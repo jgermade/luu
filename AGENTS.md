@@ -6,9 +6,9 @@ management: what gets into the prompt, and what earns its place there.
 
 Be concise in your answers. I prefer examples over long text.
 
-**There is no code yet.** [`loude-design.md`](loude-design.md) is the whole project
-so far. Read it before proposing anything; a suggestion that contradicts a decision
-already recorded there needs to say so and argue with it, not route around it.
+[`loude-design.md`](loude-design.md) is the design as it stands. Read it before
+proposing anything; a suggestion that contradicts a decision already recorded
+there needs to say so and argue with it, not route around it.
 
 ## Where things live
 
@@ -51,11 +51,21 @@ cargo run --bin luu -- chat "hola"                    # one turn, mock backend, 
 cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 
+# a repeatable multi-turn run, which is the only kind worth comparing
+cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
+  --context-limit 8192 --tokenizer path/to/tokenizer.json --record before.jsonl
+
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
 
 `--mock-delay-ms` paces the mock backend, `--cancel-after-ms` exercises cancelling,
 and `--record <file>` writes a replayable session from either subcommand.
+
+`--context-limit` is the model's window (`0` means unknown: no budget, no
+eviction), `--reserve` is what is held back for the answer, and `--tokenizer`
+points at the model's `tokenizer.json`. **Without `--tokenizer` the counts are
+`chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
+useless for a comparison, and the numbers say so themselves.
 
 CI is `.github/workflows/build.yml` (fmt, clippy, tests, both binaries, the site) on
 every push and pull request. `release.yml` is manual: it takes `patch`/`minor`/`major`,
@@ -79,6 +89,17 @@ implementation detail from close up:
 - **Permission checks live in the code, not in the model behaving well.**
   Canonicalize paths (`std::fs::canonicalize`) before comparing, or a symlink walks
   straight out of the sandbox.
+- **Decide what goes in, then render it.** `Context::select` chooses against a
+  token budget and the rendering is a pure function of that choice, so every
+  token sent is attributable to a bucket. Rendering first and trimming the
+  string afterwards loses the attribution and cuts wherever the limit lands —
+  sooner or later inside the stable prefix.
+- **History is evicted in whole turns.** Half a turn leaves an answer to a
+  question nobody asked, and a window starting on an assistant message makes
+  several chat templates continue instead of answering.
+- **Every token count carries which counter produced it.** Two runs measured by
+  different counters are not comparable, and nothing else in the system would
+  ever say so.
 - **The stable prompt prefix stays byte-identical across calls.** System text and
   tool definitions are what llama.cpp's prompt cache reuses. Reordering tools,
   re-serializing a schema with different key order, or interpolating a timestamp

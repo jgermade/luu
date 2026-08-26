@@ -7,6 +7,13 @@
   --accent: #7aa2f7;
   --warn: #e0af68;
   --bad: #f7768e;
+  /* One colour per bucket, so a bar and its legend agree. Named after the
+     buckets the context manager emits, not after a palette. */
+  --b-system: #7aa2f7;
+  --b-history: #9ece6a;
+  --b-code: #bb9af7;
+  --b-prompt: #e0af68;
+  --b-reserve: #3b4048;
   color-scheme: dark;
 }
 

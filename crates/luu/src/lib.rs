@@ -6,11 +6,12 @@
 use std::time::Duration;
 
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama};
+use agent_core::context::{Budget, Context as AgentContext};
 use agent_core::protocol::ServerMessage;
-use agent_core::trace::{Bucket, TraceMessage};
+use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
-use crate::session::{Event, Recorder, messages_for, now_ms, rendered};
+use crate::session::{DEFAULT_RESERVE, Event, Recorder, SYSTEM, counter_for, now_ms, rendered};
 use anyhow::{Context, Result};
 
 pub mod export;
@@ -73,15 +74,30 @@ enum Command {
         #[arg(long)]
         record: Option<std::path::PathBuf>,
 
-        /// The model's context window, for the budget panel. 0 means unknown.
+        /// The model's context window. 0 means unknown: no budget, no eviction.
         #[arg(long, default_value_t = 0)]
         context_limit: u32,
+
+        /// The model's `tokenizer.json`. Without it, tokens are counted
+        /// approximately and every number says so.
+        #[arg(long)]
+        tokenizer: Option<std::path::PathBuf>,
+
+        /// Tokens held back for the answer before history is considered.
+        #[arg(long, default_value_t = DEFAULT_RESERVE)]
+        reserve: u32,
     },
 
-    /// Run one turn and stream the answer to stdout.
+    /// Run a turn — or a scripted sequence of them — streaming to stdout.
     Chat {
-        /// The prompt. Reads stdin when omitted.
+        /// The prompt. Reads stdin when omitted, and ignored with --script.
         prompt: Option<String>,
+
+        /// A file of prompts, one per line, run in order against one shared
+        /// history. `#` comments and blank lines are skipped. This is how a
+        /// multi-turn baseline gets recorded the same way twice.
+        #[arg(long)]
+        script: Option<std::path::PathBuf>,
 
         #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
         backend: BackendKind,
@@ -105,9 +121,18 @@ enum Command {
         #[arg(long)]
         record: Option<std::path::PathBuf>,
 
-        /// The model's context window, recorded with the budget. 0 means unknown.
+        /// The model's context window. 0 means unknown: no budget, no eviction.
         #[arg(long, default_value_t = 0)]
         context_limit: u32,
+
+        /// The model's `tokenizer.json`. Without it, tokens are counted
+        /// approximately and every number says so.
+        #[arg(long)]
+        tokenizer: Option<std::path::PathBuf>,
+
+        /// Tokens held back for the answer before history is considered.
+        #[arg(long, default_value_t = DEFAULT_RESERVE)]
+        reserve: u32,
     },
 }
 
@@ -181,22 +206,30 @@ pub async fn run() -> Result<()> {
         mock_delay_ms,
         record,
         context_limit,
+        tokenizer,
+        reserve,
     } = command
     {
         let backend = build_backend(backend, &ollama_url, mock_delay_ms);
         let model = model_for(backend.as_ref(), model);
+        let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
+        if let Some(warning) = &warning {
+            eprintln!("warning: {warning}");
+        }
         return serve::serve(serve::ServeOptions {
             address: bind,
             backend: backend.into(),
             model,
             record,
-            context_limit,
+            budget: Budget::new(context_limit, reserve),
+            counter,
         })
         .await;
     }
 
     let Command::Chat {
         prompt,
+        script,
         backend,
         model,
         ollama_url,
@@ -204,117 +237,179 @@ pub async fn run() -> Result<()> {
         cancel_after_ms,
         record,
         context_limit,
+        tokenizer,
+        reserve,
     } = command
     else {
         unreachable!("serve is handled above");
     };
 
-    let prompt = match prompt {
-        Some(prompt) => prompt,
-        None => std::io::read_to_string(std::io::stdin())?,
+    // One prompt, or a file of them: a script is what makes a multi-turn run
+    // repeatable, and a baseline that cannot be re-run is not a baseline.
+    let prompts = match (&script, prompt) {
+        (Some(path), _) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let prompts: Vec<String> = text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_string)
+                .collect();
+            if prompts.is_empty() {
+                anyhow::bail!("{} has no prompts in it", path.display());
+            }
+            prompts
+        }
+        (None, Some(prompt)) => vec![prompt],
+        (None, None) => vec![std::io::read_to_string(std::io::stdin())?],
     };
 
     let backend = build_backend(backend, &ollama_url, mock_delay_ms);
     let model = model_for(backend.as_ref(), model);
-    let messages = messages_for(prompt.clone());
+    let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
+    if let Some(warning) = &warning {
+        eprintln!("warning: {warning}");
+    }
 
-    // One turn per `chat`, so it is always turn 1.
-    const TURN: agent_core::protocol::TurnId = 1;
-
+    let budget = Budget::new(context_limit, reserve);
     let started_at = now_ms();
     let recorder = match &record {
-        Some(path) => Some(Recorder::create(path, backend.name(), &model, started_at).await?),
+        Some(path) => Some(std::sync::Arc::new(
+            Recorder::create(
+                path,
+                backend.name(),
+                &model,
+                budget.limit,
+                counter.id(),
+                started_at,
+            )
+            .await?,
+        )),
         None => None,
     };
-    if let Some(recorder) = &recorder {
-        recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
-            turn: TURN,
-            prompt,
-        }));
-        recorder.write(&Event::Trace(TraceMessage::Prompt {
-            turn: TURN,
-            text: rendered(&messages),
-        }));
-    }
 
-    let request = CompletionRequest { model, messages };
+    // The history the turns accumulate into. One turn and it stays empty; the
+    // selection still runs either way, because a `chat` that assembled its
+    // prompt differently from `serve` would be measuring something the server
+    // never sends.
+    let mut context = AgentContext::new(SYSTEM);
+    let mut failed = false;
 
-    let (stop, cancel) = watch::channel(false);
-    if let Some(ms) = cancel_after_ms {
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(ms)).await;
-            let _ = stop.send(true);
-        });
-    }
+    for (index, prompt) in prompts.iter().enumerate() {
+        let turn = index as agent_core::protocol::TurnId + 1;
+        let selection = context.select(prompt, &[], budget, counter.as_ref());
 
-    let (tx, mut rx) = mpsc::channel::<TurnEvent>(256);
-    let recorder = std::sync::Arc::new(recorder);
-    let printer = {
-        let recorder = recorder.clone();
-        tokio::spawn(async move {
-            let mut out = stdout();
-            while let Some(event) = rx.recv().await {
-                if let Some(recorder) = recorder.as_ref() {
-                    let message = ServerMessage::from_turn_event(TURN, event.clone());
-                    recorder.write(&Event::Protocol(message));
+        if let Some(recorder) = &recorder {
+            recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
+                turn,
+                prompt: prompt.clone(),
+            }));
+            recorder.write(&Event::Trace(TraceMessage::Prompt {
+                turn,
+                text: rendered(&selection.messages),
+            }));
+            // Before the call, not after: this is what we decided to send, and
+            // a cancelled turn has it too.
+            recorder.write(&Event::Trace(TraceMessage::Budget {
+                turn,
+                limit: selection.limit,
+                counter: selection.counter.clone(),
+                buckets: selection.buckets.clone(),
+            }));
+        }
+
+        let request = CompletionRequest {
+            model: model.clone(),
+            messages: selection.messages,
+        };
+
+        let (stop, cancel) = watch::channel(false);
+        if let Some(ms) = cancel_after_ms {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                let _ = stop.send(true);
+            });
+        }
+
+        let (tx, mut rx) = mpsc::channel::<TurnEvent>(256);
+        let printer = {
+            let recorder = recorder.clone();
+            let multi = prompts.len() > 1;
+            let prompt = prompt.clone();
+            tokio::spawn(async move {
+                let mut out = stdout();
+                if multi {
+                    // A transcript of a scripted run is unreadable without the
+                    // questions in it.
+                    let _ = out.write_all(format!("\n> {prompt}\n\n").as_bytes()).await;
                 }
-                match event {
-                    // Written and flushed per token on purpose: this is the CLI's
-                    // whole job at this stage — showing that generation streams.
-                    TurnEvent::Token(text) => {
-                        let _ = out.write_all(text.as_bytes()).await;
-                        let _ = out.flush().await;
+                while let Some(event) = rx.recv().await {
+                    if let Some(recorder) = recorder.as_ref() {
+                        let message = ServerMessage::from_turn_event(turn, event.clone());
+                        recorder.write(&Event::Protocol(message));
                     }
-                    TurnEvent::Ended { reason, usage } => {
-                        let _ = out.write_all(b"\n").await;
-                        let counts = match usage {
-                            Some(u) => format!(
-                                "{} prompt / {} completion",
-                                u.prompt_tokens, u.completion_tokens
-                            ),
-                            None => "usage unknown".to_string(),
-                        };
-                        let reason = match reason {
-                            EndReason::Stop => "stop",
-                            EndReason::Length => "length",
-                            EndReason::Other => "other",
-                            EndReason::Cancelled => "cancelled",
-                        };
-                        let _ = out
-                            .write_all(format!("\n[{reason}] {counts}\n").as_bytes())
-                            .await;
-                        let _ = out.flush().await;
-                    }
-                    TurnEvent::Failed(error) => {
-                        let _ = out
-                            .write_all(format!("\n\n[failed] {error}\n").as_bytes())
-                            .await;
-                        let _ = out.flush().await;
+                    match event {
+                        // Written and flushed per token on purpose: this is the
+                        // CLI's whole job at this stage — showing that
+                        // generation streams.
+                        TurnEvent::Token(text) => {
+                            let _ = out.write_all(text.as_bytes()).await;
+                            let _ = out.flush().await;
+                        }
+                        TurnEvent::Ended { reason, usage } => {
+                            let _ = out.write_all(b"\n").await;
+                            let counts = match usage {
+                                Some(u) => format!(
+                                    "{} prompt / {} completion",
+                                    u.prompt_tokens, u.completion_tokens
+                                ),
+                                None => "usage unknown".to_string(),
+                            };
+                            let reason = match reason {
+                                EndReason::Stop => "stop",
+                                EndReason::Length => "length",
+                                EndReason::Other => "other",
+                                EndReason::Cancelled => "cancelled",
+                            };
+                            let _ = out
+                                .write_all(format!("\n[{reason}] {counts}\n").as_bytes())
+                                .await;
+                            let _ = out.flush().await;
+                        }
+                        TurnEvent::Failed(error) => {
+                            let _ = out
+                                .write_all(format!("\n\n[failed] {error}\n").as_bytes())
+                                .await;
+                            let _ = out.flush().await;
+                        }
                     }
                 }
-            }
-        })
-    };
+            })
+        };
 
-    let outcome = run_turn(backend.as_ref(), request, tx, cancel).await;
-    let _ = printer.await;
+        let outcome = run_turn(backend.as_ref(), request, tx, cancel).await;
+        let _ = printer.await;
 
-    if let (Some(recorder), Some(usage)) = (recorder.as_ref(), outcome.usage) {
-        // Real numbers only: with no usage there is nothing to plot, and a zero
-        // would read as a measurement.
-        recorder.write(&Event::Trace(TraceMessage::Budget {
-            turn: TURN,
-            limit: context_limit,
-            buckets: vec![
-                Bucket::new("prompt", usage.prompt_tokens),
-                Bucket::new("completion", usage.completion_tokens),
-            ],
-        }));
+        // A cancelled turn keeps its partial answer: it happened, and the next
+        // turn was asked in its light. A turn that produced nothing is not
+        // remembered — an empty assistant message is not a thing that happened.
+        if !outcome.text.is_empty() {
+            context.push_turn(prompt.clone(), outcome.text, vec![], counter.as_ref());
+        }
+
+        // A script does not push on through a broken backend: the remaining
+        // turns would all fail the same way and bury the first, real error.
+        if outcome.error.is_some() {
+            failed = true;
+            break;
+        }
     }
+
     // Let the recorder task drain before the process exits.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    if outcome.error.is_some() {
+    if failed {
         std::process::exit(1);
     }
     Ok(())

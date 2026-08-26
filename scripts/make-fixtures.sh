@@ -17,6 +17,14 @@ mkdir -p "$out"
   --mock-delay-ms 45 --cancel-after-ms 700 --context-limit 8192 \
   --record "$out/cancelled-turn.jsonl" >/dev/null
 
+# The one that shows the context manager working. A deliberately small window
+# so the session overflows: the recording then carries a real split, a whole
+# turn evicted, and the stable prefix surviving the eviction. A fixture set
+# where every budget fits would demonstrate exactly the thing that was fixed.
+"$luu" chat --script "$(dirname "$0")/tasks/long-session.txt" \
+  --mock-delay-ms 20 --context-limit 256 --reserve 64 \
+  --record "$out/eviction.jsonl" >/dev/null
+
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
   --record "$out/backend-failure.jsonl" >/dev/null 2>&1 || true
@@ -27,6 +35,7 @@ mkdir -p "$out"
 # Named in order, not globbed: the first one is what the page plays on load,
 # and a glob would lead with whichever name sorts first.
 "$luu" export \
+  "$out/eviction.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \

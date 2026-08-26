@@ -9,11 +9,12 @@ use std::sync::Arc;
 
 use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
+use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
-use agent_core::trace::{Bucket, TraceMessage};
+use agent_core::trace::TraceMessage;
 use agent_core::turn::run_turn;
 
-use crate::session::{Event, Recorder, messages_for, now_ms, rendered};
+use crate::session::{Event, Recorder, SYSTEM, now_ms, rendered};
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -40,6 +41,9 @@ struct Session {
     current: Option<TurnId>,
     /// Present only while a turn is running.
     cancel: Option<watch::Sender<bool>>,
+    /// The conversation so far. In memory: enough to measure a context
+    /// strategy, and lost on restart until sessions are persisted.
+    context: AgentContext,
 }
 
 /// The id the live session is served under. There is one until sessions are
@@ -52,6 +56,8 @@ struct App {
     session: Mutex<Session>,
     events: broadcast::Sender<Event>,
     recorder: Option<Recorder>,
+    counter: Arc<dyn TokenCounter>,
+    budget: Budget,
     /// The read side, folded from the same events the sockets carry — so
     /// `GET /api/...` can never disagree with what a client watched happen.
     view: Mutex<SessionView>,
@@ -82,7 +88,8 @@ pub struct ServeOptions {
     pub backend: Arc<dyn Backend>,
     pub model: String,
     pub record: Option<PathBuf>,
-    pub context_limit: u32,
+    pub budget: Budget,
+    pub counter: Arc<dyn TokenCounter>,
 }
 
 pub async fn serve(options: ServeOptions) -> Result<()> {
@@ -91,12 +98,23 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         backend,
         model,
         record,
-        context_limit,
+        budget,
+        counter,
     } = options;
     let started_at = now_ms();
 
     let recorder = match record {
-        Some(path) => Some(Recorder::create(&path, backend.name(), &model, started_at).await?),
+        Some(path) => Some(
+            Recorder::create(
+                &path,
+                backend.name(),
+                &model,
+                budget.limit,
+                counter.id(),
+                started_at,
+            )
+            .await?,
+        ),
         None => None,
     };
 
@@ -109,9 +127,12 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
             next_turn: 1,
             current: None,
             cancel: None,
+            context: AgentContext::new(SYSTEM),
         }),
         events: broadcast::channel(1024).0,
         recorder,
+        counter,
+        budget,
         view: Mutex::new({
             let mut view = SessionView::new(LIVE_SESSION, backend_name, &model_name);
             view.started_at = started_at;
@@ -145,10 +166,7 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         .route("/api/sessions/{id}/context.json", get(get_context))
         .route("/", get(|| serve_asset("index.html")))
         .route("/{*path}", get(asset_handler))
-        .with_state(AppRouterState {
-            app: app.clone(),
-            context_limit,
-        });
+        .with_state(AppRouterState { app: app.clone() });
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -162,7 +180,6 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
 #[derive(Clone)]
 struct AppRouterState {
     app: Arc<App>,
-    context_limit: u32,
 }
 
 async fn asset_handler(uri: Uri) -> Response {
@@ -212,7 +229,7 @@ async fn run_trace_socket(socket: WebSocket, app: Arc<App>) {
 }
 
 async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
-    let AppRouterState { app, context_limit } = state;
+    let AppRouterState { app } = state;
     let (mut sink, mut stream) = socket.split();
     let mut events = app.events.subscribe();
 
@@ -255,7 +272,7 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                 };
                 match serde_json::from_str::<ClientMessage>(&text) {
                     Ok(ClientMessage::Prompt { text }) => {
-                        start_turn(app.clone(), text, context_limit).await;
+                        start_turn(app.clone(), text).await;
                     }
                     Ok(ClientMessage::Cancel) => {
                         let session = app.session.lock().await;
@@ -272,8 +289,8 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
     }
 }
 
-async fn start_turn(app: Arc<App>, prompt: String, context_limit: u32) {
-    let (turn, cancel_rx) = {
+async fn start_turn(app: Arc<App>, prompt: String) {
+    let (turn, cancel_rx, selection) = {
         let mut session = app.session.lock().await;
         if session.current.is_some() {
             // One turn at a time until sessions exist.
@@ -285,22 +302,38 @@ async fn start_turn(app: Arc<App>, prompt: String, context_limit: u32) {
 
         let (tx, rx) = watch::channel(false);
         session.cancel = Some(tx);
-        (turn, rx)
+        // Selected under the same lock that hands out the turn number, so the
+        // history a turn is built from is the history at the moment it started.
+        let selection = session
+            .context
+            .select(&prompt, &[], app.budget, app.counter.as_ref());
+        (turn, rx, selection)
     };
 
-    let messages = messages_for(prompt.clone());
-
-    app.publish(Event::Protocol(ServerMessage::TurnStarted { turn, prompt }))
-        .await;
+    app.publish(Event::Protocol(ServerMessage::TurnStarted {
+        turn,
+        prompt: prompt.clone(),
+    }))
+    .await;
     app.publish(Event::Trace(TraceMessage::Prompt {
         turn,
-        text: rendered(&messages),
+        text: rendered(&selection.messages),
+    }))
+    .await;
+    // Published before the call: this is what we decided to send. A turn that
+    // gets cancelled has a budget too, which the old after-the-fact version
+    // could not report.
+    app.publish(Event::Trace(TraceMessage::Budget {
+        turn,
+        limit: selection.limit,
+        counter: selection.counter.clone(),
+        buckets: selection.buckets.clone(),
     }))
     .await;
 
     let request = CompletionRequest {
         model: app.model.clone(),
-        messages,
+        messages: selection.messages,
     };
 
     tokio::spawn(async move {
@@ -318,21 +351,16 @@ async fn start_turn(app: Arc<App>, prompt: String, context_limit: u32) {
         let outcome = run_turn(app.backend.as_ref(), request, tx, cancel_rx).await;
         let _ = forwarder.await;
 
-        // Real numbers only: with no usage there is nothing to plot, and a zero
-        // would read as a measurement.
-        if let Some(usage) = outcome.usage {
-            app.publish(Event::Trace(TraceMessage::Budget {
-                turn,
-                limit: context_limit,
-                buckets: vec![
-                    Bucket::new("prompt", usage.prompt_tokens),
-                    Bucket::new("completion", usage.completion_tokens),
-                ],
-            }))
-            .await;
-        }
-
         let mut session = app.session.lock().await;
+        // A cancelled turn keeps its partial answer: the user saw it, so the
+        // model should too. A turn that produced nothing at all is not
+        // remembered — an empty assistant message is not a thing that happened,
+        // and several chat templates render it as a prompt to continue.
+        if !outcome.text.is_empty() {
+            session
+                .context
+                .push_turn(prompt, outcome.text, vec![], app.counter.as_ref());
+        }
         session.current = None;
         session.cancel = None;
     });
