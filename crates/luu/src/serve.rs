@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
 use agent_core::trace::{Bucket, TraceMessage};
@@ -14,7 +15,9 @@ use agent_core::turn::run_turn;
 
 use crate::session::{Event, Recorder, messages_for, now_ms, rendered};
 use anyhow::{Context, Result};
+use axum::Json;
 use axum::Router;
+use axum::extract::Path;
 use axum::extract::State;
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
 use axum::http::{StatusCode, Uri, header};
@@ -39,19 +42,35 @@ struct Session {
     cancel: Option<watch::Sender<bool>>,
 }
 
+/// The id the live session is served under. There is one until sessions are
+/// persisted, and naming it beats a magic string at four call sites.
+pub const LIVE_SESSION: &str = "live";
+
 struct App {
     backend: Arc<dyn Backend>,
     model: String,
     session: Mutex<Session>,
     events: broadcast::Sender<Event>,
     recorder: Option<Recorder>,
+    /// The read side, folded from the same events the sockets carry — so
+    /// `GET /api/...` can never disagree with what a client watched happen.
+    view: Mutex<SessionView>,
+    started_at: u64,
 }
 
 impl App {
     /// Publishes one event to every client and to the record, in that order.
-    fn publish(&self, event: Event) {
+    async fn publish(&self, event: Event) {
         if let Some(recorder) = &self.recorder {
             recorder.write(&event);
+        }
+        {
+            let at_ms = now_ms().saturating_sub(self.started_at);
+            let mut view = self.view.lock().await;
+            match &event {
+                Event::Protocol(message) => view.apply_protocol(at_ms, message),
+                Event::Trace(message) => view.apply_trace(at_ms, message),
+            }
         }
         // No subscribers is the ordinary state of a server nobody has opened yet.
         let _ = self.events.send(event);
@@ -81,6 +100,8 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         None => None,
     };
 
+    let backend_name = backend.name().to_string();
+    let model_name = model.clone();
     let app = Arc::new(App {
         backend,
         model,
@@ -91,11 +112,37 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         }),
         events: broadcast::channel(1024).0,
         recorder,
+        view: Mutex::new({
+            let mut view = SessionView::new(LIVE_SESSION, backend_name, &model_name);
+            view.started_at = started_at;
+            view
+        }),
+        started_at,
     });
 
     let router = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
+        // The read side. Every path also answers with a `.json` suffix, because
+        // that is the only shape a static host can mirror — see `luu export`.
+        //
+        // Where the suffix sits on a parameter it is not a route of its own:
+        // axum allows only one parameter per segment, so `{id}` captures
+        // `completed-turn.json` whole and the handler strips it. Only the
+        // literal segments get a second route.
+        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions.json", get(list_sessions))
+        .route("/api/sessions/{id}", get(get_session))
+        .route("/api/sessions/{id}/turns", get(get_turns))
+        .route("/api/sessions/{id}/turns.json", get(get_turns))
+        .route("/api/sessions/{id}/turns/{turn}", get(get_turn))
+        .route("/api/sessions/{id}/turns/{turn}/prompt", get(get_prompt))
+        .route(
+            "/api/sessions/{id}/turns/{turn}/prompt.json",
+            get(get_prompt),
+        )
+        .route("/api/sessions/{id}/context", get(get_context))
+        .route("/api/sessions/{id}/context.json", get(get_context))
         .route("/", get(|| serve_asset("index.html")))
         .route("/{*path}", get(asset_handler))
         .with_state(AppRouterState {
@@ -243,11 +290,13 @@ async fn start_turn(app: Arc<App>, prompt: String, context_limit: u32) {
 
     let messages = messages_for(prompt.clone());
 
-    app.publish(Event::Protocol(ServerMessage::TurnStarted { turn, prompt }));
+    app.publish(Event::Protocol(ServerMessage::TurnStarted { turn, prompt }))
+        .await;
     app.publish(Event::Trace(TraceMessage::Prompt {
         turn,
         text: rendered(&messages),
-    }));
+    }))
+    .await;
 
     let request = CompletionRequest {
         model: app.model.clone(),
@@ -260,7 +309,8 @@ async fn start_turn(app: Arc<App>, prompt: String, context_limit: u32) {
             let app = app.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    app.publish(Event::Protocol(ServerMessage::from_turn_event(turn, event)));
+                    app.publish(Event::Protocol(ServerMessage::from_turn_event(turn, event)))
+                        .await;
                 }
             })
         };
@@ -278,11 +328,96 @@ async fn start_turn(app: Arc<App>, prompt: String, context_limit: u32) {
                     Bucket::new("prompt", usage.prompt_tokens),
                     Bucket::new("completion", usage.completion_tokens),
                 ],
-            }));
+            }))
+            .await;
         }
 
         let mut session = app.session.lock().await;
         session.current = None;
         session.cancel = None;
     });
+}
+
+/// Strips the `.json` a static mirror needs, so both spellings reach one handler.
+fn bare(id: &str) -> &str {
+    id.strip_suffix(".json").unwrap_or(id)
+}
+
+fn not_found(what: &str) -> Response {
+    (StatusCode::NOT_FOUND, format!("no such {what}")).into_response()
+}
+
+async fn list_sessions(State(state): State<AppRouterState>) -> Response {
+    let view = state.app.view.lock().await;
+    Json(vec![view.summary()]).into_response()
+}
+
+async fn get_session(Path(id): Path<String>, State(state): State<AppRouterState>) -> Response {
+    let view = state.app.view.lock().await;
+    match bare(&id) == view.id {
+        true => Json(view.clone()).into_response(),
+        false => not_found("session"),
+    }
+}
+
+async fn get_turns(Path(id): Path<String>, State(state): State<AppRouterState>) -> Response {
+    let view = state.app.view.lock().await;
+    match bare(&id) == view.id {
+        true => Json(view.turns.clone()).into_response(),
+        false => not_found("session"),
+    }
+}
+
+/// The turn segment carries the `.json` when it is the last one, so it is
+/// stripped before parsing rather than after.
+fn parse_turn(turn: &str) -> Option<TurnId> {
+    bare(turn).parse().ok()
+}
+
+async fn get_turn(
+    Path((id, turn)): Path<(String, String)>,
+    State(state): State<AppRouterState>,
+) -> Response {
+    let view = state.app.view.lock().await;
+    let Some(number) = parse_turn(&turn) else {
+        return not_found("turn");
+    };
+    match (bare(&id) == view.id).then(|| view.turn(number)).flatten() {
+        Some(turn) => Json(turn.clone()).into_response(),
+        None => not_found("turn"),
+    }
+}
+
+async fn get_prompt(
+    Path((id, turn)): Path<(String, String)>,
+    State(state): State<AppRouterState>,
+) -> Response {
+    let view = state.app.view.lock().await;
+    let Some(number) = parse_turn(&turn) else {
+        return not_found("turn");
+    };
+    let found = (bare(&id) == view.id).then(|| view.turn(number)).flatten();
+    match found {
+        Some(turn) => Json(serde_json::json!({
+            "turn": turn.turn,
+            "text": turn.prompt_sent,
+        }))
+        .into_response(),
+        None => not_found("turn"),
+    }
+}
+
+/// The budget of the newest turn that has one — the panel asks "what is the
+/// context doing now", and a running turn has not reported yet.
+async fn get_context(Path(id): Path<String>, State(state): State<AppRouterState>) -> Response {
+    let view = state.app.view.lock().await;
+    if bare(&id) != view.id {
+        return not_found("session");
+    }
+    let latest = view.turns.iter().rev().find(|t| t.budget.is_some());
+    Json(serde_json::json!({
+        "turn": latest.map(|t| t.turn),
+        "budget": latest.and_then(|t| t.budget.clone()),
+    }))
+    .into_response()
 }

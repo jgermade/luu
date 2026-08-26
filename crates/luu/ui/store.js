@@ -215,15 +215,25 @@ export function playFixture(file) {
   if (file) replay(file)
 }
 
-/// Looks for the fixtures a static deploy ships beside the app. Returning false
-/// means there is nothing to fall back to, so reconnecting is still right.
+/// Asks the read API which sessions exist.
+///
+/// The same request answers on the live server and on a static host: `luu
+/// export` writes this file, and the server serves the same JSON at the same
+/// path. Returning false means there is nothing to fall back to, so
+/// reconnecting is still right.
 async function loadFixtures() {
   try {
-    const response = await fetch("./fixtures/index.json")
+    const response = await fetch("./api/sessions.json")
     if (!response.ok) return false
-    const fixtures = await response.json()
-    if (!Array.isArray(fixtures) || !fixtures.length) return false
-    state.fixtures = fixtures
+    const sessions = await response.json()
+    // Only sessions that ship a recording can be replayed; a live one cannot.
+    const replayable = sessions.filter(session => session.record)
+    if (!replayable.length) return false
+    state.fixtures = replayable.map(session => ({
+      name: session.title || session.id,
+      file: session.record,
+      turns: session.turns,
+    }))
     return true
   } catch {
     return false

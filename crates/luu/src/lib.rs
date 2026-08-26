@@ -11,8 +11,9 @@ use agent_core::trace::{Bucket, TraceMessage};
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
 use crate::session::{Event, Recorder, messages_for, now_ms, rendered};
-use anyhow::Result;
+use anyhow::{Context, Result};
 
+pub mod export;
 pub mod serve;
 pub mod session;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -32,6 +33,25 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Turn recordings into the static twin of the read API.
+    ///
+    /// The same JSON the live server serves, as files a static host can
+    /// answer with — which is what makes the GitHub Pages deploy more than
+    /// a screenshot.
+    Export {
+        /// Recorded `.jsonl` sessions. Each file's stem becomes its session id.
+        #[arg(required = true)]
+        records: Vec<std::path::PathBuf>,
+
+        /// Where to write the tree (`sessions.json`, `sessions/<id>/…`).
+        #[arg(long, short)]
+        out: std::path::PathBuf,
+
+        /// How the page reaches the recordings, relative to the site root.
+        #[arg(long, default_value = "./fixtures")]
+        record_base: String,
+    },
+
     /// Serve the debug UI and the agent protocol over HTTP.
     Serve {
         #[arg(long, default_value = "127.0.0.1:7878")]
@@ -115,6 +135,43 @@ fn model_for(backend: &dyn Backend, model: String) -> String {
 
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
+
+    if let Command::Export {
+        records,
+        out,
+        record_base,
+    } = &command
+    {
+        let sessions = records
+            .iter()
+            .map(|path| {
+                let id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .context("a record file needs a name")?
+                    .to_string();
+                let url = format!(
+                    "{}/{}",
+                    record_base.trim_end_matches('/'),
+                    path.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                );
+                Ok(export::Session {
+                    id,
+                    record: export::RecordSource { url },
+                    lines: export::read_record(path)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let summaries = export::export(&sessions, out)?;
+        for summary in &summaries {
+            println!("{} — {} turn(s)", summary.id, summary.turns);
+        }
+        println!("written to {}", out.display());
+        return Ok(());
+    }
 
     if let Command::Serve {
         bind,

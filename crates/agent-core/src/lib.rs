@@ -3,6 +3,7 @@
 //! See `AGENTS.md` for the design commitments this crate is expected to hold,
 //! and `RECORD/` for how they were arrived at.
 
+pub mod api;
 pub mod backend;
 pub mod protocol;
 pub mod record;

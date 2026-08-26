@@ -91,8 +91,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # The UI has no build step — it is jq79 plus .html components, served as
-      # they are. What CI produces is the fixtures, and it produces them by
-      # running the agent, so a fixture cannot drift from the format.
+      # they are. What CI produces is the recordings and the static twin of the
+      # read API, and it produces both by running the agent, so neither can
+      # drift from what the live server would answer.
       - run: cargo build --release --locked --bin luu
 
       - name: Assemble the site
@@ -111,8 +112,25 @@ jobs:
             echo "::error::the site must not reference external hosts"
             exit 1
           fi
-          test -s site/fixtures/index.json
           test -s site/vendor/jq79.js
+          # The static API must exist and be shaped like the live one. A deploy
+          # whose API is missing looks fine until someone opens it.
+          test -s site/api/sessions.json
+          python3 - <<'PY'
+          import json, pathlib
+          sessions = json.loads(pathlib.Path("site/api/sessions.json").read_text())
+          assert sessions, "no sessions exported"
+          for session in sessions:
+              root = pathlib.Path("site/api/sessions") / session["id"]
+              assert (root.parent / f"{session['id']}.json").is_file()
+              turns = json.loads((root / "turns.json").read_text())
+              assert len(turns) == session["turns"]
+              for turn in turns:
+                  assert (root / "turns" / f"{turn['turn']}.json").is_file()
+                  assert (root / "turns" / str(turn["turn"]) / "prompt.json").is_file()
+              assert pathlib.Path("site" + session["record"].lstrip(".")).is_file(), session["record"]
+          print(f"{len(sessions)} sessions exported, all files present")
+          PY
 
       - uses: actions/upload-artifact@v4
         with:

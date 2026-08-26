@@ -11,23 +11,26 @@ out="${2:?usage: make-fixtures.sh <path-to-luu> <out-dir>}"
 mkdir -p "$out"
 
 "$luu" chat "What does the context manager do?" \
-  --mock-delay-ms 45 --context-limit 8192 --record "$out/completed.jsonl" >/dev/null
+  --mock-delay-ms 45 --context-limit 8192 --record "$out/completed-turn.jsonl" >/dev/null
 
 "$luu" chat "Explain the sandbox policy" \
   --mock-delay-ms 45 --cancel-after-ms 700 --context-limit 8192 \
-  --record "$out/cancelled.jsonl" >/dev/null
+  --record "$out/cancelled-turn.jsonl" >/dev/null
 
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
-  --record "$out/failed.jsonl" >/dev/null 2>&1 || true
+  --record "$out/backend-failure.jsonl" >/dev/null 2>&1 || true
 
-cat > "$out/index.json" <<'JSON'
-[
-  { "name": "Completed turn",  "file": "./fixtures/completed.jsonl", "about": "A turn that ran to a stop, with usage reported." },
-  { "name": "Cancelled turn",  "file": "./fixtures/cancelled.jsonl", "about": "Cancelled mid-generation: partial text, and no usage to plot." },
-  { "name": "Backend failure", "file": "./fixtures/failed.jsonl",    "about": "The backend was unreachable." }
-]
-JSON
+# The static twin of the read API, folded from these same recordings by the
+# same code the live server uses. `$out` is <site>/fixtures, so the API tree
+# goes beside it and the recordings are reached as ./fixtures/<name>.jsonl.
+# Named in order, not globbed: the first one is what the page plays on load,
+# and a glob would lead with whichever name sorts first.
+"$luu" export \
+  "$out/completed-turn.jsonl" \
+  "$out/cancelled-turn.jsonl" \
+  "$out/backend-failure.jsonl" \
+  --out "$(dirname "$out")/api" --record-base ./fixtures
 
 echo "fixtures written to $out:"
 wc -l "$out"/*.jsonl
