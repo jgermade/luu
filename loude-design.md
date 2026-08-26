@@ -122,8 +122,49 @@ Read side — plain GETs, browsable and curl-able:
 - `GET /events?session=` — SSE mirror of the WS stream, so a session can be followed with `curl -N`
   without a browser
 
-Stack: `axum` + `tokio` on the server; the client starts as a single `index.html` plus a small
-TypeScript bundle, moving to Vite + React only if it outgrows that.
+Server stack: `axum` + `tokio`.
+
+### UI stack
+
+**Vite + React + TypeScript, with the protocol types generated from the Rust enums.**
+
+The deciding factor is not the framework, it is where the message types live. Annotate the protocol
+enums with `ts-rs` and export them on `cargo test`; the UI imports the generated `.d.ts`. The schema
+stays single-source-of-truth in Rust, a renamed variant becomes a TypeScript compile error instead of
+a runtime `undefined`, and the VSCode extension later imports the exact same file.
+
+Why not a Rust/WASM frontend (Leptos, Dioxus, Yew), despite this being a Rust project: the pull is
+shared types, and `ts-rs` already provides those without the WASM cost. What you would give up is the
+component ecosystem this specific UI needs — a merge view and a list virtualizer — plus a recompile
+in the edit loop of the tool you use to debug everything else.
+
+Why React over Preact: the transcript virtualizer and the diff view live in React's ecosystem, and a
+debug tool is the wrong place to spend budget on a compat layer.
+
+Concrete picks:
+
+- **Editor and diff**: CodeMirror 6, including its merge view. It covers both the prompt diff panel
+  and the editable plan (`edit_plan`), and is a fraction of Monaco's size — which matters when the
+  bundle ships inside the binary.
+- **Virtualization**: `@tanstack/react-virtual` for the transcript and the tool timeline. Long local
+  sessions produce thousands of events.
+- **Charts**: none at first. The token budget bar is four flex children with percentage widths; a
+  charting library only earns its place once budget trends across turns are plotted.
+- **State**: an append-only event log in a plain class, exposed via `useSyncExternalStore`. A stream
+  of protocol events is already the right data model — reach for a state library only if it grows.
+- **Styling**: Tailwind v4, no config file.
+
+Two performance and workflow details that are easy to get wrong:
+
+- **Do not set state per streamed token.** Buffer incoming `token` messages and flush them on
+  `requestAnimationFrame`, or the UI stalls on exactly the fast-generation runs worth watching.
+- **Serve the UI from disk in debug builds** (`#[cfg(debug_assertions)]`) and from `rust-embed` in
+  release, with Vite's dev server proxying `/api` and `/ws` (`ws: true`) to the agent. A CSS change
+  should never cost a `cargo build`.
+
+Keep `npm` out of `build.rs` — `cargo build` must not require node. Build the UI with a separate task
+and commit `dist/`: noisier diffs, but anyone can build and install the binary with a Rust toolchain
+alone.
 
 ### Debug panels that earn their place
 
