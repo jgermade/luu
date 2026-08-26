@@ -126,45 +126,40 @@ Server stack: `axum` + `tokio`.
 
 ### UI stack
 
-**Vite + React + TypeScript, with the protocol types generated from the Rust enums.**
+**[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.**
 
-The deciding factor is not the framework, it is where the message types live. Annotate the protocol
-enums with `ts-rs` and export them on `cargo test`; the UI imports the generated `.d.ts`. The schema
-stays single-source-of-truth in Rust, a renamed variant becomes a TypeScript compile error instead of
-a runtime `undefined`, and the VSCode extension later imports the exact same file.
+The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
+frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
+`cargo build` requires node, or a committed `dist/` with the noise that brings. jq79 has no compiler
+step — components are `.html` files loaded at runtime — so `rust-embed` ships one `jq79.js` plus a
+handful of `.html` files and the build stays pure Cargo.
 
-Why not a Rust/WASM frontend (Leptos, Dioxus, Yew), despite this being a Rust project: the pull is
-shared types, and `ts-rs` already provides those without the WASM cost. What you would give up is the
-component ecosystem this specific UI needs — a merge view and a list virtualizer — plus a recompile
-in the edit loop of the tool you use to debug everything else.
+The rest follows from that:
 
-Why React over Preact: the transcript virtualizer and the diff view live in React's ecosystem, and a
-debug tool is the wrong place to spend budget on a compat layer.
+- **Dev loop**: `jq79 dev` hot-reloads components with no bundler. Serve the directory from disk in
+  debug builds (`#[cfg(debug_assertions)]`) and from `rust-embed` in release — the dev server applies
+  no transforms, so both paths serve the same bytes. No Vite proxy to configure.
+- **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
+  keeps existing DOM when the transcript is appended to.
+- **Virtualization**: no library, and none needed — bind `:each` to a computed window plus two spacer
+  elements. `GET /api/sessions/:id/turns?from=&limit=` already puts pagination on the server.
 
-Concrete picks:
+Two consequences worth designing around rather than discovering:
 
-- **Editor and diff**: CodeMirror 6, including its merge view. It covers both the prompt diff panel
-  and the editable plan (`edit_plan`), and is a fraction of Monaco's size — which matters when the
-  bundle ships inside the binary.
-- **Virtualization**: `@tanstack/react-virtual` for the transcript and the tool timeline. Long local
-  sessions produce thousands of events.
-- **Charts**: none at first. The token budget bar is four flex children with percentage widths; a
-  charting library only earns its place once budget trends across turns are plotted.
-- **State**: an append-only event log in a plain class, exposed via `useSyncExternalStore`. A stream
-  of protocol events is already the right data model — reach for a state library only if it grows.
-- **Styling**: Tailwind v4, no config file.
+- **Compute the prompt diff in Rust** (`similar`), and send resolved spans over the protocol. Pulling
+  in CodeMirror or Monaco for it would reintroduce the bundler this choice just removed, and the
+  server holds both prompt strings anyway — it is the right place for the work. Should the editable
+  plan later need a real editor, `await $mounted()` + `$self(...)` mounts an imperative widget
+  cleanly, so the option stays open without being paid for now.
+- **No compile-time check of the protocol types**, which a TypeScript build would have given. Recover
+  most of it by splitting the UI: the transport and store layer as a `// @ts-check`ed `.js` module
+  validated against the `ts-rs`-generated `.d.ts`, templates untyped. `tsc --noEmit` stays an
+  optional check task, never a build step.
 
-Two performance and workflow details that are easy to get wrong:
-
-- **Do not set state per streamed token.** Buffer incoming `token` messages and flush them on
-  `requestAnimationFrame`, or the UI stalls on exactly the fast-generation runs worth watching.
-- **Serve the UI from disk in debug builds** (`#[cfg(debug_assertions)]`) and from `rust-embed` in
-  release, with Vite's dev server proxying `/api` and `/ws` (`ws: true`) to the agent. A CSS change
-  should never cost a `cargo build`.
-
-Keep `npm` out of `build.rs` — `cargo build` must not require node. Build the UI with a separate task
-and commit `dist/`: noisier diffs, but anyone can build and install the binary with a Rust toolchain
-alone.
+**Effect batching is the one gap.** jq79 has no scheduler — writes propagate synchronously, so a
+token stream would cost one DOM write per token. Either buffer `token` messages and flush on
+`requestAnimationFrame` (needed under any framework), or add a microtask-coalescing `batch(fn)`
+upstream in jq79, where it would serve any consumer with streaming data.
 
 ### Debug panels that earn their place
 
