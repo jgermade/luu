@@ -1,0 +1,17 @@
+[package]
+name = "luu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-core.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+mime_guess.workspace = true
+rust-embed.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tokio.workspace = true

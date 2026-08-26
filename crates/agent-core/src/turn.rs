@@ -1,0 +1,261 @@
+//! One turn: prompt in, tokens out.
+//!
+//! No tools and no context management yet — this is the walking skeleton's
+//! middle, and its job is to make the events real before they are written down
+//! as a wire protocol (`RECORD/2026-08-26.walking-skeleton.md`).
+
+use futures_util::StreamExt;
+use tokio::sync::{mpsc, watch};
+
+use crate::backend::{Backend, Chunk, CompletionRequest, StopReason, Usage};
+
+/// Why a turn stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndReason {
+    Stop,
+    Length,
+    Other,
+    /// The caller cancelled. Distinct from every model-side reason, because
+    /// only this one means the answer is incomplete by our own doing.
+    Cancelled,
+}
+
+impl From<StopReason> for EndReason {
+    fn from(stop: StopReason) -> Self {
+        match stop {
+            StopReason::Stop => Self::Stop,
+            StopReason::Length => Self::Length,
+            StopReason::Other => Self::Other,
+        }
+    }
+}
+
+/// What the loop emits as it runs. The wire protocol is derived from this, not
+/// the other way round.
+#[derive(Debug, Clone)]
+pub enum TurnEvent {
+    Token(String),
+    /// `usage` is absent on a cancelled turn: the counts arrive on the
+    /// backend's final line, and cancelling means never reading it.
+    Ended { reason: EndReason, usage: Option<Usage> },
+    Failed(String),
+}
+
+/// What the caller gets back, once the turn is over.
+#[derive(Debug, Clone)]
+pub struct TurnOutcome {
+    /// Everything the model produced, assembled. Partial on a cancel or a
+    /// failure — the caller decides whether a partial answer is worth keeping.
+    pub text: String,
+    pub reason: EndReason,
+    pub usage: Option<Usage>,
+    pub error: Option<String>,
+}
+
+/// Runs one turn to completion, emitting events as they happen.
+///
+/// Cancellation is checked between chunks, so it takes effect at the next token
+/// rather than mid-token. Dropping `events` does not stop the turn: the loop
+/// keeps draining the backend so the outcome stays complete.
+pub async fn run_turn(
+    backend: &dyn Backend,
+    request: CompletionRequest,
+    events: mpsc::Sender<TurnEvent>,
+    mut cancel: watch::Receiver<bool>,
+) -> TurnOutcome {
+    let mut text = String::new();
+    let mut stream = backend.stream(request);
+
+    macro_rules! emit {
+        ($event:expr) => {
+            let _ = events.send($event).await;
+        };
+    }
+
+    if *cancel.borrow_and_update() {
+        emit!(TurnEvent::Ended { reason: EndReason::Cancelled, usage: None });
+        return TurnOutcome { text, reason: EndReason::Cancelled, usage: None, error: None };
+    }
+
+    // Every cancel sender may be dropped before the turn ends — that is the
+    // ordinary shape of a caller with nothing to cancel with. Once it happens,
+    // `changed()` is permanently ready with an error, so it has to stop being
+    // selected on, or the biased arm starves the stream forever.
+    let mut cancellable = true;
+
+    loop {
+        let next = if cancellable {
+            tokio::select! {
+                biased;
+                changed = cancel.changed() => {
+                    match changed {
+                        Ok(()) if *cancel.borrow() => {
+                            emit!(TurnEvent::Ended { reason: EndReason::Cancelled, usage: None });
+                            return TurnOutcome {
+                                text,
+                                reason: EndReason::Cancelled,
+                                usage: None,
+                                error: None,
+                            };
+                        }
+                        Ok(()) => continue,
+                        Err(_) => {
+                            cancellable = false;
+                            continue;
+                        }
+                    }
+                }
+                next = stream.next() => next,
+            }
+        } else {
+            stream.next().await
+        };
+
+        match next {
+            Some(Ok(Chunk::Text(delta))) => {
+                text.push_str(&delta);
+                emit!(TurnEvent::Token(delta));
+            }
+            Some(Ok(Chunk::Done { stop, usage })) => {
+                let reason = EndReason::from(stop);
+                emit!(TurnEvent::Ended { reason, usage: Some(usage) });
+                return TurnOutcome { text, reason, usage: Some(usage), error: None };
+            }
+            Some(Err(error)) => {
+                let error = error.to_string();
+                emit!(TurnEvent::Failed(error.clone()));
+                return TurnOutcome {
+                    text,
+                    reason: EndReason::Other,
+                    usage: None,
+                    error: Some(error),
+                };
+            }
+            // The backend's stream ended without saying so. Treat it as a stop,
+            // and say the usage is unknown rather than reporting zeros.
+            None => {
+                emit!(TurnEvent::Ended { reason: EndReason::Stop, usage: None });
+                return TurnOutcome {
+                    text,
+                    reason: EndReason::Stop,
+                    usage: None,
+                    error: None,
+                };
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::backend::{Message, mock::Mock};
+
+    fn request() -> CompletionRequest {
+        CompletionRequest {
+            model: "mock".into(),
+            messages: vec![Message::user("hola")],
+        }
+    }
+
+    async fn collect(backend: &dyn Backend, cancel: watch::Receiver<bool>) -> (Vec<TurnEvent>, TurnOutcome) {
+        let (tx, mut rx) = mpsc::channel(64);
+        let drain = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while let Some(event) = rx.recv().await {
+                seen.push(event);
+            }
+            seen
+        });
+        let outcome = run_turn(backend, request(), tx, cancel).await;
+        (drain.await.unwrap(), outcome)
+    }
+
+    #[tokio::test]
+    async fn a_turn_streams_its_tokens_then_ends() {
+        let backend = Mock::new("uno dos tres").delay(Duration::ZERO);
+        let (_, never) = watch::channel(false);
+        let (events, outcome) = collect(&backend, never).await;
+
+        let tokens: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                TurnEvent::Token(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tokens, ["uno ", "dos ", "tres"]);
+        assert_eq!(outcome.text, "uno dos tres");
+        assert_eq!(outcome.reason, EndReason::Stop);
+        assert_eq!(outcome.usage.map(|u| u.completion_tokens), Some(3));
+        assert!(matches!(events.last(), Some(TurnEvent::Ended { .. })));
+    }
+
+    #[tokio::test]
+    async fn cancelling_ends_the_turn_and_keeps_the_partial_text() {
+        let backend = Mock::new("uno dos tres cuatro").delay(Duration::from_millis(30));
+        let (stop, cancel) = watch::channel(false);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(45)).await;
+            let _ = stop.send(true);
+        });
+
+        let (events, outcome) = collect(&backend, cancel).await;
+
+        assert_eq!(outcome.reason, EndReason::Cancelled);
+        // Cancelling means the backend's final line is never read, so there is
+        // no usage to report — the one thing this test exists to pin down.
+        assert!(outcome.usage.is_none());
+        assert!(!outcome.text.is_empty(), "the tokens already streamed are kept");
+        assert!(outcome.text.len() < "uno dos tres cuatro".len());
+        assert!(matches!(
+            events.last(),
+            Some(TurnEvent::Ended { reason: EndReason::Cancelled, usage: None })
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelling_before_the_first_token_still_ends_cleanly() {
+        let backend = Mock::new("uno dos").delay(Duration::from_millis(50));
+        let (_stop, cancel) = watch::channel(true);
+        let (events, outcome) = collect(&backend, cancel).await;
+
+        assert_eq!(outcome.reason, EndReason::Cancelled);
+        assert!(outcome.text.is_empty());
+        assert_eq!(events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_cancel_sender_does_not_stall_the_turn() {
+        // Regression: with every sender gone, `watch::Receiver::changed()` is
+        // permanently ready with an error. A biased select that kept polling it
+        // never reached the backend stream, and the turn hung.
+        let backend = Mock::new("uno dos").delay(Duration::ZERO);
+        let (sender, cancel) = watch::channel(false);
+        drop(sender);
+
+        let (_, outcome) = tokio::time::timeout(Duration::from_secs(5), collect(&backend, cancel))
+            .await
+            .expect("the turn must finish once cancellation becomes impossible");
+
+        assert_eq!(outcome.reason, EndReason::Stop);
+        assert_eq!(outcome.text, "uno dos");
+    }
+
+    #[tokio::test]
+    async fn a_backend_failure_is_reported_and_keeps_what_arrived() {
+        let backend = Mock::new("uno dos tres cuatro")
+            .delay(Duration::ZERO)
+            .failing("connection reset");
+        let (_, never) = watch::channel(false);
+        let (events, outcome) = collect(&backend, never).await;
+
+        assert!(outcome.error.as_deref().unwrap().contains("connection reset"));
+        assert!(!outcome.text.is_empty());
+        assert!(matches!(events.last(), Some(TurnEvent::Failed(_))));
+    }
+}
