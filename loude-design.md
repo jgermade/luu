@@ -156,10 +156,27 @@ Two consequences worth designing around rather than discovering:
   validated against the `ts-rs`-generated `.d.ts`, templates untyped. `tsc --noEmit` stays an
   optional check task, never a build step.
 
-**Effect batching is the one gap.** jq79 has no scheduler — writes propagate synchronously, so a
-token stream would cost one DOM write per token. Either buffer `token` messages and flush on
-`requestAnimationFrame` (needed under any framework), or add a microtask-coalescing `batch(fn)`
-upstream in jq79, where it would serve any consumer with streaming data.
+### What this needs from jq79
+
+Two gaps, neither expressible from userland, both general enough to belong upstream rather than in a
+patched copy. Listed in the order loude hits them:
+
+1. **A teardown hook** (`$onDestroy`, or a cleanup function returned from `$effect`). Effects, stores
+   and injected styles are disposed with the component, but a resource the component itself owns has
+   nowhere to be released. The first component written here — the one holding the WebSocket — needs
+   it, as does any `requestAnimationFrame` loop or mounted imperative widget.
+2. **Effect batching** (`batch(fn)`, microtask-coalesced flush). There is no scheduler; writes
+   propagate synchronously, so a token stream costs one DOM write per token. Until it exists, buffer
+   `token` messages and flush on `requestAnimationFrame` — worth doing under any framework.
+
+**Promotion rule**, to keep a library whose value is "one file, no dependencies" from bending toward
+its first consumer: a gap moves upstream only when it cannot be expressed in userland, or when the
+same workaround has appeared twice. The two above pass the first test. List virtualization fails
+both — it is ordinary component code, so it stays here until something else asks for it.
+
+What flows back is a workload no tutorial or benchmark produces: long-lived sessions, sustained
+high-frequency updates, thousand-row lists that grow at the end, and components owning external
+resources.
 
 ### Debug panels that earn their place
 
