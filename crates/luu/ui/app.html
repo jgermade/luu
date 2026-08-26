@@ -1,0 +1,234 @@
+<script :setup>
+  // A setup script takes `await import(...)`; a static `import` statement is
+  // for factory scripts only.
+  const { state, connect, send, cancel, playFixture } = await import("./store.js")
+
+  connect()
+
+  let draft = ""
+
+  const submit = () => {
+    send(draft)
+    draft = ""
+  }
+
+  $: running = state.status === "running"
+  $: replaying = state.status === "replay"
+  $: budgetTotal = state.budget
+    ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
+    : 0
+</script>
+
+<header>
+  <strong>loude</strong>
+  <span class="tag">{{ state.backend || "—" }}</span>
+  <span class="tag">{{ state.model || "—" }}</span>
+  <select
+    :if="state.fixtures.length"
+    class="fixtures"
+    :value="state.fixture"
+    @change="playFixture($event.target.value)">
+    <option :each="fixture in state.fixtures" :key="fixture.file" :value="fixture.file">
+      {{ fixture.name }}
+    </option>
+  </select>
+  <span class="status" :class="state.status">{{ state.status }}</span>
+</header>
+
+<div class="split">
+  <section class="chat">
+    <div class="transcript">
+      <article :each="message in state.messages" :key="message.id" :class="message.role">
+        <div class="who">{{ message.role }}</div>
+        <div class="text">{{ message.text }}</div>
+        <div :if="message.reason" class="meta">
+          <span :class.warn="message.reason !== 'stop'">{{ message.reason }}</span>
+          <span :if="message.usage">
+            {{ message.usage.prompt_tokens }} prompt / {{ message.usage.completion_tokens }} completion
+          </span>
+          <span :if="message.reason && !message.usage" class="dim">usage unknown</span>
+        </div>
+      </article>
+
+      <p :if="!state.messages.length" class="empty">
+        Nothing yet. Send a prompt.
+      </p>
+    </div>
+
+    <div :if="state.error" class="error">{{ state.error }}</div>
+
+    <form class="composer" @submit.prevent="submit()">
+      <input
+        :value="draft"
+        @input="draft = $event.target.value"
+        :attrs="{ placeholder: replaying ? 'Replaying a recorded session — read only' : 'Ask something…', disabled: replaying }"
+        autofocus>
+      <button :if="!running" type="submit" :disabled="!draft.trim() || replaying">Send</button>
+      <button :if="running" type="button" class="cancel" @click="cancel()">Cancel</button>
+    </form>
+  </section>
+
+  <aside class="inspector">
+    <h2>Token budget</h2>
+    <div :if="state.budget">
+      <div class="bar">
+        <span
+          :each="bucket in state.budget.buckets"
+          :key="bucket.name"
+          :class="bucket.name"
+          :attrs="{ style: `flex-grow:${bucket.tokens || 0}`, title: `${bucket.name}: ${bucket.tokens}` }"></span>
+      </div>
+      <ul class="legend">
+        <li :each="bucket in state.budget.buckets" :key="bucket.name">
+          <span :class="bucket.name"></span>{{ bucket.name }}
+          <b>{{ bucket.tokens }}</b>
+        </li>
+      </ul>
+      <p class="dim">
+        {{ budgetTotal }} tokens<span :if="state.budget?.limit"> of {{ state.budget?.limit }}</span>
+      </p>
+    </div>
+    <p :if="!state.budget" class="dim">
+      No usage reported yet. A cancelled turn never reports any — the counts
+      arrive on the backend's last line.
+    </p>
+
+    <h2>Prompt sent to the model</h2>
+    <pre :if="state.prompt">{{ state.prompt }}</pre>
+    <p :if="!state.prompt" class="dim">Nothing sent yet this session.</p>
+  </aside>
+</div>
+
+<style>
+  :host, header, .split { display: block; }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .6rem 1rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  header strong { letter-spacing: .02em; }
+  .tag {
+    font-size: 12px;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0 .5rem;
+  }
+  .status { margin-left: auto; font-size: 12px; color: var(--dim); }
+  .status.running { color: var(--accent); }
+  .status.replay { color: var(--warn); }
+  .status.closed { color: var(--bad); }
+  .fixtures {
+    background: var(--bg);
+    color: inherit;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 12px;
+    padding: .15rem .4rem;
+  }
+  input:disabled { opacity: .6; }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 26rem);
+    height: calc(100vh - 3rem);
+  }
+  @media (max-width: 60rem) {
+    .split { grid-template-columns: minmax(0, 1fr); }
+    .inspector { display: none; }
+  }
+
+  .chat { display: flex; flex-direction: column; min-width: 0; }
+  .transcript { flex: 1; overflow-y: auto; padding: 1rem; }
+
+  article { margin-bottom: 1rem; }
+  .who {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--dim);
+    margin-bottom: .2rem;
+  }
+  article.user .text { color: var(--accent); }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .meta { margin-top: .3rem; font-size: 12px; color: var(--dim); display: flex; gap: .6rem; }
+  .meta .warn { color: var(--warn); }
+
+  .empty, .dim { color: var(--dim); }
+  .error {
+    margin: 0 1rem;
+    padding: .5rem .75rem;
+    border: 1px solid var(--bad);
+    border-radius: 6px;
+    color: var(--bad);
+    font-size: 13px;
+  }
+
+  .composer { display: flex; gap: .5rem; padding: 1rem; border-top: 1px solid var(--line); }
+  input {
+    flex: 1;
+    min-width: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    padding: .5rem .75rem;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    background: var(--accent);
+    color: #10131a;
+    border: 0;
+    border-radius: 6px;
+    font: inherit;
+    font-weight: 600;
+    padding: .5rem 1rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  button.cancel { background: var(--warn); }
+
+  .inspector {
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+    padding: 1rem;
+    overflow-y: auto;
+    min-width: 0;
+  }
+  .inspector h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--dim);
+    margin: 1.2rem 0 .5rem;
+  }
+  .inspector h2:first-child { margin-top: 0; }
+
+  .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #0e1014; }
+  .bar span { min-width: 2px; }
+  .bar span.prompt, .legend span.prompt { background: var(--accent); }
+  .bar span.completion, .legend span.completion { background: var(--warn); }
+
+  .legend { list-style: none; margin: .6rem 0 0; padding: 0; font-size: 13px; }
+  .legend li { display: flex; align-items: center; gap: .4rem; }
+  .legend li b { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .legend span { width: 9px; height: 9px; border-radius: 2px; }
+
+  pre {
+    background: #0e1014;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: .6rem;
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 22rem;
+    overflow-y: auto;
+  }
+</style>

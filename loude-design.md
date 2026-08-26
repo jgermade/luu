@@ -2,6 +2,10 @@
 
 Local AI agent written in Rust that orchestrates calls to models, optimized for local inference (limited context, tight token budget).
 
+This file is the design as it stands now, and is rewritten as decisions change. The dated
+reasoning behind them — including the answers that were wrong first — lives in [`RECORD/`](RECORD/),
+which is append-only. See [AGENTS.md](AGENTS.md).
+
 ## Goals
 
 - **Optimize the context window** for local models (7B–32B, 8K–32K context) — the key differentiator vs. existing solutions that don't do this well.
@@ -21,12 +25,12 @@ Modeled in Rust as a state enum + a `Mode` trait with `next_action(&self, ctx: &
 ## Overall architecture
 
 ```
-┌─────────────┐   ┌──────────────────┐   ┌────────────────┐
-│  CLI (bin)  │   │  VSCode ext (TS) │   │  (future: TUI)  │
+┌─────────────┐   ┌──────────────────┐   ┌─────────────────┐
+│  CLI (bin)  │   │  VSCode ext (TS) │   │  Web debug UI   │
 └──────┬──────┘   └────────┬─────────┘   └────────┬────────┘
-       │                   │ JSON-RPC / stdio       │
-       └───────────────────┴────────────────────────┘
-                            │
+       │ in-process        │ stdio               │ WebSocket
+       └───────────────────┴─────────────────────┘
+                            │   one JSON message schema, N transports
                   ┌─────────▼──────────┐
                   │   agent-core (lib) │  ← all the brains here
                   │  modes, context,   │
@@ -38,7 +42,7 @@ Modeled in Rust as a state enum + a `Mode` trait with `next_action(&self, ctx: &
                   └─────────────────────┘
 ```
 
-The core knows nothing about CLI or VSCode — it exposes an internal API (Rust) or a local JSON-RPC server. This gets container isolation for free: the container only wraps the core.
+The core knows nothing about CLI, VSCode or the browser — it exposes an internal API (Rust) plus a local server speaking a single JSON message schema over swappable transports. This gets container isolation for free: the container only wraps the core.
 
 ## Context management (the differentiating piece)
 
@@ -79,6 +83,123 @@ The model never executes anything directly — it only emits a structured reques
 - The TS extension acts as a bridge: renders the UI (messages, plan approval) and talks to the Rust binary (`agent-core --serve`) over stdio or a socket, using JSON-lines or JSON-RPC (reusable for the CLI too).
 - The `plan` mode maps well to this UX: an editable plan before execution (similar to how Copilot shows changes before applying them); `run` as execution with streaming of which tool is being used.
 
+## Debug web client (agent protocol)
+
+A local web UI (chat, session browser, context inspector) is the fastest way to see what the
+context manager is actually doing — the CLI can't show a token budget or a prompt diff.
+
+### Transport: HTTP + WebSocket, not REST-only and not gRPC
+
+**Decision: one JSON message schema, several transports (stdio, WebSocket), served over plain HTTP.**
+
+- **Not gRPC.** Browsers can't speak gRPC natively — it needs grpc-web plus a proxy (Envoy) or
+  Connect. `tonic` also forces a protobuf IDL maintained in parallel with the `serde` types, with
+  codegen in `build.rs`, and binary frames that are unreadable in devtools. gRPC pays off for
+  cross-language, multi-service, high-throughput systems; this is one local process talking to one
+  browser. The cost is all setup and the benefit is nil.
+- **Not REST-only.** No streaming of tokens or tool events; polling makes a debug UI useless. Adding
+  SSE on top gets you halfway to a WebSocket with more moving parts.
+- **Reuse what stdio already needs.** The VSCode bridge already requires a JSON-lines protocol.
+  Define the messages once as `serde` enums (`#[serde(tag = "type")]`), put the transport behind a
+  trait, and the web client and the extension speak the same protocol — one schema to version, two
+  clients debugged at once.
+
+### Server shape
+
+`luu serve --http 127.0.0.1:7878` (loopback by default, no auth; require a bearer token when bound
+to any other address). The UI is embedded in the binary with `rust-embed`, so there is one command,
+one URL, and no node process in the loop.
+
+Live channel — `WS /ws`:
+
+| Direction | Messages |
+| --- | --- |
+| client → server | `prompt`, `approve_plan`, `edit_plan`, `cancel`, `set_mode` |
+| server → client | `token`, `plan`, `tool_call`, `tool_result`, `context_snapshot`, `usage`, `error`, `turn_end` |
+
+Read side — plain GETs, browsable and curl-able:
+
+- `GET /api/sessions` · `GET /api/sessions/:id` · `POST /api/sessions` · `DELETE /api/sessions/:id`
+- `GET /api/sessions/:id/turns?from=&limit=`
+- `GET /api/sessions/:id/turns/:n/prompt` — the exact string sent to the model
+- `GET /api/sessions/:id/context` — current token budget breakdown
+- `GET /events?session=` — SSE mirror of the WS stream, so a session can be followed with `curl -N`
+  without a browser
+
+Server stack: `axum` + `tokio`.
+
+### UI stack
+
+**[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.**
+
+The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
+frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
+`cargo build` requires node, or a committed `dist/` with the noise that brings. jq79 has no compiler
+step — components are `.html` files loaded at runtime — so `rust-embed` ships one `jq79.js` plus a
+handful of `.html` files and the build stays pure Cargo.
+
+The rest follows from that:
+
+- **Dev loop**: `jq79 dev` hot-reloads components with no bundler. Serve the directory from disk in
+  debug builds (`#[cfg(debug_assertions)]`) and from `rust-embed` in release — the dev server applies
+  no transforms, so both paths serve the same bytes. No Vite proxy to configure.
+- **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
+  keeps existing DOM when the transcript is appended to.
+- **Virtualization**: no library, and none needed — bind `:each` to a computed window plus two spacer
+  elements. `GET /api/sessions/:id/turns?from=&limit=` already puts pagination on the server.
+
+Two consequences worth designing around rather than discovering:
+
+- **Compute the prompt diff in Rust** (`similar`), and send resolved spans over the protocol. Pulling
+  in CodeMirror or Monaco for it would reintroduce the bundler this choice just removed, and the
+  server holds both prompt strings anyway — it is the right place for the work. Should the editable
+  plan later need a real editor, `await $mounted()` + `$self(...)` mounts an imperative widget
+  cleanly, so the option stays open without being paid for now.
+- **No compile-time check of the protocol types**, which a TypeScript build would have given. Recover
+  most of it by splitting the UI: the transport and store layer as a `// @ts-check`ed `.js` module
+  validated against the `ts-rs`-generated `.d.ts`, templates untyped. `tsc --noEmit` stays an
+  optional check task, never a build step.
+
+### What this needs from jq79
+
+Two gaps, neither expressible from userland, both general enough to belong upstream rather than in a
+patched copy. Listed in the order loude hits them:
+
+1. **A teardown hook** (`$onDestroy`, or a cleanup function returned from `$effect`). Effects, stores
+   and injected styles are disposed with the component, but a resource the component itself owns has
+   nowhere to be released. The first component written here — the one holding the WebSocket — needs
+   it, as does any `requestAnimationFrame` loop or mounted imperative widget.
+2. **Effect batching** (`batch(fn)`, microtask-coalesced flush). There is no scheduler; writes
+   propagate synchronously, so a token stream costs one DOM write per token. Until it exists, buffer
+   `token` messages and flush on `requestAnimationFrame` — worth doing under any framework.
+
+**Promotion rule**, to keep a library whose value is "one file, no dependencies" from bending toward
+its first consumer: a gap moves upstream only when it cannot be expressed in userland, or when the
+same workaround has appeared twice. The two above pass the first test. List virtualization fails
+both — it is ordinary component code, so it stays here until something else asks for it.
+
+What flows back is a workload no tutorial or benchmark produces: long-lived sessions, sustained
+high-frequency updates, thousand-row lists that grow at the end, and components owning external
+resources.
+
+### Debug panels that earn their place
+
+Chat and session list are table stakes. The ones that justify building this at all:
+
+1. **Token budget per turn** — stacked bar of system/tools · code context · history · reserve, with
+   the underlying text of each block on hover.
+2. **Raw prompt viewer with a diff against the previous turn** — shows how much of the stable prefix
+   survived, i.e. the real prompt-cache / KV-reuse hit rate.
+3. **Tool call timeline** — arguments, sandbox verdict (allowed/denied and *which* rule matched),
+   duration, and result size before/after pruning.
+4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
+
+### Record and replay
+
+`luu serve --record <file>` dumps the JSON-lines stream to disk, and the UI can load such a file
+instead of a live socket. Sessions become replayable offline — useful for bug reports and for
+comparing context strategies across runs without re-running inference.
+
 ## Inference backend
 
 Decide between:
@@ -93,9 +214,11 @@ Decide between:
 
 1. `agent-core`: base types (`Mode`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp).
 2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly.
-3. Application-level path/command sandbox.
-4. Container packaging.
-5. TS bridge + VSCode extension last, once the core is stable.
+3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
+   measure step 2.
+4. Application-level path/command sandbox.
+5. Container packaging.
+6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
 
 ## Naming
 
@@ -109,3 +232,4 @@ Decide between:
 - Finalize the base types design for `agent-core` (`Mode`, `Context`, `Tool`, `SandboxPolicy`).
 - Design the concrete GBNF grammar to force valid tool calls with the target model (Qwen2.5-Coder).
 - Define the initial tool set: `read_file`, `edit_file`, `list_dir`, `run_command`, etc.
+- Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format).
