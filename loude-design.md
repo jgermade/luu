@@ -2,6 +2,10 @@
 
 Local AI agent written in Rust that orchestrates calls to models, optimized for local inference (limited context, tight token budget).
 
+This file is the design as it stands now, and is rewritten as decisions change. The dated
+reasoning behind them — including the answers that were wrong first — lives in [`RECORD/`](RECORD/),
+which is append-only. See [AGENTS.md](AGENTS.md).
+
 ## Goals
 
 - **Optimize the context window** for local models (7B–32B, 8K–32K context) — the key differentiator vs. existing solutions that don't do this well.

@@ -1,0 +1,87 @@
+# Loude (CLI alias: `luu`)
+
+A local AI agent in Rust that orchestrates calls to models, built for local
+inference — 7B–32B models with 8K–32K of context. The differentiator is context
+management: what gets into the prompt, and what earns its place there.
+
+Be concise in your answers. I prefer examples over long text.
+
+**There is no code yet.** [`loude-design.md`](loude-design.md) is the whole project
+so far. Read it before proposing anything; a suggestion that contradicts a decision
+already recorded there needs to say so and argue with it, not route around it.
+
+## Where things live
+
+- [`loude-design.md`](loude-design.md) — the design as it stands **now**. It is
+  rewritten as decisions change, so it always reads as the current answer.
+- [`RECORD/`](RECORD/) — dated proposals and the reasoning behind them,
+  **append-only**. It is how the current answer was arrived at, including the
+  answers that were wrong first.
+
+The two overlap on purpose and must not be merged. If you only update the design
+doc, the reasoning is lost; if you only write a record, nobody can tell what is
+true today. A decision that changes touches both: rewrite the design doc, append
+to the record.
+
+## Plans
+
+Design work that isn't code yet lives in `RECORD/`, one file per proposal, named
+`YYYY-MM-DD.<slug>.md` after the day it was written. Write the plan there *before*
+touching code — the reasoning is the point, and it's what a future reader (or the
+next agent) needs in order to argue with the decision rather than rediscover it. A
+plan states the problem, the proposal, what it costs, what was rejected and why,
+and what's still open.
+
+**`RECORD/` files are append-only.** Never edit or delete what's already in one,
+even to fix something the file gets wrong. A plan is a record of what was believed
+on a given day, and rewriting it erases the only evidence of how the thinking
+moved. A superseded decision gets a new dated section appended to the bottom (or a
+new file, if the whole proposal is being replaced) saying what changed and why. The
+mistakes stay where they are, because the reason they were made is usually the most
+useful thing in the file.
+
+## Commands
+
+The Cargo workspace is not scaffolded yet. Once it is, the loop is `cargo test`,
+`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`; add them here
+with anything else that becomes real, and keep this list to commands that actually
+run.
+
+## Design commitments that are easy to erode
+
+These are not style preferences. Each one is load-bearing, and each looks like an
+implementation detail from close up:
+
+- **The model never executes anything.** It emits a structured request; the program
+  parses it, validates it against the `SandboxPolicy`, and executes real Rust code.
+  Any path where model output reaches a shell or the filesystem without passing
+  that validation is a bug, however convenient.
+- **Permission checks live in the code, not in the model behaving well.**
+  Canonicalize paths (`std::fs::canonicalize`) before comparing, or a symlink walks
+  straight out of the sandbox.
+- **The stable prompt prefix stays byte-identical across calls.** System text and
+  tool definitions are what llama.cpp's prompt cache reuses. Reordering tools,
+  re-serializing a schema with different key order, or interpolating a timestamp
+  into the system block silently destroys KV reuse — and nothing fails, it just
+  gets slower. Treat the prefix as a wire format.
+- **One JSON message schema, several transports.** stdio, WebSocket and the record
+  format carry the same enums. A field that only makes sense to one client does not
+  belong in the protocol; debug traces go behind `--trace`, on their own channel, so
+  the protocol doesn't grow a debug half that stdio has to carry forever.
+- **`agent-core` knows nothing about the CLI, VSCode or the browser.** That is what
+  makes container isolation a packaging question rather than a rewrite.
+- **`cargo build` must not require node.** The debug UI ships as
+  [jq79](https://github.com/jgermade/jq79) — one runtime file plus `.html`
+  components, embedded with `rust-embed`. Keep npm out of `build.rs`.
+
+## Before you claim the context manager got better
+
+Context strategies are measured, not argued. A change to compaction, relevance
+selection or budget allocation needs numbers from the same model and the same task
+set, before and after — token counts per bucket, prompt-cache hit rate, and whether
+the task still succeeds. "Fewer tokens" is not a result on its own: dropping the
+fragment the model needed is also fewer tokens.
+
+The debug web client exists to produce those numbers — which is why it sits early
+in the work order rather than at the end, and why `luu serve --record` writes a
+replayable session file. Compare runs, don't recall them.
