@@ -15,7 +15,7 @@
 import { $reactive } from "./vendor/jq79.js"
 
 export const state = $reactive({
-  status: "connecting",   // connecting | ready | running | closed
+  status: "connecting",   // connecting | ready | running | closed | replay
   backend: "",
   model: "",
   protocol: 0,
@@ -24,6 +24,8 @@ export const state = $reactive({
   budget: null,           // { limit, buckets: [{ name, tokens }] }
   prompt: "",             // the exact string sent to the model, last turn
   error: null,
+  fixtures: [],           // replay mode only: [{ name, file, about }]
+  fixture: "",            // the one being replayed
 })
 
 let socket = null
@@ -77,7 +79,7 @@ function onProtocol(message) {
       state.model = message.model
       state.protocol = message.protocol
       state.turn = message.turn
-      state.status = message.turn === null ? "ready" : "running"
+      state.status = message.turn === null ? idle() : "running"
       break
 
     case "turn_started":
@@ -96,14 +98,14 @@ function onProtocol(message) {
       flush()
       replaceLast({ reason: message.reason, usage: message.usage })
       state.turn = null
-      state.status = "ready"
+      state.status = idle()
       break
 
     case "failed":
       flush()
       state.error = message.message
       state.turn = null
-      state.status = "ready"
+      state.status = idle()
       break
   }
 }
@@ -115,6 +117,8 @@ function onTrace(message) {
   }
 }
 
+let everConnected = false
+
 function open(path, onMessage, assign) {
   const ws = new WebSocket(url(path))
   ws.onmessage = event => {
@@ -125,10 +129,18 @@ function open(path, onMessage, assign) {
       console.error("unparseable frame", error)
     }
   }
-  ws.onopen = () => { backoff = 250 }
-  ws.onclose = () => {
+  ws.onopen = () => { backoff = 250; everConnected = true }
+  ws.onclose = async () => {
     assign(null)
     state.status = "closed"
+
+    // No agent was ever there: this is a static deploy, not a server that
+    // restarted. Offer the recorded sessions instead of retrying forever.
+    if (!everConnected && await loadFixtures()) {
+      socket = traceSocket = null
+      return replay(state.fixtures[0].file)
+    }
+
     // The server restarting is the ordinary case during development.
     setTimeout(connect, backoff)
     backoff = Math.min(backoff * 2, 5000)
@@ -136,7 +148,94 @@ function open(path, onMessage, assign) {
   return ws
 }
 
-export function connect() {
+/// Replay: the same messages, read from a recorded file instead of a socket.
+///
+/// This is what makes the UI useful on a static host — GitHub Pages has no
+/// agent behind it, and a recorded session is a truer fixture than a hand-made
+/// one, because it is a real run of the real protocol.
+async function replay(file) {
+  reset()
+  isReplay = true
+  state.status = "replay"
+  state.fixture = file
+
+  const response = await fetch(file)
+  if (!response.ok) {
+    state.error = `could not load ${file} (${response.status})`
+    return
+  }
+
+  const lines = (await response.text()).split("\n").filter(Boolean).map(JSON.parse)
+  const token = ++replayToken
+
+  let previous = 0
+  for (const line of lines) {
+    if (token !== replayToken) return          // a newer replay superseded this one
+
+    if (line.channel === "header") {
+      state.backend = line.backend
+      state.model = line.model
+      state.protocol = line.protocol
+      continue
+    }
+
+    // Played back at the pace it was recorded, capped so a session with a long
+    // pause in it does not become a long pause here.
+    const wait = Math.min(line.at_ms - previous, 400)
+    previous = line.at_ms
+    if (wait > 0) await new Promise(r => setTimeout(r, wait))
+    if (token !== replayToken) return
+
+    if (line.channel === "protocol") onProtocol(line.message)
+    if (line.channel === "trace") onTrace(line.message)
+  }
+
+  flush()
+  state.status = "replay"
+}
+
+/// What "not running" means depends on whether there is an agent behind us.
+function idle() {
+  return isReplay ? "replay" : "ready"
+}
+
+function reset() {
+  state.messages = []
+  state.budget = null
+  state.prompt = ""
+  state.error = null
+  state.turn = null
+  pending = ""
+}
+
+let replayToken = 0
+let isReplay = false
+
+export function playFixture(file) {
+  if (file) replay(file)
+}
+
+/// Looks for the fixtures a static deploy ships beside the app. Returning false
+/// means there is nothing to fall back to, so reconnecting is still right.
+async function loadFixtures() {
+  try {
+    const response = await fetch("./fixtures/index.json")
+    if (!response.ok) return false
+    const fixtures = await response.json()
+    if (!Array.isArray(fixtures) || !fixtures.length) return false
+    state.fixtures = fixtures
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function connect() {
+  const asked = new URLSearchParams(location.search).get("replay")
+  if (asked) {
+    await loadFixtures()
+    return replay(asked)
+  }
   if (socket) return
   socket = open("/ws", onProtocol, s => { socket = s })
   traceSocket = open("/ws/trace", onTrace, s => { traceSocket = s })

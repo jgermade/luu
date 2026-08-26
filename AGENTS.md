@@ -42,10 +42,30 @@ useful thing in the file.
 
 ## Commands
 
-The Cargo workspace is not scaffolded yet. Once it is, the loop is `cargo test`,
-`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`; add them here
-with anything else that becomes real, and keep this list to commands that actually
-run.
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets     # CI runs this with RUSTFLAGS=-D warnings
+cargo fmt --all --check
+
+cargo run --bin luu -- chat "hola"                    # one turn, mock backend, to stdout
+cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
+cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
+
+./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
+```
+
+`--mock-delay-ms` paces the mock backend, `--cancel-after-ms` exercises cancelling,
+and `--record <file>` writes a replayable session from either subcommand.
+
+CI is `.github/workflows/build.yml` (fmt, clippy, tests, both binaries, the site) on
+every push and pull request. `release.yml` is manual: it takes `patch`/`minor`/`major`,
+raises the workspace version, tags it, calls `build.yml` at the new commit, publishes
+the release and deploys Pages. It has a `dry-run` input — use it before the first
+real release.
+
+**Do not edit the UI's `dist`-like output, because there isn't one.** `crates/luu/ui/`
+is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into
+the binary for release. Editing a component costs a reload, not a `cargo build`.
 
 ## Design commitments that are easy to erode
 

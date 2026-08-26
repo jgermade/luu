@@ -1,0 +1,128 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build. Defaults to the caller's ref.
+        type: string
+        default: ""
+      pages:
+        description: Assemble and upload the GitHub Pages artifact.
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+
+  binary:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Both names ship: the design calls for `loude` and `luu` to be the same
+      # binary under two names.
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="dist/luu-${{ matrix.target }}"
+          mkdir -p "$out"
+          cp "target/${{ matrix.target }}/release/luu" "$out/"
+          cp "target/${{ matrix.target }}/release/loude" "$out/"
+          cp README.md "$out/" 2>/dev/null || true
+          tar -czf "dist/luu-${{ matrix.target }}.tar.gz" -C dist "luu-${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luu-${{ matrix.target }}
+          path: dist/luu-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  web:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The UI has no build step — it is jq79 plus .html components, served as
+      # they are. What CI produces is the fixtures, and it produces them by
+      # running the agent, so a fixture cannot drift from the format.
+      - run: cargo build --release --locked --bin luu
+
+      - name: Assemble the site
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          cp -r crates/luu/ui/. site/
+          ./scripts/make-fixtures.sh ./target/release/luu site/fixtures
+
+      - name: Check the site is self-contained
+        run: |
+          set -euo pipefail
+          # A CDN reference here would work locally and break the moment the
+          # binary is offline — which is the case the embedded UI exists for.
+          if grep -rInE 'https?://(cdn|unpkg|esm|fonts)\.' site/ ; then
+            echo "::error::the site must not reference external hosts"
+            exit 1
+          fi
+          test -s site/fixtures/index.json
+          test -s site/vendor/jq79.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site
+          if-no-files-found: error
+
+      - uses: actions/configure-pages@v5
+        if: ${{ inputs.pages }}
+      - uses: actions/upload-pages-artifact@v3
+        if: ${{ inputs.pages }}
+        with:
+          path: site

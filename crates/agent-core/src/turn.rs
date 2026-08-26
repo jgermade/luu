@@ -38,7 +38,10 @@ pub enum TurnEvent {
     Token(String),
     /// `usage` is absent on a cancelled turn: the counts arrive on the
     /// backend's final line, and cancelling means never reading it.
-    Ended { reason: EndReason, usage: Option<Usage> },
+    Ended {
+        reason: EndReason,
+        usage: Option<Usage>,
+    },
     Failed(String),
 }
 
@@ -74,8 +77,16 @@ pub async fn run_turn(
     }
 
     if *cancel.borrow_and_update() {
-        emit!(TurnEvent::Ended { reason: EndReason::Cancelled, usage: None });
-        return TurnOutcome { text, reason: EndReason::Cancelled, usage: None, error: None };
+        emit!(TurnEvent::Ended {
+            reason: EndReason::Cancelled,
+            usage: None
+        });
+        return TurnOutcome {
+            text,
+            reason: EndReason::Cancelled,
+            usage: None,
+            error: None,
+        };
     }
 
     // Every cancel sender may be dropped before the turn ends — that is the
@@ -119,8 +130,16 @@ pub async fn run_turn(
             }
             Some(Ok(Chunk::Done { stop, usage })) => {
                 let reason = EndReason::from(stop);
-                emit!(TurnEvent::Ended { reason, usage: Some(usage) });
-                return TurnOutcome { text, reason, usage: Some(usage), error: None };
+                emit!(TurnEvent::Ended {
+                    reason,
+                    usage: Some(usage)
+                });
+                return TurnOutcome {
+                    text,
+                    reason,
+                    usage: Some(usage),
+                    error: None,
+                };
             }
             Some(Err(error)) => {
                 let error = error.to_string();
@@ -135,7 +154,10 @@ pub async fn run_turn(
             // The backend's stream ended without saying so. Treat it as a stop,
             // and say the usage is unknown rather than reporting zeros.
             None => {
-                emit!(TurnEvent::Ended { reason: EndReason::Stop, usage: None });
+                emit!(TurnEvent::Ended {
+                    reason: EndReason::Stop,
+                    usage: None
+                });
                 return TurnOutcome {
                     text,
                     reason: EndReason::Stop,
@@ -161,7 +183,10 @@ mod tests {
         }
     }
 
-    async fn collect(backend: &dyn Backend, cancel: watch::Receiver<bool>) -> (Vec<TurnEvent>, TurnOutcome) {
+    async fn collect(
+        backend: &dyn Backend,
+        cancel: watch::Receiver<bool>,
+    ) -> (Vec<TurnEvent>, TurnOutcome) {
         let (tx, mut rx) = mpsc::channel(64);
         let drain = tokio::spawn(async move {
             let mut seen = Vec::new();
@@ -210,11 +235,17 @@ mod tests {
         // Cancelling means the backend's final line is never read, so there is
         // no usage to report — the one thing this test exists to pin down.
         assert!(outcome.usage.is_none());
-        assert!(!outcome.text.is_empty(), "the tokens already streamed are kept");
+        assert!(
+            !outcome.text.is_empty(),
+            "the tokens already streamed are kept"
+        );
         assert!(outcome.text.len() < "uno dos tres cuatro".len());
         assert!(matches!(
             events.last(),
-            Some(TurnEvent::Ended { reason: EndReason::Cancelled, usage: None })
+            Some(TurnEvent::Ended {
+                reason: EndReason::Cancelled,
+                usage: None
+            })
         ));
     }
 
@@ -254,7 +285,13 @@ mod tests {
         let (_, never) = watch::channel(false);
         let (events, outcome) = collect(&backend, never).await;
 
-        assert!(outcome.error.as_deref().unwrap().contains("connection reset"));
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("connection reset")
+        );
         assert!(!outcome.text.is_empty());
         assert!(matches!(events.last(), Some(TurnEvent::Failed(_))));
     }

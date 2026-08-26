@@ -47,8 +47,14 @@ pub enum ServerMessage {
     },
     /// Carries the prompt, because a second client (and the record file) never
     /// saw the `ClientMessage` that started the turn.
-    TurnStarted { turn: TurnId, prompt: String },
-    Token { turn: TurnId, text: String },
+    TurnStarted {
+        turn: TurnId,
+        prompt: String,
+    },
+    Token {
+        turn: TurnId,
+        text: String,
+    },
     /// `usage` is absent on a cancelled turn: the counts arrive on the
     /// backend's final line, which cancelling means never reading. Reporting
     /// zeros instead would be a lie the budget panel would plot.
@@ -57,7 +63,10 @@ pub enum ServerMessage {
         reason: EndReason,
         usage: Option<Usage>,
     },
-    Failed { turn: TurnId, message: String },
+    Failed {
+        turn: TurnId,
+        message: String,
+    },
 }
 
 impl ServerMessage {
@@ -65,7 +74,11 @@ impl ServerMessage {
     pub fn from_turn_event(turn: TurnId, event: TurnEvent) -> Self {
         match event {
             TurnEvent::Token(text) => Self::Token { turn, text },
-            TurnEvent::Ended { reason, usage } => Self::Ended { turn, reason, usage },
+            TurnEvent::Ended { reason, usage } => Self::Ended {
+                turn,
+                reason,
+                usage,
+            },
             TurnEvent::Failed(message) => Self::Failed { turn, message },
         }
     }
@@ -95,7 +108,10 @@ mod tests {
 
     #[test]
     fn a_token_is_tagged_by_type() {
-        let json = roundtrip(&ServerMessage::Token { turn: 1, text: "hola".into() });
+        let json = roundtrip(&ServerMessage::Token {
+            turn: 1,
+            text: "hola".into(),
+        });
         assert_eq!(json["type"], "token");
         assert_eq!(json["text"], "hola");
     }
@@ -120,9 +136,18 @@ mod tests {
 
     #[test]
     fn turn_events_convert_without_losing_the_reason() {
-        let event = TurnEvent::Ended { reason: EndReason::Length, usage: None };
+        let event = TurnEvent::Ended {
+            reason: EndReason::Length,
+            usage: None,
+        };
         let message = ServerMessage::from_turn_event(7, event);
         assert_eq!(message.turn(), Some(7));
-        assert!(matches!(message, ServerMessage::Ended { reason: EndReason::Length, .. }));
+        assert!(matches!(
+            message,
+            ServerMessage::Ended {
+                reason: EndReason::Length,
+                ..
+            }
+        ));
     }
 }

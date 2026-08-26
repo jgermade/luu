@@ -18,7 +18,11 @@ pub struct Mock {
 
 impl Mock {
     pub fn new(reply: impl Into<String>) -> Self {
-        Self { reply: reply.into(), delay: Duration::from_millis(25), fail_with: None }
+        Self {
+            reply: reply.into(),
+            delay: Duration::from_millis(25),
+            fail_with: None,
+        }
     }
 
     pub fn delay(mut self, delay: Duration) -> Self {
@@ -49,8 +53,11 @@ impl Backend for Mock {
     }
 
     fn stream(&self, _request: CompletionRequest) -> ChunkStream<'_> {
-        let words: Vec<String> =
-            self.reply.split_inclusive(' ').map(str::to_string).collect();
+        let words: Vec<String> = self
+            .reply
+            .split_inclusive(' ')
+            .map(str::to_string)
+            .collect();
         let delay = self.delay;
         let fail_with = self.fail_with.clone();
 
@@ -61,9 +68,9 @@ impl Backend for Mock {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
-                if let Some(message) = &fail_with
-                    && i == completion_tokens as usize / 2
-                {
+                // Same macro-expansion limit as in `ollama.rs`: no let chains here.
+                let failing = fail_with.as_ref().filter(|_| i == completion_tokens as usize / 2);
+                if let Some(message) = failing {
                     Err(BackendError::Transport(message.clone()))?;
                     return;
                 }

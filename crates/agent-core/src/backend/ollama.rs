@@ -15,7 +15,10 @@ pub struct Ollama {
 impl Ollama {
     pub fn new(base_url: impl Into<String>) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
-        Self { base_url, http: reqwest::Client::new() }
+        Self {
+            base_url,
+            http: reqwest::Client::new(),
+        }
     }
 }
 
@@ -129,10 +132,14 @@ impl Backend for Ollama {
             }
 
             // A last line without its newline: the stream ending is the delimiter.
-            if !buf.iter().all(u8::is_ascii_whitespace) {
-                if let Some(chunk) = parse_line(&buf)? {
-                    yield chunk;
-                }
+            // A let chain would read better, but this body is macro-expanded
+            // and loses its edition, so `&& let` is rejected here.
+            let tail = match buf.iter().all(u8::is_ascii_whitespace) {
+                true => None,
+                false => parse_line(&buf)?,
+            };
+            if let Some(chunk) = tail {
+                yield chunk;
             }
         })
     }

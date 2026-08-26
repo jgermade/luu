@@ -30,11 +30,17 @@ pub enum Role {
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: Role::System, content: content.into() }
+        Self {
+            role: Role::System,
+            content: content.into(),
+        }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: Role::User, content: content.into() }
+        Self {
+            role: Role::User,
+            content: content.into(),
+        }
     }
 }
 
@@ -86,8 +92,7 @@ pub enum BackendError {
     Malformed(String),
 }
 
-pub type ChunkStream<'a> =
-    Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>> + Send + 'a>>;
+pub type ChunkStream<'a> = Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>> + Send + 'a>>;
 
 /// Object-safe on purpose: the turn loop holds a `dyn Backend`, so swapping
 /// Ollama for an FFI binding never reaches the loop.

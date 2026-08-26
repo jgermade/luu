@@ -1,7 +1,7 @@
 <script :setup>
   // A setup script takes `await import(...)`; a static `import` statement is
   // for factory scripts only.
-  const { state, connect, send, cancel } = await import("./store.js")
+  const { state, connect, send, cancel, playFixture } = await import("./store.js")
 
   connect()
 
@@ -13,6 +13,7 @@
   }
 
   $: running = state.status === "running"
+  $: replaying = state.status === "replay"
   $: budgetTotal = state.budget
     ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
     : 0
@@ -22,6 +23,15 @@
   <strong>loude</strong>
   <span class="tag">{{ state.backend || "—" }}</span>
   <span class="tag">{{ state.model || "—" }}</span>
+  <select
+    :if="state.fixtures.length"
+    class="fixtures"
+    :value="state.fixture"
+    @change="playFixture($event.target.value)">
+    <option :each="fixture in state.fixtures" :key="fixture.file" :value="fixture.file">
+      {{ fixture.name }}
+    </option>
+  </select>
   <span class="status" :class="state.status">{{ state.status }}</span>
 </header>
 
@@ -51,9 +61,9 @@
       <input
         :value="draft"
         @input="draft = $event.target.value"
-        placeholder="Ask something…"
+        :attrs="{ placeholder: replaying ? 'Replaying a recorded session — read only' : 'Ask something…', disabled: replaying }"
         autofocus>
-      <button :if="!running" type="submit" :disabled="!draft.trim()">Send</button>
+      <button :if="!running" type="submit" :disabled="!draft.trim() || replaying">Send</button>
       <button :if="running" type="button" class="cancel" @click="cancel()">Cancel</button>
     </form>
   </section>
@@ -75,7 +85,7 @@
         </li>
       </ul>
       <p class="dim">
-        {{ budgetTotal }} tokens<span :if="state.budget.limit"> of {{ state.budget.limit }}</span>
+        {{ budgetTotal }} tokens<span :if="state.budget?.limit"> of {{ state.budget?.limit }}</span>
       </p>
     </div>
     <p :if="!state.budget" class="dim">
@@ -110,7 +120,18 @@
   }
   .status { margin-left: auto; font-size: 12px; color: var(--dim); }
   .status.running { color: var(--accent); }
+  .status.replay { color: var(--warn); }
   .status.closed { color: var(--bad); }
+  .fixtures {
+    background: var(--bg);
+    color: inherit;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 12px;
+    padding: .15rem .4rem;
+  }
+  input:disabled { opacity: .6; }
 
   .split {
     display: grid;

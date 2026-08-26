@@ -27,8 +27,14 @@ pub enum RecordLine {
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
-    Protocol { at_ms: u64, message: ServerMessage },
-    Trace { at_ms: u64, message: TraceMessage },
+    Protocol {
+        at_ms: u64,
+        message: ServerMessage,
+    },
+    Trace {
+        at_ms: u64,
+        message: TraceMessage,
+    },
 }
 
 #[cfg(test)]
@@ -47,7 +53,10 @@ mod tests {
         };
         let token = RecordLine::Protocol {
             at_ms: 12,
-            message: ServerMessage::Token { turn: 1, text: "hola".into() },
+            message: ServerMessage::Token {
+                turn: 1,
+                text: "hola".into(),
+            },
         };
 
         let lines = format!(
@@ -57,8 +66,10 @@ mod tests {
         );
         assert_eq!(lines.lines().count(), 2, "one line per record");
 
-        let parsed: Vec<RecordLine> =
-            lines.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let parsed: Vec<RecordLine> = lines
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
         assert!(matches!(parsed[0], RecordLine::Header { format: 1, .. }));
         assert!(matches!(parsed[1], RecordLine::Protocol { at_ms: 12, .. }));
     }

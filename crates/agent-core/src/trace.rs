@@ -25,7 +25,10 @@ pub struct Bucket {
 
 impl Bucket {
     pub fn new(name: impl Into<String>, tokens: u32) -> Self {
-        Self { name: name.into(), tokens }
+        Self {
+            name: name.into(),
+            tokens,
+        }
     }
 }
 

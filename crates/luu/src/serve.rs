@@ -6,22 +6,21 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use agent_core::backend::{Backend, CompletionRequest, Message};
+use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
-use agent_core::record::{self, RecordLine};
 use agent_core::trace::{Bucket, TraceMessage};
 use agent_core::turn::run_turn;
+
+use crate::session::{Event, Recorder, messages_for, now_ms, rendered};
 use anyhow::{Context, Result};
 use axum::Router;
-use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
 /// The UI, embedded in the binary.
@@ -32,13 +31,6 @@ use tokio::sync::{Mutex, broadcast, mpsc, watch};
 #[derive(rust_embed::Embed)]
 #[folder = "ui/"]
 struct Ui;
-
-/// One message on its way to every connected client and to the record file.
-#[derive(Clone)]
-enum Event {
-    Protocol(ServerMessage),
-    Trace(TraceMessage),
-}
 
 struct Session {
     next_turn: TurnId,
@@ -52,26 +44,14 @@ struct App {
     model: String,
     session: Mutex<Session>,
     events: broadcast::Sender<Event>,
-    recorder: Option<mpsc::UnboundedSender<RecordLine>>,
-    started_at: u64,
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+    recorder: Option<Recorder>,
 }
 
 impl App {
     /// Publishes one event to every client and to the record, in that order.
     fn publish(&self, event: Event) {
         if let Some(recorder) = &self.recorder {
-            let at_ms = now_ms().saturating_sub(self.started_at);
-            let line = match &event {
-                Event::Protocol(message) => {
-                    RecordLine::Protocol { at_ms, message: message.clone() }
-                }
-                Event::Trace(message) => RecordLine::Trace { at_ms, message: message.clone() },
-            };
-            let _ = recorder.send(line);
+            recorder.write(&event);
         }
         // No subscribers is the ordinary state of a server nobody has opened yet.
         let _ = self.events.send(event);
@@ -87,21 +67,30 @@ pub struct ServeOptions {
 }
 
 pub async fn serve(options: ServeOptions) -> Result<()> {
-    let ServeOptions { address, backend, model, record, context_limit } = options;
+    let ServeOptions {
+        address,
+        backend,
+        model,
+        record,
+        context_limit,
+    } = options;
     let started_at = now_ms();
 
     let recorder = match record {
-        Some(path) => Some(spawn_recorder(path, &backend, &model, started_at).await?),
+        Some(path) => Some(Recorder::create(&path, backend.name(), &model, started_at).await?),
         None => None,
     };
 
     let app = Arc::new(App {
         backend,
         model,
-        session: Mutex::new(Session { next_turn: 1, current: None, cancel: None }),
+        session: Mutex::new(Session {
+            next_turn: 1,
+            current: None,
+            cancel: None,
+        }),
         events: broadcast::channel(1024).0,
         recorder,
-        started_at,
     });
 
     let router = Router::new()
@@ -109,7 +98,10 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         .route("/ws/trace", get(trace_socket))
         .route("/", get(|| serve_asset("index.html")))
         .route("/{*path}", get(asset_handler))
-        .with_state(AppRouterState { app: app.clone(), context_limit });
+        .with_state(AppRouterState {
+            app: app.clone(),
+            context_limit,
+        });
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -126,40 +118,6 @@ struct AppRouterState {
     context_limit: u32,
 }
 
-async fn spawn_recorder(
-    path: PathBuf,
-    backend: &Arc<dyn Backend>,
-    model: &str,
-    started_at: u64,
-) -> Result<mpsc::UnboundedSender<RecordLine>> {
-    let mut file = tokio::fs::File::create(&path)
-        .await
-        .with_context(|| format!("creating {}", path.display()))?;
-
-    let header = RecordLine::Header {
-        format: record::FORMAT,
-        protocol: protocol::VERSION,
-        backend: backend.name().to_string(),
-        model: model.to_string(),
-        started_at,
-    };
-    file.write_all(format!("{}\n", serde_json::to_string(&header)?).as_bytes()).await?;
-
-    let (tx, mut rx) = mpsc::unbounded_channel::<RecordLine>();
-    tokio::spawn(async move {
-        while let Some(line) = rx.recv().await {
-            let Ok(json) = serde_json::to_string(&line) else { continue };
-            if file.write_all(format!("{json}\n").as_bytes()).await.is_err() {
-                break;
-            }
-            // Flushed per line: a session worth replaying is usually one that
-            // ended badly, and a buffered tail is the part you needed.
-            let _ = file.flush().await;
-        }
-    });
-    Ok(tx)
-}
-
 async fn asset_handler(uri: Uri) -> Response {
     serve_asset(uri.path().trim_start_matches('/')).await
 }
@@ -174,10 +132,7 @@ async fn serve_asset(path: &str) -> Response {
     }
 }
 
-async fn protocol_socket(
-    ws: WebSocketUpgrade,
-    State(state): State<AppRouterState>,
-) -> Response {
+async fn protocol_socket(ws: WebSocketUpgrade, State(state): State<AppRouterState>) -> Response {
     ws.on_upgrade(move |socket| run_protocol_socket(socket, state))
 }
 
@@ -223,7 +178,9 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
             turn: session.current,
         }
     };
-    let Ok(json) = serde_json::to_string(&hello) else { return };
+    let Ok(json) = serde_json::to_string(&hello) else {
+        return;
+    };
     if sink.send(WsMessage::Text(json.into())).await.is_err() {
         return;
     }
@@ -284,23 +241,18 @@ async fn start_turn(app: Arc<App>, prompt: String, context_limit: u32) {
         (turn, rx)
     };
 
-    let messages = vec![
-        Message::system("You are Loude, a concise local coding agent."),
-        Message::user(prompt.clone()),
-    ];
+    let messages = messages_for(prompt.clone());
 
     app.publish(Event::Protocol(ServerMessage::TurnStarted { turn, prompt }));
+    app.publish(Event::Trace(TraceMessage::Prompt {
+        turn,
+        text: rendered(&messages),
+    }));
 
-    // The exact text handed to the model. Once a context manager exists this is
-    // what its prompt-diff panel reads.
-    let sent = messages
-        .iter()
-        .map(|m| format!("<|{:?}|>\n{}", m.role, m.content))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    app.publish(Event::Trace(TraceMessage::Prompt { turn, text: sent }));
-
-    let request = CompletionRequest { model: app.model.clone(), messages };
+    let request = CompletionRequest {
+        model: app.model.clone(),
+        messages,
+    };
 
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel(256);
