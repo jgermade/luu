@@ -48,7 +48,12 @@ a mode cannot tell the context manager what to compact. See
   *refused, visibly* (`refused` on the wire) rather than dropped or queued: a queued
   prompt runs against a plan nobody answered.
 - **The model writes the plan**, parsed out of a ```` ```plan ```` block the way a
-  tool call is parsed. When the block does not parse, the model's own lines become
+  tool call is parsed. The planning call is measured like any other call — it
+  carries its prompt, its size and its reuse on the trace channel, because a call
+  nothing measures is a cost nothing accounts for. **`parsed: true` is a syntax
+  check, not a grounding one**: a real 7B produced clean plan blocks naming
+  Python files that do not exist in this Rust workspace, because nothing in the
+  prompt had shown it the repository. When the block does not parse, the model's own lines become
   the steps and the plan says so — the user is about to approve this, and a plan
   with our sentences in it is a confirmation of something nobody proposed. The
   planning call is an ordinary user message on the unchanged prefix, so proposing
@@ -67,31 +72,49 @@ a mode cannot tell the context manager what to compact. See
   `:close` — so a task session is as repeatable as a plain one and approval is
   always typed. In the debug UI it is `/task <objective>` and two buttons.
 
-**What folding actually buys**, over the same 20 prompts in a 1024-token window,
-against the same prompts without tasks
-([`RECORD/2026-08-27.tasks-in-the-core.md`](RECORD/2026-08-27.tasks-in-the-core.md)):
+**What folding actually buys depends on the window**, and that is the finding.
+The same twenty prompts, with and without tasks, measured twice
+([`RECORD/2026-08-27.tasks-in-the-core.md`](RECORD/2026-08-27.tasks-in-the-core.md),
+third and fourth passes):
 
-|  | mean reuse | tokens sent | `history` | `tasks` |
+*1024 tokens, mock backend — a window chosen so the baseline is forced to evict:*
+
+|  | reuse, all calls | turn prompts | planning | total sent |
 | --- | ---: | ---: | ---: | ---: |
-| plain · `turn` (baseline) | 69.9% | 16 397 | 6 641 | 0 |
-| tasks · `turn` | 88.6% | 15 174 | 2 103 | 3 315 |
-| plain · `block` | 89.9% | 15 294 | 5 538 | 0 |
-| tasks · `block` | 89.4% | 14 976 | 2 103 | 3 117 |
+| plain · `turn` (baseline) | 69.9% | 16 397 | — | 16 397 |
+| plain · `block` | 89.9% | 15 294 | — | 15 294 |
+| tasks · either policy | 91.1% | 13 954 | 2 559 | 16 513 |
 
-- Against the default policy it wins outright — and by a different mechanism than
-  block eviction: it keeps the history small enough that eviction rarely fires,
-  rather than making each eviction cheaper.
-- Against block eviction it is a wash on reuse and −2% on tokens. **The two are
-  not additive**; both are ways of not rewriting the front of the history often.
-- A fold costs ~14 points of reuse on the turn after the close and the next turn
-  is back at 92%: a cut whose replacement is small, landing after a large stable
-  prefix, is a dip where an eviction is a cliff.
-- **The scaffolding is more than half of what the window costs** after four folds
-  (3 315 tokens of plans and summaries against 2 103 of history), which is the
-  part the shape of the idea does not suggest. Measured with plans the mock did
-  not write as plan blocks, so it is an upper bound.
+*8192 tokens, `qwen2.5-coder:7b` on an M4 Pro — the regime this tool targets:*
 
-The reason to keep it is not the reuse figure, then: it is the two things a
+|  | reuse, all calls | turn prompts | planning | total sent |
+| --- | ---: | ---: | ---: | ---: |
+| plain · `turn` (baseline) | 89.5% | 66 986 | — | 66 986 |
+| tasks · `turn` | 80.7% | 31 879 | 3 177 | 35 056 |
+
+- **Narrow window: folding buys reuse, not tokens.** Four planning calls at
+  557–718 tokens put the total above both baselines, so the 15% saved on turn
+  prompts is spent on proposing. The eviction policy stops mattering entirely —
+  the history never grows enough for either to fire.
+- **Comfortable window: folding buys tokens, not reuse.** The baseline never
+  evicts, so its history compounds over all twenty turns and folding sends about
+  half as much. Reuse goes the other way: an append-only history that is never
+  rewritten is the best case a prefix cache has, and folding rewrites it four
+  times.
+- So the two quantities trade against each other and **which one you win is
+  decided by whether the window forces the baseline to evict.** State the
+  configuration beside the figure — a reuse percentage compares only against the
+  same window, the same prefix and the same counter.
+- The scaffolding is real either way: at 1024, 2 095 tokens of plans and
+  summaries against 2 103 of history. A planning call is a per-task cost against
+  a per-turn benefit, so the ratio is task length: 15% of the session at five
+  turns a task, about 5% at fifteen. **A design that proposes a plan per task
+  wants tasks worth planning.**
+- A fold costs ~15 points of reuse, and it is the *planning call* that pays them,
+  not a turn — visible only because a planning call is measured. Turn-to-turn
+  reuse inside a tasks run is flat.
+
+The reason to keep it is not any single figure, then: it is the two things a
 threshold cannot give at any figure — the cut lands where the work ended, and the
 transcript collapses exactly what the context collapses.
 
@@ -253,6 +276,23 @@ the precision given up.
 
 - **Hierarchical compaction**: built and measured. A closed task is replaced by its deterministic summary (the plan plus the evidence: paths, commands, exit codes, denials), and the token threshold stays as the fallback for a task that overflows alone. What the table says is narrower than the idea promised — see below. What is still unmeasured is the only question the mock cannot answer: whether the summary loses something the task needed.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
+- **A tool call inside a turn is invisible to the instrument.** A turn that calls
+  a tool is two model calls, not one: the first ends in a tool block, the second
+  reads the result and answers. `budget` and `prefix_reuse` are emitted for the
+  first only, while `usage.prompt_tokens` on `Ended` is summed over both — so on
+  a tooled turn our count and the backend's are not counts of the same thing. Seen
+  on a real run: 1 590 tokens by our count against 3 552 reported, on a turn where
+  every other turn in the session agreed within 3. Exactly the gap `PlanCall` was
+  added to close, one level down, and the same fix: a trace event for the
+  intermediate call. **Until it lands, no budget number from a tooled turn is
+  trustworthy.**
+- **Nothing can fuse a file into a turn.** `Context::select` takes code fragments
+  and the `code` bucket exists for them, and no CLI surface fills it — so every
+  script in `scripts/tasks/` is ungrounded Q&A, a real model answers it out of
+  its own training (asked "what does the context manager do?", a 7B explained
+  Python's `__enter__`/`__exit__`), and *whether a summary loses something the
+  task needed* cannot be tested at all: there is no grounded answer for a fold to
+  lose.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
 ## Tool calling: how actions actually get executed
