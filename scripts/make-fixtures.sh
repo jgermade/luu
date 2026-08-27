@@ -38,10 +38,13 @@ done
 # same code the live server uses. `$out` is <site>/fixtures, so the API tree
 # goes beside it and the recordings are reached as ./fixtures/<name>.jsonl.
 # Named in order, not globbed: the first one is what the page plays on load,
-# and a glob would lead with whichever name sorts first.
+# and a glob would lead with whichever name sorts first. The default policy
+# leads — a demo that silently plays a non-default configuration is a demo of
+# something the tool does not do — and its counterpart is one click away in the
+# picker, which is the point of recording both.
 "$luu" export \
-  "$out/eviction-block.jsonl" \
   "$out/eviction-turn.jsonl" \
+  "$out/eviction-block.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \
