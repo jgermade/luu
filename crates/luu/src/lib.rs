@@ -5,14 +5,17 @@
 
 use std::time::Duration;
 
+use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama};
 use agent_core::context::{Budget, Context as AgentContext, Eviction};
 use agent_core::protocol::ServerMessage;
+use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
+use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
-use agent_core::turn::{EndReason, TurnEvent, run_turn};
+use agent_core::turn::{EndReason, TurnEvent};
 
 use crate::session::{
-    DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms, rendered,
+    Agency, DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms, rendered,
 };
 use anyhow::{Context, Result};
 
@@ -55,8 +58,22 @@ enum Command {
         record_base: String,
     },
 
+    /// Print the resolved sandbox and the exact tool definitions that go into
+    /// the prompt.
+    ///
+    /// The definitions are the second half of the cached prefix, so being able
+    /// to look at the bytes is the difference between a cache miss you can see
+    /// and one you cannot.
+    Tools {
+        #[command(flatten)]
+        sandbox: SandboxArgs,
+    },
+
     /// Serve the debug UI and the agent protocol over HTTP.
     Serve {
+        #[command(flatten)]
+        sandbox_args: SandboxArgs,
+
         #[arg(long, default_value = "127.0.0.1:7878")]
         bind: std::net::SocketAddr,
 
@@ -107,6 +124,9 @@ enum Command {
         /// The prompt. Reads stdin when omitted, and ignored with --script.
         prompt: Option<String>,
 
+        #[command(flatten)]
+        sandbox_args: SandboxArgs,
+
         /// A file of prompts, one per line, run in order against one shared
         /// history. `#` comments and blank lines are skipped. This is how a
         /// multi-turn baseline gets recorded the same way twice.
@@ -125,6 +145,13 @@ enum Command {
         /// Milliseconds between mock tokens, for exercising slow generation.
         #[arg(long, default_value_t = 25)]
         mock_delay_ms: u64,
+
+        /// What the mock backend answers, one per model call. Repeatable, and
+        /// the last one repeats — which is how the tool loop is exercised end
+        /// to end without a model: a reply containing a ```tool block, then the
+        /// reply that reads its result.
+        #[arg(long = "mock-reply", value_name = "TEXT")]
+        mock_replies: Vec<String>,
 
         /// Stop the turn after this many milliseconds, to exercise cancelling.
         #[arg(long)]
@@ -162,6 +189,113 @@ enum Command {
     },
 }
 
+/// The sandbox flags, shared by every subcommand that can act.
+///
+/// They *add* to whatever the policy file said rather than replacing it, so
+/// widening a project's sandbox for one run is a flag and narrowing it is an
+/// edit to the file — which is the direction that should be the harder one.
+#[derive(Clone, clap::Args)]
+struct SandboxArgs {
+    /// Sandbox policy (TOML). Defaults to ./luu.toml when it is there.
+    #[arg(long, value_name = "FILE")]
+    sandbox: Option<std::path::PathBuf>,
+
+    /// Grant read access to a path. Repeatable.
+    #[arg(long = "allow-read", value_name = "PATH")]
+    allow_read: Vec<std::path::PathBuf>,
+
+    /// Grant read and write. Repeatable.
+    #[arg(long = "allow-write", value_name = "PATH")]
+    allow_write: Vec<std::path::PathBuf>,
+
+    /// Grant read and the right to run what is in the tree. Repeatable.
+    #[arg(long = "allow-exec", value_name = "PATH")]
+    allow_exec: Vec<std::path::PathBuf>,
+
+    /// Let run_command run this program. Repeatable, and a program name — never
+    /// a shell string, which would make the list it is checked against
+    /// meaningless.
+    #[arg(long = "allow-command", value_name = "NAME")]
+    allow_command: Vec<String>,
+
+    /// Let subprocesses reach the network.
+    #[arg(long = "allow-network")]
+    allow_network: bool,
+
+    /// What to do where the kernel cannot hold a subprocess: `kernel` denies
+    /// the call and says what is missing, `best-effort` runs it and reports the
+    /// gap in every verdict.
+    #[arg(long = "sandbox-enforcement", value_enum)]
+    enforcement: Option<EnforcementKind>,
+
+    /// Tool calls one turn may make before it has to answer.
+    #[arg(long, default_value_t = DEFAULT_MAX_STEPS)]
+    max_tool_steps: u32,
+
+    /// Run without tools. The prefix loses the definitions block, so this is
+    /// not the same prompt with the tools ignored — it is a different one.
+    #[arg(long)]
+    no_tools: bool,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum EnforcementKind {
+    Kernel,
+    BestEffort,
+}
+
+impl SandboxArgs {
+    /// Resolves the policy: the file, then the flags, then the working
+    /// directory as the base every relative path is taken against.
+    fn resolve(&self) -> Result<Agency> {
+        let base = std::env::current_dir().context("the working directory")?;
+
+        let explicit = self.sandbox.is_some();
+        let path = self
+            .sandbox
+            .clone()
+            .unwrap_or_else(|| base.join("luu.toml"));
+        let mut policy = match (explicit, path.exists()) {
+            // An explicit --sandbox that is not there is an error: it was asked
+            // for, and falling back to the default would be a wider sandbox
+            // than the one the user named.
+            (true, false) => anyhow::bail!("--sandbox {}: no such file", path.display()),
+            (_, true) => SandboxPolicy::from_file(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+            (false, false) => SandboxPolicy::default(),
+        };
+
+        for granted in &self.allow_read {
+            policy.allow(granted, Access::Read);
+        }
+        for granted in &self.allow_exec {
+            policy.allow(granted, Access::Execute);
+        }
+        for granted in &self.allow_write {
+            policy.allow(granted, Access::ReadWrite);
+        }
+        for command in &self.allow_command {
+            policy.allow_command(command);
+        }
+        policy.network |= self.allow_network;
+        if let Some(enforcement) = self.enforcement {
+            policy.enforcement = match enforcement {
+                EnforcementKind::Kernel => Enforcement::Kernel,
+                EnforcementKind::BestEffort => Enforcement::BestEffort,
+            };
+        }
+
+        Ok(Agency {
+            tools: std::sync::Arc::new(match self.no_tools {
+                true => Tools::new(Vec::new()),
+                false => Tools::standard(),
+            }),
+            sandbox: std::sync::Arc::new(Sandbox::new(&policy, &base)?),
+            max_steps: self.max_tool_steps,
+        })
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum EvictionKind {
     Turn,
@@ -183,9 +317,20 @@ enum BackendKind {
     Ollama,
 }
 
-fn build_backend(kind: BackendKind, ollama_url: &str, mock_delay_ms: u64) -> Box<dyn Backend> {
+fn build_backend(
+    kind: BackendKind,
+    ollama_url: &str,
+    mock_delay_ms: u64,
+    mock_replies: Vec<String>,
+) -> Box<dyn Backend> {
     match kind {
-        BackendKind::Mock => Box::new(Mock::default().delay(Duration::from_millis(mock_delay_ms))),
+        BackendKind::Mock => Box::new(
+            match mock_replies.is_empty() {
+                true => Mock::default(),
+                false => Mock::replies(mock_replies),
+            }
+            .delay(Duration::from_millis(mock_delay_ms)),
+        ),
         BackendKind::Ollama => Box::new(Ollama::new(ollama_url)),
     }
 }
@@ -239,8 +384,19 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    if let Command::Tools { sandbox } = &command {
+        let agency = sandbox.resolve()?;
+        print!("{}", agency.describe());
+        let definitions = agency.definitions();
+        if !definitions.is_empty() {
+            println!("\n--- the prefix block, verbatim ---\n{definitions}");
+        }
+        return Ok(());
+    }
+
     if let Command::Serve {
         bind,
+        sandbox_args,
         backend,
         model,
         ollama_url,
@@ -253,12 +409,14 @@ pub async fn run() -> Result<()> {
         low_water,
     } = command
     {
-        let backend = build_backend(backend, &ollama_url, mock_delay_ms);
+        let backend = build_backend(backend, &ollama_url, mock_delay_ms, Vec::new());
         let model = model_for(backend.as_ref(), model);
         let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
+        let agency = sandbox_args.resolve()?;
+        eprint!("{}", agency.describe());
         return serve::serve(serve::ServeOptions {
             address: bind,
             backend: backend.into(),
@@ -266,17 +424,20 @@ pub async fn run() -> Result<()> {
             record,
             budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
             counter,
+            agency,
         })
         .await;
     }
 
     let Command::Chat {
         prompt,
+        sandbox_args,
         script,
         backend,
         model,
         ollama_url,
         mock_delay_ms,
+        mock_replies,
         cancel_after_ms,
         record,
         context_limit,
@@ -286,8 +447,10 @@ pub async fn run() -> Result<()> {
         low_water,
     } = command
     else {
-        unreachable!("serve is handled above");
+        unreachable!("serve and tools are handled above");
     };
+
+    let agency = sandbox_args.resolve()?;
 
     // One prompt, or a file of them: a script is what makes a multi-turn run
     // repeatable, and a baseline that cannot be re-run is not a baseline.
@@ -310,7 +473,7 @@ pub async fn run() -> Result<()> {
         (None, None) => vec![std::io::read_to_string(std::io::stdin())?],
     };
 
-    let backend = build_backend(backend, &ollama_url, mock_delay_ms);
+    let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
     let model = model_for(backend.as_ref(), model);
     let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
     if let Some(warning) = &warning {
@@ -338,7 +501,7 @@ pub async fn run() -> Result<()> {
     // selection still runs either way, because a `chat` that assembled its
     // prompt differently from `serve` would be measuring something the server
     // never sends.
-    let mut context = AgentContext::new(SYSTEM);
+    let mut context = AgentContext::new(SYSTEM).with_tools(agency.definitions());
     let mut prefix = PrefixTracker::default();
     let mut failed = false;
 
@@ -405,6 +568,41 @@ pub async fn run() -> Result<()> {
                             let _ = out.write_all(text.as_bytes()).await;
                             let _ = out.flush().await;
                         }
+                        TurnEvent::ToolCall { step, call } => {
+                            let arguments = serde_json::to_string(&call.arguments)
+                                .unwrap_or_else(|_| "{}".into());
+                            let _ = out
+                                .write_all(
+                                    format!("\n\n  [{step}] → {} {arguments}\n", call.name)
+                                        .as_bytes(),
+                                )
+                                .await;
+                            let _ = out.flush().await;
+                        }
+                        TurnEvent::ToolResult { step, outcome } => {
+                            // The verdict is on the line, always. "The agent
+                            // ran a command" and "the kernel held the command
+                            // it ran" are different facts.
+                            let verdict = &outcome.outcome.verdict;
+                            // The rule is printed once. On a denial the error
+                            // is the rule with a word in front of it, and
+                            // saying it twice reads as two findings.
+                            let status = match (verdict.allowed, &outcome.outcome.error) {
+                                (false, _) => "denied",
+                                (true, Some(error)) => error.as_str(),
+                                (true, None) => "ok",
+                            };
+                            let _ = out
+                                .write_all(
+                                    format!(
+                                        "  [{step}] ← {status} · {} · held by {} · {} ms\n\n",
+                                        verdict.rule, verdict.enforced_by, outcome.duration_ms,
+                                    )
+                                    .as_bytes(),
+                                )
+                                .await;
+                            let _ = out.flush().await;
+                        }
                         TurnEvent::Ended { reason, usage } => {
                             let _ = out.write_all(b"\n").await;
                             let counts = match usage {
@@ -418,6 +616,7 @@ pub async fn run() -> Result<()> {
                                 EndReason::Stop => "stop",
                                 EndReason::Length => "length",
                                 EndReason::Other => "other",
+                                EndReason::ToolLimit => "tool limit reached",
                                 EndReason::Cancelled => "cancelled",
                             };
                             let _ = out
@@ -436,14 +635,29 @@ pub async fn run() -> Result<()> {
             })
         };
 
-        let outcome = run_turn(backend.as_ref(), request, tx, cancel).await;
+        let outcome = run_agent_turn(
+            backend.as_ref(),
+            request,
+            agency.tools.as_ref(),
+            agency.sandbox.as_ref(),
+            agency.max_steps,
+            tx,
+            cancel,
+        )
+        .await;
         let _ = printer.await;
 
         // A cancelled turn keeps its partial answer: it happened, and the next
         // turn was asked in its light. A turn that produced nothing is not
         // remembered — an empty assistant message is not a thing that happened.
-        if !outcome.text.is_empty() {
-            context.push_turn(prompt.clone(), outcome.text, vec![], counter.as_ref());
+        if !outcome.text.is_empty() || !outcome.steps.is_empty() {
+            context.push_turn_with_steps(
+                prompt.clone(),
+                outcome.text,
+                vec![],
+                outcome.steps,
+                counter.as_ref(),
+            );
         }
 
         // A script does not push on through a broken backend: the remaining

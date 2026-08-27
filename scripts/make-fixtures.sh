@@ -30,6 +30,24 @@ for policy in turn block; do
     --record "$out/eviction-$policy.jsonl" >/dev/null
 done
 
+# The tool loop, with the sandbox answering both ways: one call allowed and one
+# denied. Scripted replies rather than a model, so the recording is the same
+# every time — and the point of the pair is that the panel has to show *who*
+# enforced each verdict, not just that something was refused.
+"$luu" chat "What is in AGENTS.md, and what is in /etc/hostname?" \
+  --mock-delay-ms 20 --context-limit 8192 \
+  --sandbox "$(dirname "$0")/../luu.toml" \
+  --mock-reply 'Let me read the file.
+```tool
+{"name":"read_file","arguments":{"path":"AGENTS.md","max_lines":3}}
+```' \
+  --mock-reply 'Now the other one.
+```tool
+{"name":"read_file","arguments":{"path":"/etc/hostname"}}
+```' \
+  --mock-reply 'AGENTS.md is the shared instruction file. The second path is outside the sandbox, so I cannot read it.' \
+  --record "$out/tool-calls.jsonl" >/dev/null
+
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
   --record "$out/backend-failure.jsonl" >/dev/null 2>&1 || true
@@ -45,6 +63,7 @@ done
 "$luu" export \
   "$out/eviction-turn.jsonl" \
   "$out/eviction-block.jsonl" \
+  "$out/tool-calls.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \

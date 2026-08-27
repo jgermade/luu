@@ -1,0 +1,45 @@
+# Loude's own sandbox, for running the agent on this repository.
+#
+# The whole policy is here: an allowlist of trees and an allowlist of programs.
+# There is no deny list, deliberately — Landlock is allow-only, so a subtraction
+# could be honoured in our own checks and not in a subprocess, which is where it
+# would matter. The way to deny is to not grant. See
+# RECORD/2026-08-27.tools-and-sandbox.md.
+#
+# `luu tools` prints the resolved result, the implicit grants included.
+
+[sandbox]
+# Subprocesses run only if the kernel takes the Landlock ruleset and the seccomp
+# filter. Where it cannot — macOS, a kernel without Landlock — `run_command` is
+# denied and says what is missing. Lower it to "best-effort" deliberately, per
+# run, and every verdict then carries the gap.
+enforcement = "kernel"
+
+# Off, so a build script cannot phone home. Turning it on is one word, and every
+# verdict for the session says so.
+network = false
+
+# Program names, never shell strings: `sh -c "cargo test; curl …"` would pass
+# any check that looks at the first word.
+commands = ["cargo", "rustc", "git", "rg", "ls"]
+
+[[sandbox.paths]]
+path = "."
+access = "read-write"
+
+# Nothing outside the repository is granted, and a granted path that is not there
+# is a load error rather than a rule that silently does nothing — so the toolchain
+# directories are not listed here: they are not in the same place on every machine
+# that clones this. `cargo` will fail to read its registry until you add them, and
+# adding them is the point:
+#
+#   [[sandbox.paths]]
+#   path = "~/.cargo"
+#   access = "execute"
+#
+#   [[sandbox.paths]]
+#   path = "~/.rustup"
+#   access = "execute"
+#
+# One informed line beats a prompt per call, which is what trains people to click
+# yes without reading.

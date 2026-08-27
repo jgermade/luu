@@ -12,6 +12,8 @@ use agent_core::backend::Message;
 use agent_core::context::{ApproximateCounter, Budget, Counter, ModelCounter, TokenCounter};
 use agent_core::protocol::{self, ServerMessage, TurnId};
 use agent_core::record::{self, RecordLine};
+use agent_core::sandbox::Sandbox;
+use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use anyhow::{Context, Result};
 use tokio::io::AsyncWriteExt;
@@ -21,6 +23,64 @@ use tokio::sync::mpsc;
 /// prompt cache reuses it byte for byte — a formatting change here is a cache
 /// miss on every call, and nothing fails to tell you.
 pub const SYSTEM: &str = "You are Loude, a concise local coding agent.";
+
+/// The sandbox and the tool set, resolved once and shared by `chat` and
+/// `serve`. Here for the same reason the prompt assembly is: two call sites
+/// resolving a policy differently is two sandboxes.
+#[derive(Clone)]
+pub struct Agency {
+    pub tools: Arc<Tools>,
+    pub sandbox: Arc<Sandbox>,
+    pub max_steps: u32,
+}
+
+impl Agency {
+    /// The tool definitions as they go into the cached prefix. Empty when there
+    /// are no tools, so a run without them sends the same bytes it always did.
+    pub fn definitions(&self) -> String {
+        self.tools.definitions()
+    }
+
+    /// What `luu tools` prints and what a session says on startup.
+    ///
+    /// Every grant is listed, the implicit ones included: a sandbox whose real
+    /// extent has to be inferred from the file that configured it is one nobody
+    /// checks.
+    pub fn describe(&self) -> String {
+        let mut text = format!("sandbox — base {}\n", self.sandbox.base().display());
+        for root in self.sandbox.roots() {
+            text.push_str(&format!(
+                "  {:<10} {}{}\n",
+                root.access.as_str(),
+                root.path.display(),
+                match root.implicit {
+                    true => "   (implicit: commands need their interpreter)",
+                    false => "",
+                }
+            ));
+        }
+        text.push_str(&format!(
+            "  commands   {}\n  network    {}\n  enforce    {}\n",
+            match self.sandbox.commands().is_empty() {
+                true => "(none)".to_string(),
+                false => self.sandbox.commands().join(", "),
+            },
+            match self.sandbox.network() {
+                true => "allowed",
+                false => "denied",
+            },
+            self.sandbox.enforcement().as_str(),
+        ));
+        text.push_str(&format!(
+            "  tools      {}\n",
+            match self.tools.is_empty() {
+                true => "(none)".to_string(),
+                false => self.tools.names().collect::<Vec<_>>().join(", "),
+            }
+        ));
+        text
+    }
+}
 
 /// How much of the window is held back for the answer. A default, not a law:
 /// too large wastes context, too small truncates answers, and the only way to

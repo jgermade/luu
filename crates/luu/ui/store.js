@@ -24,6 +24,10 @@ export const state = $reactive({
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
+  // This turn's tool calls, in order. A call is pushed before it is checked, so
+  // one that is still running (or was denied) is visible as itself rather than
+  // as nothing happening. Per turn, like the budget beside it.
+  tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms }]
   error: null,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
@@ -89,6 +93,7 @@ function onProtocol(message) {
       state.error = null
       state.messages.push({ id: nextId++, role: "user", text: message.prompt, reason: null, usage: null })
       state.messages.push({ id: nextId++, role: "assistant", text: "", reason: null, usage: null })
+      state.tools = []
       break
 
     case "token":
@@ -106,6 +111,34 @@ function onProtocol(message) {
       }
       state.turn = null
       state.status = idle()
+      break
+
+    // Pushed and then replaced rather than mutated: jq79 does not wake an
+    // `:each` binding on a property assigned inside an array element.
+    case "tool_call":
+      state.tools = [...state.tools, {
+        step: message.step,
+        name: message.name,
+        arguments: message.arguments,
+        verdict: null,
+        error: null,
+        output: "",
+        truncated: false,
+        duration_ms: null,
+      }]
+      break
+
+    case "tool_result":
+      state.tools = state.tools.map(call => call.step === message.step
+        ? {
+            ...call,
+            verdict: message.verdict,
+            error: message.error,
+            output: message.output,
+            truncated: message.truncated,
+            duration_ms: message.duration_ms,
+          }
+        : call)
       break
 
     case "failed":
@@ -225,6 +258,7 @@ function idle() {
 function reset() {
   state.messages = []
   state.budget = null
+  state.tools = []
   state.prompt = ""
   state.prefix = null
   state.error = null
@@ -280,6 +314,7 @@ export function send(text) {
   socket.send(JSON.stringify({ type: "prompt", text }))
   state.prompt = ""
   state.budget = null
+  state.tools = []
   state.prefix = null
 }
 

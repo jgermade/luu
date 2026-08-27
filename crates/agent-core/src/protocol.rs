@@ -15,6 +15,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
+use crate::sandbox::Verdict;
+use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
 
 /// Bumped when a change would break an older client. `Hello` carries it so a
@@ -67,6 +69,29 @@ pub enum ServerMessage {
         turn: TurnId,
         message: String,
     },
+    /// A tool the model asked for, before it was checked. `step` counts from 1
+    /// within the turn.
+    ToolCall {
+        turn: TurnId,
+        step: u32,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    /// What it did. The verdict travels with the result because "the agent ran
+    /// a command" and "the kernel held the command it ran" are different facts
+    /// and only one of them is worth trusting.
+    ToolResult {
+        turn: TurnId,
+        step: u32,
+        name: String,
+        verdict: Verdict,
+        error: Option<String>,
+        /// The result as the model received it — the same bytes that went into
+        /// the history, so a recording can show what the model was told.
+        output: String,
+        truncated: bool,
+        duration_ms: u64,
+    },
 }
 
 impl ServerMessage {
@@ -80,6 +105,30 @@ impl ServerMessage {
                 usage,
             },
             TurnEvent::Failed(message) => Self::Failed { turn, message },
+            TurnEvent::ToolCall { step, call } => Self::ToolCall {
+                turn,
+                step,
+                name: call.name,
+                arguments: call.arguments,
+            },
+            TurnEvent::ToolResult { step, outcome } => {
+                let ToolStep {
+                    call,
+                    outcome,
+                    duration_ms,
+                    ..
+                } = *outcome;
+                Self::ToolResult {
+                    turn,
+                    step,
+                    name: call.name,
+                    verdict: outcome.verdict,
+                    error: outcome.error,
+                    output: outcome.output,
+                    truncated: outcome.truncated,
+                    duration_ms,
+                }
+            }
         }
     }
 
@@ -90,7 +139,9 @@ impl ServerMessage {
             Self::TurnStarted { turn, .. }
             | Self::Token { turn, .. }
             | Self::Ended { turn, .. }
-            | Self::Failed { turn, .. } => Some(*turn),
+            | Self::Failed { turn, .. }
+            | Self::ToolCall { turn, .. }
+            | Self::ToolResult { turn, .. } => Some(*turn),
         }
     }
 }

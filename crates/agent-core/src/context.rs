@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
+use crate::tools::ToolStep;
 use crate::trace::Bucket;
 
 /// Which counter produced a token count.
@@ -125,6 +126,12 @@ pub struct Fragment {
 pub struct Turn {
     pub prompt: String,
     pub answer: String,
+    /// What the agent did before answering. Part of the turn, not of the
+    /// history around it: a turn with tool calls is evicted whole, so the model
+    /// never sees a result whose call has gone — and until the next turn is
+    /// evicted it can see that it already read the file.
+    #[serde(default)]
+    pub steps: Vec<ToolStep>,
     /// Rendered fused into the user message, stored apart so that pruning can
     /// reach it later without parsing back what we already wrote.
     pub code_context: Vec<Fragment>,
@@ -199,6 +206,10 @@ pub struct Selection {
 #[derive(Debug, Clone)]
 pub struct Context {
     system: String,
+    /// The tool definitions, rendered once. Second half of the cached prefix
+    /// and counted as its own bucket, because "the system block grew" is not an
+    /// answer to why the window is full.
+    tools: String,
     turns: Vec<Turn>,
     /// The oldest turn still in the window. It only ever moves forward.
     ///
@@ -218,8 +229,29 @@ impl Context {
     pub fn new(system: impl Into<String>) -> Self {
         Self {
             system: system.into(),
+            tools: String::new(),
             turns: Vec::new(),
             floor: 0,
+        }
+    }
+
+    /// Adds the tool definitions to the prefix. Byte-stable by construction —
+    /// see [`crate::tools::Tools::definitions`].
+    pub fn with_tools(mut self, tools: impl Into<String>) -> Self {
+        self.tools = tools.into();
+        self
+    }
+
+    pub fn tools(&self) -> &str {
+        &self.tools
+    }
+
+    /// The whole cached prefix, as one message. Assembled here and nowhere else
+    /// so that two call sites cannot join it differently.
+    fn system_message(&self) -> String {
+        match self.tools.is_empty() {
+            true => self.system.clone(),
+            false => format!("{}\n\n{}", self.system, self.tools),
         }
     }
 
@@ -239,12 +271,27 @@ impl Context {
         code_context: Vec<Fragment>,
         counter: &dyn TokenCounter,
     ) {
+        self.push_turn_with_steps(prompt, answer, code_context, Vec::new(), counter);
+    }
+
+    /// The same, for a turn in which the agent used tools.
+    pub fn push_turn_with_steps(
+        &mut self,
+        prompt: impl Into<String>,
+        answer: impl Into<String>,
+        code_context: Vec<Fragment>,
+        steps: Vec<ToolStep>,
+        counter: &dyn TokenCounter,
+    ) {
         let prompt = prompt.into();
         let answer = answer.into();
-        let tokens = counter.count(&user_text(&code_context, &prompt)) + counter.count(&answer);
+        let tokens = counter.count(&user_text(&code_context, &prompt))
+            + steps_tokens(&steps, counter)
+            + counter.count(&answer);
         self.turns.push(Turn {
             prompt,
             answer,
+            steps,
             code_context,
             tokens,
             counted_by: counter.id(),
@@ -270,6 +317,7 @@ impl Context {
         counter: &dyn TokenCounter,
     ) -> Selection {
         let system_tokens = counter.count(&self.system);
+        let tools_tokens = counter.count(&self.tools);
         // Counted as the two buckets they will be plotted as. Tokenization is
         // not additive across a boundary, so this can differ by a token or two
         // from counting the concatenation; that is the same order as the
@@ -285,7 +333,7 @@ impl Context {
             // window, history is empty and the turn still goes — being over the
             // limit is the backend's error to report, not ours to hide by
             // cutting the question in half.
-            let fixed = system_tokens + code_tokens + prompt_tokens + budget.reserve;
+            let fixed = system_tokens + tools_tokens + code_tokens + prompt_tokens + budget.reserve;
             let available = limit.saturating_sub(fixed);
 
             if self.fill(available, counter) < live {
@@ -308,15 +356,22 @@ impl Context {
             .sum();
 
         let mut messages = Vec::with_capacity(retained.len() * 2 + 2);
-        messages.push(Message::system(self.system.clone()));
+        messages.push(Message::system(self.system_message()));
         for turn in retained {
             messages.push(Message::user(user_text(&turn.code_context, &turn.prompt)));
+            // Each step is a real exchange, so the alternation holds and no
+            // chat template has to decide what two user messages in a row mean.
+            for step in &turn.steps {
+                messages.push(Message::assistant(step.text.clone()));
+                messages.push(Message::user(step.result_text()));
+            }
             messages.push(Message::assistant(turn.answer.clone()));
         }
         messages.push(Message::user(user_text(code_context, prompt)));
 
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
+            Bucket::new("tools", tools_tokens),
             Bucket::new("history", history_tokens),
             Bucket::new("code", code_tokens),
             Bucket::new("prompt", prompt_tokens),
@@ -358,10 +413,19 @@ impl Context {
             true => turn.tokens,
             false => {
                 counter.count(&user_text(&turn.code_context, &turn.prompt))
+                    + steps_tokens(&turn.steps, counter)
                     + counter.count(&turn.answer)
             }
         }
     }
+}
+
+/// The tool exchanges of a turn, counted as the messages they render as.
+fn steps_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
+    steps
+        .iter()
+        .map(|step| counter.count(&step.text) + counter.count(&step.result_text()))
+        .sum()
 }
 
 /// The fragments alone, as they are rendered inside a user message.
@@ -549,9 +613,10 @@ mod tests {
             &counter,
         );
 
-        // System, the fragments, the prompt. The ten stored turns are not
-        // re-counted, which is the whole point of storing their counts.
-        assert_eq!(counter.calls.load(Ordering::Relaxed) - after_building, 3);
+        // System, the tool definitions, the fragments, the prompt. The ten
+        // stored turns are not re-counted, which is the whole point of storing
+        // their counts.
+        assert_eq!(counter.calls.load(Ordering::Relaxed) - after_building, 4);
     }
 
     #[test]
@@ -607,7 +672,10 @@ mod tests {
         );
 
         let names: Vec<&str> = selection.buckets.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(names, ["system", "history", "code", "prompt", "reserve"]);
+        assert_eq!(
+            names,
+            ["system", "tools", "history", "code", "prompt", "reserve"]
+        );
     }
 
     #[test]
@@ -723,6 +791,136 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Eviction::Turn).unwrap()["policy"],
             "turn"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tool_turn_tests {
+    use super::*;
+    use crate::backend::Role;
+    use crate::sandbox::{Applied, Verdict};
+    use crate::tools::{ToolCall, ToolOutcome, ToolStep};
+
+    fn step(name: &str, text: &str, output: &str) -> ToolStep {
+        ToolStep {
+            text: text.into(),
+            call: ToolCall {
+                name: name.into(),
+                arguments: serde_json::json!({}),
+            },
+            outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
+            duration_ms: 1,
+        }
+    }
+
+    #[test]
+    fn tool_definitions_are_in_the_prefix_and_counted_apart_from_the_system_text() {
+        let mut context = Context::new("sys").with_tools("TOOLS");
+        let selection = context.select(
+            "hola",
+            &[],
+            Budget::new(8192, 512, Eviction::Turn),
+            &ApproximateCounter,
+        );
+
+        assert_eq!(selection.messages[0].role, Role::System);
+        assert!(selection.messages[0].content.contains("TOOLS"));
+        let tools = selection
+            .buckets
+            .iter()
+            .find(|b| b.name == "tools")
+            .unwrap();
+        assert!(
+            tools.tokens > 0,
+            "a bucket the definitions are hidden inside cannot explain a full window"
+        );
+    }
+
+    #[test]
+    fn a_turn_with_tool_calls_renders_as_alternating_messages() {
+        let mut context = Context::new("sys");
+        context.push_turn_with_steps(
+            "read the file",
+            "It defines main.",
+            vec![],
+            vec![step(
+                "read_file",
+                "let me look\n```tool\n{}\n```",
+                "fn main() {}",
+            )],
+            &ApproximateCounter,
+        );
+
+        let selection = context.select(
+            "and now?",
+            &[],
+            Budget::new(0, 0, Eviction::Turn),
+            &ApproximateCounter,
+        );
+        let roles: Vec<Role> = selection.messages.iter().map(|m| m.role).collect();
+        assert_eq!(
+            roles,
+            [
+                Role::System,
+                Role::User,
+                Role::Assistant,
+                Role::User,
+                Role::Assistant,
+                Role::User
+            ],
+            "the call and its result are a real exchange, so nothing has to \
+             decide what two user messages in a row mean",
+        );
+        assert!(selection.messages[3].content.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn a_turn_leaves_the_window_with_its_tool_calls() {
+        // Half a turn would leave a result whose call has gone, which reads as
+        // output nobody asked for.
+        let counter = ApproximateCounter;
+        let mut context = Context::new("sys");
+        for n in 0..4 {
+            context.push_turn_with_steps(
+                format!("question {n} padded out a little"),
+                format!("answer {n} padded out a little"),
+                vec![],
+                vec![step("read_file", "calling", &"x".repeat(200))],
+                &counter,
+            );
+        }
+
+        let selection = context.select("now", &[], Budget::new(256, 32, Eviction::Turn), &counter);
+        assert!(
+            selection.evicted > 0,
+            "the results are what filled the window"
+        );
+        for pair in selection.messages[1..].windows(2) {
+            assert_ne!(
+                pair[0].role, pair[1].role,
+                "the alternation survives eviction"
+            );
+        }
+    }
+
+    #[test]
+    fn the_steps_are_counted_into_the_turn_they_belong_to() {
+        let counter = ApproximateCounter;
+        let mut bare = Context::new("sys");
+        bare.push_turn("q", "a", vec![], &counter);
+        let mut with_steps = Context::new("sys");
+        with_steps.push_turn_with_steps(
+            "q",
+            "a",
+            vec![],
+            vec![step("read_file", "calling", &"x".repeat(400))],
+            &counter,
+        );
+
+        assert!(
+            with_steps.turns()[0].tokens > bare.turns()[0].tokens,
+            "a turn whose tool output is not in its count is a turn the budget cannot see"
         );
     }
 }

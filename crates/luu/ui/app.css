@@ -10,6 +10,7 @@
   /* One colour per bucket, so a bar and its legend agree. Named after the
      buckets the context manager emits, not after a palette. */
   --b-system: #7aa2f7;
+  --b-tools: #2ac3de;
   --b-history: #9ece6a;
   --b-code: #bb9af7;
   --b-prompt: #e0af68;

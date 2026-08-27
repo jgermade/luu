@@ -50,6 +50,14 @@ cargo fmt --all --check
 cargo run --bin luu -- chat "hola"                    # one turn, mock backend, to stdout
 cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
+cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
+
+# the tool loop end to end without a model: one reply per model call
+cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
+  --mock-reply 'looking
+```tool
+{"name":"read_file","arguments":{"path":"AGENTS.md","max_lines":3}}
+```' --mock-reply 'It is the shared instruction file.'
 
 # a repeatable multi-turn run, which is the only kind worth comparing
 cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
@@ -62,8 +70,16 @@ cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
 
-`--mock-delay-ms` paces the mock backend, `--cancel-after-ms` exercises cancelling,
-and `--record <file>` writes a replayable session from either subcommand.
+`--mock-delay-ms` paces the mock backend, `--mock-reply` scripts what it answers
+(repeatable, one per model call, the last repeating), `--cancel-after-ms` exercises
+cancelling, and `--record <file>` writes a replayable session from either subcommand.
+
+The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
+`network` and `enforcement` — and the `--allow-read/-write/-exec`,
+`--allow-command`, `--allow-network` and `--sandbox-enforcement` flags **add** to
+it for one run. `--max-tool-steps` caps the tool calls one turn may make and
+`--no-tools` runs without them. `luu tools` prints what all of that resolved to,
+implicit grants included.
 
 `--context-limit` is the model's window (`0` means unknown: no budget, no
 eviction), `--reserve` is what is held back for the answer, `--evict` is how the
@@ -94,6 +110,20 @@ implementation detail from close up:
 - **Permission checks live in the code, not in the model behaving well.**
   Canonicalize paths (`std::fs::canonicalize`) before comparing, or a symlink walks
   straight out of the sandbox.
+- **A subprocess is the kernel's to hold, not ours.** An in-process check happens
+  before the syscall, in a program that then makes the syscall itself; a child
+  makes its own, and nothing we wrote is in the way. So `run_command` builds a
+  Landlock ruleset and a seccomp filter in the parent and applies them in
+  `pre_exec` — and where the kernel cannot, the default is to deny rather than to
+  run the child unheld.
+- **Nothing may say "sandboxed" without saying by what.** Every verdict carries who
+  enforced it, and a partial one carries what is missing. A run the kernel held and
+  a run nothing held are not the same run, and afterwards the recording is the only
+  thing that could tell them apart.
+- **A grant that exists for the child does not answer for a tool.** Allowing a
+  command implies read+execute on the system roots, because a program cannot run
+  without reading libc — and that reasoning says nothing about `read_file`, so the
+  in-process path check ignores those roots.
 - **Decide what goes in, then render it.** `Context::select` chooses against a
   token budget and the rendering is a pure function of that choice, so every
   token sent is attributable to a bucket. Rendering first and trimming the
@@ -110,7 +140,9 @@ implementation detail from close up:
   ever say so.
 - **The stable prompt prefix stays byte-identical across calls**, and how much of
   it survived is reported per turn rather than assumed. System text and
-  tool definitions are what llama.cpp's prompt cache reuses. Reordering tools,
+  tool definitions are what llama.cpp's prompt cache reuses. The definitions are
+  therefore a wire format: tools sorted by name, schemas through `serde_json`'s
+  sorted maps, nothing interpolated. `luu tools` prints the exact bytes. Reordering tools,
   re-serializing a schema with different key order, or interpolating a timestamp
   into the system block silently destroys KV reuse — and nothing fails, it just
   gets slower. Treat the prefix as a wire format.
