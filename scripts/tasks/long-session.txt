@@ -1,0 +1,8 @@
+# A session long enough to overflow a small window, so the recording shows a
+# whole turn being evicted rather than a budget that always fits.
+what does the context manager do?
+now explain the token budget, bucket by bucket
+how does the stable prefix survive a new turn?
+what happens when the window fills up?
+which turn gets dropped first, and why that one?
+summarise everything above in three lines

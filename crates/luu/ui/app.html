@@ -17,6 +17,17 @@
   $: budgetTotal = state.budget
     ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
     : 0
+  // What we actually sent: the reserve is headroom, not content.
+  $: budgetSent = state.budget
+    ? state.budget.buckets
+        .filter(b => b.name !== "reserve")
+        .reduce((sum, b) => sum + b.tokens, 0)
+    : 0
+  // The chat template, which the backend applies where we cannot see it. A
+  // stable number here is overhead; a moving one means the template changed.
+  $: templateOverhead = state.budget?.backendPrompt
+    ? state.budget.backendPrompt - budgetSent
+    : null
 </script>
 
 <header>
@@ -85,12 +96,21 @@
         </li>
       </ul>
       <p class="dim">
-        {{ budgetTotal }} tokens<span :if="state.budget?.limit"> of {{ state.budget?.limit }}</span>
+        {{ budgetSent }} tokens sent<span :if="state.budget?.limit">, {{ budgetTotal }} of {{ state.budget?.limit }} spoken for</span>
+        <span :if="!state.budget?.limit">— window unknown, so nothing was budgeted</span>
+      </p>
+      <p :if="state.budget?.counter?.kind === 'approximate'" class="dim warn">
+        Counted approximately (chars/4). Not a measurement — pass
+        <code>--tokenizer</code> for real numbers.
+      </p>
+      <p :if="templateOverhead !== null" class="dim">
+        Backend counted {{ state.budget?.backendPrompt }}: {{ templateOverhead }}
+        more than we sent, the chat template applied on its side.
       </p>
     </div>
     <p :if="!state.budget" class="dim">
-      No usage reported yet. A cancelled turn never reports any — the counts
-      arrive on the backend's last line.
+      No turn yet. The budget is decided before the call, so the first prompt
+      fills this in.
     </p>
 
     <h2>Prompt sent to the model</h2>
@@ -160,6 +180,7 @@
   .meta .warn { color: var(--warn); }
 
   .empty, .dim { color: var(--dim); }
+  .warn { color: var(--warn); }
   .error {
     margin: 0 1rem;
     padding: .5rem .75rem;
@@ -212,8 +233,13 @@
 
   .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #0e1014; }
   .bar span { min-width: 2px; }
-  .bar span.prompt, .legend span.prompt { background: var(--accent); }
-  .bar span.completion, .legend span.completion { background: var(--warn); }
+  .bar span.system, .legend span.system { background: var(--b-system); }
+  .bar span.history, .legend span.history { background: var(--b-history); }
+  .bar span.code, .legend span.code { background: var(--b-code); }
+  .bar span.prompt, .legend span.prompt { background: var(--b-prompt); }
+  /* The reserve is headroom, not content: it reads as the empty part of the
+     bar, which is what it is. */
+  .bar span.reserve, .legend span.reserve { background: var(--b-reserve); }
 
   .legend { list-style: none; margin: .6rem 0 0; padding: 0; font-size: 13px; }
   .legend li { display: flex; align-items: center; gap: .4rem; }

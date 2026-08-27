@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod backend;
+pub mod context;
 pub mod protocol;
 pub mod record;
 pub mod trace;

@@ -9,15 +9,21 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
+use crate::context::Counter;
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
-/// How the context was spent on one turn.
+/// How the context was spent on one turn, as we measured it before the call.
+/// `usage` on the same turn is the backend's own count afterwards; the two
+/// differ by the chat template we never see, and that difference is a reading,
+/// not an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budget {
-    pub limit: u32,
+    /// `None` when the model's window is unknown.
+    pub limit: Option<u32>,
+    pub counter: Counter,
     pub buckets: Vec<Bucket>,
 }
 
@@ -171,11 +177,13 @@ impl SessionView {
             TraceMessage::Budget {
                 turn,
                 limit,
+                counter,
                 buckets,
             } => {
                 if let Some(view) = self.turn_mut(*turn) {
                     view.budget = Some(Budget {
                         limit: *limit,
+                        counter: counter.clone(),
                         buckets: buckets.clone(),
                     });
                 }
@@ -219,6 +227,8 @@ mod tests {
                 protocol: crate::protocol::VERSION,
                 backend: "mock".into(),
                 model: "mock".into(),
+                context_limit: Some(8192),
+                counter: Some(Counter::Model { id: "mock".into() }),
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {

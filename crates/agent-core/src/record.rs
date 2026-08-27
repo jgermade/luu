@@ -10,11 +10,16 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::Counter;
 use crate::protocol::ServerMessage;
 use crate::trace::TraceMessage;
 
 /// Bumped when an older reader could not make sense of a newer file.
-pub const FORMAT: u32 = 1;
+///
+/// 2: the budget's `limit` became nullable and gained a `counter`, and the
+/// header says what the run was measured against. A format-1 reader would
+/// choke on `"limit": null`.
+pub const FORMAT: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]
@@ -24,6 +29,16 @@ pub enum RecordLine {
         protocol: u32,
         backend: String,
         model: String,
+        /// The window this run was measured against, `None` when unknown.
+        /// Part of the header because two runs with different windows are not
+        /// comparable, and by the time you are comparing them, nobody
+        /// remembers which was which.
+        #[serde(default)]
+        context_limit: Option<u32>,
+        /// Which counter produced this run's budgets. `None` in a format-1
+        /// file, where the numbers came from the backend instead.
+        #[serde(default)]
+        counter: Option<Counter>,
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
@@ -49,6 +64,8 @@ mod tests {
             protocol: protocol::VERSION,
             backend: "mock".into(),
             model: "mock".into(),
+            context_limit: Some(8192),
+            counter: Some(Counter::Approximate),
             started_at: 1_700_000_000_000,
         };
         let token = RecordLine::Protocol {
@@ -70,7 +87,10 @@ mod tests {
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
-        assert!(matches!(parsed[0], RecordLine::Header { format: 1, .. }));
+        assert!(matches!(
+            parsed[0],
+            RecordLine::Header { format: FORMAT, .. }
+        ));
         assert!(matches!(parsed[1], RecordLine::Protocol { at_ms: 12, .. }));
     }
 }

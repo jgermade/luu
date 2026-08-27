@@ -21,7 +21,7 @@ export const state = $reactive({
   protocol: 0,
   turn: null,
   messages: [],           // { id, role, text, reason, usage }
-  budget: null,           // { limit, buckets: [{ name, tokens }] }
+  budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
   error: null,
   fixtures: [],           // replay mode only: [{ name, file, about }]
@@ -97,6 +97,12 @@ function onProtocol(message) {
     case "ended":
       flush()
       replaceLast({ reason: message.reason, usage: message.usage })
+      // The gap between this and what we counted is the chat template, applied
+      // where we cannot see it. Reassigned rather than mutated: the panel reads
+      // the object, and one write is one update.
+      if (state.budget && message.usage) {
+        state.budget = { ...state.budget, backendPrompt: message.usage.prompt_tokens }
+      }
       state.turn = null
       state.status = idle()
       break
@@ -113,7 +119,14 @@ function onProtocol(message) {
 function onTrace(message) {
   if (message.type === "prompt") state.prompt = message.text
   if (message.type === "budget") {
-    state.budget = { limit: message.limit, buckets: message.buckets }
+    // Arrives before the call now, so a cancelled turn has one too. The
+    // backend's own count lands later, on `ended`.
+    state.budget = {
+      limit: message.limit,
+      counter: message.counter,
+      buckets: message.buckets,
+      backendPrompt: null,
+    }
   }
 }
 

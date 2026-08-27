@@ -5,9 +5,11 @@
 //! prefix commitment in `AGENTS.md` warns about, so there is one.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_core::backend::Message;
+use agent_core::context::{ApproximateCounter, Counter, ModelCounter, TokenCounter};
 use agent_core::protocol::{self, ServerMessage};
 use agent_core::record::{self, RecordLine};
 use agent_core::trace::TraceMessage;
@@ -20,9 +22,35 @@ use tokio::sync::mpsc;
 /// miss on every call, and nothing fails to tell you.
 pub const SYSTEM: &str = "You are Loude, a concise local coding agent.";
 
-/// The one place a turn's messages are assembled.
-pub fn messages_for(prompt: impl Into<String>) -> Vec<Message> {
-    vec![Message::system(SYSTEM), Message::user(prompt)]
+/// How much of the window is held back for the answer. A default, not a law:
+/// too large wastes context, too small truncates answers, and the only way to
+/// find out is to measure.
+pub const DEFAULT_RESERVE: u32 = 512;
+
+/// Builds the counter, and says out loud when it is not a real one.
+///
+/// An explicit `--tokenizer` that fails is an error: it was asked for. An
+/// absent one degrades to the approximate counter with a warning, so a first
+/// run works without hunting down a `tokenizer.json` — and every number it
+/// produces is labelled all the way to the panel.
+pub fn counter_for(
+    model: &str,
+    tokenizer: Option<&Path>,
+) -> Result<(Arc<dyn TokenCounter>, Option<String>)> {
+    match tokenizer {
+        Some(path) => {
+            let counter = ModelCounter::from_file(path, model)
+                .with_context(|| format!("--tokenizer {}", path.display()))?;
+            Ok((Arc::new(counter), None))
+        }
+        None => Ok((
+            Arc::new(ApproximateCounter),
+            Some(format!(
+                "no tokenizer for {model}: counting approximately (chars/4). \
+                 Pass --tokenizer <tokenizer.json> for real numbers."
+            )),
+        )),
+    }
 }
 
 /// What the backend is about to receive, as one string, for the trace channel.
@@ -58,7 +86,14 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub async fn create(path: &Path, backend: &str, model: &str, started_at: u64) -> Result<Self> {
+    pub async fn create(
+        path: &Path,
+        backend: &str,
+        model: &str,
+        context_limit: Option<u32>,
+        counter: Counter,
+        started_at: u64,
+    ) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -74,6 +109,8 @@ impl Recorder {
             protocol: protocol::VERSION,
             backend: backend.to_string(),
             model: model.to_string(),
+            context_limit,
+            counter: Some(counter),
             started_at,
         };
         file.write_all(format!("{}\n", serde_json::to_string(&header)?).as_bytes())
