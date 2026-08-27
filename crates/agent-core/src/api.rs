@@ -27,6 +27,15 @@ pub struct Budget {
     pub buckets: Vec<Bucket>,
 }
 
+/// How much of this turn's prompt the previous one already contained. `None`
+/// on the first turn of a session, where there is nothing to compare against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrefixReuse {
+    pub shared_bytes: usize,
+    pub shared_tokens: u32,
+    pub prompt_tokens: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnView {
     pub turn: TurnId,
@@ -41,6 +50,8 @@ pub struct TurnView {
     /// reconstruction. `None` when the turn was recorded without `--trace`.
     pub prompt_sent: Option<String>,
     pub budget: Option<Budget>,
+    /// What the prompt cache could reuse of the previous turn's prompt.
+    pub prefix: Option<PrefixReuse>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -56,6 +67,7 @@ impl TurnView {
             error: None,
             prompt_sent: None,
             budget: None,
+            prefix: None,
             started_at_ms,
             ended_at_ms: None,
         }
@@ -188,6 +200,20 @@ impl SessionView {
                     });
                 }
             }
+            TraceMessage::PrefixReuse {
+                turn,
+                shared_bytes,
+                shared_tokens,
+                prompt_tokens,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.prefix = Some(PrefixReuse {
+                        shared_bytes: *shared_bytes,
+                        shared_tokens: *shared_tokens,
+                        prompt_tokens: *prompt_tokens,
+                    });
+                }
+            }
         }
     }
 
@@ -229,6 +255,7 @@ mod tests {
                 model: "mock".into(),
                 context_limit: Some(8192),
                 counter: Some(Counter::Model { id: "mock".into() }),
+                eviction: Some(crate::context::Eviction::Turn),
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {
@@ -273,6 +300,44 @@ mod tests {
         ]
     }
 
+    /// A second turn, which is the first one that can carry a prefix
+    /// measurement: there is a previous prompt to measure against.
+    fn second_turn() -> Vec<RecordLine> {
+        vec![
+            RecordLine::Protocol {
+                at_ms: 40,
+                message: ServerMessage::TurnStarted {
+                    turn: 2,
+                    prompt: "y otra".into(),
+                },
+            },
+            RecordLine::Trace {
+                at_ms: 40,
+                message: TraceMessage::Prompt {
+                    turn: 2,
+                    text: "<|System|>\nx2".into(),
+                },
+            },
+            RecordLine::Trace {
+                at_ms: 40,
+                message: TraceMessage::PrefixReuse {
+                    turn: 2,
+                    shared_bytes: 12,
+                    shared_tokens: 3,
+                    prompt_tokens: 4,
+                },
+            },
+            RecordLine::Protocol {
+                at_ms: 60,
+                message: ServerMessage::Ended {
+                    turn: 2,
+                    reason: EndReason::Stop,
+                    usage: None,
+                },
+            },
+        ]
+    }
+
     #[test]
     fn a_recording_rebuilds_the_session_it_recorded() {
         let view = SessionView::from_record("completed", &lines());
@@ -293,13 +358,34 @@ mod tests {
     }
 
     #[test]
+    fn the_first_turn_has_no_prefix_to_measure_against() {
+        let view = SessionView::from_record("completed", &lines());
+        assert!(
+            view.turn(1).unwrap().prefix.is_none(),
+            "0% on turn one would read as a cold cache rather than as no cache",
+        );
+
+        let both = [lines(), second_turn()].concat();
+        let reuse = SessionView::from_record("s", &both)
+            .turn(2)
+            .unwrap()
+            .prefix
+            .unwrap();
+        assert_eq!(reuse.shared_tokens, 3);
+        assert_eq!(reuse.prompt_tokens, 4);
+    }
+
+    #[test]
     fn folding_live_events_gives_the_same_view_as_folding_the_record() {
-        let recorded = SessionView::from_record("s", &lines());
+        // Two turns, so every trace message the fold understands is covered:
+        // the prefix measurement only exists from the second turn onwards.
+        let all = [lines(), second_turn()].concat();
+        let recorded = SessionView::from_record("s", &all);
 
         // The same messages, applied one at a time the way the server does.
         let mut live = SessionView::new("s", "mock", "mock");
         live.started_at = 1_700_000_000_000;
-        for line in lines() {
+        for line in all {
             match line {
                 RecordLine::Protocol { at_ms, message } => live.apply_protocol(at_ms, &message),
                 RecordLine::Trace { at_ms, message } => live.apply_trace(at_ms, &message),

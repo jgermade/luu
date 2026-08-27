@@ -136,22 +136,47 @@ pub struct Turn {
     pub counted_by: Counter,
 }
 
-/// The window, and what is held back from it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How the history gives way when the next turn no longer fits.
+///
+/// Not a preference: the two rewrite the prompt at completely different rates,
+/// and a prefix cache reuses the longest common prefix. See
+/// `RECORD/2026-08-27.prefix-reuse-and-block-eviction.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "policy", rename_all = "snake_case")]
+pub enum Eviction {
+    /// Drop exactly as many turns as it takes to fit. The baseline, and the
+    /// thing to beat: once the window is full it drops one turn per turn, so
+    /// the history block is rewritten from its front on every call and the
+    /// reusable prefix collapses to the system block.
+    Turn,
+    /// When it no longer fits, drop past a low-water mark — a fraction of the
+    /// history budget — instead of dropping the minimum. The cut is deeper and
+    /// far less frequent: the history is rewritten once every N turns and stays
+    /// byte-identical in between, which is what a prefix cache pays for.
+    ///
+    /// `low_water` is ours and invented, not inherited from anyone's tuned
+    /// workload. It is a flag so that it can be measured.
+    Block { low_water: f32 },
+}
+
+/// The window, what is held back from it, and how it gives way.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
     /// The model's context window. `None` means unknown — then there is no
     /// budget to spend, so nothing is selected and nothing is evicted.
     pub limit: Option<u32>,
     /// Room for the answer, set aside before any history is considered.
     pub reserve: u32,
+    pub eviction: Eviction,
 }
 
 impl Budget {
     /// The CLI spells "unknown" as 0, because a flag has to have a default.
-    pub fn new(limit: u32, reserve: u32) -> Self {
+    pub fn new(limit: u32, reserve: u32, eviction: Eviction) -> Self {
         Self {
             limit: (limit > 0).then_some(limit),
             reserve,
+            eviction,
         }
     }
 }
@@ -175,6 +200,18 @@ pub struct Selection {
 pub struct Context {
     system: String,
     turns: Vec<Turn>,
+    /// The oldest turn still in the window. It only ever moves forward.
+    ///
+    /// Without it, eviction is recomputed from scratch on every call and a turn
+    /// that left the window comes back the moment a shorter prompt leaves room
+    /// for it. Under [`Eviction::Turn`] that is a rare waste; under
+    /// [`Eviction::Block`] it is fatal — the fill would walk straight back past
+    /// the cut and move the front of the history every turn, which is the exact
+    /// thing block eviction exists to stop.
+    ///
+    /// So the window a conversation has already lost is not a view that gets
+    /// recomputed. It is something that happened.
+    floor: usize,
 }
 
 impl Context {
@@ -182,6 +219,7 @@ impl Context {
         Self {
             system: system.into(),
             turns: Vec::new(),
+            floor: 0,
         }
     }
 
@@ -220,8 +258,12 @@ impl Context {
     /// would leave an answer to a question nobody asked, and a window starting
     /// on an assistant message makes several chat templates continue instead of
     /// answering.
+    ///
+    /// Takes `&mut self` because evicting is not a reading of the history: what
+    /// leaves the window stays out, so the decision has to outlive the call
+    /// that made it. See [`Context::floor`].
     pub fn select(
-        &self,
+        &mut self,
         prompt: &str,
         code_context: &[Fragment],
         budget: Budget,
@@ -235,30 +277,31 @@ impl Context {
         let code_tokens = counter.count(&fragments_text(code_context));
         let prompt_tokens = counter.count(prompt);
 
-        let keep = match budget.limit {
-            None => self.turns.len(),
-            Some(limit) => {
-                // The current turn and the reserve are not negotiable: nothing
-                // here may trim the prompt the user just typed. If they alone
-                // exceed the window, history is empty and the turn still goes —
-                // being over the limit is the backend's error to report, not
-                // ours to hide by cutting the question in half.
-                let fixed = system_tokens + code_tokens + prompt_tokens + budget.reserve;
-                let mut available = limit.saturating_sub(fixed);
-                let mut keep = 0;
-                for turn in self.turns.iter().rev() {
-                    let tokens = self.tokens_of(turn, counter);
-                    if tokens > available {
-                        break;
-                    }
-                    available -= tokens;
-                    keep += 1;
-                }
-                keep
-            }
-        };
+        // Only what the window has not already lost is a candidate.
+        let live = self.turns.len() - self.floor;
+        if let Some(limit) = budget.limit {
+            // The current turn and the reserve are not negotiable: nothing here
+            // may trim the prompt the user just typed. If they alone exceed the
+            // window, history is empty and the turn still goes — being over the
+            // limit is the backend's error to report, not ours to hide by
+            // cutting the question in half.
+            let fixed = system_tokens + code_tokens + prompt_tokens + budget.reserve;
+            let available = limit.saturating_sub(fixed);
 
-        let retained = &self.turns[self.turns.len() - keep..];
+            if self.fill(available, counter) < live {
+                // It no longer fits. How deep the cut goes is the whole
+                // difference between the two policies.
+                let target = match budget.eviction {
+                    Eviction::Turn => available,
+                    Eviction::Block { low_water } => {
+                        (available as f32 * low_water.clamp(0.0, 1.0)) as u32
+                    }
+                };
+                self.floor = self.turns.len() - self.fill(target, counter);
+            }
+        }
+
+        let retained = &self.turns[self.floor..];
         let history_tokens: u32 = retained
             .iter()
             .map(|turn| self.tokens_of(turn, counter))
@@ -288,8 +331,24 @@ impl Context {
             buckets,
             limit: budget.limit,
             counter: counter.id(),
-            evicted: self.turns.len() - keep,
+            evicted: self.floor,
         }
+    }
+
+    /// How many turns, newest first and never reaching past the floor, fit in
+    /// `available`.
+    fn fill(&self, available: u32, counter: &dyn TokenCounter) -> usize {
+        let mut left = available;
+        let mut keep = 0;
+        for turn in self.turns[self.floor..].iter().rev() {
+            let tokens = self.tokens_of(turn, counter);
+            if tokens > left {
+                break;
+            }
+            left -= tokens;
+            keep += 1;
+        }
+        keep
     }
 
     /// The stored count, unless it was produced by a different counter — in
@@ -365,9 +424,14 @@ mod tests {
     #[test]
     fn an_unknown_window_selects_nothing_and_evicts_nothing() {
         let counter = WordCounter::default();
-        let context = context_with(5, &counter);
+        let mut context = context_with(5, &counter);
 
-        let selection = context.select("now this", &[], Budget::new(0, 512), &counter);
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(0, 512, Eviction::Turn),
+            &counter,
+        );
 
         assert_eq!(selection.limit, None);
         assert_eq!(selection.evicted, 0);
@@ -379,10 +443,15 @@ mod tests {
     #[test]
     fn eviction_drops_whole_turns_and_never_orphans_an_answer() {
         let counter = WordCounter::default();
-        let context = context_with(6, &counter);
+        let mut context = context_with(6, &counter);
 
         // Room for the fixed part and two turns, no more.
-        let selection = context.select("now this", &[], Budget::new(30, 4), &counter);
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(30, 4, Eviction::Turn),
+            &counter,
+        );
 
         assert!(selection.evicted > 0, "the point of the case");
         let roles: Vec<Role> = selection.messages.iter().map(|m| m.role).collect();
@@ -402,9 +471,14 @@ mod tests {
     #[test]
     fn what_is_kept_is_the_newest_turns() {
         let counter = WordCounter::default();
-        let context = context_with(6, &counter);
+        let mut context = context_with(6, &counter);
 
-        let selection = context.select("now this", &[], Budget::new(30, 4), &counter);
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(30, 4, Eviction::Turn),
+            &counter,
+        );
 
         let kept: Vec<&String> = selection
             .messages
@@ -419,11 +493,21 @@ mod tests {
     #[test]
     fn the_system_block_is_byte_identical_whatever_the_history() {
         let counter = WordCounter::default();
-        let empty = Context::new("system prompt here");
-        let full = context_with(4, &counter);
+        let mut empty = Context::new("system prompt here");
+        let mut full = context_with(4, &counter);
 
-        let first = empty.select("hola", &[], Budget::new(8192, 512), &counter);
-        let later = full.select("hola", &[], Budget::new(8192, 512), &counter);
+        let first = empty.select(
+            "hola",
+            &[],
+            Budget::new(8192, 512, Eviction::Turn),
+            &counter,
+        );
+        let later = full.select(
+            "hola",
+            &[],
+            Budget::new(8192, 512, Eviction::Turn),
+            &counter,
+        );
 
         assert_eq!(first.messages[0].content, later.messages[0].content);
         assert_eq!(first.messages[0].role, Role::System);
@@ -432,13 +516,18 @@ mod tests {
     #[test]
     fn code_is_fused_into_the_current_user_message_never_the_system_block() {
         let counter = WordCounter::default();
-        let context = context_with(2, &counter);
+        let mut context = context_with(2, &counter);
         let code = vec![Fragment {
             path: "src/lib.rs".into(),
             text: "fn main() {}".into(),
         }];
 
-        let selection = context.select("explain this", &code, Budget::new(8192, 512), &counter);
+        let selection = context.select(
+            "explain this",
+            &code,
+            Budget::new(8192, 512, Eviction::Turn),
+            &counter,
+        );
 
         assert!(!selection.messages[0].content.contains("src/lib.rs"));
         let last = selection.messages.last().unwrap();
@@ -450,10 +539,15 @@ mod tests {
     #[test]
     fn a_closed_turn_is_counted_once_not_once_per_later_turn() {
         let counter = WordCounter::default();
-        let context = context_with(10, &counter);
+        let mut context = context_with(10, &counter);
         let after_building = counter.calls.load(Ordering::Relaxed);
 
-        context.select("now this", &[], Budget::new(8192, 512), &counter);
+        context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 512, Eviction::Turn),
+            &counter,
+        );
 
         // System, the fragments, the prompt. The ten stored turns are not
         // re-counted, which is the whole point of storing their counts.
@@ -466,7 +560,12 @@ mod tests {
         let mut context = Context::new("system prompt here");
         context.push_turn("one two three", "four five", vec![], &ApproximateCounter);
 
-        let selection = context.select("now this", &[], Budget::new(8192, 0), &words);
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &words,
+        );
 
         // The stored count came from chars/4; the bar is in words, so the turn
         // is re-counted rather than added in a foreign unit.
@@ -481,12 +580,12 @@ mod tests {
     #[test]
     fn the_current_turn_survives_a_window_too_small_for_it() {
         let counter = WordCounter::default();
-        let context = context_with(3, &counter);
+        let mut context = context_with(3, &counter);
 
         let selection = context.select(
             "a very long question indeed",
             &[],
-            Budget::new(2, 8),
+            Budget::new(2, 8, Eviction::Turn),
             &counter,
         );
 
@@ -498,9 +597,14 @@ mod tests {
     #[test]
     fn buckets_are_in_prompt_order_with_the_reserve_last() {
         let counter = WordCounter::default();
-        let context = context_with(1, &counter);
+        let mut context = context_with(1, &counter);
 
-        let selection = context.select("hola", &[], Budget::new(8192, 512), &counter);
+        let selection = context.select(
+            "hola",
+            &[],
+            Budget::new(8192, 512, Eviction::Turn),
+            &counter,
+        );
 
         let names: Vec<&str> = selection.buckets.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(names, ["system", "history", "code", "prompt", "reserve"]);
@@ -508,8 +612,117 @@ mod tests {
 
     #[test]
     fn the_approximate_counter_says_so() {
-        let context = Context::new("system");
-        let selection = context.select("hola", &[], Budget::new(8192, 512), &ApproximateCounter);
+        let mut context = Context::new("system");
+        let selection = context.select(
+            "hola",
+            &[],
+            Budget::new(8192, 512, Eviction::Turn),
+            &ApproximateCounter,
+        );
         assert!(selection.counter.is_approximate());
+    }
+
+    /// Turns of a known size, so a budget can be written in turns rather than
+    /// in tokens nobody can check by eye.
+    fn context_of_equal_turns(turns: usize, counter: &dyn TokenCounter) -> Context {
+        let mut context = Context::new("sys");
+        for n in 0..turns {
+            // Four words each way: every turn costs exactly eight.
+            context.push_turn(
+                format!("q {n} aa bb"),
+                format!("a {n} cc dd"),
+                vec![],
+                counter,
+            );
+        }
+        context
+    }
+
+    #[test]
+    fn a_turn_that_left_the_window_does_not_come_back_when_room_reappears() {
+        let counter = WordCounter::default();
+        let mut context = context_of_equal_turns(6, &counter);
+        let budget = Budget::new(60, 0, Eviction::Turn);
+
+        // A prompt big enough to force eviction, then a tiny one that would
+        // leave room for what was just dropped.
+        let long: String = std::iter::repeat_n("pad", 30).collect::<Vec<_>>().join(" ");
+        let evicted = context.select(&long, &[], budget, &counter).evicted;
+        assert!(
+            evicted > 0,
+            "the case only exists once something was dropped"
+        );
+
+        let after = context.select("hi", &[], budget, &counter);
+        assert_eq!(
+            after.evicted, evicted,
+            "resurrecting a turn rewrites the history from its front, which is \
+             the one thing the prefix cache cannot survive",
+        );
+    }
+
+    #[test]
+    fn block_eviction_cuts_deeper_and_then_holds_still() {
+        let counter = WordCounter::default();
+        // Eight turns of eight tokens: 64 of history against a window of 40.
+        let mut per_turn = context_of_equal_turns(8, &counter);
+        let mut block = context_of_equal_turns(8, &counter);
+
+        let window = 40;
+        let turn = Budget::new(window, 0, Eviction::Turn);
+        let blocks = Budget::new(window, 0, Eviction::Block { low_water: 0.5 });
+
+        let first_per_turn = per_turn.select("q", &[], turn, &counter).evicted;
+        let first_block = block.select("q", &[], blocks, &counter).evicted;
+        assert!(
+            first_block > first_per_turn,
+            "the block policy pays for its stability up front: {first_block} vs {first_per_turn}",
+        );
+
+        // A closed turn is appended to each, and only the per-turn policy has
+        // to move its front again to make room.
+        per_turn.push_turn("q 8 aa bb", "a 8 cc dd", vec![], &counter);
+        block.push_turn("q 8 aa bb", "a 8 cc dd", vec![], &counter);
+
+        let next_per_turn = per_turn.select("q", &[], turn, &counter).evicted;
+        let next_block = block.select("q", &[], blocks, &counter).evicted;
+        assert!(
+            next_per_turn > first_per_turn,
+            "the baseline drops another turn, so the history is rewritten again",
+        );
+        assert_eq!(
+            next_block, first_block,
+            "the block policy still fits, so the history is byte-identical",
+        );
+    }
+
+    #[test]
+    fn a_history_that_still_fits_is_untouched_by_either_policy() {
+        let counter = WordCounter::default();
+        let mut context = context_of_equal_turns(3, &counter);
+
+        let selection = context.select(
+            "q",
+            &[],
+            Budget::new(8192, 0, Eviction::Block { low_water: 0.5 }),
+            &counter,
+        );
+
+        assert_eq!(
+            selection.evicted, 0,
+            "the low-water mark is a floor, not a cap"
+        );
+        assert_eq!(selection.messages.len(), 3 * 2 + 2);
+    }
+
+    #[test]
+    fn the_policy_is_part_of_what_a_run_was_measured_under() {
+        let json = serde_json::to_value(Eviction::Block { low_water: 0.5 }).unwrap();
+        assert_eq!(json["policy"], "block");
+        assert_eq!(json["low_water"], 0.5);
+        assert_eq!(
+            serde_json::to_value(Eviction::Turn).unwrap()["policy"],
+            "turn"
+        );
     }
 }

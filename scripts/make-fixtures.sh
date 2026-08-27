@@ -17,13 +17,18 @@ mkdir -p "$out"
   --mock-delay-ms 45 --cancel-after-ms 700 --context-limit 8192 \
   --record "$out/cancelled-turn.jsonl" >/dev/null
 
-# The one that shows the context manager working. A deliberately small window
-# so the session overflows: the recording then carries a real split, a whole
-# turn evicted, and the stable prefix surviving the eviction. A fixture set
-# where every budget fits would demonstrate exactly the thing that was fixed.
-"$luu" chat --script "$(dirname "$0")/tasks/long-session.txt" \
-  --mock-delay-ms 20 --context-limit 256 --reserve 64 \
-  --record "$out/eviction.jsonl" >/dev/null
+# The two that show the context manager working, and the only pair in here that
+# is meant to be read against each other. A deliberately small window so the
+# session overflows: the recordings then carry a real split, a whole turn
+# evicted, and the prefix surviving — or not surviving — the eviction.
+#
+# Same script, same window, same counter, one flag apart. That is what makes
+# them comparable, and comparing is the whole reason the debug client exists.
+for policy in turn block; do
+  "$luu" chat --script "$(dirname "$0")/tasks/steady-state.txt" \
+    --mock-delay-ms 8 --context-limit 512 --reserve 64 --evict "$policy" \
+    --record "$out/eviction-$policy.jsonl" >/dev/null
+done
 
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
@@ -35,7 +40,8 @@ mkdir -p "$out"
 # Named in order, not globbed: the first one is what the page plays on load,
 # and a glob would lead with whichever name sorts first.
 "$luu" export \
-  "$out/eviction.jsonl" \
+  "$out/eviction-block.jsonl" \
+  "$out/eviction-turn.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \

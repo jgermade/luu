@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_core::backend::Message;
-use agent_core::context::{ApproximateCounter, Counter, ModelCounter, TokenCounter};
-use agent_core::protocol::{self, ServerMessage};
+use agent_core::context::{ApproximateCounter, Budget, Counter, ModelCounter, TokenCounter};
+use agent_core::protocol::{self, ServerMessage, TurnId};
 use agent_core::record::{self, RecordLine};
 use agent_core::trace::TraceMessage;
 use anyhow::{Context, Result};
@@ -64,6 +64,38 @@ pub fn rendered(messages: &[Message]) -> String {
         .join("\n\n")
 }
 
+/// The previous turn's rendered prompt, kept so the next one can be measured
+/// against it.
+///
+/// Here rather than in `agent-core` because the thing measured is a rendering,
+/// and the rendering is this module's; here rather than in each caller because
+/// `chat` and `serve` measuring against differently-assembled prompts is the
+/// same failure the module exists to prevent.
+#[derive(Default)]
+pub struct PrefixTracker {
+    previous: Option<String>,
+}
+
+impl PrefixTracker {
+    /// Measures this turn's prompt against the one before it, and remembers it
+    /// for the next. `None` on the first turn of a session: there is no
+    /// previous prompt, so the quantity does not exist — and "0% reuse" would
+    /// read as a cold cache rather than as the absence of one.
+    pub fn measure(
+        &mut self,
+        turn: TurnId,
+        prompt: &str,
+        counter: &dyn TokenCounter,
+    ) -> Option<TraceMessage> {
+        let message = self
+            .previous
+            .as_deref()
+            .map(|previous| TraceMessage::prefix_reuse(turn, previous, prompt, counter));
+        self.previous = Some(prompt.to_string());
+        message
+    }
+}
+
 /// One message on its way to clients, to the record, or both.
 #[derive(Clone)]
 pub enum Event {
@@ -90,7 +122,7 @@ impl Recorder {
         path: &Path,
         backend: &str,
         model: &str,
-        context_limit: Option<u32>,
+        budget: Budget,
         counter: Counter,
         started_at: u64,
     ) -> Result<Self> {
@@ -109,8 +141,9 @@ impl Recorder {
             protocol: protocol::VERSION,
             backend: backend.to_string(),
             model: model.to_string(),
-            context_limit,
+            context_limit: budget.limit,
             counter: Some(counter),
+            eviction: Some(budget.eviction),
             started_at,
         };
         file.write_all(format!("{}\n", serde_json::to_string(&header)?).as_bytes())

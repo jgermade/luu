@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::Counter;
+use crate::context::{Counter, Eviction};
 use crate::protocol::ServerMessage;
 use crate::trace::TraceMessage;
 
@@ -39,6 +39,17 @@ pub enum RecordLine {
         /// file, where the numbers came from the backend instead.
         #[serde(default)]
         counter: Option<Counter>,
+        /// How the history gave way under pressure. Beside `context_limit` and
+        /// `counter` for the same reason those are here: two runs under
+        /// different policies are not comparable, and by the time anyone is
+        /// comparing them nobody remembers which was which.
+        ///
+        /// `None` in a file recorded before the policy was a choice. Every one
+        /// of those ran per-turn, but the file does not say so, and inventing
+        /// the field on the reader's behalf would put a claim in a record that
+        /// the record never made.
+        #[serde(default)]
+        eviction: Option<Eviction>,
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
@@ -66,6 +77,7 @@ mod tests {
             model: "mock".into(),
             context_limit: Some(8192),
             counter: Some(Counter::Approximate),
+            eviction: Some(Eviction::Turn),
             started_at: 1_700_000_000_000,
         };
         let token = RecordLine::Protocol {

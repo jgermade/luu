@@ -6,12 +6,14 @@
 use std::time::Duration;
 
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama};
-use agent_core::context::{Budget, Context as AgentContext};
+use agent_core::context::{Budget, Context as AgentContext, Eviction};
 use agent_core::protocol::ServerMessage;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
-use crate::session::{DEFAULT_RESERVE, Event, Recorder, SYSTEM, counter_for, now_ms, rendered};
+use crate::session::{
+    DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms, rendered,
+};
 use anyhow::{Context, Result};
 
 pub mod export;
@@ -86,6 +88,18 @@ enum Command {
         /// Tokens held back for the answer before history is considered.
         #[arg(long, default_value_t = DEFAULT_RESERVE)]
         reserve: u32,
+
+        /// How the history gives way when a turn no longer fits. `turn` drops
+        /// the minimum and rewrites the history on every call once the window
+        /// is full; `block` cuts down to --low-water and then holds still.
+        #[arg(long, value_enum, default_value_t = EvictionKind::Turn)]
+        evict: EvictionKind,
+
+        /// The fraction of the history budget `--evict block` cuts down to.
+        /// Ignored by `--evict turn`. A guess, and a flag so that it can stop
+        /// being one.
+        #[arg(long, default_value_t = 0.5)]
+        low_water: f32,
     },
 
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
@@ -133,7 +147,34 @@ enum Command {
         /// Tokens held back for the answer before history is considered.
         #[arg(long, default_value_t = DEFAULT_RESERVE)]
         reserve: u32,
+
+        /// How the history gives way when a turn no longer fits. `turn` drops
+        /// the minimum and rewrites the history on every call once the window
+        /// is full; `block` cuts down to --low-water and then holds still.
+        #[arg(long, value_enum, default_value_t = EvictionKind::Turn)]
+        evict: EvictionKind,
+
+        /// The fraction of the history budget `--evict block` cuts down to.
+        /// Ignored by `--evict turn`. A guess, and a flag so that it can stop
+        /// being one.
+        #[arg(long, default_value_t = 0.5)]
+        low_water: f32,
     },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum EvictionKind {
+    Turn,
+    Block,
+}
+
+impl EvictionKind {
+    fn policy(self, low_water: f32) -> Eviction {
+        match self {
+            Self::Turn => Eviction::Turn,
+            Self::Block => Eviction::Block { low_water },
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -208,6 +249,8 @@ pub async fn run() -> Result<()> {
         context_limit,
         tokenizer,
         reserve,
+        evict,
+        low_water,
     } = command
     {
         let backend = build_backend(backend, &ollama_url, mock_delay_ms);
@@ -221,7 +264,7 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve),
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
             counter,
         })
         .await;
@@ -239,6 +282,8 @@ pub async fn run() -> Result<()> {
         context_limit,
         tokenizer,
         reserve,
+        evict,
+        low_water,
     } = command
     else {
         unreachable!("serve is handled above");
@@ -272,7 +317,7 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
-    let budget = Budget::new(context_limit, reserve);
+    let budget = Budget::new(context_limit, reserve, evict.policy(low_water));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -280,7 +325,7 @@ pub async fn run() -> Result<()> {
                 path,
                 backend.name(),
                 &model,
-                budget.limit,
+                budget,
                 counter.id(),
                 started_at,
             )
@@ -294,6 +339,7 @@ pub async fn run() -> Result<()> {
     // prompt differently from `serve` would be measuring something the server
     // never sends.
     let mut context = AgentContext::new(SYSTEM);
+    let mut prefix = PrefixTracker::default();
     let mut failed = false;
 
     for (index, prompt) in prompts.iter().enumerate() {
@@ -305,10 +351,12 @@ pub async fn run() -> Result<()> {
                 turn,
                 prompt: prompt.clone(),
             }));
-            recorder.write(&Event::Trace(TraceMessage::Prompt {
-                turn,
-                text: rendered(&selection.messages),
-            }));
+            let text = rendered(&selection.messages);
+            let reuse = prefix.measure(turn, &text, counter.as_ref());
+            recorder.write(&Event::Trace(TraceMessage::Prompt { turn, text }));
+            if let Some(reuse) = reuse {
+                recorder.write(&Event::Trace(reuse));
+            }
             // Before the call, not after: this is what we decided to send, and
             // a cancelled turn has it too.
             recorder.write(&Event::Trace(TraceMessage::Budget {

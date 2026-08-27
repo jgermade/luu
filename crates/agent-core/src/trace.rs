@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::Counter;
+use crate::context::{Counter, TokenCounter};
 use crate::protocol::TurnId;
 
 /// One slice of the token budget. The names are not an enum: the context
@@ -54,11 +54,74 @@ pub enum TraceMessage {
         counter: Counter,
         buckets: Vec<Bucket>,
     },
+    /// How much of this turn's prompt the previous turn's prompt already
+    /// contained — the prompt cache's hit rate, as far as we can see it.
+    ///
+    /// A cache reuses a *prefix* and stops at the first difference, so the
+    /// longest common prefix is the whole quantity: matching text after the
+    /// divergence is reuse the cache never gets. Not emitted on the first turn
+    /// of a session, where there is no previous prompt and "0%" would read as a
+    /// measurement of a cold cache rather than the absence of one.
+    PrefixReuse {
+        turn: TurnId,
+        /// Bytes shared with the previous turn's rendered prompt.
+        shared_bytes: usize,
+        /// Those bytes, by the same counter the budget was measured with. The
+        /// shared prefix is tokenized as a substring, so its last token may not
+        /// be one the model would emit at that boundary: an error of one token,
+        /// the same order as the boundary error between buckets and as the chat
+        /// template overhead, both of which are already accepted and reported.
+        shared_tokens: u32,
+        /// The whole rendered prompt, by that same counter, so the ratio is
+        /// exact within one rendering.
+        prompt_tokens: u32,
+    },
+}
+
+impl TraceMessage {
+    /// Measures one prompt against the one before it.
+    ///
+    /// What is compared is our own rendering, not the string the backend
+    /// assembles from it — the chat template is applied where we cannot see it.
+    /// It holds as a proxy because templates render message by message in
+    /// order: if messages `0..k` are byte-identical across two calls, the
+    /// templated prefix is identical too. What this measures is a property of
+    /// the message sequence, which is what a context strategy changes.
+    pub fn prefix_reuse(
+        turn: TurnId,
+        previous: &str,
+        current: &str,
+        counter: &dyn TokenCounter,
+    ) -> Self {
+        let shared_bytes = shared_prefix(previous, current);
+        Self::PrefixReuse {
+            turn,
+            shared_bytes,
+            shared_tokens: counter.count(&current[..shared_bytes]),
+            prompt_tokens: counter.count(current),
+        }
+    }
+}
+
+/// The length in bytes of the longest common prefix, truncated to a character
+/// boundary so the result can slice either string.
+pub fn shared_prefix(previous: &str, current: &str) -> usize {
+    let mut shared = previous
+        .as_bytes()
+        .iter()
+        .zip(current.as_bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !current.is_char_boundary(shared) {
+        shared -= 1;
+    }
+    shared
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::ApproximateCounter;
 
     #[test]
     fn a_budget_survives_the_wire() {
@@ -75,6 +138,37 @@ mod tests {
 
         let back: TraceMessage = serde_json::from_value(json).unwrap();
         assert!(matches!(back, TraceMessage::Budget { buckets, .. } if buckets.len() == 2));
+    }
+
+    #[test]
+    fn reuse_is_the_common_prefix_and_stops_at_the_first_difference() {
+        let previous = "<|System|>\nfixed\n\n<|User|>\nold\n\n<|User|>\ntail";
+        let current = "<|System|>\nfixed\n\n<|User|>\nnew\n\n<|User|>\ntail";
+
+        let TraceMessage::PrefixReuse {
+            shared_bytes,
+            shared_tokens,
+            prompt_tokens,
+            ..
+        } = TraceMessage::prefix_reuse(2, previous, current, &ApproximateCounter)
+        else {
+            panic!("prefix_reuse builds a PrefixReuse");
+        };
+
+        assert_eq!(
+            &current[..shared_bytes],
+            "<|System|>\nfixed\n\n<|User|>\n",
+            "the shared trailing text is not reuse: a cache stops at the first difference",
+        );
+        assert!(shared_tokens < prompt_tokens);
+    }
+
+    #[test]
+    fn a_prefix_that_diverges_mid_character_lands_on_a_boundary() {
+        // Same first byte in UTF-8, different second: the byte-wise prefix ends
+        // inside a character, and slicing there would panic.
+        assert_eq!(shared_prefix("é", "è"), 0);
+        assert_eq!(shared_prefix("añb", "añc"), 3, "the whole ñ is shared");
     }
 
     #[test]

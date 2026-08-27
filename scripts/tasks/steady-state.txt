@@ -1,0 +1,29 @@
+# Twenty turns of roughly uniform size, for comparing eviction policies.
+#
+# `long-session.txt` is six turns: long enough to overflow a small window and
+# show one eviction, which is what the fixture needs. It is too short to show
+# what happens *after* the first eviction, and that is the whole difference
+# between dropping one turn per turn and dropping a block every N turns.
+#
+# Uniform on purpose: turns of wildly different sizes make the reuse numbers a
+# reading of the prompts rather than of the policy.
+what does the context manager do?
+how is the token budget split into buckets?
+why does the system block never change?
+what is the reserve held back for?
+which turn is dropped first when the window fills?
+why are turns evicted whole rather than in halves?
+what does the prompt cache actually reuse?
+how is the stable prefix kept byte-identical?
+why is code fused into the current user message?
+what does an unknown context window mean here?
+why does every count carry its counter?
+what is the difference between our count and the backend's?
+how does the record make two runs comparable?
+what does the trace channel carry that the protocol does not?
+why is the debug client early in the work order?
+what would compaction replace in the history?
+how would relevance selection pick fragments?
+why is a tool result worth pruning later?
+what has to be true before a strategy is adopted?
+summarise the whole design in three lines

@@ -28,6 +28,14 @@
   $: templateOverhead = state.budget?.backendPrompt
     ? state.budget.backendPrompt - budgetSent
     : null
+  // How much of this prompt the previous one already contained. A cache stops
+  // at the first difference, so this is a prefix, not a total of matching text.
+  $: reusePercent = state.prefix?.prompt_tokens
+    ? Math.round((state.prefix.shared_tokens / state.prefix.prompt_tokens) * 100)
+    : null
+  $: reuseFresh = state.prefix
+    ? state.prefix.prompt_tokens - state.prefix.shared_tokens
+    : 0
 </script>
 
 <header>
@@ -111,6 +119,28 @@
     <p :if="!state.budget" class="dim">
       No turn yet. The budget is decided before the call, so the first prompt
       fills this in.
+    </p>
+
+    <h2>Prefix reuse</h2>
+    <div :if="state.prefix">
+      <div class="bar">
+        <span
+          class="shared"
+          :attrs="{ style: `flex-grow:${state.prefix.shared_tokens || 0}`, title: `shared: ${state.prefix.shared_tokens}` }"></span>
+        <span
+          class="fresh"
+          :attrs="{ style: `flex-grow:${reuseFresh}`, title: `new: ${reuseFresh}` }"></span>
+      </div>
+      <p class="dim">
+        <b>{{ reusePercent }}%</b> of this prompt was already in the previous
+        one: {{ state.prefix.shared_tokens }} of
+        {{ state.prefix.prompt_tokens }} tokens ({{ state.prefix.shared_bytes }}
+        bytes) before the first difference, which is where the cache stops.
+      </p>
+    </div>
+    <p :if="!state.prefix" class="dim">
+      First turn of the session — no previous prompt to measure against, which
+      is not the same as no reuse.
     </p>
 
     <h2>Prompt sent to the model</h2>
@@ -240,6 +270,8 @@
   /* The reserve is headroom, not content: it reads as the empty part of the
      bar, which is what it is. */
   .bar span.reserve, .legend span.reserve { background: var(--b-reserve); }
+  .bar span.shared { background: var(--b-history); }
+  .bar span.fresh { background: var(--b-reserve); }
 
   .legend { list-style: none; margin: .6rem 0 0; padding: 0; font-size: 13px; }
   .legend li { display: flex; align-items: center; gap: .4rem; }
