@@ -207,6 +207,16 @@ stable prefix.
 - **Every count carries its counter.** A stored turn records which counter produced
   its tokens, and a budget names the counter that produced it. Two runs measured
   differently are not comparable, and nothing else would say so.
+- **A turn is not a call, and every call is measured.** A turn that uses a tool
+  is several model calls — the first ends in a tool block, the next carries the
+  result — and the backend's `usage.prompt_tokens` is summed over all of them.
+  Measuring only the first made our count and the backend's count different
+  things: 1 590 against 3 552 on a real run, on a turn where every other turn
+  agreed within 3 tokens. So the agent loop announces **every** call it makes and
+  the trace channel measures the ones after the first (`step_call`, beside
+  `plan_call` for the same reason). The budget bar is still the first call, and
+  the panel says how much the round trips added rather than folding it into the
+  chat-template gap.
 - **Prefix reuse is measured, not assumed.** Every turn after the first carries the
   longest common prefix between its prompt and the previous one, in bytes and in
   tokens. A cache stops at the first difference, so a prefix is the whole quantity —
@@ -276,16 +286,6 @@ the precision given up.
 
 - **Hierarchical compaction**: built and measured. A closed task is replaced by its deterministic summary (the plan plus the evidence: paths, commands, exit codes, denials), and the token threshold stays as the fallback for a task that overflows alone. What the table says is narrower than the idea promised — see below. What is still unmeasured is the only question the mock cannot answer: whether the summary loses something the task needed.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
-- **A tool call inside a turn is invisible to the instrument.** A turn that calls
-  a tool is two model calls, not one: the first ends in a tool block, the second
-  reads the result and answers. `budget` and `prefix_reuse` are emitted for the
-  first only, while `usage.prompt_tokens` on `Ended` is summed over both — so on
-  a tooled turn our count and the backend's are not counts of the same thing. Seen
-  on a real run: 1 590 tokens by our count against 3 552 reported, on a turn where
-  every other turn in the session agreed within 3. Exactly the gap `PlanCall` was
-  added to close, one level down, and the same fix: a trace event for the
-  intermediate call. **Until it lands, no budget number from a tooled turn is
-  trustworthy.**
 - **Nothing can fuse a file into a turn.** `Context::select` takes code fragments
   and the `code` bucket exists for them, and no CLI surface fills it — so every
   script in `scripts/tasks/` is ungrounded Q&A, a real model answers it out of

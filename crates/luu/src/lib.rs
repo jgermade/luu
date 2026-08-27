@@ -394,7 +394,7 @@ async fn run_directive(
     step: &Step,
     tasks: &mut Tasks,
     context: &mut AgentContext,
-    prefix: &mut PrefixTracker,
+    prefix: &std::sync::Mutex<PrefixTracker>,
     backend: &dyn Backend,
     model: &str,
     budget: Budget,
@@ -425,7 +425,11 @@ async fn run_directive(
             // and the claim that proposing costs nothing is checkable only if
             // the prompt it sent is written down.
             if let Some(recorder) = recorder {
-                recorder.write(&Event::Trace(prefix.measure_plan(id, &sent, counter)));
+                let call = prefix
+                    .lock()
+                    .expect("no panic holds this lock")
+                    .measure_plan(id, &sent, counter);
+                recorder.write(&Event::Trace(call));
             }
             Ok(())
         }
@@ -645,7 +649,10 @@ pub async fn run() -> Result<()> {
     // prompt differently from `serve` would be measuring something the server
     // never sends.
     let mut context = AgentContext::new(SYSTEM).with_tools(agency.definitions());
-    let mut prefix = PrefixTracker::default();
+    // Shared with the printer task, which is where the tool round trips arrive:
+    // the chain of calls is one chain, and two of them would measure the same
+    // session against two different pasts.
+    let prefix = std::sync::Arc::new(std::sync::Mutex::new(PrefixTracker::default()));
     let mut tasks = Tasks::default();
     let mut failed = false;
     let mut turn: agent_core::protocol::TurnId = 0;
@@ -663,7 +670,7 @@ pub async fn run() -> Result<()> {
                     directive,
                     &mut tasks,
                     &mut context,
-                    &mut prefix,
+                    &prefix,
                     backend.as_ref(),
                     &model,
                     budget,
@@ -706,7 +713,11 @@ pub async fn run() -> Result<()> {
                 task,
             }));
             let text = rendered(&selection.messages);
-            let reuse = prefix.measure(turn, &text, counter.as_ref());
+            let reuse = prefix.lock().expect("no panic holds this lock").measure(
+                turn,
+                &text,
+                counter.as_ref(),
+            );
             recorder.write(&Event::Trace(TraceMessage::Prompt { turn, text }));
             if let Some(reuse) = reuse {
                 recorder.write(&Event::Trace(reuse));
@@ -739,6 +750,8 @@ pub async fn run() -> Result<()> {
         let printer = {
             let recorder = recorder.clone();
             let prompt = prompt.clone();
+            let prefix = prefix.clone();
+            let counter = counter.clone();
             tokio::spawn(async move {
                 let mut out = stdout();
                 if multi {
@@ -747,8 +760,25 @@ pub async fn run() -> Result<()> {
                     let _ = out.write_all(format!("\n> {prompt}\n\n").as_bytes()).await;
                 }
                 while let Some(event) = rx.recv().await {
-                    if let Some(recorder) = recorder.as_ref() {
-                        let message = ServerMessage::from_turn_event(turn, event.clone());
+                    // A model call is not a protocol message: it explains the
+                    // agent rather than driving it, so it goes on the trace
+                    // channel and only from the second call on — the first one
+                    // is the turn's own prompt, already measured before the
+                    // call, beside its budget.
+                    if let TurnEvent::ModelCall { step, messages } = &event {
+                        if let (Some(recorder), true) = (recorder.as_ref(), *step > 1) {
+                            let text = rendered(messages);
+                            let call = prefix
+                                .lock()
+                                .expect("no panic holds this lock")
+                                .measure_step(turn, *step, &text, counter.as_ref());
+                            recorder.write(&Event::Trace(call));
+                        }
+                        continue;
+                    }
+                    if let Some(recorder) = recorder.as_ref()
+                        && let Some(message) = ServerMessage::from_turn_event(turn, event.clone())
+                    {
                         recorder.write(&Event::Protocol(message));
                     }
                     match event {
@@ -815,6 +845,8 @@ pub async fn run() -> Result<()> {
                                 .await;
                             let _ = out.flush().await;
                         }
+                        // Handled above, before the protocol conversion.
+                        TurnEvent::ModelCall { .. } => {}
                         TurnEvent::Failed(error) => {
                             let _ = out
                                 .write_all(format!("\n\n[failed] {error}\n").as_bytes())

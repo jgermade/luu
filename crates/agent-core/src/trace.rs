@@ -122,6 +122,25 @@ pub enum TraceMessage {
         /// would read as a cold cache.
         shared: Option<Shared>,
     },
+    /// A model call *after* the first one of a turn: the tool-use round trip.
+    ///
+    /// The budget and `prefix_reuse` describe the call that starts a turn. A
+    /// turn that uses a tool makes more, each one carrying the previous
+    /// result — and `usage.prompt_tokens` on `Ended` is summed over all of
+    /// them, so on a tooled turn our count and the backend's count different
+    /// things until these are added in. Same gap as [`Self::PlanCall`], one
+    /// level down: a call nothing measures is a cost nothing accounts for.
+    StepCall {
+        turn: TurnId,
+        /// Counts from 1 within the turn; this message is only emitted from 2.
+        step: u32,
+        text: String,
+        prompt_tokens: u32,
+        /// Against the call before it — the previous step, or the turn's own
+        /// prompt. Never `None` in practice: there is always an earlier call in
+        /// the same turn.
+        shared: Option<Shared>,
+    },
     /// What closing a task cost the history and what it bought.
     ///
     /// The one rewrite in a session, so it is the one number that says whether

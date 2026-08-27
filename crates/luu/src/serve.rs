@@ -14,6 +14,7 @@ use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
 use agent_core::task::{TaskId, Tasks};
 use agent_core::trace::TraceMessage;
+use agent_core::turn::TurnEvent;
 
 use crate::session::{
     Agency, Event, PrefixTracker, Recorder, SYSTEM, now_ms, propose_plan, rendered,
@@ -496,8 +497,30 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             let app = app.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    app.publish(Event::Protocol(ServerMessage::from_turn_event(turn, event)))
-                        .await;
+                    // A model call after the first is the tool round trip: it
+                    // explains the agent rather than driving it, so it goes out
+                    // on the trace channel and never becomes a protocol
+                    // message. The first call is the turn's own prompt, already
+                    // measured beside its budget.
+                    if let TurnEvent::ModelCall { step, messages } = &event {
+                        if *step > 1 {
+                            let text = rendered(messages);
+                            let call = {
+                                let mut session = app.session.lock().await;
+                                session.prefix.measure_step(
+                                    turn,
+                                    *step,
+                                    &text,
+                                    app.counter.as_ref(),
+                                )
+                            };
+                            app.publish(Event::Trace(call)).await;
+                        }
+                        continue;
+                    }
+                    if let Some(message) = ServerMessage::from_turn_event(turn, event) {
+                        app.publish(Event::Protocol(message)).await;
+                    }
                 }
             })
         };

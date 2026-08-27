@@ -209,6 +209,32 @@ impl PrefixTracker {
         message
     }
 
+    /// The same, for a model call inside a turn — the tool round trip.
+    ///
+    /// Emitted from the second call of a turn onwards: the first is the turn's
+    /// own prompt, measured before the call beside its budget, and measuring it
+    /// twice would put it in the chain twice.
+    pub fn measure_step(
+        &mut self,
+        turn: TurnId,
+        step: u32,
+        prompt: &str,
+        counter: &dyn TokenCounter,
+    ) -> TraceMessage {
+        let shared = self
+            .previous
+            .as_deref()
+            .map(|previous| Shared::measure(previous, prompt, counter));
+        self.previous = Some(prompt.to_string());
+        TraceMessage::StepCall {
+            turn,
+            step,
+            text: prompt.to_string(),
+            prompt_tokens: counter.count(prompt),
+            shared,
+        }
+    }
+
     /// The same, for a planning call. It carries the prompt as well as the
     /// measurement: there is no `TurnStarted` to hang it off, and a number
     /// nobody can see the input of is not much of a reading.

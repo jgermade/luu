@@ -300,6 +300,11 @@ Two things that have already gone wrong here, both silently:
   `--context-limit 512` selected no history at all and both policies produced an
   identical run of nothing — for several commits, with every panel drawing
   normally. If a bucket you expect to move is flat, check the fixed part first.
+- **A turn is not a model call.** A turn with a tool in it is two calls or more,
+  and the backend reports one summed usage for the lot. Anything that compares
+  our per-turn count against `usage.prompt_tokens` has to add the round trips
+  in — otherwise the missing calls surface as chat-template overhead, and a
+  2-token gap reads as 1 962.
 - **A reuse percentage is not comparable across prefixes.** The floor is the
   constant share of the prompt, so adding a large block to the prefix raises every
   number without improving anything. Same rule as "every count carries its

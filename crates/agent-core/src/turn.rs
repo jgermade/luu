@@ -7,7 +7,7 @@
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 
-use crate::backend::{Backend, Chunk, CompletionRequest, StopReason, Usage};
+use crate::backend::{Backend, Chunk, CompletionRequest, Message, StopReason, Usage};
 use crate::tools::{ToolCall, ToolStep};
 
 /// Why a turn stopped.
@@ -42,6 +42,22 @@ impl From<StopReason> for EndReason {
 #[derive(Debug, Clone)]
 pub enum TurnEvent {
     Token(String),
+    /// A call to the model, announced before it is made, with the exact
+    /// messages it sends. `step` counts from 1 within the turn.
+    ///
+    /// A turn that uses a tool is several calls, not one — the first ends in a
+    /// tool block, the next reads the result — and the counts the backend
+    /// reports on `Ended` are summed over all of them. Announcing every call is
+    /// what lets the trace channel measure the ones after the first; without it
+    /// our count and the backend's are not counts of the same thing, and
+    /// nothing says so. Debug data, so it never becomes a protocol message.
+    ///
+    /// It costs one clone of the prompt per call, made whether or not anyone is
+    /// recording — the same order as the clone the request already needs.
+    ModelCall {
+        step: u32,
+        messages: Vec<Message>,
+    },
     /// The model asked for a tool. Emitted before the sandbox is consulted, so
     /// a denial is visible as a call that was made and refused rather than as
     /// nothing happening.

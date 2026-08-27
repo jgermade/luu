@@ -24,10 +24,15 @@
         .filter(b => b.name !== "reserve")
         .reduce((sum, b) => sum + b.tokens, 0)
     : 0
+  // A turn that used a tool is several model calls, and the backend's usage is
+  // summed over all of them. Comparing it against the first call alone reports
+  // the other calls as chat-template overhead, which is how a 2-token gap reads
+  // as 1 962.
+  $: extraSent = state.extraCalls.reduce((sum, call) => sum + call.prompt_tokens, 0)
   // The chat template, which the backend applies where we cannot see it. A
   // stable number here is overhead; a moving one means the template changed.
   $: templateOverhead = state.budget?.backendPrompt
-    ? state.budget.backendPrompt - budgetSent
+    ? state.budget.backendPrompt - budgetSent - extraSent
     : null
   // How much of this prompt the previous one already contained. A cache stops
   // at the first difference, so this is a prefix, not a total of matching text.
@@ -186,8 +191,13 @@
         Counted approximately (chars/4). Not a measurement — pass
         <code>--tokenizer</code> for real numbers.
       </p>
+      <p :if="state.extraCalls.length" class="dim">
+        This turn made {{ state.extraCalls.length + 1 }} model calls: the bar is
+        the first, and the tool round trips sent {{ extraSent }} tokens more.
+      </p>
       <p :if="templateOverhead !== null" class="dim">
-        Backend counted {{ state.budget?.backendPrompt }}: {{ templateOverhead }}
+        Backend counted {{ state.budget?.backendPrompt }} over
+        {{ state.extraCalls.length + 1 }} call(s): {{ templateOverhead }}
         more than we sent, the chat template applied on its side.
       </p>
     </div>

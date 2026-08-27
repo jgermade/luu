@@ -89,6 +89,19 @@ pub struct FoldView {
     pub tokens_after: u32,
 }
 
+/// A model call after the first one of a turn — the tool-use round trip.
+///
+/// The budget describes the call that starts a turn; these are the ones that
+/// follow it, each carrying the previous tool result. A client that wants to
+/// compare our count against the backend's has to add them in, because
+/// `usage.prompt_tokens` is summed over all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallView {
+    pub step: u32,
+    pub prompt_tokens: u32,
+    pub shared: Option<Shared>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnView {
     pub turn: TurnId,
@@ -111,6 +124,10 @@ pub struct TurnView {
     /// What the agent did during the turn, in order.
     #[serde(default)]
     pub tools: Vec<ToolCallView>,
+    /// The model calls after the first, in order. Empty on a turn that
+    /// answered without a tool, which is the ordinary case.
+    #[serde(default)]
+    pub extra_calls: Vec<CallView>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -129,6 +146,7 @@ impl TurnView {
             budget: None,
             prefix: None,
             tools: Vec::new(),
+            extra_calls: Vec::new(),
             started_at_ms,
             ended_at_ms: None,
         }
@@ -334,6 +352,23 @@ impl SessionView {
 
     pub fn apply_trace(&mut self, _at_ms: u64, message: &TraceMessage) {
         match message {
+            TraceMessage::StepCall {
+                turn,
+                step,
+                prompt_tokens,
+                shared,
+                ..
+            } => {
+                if let Some(view) = self.turn_mut(*turn)
+                    && !view.extra_calls.iter().any(|call| call.step == *step)
+                {
+                    view.extra_calls.push(CallView {
+                        step: *step,
+                        prompt_tokens: *prompt_tokens,
+                        shared: *shared,
+                    });
+                }
+            }
             TraceMessage::PlanCall {
                 task,
                 text,
