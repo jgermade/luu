@@ -198,6 +198,7 @@ mod tests {
         CompletionRequest {
             model: "mock".into(),
             messages: vec![Message::user("hola")],
+            context_limit: None,
         }
     }
 

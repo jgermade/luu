@@ -92,6 +92,12 @@
           <div :if="message.view?.plan.parsed === false" class="meta warn">
             the model did not answer in a plan block — these are its own lines
           </div>
+          <!-- Proposing is a call, and it is the one the per-turn reuse panel
+               cannot see: it happens between two turns. -->
+          <div :if="message.view?.planReuse !== null && message.view?.planReuse !== undefined" class="meta">
+            proposing sent {{ message.view?.planTokens }} tokens and reused
+            {{ message.view?.planReuse }}% of the previous prompt
+          </div>
 
           <!-- What the context now reads instead of those turns. -->
           <pre :if="message.view?.collapsed" class="summary">{{ message.view?.summary }}</pre>

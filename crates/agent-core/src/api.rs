@@ -14,7 +14,7 @@ use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
 use crate::task::{Plan, TaskId, TaskState};
-use crate::trace::{Bucket, TraceMessage};
+use crate::trace::{Bucket, Shared, TraceMessage};
 use crate::turn::EndReason;
 
 /// How the context was spent on one turn, as we measured it before the call.
@@ -71,6 +71,15 @@ pub struct TaskView {
     /// What closing it cost the history. From the trace channel, so a recording
     /// made without `--trace` has the summary and not the arithmetic.
     pub fold: Option<FoldView>,
+    /// The prompt the plan was asked for with, how big it was, and what it
+    /// reused of the call before it. Also the trace channel's, and the answer
+    /// to "what did proposing this cost".
+    #[serde(default)]
+    pub plan_prompt: Option<String>,
+    #[serde(default)]
+    pub plan_tokens: Option<u32>,
+    #[serde(default)]
+    pub plan_shared: Option<Shared>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +241,9 @@ impl SessionView {
                         turns: Vec::new(),
                         summary: None,
                         fold: None,
+                        plan_prompt: None,
+                        plan_tokens: None,
+                        plan_shared: None,
                     });
                 }
             }
@@ -322,6 +334,18 @@ impl SessionView {
 
     pub fn apply_trace(&mut self, _at_ms: u64, message: &TraceMessage) {
         match message {
+            TraceMessage::PlanCall {
+                task,
+                text,
+                prompt_tokens,
+                shared,
+            } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.plan_prompt = Some(text.clone());
+                    view.plan_tokens = Some(*prompt_tokens);
+                    view.plan_shared = *shared;
+                }
+            }
             TraceMessage::TaskFolded {
                 task,
                 turns,

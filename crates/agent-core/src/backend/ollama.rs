@@ -33,6 +33,17 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [Message],
     stream: bool,
+    /// Omitted entirely when the window is unknown, so the server keeps its own
+    /// default rather than being told a number we made up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<Options>,
+}
+
+/// Only what we have a reason to set. Sampling stays the server's business
+/// until there is something here that measures it.
+#[derive(serde::Serialize)]
+struct Options {
+    num_ctx: u32,
 }
 
 /// Only the fields we act on. Ollama sends more; ignoring the rest means a
@@ -99,7 +110,12 @@ impl Backend for Ollama {
         Box::pin(async_stream::try_stream! {
             let response = http
                 .post(&url)
-                .json(&ChatRequest { model: &request.model, messages: &request.messages, stream: true })
+                .json(&ChatRequest {
+                    model: &request.model,
+                    messages: &request.messages,
+                    stream: true,
+                    options: request.context_limit.map(|num_ctx| Options { num_ctx }),
+                })
                 .send()
                 .await
                 .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -170,6 +186,37 @@ mod tests {
         assert_eq!(stop, StopReason::Stop);
         assert_eq!(usage.prompt_tokens, 26);
         assert_eq!(usage.completion_tokens, 7);
+    }
+
+    /// The window we budgeted against has to reach the server, or the run
+    /// measures a prompt the model never saw: Ollama truncates to its own
+    /// `num_ctx` and says nothing.
+    #[test]
+    fn a_known_window_is_sent_as_num_ctx() {
+        let messages = [Message::user("hola")];
+        let body = serde_json::to_value(ChatRequest {
+            model: "qwen2.5-coder:7b",
+            messages: &messages,
+            stream: true,
+            options: Some(Options { num_ctx: 8192 }),
+        })
+        .unwrap();
+        assert_eq!(body["options"]["num_ctx"], 8192);
+    }
+
+    #[test]
+    fn an_unknown_window_sends_no_options_at_all() {
+        // Not `num_ctx: 0`, and not a default we invented: the server keeps its
+        // own, and the recording says the window was unknown.
+        let messages = [Message::user("hola")];
+        let body = serde_json::to_value(ChatRequest {
+            model: "qwen2.5-coder:7b",
+            messages: &messages,
+            stream: true,
+            options: None,
+        })
+        .unwrap();
+        assert!(body.get("options").is_none(), "{body}");
     }
 
     #[test]

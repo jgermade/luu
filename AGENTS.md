@@ -91,6 +91,76 @@ behaves exactly as it always did. In the debug UI the same lifecycle is
 (repeatable, one per model call, the last repeating), `--cancel-after-ms` exercises
 cancelling, and `--record <file>` writes a replayable session from either subcommand.
 
+## Running against a real model (Ollama)
+
+Everything measured so far comes from the mock backend and `chars/4`. That is
+legitimate for reuse and token accounting — both are properties of the string we
+assemble, decided before the call — and it is **not** legitimate for the question
+that decides whether a context strategy is any good: does the task still succeed.
+That needs a model. This is the setup for one.
+
+*Nothing in this section has been run yet. Whoever does it first should correct
+it in place and append what they found to `RECORD/`.*
+
+```sh
+brew install ollama && ollama serve          # or the .app; it listens on 11434
+ollama pull qwen2.5-coder:7b                 # ~4.7 GB, the CLI's default model
+ollama pull qwen2.5-coder:14b                # ~9 GB
+ollama pull qwen2.5-coder:32b                # ~20 GB — fits 48 GB, much slower
+
+# the tokenizer, which Ollama does not ship: GGUF carries its own vocab, and
+# `--tokenizer` wants the HuggingFace file. It must be the tokenizer of the
+# model actually being run, which is the entire point of `Counter::Model { id }`.
+curl -L -o ~/models/qwen2.5-coder-7b/tokenizer.json \
+  https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct/resolve/main/tokenizer.json
+
+cargo run --release --bin luu -- chat "hola" --backend ollama \
+  --model qwen2.5-coder:7b --context-limit 8192 \
+  --tokenizer ~/models/qwen2.5-coder-7b/tokenizer.json
+```
+
+Four things that will otherwise waste a session:
+
+- **The window has to be sent, and it is.** `--context-limit` becomes
+  `options.num_ctx` on the request. Ollama's own default is a couple of thousand
+  tokens and it truncates the prompt to it *silently*, so without this a run
+  budgeting 8k measures a prompt the model never saw. `--context-limit 0` sends
+  no option at all and the server keeps its default.
+- **A larger window costs memory before it costs anything else.** The KV cache
+  grows with `num_ctx` and with the model; 7B at 8–16K is the place to start on
+  48 GB, and 32B at 32K is where it stops being comfortable.
+- **The prompt cache lives with the loaded model.** If Ollama unloads between
+  runs the next first call is cold, and a reuse comparison across runs is
+  measuring the unload. `OLLAMA_KEEP_ALIVE=30m` (or `ollama ps` to check what is
+  still resident) before recording a pair.
+- **The sandbox is weaker on macOS, and says so.** Landlock and seccomp are
+  Linux-only, so `run_command` is *denied* by default with a verdict naming what
+  is missing. `--sandbox-enforcement best-effort` runs it anyway, and then the
+  allowlist in our own process is all that holds the child — which is exactly
+  what the verdict will report. In-process tools (`read_file`, `write_file`,
+  `edit_file`, `list_dir`) are unaffected: they never had kernel enforcement.
+
+The runs worth recording first, because they are the ones the mock cannot answer:
+
+```sh
+# the same pair the mock measured, now with a model that reads what it is sent
+for script in steady-state steady-state-tasks; do
+  cargo run --release --bin luu -- chat --script scripts/tasks/$script.txt \
+    --backend ollama --model qwen2.5-coder:7b \
+    --context-limit 8192 --reserve 512 \
+    --tokenizer ~/models/qwen2.5-coder-7b/tokenizer.json \
+    --record ~/records/$script.jsonl
+done
+
+cargo run --release --bin luu -- serve --record ~/records/live.jsonl   # and look at them
+```
+
+What to look at, in order: whether the answers after a fold still refer to what
+the task did (the summary is the only trace of it left), the gap between our
+count and `usage.prompt_tokens` on each turn (a stable gap is the chat template,
+a moving one means the template changed), and whether reuse behaves as the mock
+said it would.
+
 The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
 `network` and `enforcement` — and the `--allow-read/-write/-exec`,
 `--allow-command`, `--allow-network` and `--sandbox-enforcement` flags **add** to

@@ -15,9 +15,9 @@ use agent_core::context::{
 use agent_core::protocol::{self, ServerMessage, TurnId};
 use agent_core::record::{self, RecordLine};
 use agent_core::sandbox::Sandbox;
-use agent_core::task::{Plan, plan_request};
+use agent_core::task::{Plan, TaskId, plan_request};
 use agent_core::tools::Tools;
-use agent_core::trace::TraceMessage;
+use agent_core::trace::{Shared, TraceMessage};
 use agent_core::turn::run_turn;
 use anyhow::{Context, Result};
 use tokio::io::AsyncWriteExt;
@@ -127,6 +127,8 @@ pub fn counter_for(
 ///
 /// It does not stream. The client is shown the plan, not its generation — a
 /// silent wait on a slow local model, and the first thing to change if it bites.
+/// Returns the plan and the exact prompt that produced it, which is what the
+/// trace channel needs in order to say what proposing cost.
 pub async fn propose_plan(
     backend: &dyn Backend,
     model: &str,
@@ -134,8 +136,9 @@ pub async fn propose_plan(
     budget: Budget,
     counter: &dyn TokenCounter,
     objective: &str,
-) -> Plan {
+) -> (Plan, String) {
     let selection = context.select(&plan_request(objective), &[], budget, counter);
+    let sent = rendered(&selection.messages);
     let (events, mut inbox) = mpsc::channel(256);
     let drain = tokio::spawn(async move { while inbox.recv().await.is_some() {} });
     // Nothing cancels a planning call yet: it is one short generation, and a
@@ -147,6 +150,7 @@ pub async fn propose_plan(
         CompletionRequest {
             model: model.to_string(),
             messages: selection.messages,
+            context_limit: budget.limit,
         },
         events,
         cancel,
@@ -155,7 +159,7 @@ pub async fn propose_plan(
     drop(stop);
     let _ = drain.await;
 
-    Plan::from_reply(objective, &outcome.text)
+    (Plan::from_reply(objective, &outcome.text), sent)
 }
 
 /// What the backend is about to receive, as one string, for the trace channel.
@@ -169,8 +173,13 @@ pub fn rendered(messages: &[Message]) -> String {
         .join("\n\n")
 }
 
-/// The previous turn's rendered prompt, kept so the next one can be measured
+/// The previous *call's* rendered prompt, kept so the next one can be measured
 /// against it.
+///
+/// Every call, not every turn: a planning call is a call, and it is what the
+/// server's cache holds afterwards. Measuring the turn after a proposal against
+/// the turn before it would report reuse against a prompt the cache no longer
+/// has.
 ///
 /// Here rather than in `agent-core` because the thing measured is a rendering,
 /// and the rendering is this module's; here rather than in each caller because
@@ -198,6 +207,28 @@ impl PrefixTracker {
             .map(|previous| TraceMessage::prefix_reuse(turn, previous, prompt, counter));
         self.previous = Some(prompt.to_string());
         message
+    }
+
+    /// The same, for a planning call. It carries the prompt as well as the
+    /// measurement: there is no `TurnStarted` to hang it off, and a number
+    /// nobody can see the input of is not much of a reading.
+    pub fn measure_plan(
+        &mut self,
+        task: TaskId,
+        prompt: &str,
+        counter: &dyn TokenCounter,
+    ) -> TraceMessage {
+        let shared = self
+            .previous
+            .as_deref()
+            .map(|previous| Shared::measure(previous, prompt, counter));
+        self.previous = Some(prompt.to_string());
+        TraceMessage::PlanCall {
+            task,
+            text: prompt.to_string(),
+            prompt_tokens: counter.count(prompt),
+            shared,
+        }
     }
 }
 

@@ -343,7 +343,7 @@ async fn propose_task(app: Arc<App>, objective: String) {
 
     // Held across the call: the plan is proposed against the history as it is
     // now, and a turn that started underneath it would plan against another.
-    let plan = propose_plan(
+    let (plan, sent) = propose_plan(
         app.backend.as_ref(),
         &app.model,
         &mut session.context,
@@ -353,10 +353,16 @@ async fn propose_task(app: Arc<App>, objective: String) {
     )
     .await;
     let task = session.tasks.propose(plan.clone());
+    // Measured under the same lock that produced it, so a turn starting
+    // underneath cannot measure itself against this prompt first.
+    let call = session
+        .prefix
+        .measure_plan(task, &sent, app.counter.as_ref());
     drop(session);
 
     app.publish(Event::Protocol(ServerMessage::TaskProposed { task, plan }))
         .await;
+    app.publish(Event::Trace(call)).await;
 }
 
 async fn approve_task(app: &Arc<App>, task: TaskId) {
@@ -481,6 +487,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     let request = CompletionRequest {
         model: app.model.clone(),
         messages: selection.messages,
+        context_limit: selection.limit,
     };
 
     tokio::spawn(async move {

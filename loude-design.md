@@ -519,8 +519,20 @@ against it; baselines need a real model.
 ## Inference backend
 
 Decide between:
-- Talking to Ollama/llama.cpp via its local HTTP API (simpler).
+- Talking to Ollama/llama.cpp via its local HTTP API (simpler). *This is what
+  exists: `POST /api/chat`, NDJSON stream.*
 - Binding directly to `llama-cpp-rs` (FFI bindings) for fine-grained control over the KV cache across calls and avoiding the overhead of an intermediate HTTP server — recommended given the performance goal.
+
+**The window is sent, not assumed.** The request carries `options.num_ctx` from
+`--context-limit`, and omits it entirely when the window is unknown. Ollama's own
+default is a couple of thousand tokens and it *truncates the prompt silently* to
+it: a run that budgets 8k against a server serving 2k measures a prompt the model
+never saw, and every bucket, reuse figure and usage count in it is a reading of
+something else.
+
+Two numbers the backend reports and we do not yet read: `prompt_eval_duration`
+and `eval_duration`. They are what turns reuse into seconds, which is the
+question the whole cache argument is a proxy for.
 
 ## Persistence
 

@@ -394,6 +394,7 @@ async fn run_directive(
     step: &Step,
     tasks: &mut Tasks,
     context: &mut AgentContext,
+    prefix: &mut PrefixTracker,
     backend: &dyn Backend,
     model: &str,
     budget: Budget,
@@ -411,7 +412,8 @@ async fn run_directive(
         Step::Task(objective) => {
             tasks.may_propose()?;
             println!("\n[task] {objective}\n  planning…");
-            let plan = propose_plan(backend, model, context, budget, counter, objective).await;
+            let (plan, sent) =
+                propose_plan(backend, model, context, budget, counter, objective).await;
             let id = tasks.propose(plan.clone());
             println!("{}", indent(&plan.render()));
             if !plan.parsed {
@@ -419,6 +421,12 @@ async fn run_directive(
             }
             println!("  → :approve or :discard");
             publish(ServerMessage::TaskProposed { task: id, plan });
+            // A planning call is a call: it is what the cache holds afterwards,
+            // and the claim that proposing costs nothing is checkable only if
+            // the prompt it sent is written down.
+            if let Some(recorder) = recorder {
+                recorder.write(&Event::Trace(prefix.measure_plan(id, &sent, counter)));
+            }
             Ok(())
         }
         Step::Approve => {
@@ -655,6 +663,7 @@ pub async fn run() -> Result<()> {
                     directive,
                     &mut tasks,
                     &mut context,
+                    &mut prefix,
                     backend.as_ref(),
                     &model,
                     budget,
@@ -715,6 +724,7 @@ pub async fn run() -> Result<()> {
         let request = CompletionRequest {
             model: model.clone(),
             messages: selection.messages,
+            context_limit: selection.limit,
         };
 
         let (stop, cancel) = watch::channel(false);

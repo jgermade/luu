@@ -165,6 +165,8 @@ function onProtocol(message) {
         state: "proposed",
         summary: null,
         fold: null,
+        planTokens: null,
+        planReuse: null,
         collapsed: false,
       }]
       state.messages.push({ id: nextId++, role: "task", task: message.task, text: "", reason: null, usage: null })
@@ -211,6 +213,17 @@ function onTrace(message) {
       shared_tokens: message.shared_tokens,
       prompt_tokens: message.prompt_tokens,
     }
+  }
+  // What proposing the plan cost the cache. A planning call is not a turn, so
+  // it never appears in the per-turn reuse panel — this is the only place the
+  // number exists.
+  if (message.type === "plan_call") {
+    patchTask(message.task, {
+      planTokens: message.prompt_tokens,
+      planReuse: message.shared
+        ? Math.round((message.shared.tokens / message.prompt_tokens) * 100)
+        : null,
+    })
   }
   if (message.type === "task_folded") {
     patchTask(message.task, {

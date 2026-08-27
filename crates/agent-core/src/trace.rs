@@ -35,6 +35,31 @@ impl Bucket {
     }
 }
 
+/// How much of a prompt the previous one already contained.
+///
+/// Only the shared half: how big the prompt was travels with the message, so a
+/// call whose reuse is undefined — the first of a session — still reports its
+/// size. The alternative was `Option` around all three numbers, which loses the
+/// size exactly where a total is being added up.
+///
+/// [`TraceMessage::PrefixReuse`] carries the same numbers inline and is not
+/// changed to use this: its shape is in every recording that has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Shared {
+    pub bytes: usize,
+    pub tokens: u32,
+}
+
+impl Shared {
+    pub fn measure(previous: &str, current: &str, counter: &dyn TokenCounter) -> Self {
+        let bytes = shared_prefix(previous, current);
+        Self {
+            bytes,
+            tokens: counter.count(&current[..bytes]),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TraceMessage {
@@ -76,6 +101,26 @@ pub enum TraceMessage {
         /// The whole rendered prompt, by that same counter, so the ratio is
         /// exact within one rendering.
         prompt_tokens: u32,
+    },
+    /// A planning call: the exact prompt it sent, and how much of the previous
+    /// call's prompt it reused.
+    ///
+    /// It exists because a planning call is otherwise invisible to the
+    /// instrument — it sits between two turns and is not one, so no
+    /// `prefix_reuse` is emitted for it and the claim that proposing a task
+    /// costs no cache goes unchecked. `reuse` is `None` on the session's first
+    /// call, for the same reason the first turn carries no reuse: there is
+    /// nothing to compare against, and 0% would read as a cold cache.
+    PlanCall {
+        task: TaskId,
+        text: String,
+        /// Always: a planning call is a call, and a total of what a session
+        /// sent that skipped the first one would be wrong by a whole prompt.
+        prompt_tokens: u32,
+        /// `None` on the session's first call, for the same reason the first
+        /// turn carries no reuse: there is nothing to compare against, and 0%
+        /// would read as a cold cache.
+        shared: Option<Shared>,
     },
     /// What closing a task cost the history and what it bought.
     ///

@@ -60,6 +60,15 @@ impl Message {
 pub struct CompletionRequest {
     pub model: String,
     pub messages: Vec<Message>,
+    /// The window the caller budgeted against, when it knows one.
+    ///
+    /// It has to be *sent*, not merely respected: Ollama's own default is a
+    /// couple of thousand tokens and it silently truncates the prompt to it, so
+    /// a run that budgets 32k against a server serving 4k measures a prompt the
+    /// model never saw — and every bucket, every reuse figure and every usage
+    /// count in that run is a reading of something else. `None` is the CLI's
+    /// "unknown window", where there was nothing to budget and nothing to send.
+    pub context_limit: Option<u32>,
 }
 
 /// Token counts, as the backend reports them. Not our own tokenizer's opinion —
