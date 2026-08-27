@@ -71,7 +71,11 @@ cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
 
 # the same run under the other eviction policy — one flag apart, so comparable
 cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
-  --context-limit 512 --evict block --low-water 0.5 --record after.jsonl
+  --context-limit 1024 --reserve 64 --evict block --low-water 0.5 --record after.jsonl
+
+# and its twin: the same twenty prompts grouped into tasks that close every five
+cargo run --bin luu -- chat --script scripts/tasks/steady-state-tasks.txt \
+  --context-limit 1024 --reserve 64 --record folded.jsonl
 
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
@@ -195,3 +199,15 @@ fragment the model needed is also fewer tokens.
 The debug web client exists to produce those numbers — which is why it sits early
 in the work order rather than at the end, and why `luu serve --record` writes a
 replayable session file. Compare runs, don't recall them.
+
+Two things that have already gone wrong here, both silently:
+
+- **The window has to leave room for what is being measured.** The tool
+  definitions are ~465 tokens of the prefix, so the eviction pair recorded at
+  `--context-limit 512` selected no history at all and both policies produced an
+  identical run of nothing — for several commits, with every panel drawing
+  normally. If a bucket you expect to move is flat, check the fixed part first.
+- **A reuse percentage is not comparable across prefixes.** The floor is the
+  constant share of the prompt, so adding a large block to the prefix raises every
+  number without improving anything. Same rule as "every count carries its
+  counter", one level up: state the configuration beside the figure.

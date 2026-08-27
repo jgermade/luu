@@ -18,17 +18,32 @@ mkdir -p "$out"
   --record "$out/cancelled-turn.jsonl" >/dev/null
 
 # The two that show the context manager working, and the only pair in here that
-# is meant to be read against each other. A deliberately small window so the
-# session overflows: the recordings then carry a real split, a whole turn
-# evicted, and the prefix surviving — or not surviving — the eviction.
+# is meant to be read against each other. A small window so the session
+# overflows: the recordings then carry a real split, a whole turn evicted, and
+# the prefix surviving — or not surviving — the eviction.
+#
+# **The window has to clear the tool definitions first.** They are 465 tokens of
+# the prefix, so at 512 the fixed part alone exceeds the window, no history is
+# ever selected, and both policies record an empty `history` bucket and an
+# identical 98% reuse — a pair that shows nothing, which is what this was for a
+# while. 1024 leaves ~480 tokens of history, eight or nine turns, which is what
+# makes the eviction visible. See the correction appended to
+# RECORD/2026-08-27.prefix-reuse-and-block-eviction.md.
 #
 # Same script, same window, same counter, one flag apart. That is what makes
 # them comparable, and comparing is the whole reason the debug client exists.
 for policy in turn block; do
   "$luu" chat --script "$(dirname "$0")/tasks/steady-state.txt" \
-    --mock-delay-ms 8 --context-limit 512 --reserve 64 --evict "$policy" \
+    --mock-delay-ms 8 --context-limit 1024 --reserve 64 --evict "$policy" \
     --record "$out/eviction-$policy.jsonl" >/dev/null
 done
+
+# The same twenty prompts again, this time grouped into four tasks that close
+# every five turns — the third recording of that pair, and the one that shows
+# what a fold does to a history the other two only evict.
+"$luu" chat --script "$(dirname "$0")/tasks/steady-state-tasks.txt" \
+  --mock-delay-ms 8 --context-limit 1024 --reserve 64 --evict turn \
+  --record "$out/eviction-tasks.jsonl" >/dev/null
 
 # The tool loop, with the sandbox answering both ways: one call allowed and one
 # denied. Scripted replies rather than a model, so the recording is the same
@@ -80,6 +95,7 @@ done
 "$luu" export \
   "$out/eviction-turn.jsonl" \
   "$out/eviction-block.jsonl" \
+  "$out/eviction-tasks.jsonl" \
   "$out/tool-calls.jsonl" \
   "$out/one-task.jsonl" \
   "$out/completed-turn.jsonl" \

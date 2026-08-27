@@ -67,6 +67,34 @@ a mode cannot tell the context manager what to compact. See
   `:close` — so a task session is as repeatable as a plain one and approval is
   always typed. In the debug UI it is `/task <objective>` and two buttons.
 
+**What folding actually buys**, over the same 20 prompts in a 1024-token window,
+against the same prompts without tasks
+([`RECORD/2026-08-27.tasks-in-the-core.md`](RECORD/2026-08-27.tasks-in-the-core.md)):
+
+|  | mean reuse | tokens sent | `history` | `tasks` |
+| --- | ---: | ---: | ---: | ---: |
+| plain · `turn` (baseline) | 69.9% | 16 397 | 6 641 | 0 |
+| tasks · `turn` | 88.6% | 15 174 | 2 103 | 3 315 |
+| plain · `block` | 89.9% | 15 294 | 5 538 | 0 |
+| tasks · `block` | 89.4% | 14 976 | 2 103 | 3 117 |
+
+- Against the default policy it wins outright — and by a different mechanism than
+  block eviction: it keeps the history small enough that eviction rarely fires,
+  rather than making each eviction cheaper.
+- Against block eviction it is a wash on reuse and −2% on tokens. **The two are
+  not additive**; both are ways of not rewriting the front of the history often.
+- A fold costs ~14 points of reuse on the turn after the close and the next turn
+  is back at 92%: a cut whose replacement is small, landing after a large stable
+  prefix, is a dip where an eviction is a cliff.
+- **The scaffolding is more than half of what the window costs** after four folds
+  (3 315 tokens of plans and summaries against 2 103 of history), which is the
+  part the shape of the idea does not suggest. Measured with plans the mock did
+  not write as plan blocks, so it is an upper bound.
+
+The reason to keep it is not the reuse figure, then: it is the two things a
+threshold cannot give at any figure — the cut lands where the work ended, and the
+transcript collapses exactly what the context collapses.
+
 Still missing from the loop: reopening a closed task, the judge below, and the
 task-scoped `SandboxPolicy` — see *Open questions*.
 
@@ -174,13 +202,19 @@ stable prefix.
   changes rarely belongs *above* an append-only history, not below it.
 - **Eviction cuts in blocks, not one turn at a time** (`--evict block`, default
   `turn`). Dropping the minimum rewrites the history from its front on every call
-  once the window is full, and the reusable prefix collapses to the system block —
-  measured at 3–4% from the first eviction onwards, and it never recovers. Cutting
-  down to a low-water mark (`--low-water`, 0.5) instead pays for that once every
-  four or five turns and holds still in between: mean reuse over the same 20 turns
-  goes from 33% to 67%. It costs 21% of the history, which is not free and is not
-  yet known to be harmless. Numbers in
+  once the window is full, and the reusable prefix collapses to the constant part
+  of the prompt — and never recovers. Cutting down to a low-water mark
+  (`--low-water`, 0.5) instead pays for that once every four or five turns and
+  holds still in between: over 20 turns in a 1024-token window, mean reuse goes
+  from **70% to 90%** and 7% fewer tokens are sent. It costs history, which is not
+  free and is not yet known to be harmless.
+  **A reuse percentage is not comparable across prefixes**: the same pair measured
+  before tool definitions existed floored at 3% instead of 50%, because the floor
+  *is* the constant share of the prompt. Numbers, and the correction, in
   [`RECORD/2026-08-27.prefix-reuse-and-block-eviction.md`](RECORD/2026-08-27.prefix-reuse-and-block-eviction.md).
+  The window has to clear the tool definitions before any of this is visible at
+  all — at 512 tokens they alone fill it, no history is selected, and both
+  policies record the same run of nothing.
 - **What leaves the window stays out.** Eviction is monotone: `Context` keeps a floor
   that only moves forward. Recomputing the retained window from scratch each turn
   lets a dropped turn return the moment a shorter prompt leaves room, which moves the
@@ -217,7 +251,7 @@ the precision given up.
 
 ### Still ahead
 
-- **Hierarchical compaction**: the mechanism is built — a closed task is replaced by its deterministic summary (the plan plus the evidence: paths, commands, exit codes, denials), and the token threshold stays as the fallback for a task that overflows alone. What is *not* done is the part that matters: nobody has yet run the same script with and without tasks and compared reuse and tokens. Until that table exists, folding on a boundary is a plausible strategy, not a better one.
+- **Hierarchical compaction**: built and measured. A closed task is replaced by its deterministic summary (the plan plus the evidence: paths, commands, exit codes, denials), and the token threshold stays as the fallback for a task that overflows alone. What the table says is narrower than the idea promised — see below. What is still unmeasured is the only question the mock cannot answer: whether the summary loses something the task needed.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
