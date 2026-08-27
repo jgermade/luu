@@ -102,8 +102,18 @@ That needs a model. This is the setup for one.
 *Nothing in this section has been run yet. Whoever does it first should correct
 it in place and append what they found to `RECORD/`.*
 
+**No administrator rights are needed for any of this.** Ollama runs entirely out
+of your home directory — the models live in `~/.ollama/models` (`OLLAMA_MODELS`
+moves them) and the server is an ordinary user process. What the package manager
+buys is a symlink in `/usr/local/bin`, which is the only part that wants `sudo`
+and the only part nothing here uses: `luu` talks to a URL.
+
 ```sh
-brew install ollama && ollama serve          # or the .app; it listens on 11434
+# however the binary got onto the machine — unzipped .app, tarball, ~/.local/bin
+export OLLAMA_KEEP_ALIVE=30m                 # see below; set it *before* serving
+nohup ollama serve > ~/ollama.log 2>&1 &     # detached, listening on 11434
+ollama ps                                    # what is loaded, and until when
+
 ollama pull qwen2.5-coder:7b                 # ~4.7 GB, the CLI's default model
 ollama pull qwen2.5-coder:14b                # ~9 GB
 ollama pull qwen2.5-coder:32b                # ~20 GB — fits 48 GB, much slower
@@ -111,6 +121,7 @@ ollama pull qwen2.5-coder:32b                # ~20 GB — fits 48 GB, much slowe
 # the tokenizer, which Ollama does not ship: GGUF carries its own vocab, and
 # `--tokenizer` wants the HuggingFace file. It must be the tokenizer of the
 # model actually being run, which is the entire point of `Counter::Model { id }`.
+mkdir -p ~/models/qwen2.5-coder-7b
 curl -L -o ~/models/qwen2.5-coder-7b/tokenizer.json \
   https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct/resolve/main/tokenizer.json
 
@@ -131,8 +142,10 @@ Four things that will otherwise waste a session:
   48 GB, and 32B at 32K is where it stops being comfortable.
 - **The prompt cache lives with the loaded model.** If Ollama unloads between
   runs the next first call is cold, and a reuse comparison across runs is
-  measuring the unload. `OLLAMA_KEEP_ALIVE=30m` (or `ollama ps` to check what is
-  still resident) before recording a pair.
+  measuring the unload. `OLLAMA_KEEP_ALIVE` is read by the *server*, so it has to
+  be set before `ollama serve` starts, not in the shell that runs `luu`; `ollama
+  ps` says what is resident and for how long. Check it between the two halves of
+  a comparison, not only before the first.
 - **The sandbox is weaker on macOS, and says so.** Landlock and seccomp are
   Linux-only, so `run_command` is *denied* by default with a verdict naming what
   is missing. `--sandbox-enforcement best-effort` runs it anyway, and then the
