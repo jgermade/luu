@@ -351,6 +351,9 @@ async fn propose_task(app: Arc<App>, objective: String) {
         app.budget,
         app.counter.as_ref(),
         &objective,
+        // Nothing to attach: the debug UI has no way to put a file into a turn
+        // yet, and the measured runs are scripted. See the record.
+        &[],
     )
     .await;
     let task = session.tasks.propose(plan.clone());

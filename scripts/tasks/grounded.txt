@@ -1,0 +1,42 @@
+# Twenty turns that are actually about this repository.
+#
+# `steady-state.txt` is uniform Q&A with nothing attached, which is right for
+# measuring eviction mechanics against a mock and useless against a model: asked
+# "what does the context manager do?", a 7B answered about Python's `__enter__`
+# and `__exit__`, correctly, to a question nobody had asked. Nothing in the
+# prompt had ever told it this project exists.
+#
+# So this script attaches real files with `:file`, and every question in the
+# first three groups is answerable from the text that was attached. **The last
+# group attaches nothing on purpose**: it asks again about all three, so the
+# answers can only come from what survived in the window. Run against
+# `grounded-tasks.txt` — same prompts, same files, same order, grouped into
+# tasks — that last group is the fold-fidelity probe: in the tasks run those
+# three groups have been replaced by their summaries.
+
+:file crates/agent-core/src/context.rs:1-15
+which two commitments does this file open with?
+where does selected code get fused, and why not above the system block?
+what does "decide, then render" forbid doing to the prompt string?
+which record does it point at for the reasoning?
+name one change that would break byte-identical prefix reuse
+
+:file crates/agent-core/src/task.rs:1-18
+what are the steps of a task, in order?
+what does "a task owns no turns" mean here?
+what goes wrong with a second history beside the real one?
+which two records does it cite, and for what?
+at which step does anything first run?
+
+:file luu.toml:1-26
+why is there no deny list in this policy?
+what does enforcement = "kernel" do where Landlock is missing?
+why are commands program names rather than shell strings?
+which programs does this policy allow?
+what happens to network access, and how would a verdict report it?
+
+without looking at any file again: what were the two commitments the context module opens with?
+what are the steps of a task, in order?
+which programs does the sandbox policy allow?
+what does enforcement = "kernel" do when Landlock is missing?
+which of your last four answers came from what you were shown, and which did you fill in?

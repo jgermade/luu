@@ -10,7 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_core::backend::{Backend, CompletionRequest, Message};
 use agent_core::context::{
-    ApproximateCounter, Budget, Context as AgentContext, Counter, ModelCounter, TokenCounter,
+    ApproximateCounter, Budget, Context as AgentContext, Counter, Fragment, ModelCounter,
+    TokenCounter,
 };
 use agent_core::protocol::{self, ServerMessage, TurnId};
 use agent_core::record::{self, RecordLine};
@@ -129,6 +130,14 @@ pub fn counter_for(
 /// silent wait on a slow local model, and the first thing to change if it bites.
 /// Returns the plan and the exact prompt that produced it, which is what the
 /// trace channel needs in order to say what proposing cost.
+///
+/// `code_context` is whatever is pending for the next turn: a planning call
+/// **sees** the fragments and does not consume them. The point of attaching a
+/// file before proposing is that the plan is about that file — shown nothing, a
+/// real 7B planned confidently against Python paths in a Rust workspace. The
+/// turn that follows still gets them, and paying twice for one file is the
+/// price of a plan made in view of it.
+#[allow(clippy::too_many_arguments)]
 pub async fn propose_plan(
     backend: &dyn Backend,
     model: &str,
@@ -136,8 +145,9 @@ pub async fn propose_plan(
     budget: Budget,
     counter: &dyn TokenCounter,
     objective: &str,
+    code_context: &[Fragment],
 ) -> (Plan, String) {
-    let selection = context.select(&plan_request(objective), &[], budget, counter);
+    let selection = context.select(&plan_request(objective), code_context, budget, counter);
     let sent = rendered(&selection.messages);
     let (events, mut inbox) = mpsc::channel(256);
     let drain = tokio::spawn(async move { while inbox.recv().await.is_some() {} });

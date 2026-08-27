@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama};
-use agent_core::context::{Budget, Context as AgentContext, Eviction};
+use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
+use agent_core::fragment;
 use agent_core::protocol::ServerMessage;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
 use agent_core::task::{TaskId, Tasks};
@@ -134,6 +135,14 @@ enum Command {
         /// multi-turn baseline gets recorded the same way twice.
         #[arg(long)]
         script: Option<std::path::PathBuf>,
+
+        /// Fuse a file into the next prompt, as `PATH` or `PATH:START-END`.
+        /// Repeatable, read through the sandbox, and attached to **one** turn —
+        /// which turns a file belongs in is what relevance selection exists to
+        /// decide later. In a script, `:file <path>` does the same thing at the
+        /// point it appears.
+        #[arg(long = "fragment", value_name = "PATH[:START-END]")]
+        fragments: Vec<String>,
 
         #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
         backend: BackendKind,
@@ -357,6 +366,8 @@ enum Step {
     Prompt(String),
     /// `:task <objective>` — asks the model for a plan. Runs nothing.
     Task(String),
+    /// `:file <path>[:start-end]` — fuses a file into the next prompt.
+    File(String),
     /// `:approve` — the confirmation.
     Approve,
     /// `:discard` — the plan was read and refused.
@@ -376,11 +387,14 @@ impl Step {
         match (word, rest.trim()) {
             ("task", "") => anyhow::bail!(":task needs an objective"),
             ("task", objective) => Ok(Self::Task(objective.to_string())),
+            ("file", "") => anyhow::bail!(":file needs a path"),
+            ("file", path) => Ok(Self::File(path.to_string())),
             ("approve", _) => Ok(Self::Approve),
             ("discard", _) => Ok(Self::Discard),
             ("close", _) => Ok(Self::Close),
             (unknown, _) => anyhow::bail!(
-                ":{unknown} is not a directive (:task <objective>, :approve, :discard, :close)"
+                ":{unknown} is not a directive (:file <path>, :task <objective>, \
+                 :approve, :discard, :close)"
             ),
         }
     }
@@ -395,6 +409,7 @@ async fn run_directive(
     tasks: &mut Tasks,
     context: &mut AgentContext,
     prefix: &std::sync::Mutex<PrefixTracker>,
+    attached: &[Fragment],
     backend: &dyn Backend,
     model: &str,
     budget: Budget,
@@ -408,12 +423,16 @@ async fn run_directive(
     };
 
     match step {
-        Step::Prompt(_) => Ok(()),
+        // Both are handled in the loop, where the sandbox and the pending
+        // fragments are: neither one calls the model.
+        Step::Prompt(_) | Step::File(_) => Ok(()),
         Step::Task(objective) => {
             tasks.may_propose()?;
             println!("\n[task] {objective}\n  planning…");
-            let (plan, sent) =
-                propose_plan(backend, model, context, budget, counter, objective).await;
+            let (plan, sent) = propose_plan(
+                backend, model, context, budget, counter, objective, attached,
+            )
+            .await;
             let id = tasks.propose(plan.clone());
             println!("{}", indent(&plan.render()));
             if !plan.parsed {
@@ -473,6 +492,17 @@ async fn run_directive(
             Ok(())
         }
     }
+}
+
+/// Reads one `--fragment` or `:file`, through the sandbox.
+///
+/// A denial is an error rather than a warning: a run that quietly dropped the
+/// file it was told to ground itself with would answer from the model's
+/// training and look like it worked, which is the failure this whole surface
+/// exists to remove.
+fn load_fragment(sandbox: &Sandbox, spec: &str) -> Result<Fragment> {
+    fragment::load(sandbox, &fragment::Spec::parse(spec))
+        .with_context(|| format!("--fragment {spec}"))
 }
 
 fn pending(tasks: &Tasks) -> std::result::Result<TaskId, String> {
@@ -580,6 +610,7 @@ pub async fn run() -> Result<()> {
         prompt,
         sandbox_args,
         script,
+        fragments,
         backend,
         model,
         ollama_url,
@@ -658,9 +689,26 @@ pub async fn run() -> Result<()> {
     let mut turn: agent_core::protocol::TurnId = 0;
     let multi = steps.len() > 1;
 
+    // Waiting to be fused into the next prompt, then gone: a fragment belongs to
+    // one turn, and is stored with it.
+    let mut pending: Vec<Fragment> = fragments
+        .iter()
+        .map(|spec| load_fragment(agency.sandbox.as_ref(), spec))
+        .collect::<Result<_>>()?;
+
     for step in &steps {
         let prompt = match step {
             Step::Prompt(text) => text,
+            Step::File(spec) => {
+                let fragment = load_fragment(agency.sandbox.as_ref(), spec)?;
+                println!(
+                    "\n[file] {} — {} bytes into the next prompt",
+                    fragment.path,
+                    fragment.text.len()
+                );
+                pending.push(fragment);
+                continue;
+            }
             // The lifecycle, run from the script so that a task session is as
             // repeatable as a plain one. Approval is typed, never implied: a
             // run that approved its own plans would be measuring a gate that
@@ -671,6 +719,7 @@ pub async fn run() -> Result<()> {
                     &mut tasks,
                     &mut context,
                     &prefix,
+                    &pending,
                     backend.as_ref(),
                     &model,
                     budget,
@@ -704,7 +753,10 @@ pub async fn run() -> Result<()> {
         turn += 1;
         let task = tasks.active().map(|task| task.id);
         tasks.record_turn(turn);
-        let selection = context.select(prompt, &[], budget, counter.as_ref());
+        // Taken, not copied: the fragments are this turn's, and the next turn
+        // starts with none.
+        let code_context = std::mem::take(&mut pending);
+        let selection = context.select(prompt, &code_context, budget, counter.as_ref());
 
         if let Some(recorder) = &recorder {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
@@ -877,7 +929,7 @@ pub async fn run() -> Result<()> {
             context.push_turn_with_steps(
                 prompt.clone(),
                 outcome.text,
-                vec![],
+                code_context,
                 outcome.steps,
                 counter.as_ref(),
             );

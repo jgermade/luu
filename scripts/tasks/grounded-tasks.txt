@@ -1,0 +1,50 @@
+# The twin of `grounded.txt`: the same twenty prompts and the same files, in the
+# same order, grouped into four tasks that close every five turns.
+#
+# The `:file` line comes *before* its `:task`, so the planning call is made in
+# view of the file — shown nothing, a real 7B proposed clean plan blocks naming
+# Python paths that do not exist in this workspace. A planning call sees what is
+# pending and does not consume it, so the first turn of the task still gets it.
+#
+# The fourth group attaches nothing and asks again about the first three, which
+# by then have been folded into their summaries. That is the whole experiment:
+# `diff` these two scripts with the directives stripped and it is empty.
+
+:file crates/agent-core/src/context.rs:1-15
+:task work out what the context module commits to
+:approve
+which two commitments does this file open with?
+where does selected code get fused, and why not above the system block?
+what does "decide, then render" forbid doing to the prompt string?
+which record does it point at for the reasoning?
+name one change that would break byte-identical prefix reuse
+:close
+
+:file crates/agent-core/src/task.rs:1-18
+:task work out what a task is in this codebase
+:approve
+what are the steps of a task, in order?
+what does "a task owns no turns" mean here?
+what goes wrong with a second history beside the real one?
+which two records does it cite, and for what?
+at which step does anything first run?
+:close
+
+:file luu.toml:1-26
+:task work out what the sandbox policy grants
+:approve
+why is there no deny list in this policy?
+what does enforcement = "kernel" do where Landlock is missing?
+why are commands program names rather than shell strings?
+which programs does this policy allow?
+what happens to network access, and how would a verdict report it?
+:close
+
+:task check what is left of the first three
+:approve
+without looking at any file again: what were the two commitments the context module opens with?
+what are the steps of a task, in order?
+which programs does the sandbox policy allow?
+what does enforcement = "kernel" do when Landlock is missing?
+which of your last four answers came from what you were shown, and which did you fill in?
+:close

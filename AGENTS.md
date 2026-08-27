@@ -65,6 +65,10 @@ cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
 {"name":"read_file","arguments":{"path":"AGENTS.md","max_lines":3}}
 ```' --mock-reply 'It is the shared instruction file.'
 
+# a turn with a real file fused into it — `PATH` or `PATH:START-END`, repeatable
+cargo run --bin luu -- chat "what does this commit to?" \
+  --fragment crates/agent-core/src/context.rs:1-15
+
 # a repeatable multi-turn run, which is the only kind worth comparing
 cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
   --context-limit 8192 --tokenizer path/to/tokenizer.json --record before.jsonl
@@ -80,9 +84,15 @@ cargo run --bin luu -- chat --script scripts/tasks/steady-state-tasks.txt \
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
 
-A script line starting with `:` is a task directive: `:task <objective>` asks the
-model for a plan and runs nothing, `:approve` is the confirmation, `:discard`
-refuses it, and `:close` summarises the task and folds its turns into that summary.
+A script line starting with `:` is a directive. `:file <path>[:start-end]` fuses
+a file into the next prompt — read through the sandbox, capped like a tool
+result, and attached to **one** turn, because which turns a file belongs in is
+what relevance selection exists to decide later. A planning call *sees* what is
+pending without consuming it, so `:file` before `:task` is how a plan gets
+proposed in view of the file. The rest are the task lifecycle: `:task
+<objective>` asks the model for a plan and runs nothing, `:approve` is the
+confirmation, `:discard` refuses it, and `:close` summarises the task and folds
+its turns into that summary.
 A prompt while a plan is waiting is refused, not queued. Outside a task, `chat`
 behaves exactly as it always did. In the debug UI the same lifecycle is
 `/task <objective>` in the composer and two buttons on the card.
@@ -166,7 +176,19 @@ Four things that will otherwise waste a session:
 The runs worth recording first, because they are the ones the mock cannot answer:
 
 ```sh
-# the same pair the mock measured, now with a model that reads what it is sent
+# the pair that asks the question the mock cannot: `grounded.txt` attaches real
+# files from this repository and its twin groups the same prompts into tasks, so
+# the last five turns — which attach nothing and ask about all of it again — rest
+# on the full history in one run and on three summaries in the other.
+for script in grounded grounded-tasks; do
+  cargo run --release --bin luu -- chat --script scripts/tasks/$script.txt \
+    --backend ollama --model qwen2.5-coder:7b \
+    --context-limit 8192 --reserve 512 \
+    --tokenizer ~/models/qwen2.5-coder-7b/tokenizer.json \
+    --record ~/records/$script.jsonl
+done
+
+# and the ungrounded pair, which is what the eviction and fold numbers came from
 for script in steady-state steady-state-tasks; do
   cargo run --release --bin luu -- chat --script scripts/tasks/$script.txt \
     --backend ollama --model qwen2.5-coder:7b \
@@ -178,11 +200,13 @@ done
 cargo run --release --bin luu -- serve --record ~/records/live.jsonl   # and look at them
 ```
 
-What to look at, in order: whether the answers after a fold still refer to what
-the task did (the summary is the only trace of it left), the gap between our
-count and `usage.prompt_tokens` on each turn (a stable gap is the chat template,
-a moving one means the template changed), and whether reuse behaves as the mock
-said it would.
+What to look at, in order: **the last five turns of the grounded pair**, where
+the same four questions are answered from a full history in one run and from
+three summaries in the other — that comparison is the only thing that says
+whether folding loses what the task needed; the gap between our count and
+`usage.prompt_tokens` per turn (stable is the chat template; a tooled turn's
+round trips are now counted, so they no longer masquerade as it); and whether
+reuse behaves as the mock said it would.
 
 The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
 `network` and `enforcement` — and the `--allow-read/-write/-exec`,

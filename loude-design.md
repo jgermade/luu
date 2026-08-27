@@ -204,6 +204,17 @@ stable prefix.
   context, history, and a reserve held back for the answer before any history is
   considered. Without a tokenizer file the count degrades to `chars/4` and is
   **labelled approximate everywhere it appears** — it is not a measurement.
+- **A file gets into a turn by being attached to it** (`--fragment PATH[:A-B]`,
+  `:file` in a script), read through the sandbox — a path `read_file` would
+  refuse must not become readable by spelling it in a flag — and fused into that
+  turn's user message only. It does not follow the conversation: which turns a
+  file belongs in is the question relevance selection exists to answer, and
+  attaching it to all of them answers it wrong, expensively. A planning call sees
+  what is pending without consuming it, so a plan can be proposed in view of the
+  file it is about. Until this existed the `code` bucket was always zero, every
+  script was ungrounded Q&A, and a 7B asked "what does the context manager do?"
+  answered about Python's `__enter__`/`__exit__` — correctly, to a question
+  nobody had asked.
 - **Every count carries its counter.** A stored turn records which counter produced
   its tokens, and a budget names the counter that produced it. Two runs measured
   differently are not comparable, and nothing else would say so.
@@ -286,13 +297,6 @@ the precision given up.
 
 - **Hierarchical compaction**: built and measured. A closed task is replaced by its deterministic summary (the plan plus the evidence: paths, commands, exit codes, denials), and the token threshold stays as the fallback for a task that overflows alone. What the table says is narrower than the idea promised — see below. What is still unmeasured is the only question the mock cannot answer: whether the summary loses something the task needed.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
-- **Nothing can fuse a file into a turn.** `Context::select` takes code fragments
-  and the `code` bucket exists for them, and no CLI surface fills it — so every
-  script in `scripts/tasks/` is ungrounded Q&A, a real model answers it out of
-  its own training (asked "what does the context manager do?", a 7B explained
-  Python's `__enter__`/`__exit__`), and *whether a summary loses something the
-  task needed* cannot be tested at all: there is no grounded answer for a fold to
-  lose.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
 ## Tool calling: how actions actually get executed
