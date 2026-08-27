@@ -55,6 +55,10 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
   --context-limit 8192 --tokenizer path/to/tokenizer.json --record before.jsonl
 
+# the same run under the other eviction policy — one flag apart, so comparable
+cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
+  --context-limit 512 --evict block --low-water 0.5 --record after.jsonl
+
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
 
@@ -62,8 +66,9 @@ cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
 and `--record <file>` writes a replayable session from either subcommand.
 
 `--context-limit` is the model's window (`0` means unknown: no budget, no
-eviction), `--reserve` is what is held back for the answer, and `--tokenizer`
-points at the model's `tokenizer.json`. **Without `--tokenizer` the counts are
+eviction), `--reserve` is what is held back for the answer, `--evict` is how the
+history gives way (`turn` drops the minimum, `block` cuts to `--low-water` and
+then holds still), and `--tokenizer` points at the model's `tokenizer.json`. **Without `--tokenizer` the counts are
 `chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
 useless for a comparison, and the numbers say so themselves.
 
@@ -94,13 +99,17 @@ implementation detail from close up:
   token sent is attributable to a bucket. Rendering first and trimming the
   string afterwards loses the attribution and cuts wherever the limit lands —
   sooner or later inside the stable prefix.
-- **History is evicted in whole turns.** Half a turn leaves an answer to a
-  question nobody asked, and a window starting on an assistant message makes
-  several chat templates continue instead of answering.
+- **History is evicted in whole turns, and what leaves the window stays out.**
+  Half a turn leaves an answer to a question nobody asked, and a window starting
+  on an assistant message makes several chat templates continue instead of
+  answering. Eviction is also monotone — `Context` keeps a floor that only moves
+  forward — because a turn that comes back rewrites the history from its front,
+  and that is the prefix cache's worst case.
 - **Every token count carries which counter produced it.** Two runs measured by
   different counters are not comparable, and nothing else in the system would
   ever say so.
-- **The stable prompt prefix stays byte-identical across calls.** System text and
+- **The stable prompt prefix stays byte-identical across calls**, and how much of
+  it survived is reported per turn rather than assumed. System text and
   tool definitions are what llama.cpp's prompt cache reuses. Reordering tools,
   re-serializing a schema with different key order, or interpolating a timestamp
   into the system block silently destroys KV reuse — and nothing fails, it just
