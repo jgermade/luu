@@ -15,3 +15,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokenizers.workspace = true
+toml.workspace = true
+
+# Level 2 of the sandbox ladder: the kernel holding a subprocess. Linux-only and
+# gated so that `cargo build` on macOS pulls none of it — the fallback there
+# reports what is missing rather than failing to compile.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+libc.workspace = true
+seccompiler.workspace = true

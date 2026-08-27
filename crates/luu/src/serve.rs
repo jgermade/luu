@@ -7,14 +7,14 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use agent_core::agent::run_agent_turn;
 use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
 use agent_core::trace::TraceMessage;
-use agent_core::turn::run_turn;
 
-use crate::session::{Event, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
+use crate::session::{Agency, Event, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -61,6 +61,7 @@ struct App {
     recorder: Option<Recorder>,
     counter: Arc<dyn TokenCounter>,
     budget: Budget,
+    agency: Agency,
     /// The read side, folded from the same events the sockets carry — so
     /// `GET /api/...` can never disagree with what a client watched happen.
     view: Mutex<SessionView>,
@@ -93,6 +94,7 @@ pub struct ServeOptions {
     pub record: Option<PathBuf>,
     pub budget: Budget,
     pub counter: Arc<dyn TokenCounter>,
+    pub agency: Agency,
 }
 
 pub async fn serve(options: ServeOptions) -> Result<()> {
@@ -103,6 +105,7 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         record,
         budget,
         counter,
+        agency,
     } = options;
     let started_at = now_ms();
 
@@ -130,13 +133,14 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
             next_turn: 1,
             current: None,
             cancel: None,
-            context: AgentContext::new(SYSTEM),
+            context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
             prefix: PrefixTracker::default(),
         }),
         events: broadcast::channel(1024).0,
         recorder,
         counter,
         budget,
+        agency,
         view: Mutex::new({
             let mut view = SessionView::new(LIVE_SESSION, backend_name, &model_name);
             view.started_at = started_at;
@@ -361,7 +365,16 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             })
         };
 
-        let outcome = run_turn(app.backend.as_ref(), request, tx, cancel_rx).await;
+        let outcome = run_agent_turn(
+            app.backend.as_ref(),
+            request,
+            app.agency.tools.as_ref(),
+            app.agency.sandbox.as_ref(),
+            app.agency.max_steps,
+            tx,
+            cancel_rx,
+        )
+        .await;
         let _ = forwarder.await;
 
         let mut session = app.session.lock().await;
@@ -369,10 +382,14 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         // model should too. A turn that produced nothing at all is not
         // remembered — an empty assistant message is not a thing that happened,
         // and several chat templates render it as a prompt to continue.
-        if !outcome.text.is_empty() {
-            session
-                .context
-                .push_turn(prompt, outcome.text, vec![], app.counter.as_ref());
+        if !outcome.text.is_empty() || !outcome.steps.is_empty() {
+            session.context.push_turn_with_steps(
+                prompt,
+                outcome.text,
+                vec![],
+                outcome.steps,
+                app.counter.as_ref(),
+            );
         }
         session.current = None;
         session.cancel = None;

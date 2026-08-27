@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 
 use crate::backend::{Backend, Chunk, CompletionRequest, StopReason, Usage};
+use crate::tools::{ToolCall, ToolStep};
 
 /// Why a turn stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -16,6 +17,11 @@ pub enum EndReason {
     Stop,
     Length,
     Other,
+    /// The turn used its whole tool budget without arriving at an answer.
+    /// Distinct from every other reason because the text that came back is an
+    /// investigation cut short, not a conclusion — and a client that cannot
+    /// tell will present it as one.
+    ToolLimit,
     /// The caller cancelled. Distinct from every model-side reason, because
     /// only this one means the answer is incomplete by our own doing.
     Cancelled,
@@ -36,6 +42,18 @@ impl From<StopReason> for EndReason {
 #[derive(Debug, Clone)]
 pub enum TurnEvent {
     Token(String),
+    /// The model asked for a tool. Emitted before the sandbox is consulted, so
+    /// a denial is visible as a call that was made and refused rather than as
+    /// nothing happening.
+    ToolCall {
+        step: u32,
+        call: ToolCall,
+    },
+    /// What it did, including the verdict and who enforced it.
+    ToolResult {
+        step: u32,
+        outcome: Box<ToolStep>,
+    },
     /// `usage` is absent on a cancelled turn: the counts arrive on the
     /// backend's final line, and cancelling means never reading it.
     Ended {

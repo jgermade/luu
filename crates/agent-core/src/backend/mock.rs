@@ -11,15 +11,23 @@ use std::time::Duration;
 use super::{Backend, BackendError, Chunk, ChunkStream, CompletionRequest, StopReason, Usage};
 
 pub struct Mock {
-    reply: String,
+    /// One per call, in order; the last one repeats once they run out. A single
+    /// reply is the ordinary case and a list is what makes the tool loop
+    /// runnable without a model — a scripted call, then the answer to its
+    /// result.
+    replies: std::sync::Mutex<std::collections::VecDeque<String>>,
     delay: Duration,
     fail_with: Option<String>,
 }
 
 impl Mock {
     pub fn new(reply: impl Into<String>) -> Self {
+        Self::replies(vec![reply.into()])
+    }
+
+    pub fn replies(replies: Vec<String>) -> Self {
         Self {
-            reply: reply.into(),
+            replies: std::sync::Mutex::new(replies.into()),
             delay: Duration::from_millis(25),
             fail_with: None,
         }
@@ -53,11 +61,16 @@ impl Backend for Mock {
     }
 
     fn stream(&self, _request: CompletionRequest) -> ChunkStream<'_> {
-        let words: Vec<String> = self
-            .reply
-            .split_inclusive(' ')
-            .map(str::to_string)
-            .collect();
+        let reply = {
+            let mut replies = self.replies.lock().expect("no panic holds this lock");
+            match replies.len() > 1 {
+                true => replies.pop_front().unwrap_or_default(),
+                false => replies.front().cloned().unwrap_or_default(),
+            }
+        };
+        // Word by word, because what this backend exists to exercise is a
+        // stream arriving in pieces.
+        let words: Vec<String> = reply.split_inclusive(' ').map(str::to_string).collect();
         let delay = self.delay;
         let fail_with = self.fail_with.clone();
 

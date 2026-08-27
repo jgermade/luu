@@ -9,7 +9,7 @@ which is append-only. See [AGENTS.md](AGENTS.md).
 ## Goals
 
 - **Optimize the context window** for local models (7B–32B, 8K–32K context) — the key differentiator vs. existing solutions that don't do this well.
-- **Constrain resource access**: configurable folders and commands the agent can reach (application-level sandbox).
+- **Constrain resource access**: configurable folders and commands the agent can reach, checked in our own code *and* held by the kernel (Landlock + seccomp) for anything that runs as a subprocess.
 - **Container mode**: option to run inside a container to isolate system access.
 - **CLI mode**: direct terminal usage.
 - **VSCode integration**: a chat tab similar to Copilot Chat.
@@ -170,28 +170,122 @@ the precision given up.
 ### Still ahead
 
 - **Hierarchical compaction**: a closed task is replaced by its summary, and full text is kept only for the live one. The boundary is what a task gives the context manager; the token threshold stays as the fallback for a task that overflows alone. Not built: it is a strategy, and a strategy has to beat a recorded baseline — now with an instrument and a table to beat it in. The summary is deterministic first (the plan plus the evidence: diff, commands, exit codes), because a 7B's prose would be entering the write-once region every later turn is built on.
-- **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Needs tools and the sandbox first.
-- **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Waits on tools existing at all.
+- **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
+- **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
 ## Tool calling: how actions actually get executed
 
 The model never executes anything directly — it only emits a structured request that the program interprets and executes.
 
-- **Native function calling**: define tools via JSON Schema; the model emits a `tool_call` with name + arguments. With llama.cpp, use **GBNF grammars / constrained decoding** to force valid JSON against the schema — key for reliability with small models.
-- **Agent loop**:
+- **Agent loop**, built:
   1. Prompt + history + tools → model
-  2. If `tool_call`: parse → validate against `SandboxPolicy` → execute (real Rust code) → append result to history → back to 1
+  2. If a tool call: parse → validate against the `Sandbox` → execute (real Rust code) → append the call *and its result* to the turn → back to 1
   3. If plain text: end of turn
-- **File editing via diff/patch** (not full rewrites): a tool like `edit_file(path, old_string, new_string)` that finds an exact, unique `old_string` and replaces it. Saves output tokens (the slow part of local generation) and reduces errors.
-- **Streaming**: you can stream the preceding reasoning text, but you need to buffer until the full `tool_call` block is closed before parsing and executing.
+
+  Capped at `--max-tool-steps` (8), and exhausting it ends the turn with
+  `EndReason::ToolLimit` rather than presenting an investigation cut short as a
+  conclusion.
+- **The steps are messages, and they alternate**: a turn renders as `user(prompt)`,
+  then `assistant(call) · user(result)` per step, then `assistant(answer)`. The
+  fusion rule applied to a new kind of content — and it means a turn with tool
+  calls is still *one* turn, evicted whole, so the model never sees a result
+  whose call has gone.
+- **How the model expresses a call is a transport detail.** `ToolCall` is the type
+  and the parser is one function. Today it reads a fenced ```` ```tool ```` block
+  out of plain text, which works against any backend including a 7B that has
+  never seen a tool API. **Native function calling** — JSON Schema definitions,
+  a `tool_call` from the backend, and **GBNF grammars / constrained decoding**
+  under llama.cpp to force valid JSON — replaces that function and nothing above
+  it. Not built.
+- **The definitions are the second half of the cached prefix**, so their rendering
+  is a wire format: tools sorted by name, schemas serialized through
+  `serde_json`'s sorted maps, nothing interpolated. `luu tools` prints the exact
+  bytes. The budget has a `tools` bucket beside `system` for the same reason —
+  "the system block grew" is not an answer to why the window is full.
+- **File editing via diff/patch** (not full rewrites): `edit_file(path, old_string, new_string)`
+  replaces an exact, *unique* occurrence and refuses an ambiguous one. Saves output
+  tokens (the slow part of local generation) and reduces errors; the uniqueness rule
+  is the safety half, because a replacement that matched twice would edit the one
+  the model was not looking at.
+- **Streaming**: the preceding reasoning text streams, but an unclosed block is a
+  call still being generated, and half a call is not a call.
+
+The set: `read_file`, `list_dir`, `edit_file`, `write_file`, `run_command`.
+Output is capped at 8 KiB with a `truncated` flag — pruning old results out of
+the history is a later, measured change; a cap is the part that is not a strategy.
 
 ## Sandbox / security
 
-- **Declarative config (TOML)** per project/session: `allowed_paths`, `denied_paths`, `allowed_commands` (whitelist/regex), `network: bool`.
-- Each `Tool` receives an injected `SandboxPolicy` and self-validates before executing — canonicalize paths (`std::fs::canonicalize`) before comparing, to prevent symlink bypass.
-- Permission validation lives in the program's code, not in the model "behaving well."
+Three rungs, and the middle one is what makes the first worth having. Built: 1
+and 2. See [`RECORD/2026-08-27.tools-and-sandbox.md`](RECORD/2026-08-27.tools-and-sandbox.md).
+
+1. **In-process checks.** Canonicalize (`std::fs::canonicalize`) before comparing,
+   or a symlink walks straight out. Everything an in-process tool can have — and
+   nothing a subprocess gets: the check happens before the syscall, in a program
+   that then makes the syscall itself. A child makes its own.
+2. **The kernel, same process tree, no image and no daemon.** Landlock for the
+   filesystem and seccomp for sockets, applied to the child between `fork` and
+   `exec`. `run_command("cargo", …)` otherwise hands a build script the same
+   authority the agent has, and checking the string `cargo` against an allowlist
+   and calling that a sandbox is the part that would be a lie.
+3. **A container.** Below, and *on top of* level 2 rather than instead of it:
+   Landlock survives `exec` and cannot be dropped.
+
+**Declarative config (TOML)** per project — `luu.toml`, and `luu tools` prints the
+resolved result:
+
+```toml
+[sandbox]
+enforcement = "kernel"          # or "best-effort"
+network = false
+commands = ["cargo", "git"]     # program names, never a shell string
+
+[[sandbox.paths]]
+path = "."
+access = "read-write"           # read | execute | read-write
+```
+
+- **Longest match wins**, so a narrower rule under a broader one grants more.
+- **There is no deny list**, deliberately, though an earlier version of this file
+  had one. Landlock is allow-only: a subtraction could be honoured in-process and
+  could not be honoured in a subprocess, so `denied = ["./.env"]` would stop
+  `read_file` and would not stop `cat .env`, with nothing in the config saying so.
+  The way to deny is to not grant.
+- **The commands allowlist is a program name.** `run_command` takes `command` plus
+  `args` and never a shell string, which would make the allowlist meaningless —
+  `sh -c "cargo test; curl …"` passes any check that looks at the first word.
+- **Allowing any command implies read+execute on the system roots** (`/usr`, `/bin`,
+  `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt`), because a program cannot run without
+  reading its own interpreter. **For the child only** — an in-process tool sees
+  only what was written down, or `commands = ["ls"]` would quietly grant the agent
+  `/etc`.
+- **Permission validation lives in the program's code**, not in the model behaving well.
+
+### Who enforced it is reported, never assumed
+
+Level 2 is Linux-only, so `enforcement` decides what happens where it is not
+available — the one place in this design where a security property is a setting:
+
+- `"kernel"` (default) — a subprocess runs only if the kernel took the ruleset and
+  the filter. On macOS, or a kernel without Landlock, `run_command` is **denied**,
+  and the denial names what is missing and the flag that lowers the bar.
+- `"best-effort"` — apply what this kernel has and report the gap.
+
+Either way every verdict carries `Applied` — `Process`, `Kernel { how }`, or
+`Partial { how, missing }` — and `how` names the mechanism *and its version*,
+because Landlock's older ABIs mediate less. Nothing here may say "sandboxed"
+without saying by what: a run whose subprocesses the kernel held and a run whose
+subprocesses nothing held are not the same run, and afterwards the recording is
+the only thing that could tell them apart.
+
+What level 2 does *not* claim: it is not a network namespace (blocking the
+internet address families stops a program opening a connection, not one that
+inherited a socket), and canonicalize-then-open still has a TOCTOU window for the
+in-process tools — `openat2(RESOLVE_BENEATH)` is the answer there and is not built.
 
 ## Container mode
+
+Level 3, and still ahead. The level-2 restrictions stay applied inside it.
 
 - Compile to a static binary (`musl`) → minimal image (`scratch`/distroless).
 - Bind-mount only allowed folders, network disabled by default (`--network none`).
@@ -236,7 +330,7 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `prompt`, `approve_plan`, `edit_plan`, `close_task`, `reopen_task`, `cancel` |
-| server → client | `token`, `task_proposed`, `task_approved`, `task_closed`, `tool_call`, `tool_result`, `context_snapshot`, `usage`, `error`, `turn_end` |
+| server → client | `token`, `tool_call`, `tool_result`, `ended`, `failed` — built; `task_proposed`, `task_approved`, `task_closed`, `context_snapshot` wait on the task lifecycle |
 
 Closing a task is an event, not a mutation: reopening one is folding the log
 differently, never undoing a deletion. Freezing v1 of these enums waits on the task
@@ -318,8 +412,11 @@ Chat and session list are table stakes. The ones that justify building this at a
    span-level diff of the two prompt strings is not, and is a separate thing: the
    number says how much was reused, a diff would say what changed. `similar` is still
    right for the second and was the wrong tool for the first, which is a prefix.
-3. **Tool call timeline** — arguments, sandbox verdict (allowed/denied and *which* rule matched),
-   duration, and result size before/after pruning.
+3. **Tool call timeline** — arguments, sandbox verdict (allowed/denied and *which*
+   rule matched), **who enforced it**, duration, and result size. Built. A call is
+   listed when it is made and filled in when it returns, so one that is running or
+   was denied reads as itself rather than as nothing happening. Result size
+   *before/after pruning* waits on pruning existing.
 4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
 
 ### Record and replay
@@ -366,12 +463,12 @@ lives in memory for the life of the process.
 
 ## Suggested work order
 
-1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *`Context` and the Ollama/mock backends exist; `Task`, `Tool` and `SandboxPolicy` do not.*
+1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *`Context`, `Tool`, `SandboxPolicy` and the Ollama/mock backends exist; `Task` does not.*
 2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction and block eviction exist, and prefix reuse is measured per turn. Compaction and relevance selection are still ahead, and each has to beat the recorded baseline.*
 3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
    measure step 2. *Done.*
-4. Application-level path/command sandbox.
-5. Container packaging.
+4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
+5. Container packaging (level 3), with the level-2 restrictions still applied inside it.
 6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
 
 ## Naming
@@ -382,7 +479,12 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Finalize the remaining base types for `agent-core` (`Task`, `Tool`, `SandboxPolicy`).
-- Design the concrete GBNF grammar to force valid tool calls with the target model (Qwen2.5-Coder).
-- Define the initial tool set: `read_file`, `edit_file`, `list_dir`, `run_command`, etc.
+- Finalize the remaining base type for `agent-core`: `Task`. Until it exists, the
+  policy file is the standing approval for a whole session — where the design
+  wants the approved plan to *be* the `SandboxPolicy` for one task, with the file
+  as its floor.
+- Design the concrete GBNF grammar to force valid tool calls with the target model
+  (Qwen2.5-Coder), replacing the text parse.
+- `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window
+  that canonicalize-then-open leaves.
 - Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format).

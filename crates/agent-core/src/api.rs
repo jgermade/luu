@@ -12,6 +12,7 @@ use crate::backend::Usage;
 use crate::context::Counter;
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
+use crate::sandbox::Verdict;
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
@@ -36,6 +37,25 @@ pub struct PrefixReuse {
     pub prompt_tokens: u32,
 }
 
+/// One tool call as a client browses it — the "tool call timeline" panel the
+/// design asks for, which is arguments, verdict, duration and result size.
+///
+/// The result half is optional because a call that was made and has not come
+/// back yet is a real state, and a panel that waits for both would show nothing
+/// while a command runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallView {
+    pub step: u32,
+    pub name: String,
+    pub arguments: serde_json::Value,
+    /// Allowed or denied, and *which rule* matched — plus who enforced it.
+    pub verdict: Option<Verdict>,
+    pub error: Option<String>,
+    pub output: String,
+    pub truncated: bool,
+    pub duration_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnView {
     pub turn: TurnId,
@@ -52,6 +72,9 @@ pub struct TurnView {
     pub budget: Option<Budget>,
     /// What the prompt cache could reuse of the previous turn's prompt.
     pub prefix: Option<PrefixReuse>,
+    /// What the agent did during the turn, in order.
+    #[serde(default)]
+    pub tools: Vec<ToolCallView>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -68,6 +91,7 @@ impl TurnView {
             prompt_sent: None,
             budget: None,
             prefix: None,
+            tools: Vec::new(),
             started_at_ms,
             ended_at_ms: None,
         }
@@ -174,6 +198,47 @@ impl SessionView {
                 if let Some(view) = self.turn_mut(*turn) {
                     view.error = Some(message.clone());
                     view.ended_at_ms = Some(at_ms);
+                }
+            }
+            ServerMessage::ToolCall {
+                turn,
+                step,
+                name,
+                arguments,
+            } => {
+                if let Some(view) = self.turn_mut(*turn)
+                    && !view.tools.iter().any(|call| call.step == *step)
+                {
+                    view.tools.push(ToolCallView {
+                        step: *step,
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                        verdict: None,
+                        error: None,
+                        output: String::new(),
+                        truncated: false,
+                        duration_ms: None,
+                    });
+                }
+            }
+            ServerMessage::ToolResult {
+                turn,
+                step,
+                verdict,
+                error,
+                output,
+                truncated,
+                duration_ms,
+                ..
+            } => {
+                if let Some(view) = self.turn_mut(*turn)
+                    && let Some(call) = view.tools.iter_mut().find(|call| call.step == *step)
+                {
+                    call.verdict = Some(verdict.clone());
+                    call.error = error.clone();
+                    call.output = output.clone();
+                    call.truncated = *truncated;
+                    call.duration_ms = Some(*duration_ms);
                 }
             }
         }
