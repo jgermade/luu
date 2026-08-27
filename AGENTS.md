@@ -99,8 +99,18 @@ assemble, decided before the call — and it is **not** legitimate for the quest
 that decides whether a context strategy is any good: does the task still succeed.
 That needs a model. This is the setup for one.
 
-*Nothing in this section has been run yet. Whoever does it first should correct
-it in place and append what they found to `RECORD/`.*
+This has been run: `qwen2.5-coder:7b/14b/32b` pulled, tokenizer fetched, the
+setup below confirmed correct as written — `num_ctx` reached the server, the
+macOS `run_command` denial read exactly as described. What running it actually
+found is in the fourth pass of
+[`RECORD/2026-08-27.tasks-in-the-core.md`](RECORD/2026-08-27.tasks-in-the-core.md#2026-08-27-fourth-pass-a-real-model-and-two-blind-spots-it-found):
+`steady-state`/`steady-state-tasks` carry no grounding, so they cannot answer
+whether an answer survives a fold; a tool call inside a turn is invisible to
+`prefix_reuse` the same way a planning call used to be; and folding's token
+result from the third pass flips at this window — losing narrowly at
+`--context-limit 1024` (chosen to force eviction), winning by more than half at
+the `8192` this recipe uses, because the baseline never evicts at 8192 and its
+history compounds unchecked.
 
 **No administrator rights are needed for any of this.** Ollama runs entirely out
 of your home directory — the models live in `~/.ollama/models` (`OLLAMA_MODELS`
