@@ -316,6 +316,12 @@ lives in memory for the life of the process.
   JSON-lines stream is the account of what happened, and `api::SessionView` already
   folds it; a store that accumulates state the events cannot regenerate is a second
   truth, which is how the static mirror and the live server start disagreeing.
+- **Forgetting is an event too.** Eviction — and later compaction — is recorded, not
+  just applied: a recording has to be able to say which turns left the window, when,
+  and under which policy. Today the eviction floor is in-memory and a recording can
+  only show the history bucket shrinking, which is the symptom without the cause.
+  Decided, not built; the shape is OpenHands' condensation tombstones, read in
+  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md).
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums
