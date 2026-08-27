@@ -12,7 +12,7 @@
 //!   selected code is fused into the *current* user message, as late as
 //!   possible.
 //!
-//! See `RECORD/2026-08-26.context-manager.md` for how both were arrived at.
+//! See `RECORD/2026-08-27.context-manager.md` for how both were arrived at.
 
 use serde::{Deserialize, Serialize};
 
