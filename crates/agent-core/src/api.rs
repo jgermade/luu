@@ -13,6 +13,7 @@ use crate::context::Counter;
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
+use crate::task::{Plan, TaskId, TaskState};
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
@@ -56,9 +57,35 @@ pub struct ToolCallView {
     pub duration_ms: Option<u64>,
 }
 
+/// One task as a client browses it. The transcript groups by this and collapses
+/// a closed one to its `summary` — the view collapses exactly what the context
+/// collapses, which is one concept to explain instead of two.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskView {
+    pub id: TaskId,
+    pub plan: Plan,
+    pub state: TaskState,
+    /// The turns that ran inside it, in order.
+    pub turns: Vec<TurnId>,
+    pub summary: Option<String>,
+    /// What closing it cost the history. From the trace channel, so a recording
+    /// made without `--trace` has the summary and not the arithmetic.
+    pub fold: Option<FoldView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoldView {
+    pub turns: usize,
+    pub tokens_before: u32,
+    pub tokens_after: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnView {
     pub turn: TurnId,
+    /// The task it ran inside, when there was one.
+    #[serde(default)]
+    pub task: Option<TaskId>,
     /// What the user asked.
     pub prompt: String,
     /// What the model produced, assembled. Partial on a cancel or a failure.
@@ -80,9 +107,10 @@ pub struct TurnView {
 }
 
 impl TurnView {
-    fn new(turn: TurnId, prompt: String, started_at_ms: u64) -> Self {
+    fn new(turn: TurnId, task: Option<TaskId>, prompt: String, started_at_ms: u64) -> Self {
         Self {
             turn,
+            task,
             prompt,
             text: String::new(),
             reason: None,
@@ -124,6 +152,10 @@ pub struct SessionView {
     pub model: String,
     pub started_at: u64,
     pub turns: Vec<TurnView>,
+    /// In the order they were proposed, refused ones included: a plan somebody
+    /// read and said no to is the most useful thing in a transcript.
+    #[serde(default)]
+    pub tasks: Vec<TaskView>,
     pub record: Option<String>,
 }
 
@@ -141,6 +173,7 @@ impl SessionView {
             model: model.into(),
             started_at: 0,
             turns: Vec::new(),
+            tasks: Vec::new(),
             record: None,
         }
     }
@@ -165,6 +198,14 @@ impl SessionView {
         self.turns.iter_mut().find(|t| t.turn == turn)
     }
 
+    pub fn task(&self, task: TaskId) -> Option<&TaskView> {
+        self.tasks.iter().find(|t| t.id == task)
+    }
+
+    fn task_mut(&mut self, task: TaskId) -> Option<&mut TaskView> {
+        self.tasks.iter_mut().find(|t| t.id == task)
+    }
+
     /// Folds one protocol message in. `at_ms` is milliseconds since the session
     /// started, the same clock the record file uses.
     pub fn apply_protocol(&mut self, at_ms: u64, message: &ServerMessage) {
@@ -173,11 +214,46 @@ impl SessionView {
                 self.backend = backend.clone();
                 self.model = model.clone();
             }
-            ServerMessage::TurnStarted { turn, prompt } => {
+            ServerMessage::TurnStarted { turn, prompt, task } => {
                 if self.turn(*turn).is_none() {
-                    self.turns.push(TurnView::new(*turn, prompt.clone(), at_ms));
+                    self.turns
+                        .push(TurnView::new(*turn, *task, prompt.clone(), at_ms));
+                    if let Some(view) = task.and_then(|task| self.task_mut(task)) {
+                        view.turns.push(*turn);
+                    }
                 }
             }
+            ServerMessage::TaskProposed { task, plan } => {
+                if self.task(*task).is_none() {
+                    self.tasks.push(TaskView {
+                        id: *task,
+                        plan: plan.clone(),
+                        state: TaskState::Proposed,
+                        turns: Vec::new(),
+                        summary: None,
+                        fold: None,
+                    });
+                }
+            }
+            ServerMessage::TaskApproved { task } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Approved;
+                }
+            }
+            ServerMessage::TaskDiscarded { task } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Discarded;
+                }
+            }
+            ServerMessage::TaskClosed { task, summary } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Closed;
+                    view.summary = Some(summary.clone());
+                }
+            }
+            // A refusal is addressed to the client that asked, and it is
+            // nothing that happened to the session. Nothing to fold.
+            ServerMessage::Refused { .. } => {}
             ServerMessage::Token { turn, text } => {
                 if let Some(view) = self.turn_mut(*turn) {
                     view.text.push_str(text);
@@ -246,6 +322,20 @@ impl SessionView {
 
     pub fn apply_trace(&mut self, _at_ms: u64, message: &TraceMessage) {
         match message {
+            TraceMessage::TaskFolded {
+                task,
+                turns,
+                tokens_before,
+                tokens_after,
+            } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.fold = Some(FoldView {
+                        turns: *turns,
+                        tokens_before: *tokens_before,
+                        tokens_after: *tokens_after,
+                    });
+                }
+            }
             TraceMessage::Prompt { turn, text } => {
                 if let Some(view) = self.turn_mut(*turn) {
                     view.prompt_sent = Some(text.clone());
@@ -328,6 +418,7 @@ mod tests {
                 message: ServerMessage::TurnStarted {
                     turn: 1,
                     prompt: "hola".into(),
+                    task: None,
                 },
             },
             RecordLine::Trace {
@@ -374,6 +465,7 @@ mod tests {
                 message: ServerMessage::TurnStarted {
                     turn: 2,
                     prompt: "y otra".into(),
+                    task: None,
                 },
             },
             RecordLine::Trace {
@@ -440,11 +532,82 @@ mod tests {
         assert_eq!(reuse.prompt_tokens, 4);
     }
 
+    /// A task around the second turn: proposed, approved, closed. The lifecycle
+    /// is on the protocol channel and what the fold cost is on the trace one,
+    /// so a recording of it exercises both.
+    fn task_lines() -> Vec<RecordLine> {
+        let plan = crate::task::Plan::from_reply(
+            "read the file",
+            "```plan\n{\"steps\":[\"read it\"],\"paths\":[\"AGENTS.md\"]}\n```",
+        );
+        vec![
+            RecordLine::Protocol {
+                at_ms: 35,
+                message: ServerMessage::TaskProposed { task: 1, plan },
+            },
+            RecordLine::Protocol {
+                at_ms: 36,
+                message: ServerMessage::TaskApproved { task: 1 },
+            },
+            RecordLine::Protocol {
+                at_ms: 70,
+                message: ServerMessage::TaskClosed {
+                    task: 1,
+                    summary: "[task 1] read the file — closed".into(),
+                },
+            },
+            RecordLine::Trace {
+                at_ms: 70,
+                message: TraceMessage::TaskFolded {
+                    task: 1,
+                    turns: 2,
+                    tokens_before: 90,
+                    tokens_after: 30,
+                },
+            },
+        ]
+    }
+
+    #[test]
+    fn a_task_collects_the_turns_that_ran_inside_it() {
+        let mut second = second_turn();
+        // The turn the task owns says so itself, rather than the client
+        // guessing from what happened to be open when it folded the record.
+        if let RecordLine::Protocol {
+            message: ServerMessage::TurnStarted { task, .. },
+            ..
+        } = &mut second[0]
+        {
+            *task = Some(1);
+        }
+        let all = [
+            lines(),
+            task_lines()[..2].to_vec(),
+            second,
+            task_lines()[2..].to_vec(),
+        ]
+        .concat();
+
+        let view = SessionView::from_record("s", &all);
+        let task = view.task(1).unwrap();
+        assert_eq!(task.state, TaskState::Closed);
+        assert_eq!(task.turns, [2], "turn 1 ran before the task existed");
+        assert_eq!(task.plan.steps, ["read it"]);
+        assert!(task.summary.is_some());
+        assert_eq!(
+            task.fold.unwrap().tokens_after,
+            30,
+            "what the one rewrite in the session cost is part of the reading",
+        );
+        assert_eq!(view.turn(1).unwrap().task, None);
+        assert_eq!(view.turn(2).unwrap().task, Some(1));
+    }
+
     #[test]
     fn folding_live_events_gives_the_same_view_as_folding_the_record() {
         // Two turns, so every trace message the fold understands is covered:
         // the prefix measurement only exists from the second turn onwards.
-        let all = [lines(), second_turn()].concat();
+        let all = [lines(), second_turn(), task_lines()].concat();
         let recorded = SessionView::from_record("s", &all);
 
         // The same messages, applied one at a time the way the server does.
@@ -473,6 +636,7 @@ mod tests {
             &ServerMessage::TurnStarted {
                 turn: 1,
                 prompt: "x".into(),
+                task: None,
             },
         );
         view.apply_protocol(

@@ -257,17 +257,20 @@ needed, answer in plain text and do not emit a block.
 /// drops the fence about a third of the time and refusing that would be
 /// measuring the fence rather than the loop.
 pub fn parse_call(text: &str) -> Option<ToolCall> {
-    fenced(text)
+    fenced(text, "```tool")
         .and_then(|body| serde_json::from_str::<ToolCall>(body).ok())
         .or_else(|| bare_object(text))
         .filter(|call| !call.name.is_empty())
 }
 
-/// The body of the first ```tool block, if the block is closed. An unclosed one
-/// is a call still being generated, and half a call is not a call.
-fn fenced(text: &str) -> Option<&str> {
-    let open = text.find("```tool")?;
-    let body = &text[open + "```tool".len()..];
+/// The body of the first block opened by `tag`, if the block is closed. An
+/// unclosed one is a call still being generated, and half a call is not a call.
+///
+/// Shared with the plan parse in [`crate::task`]: a plan arrives the same way a
+/// call does, so it is read the same way — one parser to be wrong in one way.
+pub(crate) fn fenced<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = text.find(tag)?;
+    let body = &text[open + tag.len()..];
     let body = body.strip_prefix('\n').unwrap_or(body);
     let close = body.find("```")?;
     Some(body[..close].trim())

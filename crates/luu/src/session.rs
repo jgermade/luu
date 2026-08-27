@@ -8,16 +8,21 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agent_core::backend::Message;
-use agent_core::context::{ApproximateCounter, Budget, Counter, ModelCounter, TokenCounter};
+use agent_core::backend::{Backend, CompletionRequest, Message};
+use agent_core::context::{
+    ApproximateCounter, Budget, Context as AgentContext, Counter, ModelCounter, TokenCounter,
+};
 use agent_core::protocol::{self, ServerMessage, TurnId};
 use agent_core::record::{self, RecordLine};
 use agent_core::sandbox::Sandbox;
+use agent_core::task::{Plan, plan_request};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
+use agent_core::turn::run_turn;
 use anyhow::{Context, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 /// The fixed head of every prompt. Kept as one `&'static str` because the
 /// prompt cache reuses it byte for byte — a formatting change here is a cache
@@ -111,6 +116,46 @@ pub fn counter_for(
             )),
         )),
     }
+}
+
+/// Asks the model for a plan, and reads one out of whatever it answered.
+///
+/// An ordinary user message on top of the unchanged prefix, so proposing a task
+/// costs no prompt cache. The exchange is **not remembered**: the approved plan
+/// enters the history, the request that produced it does not, or the objective
+/// is in the prompt twice before any work has happened.
+///
+/// It does not stream. The client is shown the plan, not its generation — a
+/// silent wait on a slow local model, and the first thing to change if it bites.
+pub async fn propose_plan(
+    backend: &dyn Backend,
+    model: &str,
+    context: &mut AgentContext,
+    budget: Budget,
+    counter: &dyn TokenCounter,
+    objective: &str,
+) -> Plan {
+    let selection = context.select(&plan_request(objective), &[], budget, counter);
+    let (events, mut inbox) = mpsc::channel(256);
+    let drain = tokio::spawn(async move { while inbox.recv().await.is_some() {} });
+    // Nothing cancels a planning call yet: it is one short generation, and a
+    // cancel channel nobody holds is a sender dropped mid-turn.
+    let (stop, cancel) = watch::channel(false);
+
+    let outcome = run_turn(
+        backend,
+        CompletionRequest {
+            model: model.to_string(),
+            messages: selection.messages,
+        },
+        events,
+        cancel,
+    )
+    .await;
+    drop(stop);
+    let _ = drain.await;
+
+    Plan::from_reply(objective, &outcome.text)
 }
 
 /// What the backend is about to receive, as one string, for the trace channel.

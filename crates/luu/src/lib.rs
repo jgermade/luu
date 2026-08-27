@@ -10,12 +10,14 @@ use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama
 use agent_core::context::{Budget, Context as AgentContext, Eviction};
 use agent_core::protocol::ServerMessage;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
+use agent_core::task::{TaskId, Tasks};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
 
 use crate::session::{
-    Agency, DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms, rendered,
+    Agency, DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms,
+    propose_plan, rendered,
 };
 use anyhow::{Context, Result};
 
@@ -344,6 +346,139 @@ fn model_for(backend: &dyn Backend, model: String) -> String {
     }
 }
 
+/// One line of a `chat` run: something to ask, or something to do to the task
+/// around it.
+///
+/// Directives are in the script rather than in flags because approval is the
+/// one thing that must be typed. A `--approve-everything` flag would make the
+/// gate a setting again, which is the shape this whole design replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Step {
+    Prompt(String),
+    /// `:task <objective>` — asks the model for a plan. Runs nothing.
+    Task(String),
+    /// `:approve` — the confirmation.
+    Approve,
+    /// `:discard` — the plan was read and refused.
+    Discard,
+    /// `:close` — summarise the task and fold its turns.
+    Close,
+}
+
+impl Step {
+    fn parse(line: &str) -> Result<Self> {
+        let Some(directive) = line.strip_prefix(':') else {
+            return Ok(Self::Prompt(line.to_string()));
+        };
+        let (word, rest) = directive
+            .split_once(char::is_whitespace)
+            .unwrap_or((directive, ""));
+        match (word, rest.trim()) {
+            ("task", "") => anyhow::bail!(":task needs an objective"),
+            ("task", objective) => Ok(Self::Task(objective.to_string())),
+            ("approve", _) => Ok(Self::Approve),
+            ("discard", _) => Ok(Self::Discard),
+            ("close", _) => Ok(Self::Close),
+            (unknown, _) => anyhow::bail!(
+                ":{unknown} is not a directive (:task <objective>, :approve, :discard, :close)"
+            ),
+        }
+    }
+}
+
+/// Runs one lifecycle directive. `Err` is a refusal to print and stop on: a
+/// script that carried on past a refused gate would record a session that could
+/// not have happened.
+#[allow(clippy::too_many_arguments)]
+async fn run_directive(
+    step: &Step,
+    tasks: &mut Tasks,
+    context: &mut AgentContext,
+    backend: &dyn Backend,
+    model: &str,
+    budget: Budget,
+    counter: &dyn agent_core::context::TokenCounter,
+    recorder: Option<&Recorder>,
+) -> std::result::Result<(), String> {
+    let publish = |message: ServerMessage| {
+        if let Some(recorder) = recorder {
+            recorder.write(&Event::Protocol(message));
+        }
+    };
+
+    match step {
+        Step::Prompt(_) => Ok(()),
+        Step::Task(objective) => {
+            tasks.may_propose()?;
+            println!("\n[task] {objective}\n  planning…");
+            let plan = propose_plan(backend, model, context, budget, counter, objective).await;
+            let id = tasks.propose(plan.clone());
+            println!("{}", indent(&plan.render()));
+            if !plan.parsed {
+                println!("  (the model did not answer in a plan block; these are its own lines)");
+            }
+            println!("  → :approve or :discard");
+            publish(ServerMessage::TaskProposed { task: id, plan });
+            Ok(())
+        }
+        Step::Approve => {
+            let id = pending(tasks)?;
+            tasks
+                .approve(id, context, counter)
+                .map_err(|e| e.to_string())?;
+            println!("[task {id}] approved");
+            publish(ServerMessage::TaskApproved { task: id });
+            Ok(())
+        }
+        Step::Discard => {
+            let id = pending(tasks)?;
+            tasks.discard(id).map_err(|e| e.to_string())?;
+            println!("[task {id}] discarded");
+            publish(ServerMessage::TaskDiscarded { task: id });
+            Ok(())
+        }
+        Step::Close => {
+            let id = tasks
+                .active()
+                .map(|task| task.id)
+                .ok_or("no task is open")?;
+            let closed = tasks
+                .close(id, context, counter)
+                .map_err(|e| e.to_string())?;
+            println!("\n{}", indent(&closed.summary));
+            // The one rewrite in a session, so the numbers travel with it.
+            println!(
+                "  [folded] {} turn(s), {} → {} tokens",
+                closed.fold.turns, closed.fold.tokens_before, closed.fold.tokens_after,
+            );
+            publish(ServerMessage::TaskClosed {
+                task: id,
+                summary: closed.summary,
+            });
+            if let Some(recorder) = recorder {
+                recorder.write(&Event::Trace(TraceMessage::folded(id, closed.fold)));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn pending(tasks: &Tasks) -> std::result::Result<TaskId, String> {
+    tasks
+        .pending()
+        .map(|task| task.id)
+        .ok_or_else(|| "no plan is waiting for an answer".to_string())
+}
+
+/// Two spaces in front of every line, so a plan and a summary read as blocks
+/// rather than as more of the transcript.
+fn indent(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
@@ -454,23 +589,23 @@ pub async fn run() -> Result<()> {
 
     // One prompt, or a file of them: a script is what makes a multi-turn run
     // repeatable, and a baseline that cannot be re-run is not a baseline.
-    let prompts = match (&script, prompt) {
+    let steps = match (&script, prompt) {
         (Some(path), _) => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {}", path.display()))?;
-            let prompts: Vec<String> = text
+            let steps: Vec<Step> = text
                 .lines()
                 .map(str::trim)
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(str::to_string)
-                .collect();
-            if prompts.is_empty() {
+                .map(Step::parse)
+                .collect::<Result<_>>()?;
+            if !steps.iter().any(|step| matches!(step, Step::Prompt(_))) {
                 anyhow::bail!("{} has no prompts in it", path.display());
             }
-            prompts
+            steps
         }
-        (None, Some(prompt)) => vec![prompt],
-        (None, None) => vec![std::io::read_to_string(std::io::stdin())?],
+        (None, Some(prompt)) => vec![Step::Prompt(prompt)],
+        (None, None) => vec![Step::Prompt(std::io::read_to_string(std::io::stdin())?)],
     };
 
     let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
@@ -503,16 +638,63 @@ pub async fn run() -> Result<()> {
     // never sends.
     let mut context = AgentContext::new(SYSTEM).with_tools(agency.definitions());
     let mut prefix = PrefixTracker::default();
+    let mut tasks = Tasks::default();
     let mut failed = false;
+    let mut turn: agent_core::protocol::TurnId = 0;
+    let multi = steps.len() > 1;
 
-    for (index, prompt) in prompts.iter().enumerate() {
-        let turn = index as agent_core::protocol::TurnId + 1;
+    for step in &steps {
+        let prompt = match step {
+            Step::Prompt(text) => text,
+            // The lifecycle, run from the script so that a task session is as
+            // repeatable as a plain one. Approval is typed, never implied: a
+            // run that approved its own plans would be measuring a gate that
+            // is not there.
+            directive => {
+                match run_directive(
+                    directive,
+                    &mut tasks,
+                    &mut context,
+                    backend.as_ref(),
+                    &model,
+                    budget,
+                    counter.as_ref(),
+                    recorder.as_deref(),
+                )
+                .await
+                {
+                    Ok(()) => continue,
+                    Err(refusal) => {
+                        eprintln!("refused: {refusal}");
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+        };
+
+        // Nothing runs while a plan is waiting to be read.
+        if let Err(refusal) = tasks.gate() {
+            if let Some(recorder) = &recorder {
+                recorder.write(&Event::Protocol(ServerMessage::Refused {
+                    reason: refusal.clone(),
+                }));
+            }
+            eprintln!("refused: {refusal}");
+            failed = true;
+            break;
+        }
+
+        turn += 1;
+        let task = tasks.active().map(|task| task.id);
+        tasks.record_turn(turn);
         let selection = context.select(prompt, &[], budget, counter.as_ref());
 
         if let Some(recorder) = &recorder {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
                 turn,
                 prompt: prompt.clone(),
+                task,
             }));
             let text = rendered(&selection.messages);
             let reuse = prefix.measure(turn, &text, counter.as_ref());
@@ -546,7 +728,6 @@ pub async fn run() -> Result<()> {
         let (tx, mut rx) = mpsc::channel::<TurnEvent>(256);
         let printer = {
             let recorder = recorder.clone();
-            let multi = prompts.len() > 1;
             let prompt = prompt.clone();
             tokio::spawn(async move {
                 let mut out = stdout();

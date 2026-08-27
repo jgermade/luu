@@ -52,6 +52,12 @@ cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
 
+# a task, start to finish, against the mock backend: the first reply is the plan
+cargo run --bin luu -- chat --script scripts/tasks/one-task.txt --mock-delay-ms 0 \
+  --mock-reply '```plan
+{"steps":["read AGENTS.md"],"paths":["AGENTS.md"],"commands":[]}
+```' --mock-reply 'It is the shared instruction file.'
+
 # the tool loop end to end without a model: one reply per model call
 cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
   --mock-reply 'looking
@@ -69,6 +75,13 @@ cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
 
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
+
+A script line starting with `:` is a task directive: `:task <objective>` asks the
+model for a plan and runs nothing, `:approve` is the confirmation, `:discard`
+refuses it, and `:close` summarises the task and folds its turns into that summary.
+A prompt while a plan is waiting is refused, not queued. Outside a task, `chat`
+behaves exactly as it always did. In the debug UI the same lifecycle is
+`/task <objective>` in the composer and two buttons on the card.
 
 `--mock-delay-ms` paces the mock backend, `--mock-reply` scripts what it answers
 (repeatable, one per model call, the last repeating), `--cancel-after-ms` exercises
@@ -124,6 +137,21 @@ implementation detail from close up:
   command implies read+execute on the system roots, because a program cannot run
   without reading libc — and that reasoning says nothing about `read_file`, so the
   in-process path check ignores those roots.
+- **A task's plan and its summary are turns, and closing is the one rewrite.** They
+  enter the history as ordinary turns so the user/assistant alternation holds and so
+  they stay inside the budget — tagged, and counted in their own bucket, because
+  scaffolding that hides inside `history` is scaffolding nobody can justify. The
+  fold at the close replaces the span from the plan turn onward with the summary;
+  it is the only place the history is rewritten, and the floor moves back exactly
+  far enough to keep the summary in the window. What the fold cost travels with it.
+- **Nothing runs before the confirmation, and a refusal is said out loud.** The gate
+  is a comparison on the task's state, not a mode: a prompt while a plan is waiting
+  is refused with a reason. Dropping it silently, or queueing it, runs work against
+  a plan nobody answered.
+- **A summary is evidence, not the model's account of itself.** It is derived from
+  the turns' tool calls — paths, commands, exit lines, denials — with no model call
+  in the path, because it lands in the write-once region every later turn is built
+  on and a fallback must not need the thing that failed.
 - **Decide what goes in, then render it.** `Context::select` chooses against a
   token budget and the rendering is a pure function of that choice, so every
   token sent is attributable to a bucket. Rendering first and trimming the

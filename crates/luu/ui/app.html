@@ -1,7 +1,8 @@
 <script :setup>
   // A setup script takes `await import(...)`; a static `import` statement is
   // for factory scripts only.
-  const { state, connect, send, cancel, playFixture } = await import("./store.js")
+  const { state, connect, send, cancel, playFixture, approveTask, discardTask, closeTask, toggleTask } =
+    await import("./store.js")
 
   connect()
 
@@ -36,6 +37,15 @@
   $: reuseFresh = state.prefix
     ? state.prefix.prompt_tokens - state.prefix.shared_tokens
     : 0
+  // Each message carries its task, so a closed one can hide the turns the
+  // context just stopped sending. The card itself always stays: what a closed
+  // task collapses *to* is its summary, which is what the model now reads.
+  $: visible = state.messages
+    .map(message => ({
+      ...message,
+      view: message.task ? state.tasks.find(task => task.id === message.task) : null,
+    }))
+    .filter(message => message.role === "task" || !message.view?.collapsed)
 </script>
 
 <header>
@@ -57,9 +67,64 @@
 <div class="split">
   <section class="chat">
     <div class="transcript">
-      <article :each="message in state.messages" :key="message.id" :class="message.role">
-        <div class="who">{{ message.role }}</div>
-        <div class="text">{{ message.text }}</div>
+      <article :each="message in visible" :key="message.id" :class="message.role">
+        <!-- A task: the plan somebody approved, where it happened. Nothing in
+             it has run while it says "proposed". -->
+        <div :if="message.role === 'task'" class="card" :class="message.view?.state">
+          <div class="who">
+            task {{ message.task }} · {{ message.view?.state }}
+            <span :if="message.view?.fold" class="dim">
+              · folded {{ message.view?.fold.turns }} turn(s),
+              {{ message.view?.fold.tokens_before }} → {{ message.view?.fold.tokens_after }} tokens
+            </span>
+          </div>
+          <div class="text objective">{{ message.view?.plan.objective }}</div>
+
+          <ol :if="!message.view?.collapsed" class="steps">
+            <li :each="step in message.view?.plan.steps || []" :key="step">{{ step }}</li>
+          </ol>
+          <div :if="!message.view?.collapsed && message.view?.plan.paths.length" class="meta">
+            files: {{ message.view?.plan.paths.join(", ") }}
+          </div>
+          <div :if="!message.view?.collapsed && message.view?.plan.commands.length" class="meta">
+            commands: {{ message.view?.plan.commands.join(", ") }}
+          </div>
+          <div :if="message.view?.plan.parsed === false" class="meta warn">
+            the model did not answer in a plan block — these are its own lines
+          </div>
+
+          <!-- What the context now reads instead of those turns. -->
+          <pre :if="message.view?.collapsed" class="summary">{{ message.view?.summary }}</pre>
+
+          <div class="actions">
+            <button
+              :if="message.view?.state === 'proposed'"
+              type="button"
+              :disabled="replaying"
+              @click="approveTask(message.task)">Approve</button>
+            <button
+              :if="message.view?.state === 'proposed'"
+              type="button"
+              class="cancel"
+              :disabled="replaying"
+              @click="discardTask(message.task)">Discard</button>
+            <button
+              :if="message.view?.state === 'approved'"
+              type="button"
+              :disabled="replaying || running"
+              @click="closeTask(message.task)">Close task</button>
+            <button
+              :if="message.view?.state === 'closed'"
+              type="button"
+              class="ghost"
+              @click="toggleTask(message.task)">
+              {{ message.view?.collapsed ? "Show the turns" : "Collapse" }}
+            </button>
+          </div>
+        </div>
+
+        <div :if="message.role !== 'task'" class="who">{{ message.role }}</div>
+        <div :if="message.role !== 'task'" class="text">{{ message.text }}</div>
         <div :if="message.reason" class="meta">
           <span :class.warn="message.reason !== 'stop'">{{ message.reason }}</span>
           <span :if="message.usage">
@@ -70,17 +135,21 @@
       </article>
 
       <p :if="!state.messages.length" class="empty">
-        Nothing yet. Send a prompt.
+        Nothing yet. Send a prompt, or start a task with
+        <code>/task &lt;objective&gt;</code>.
       </p>
     </div>
 
     <div :if="state.error" class="error">{{ state.error }}</div>
+    <!-- A refusal is not an error: nothing went wrong, something was not
+         allowed to start. -->
+    <div :if="state.refusal" class="refusal">{{ state.refusal }}</div>
 
     <form class="composer" @submit.prevent="submit()">
       <input
         :value="draft"
         @input="draft = $event.target.value"
-        :attrs="{ placeholder: replaying ? 'Replaying a recorded session — read only' : 'Ask something…', disabled: replaying }"
+        :attrs="{ placeholder: replaying ? 'Replaying a recorded session — read only' : 'Ask something, or /task <objective>…', disabled: replaying }"
         autofocus>
       <button :if="!running" type="submit" :disabled="!draft.trim() || replaying">Send</button>
       <button :if="running" type="button" class="cancel" @click="cancel()">Cancel</button>
@@ -243,6 +312,32 @@
   .meta { margin-top: .3rem; font-size: 12px; color: var(--dim); display: flex; gap: .6rem; }
   .meta .warn { color: var(--warn); }
 
+  /* The article carries the role as its class, so the card carries its own:
+     styling `.task` would draw the border twice, once around each. */
+  .card {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--b-tasks);
+    border-radius: 6px;
+    padding: .6rem .75rem;
+    background: var(--panel);
+  }
+  .card.proposed { border-left-color: var(--warn); }
+  .card.discarded { opacity: .6; }
+  .card .objective { color: var(--b-tasks); }
+  .card .steps { margin: .4rem 0; padding-left: 1.2rem; }
+  .card .summary { margin: .5rem 0 0; max-height: 12rem; }
+  .card .actions { display: flex; gap: .5rem; margin-top: .6rem; }
+  .card .actions button { font-size: 12px; padding: .25rem .6rem; }
+  button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line); }
+  .refusal {
+    margin: 0 1rem;
+    padding: .5rem .75rem;
+    border: 1px solid var(--warn);
+    border-radius: 6px;
+    color: var(--warn);
+    font-size: 13px;
+  }
+
   .empty, .dim { color: var(--dim); }
   .warn { color: var(--warn); }
   .error {
@@ -299,6 +394,7 @@
   .bar span { min-width: 2px; }
   .bar span.system, .legend span.system { background: var(--b-system); }
   .bar span.tools, .legend span.tools { background: var(--b-tools); }
+  .bar span.tasks, .legend span.tasks { background: var(--b-tasks); }
   .bar span.history, .legend span.history { background: var(--b-history); }
   .bar span.code, .legend span.code { background: var(--b-code); }
   .bar span.prompt, .legend span.prompt { background: var(--b-prompt); }

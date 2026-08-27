@@ -1,0 +1,9 @@
+# One task, start to finish: proposed, approved, two turns, closed.
+#
+# The directives are the gate. Approval is typed rather than implied, because a
+# run that approved its own plans would be measuring a gate that is not there.
+:task find out what AGENTS.md is for
+:approve
+what is in AGENTS.md?
+and what does it say about the sandbox?
+:close

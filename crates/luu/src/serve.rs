@@ -12,9 +12,12 @@ use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
+use agent_core::task::{TaskId, Tasks};
 use agent_core::trace::TraceMessage;
 
-use crate::session::{Agency, Event, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
+use crate::session::{
+    Agency, Event, PrefixTracker, Recorder, SYSTEM, now_ms, propose_plan, rendered,
+};
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -47,6 +50,9 @@ struct Session {
     /// Beside the context, because what it measures is a property of two
     /// consecutive prompts of *this* session.
     prefix: PrefixTracker,
+    /// The session's tasks, and the gate. In memory with the context, and lost
+    /// with it on restart.
+    tasks: Tasks,
 }
 
 /// The id the live session is served under. There is one until sessions are
@@ -135,6 +141,7 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
             cancel: None,
             context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
             prefix: PrefixTracker::default(),
+            tasks: Tasks::default(),
         }),
         events: broadcast::channel(1024).0,
         recorder,
@@ -288,6 +295,20 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                             let _ = cancel.send(true);
                         }
                     }
+                    // Planning is a model call, so it is spawned: the socket
+                    // loop has to stay free to carry the cancel that stops it.
+                    Ok(ClientMessage::ProposeTask { objective }) => {
+                        tokio::spawn(propose_task(app.clone(), objective));
+                    }
+                    Ok(ClientMessage::ApproveTask { task }) => {
+                        approve_task(&app, task).await;
+                    }
+                    Ok(ClientMessage::DiscardTask { task }) => {
+                        discard_task(&app, task).await;
+                    }
+                    Ok(ClientMessage::CloseTask { task }) => {
+                        close_task(&app, task).await;
+                    }
                     // Unparseable input from one client must not take the
                     // server down for the others.
                     Err(_) => continue,
@@ -297,16 +318,124 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
     }
 }
 
+/// A refusal, to every client and to the record.
+///
+/// Published rather than answered to the one socket that asked: with one
+/// session behind them, a gate that only one client can see is a gate the
+/// others watch nothing happen at.
+async fn refuse(app: &Arc<App>, reason: impl Into<String>) {
+    app.publish(Event::Protocol(ServerMessage::Refused {
+        reason: reason.into(),
+    }))
+    .await;
+}
+
+async fn propose_task(app: Arc<App>, objective: String) {
+    let mut session = app.session.lock().await;
+    if session.current.is_some() {
+        drop(session);
+        return refuse(&app, "a turn is running — wait for it or cancel it").await;
+    }
+    if let Err(reason) = session.tasks.may_propose() {
+        drop(session);
+        return refuse(&app, reason).await;
+    }
+
+    // Held across the call: the plan is proposed against the history as it is
+    // now, and a turn that started underneath it would plan against another.
+    let plan = propose_plan(
+        app.backend.as_ref(),
+        &app.model,
+        &mut session.context,
+        app.budget,
+        app.counter.as_ref(),
+        &objective,
+    )
+    .await;
+    let task = session.tasks.propose(plan.clone());
+    drop(session);
+
+    app.publish(Event::Protocol(ServerMessage::TaskProposed { task, plan }))
+        .await;
+}
+
+async fn approve_task(app: &Arc<App>, task: TaskId) {
+    let mut session = app.session.lock().await;
+    let counter = app.counter.clone();
+    let Session { tasks, context, .. } = &mut *session;
+    match tasks.approve(task, context, counter.as_ref()) {
+        Ok(()) => {
+            drop(session);
+            app.publish(Event::Protocol(ServerMessage::TaskApproved { task }))
+                .await;
+        }
+        Err(error) => {
+            drop(session);
+            refuse(app, error.to_string()).await;
+        }
+    }
+}
+
+async fn discard_task(app: &Arc<App>, task: TaskId) {
+    let mut session = app.session.lock().await;
+    match session.tasks.discard(task) {
+        Ok(()) => {
+            drop(session);
+            app.publish(Event::Protocol(ServerMessage::TaskDiscarded { task }))
+                .await;
+        }
+        Err(error) => {
+            drop(session);
+            refuse(app, error.to_string()).await;
+        }
+    }
+}
+
+async fn close_task(app: &Arc<App>, task: TaskId) {
+    let mut session = app.session.lock().await;
+    if session.current.is_some() {
+        drop(session);
+        return refuse(app, "a turn is running — the history is not finished yet").await;
+    }
+    let counter = app.counter.clone();
+    let Session { tasks, context, .. } = &mut *session;
+    match tasks.close(task, context, counter.as_ref()) {
+        Ok(closed) => {
+            drop(session);
+            app.publish(Event::Protocol(ServerMessage::TaskClosed {
+                task,
+                summary: closed.summary,
+            }))
+            .await;
+            // What the fold cost, on the channel the other numbers are on.
+            app.publish(Event::Trace(TraceMessage::folded(task, closed.fold)))
+                .await;
+        }
+        Err(error) => {
+            drop(session);
+            refuse(app, error.to_string()).await;
+        }
+    }
+}
+
 async fn start_turn(app: Arc<App>, prompt: String) {
-    let (turn, cancel_rx, selection, prompt_sent, reuse) = {
+    let (turn, task, cancel_rx, selection, prompt_sent, reuse) = {
         let mut session = app.session.lock().await;
         if session.current.is_some() {
             // One turn at a time until sessions exist.
             return;
         }
+        // Nothing runs while a plan is waiting to be read. Refused rather than
+        // queued: a queued prompt runs against a plan nobody answered.
+        if let Err(reason) = session.tasks.gate() {
+            drop(session);
+            return refuse(&app, reason).await;
+        }
         let turn = session.next_turn;
         session.next_turn += 1;
         session.current = Some(turn);
+        let task = session.tasks.active().map(|task| task.id);
+        session.tasks.record_turn(turn);
 
         let (tx, rx) = watch::channel(false);
         session.cancel = Some(tx);
@@ -321,12 +450,13 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let reuse = session
             .prefix
             .measure(turn, &prompt_sent, app.counter.as_ref());
-        (turn, rx, selection, prompt_sent, reuse)
+        (turn, task, rx, selection, prompt_sent, reuse)
     };
 
     app.publish(Event::Protocol(ServerMessage::TurnStarted {
         turn,
         prompt: prompt.clone(),
+        task,
     }))
     .await;
     app.publish(Event::Trace(TraceMessage::Prompt {

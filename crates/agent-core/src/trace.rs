@@ -13,8 +13,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::{Counter, TokenCounter};
+use crate::context::{Counter, Fold, TokenCounter};
 use crate::protocol::TurnId;
+use crate::task::TaskId;
 
 /// One slice of the token budget. The names are not an enum: the context
 /// manager will invent buckets faster than a wire enum can be revised, and a
@@ -76,9 +77,31 @@ pub enum TraceMessage {
         /// exact within one rendering.
         prompt_tokens: u32,
     },
+    /// What closing a task cost the history and what it bought.
+    ///
+    /// The one rewrite in a session, so it is the one number that says whether
+    /// the boundary was worth cutting on. Not keyed by a turn: a fold happens
+    /// between them, which is the whole idea.
+    TaskFolded {
+        task: TaskId,
+        /// Turns replaced by the summary, the plan turn included.
+        turns: usize,
+        tokens_before: u32,
+        tokens_after: u32,
+    },
 }
 
 impl TraceMessage {
+    /// The one conversion at the fold/wire boundary.
+    pub fn folded(task: TaskId, fold: Fold) -> Self {
+        Self::TaskFolded {
+            task,
+            turns: fold.turns,
+            tokens_before: fold.tokens_before,
+            tokens_after: fold.tokens_after,
+        }
+    }
+
     /// Measures one prompt against the one before it.
     ///
     /// What is compared is our own rendering, not the string the backend

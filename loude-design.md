@@ -33,6 +33,43 @@ they were global where approval is per piece of work, and — the reason they we
 a mode cannot tell the context manager what to compact. See
 [`RECORD/2026-08-27.tasks-instead-of-modes.md`](RECORD/2026-08-27.tasks-instead-of-modes.md).
 
+**Built**, and the shape it took is in
+[`RECORD/2026-08-27.tasks-in-the-core.md`](RECORD/2026-08-27.tasks-in-the-core.md):
+
+- **A task owns no turns.** It is bookkeeping — a plan, a state, and where in the
+  history it began — and everything it produces enters the history as an ordinary
+  turn tagged with a `TurnKind`: the approved plan is one (prompt = the objective as
+  typed, answer = the plan), the closing summary is another. That is what keeps the
+  strict alternation the prompt shape depends on, and what keeps both inside the
+  budget instead of in a second, quieter window nobody measures. They are counted in
+  their own `tasks` bucket, because "the scaffolding costs N tokens" is a number the
+  strategy has to justify.
+- **The gate is a comparison, not a mode.** A prompt while a plan is waiting is
+  *refused, visibly* (`refused` on the wire) rather than dropped or queued: a queued
+  prompt runs against a plan nobody answered.
+- **The model writes the plan**, parsed out of a ```` ```plan ```` block the way a
+  tool call is parsed. When the block does not parse, the model's own lines become
+  the steps and the plan says so — the user is about to approve this, and a plan
+  with our sentences in it is a confirmation of something nobody proposed. The
+  planning call is an ordinary user message on the unchanged prefix, so proposing
+  costs no cache, and it is not remembered: the approved plan enters the history,
+  the request that produced it does not.
+- **The summary is evidence, not prose**: the objective, the approved steps, and
+  what the turns' tool calls actually did — paths touched, commands and how they
+  exited, calls the sandbox refused. No model call, so closing cannot fail because
+  generation did, and the same session summarises the same way twice.
+- **Closing folds the span** from the plan turn to the end of the history into that
+  one summary. What it cost and bought (`turns`, tokens before and after) is a trace
+  message, beside the other numbers.
+- Tasks are **opt-in** for now: `luu chat "hola"` still runs a turn with no task
+  around it, because that path is what every baseline recording uses. In `chat` the
+  lifecycle is script directives — `:task <objective>`, `:approve`, `:discard`,
+  `:close` — so a task session is as repeatable as a plain one and approval is
+  always typed. In the debug UI it is `/task <objective>` and two buttons.
+
+Still missing from the loop: reopening a closed task, the judge below, and the
+task-scoped `SandboxPolicy` — see *Open questions*.
+
 One boundary does three jobs, which is the argument for it:
 
 - **Compaction gets a cut point the work chose** rather than one the counter fell
@@ -53,7 +90,10 @@ only authority. The judge is the same model given a short context of **evidence,
 narrative** — the objective as typed, the diff, the commands and their exit codes —
 because a judge fed the model's own account of its work inherits its hallucinations.
 It runs in shadow mode until measured: every task the user closes is a label, so the
-accuracy figure arrives for free and gates nothing until it exists.
+accuracy figure arrives for free and gates nothing until it exists. **Not built** —
+today the user closes the task with `:close` and nothing judges anything, which is
+the right order: there is nothing to be accurate about until tasks have been closed
+in anger.
 
 ## Overall architecture
 
@@ -147,6 +187,14 @@ stable prefix.
   front of the history and is the one thing a prefix cache cannot survive — and it
   makes block eviction impossible, because the next fill walks straight back past the
   cut.
+- **A closed task is the one rewrite in a session.** Eviction drops the minimum and
+  moves the front of the history every turn once the window is full; a fold cuts
+  once, deeply, at a point the work chose, and the history is byte-identical in
+  between. The floor moves back far enough to keep the summary inside the window
+  when the fold spans turns that had already left it — the *index* moves, the
+  content does not come back: the folded turns are gone from the history and what
+  stands in their place is not one of them. A summary left below the floor would
+  cost the tokens to write it and send none of them.
 - **An unknown window is not an unlimited one**: `--context-limit 0` means unknown, so
   nothing is budgeted and nothing is evicted, and the panel says so rather than
   drawing a bar against nothing.
@@ -169,7 +217,7 @@ the precision given up.
 
 ### Still ahead
 
-- **Hierarchical compaction**: a closed task is replaced by its summary, and full text is kept only for the live one. The boundary is what a task gives the context manager; the token threshold stays as the fallback for a task that overflows alone. Not built: it is a strategy, and a strategy has to beat a recorded baseline — now with an instrument and a table to beat it in. The summary is deterministic first (the plan plus the evidence: diff, commands, exit codes), because a 7B's prose would be entering the write-once region every later turn is built on.
+- **Hierarchical compaction**: the mechanism is built — a closed task is replaced by its deterministic summary (the plan plus the evidence: paths, commands, exit codes, denials), and the token threshold stays as the fallback for a task that overflows alone. What is *not* done is the part that matters: nobody has yet run the same script with and without tasks and compared reuse and tokens. Until that table exists, folding on a boundary is a plausible strategy, not a better one.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
@@ -463,11 +511,11 @@ lives in memory for the life of the process.
 
 ## Suggested work order
 
-1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *`Context`, `Tool`, `SandboxPolicy` and the Ollama/mock backends exist; `Task` does not.*
-2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction and block eviction exist, and prefix reuse is measured per turn. Compaction and relevance selection are still ahead, and each has to beat the recorded baseline.*
+1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *All four exist, with the Ollama and mock backends.*
+2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction, block eviction and the fold at a task boundary exist, and prefix reuse is measured per turn. Whether folding on the boundary beats the threshold is unmeasured; relevance selection is still ahead.*
 3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
    measure step 2. *Done.*
-4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
+4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. Per-task policy is still open, and no longer for want of tasks — see below.*
 5. Container packaging (level 3), with the level-2 restrictions still applied inside it.
 6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
 
@@ -479,12 +527,23 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Finalize the remaining base type for `agent-core`: `Task`. Until it exists, the
-  policy file is the standing approval for a whole session — where the design
-  wants the approved plan to *be* the `SandboxPolicy` for one task, with the file
-  as its floor.
+- **What a plan's `paths` and `commands` should grant.** The approved plan is meant
+  to *be* the `SandboxPolicy` for its task, and it declares both — but nothing
+  narrows the sandbox to them yet, so the policy file is still the standing
+  approval for the whole session. The obstacle is concrete: `Sandbox::new` needs
+  every granted path to exist, because Landlock takes a descriptor per root, and
+  the most ordinary claim a plan makes is that it will create a file. Narrowing to
+  the plan either denies the work the plan describes or silently widens to the
+  nearest existing ancestor — a grant on `src/` wearing the label of a grant on one
+  file. Neither is shippable; choosing between them needs its own record.
 - Design the concrete GBNF grammar to force valid tool calls with the target model
   (Qwen2.5-Coder), replacing the text parse.
 - `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window
   that canonicalize-then-open leaves.
-- Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format).
+- What reopening a closed task does to a prompt already built on its summary.
+  Closing is an event and the fold is what the event does; reopening is a different
+  fold, and inventing it before anything has been closed in anger is guessing.
+- Whether the judge (below) earns its place: it needs about thirty closed tasks in
+  shadow mode before its accuracy against the user's own verdict means anything.
+- The protocol enums are at v2, which carries the task lifecycle. What is still
+  unfrozen is `task_reopened`, for the reason above.

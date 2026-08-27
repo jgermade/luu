@@ -20,7 +20,10 @@ export const state = $reactive({
   model: "",
   protocol: 0,
   turn: null,
-  messages: [],           // { id, role, text, reason, usage }
+  messages: [],           // { id, role, text, reason, usage } — role "task" carries { task }
+  // The session's tasks, newest last. A closed one collapses to its summary in
+  // the transcript: the view collapses exactly what the context collapses.
+  tasks: [],              // [{ id, plan, state, summary, fold, collapsed }]
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
@@ -29,6 +32,9 @@ export const state = $reactive({
   // as nothing happening. Per turn, like the budget beside it.
   tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms }]
   error: null,
+  // A refusal is not an error: nothing went wrong, something was not allowed to
+  // start. Kept apart so the transcript can say which of the two it was.
+  refusal: null,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
 })
@@ -91,8 +97,9 @@ function onProtocol(message) {
       state.turn = message.turn
       state.status = "running"
       state.error = null
-      state.messages.push({ id: nextId++, role: "user", text: message.prompt, reason: null, usage: null })
-      state.messages.push({ id: nextId++, role: "assistant", text: "", reason: null, usage: null })
+      state.refusal = null
+      state.messages.push({ id: nextId++, role: "user", text: message.prompt, reason: null, usage: null, task: message.task })
+      state.messages.push({ id: nextId++, role: "assistant", text: "", reason: null, usage: null, task: message.task })
       state.tools = []
       break
 
@@ -147,7 +154,51 @@ function onProtocol(message) {
       state.turn = null
       state.status = idle()
       break
+
+    // The lifecycle. Pushed into the transcript as messages of its own, so the
+    // plan somebody approved sits where it happened rather than in a panel
+    // beside it.
+    case "task_proposed":
+      state.tasks = [...state.tasks, {
+        id: message.task,
+        plan: message.plan,
+        state: "proposed",
+        summary: null,
+        fold: null,
+        collapsed: false,
+      }]
+      state.messages.push({ id: nextId++, role: "task", task: message.task, text: "", reason: null, usage: null })
+      break
+
+    case "task_approved":
+      patchTask(message.task, { state: "approved" })
+      break
+
+    case "task_discarded":
+      patchTask(message.task, { state: "discarded" })
+      break
+
+    // Collapsed on arrival, because that is what just happened to the context:
+    // those turns stop being sent verbatim.
+    case "task_closed":
+      patchTask(message.task, { state: "closed", summary: message.summary, collapsed: true })
+      break
+
+    // The gate, said out loud. Not an error: nothing went wrong, something was
+    // refused — and the difference is the whole point of a confirmation.
+    case "refused":
+      state.refusal = message.reason
+      break
   }
+}
+
+function patchTask(id, patch) {
+  state.tasks = state.tasks.map(task => task.id === id ? { ...task, ...patch } : task)
+}
+
+export function toggleTask(id) {
+  const task = state.tasks.find(task => task.id === id)
+  if (task) patchTask(id, { collapsed: !task.collapsed })
 }
 
 function onTrace(message) {
@@ -160,6 +211,15 @@ function onTrace(message) {
       shared_tokens: message.shared_tokens,
       prompt_tokens: message.prompt_tokens,
     }
+  }
+  if (message.type === "task_folded") {
+    patchTask(message.task, {
+      fold: {
+        turns: message.turns,
+        tokens_before: message.tokens_before,
+        tokens_after: message.tokens_after,
+      },
+    })
   }
   if (message.type === "budget") {
     // Arrives before the call now, so a cancelled turn has one too. The
@@ -257,6 +317,8 @@ function idle() {
 
 function reset() {
   state.messages = []
+  state.tasks = []
+  state.refusal = null
   state.budget = null
   state.tools = []
   state.prompt = ""
@@ -309,13 +371,37 @@ export async function connect() {
   traceSocket = open("/ws/trace", onTrace, s => { traceSocket = s })
 }
 
+function command(message) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false
+  socket.send(JSON.stringify(message))
+  return true
+}
+
 export function send(text) {
-  if (!socket || socket.readyState !== WebSocket.OPEN || !text.trim()) return
-  socket.send(JSON.stringify({ type: "prompt", text }))
+  if (!text.trim()) return
+  // `/task <objective>` proposes instead of prompting. A prefix rather than a
+  // second box: the composer is where you say what you want, and which of the
+  // two it is depends on the words, not on where they were typed.
+  const objective = text.trim().match(/^\/task\s+(.+)$/s)
+  if (objective) return void command({ type: "propose_task", objective: objective[1] })
+  if (!command({ type: "prompt", text })) return
+  state.refusal = null
   state.prompt = ""
   state.budget = null
   state.tools = []
   state.prefix = null
+}
+
+export function approveTask(task) {
+  command({ type: "approve_task", task })
+}
+
+export function discardTask(task) {
+  command({ type: "discard_task", task })
+}
+
+export function closeTask(task) {
+  command({ type: "close_task", task })
 }
 
 export function cancel() {

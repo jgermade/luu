@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
+use crate::task::TaskId;
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
 
@@ -120,6 +121,44 @@ pub struct Fragment {
     pub text: String,
 }
 
+/// What a turn is in the history.
+///
+/// A task's plan and its closing summary are turns like any other — that is
+/// what keeps the strict user/assistant alternation the prompt shape depends
+/// on, and what keeps them inside the budget rather than in a second, quieter
+/// window nobody measures. The tag is here so the two can still be *counted*
+/// apart: "the task scaffolding costs N tokens" is a number the strategy has to
+/// justify, and without it that number hides inside `history`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TurnKind {
+    /// A prompt and what came back. Everything, before tasks existed — hence
+    /// the default, which is what a turn recorded then deserializes as.
+    #[default]
+    Exchange,
+    /// The approved plan, written once when the task started.
+    Plan { task: TaskId },
+    /// What a closed task left behind.
+    Summary { task: TaskId },
+}
+
+impl TurnKind {
+    pub fn task(self) -> Option<TaskId> {
+        match self {
+            Self::Exchange => None,
+            Self::Plan { task } | Self::Summary { task } => Some(task),
+        }
+    }
+
+    /// Which bucket its tokens are attributed to.
+    fn bucket(self) -> &'static str {
+        match self {
+            Self::Exchange => "history",
+            Self::Plan { .. } | Self::Summary { .. } => "tasks",
+        }
+    }
+}
+
 /// One exchange. The unit of everything the context manager does: eviction
 /// drops a turn, compaction replaces one, relevance scores one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +180,10 @@ pub struct Turn {
     /// Which counter produced `tokens`. Without it, swapping tokenizers
     /// mid-session sums two different units into one bar.
     pub counted_by: Counter,
+    /// An exchange, or something a task wrote. Defaulted so a recording made
+    /// before tasks existed still reads.
+    #[serde(default)]
+    pub kind: TurnKind,
 }
 
 /// How the history gives way when the next turn no longer fits.
@@ -200,6 +243,19 @@ pub struct Selection {
     pub counter: Counter,
     /// Whole turns dropped to make room, oldest first.
     pub evicted: usize,
+}
+
+/// What a fold cost and what it bought.
+///
+/// Numbers, because the house rule is that a context strategy is measured. They
+/// travel on the trace channel: the summary is what a client draws, and the
+/// arithmetic behind it is debug data a stdio consumer should never carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fold {
+    /// Turns replaced, the plan turn included.
+    pub turns: usize,
+    pub tokens_before: u32,
+    pub tokens_after: u32,
 }
 
 /// The conversation, and the rule for turning it into a prompt.
@@ -295,7 +351,94 @@ impl Context {
             code_context,
             tokens,
             counted_by: counter.id(),
+            kind: TurnKind::Exchange,
         });
+    }
+
+    /// Writes an approved plan into the history, and says where it landed.
+    ///
+    /// The index is the task's span: everything from here to the end of the
+    /// history is what the fold replaces at the close. Returned rather than
+    /// looked up later, because a span recomputed from a search is a span that
+    /// can be wrong.
+    pub fn push_plan(
+        &mut self,
+        task: TaskId,
+        plan: &crate::task::Plan,
+        counter: &dyn TokenCounter,
+    ) -> usize {
+        self.push_written(
+            TurnKind::Plan { task },
+            plan.objective.clone(),
+            plan.render(),
+            counter,
+        )
+    }
+
+    /// The one rewrite in a session: the turns from `from` become one summary.
+    ///
+    /// Deep and rare on purpose. Eviction drops the minimum and rewrites the
+    /// front of the history every turn once the window is full; this cuts once,
+    /// at a point the work chose, and the history is byte-identical in between.
+    /// That is the shape a prompt cache pays for — see
+    /// `RECORD/2026-08-27.prefix-reuse-and-block-eviction.md`.
+    ///
+    /// The floor moves back to keep the summary inside the window when the fold
+    /// spans turns that had already left it. The **index** moves; the content
+    /// does not come back — the folded turns are gone from the history, and
+    /// what stands in their place is not one of them. Leaving the summary below
+    /// the floor would spend the tokens to write it and send none of them.
+    pub fn close_task(
+        &mut self,
+        task: TaskId,
+        from: usize,
+        objective: &str,
+        summary: &str,
+        counter: &dyn TokenCounter,
+    ) -> Fold {
+        let from = from.min(self.turns.len());
+        let folded: Vec<Turn> = self.turns.drain(from..).collect();
+        let tokens_before = folded
+            .iter()
+            .map(|turn| self.tokens_of(turn, counter))
+            .sum();
+
+        let at = self.push_written(
+            TurnKind::Summary { task },
+            objective.to_string(),
+            summary.to_string(),
+            counter,
+        );
+        self.floor = self.floor.min(at);
+
+        Fold {
+            turns: folded.len(),
+            tokens_before,
+            tokens_after: self.turns[at].tokens,
+        }
+    }
+
+    /// A turn the agent wrote rather than exchanged: a plan or a summary. One
+    /// user half and one assistant half, so nothing downstream has to know the
+    /// difference.
+    fn push_written(
+        &mut self,
+        kind: TurnKind,
+        prompt: String,
+        answer: String,
+        counter: &dyn TokenCounter,
+    ) -> usize {
+        let tokens = counter.count(&prompt) + counter.count(&answer);
+        self.turns.push(Turn {
+            prompt,
+            answer,
+            steps: Vec::new(),
+            code_context: Vec::new(),
+            tokens,
+            counted_by: counter.id(),
+            kind,
+        });
+        self.turns.len() - 1
     }
 
     /// Chooses what fits, then renders it.
@@ -350,10 +493,17 @@ impl Context {
         }
 
         let retained = &self.turns[self.floor..];
-        let history_tokens: u32 = retained
-            .iter()
-            .map(|turn| self.tokens_of(turn, counter))
-            .sum();
+        // Split by what wrote it: an exchange the session had, or the plan and
+        // summary a task left behind. One bar, two answers to "why is the
+        // window full".
+        let (history_tokens, task_tokens) =
+            retained.iter().fold((0, 0), |(history, tasks), turn| {
+                let tokens = self.tokens_of(turn, counter);
+                match turn.kind.bucket() {
+                    "tasks" => (history, tasks + tokens),
+                    _ => (history + tokens, tasks),
+                }
+            });
 
         let mut messages = Vec::with_capacity(retained.len() * 2 + 2);
         messages.push(Message::system(self.system_message()));
@@ -372,6 +522,9 @@ impl Context {
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
             Bucket::new("tools", tools_tokens),
+            // Ahead of `history`: a summary is the oldest thing in the window
+            // it survives in, and the bar reads as the prompt reads.
+            Bucket::new("tasks", task_tokens),
             Bucket::new("history", history_tokens),
             Bucket::new("code", code_tokens),
             Bucket::new("prompt", prompt_tokens),
@@ -674,7 +827,9 @@ mod tests {
         let names: Vec<&str> = selection.buckets.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(
             names,
-            ["system", "tools", "history", "code", "prompt", "reserve"]
+            [
+                "system", "tools", "tasks", "history", "code", "prompt", "reserve"
+            ]
         );
     }
 
@@ -726,6 +881,51 @@ mod tests {
             after.evicted, evicted,
             "resurrecting a turn rewrites the history from its front, which is \
              the one thing the prefix cache cannot survive",
+        );
+    }
+
+    #[test]
+    fn a_fold_over_evicted_turns_still_puts_its_summary_in_the_window() {
+        // The floor is monotone so that a turn which left the window cannot
+        // come back. A summary is not one of those turns: it is new text,
+        // written once, standing in for them. Left below the floor it would
+        // cost tokens to produce and send none of them.
+        let counter = WordCounter::default();
+        let mut context = context_of_equal_turns(6, &counter);
+        let budget = Budget::new(40, 0, Eviction::Turn);
+
+        let evicted = context
+            .select("pad pad pad pad", &[], budget, &counter)
+            .evicted;
+        assert!(
+            evicted > 0,
+            "the case only exists once something was dropped"
+        );
+
+        let fold = context.close_task(1, 0, "the objective", "the summary", &counter);
+        assert_eq!(fold.turns, 6, "everything from the span is replaced");
+
+        let selection = context.select("and now", &[], budget, &counter);
+        assert_eq!(selection.evicted, 0, "the summary is inside the window");
+        let sent = selection
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(sent.contains("the summary"));
+        assert!(
+            !sent.contains("question number 0"),
+            "the folded turns are gone from the history, not merely hidden",
+        );
+        let tasks = selection
+            .buckets
+            .iter()
+            .find(|bucket| bucket.name == "tasks")
+            .unwrap();
+        assert!(
+            tasks.tokens > 0,
+            "and what the scaffolding costs is its own bucket",
         );
     }
 

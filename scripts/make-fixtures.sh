@@ -48,6 +48,23 @@ done
   --mock-reply 'AGENTS.md is the shared instruction file. The second path is outside the sandbox, so I cannot read it.' \
   --record "$out/tool-calls.jsonl" >/dev/null
 
+# A task, start to finish. The one recording where the history is rewritten:
+# the plan and the turns it ran are replaced by one summary at the close, and
+# the budget panel shows what that cost — `tasks` against `history`, before and
+# after. Scripted replies again, so the plan is the same plan every time.
+"$luu" chat --script "$(dirname "$0")/tasks/one-task.txt" \
+  --mock-delay-ms 20 --context-limit 8192 \
+  --sandbox "$(dirname "$0")/../luu.toml" \
+  --mock-reply '```plan
+{"steps":["read AGENTS.md","say what it is for"],"paths":["AGENTS.md"],"commands":[]}
+```' \
+  --mock-reply 'Let me read it.
+```tool
+{"name":"read_file","arguments":{"path":"AGENTS.md","max_lines":4}}
+```' \
+  --mock-reply 'It is the instruction file every agent on this project reads.' \
+  --record "$out/one-task.jsonl" >/dev/null
+
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
   --record "$out/backend-failure.jsonl" >/dev/null 2>&1 || true
@@ -64,6 +81,7 @@ done
   "$out/eviction-turn.jsonl" \
   "$out/eviction-block.jsonl" \
   "$out/tool-calls.jsonl" \
+  "$out/one-task.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \
