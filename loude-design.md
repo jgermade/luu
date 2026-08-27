@@ -14,13 +14,46 @@ which is append-only. See [AGENTS.md](AGENTS.md).
 - **CLI mode**: direct terminal usage.
 - **VSCode integration**: a chat tab similar to Copilot Chat.
 
-## Operating modes
+## Tasks
 
-- **plan**: the model only produces a plan (list of steps), without executing tools. Structured output (JSON schema) validated with `serde`.
-- **run**: executes an already-approved plan, tool call by tool call.
-- **auto**: plan → run in a loop, with an iteration limit and re-planning if a tool result diverges from what was expected.
+A session is a sequence of **tasks**, not a mode the agent is in. One task:
 
-Modeled in Rust as a state enum + a `Mode` trait with `next_action(&self, ctx: &Context) -> Action`.
+```
+the user asks for something
+  → the agent proposes a plan: steps, files it will touch, commands it will run
+  → CONFIRMATION                  ← nothing runs before this
+  → loop: act · check · ask when unsure
+  → closing question: "shall I call this done?"
+  → close: the task is summarised; its turns stop being sent verbatim
+```
+
+Every task is confirmed before anything runs, so there is no autonomy setting to
+remember and no mode that can be left open. `plan`/`run`/`auto` used to live here;
+they were global where approval is per piece of work, and — the reason they went —
+a mode cannot tell the context manager what to compact. See
+[`RECORD/2026-08-27.tasks-instead-of-modes.md`](RECORD/2026-08-27.tasks-instead-of-modes.md).
+
+One boundary does three jobs, which is the argument for it:
+
+- **Compaction gets a cut point the work chose** rather than one the counter fell
+  on. A closed task is the only rewrite in an otherwise write-once session: plan,
+  turns and summary are each written once and never edited.
+- **Permission gets its scope**: the approved plan named the files and commands, so
+  it *is* the `SandboxPolicy` for that task. One informed approval beats a prompt
+  per tool call, which is what trains people to click yes without reading.
+- **The transcript gets its grouping**: a closed task collapses to its summary in the
+  UI — the view collapses exactly what the context collapses.
+
+A task can still overflow the window on its own, so the boundary is the *preferred*
+cut point and the token threshold remains the fallback.
+
+**Who declares a task done** is a ladder, not a single answer: deterministic checks
+(exit codes, tests) first, then a judge, then the user's final question, which is the
+only authority. The judge is the same model given a short context of **evidence, not
+narrative** — the objective as typed, the diff, the commands and their exit codes —
+because a judge fed the model's own account of its work inherits its hallucinations.
+It runs in shadow mode until measured: every task the user closes is a label, so the
+accuracy figure arrives for free and gates nothing until it exists.
 
 ## Overall architecture
 
@@ -33,7 +66,7 @@ Modeled in Rust as a state enum + a `Mode` trait with `next_action(&self, ctx: &
                             │   one JSON message schema, N transports
                   ┌─────────▼──────────┐
                   │   agent-core (lib) │  ← all the brains here
-                  │  modes, context,   │
+                  │  tasks, context,   │
                   │  tools, sandbox    │
                   └─────────┬──────────┘
                             │
@@ -83,17 +116,37 @@ stable prefix.
 - **Every count carries its counter.** A stored turn records which counter produced
   its tokens, and a budget names the counter that produced it. Two runs measured
   differently are not comparable, and nothing else would say so.
+- **Prefix reuse is measured, not assumed.** Every turn after the first carries the
+  longest common prefix between its prompt and the previous one, in bytes and in
+  tokens. A cache stops at the first difference, so a prefix is the whole quantity —
+  matching text after the divergence is reuse the cache never gets. It is measured
+  against our own rendering rather than the templated string, which is a proxy and
+  labelled as one; it holds because a chat template renders message by message, so an
+  identical message prefix is an identical templated prefix. This is the number a
+  context strategy is judged by, and it is measurable against the mock backend
+  because it is decided before the call.
 - **The turn is the unit.** Eviction drops whole turns, oldest first, so the retained
   window can only ever start on a user message. Half a turn leaves an answer to a
   question nobody asked; a window starting on an assistant message makes several chat
   templates continue instead of answering.
 - **Order blocks by how often they are rewritten — growing at the end is not being
   rewritten.** A prefix cache reuses the longest common prefix, so a large block that
-  changes rarely belongs *above* an append-only history, not below it. The corollary
-  is uncomfortable and worth stating: evicting one turn per turn rewrites the history
-  from its front on every call and collapses the reusable prefix to the system block.
-  Evicting in blocks, down to a low-water mark, is the first strategy queued against
-  the baseline.
+  changes rarely belongs *above* an append-only history, not below it.
+- **Eviction cuts in blocks, not one turn at a time** (`--evict block`, default
+  `turn`). Dropping the minimum rewrites the history from its front on every call
+  once the window is full, and the reusable prefix collapses to the system block —
+  measured at 3–4% from the first eviction onwards, and it never recovers. Cutting
+  down to a low-water mark (`--low-water`, 0.5) instead pays for that once every
+  four or five turns and holds still in between: mean reuse over the same 20 turns
+  goes from 33% to 67%. It costs 21% of the history, which is not free and is not
+  yet known to be harmless. Numbers in
+  [`RECORD/2026-08-27.prefix-reuse-and-block-eviction.md`](RECORD/2026-08-27.prefix-reuse-and-block-eviction.md).
+- **What leaves the window stays out.** Eviction is monotone: `Context` keeps a floor
+  that only moves forward. Recomputing the retained window from scratch each turn
+  lets a dropped turn return the moment a shorter prompt leaves room, which moves the
+  front of the history and is the one thing a prefix cache cannot survive — and it
+  makes block eviction impossible, because the next fill walks straight back past the
+  cut.
 - **An unknown window is not an unlimited one**: `--context-limit 0` means unknown, so
   nothing is budgeted and nothing is evicted, and the panel says so rather than
   drawing a bar against nothing.
@@ -116,7 +169,7 @@ the precision given up.
 
 ### Still ahead
 
-- **Hierarchical compaction**: rolling summary of older turns (generated by the local model itself in the background, without blocking the main loop) + full text only for the last 1–2 turns. Not built: it is a strategy, and a strategy has to beat a recorded baseline.
+- **Hierarchical compaction**: a closed task is replaced by its summary, and full text is kept only for the live one. The boundary is what a task gives the context manager; the token threshold stays as the fallback for a task that overflows alone. Not built: it is a strategy, and a strategy has to beat a recorded baseline — now with an instrument and a table to beat it in. The summary is deterministic first (the plan plus the evidence: diff, commands, exit codes), because a 7B's prose would be entering the write-once region every later turn is built on.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Needs tools and the sandbox first.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Waits on tools existing at all.
 
@@ -149,7 +202,7 @@ The model never executes anything directly — it only emits a structured reques
 
 - Use the **VSCode Chat API** (`vscode.chat.createChatParticipant`) — requires a lightweight TypeScript extension.
 - The TS extension acts as a bridge: renders the UI (messages, plan approval) and talks to the Rust binary (`agent-core --serve`) over stdio or a socket, using JSON-lines or JSON-RPC (reusable for the CLI too).
-- The `plan` mode maps well to this UX: an editable plan before execution (similar to how Copilot shows changes before applying them); `run` as execution with streaming of which tool is being used.
+- The task's confirmation step maps well to this UX: an editable plan before execution (similar to how Copilot shows changes before applying them), then execution with streaming of which tool is being used, and a closed task collapsing to its summary in the thread.
 
 ## Debug web client (agent protocol)
 
@@ -182,8 +235,12 @@ Live channel — `WS /ws`:
 
 | Direction | Messages |
 | --- | --- |
-| client → server | `prompt`, `approve_plan`, `edit_plan`, `cancel`, `set_mode` |
-| server → client | `token`, `plan`, `tool_call`, `tool_result`, `context_snapshot`, `usage`, `error`, `turn_end` |
+| client → server | `prompt`, `approve_plan`, `edit_plan`, `close_task`, `reopen_task`, `cancel` |
+| server → client | `token`, `task_proposed`, `task_approved`, `task_closed`, `tool_call`, `tool_result`, `context_snapshot`, `usage`, `error`, `turn_end` |
+
+Closing a task is an event, not a mutation: reopening one is folding the log
+differently, never undoing a deletion. Freezing v1 of these enums waits on the task
+lifecycle for that reason — it is the last cheap moment to add it.
 
 Read side — plain GETs, browsable and curl-able:
 
@@ -256,8 +313,11 @@ Chat and session list are table stakes. The ones that justify building this at a
 
 1. **Token budget per turn** — stacked bar of system/tools · code context · history · reserve, with
    the underlying text of each block on hover.
-2. **Raw prompt viewer with a diff against the previous turn** — shows how much of the stable prefix
-   survived, i.e. the real prompt-cache / KV-reuse hit rate.
+2. **Prefix reuse against the previous turn** — how much of the stable prefix survived,
+   i.e. the prompt-cache / KV-reuse hit rate, as a share of the prompt. Built. The
+   span-level diff of the two prompt strings is not, and is a separate thing: the
+   number says how much was reused, a diff would say what changed. `similar` is still
+   right for the second and was the wrong tool for the first, which is a prefix.
 3. **Tool call timeline** — arguments, sandbox verdict (allowed/denied and *which* rule matched),
    duration, and result size before/after pruning.
 4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
@@ -271,7 +331,9 @@ comparing context strategies across runs without re-running inference.
 `luu chat --script <file>` runs a file of prompts, one per line, against one shared history. That
 is what makes a multi-turn run repeatable: a baseline typed into a browser cannot be re-run, and
 two recordings are only comparable when the same task list produced both. The record's header
-carries the model, the window and the counter for exactly that reason. Note that the **mock backend
+carries the model, the window, the counter and the eviction policy for exactly that reason.
+`scripts/tasks/steady-state.txt` is twenty turns of uniform size, long enough to show what a
+policy does *after* the first eviction, which is where they stop agreeing. Note that the **mock backend
 cannot validate a context strategy** — it does not read the context, so every strategy "wins"
 against it; baselines need a real model.
 
@@ -291,6 +353,12 @@ lives in memory for the life of the process.
   JSON-lines stream is the account of what happened, and `api::SessionView` already
   folds it; a store that accumulates state the events cannot regenerate is a second
   truth, which is how the static mirror and the live server start disagreeing.
+- **Forgetting is an event too.** Eviction — and later compaction — is recorded, not
+  just applied: a recording has to be able to say which turns left the window, when,
+  and under which policy. Today the eviction floor is in-memory and a recording can
+  only show the history bucket shrinking, which is the symptom without the cause.
+  Decided, not built; the shape is OpenHands' condensation tombstones, read in
+  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md).
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums
@@ -298,8 +366,8 @@ lives in memory for the life of the process.
 
 ## Suggested work order
 
-1. `agent-core`: base types (`Mode`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *`Context` and the Ollama/mock backends exist; `Mode`, `Tool` and `SandboxPolicy` do not.*
-2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget and whole-turn eviction exist and are measured; compaction and relevance selection are still ahead, and each has to beat a recorded baseline.*
+1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *`Context` and the Ollama/mock backends exist; `Task`, `Tool` and `SandboxPolicy` do not.*
+2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction and block eviction exist, and prefix reuse is measured per turn. Compaction and relevance selection are still ahead, and each has to beat the recorded baseline.*
 3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
    measure step 2. *Done.*
 4. Application-level path/command sandbox.
@@ -314,7 +382,7 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Finalize the remaining base types for `agent-core` (`Mode`, `Tool`, `SandboxPolicy`).
+- Finalize the remaining base types for `agent-core` (`Task`, `Tool`, `SandboxPolicy`).
 - Design the concrete GBNF grammar to force valid tool calls with the target model (Qwen2.5-Coder).
 - Define the initial tool set: `read_file`, `edit_file`, `list_dir`, `run_command`, etc.
 - Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format).

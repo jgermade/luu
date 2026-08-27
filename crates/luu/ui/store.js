@@ -23,6 +23,7 @@ export const state = $reactive({
   messages: [],           // { id, role, text, reason, usage }
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
+  prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
   error: null,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
@@ -118,6 +119,15 @@ function onProtocol(message) {
 
 function onTrace(message) {
   if (message.type === "prompt") state.prompt = message.text
+  // Absent on the first turn of a session: there is no previous prompt, so the
+  // panel says so rather than drawing 0%.
+  if (message.type === "prefix_reuse") {
+    state.prefix = {
+      shared_bytes: message.shared_bytes,
+      shared_tokens: message.shared_tokens,
+      prompt_tokens: message.prompt_tokens,
+    }
+  }
   if (message.type === "budget") {
     // Arrives before the call now, so a cancelled turn has one too. The
     // backend's own count lands later, on `ended`.
@@ -216,6 +226,7 @@ function reset() {
   state.messages = []
   state.budget = null
   state.prompt = ""
+  state.prefix = null
   state.error = null
   state.turn = null
   pending = ""
@@ -269,6 +280,7 @@ export function send(text) {
   socket.send(JSON.stringify({ type: "prompt", text }))
   state.prompt = ""
   state.budget = null
+  state.prefix = null
 }
 
 export function cancel() {

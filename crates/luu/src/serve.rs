@@ -14,7 +14,7 @@ use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::run_turn;
 
-use crate::session::{Event, Recorder, SYSTEM, now_ms, rendered};
+use crate::session::{Event, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -44,6 +44,9 @@ struct Session {
     /// The conversation so far. In memory: enough to measure a context
     /// strategy, and lost on restart until sessions are persisted.
     context: AgentContext,
+    /// Beside the context, because what it measures is a property of two
+    /// consecutive prompts of *this* session.
+    prefix: PrefixTracker,
 }
 
 /// The id the live session is served under. There is one until sessions are
@@ -109,7 +112,7 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
                 &path,
                 backend.name(),
                 &model,
-                budget.limit,
+                budget,
                 counter.id(),
                 started_at,
             )
@@ -128,6 +131,7 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
             current: None,
             cancel: None,
             context: AgentContext::new(SYSTEM),
+            prefix: PrefixTracker::default(),
         }),
         events: broadcast::channel(1024).0,
         recorder,
@@ -290,7 +294,7 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
 }
 
 async fn start_turn(app: Arc<App>, prompt: String) {
-    let (turn, cancel_rx, selection) = {
+    let (turn, cancel_rx, selection, prompt_sent, reuse) = {
         let mut session = app.session.lock().await;
         if session.current.is_some() {
             // One turn at a time until sessions exist.
@@ -307,7 +311,13 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let selection = session
             .context
             .select(&prompt, &[], app.budget, app.counter.as_ref());
-        (turn, rx, selection)
+        // Measured under the same lock, so two turns cannot interleave and
+        // measure themselves against each other's prompt.
+        let prompt_sent = rendered(&selection.messages);
+        let reuse = session
+            .prefix
+            .measure(turn, &prompt_sent, app.counter.as_ref());
+        (turn, rx, selection, prompt_sent, reuse)
     };
 
     app.publish(Event::Protocol(ServerMessage::TurnStarted {
@@ -317,9 +327,12 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     .await;
     app.publish(Event::Trace(TraceMessage::Prompt {
         turn,
-        text: rendered(&selection.messages),
+        text: prompt_sent,
     }))
     .await;
+    if let Some(reuse) = reuse {
+        app.publish(Event::Trace(reuse)).await;
+    }
     // Published before the call: this is what we decided to send. A turn that
     // gets cancelled has a budget too, which the old after-the-fact version
     // could not report.
