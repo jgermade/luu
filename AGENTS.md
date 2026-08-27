@@ -200,6 +200,12 @@ done
 cargo run --release --bin luu -- serve --record ~/records/live.jsonl   # and look at them
 ```
 
+**The protocol for that run — the commands, what a right answer to each of the
+last five turns contains, how to tell "the summary dropped it" from "the model
+ignored it", and the sampling precondition — is
+[`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
+Read it before running, and append what it says to append.**
+
 What to look at, in order: **the last five turns of the grounded pair**, where
 the same four questions are answered from a full history in one run and from
 three summaries in the other — that comparison is the only thing that says
