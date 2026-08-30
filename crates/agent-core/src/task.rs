@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::{Counter, TokenCounter};
+use crate::context::{Counter, Fragment, TokenCounter};
 use crate::sandbox::{Access, Sandbox};
 use crate::tools::{ToolCall, ToolStep};
 
@@ -27,6 +27,16 @@ pub type TaskId = u64;
 /// is not a strategy — it is what stops one long task quietly becoming the
 /// prompt.
 const MAX_EVIDENCE_LINES: usize = 12;
+
+/// How many tokens of quoted source one summary may carry.
+///
+/// The same argument as [`MAX_EVIDENCE_LINES`], applied to the other half of
+/// the summary: a quote is paid for on every call from the close to the end of
+/// the session, so what it costs must be a function of this number and not of
+/// how much the task was handed. The value is a starting point and wants the
+/// grounded probe to choose it — see
+/// `RECORD/2026-08-30.what-a-summary-should-carry.md`.
+const MAX_QUOTED_TOKENS: u32 = 1024;
 
 /// What the agent proposes to do, and what the user approves.
 ///
@@ -191,11 +201,18 @@ impl Task {
 
     /// Closes the task and writes its summary, once.
     ///
-    /// `steps` is everything the task's turns did, in order, and `turns` is how
-    /// many turns it took. Both are facts about what happened; nothing the model
-    /// said about what happened is used.
-    pub fn close(&mut self, steps: &[&ToolStep], turns: usize, counter: &dyn TokenCounter) {
-        let text = summary_text(&self.objective, &self.plan, steps, turns);
+    /// `steps` is everything the task's turns did and `shown` is every fragment
+    /// they were handed, both in order, and `turns` is how many turns it took.
+    /// All three are facts about what happened; nothing the model said about
+    /// what happened is used.
+    pub fn close(
+        &mut self,
+        steps: &[&ToolStep],
+        shown: &[&Fragment],
+        turns: usize,
+        counter: &dyn TokenCounter,
+    ) {
+        let text = summary_text(&self.objective, &self.plan, steps, shown, turns, counter);
         self.summary = Some(Summary {
             tokens: counter.count(&text),
             counted_by: counter.id(),
@@ -213,11 +230,23 @@ impl Task {
     }
 }
 
-/// The deterministic summary: the approved plan, then what the tools actually
-/// reported. Read `RECORD/2026-08-30.tasks-in-code.md` before adding prose to
-/// it — it lands in the write-once region, where being wrong is unrecoverable
-/// for the rest of the session.
-fn summary_text(objective: &str, plan: &Plan, steps: &[&ToolStep], turns: usize) -> String {
+/// The deterministic summary: the approved plan, what the task was shown, and
+/// what the tools actually reported. Read `RECORD/2026-08-30.tasks-in-code.md`
+/// before adding prose to it — it lands in the write-once region, where being
+/// wrong is unrecoverable for the rest of the session.
+///
+/// A fragment is quoted from the file's own bytes for that reason: it cannot be
+/// a hallucination, and it is the thing the grounded probe showed the fold
+/// losing — `RECORD/2026-08-30.the-fold-probe-run.md` measured it and
+/// `RECORD/2026-08-30.what-a-summary-should-carry.md` argues the fix.
+fn summary_text(
+    objective: &str,
+    plan: &Plan,
+    steps: &[&ToolStep],
+    shown: &[&Fragment],
+    turns: usize,
+    counter: &dyn TokenCounter,
+) -> String {
     let mut text = format!("[task closed] {objective}\n");
     if !plan.steps.is_empty() {
         text.push_str("approved plan:\n");
@@ -226,22 +255,83 @@ fn summary_text(objective: &str, plan: &Plan, steps: &[&ToolStep], turns: usize)
         }
     }
 
+    let shown = quoted(shown, counter);
+    if !shown.is_empty() {
+        text.push_str(&format!("shown, from {turns} turn(s):\n"));
+        for (fragment, tokens) in &shown {
+            let lines = fragment.text.lines().count();
+            text.push_str(&match tokens {
+                Some(tokens) => format!("  {} ({lines} line(s), {tokens} tokens)\n", fragment.path),
+                None => format!("  {} — over the cap, not kept\n", fragment.path),
+            });
+        }
+    }
+
     let evidence = evidence(steps);
-    match evidence.is_empty() {
+    match (evidence.is_empty(), shown.is_empty()) {
         // Said out loud rather than left off: "this task ran no tools" is a
         // fact about it, and a summary that simply stops reads like one that
         // was cut short.
-        true => text.push_str(&format!(
+        (true, true) => text.push_str(&format!(
             "no tools ran; {turns} turn(s) folded, their text not kept\n"
         )),
-        false => {
+        // The same fact, without the half of that sentence which is no longer
+        // true. A model reading "their text not kept" answers the question that
+        // sentence asks — the probe's turn 18 refused rather than answered — so
+        // it must not be said over a quote that is right there.
+        (true, false) => text.push_str("no tools ran; the turns' own text is not kept\n"),
+        (false, _) => {
             text.push_str(&format!("evidence, from {turns} turn(s):\n"));
             for line in &evidence {
                 text.push_str(&format!("  {line}\n"));
             }
         }
     }
+
+    for (fragment, tokens) in &shown {
+        if tokens.is_some() {
+            text.push_str(&format!("--- {}\n{}", fragment.path, fragment.text));
+            if !fragment.text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str("---\n");
+        }
+    }
     text
+}
+
+/// The distinct fragments the task was handed, in the order it saw them, each
+/// with its token count — or `None` for one the cap left out.
+///
+/// Newest first while choosing, because the last thing a task was shown is the
+/// likeliest to be what a later turn asks about; then rendered in the order
+/// they were shown, because that is the order they were read in.
+///
+/// Whole or not at all: half a file quoted under a heading naming the whole one
+/// is a summary nobody can account for, which is the same reason
+/// [`crate::tools::MAX_OUTPUT_BYTES`] says so in the text when it cuts.
+fn quoted<'a>(
+    shown: &[&'a Fragment],
+    counter: &dyn TokenCounter,
+) -> Vec<(&'a Fragment, Option<u32>)> {
+    let mut distinct: Vec<&Fragment> = Vec::new();
+    for fragment in shown {
+        if !distinct.iter().any(|seen| seen.path == fragment.path) {
+            distinct.push(fragment);
+        }
+    }
+
+    let mut kept: Vec<(&Fragment, Option<u32>)> =
+        distinct.iter().map(|fragment| (*fragment, None)).collect();
+    let mut budget = MAX_QUOTED_TOKENS;
+    for entry in kept.iter_mut().rev() {
+        let tokens = counter.count(&entry.0.text);
+        if tokens <= budget {
+            budget -= tokens;
+            entry.1 = Some(tokens);
+        }
+    }
+    kept
 }
 
 /// The distinct actions a task took, in order, each with what it reported.
@@ -347,7 +437,12 @@ mod tests {
                 Some("cargo exited with 1"),
             ),
         ];
-        task.close(&steps.iter().collect::<Vec<_>>(), 3, &ApproximateCounter);
+        task.close(
+            &steps.iter().collect::<Vec<_>>(),
+            &[],
+            3,
+            &ApproximateCounter,
+        );
 
         let text = &task.summary.as_ref().unwrap().text;
         assert!(text.contains("add a --dry-run flag"));
@@ -366,7 +461,12 @@ mod tests {
         let steps: Vec<ToolStep> = (0..8)
             .map(|_| step("list_dir", serde_json::json!({"path": "."}), None))
             .collect();
-        task.close(&steps.iter().collect::<Vec<_>>(), 8, &ApproximateCounter);
+        task.close(
+            &steps.iter().collect::<Vec<_>>(),
+            &[],
+            8,
+            &ApproximateCounter,
+        );
 
         let text = &task.summary.as_ref().unwrap().text;
         assert!(text.contains("list_dir . — ok (x8)"), "{text}");
@@ -380,16 +480,104 @@ mod tests {
     #[test]
     fn a_task_that_ran_no_tools_says_so_rather_than_stopping() {
         let mut task = Task::new(1, "explain the design", Plan::default());
-        task.close(&[], 4, &ApproximateCounter);
+        task.close(&[], &[], 4, &ApproximateCounter);
         let text = &task.summary.as_ref().unwrap().text;
         assert!(text.contains("no tools ran"), "{text}");
         assert!(text.contains("4 turn(s) folded"), "{text}");
     }
 
+    fn fragment(path: &str, text: &str) -> Fragment {
+        Fragment {
+            path: path.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn what_the_task_was_shown_is_quoted_from_the_file_and_not_described() {
+        let mut task = Task::new(
+            3,
+            "work out what the sandbox policy grants",
+            Plan::default(),
+        );
+        let shown = [fragment(
+            "luu.toml:1-3",
+            "[sandbox]\ncommands = [\"cargo\", \"rg\"]\n",
+        )];
+        task.close(
+            &[],
+            &shown.iter().collect::<Vec<_>>(),
+            5,
+            &ApproximateCounter,
+        );
+
+        let text = &task.summary.as_ref().unwrap().text;
+        assert!(text.contains("shown, from 5 turn(s):"), "{text}");
+        assert!(text.contains("luu.toml:1-3 (2 line(s),"), "{text}");
+        assert!(
+            text.contains("commands = [\"cargo\", \"rg\"]"),
+            "the file's own bytes, which cannot be a hallucination: {text}",
+        );
+        assert!(
+            !text.contains("their text not kept"),
+            "the half of that sentence which the quote makes false is what made \
+             the probe's turn 18 refuse a question it could answer: {text}",
+        );
+    }
+
+    #[test]
+    fn the_same_fragment_shown_twice_is_quoted_once() {
+        let mut task = Task::new(1, "read it twice", Plan::default());
+        let twice = [
+            fragment("luu.toml:1-2", "[sandbox]\npaths = []\n"),
+            fragment("luu.toml:1-2", "[sandbox]\npaths = []\n"),
+        ];
+        task.close(
+            &[],
+            &twice.iter().collect::<Vec<_>>(),
+            2,
+            &ApproximateCounter,
+        );
+
+        let text = &task.summary.as_ref().unwrap().text;
+        assert_eq!(
+            text.matches("[sandbox]").count(),
+            1,
+            "twice in the prefix is twice paid for on every later call: {text}",
+        );
+    }
+
+    #[test]
+    fn over_the_cap_the_newest_is_kept_and_the_rest_are_named() {
+        let mut task = Task::new(1, "read a lot", Plan::default());
+        let big = "a word ".repeat(MAX_QUOTED_TOKENS as usize);
+        let shown = [
+            fragment("old.rs", &big),
+            fragment("new.rs", "the last thing it was shown\n"),
+        ];
+        task.close(
+            &[],
+            &shown.iter().collect::<Vec<_>>(),
+            4,
+            &ApproximateCounter,
+        );
+
+        let text = &task.summary.as_ref().unwrap().text;
+        assert!(
+            text.contains("old.rs — over the cap, not kept"),
+            "what was dropped is named rather than silently absent: {text}",
+        );
+        assert!(!text.contains("--- old.rs"), "{text}");
+        assert!(
+            text.contains("the last thing it was shown"),
+            "the newest is the likeliest to be asked about: {text}",
+        );
+    }
+
     #[test]
     fn reopening_drops_the_summary_without_recovering_anything() {
         let mut task = Task::new(1, "x", Plan::default());
-        task.close(&[], 1, &ApproximateCounter);
+        task.close(&[], &[], 1, &ApproximateCounter);
         task.reopen();
         assert!(task.is_open());
         assert!(

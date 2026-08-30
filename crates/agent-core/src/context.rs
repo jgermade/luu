@@ -367,19 +367,29 @@ impl Context {
 
     /// Closes it: from the next selection on, its turns render as one summary.
     ///
-    /// The summary is written from the task's own tool steps, so it is evidence
-    /// rather than the model's account of itself. Returns the summary text, or
-    /// `None` if there is no such task.
+    /// The summary is written from the task's own tool steps and the fragments
+    /// its turns were handed, so it is evidence rather than the model's account
+    /// of itself. Returns the summary text, or `None` if there is no such task.
     pub fn close_task(&mut self, id: TaskId, counter: &dyn TokenCounter) -> Option<String> {
+        let mine = |turn: &&Turn| turn.task == Some(id);
         let steps: Vec<&ToolStep> = self
             .turns
             .iter()
-            .filter(|turn| turn.task == Some(id))
+            .filter(mine)
             .flat_map(|turn| turn.steps.iter())
             .collect();
-        let turns = self.turns.iter().filter(|t| t.task == Some(id)).count();
+        // The field beside the one above, and the reason the fold lost answers
+        // until now: what a task read was in hand at the close and was never
+        // asked for. See `RECORD/2026-08-30.the-fold-probe-run.md`.
+        let shown: Vec<&Fragment> = self
+            .turns
+            .iter()
+            .filter(mine)
+            .flat_map(|turn| turn.code_context.iter())
+            .collect();
+        let turns = self.turns.iter().filter(mine).count();
         let task = self.tasks.iter_mut().find(|task| task.id == id)?;
-        task.close(&steps, turns, counter);
+        task.close(&steps, &shown, turns, counter);
         task.summary.as_ref().map(|summary| summary.text.clone())
     }
 
@@ -910,6 +920,46 @@ mod tests {
             );
         }
         (context, task)
+    }
+
+    #[test]
+    fn the_fold_keeps_what_the_task_was_shown() {
+        // The probe's turns 17 and 18: a task grounded by a fragment, closed,
+        // and asked about afterwards. Before this, the summary said "no tools
+        // ran" and the file was gone. See
+        // `RECORD/2026-08-30.the-fold-probe-run.md`.
+        let counter = WordCounter::default();
+        let mut context = Context::new("system prompt here");
+        let task = context.propose_task("work out what the policy grants", Plan::default());
+        context.approve_task(task);
+        context.push_turn(
+            "which programs does this policy allow?",
+            "cargo, rustc, git, rg, ls",
+            vec![Fragment {
+                path: "luu.toml:1-3".into(),
+                text: "[sandbox]\ncommands = [\"cargo\", \"rg\"]\n".into(),
+            }],
+            &counter,
+        );
+        let summary = context.close_task(task, &counter).unwrap();
+
+        assert!(summary.contains("luu.toml:1-3"), "{summary}");
+        assert!(
+            summary.contains("commands = [\"cargo\", \"rg\"]"),
+            "the fragment was in hand at the close: {summary}",
+        );
+
+        let selection = context.select(
+            "which programs does the policy allow?",
+            &[],
+            Budget::new(0, 0, Eviction::Turn),
+            &counter,
+        );
+        assert!(
+            selection.messages[2].content.contains("cargo"),
+            "what the folded task read is still in the prompt: {:?}",
+            selection.messages[2].content,
+        );
     }
 
     #[test]
