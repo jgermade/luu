@@ -65,6 +65,10 @@ cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
 {"name":"read_file","arguments":{"path":"AGENTS.md","max_lines":3}}
 ```' --mock-reply 'It is the shared instruction file.'
 
+# a real file fused into the turn, read through the sandbox
+cargo run --bin luu -- chat "which two commitments does this open with?" \
+  --fragment crates/agent-core/src/context.rs:1-15
+
 # a repeatable multi-turn run, which is the only kind worth comparing
 cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
   --context-limit 8192 --tokenizer path/to/tokenizer.json --record before.jsonl
@@ -76,6 +80,14 @@ cargo run --bin luu -- chat --script scripts/tasks/steady-state-tasks.txt \
 # the same run under the other eviction policy — one flag apart, so comparable
 cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
   --context-limit 512 --evict block --low-water 0.5 --record after.jsonl
+
+# the grounded pair: twenty prompts that are about this repository, with files
+# attached, one grouped into tasks. The last five questions attach nothing and
+# ask the first fifteen again — in the tasks run those have been folded.
+for script in grounded grounded-tasks; do
+  cargo run --bin luu -- chat --script scripts/tasks/$script.txt \
+    --context-limit 8192 --reserve 512 --record $script.jsonl
+done
 
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
@@ -92,9 +104,13 @@ longer sees.
 
 A script is prompts one per line, `#` comments, and `##` directives for the task
 lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## command:`
-for its plan, and `## close`. **The written plan is the approval**: every file it
-names has to be reachable in the resolved sandbox and every command allowed by
-it, or the run stops before the first turn. Closing folds the task's turns into a
+for its plan, and `## close`. `## fragment: <path>[:start-end]` is the other
+directive, and it is **not** `## file:`: the plan's files are what the task is
+allowed to touch, a fragment is text put into the next prompt.
+
+**The written plan is the approval**: every file it names has to be reachable in
+the resolved sandbox and every command allowed by it, or the run stops before the
+first turn. Closing folds the task's turns into a
 deterministic summary (the plan, plus what the tool results reported), which is
 what the `summaries` bucket in the budget panel plots. A directive it does not
 recognise is an error, never a prompt.
@@ -105,6 +121,17 @@ The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
 it for one run. `--max-tool-steps` caps the tool calls one turn may make and
 `--no-tools` runs without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
+
+`--fragment PATH[:START-END]` on `chat` fuses a real file into the next prompt —
+repeatable, 1-based inclusive lines, read **through the sandbox**, and attached
+to one turn only. Which turns a file belongs in is what relevance selection
+exists to decide later, and attaching it to all of them would answer that now,
+wrongly, and pay for it every turn. A path the sandbox refuses is an error, not
+a warning: a run that quietly dropped its grounding answers out of the model's
+training and looks like it worked. This is what fills the `code` bucket, which
+was zero in every recording before the surface existed — and why every script in
+`scripts/tasks/` except the grounded pair is ungrounded Q&A that a 7B will answer
+from training. See `RECORD/2026-08-27.grounded-fold-probe.md`.
 
 `--context-limit` is the model's window (`0` means unknown: no budget, no
 eviction), `--reserve` is what is held back for the answer, `--evict` is how the

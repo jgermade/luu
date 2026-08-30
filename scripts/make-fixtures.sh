@@ -59,6 +59,23 @@ done
   --mock-reply 'AGENTS.md is the shared instruction file. The second path is outside the sandbox, so I cannot read it.' \
   --record "$out/tool-calls.jsonl" >/dev/null
 
+# One task, start to finish. The one recording where the history is rewritten
+# rather than only evicted: the plan and the turns it ran are replaced by one
+# summary at the close, and the budget panel shows what that cost — `summaries`
+# against `history`, before and after.
+"$luu" chat --script "$(dirname "$0")/tasks/one-task.txt" \
+  --mock-delay-ms 20 --context-limit 8192 \
+  --sandbox "$(dirname "$0")/../luu.toml" \
+  --record "$out/one-task.jsonl" >/dev/null
+
+# A real file fused into a turn — the first recording in which the `code` bucket
+# is not zero, which until the fragment surface existed it always was.
+"$luu" chat "which two commitments does this file open with?" \
+  --fragment crates/agent-core/src/context.rs:1-15 \
+  --mock-delay-ms 20 --context-limit 8192 \
+  --sandbox "$(dirname "$0")/../luu.toml" \
+  --record "$out/grounded-turn.jsonl" >/dev/null
+
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
   --record "$out/backend-failure.jsonl" >/dev/null 2>&1 || true
@@ -76,6 +93,8 @@ done
   "$out/eviction-block.jsonl" \
   "$out/eviction-tasks.jsonl" \
   "$out/tool-calls.jsonl" \
+  "$out/one-task.jsonl" \
+  "$out/grounded-turn.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \

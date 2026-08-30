@@ -1,0 +1,55 @@
+# The twin of `grounded.txt`: the same twenty prompts and the same files, in
+# the same order, grouped into four tasks that close every five turns.
+#
+# The fourth group attaches nothing and asks again about the first three, which
+# by then have been folded into their summaries. That is the whole experiment:
+# `diff` these two scripts with the directives stripped and it is empty, so the
+# only difference between the two recordings is the fold.
+#
+# `## fragment:` comes before `## task:` because a fragment is grounding for the
+# next turn and a plan is what the task is allowed to touch — two different
+# things that happen to name the same file here. The plan's `## file:` lines are
+# checked against the sandbox before the first turn runs; the fragment is read
+# through it at the point it appears.
+
+## fragment: crates/agent-core/src/context.rs:1-15
+## task: work out what the context module commits to
+## step: read the head of the module and answer from it
+## file: crates/agent-core/src/context.rs
+which two commitments does this file open with?
+where does selected code get fused, and why not above the system block?
+what does "decide, then render" forbid doing to the prompt string?
+which record does it point at for the reasoning?
+name one change that would break byte-identical prefix reuse
+## close
+
+## fragment: crates/agent-core/src/task.rs:1-18
+## task: work out what a task is in this codebase
+## step: read the head of the module and answer from it
+## file: crates/agent-core/src/task.rs
+what three jobs does one task boundary do?
+what does "closing is an event, not a mutation" mean here?
+what does reopening a closed task do to its turns?
+which two records does it cite, and for what?
+is a session a sequence of tasks, or a mode the agent is in?
+## close
+
+## fragment: luu.toml:1-26
+## task: work out what the sandbox policy grants
+## step: read the policy and answer from it
+## file: luu.toml
+why is there no deny list in this policy?
+what does enforcement = "kernel" do where Landlock is missing?
+why are commands program names rather than shell strings?
+which programs does this policy allow?
+what happens to network access, and how would a verdict report it?
+## close
+
+## task: check what is left of the first three
+## step: answer from the history alone, with nothing attached
+without looking at any file again: what were the two commitments the context module opens with?
+what three jobs does one task boundary do?
+which programs does the sandbox policy allow?
+what does enforcement = "kernel" do when Landlock is missing?
+which of your last four answers came from what you were shown, and which did you fill in?
+## close

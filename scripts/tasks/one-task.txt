@@ -1,0 +1,14 @@
+# One task, start to finish: approved, two turns, closed.
+#
+# The smallest script that exercises the whole lifecycle, and the one the
+# fixtures record so the debug UI has a session where the history is rewritten
+# rather than only evicted. The plan is written down here, which is what makes
+# approving it a check rather than a question — see
+# RECORD/2026-08-30.tasks-in-code.md.
+## task: find out what AGENTS.md is for
+## step: read it
+## step: say what it is for
+## file: AGENTS.md
+what is in AGENTS.md?
+and what does it say about the sandbox?
+## close

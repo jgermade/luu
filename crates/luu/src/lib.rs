@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama};
-use agent_core::context::{Budget, Context as AgentContext, Eviction};
+use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
+use agent_core::fragment;
 use agent_core::protocol::ServerMessage;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
 use agent_core::task::Plan;
@@ -139,6 +140,14 @@ enum Command {
         /// multi-turn baseline gets recorded the same way twice.
         #[arg(long)]
         script: Option<std::path::PathBuf>,
+
+        /// Fuse a file into the next prompt, as `PATH` or `PATH:START-END`.
+        /// Repeatable, read through the sandbox, and attached to **one** turn —
+        /// which turns a file belongs in is what relevance selection exists to
+        /// decide later. In a script, `## fragment: <path>` does the same thing
+        /// at the point it appears.
+        #[arg(long = "fragment", value_name = "PATH[:START-END]")]
+        fragments: Vec<String>,
 
         #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
         backend: BackendKind,
@@ -361,7 +370,12 @@ fn model_for(backend: &dyn Backend, model: String) -> String {
 #[derive(Debug, Clone, PartialEq)]
 enum Step {
     Prompt(String),
-    OpenTask { objective: String, plan: Plan },
+    /// `## fragment: <path>[:start-end]` — fuses a file into the next prompt.
+    Fragment(String),
+    OpenTask {
+        objective: String,
+        plan: Plan,
+    },
     CloseTask,
 }
 
@@ -371,9 +385,15 @@ enum Step {
 /// ## task: explain the context manager
 /// ## step: read the design
 /// ## file: loude-design.md
+/// ## fragment: loude-design.md:1-40
 /// what does the context manager do?
 /// ## close
 /// ```
+///
+/// `## file:` and `## fragment:` are not the same thing and the names have to
+/// stay apart: the first declares a path the *plan* is allowed to touch, the
+/// second puts that file's text into the next prompt. A plan may name a file it
+/// never reads, and a fragment may ground a turn no plan mentions.
 ///
 /// A directive it does not know is an error rather than a prompt: a typo that
 /// silently becomes a question would put a line of `## fille: x` into a
@@ -427,6 +447,14 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
                     _ => plan.commands.push(value.to_string()),
                 }
             }
+            // Attached to the next prompt, wherever it appears — inside a task
+            // or not. It is grounding for one turn, not part of the plan.
+            "fragment" => {
+                if value.is_empty() {
+                    anyhow::bail!("line {number}: `## fragment:` needs a path");
+                }
+                steps.push(Step::Fragment(value.to_string()));
+            }
             "close" => {
                 if !open {
                     anyhow::bail!("line {number}: `## close` with no task open");
@@ -436,7 +464,8 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             }
             _ => anyhow::bail!(
                 "line {number}: `{line}` is not a directive \
-                 (`## task:`, `## step:`, `## file:`, `## command:`, `## close`)"
+                 (`## task:`, `## step:`, `## file:`, `## command:`, \
+                 `## fragment:`, `## close`)"
             ),
         }
     }
@@ -445,6 +474,21 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
         anyhow::bail!("no prompts in it");
     }
     Ok(steps)
+}
+
+/// Reads one `--fragment` or `## fragment:`, through the sandbox.
+///
+/// The user typed the path, not the model, so this is not the rule about model
+/// output reaching the filesystem. It is the other one: a path `read_file`
+/// would refuse must not become readable by spelling it in a flag.
+///
+/// A denial is an error rather than a warning. A run that quietly dropped the
+/// file it was told to ground itself with would answer out of the model's
+/// training and look like it worked, which is the failure this surface exists
+/// to remove.
+fn load_fragment(sandbox: &Sandbox, spec: &str) -> Result<Fragment> {
+    fragment::load(sandbox, &fragment::Spec::parse(spec))
+        .with_context(|| format!("fragment {spec}"))
 }
 
 pub async fn run() -> Result<()> {
@@ -537,6 +581,7 @@ pub async fn run() -> Result<()> {
         prompt,
         sandbox_args,
         script,
+        fragments,
         backend,
         model,
         ollama_url,
@@ -607,6 +652,15 @@ pub async fn run() -> Result<()> {
         > 1;
     let mut turn: agent_core::protocol::TurnId = 0;
 
+    // Waiting to be fused into the next prompt, then gone: a fragment belongs
+    // to one turn and is stored with it. The flags are read before the first
+    // step, so `--fragment` and a one-shot prompt behave like a script that
+    // opens with `## fragment:`.
+    let mut attached: Vec<Fragment> = fragments
+        .iter()
+        .map(|spec| load_fragment(agency.sandbox.as_ref(), spec))
+        .collect::<Result<_>>()?;
+
     for step in &steps {
         // The task lifecycle happens between turns, and every part of it is
         // recorded: a run that cannot say what it was allowed to do is not a
@@ -655,12 +709,25 @@ pub async fn run() -> Result<()> {
                 }
                 continue;
             }
+            Step::Fragment(spec) => {
+                let fragment = load_fragment(agency.sandbox.as_ref(), spec)?;
+                println!(
+                    "\n== fragment {} — {} bytes into the next prompt",
+                    fragment.path,
+                    fragment.text.len()
+                );
+                attached.push(fragment);
+                continue;
+            }
             Step::Prompt(prompt) => prompt,
         };
 
         turn += 1;
         let task = context.live_task();
-        let selection = context.select(prompt, &[], budget, counter.as_ref());
+        // Taken, not copied: these fragments are this turn's, and the next turn
+        // starts with none.
+        let code = std::mem::take(&mut attached);
+        let selection = context.select(prompt, &code, budget, counter.as_ref());
 
         if let Some(recorder) = &recorder {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
@@ -807,7 +874,7 @@ pub async fn run() -> Result<()> {
             context.push_turn_with_steps(
                 prompt.clone(),
                 outcome.text,
-                vec![],
+                code,
                 outcome.steps,
                 counter.as_ref(),
             );
@@ -867,6 +934,29 @@ mod tests {
         assert_eq!(plan.files, ["loude-design.md"]);
         assert_eq!(plan.commands, ["cargo"]);
         assert_eq!(steps[2], Step::CloseTask);
+    }
+
+    #[test]
+    fn a_fragment_attaches_to_the_next_prompt_and_is_not_part_of_a_plan() {
+        let steps =
+            parse_script("## fragment: luu.toml:1-5\n## task: a\n## file: luu.toml\nq\n## close\n")
+                .unwrap();
+        assert_eq!(
+            steps[0],
+            Step::Fragment("luu.toml:1-5".into()),
+            "it stands on its own: grounding for a turn, not a path the plan declares",
+        );
+        let Step::OpenTask { plan, .. } = &steps[1] else {
+            panic!("expected the task after it, {steps:?}");
+        };
+        assert_eq!(plan.files, ["luu.toml"]);
+
+        assert!(
+            parse_script("## fragment:\nq\n")
+                .unwrap_err()
+                .to_string()
+                .contains("needs a path")
+        );
     }
 
     #[test]
