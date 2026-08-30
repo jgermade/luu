@@ -198,9 +198,18 @@ the panel shows the difference as its own labelled quantity. A stable difference
 template overhead; a moving one means the template changed, which is worth more than
 the precision given up.
 
+For the difference to mean that, the two sides have to count the same calls. A
+turn that uses a tool is several model calls — the first ends in a tool block,
+the next reads the result — and `usage.prompt_tokens` is summed over all of them.
+So the agent loop announces every call it makes before making it, and the trace
+measures the ones after the first into the same chain as the turns. Measure only
+the first and a 2-token template gap reads as 1 962, with nothing failing and
+nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.md`](RECORD/2026-08-27.the-m4-pro-run.md).
+
 ### Still ahead
 
 - **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold currently *loses* is the conversation itself: a task that ran no tools folds to its objective and a turn count. Model prose in the summary stays rejected until a 7B has been measured writing one — it would enter the write-once region every later turn is built on.
+- **Grounding a turn with a real file**: built. `--fragment PATH[:START-END]`, and `## fragment:` in a script, read a file **through the sandbox** and fuse it into one turn's user message — the `code` bucket, which existed from the start and until now was always zero. A path the sandbox would refuse to `read_file` is refused here too, and a denial is an error rather than a warning: a run that quietly dropped its grounding answers out of the model's training and looks like it worked, which is exactly what a real 7B did to twenty ungrounded turns. It is attached to one turn and then gone, because which turns a file belongs in is the next item's question and attaching it to all of them answers it wrongly, at every turn's expense. `scripts/tasks/grounded{,-tasks}.txt` are the pair this makes possible: the same twenty prompts, one grouped into tasks, with a last group that attaches nothing and asks the first fifteen again — the first corpus in which *does the fold lose what the task needed* is a question with an answer. The protocol for asking it is [`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
@@ -446,10 +455,14 @@ Chat and session list are table stakes. The ones that justify building this at a
 1. **Token budget per turn** — stacked bar of system/tools · code context · history · reserve, with
    the underlying text of each block on hover.
 2. **Prefix reuse against the previous turn** — how much of the stable prefix survived,
-   i.e. the prompt-cache / KV-reuse hit rate, as a share of the prompt. Built. The
-   span-level diff of the two prompt strings is not, and is a separate thing: the
-   number says how much was reused, a diff would say what changed. `similar` is still
-   right for the second and was the wrong tool for the first, which is a prefix.
+   i.e. the prompt-cache / KV-reuse hit rate, as a share of the prompt. Built, and
+   measured over *every* call rather than the first of each turn: a turn's tool
+   round trips are in the same chain, so the panel says how many calls the turn
+   made and what they sent instead of adding them to the template gap. The
+   span-level diff of the two prompt strings is not built, and is a separate thing:
+   the number says how much was reused, a diff would say what changed. `similar` is
+   still right for the second and was the wrong tool for the first, which is a
+   prefix.
 3. **Tool call timeline** — arguments, sandbox verdict (allowed/denied and *which*
    rule matched), **who enforced it**, duration, and result size. Built. A call is
    listed when it is made and filled in when it returns, so one that is running or
