@@ -111,7 +111,8 @@ allowed to touch, a fragment is text put into the next prompt.
 **The written plan is the approval**: every file it names has to be reachable in
 the resolved sandbox and every command allowed by it, or the run stops before the
 first turn. Closing folds the task's turns into a
-deterministic summary (the plan, plus what the tool results reported), which is
+deterministic summary (the plan, what the tool results reported, and the
+fragments the turns were shown, quoted verbatim under a token cap), which is
 what the `summaries` bucket in the budget panel plots. A directive it does not
 recognise is an error, never a prompt.
 
