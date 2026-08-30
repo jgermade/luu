@@ -147,7 +147,21 @@ port and asserts what `Ollama::stream` actually sends — the window included,
 which is the bug that shipped once — and `crates/luu/tests/serve_ws.rs` binds the
 server, drives the gate over `/ws`, and checks the read API agrees with what the
 socket said. Both run under a plain `cargo test --workspace` in under a second.
-See [`RECORD/2026-08-30.tests-that-run-it.md`](RECORD/2026-08-30.tests-that-run-it.md).
+
+The third one is the page, and it is the only thing here that wants node —
+`cargo build` still must not:
+
+```sh
+cp -r crates/luu/ui/. site/ && ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures
+cd tests/smoke && npm ci && npx playwright install chromium && npx playwright test
+```
+
+It loads the assembled site, replays a recording, clicks through every fixture
+in the picker, and fails on any console error other than the socket that cannot
+connect on a static host. It runs in the `web` job, after the site is assembled.
+It has already earned itself: it found a double replay that had been showing a
+ghost turn to every visitor of the deployed page. See
+[`RECORD/2026-08-30.tests-that-run-it.md`](RECORD/2026-08-30.tests-that-run-it.md).
 
 CI is `.github/workflows/build.yml` (fmt, clippy, tests, both binaries, the site) on
 every push and pull request. `release.yml` is manual: it takes `patch`/`minor`/`major`,

@@ -256,6 +256,8 @@ function onTrace(message) {
 }
 
 let everConnected = false
+// Set once the page has given up on a server and taken the recordings instead.
+let fellBack = false
 
 function open(path, onMessage, assign) {
   const ws = new WebSocket(url(path))
@@ -272,11 +274,26 @@ function open(path, onMessage, assign) {
     assign(null)
     state.status = "closed"
 
+    // A fallback already took the page into replay: there is no server to
+    // reconnect to and no second replay to start.
+    if (fellBack) return
+
     // No agent was ever there: this is a static deploy, not a server that
     // restarted. Offer the recorded sessions instead of retrying forever.
-    if (!everConnected && await loadFixtures()) {
-      socket = traceSocket = null
-      return replay(state.fixtures[0].file)
+    //
+    // Both sockets close at once on a static host, so the flag is set *before*
+    // the await and not after it. Without that, each of them started its own
+    // replay of the same file, and the loser left a turn it had already pushed
+    // at the top of the transcript — a user message with an assistant reply
+    // that never fills, on every visit to the deployed page.
+    if (!everConnected) {
+      fellBack = true
+      if (await loadFixtures()) {
+        socket = traceSocket = null
+        return replay(state.fixtures[0].file)
+      }
+      // Nothing to fall back to after all: a live server that went away.
+      fellBack = false
     }
 
     // The server restarting is the ordinary case during development.
@@ -292,6 +309,9 @@ function open(path, onMessage, assign) {
 /// agent behind it, and a recorded session is a truer fixture than a hand-made
 /// one, because it is a real run of the real protocol.
 async function replay(file) {
+  // Claimed before the reset, so a replay this one supersedes stops writing
+  // into the state we are about to fill: it re-reads this after every await.
+  const token = ++replayToken
   reset()
   isReplay = true
   state.status = "replay"
@@ -304,7 +324,6 @@ async function replay(file) {
   }
 
   const lines = (await response.text()).split("\n").filter(Boolean).map(JSON.parse)
-  const token = ++replayToken
 
   let previous = 0
   for (const line of lines) {
