@@ -10,6 +10,7 @@ pub mod context;
 pub mod protocol;
 pub mod record;
 pub mod sandbox;
+pub mod task;
 pub mod tools;
 pub mod trace;
 pub mod turn;

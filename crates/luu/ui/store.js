@@ -28,6 +28,9 @@ export const state = $reactive({
   // one that is still running (or was denied) is visible as itself rather than
   // as nothing happening. Per turn, like the budget beside it.
   tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms }]
+  // The session's tasks, in the order they were proposed. A proposed one is a
+  // gate: nothing runs behind it until someone answers.
+  tasks: [],              // [{ id, objective, plan, state, summary }]
   error: null,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
@@ -57,6 +60,39 @@ function replaceLast(patch) {
   if (!last) return null
   state.messages[index] = { ...last, ...patch }
   return last
+}
+
+function patchTask(id, patch) {
+  state.tasks = state.tasks.map(task => task.id === id ? { ...task, ...patch } : task)
+}
+
+/// The transcript as the context sees it: a closed task is one entry, its turns
+/// folded behind the summary the model will get from now on.
+///
+/// Collapsed by default and expandable, which is the pair that matters — the
+/// default view is what the prompt now contains, and opening one shows what it
+/// no longer does. A debug client that could only show one of those would be
+/// hiding the thing this whole design is about.
+export function foldTranscript(messages, tasks, expanded) {
+  const closed = new Map(tasks.filter(task => task.state === "closed").map(task => [task.id, task]))
+  const entries = []
+  const seen = new Set()
+
+  for (const message of messages) {
+    const task = closed.get(message.task)
+    if (!task) {
+      entries.push({ kind: "message", id: `m${message.id}`, message })
+      continue
+    }
+    if (!seen.has(task.id)) {
+      seen.add(task.id)
+      entries.push({ kind: "fold", id: `t${task.id}`, task })
+    }
+    if (expanded.includes(task.id)) {
+      entries.push({ kind: "message", id: `m${message.id}`, message })
+    }
+  }
+  return entries
 }
 
 function flush() {
@@ -91,9 +127,42 @@ function onProtocol(message) {
       state.turn = message.turn
       state.status = "running"
       state.error = null
-      state.messages.push({ id: nextId++, role: "user", text: message.prompt, reason: null, usage: null })
-      state.messages.push({ id: nextId++, role: "assistant", text: "", reason: null, usage: null })
+      // The task it belongs to travels with the turn, so the transcript can
+      // group without replaying the lifecycle to work out what was open.
+      state.messages.push({ id: nextId++, role: "user", text: message.prompt, task: message.task, reason: null, usage: null })
+      state.messages.push({ id: nextId++, role: "assistant", text: "", task: message.task, reason: null, usage: null })
       state.tools = []
+      break
+
+    // The lifecycle. Tasks are replaced rather than mutated, for the same
+    // reason messages are: jq79 does not wake an `:each` on a property assigned
+    // inside an array element.
+    case "task_proposed":
+      state.tasks = [...state.tasks, {
+        id: message.task,
+        objective: message.objective,
+        plan: message.plan,
+        state: "proposed",
+        summary: null,
+      }]
+      break
+
+    case "task_approved":
+      patchTask(message.task, { state: "approved" })
+      break
+
+    case "task_rejected":
+      patchTask(message.task, { state: "rejected" })
+      break
+
+    case "task_closed":
+      patchTask(message.task, { state: "closed", summary: message.summary })
+      break
+
+    case "task_reopened":
+      // The summary goes with the fold: it is an account of work that is being
+      // written again.
+      patchTask(message.task, { state: "approved", summary: null })
       break
 
     case "token":
@@ -257,6 +326,7 @@ function idle() {
 
 function reset() {
   state.messages = []
+  state.tasks = []
   state.budget = null
   state.tools = []
   state.prompt = ""
@@ -322,3 +392,15 @@ export function cancel() {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify({ type: "cancel" }))
 }
+
+/// The other half of the gate. Approving runs the prompt the server has been
+/// holding since the proposal; refusing drops it with the plan.
+function act(type, task) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type, task }))
+}
+
+export const approveTask = task => act("approve_task", task)
+export const rejectTask = task => act("reject_task", task)
+export const closeTask = task => act("close_task", task)
+export const reopenTask = task => act("reopen_task", task)

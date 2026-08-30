@@ -1,0 +1,50 @@
+# The same twenty turns as `steady-state.txt`, grouped into four closed tasks.
+#
+# The pair is the experiment: one flag apart is what makes two runs comparable,
+# and here the difference is not a flag but a boundary. Same prompts, same
+# order, same window — the only change is that the work says where it ended, so
+# the history is folded at a point the content chose rather than one the counter
+# fell on.
+#
+# The plans are real and are checked against the sandbox before anything runs:
+# `## file:` and `## command:` have to be things the policy already grants.
+
+## task: explain what the context manager does
+## step: describe the buckets and the budget
+## file: loude-design.md
+what does the context manager do?
+how is the token budget split into buckets?
+why does the system block never change?
+what is the reserve held back for?
+which turn is dropped first when the window fills?
+## close
+
+## task: explain eviction and the prompt cache
+## step: describe what a prefix cache can reuse
+## file: RECORD/2026-08-27.prefix-reuse-and-block-eviction.md
+why are turns evicted whole rather than in halves?
+what does the prompt cache actually reuse?
+how is the stable prefix kept byte-identical?
+why is code fused into the current user message?
+what does an unknown context window mean here?
+## close
+
+## task: explain how the numbers are made comparable
+## step: describe the counter, the record and the trace channel
+## file: RECORD/2026-08-27.context-manager.md
+why does every count carry its counter?
+what is the difference between our count and the backend's?
+how does the record make two runs comparable?
+what does the trace channel carry that the protocol does not?
+why is the debug client early in the work order?
+## close
+
+## task: explain what is still ahead
+## step: describe compaction, relevance and pruning
+## file: AGENTS.md
+what would compaction replace in the history?
+how would relevance selection pick fragments?
+why is a tool result worth pruning later?
+what has to be true before a strategy is adopted?
+summarise the whole design in three lines
+## close

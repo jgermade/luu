@@ -47,6 +47,37 @@ One boundary does three jobs, which is the argument for it:
 A task can still overflow the window on its own, so the boundary is the *preferred*
 cut point and the token threshold remains the fallback.
 
+**What exists**: the type, the lifecycle and the fold. A turn carries the task it
+was asked inside; closing one is an *event* — its turns stay in the history and
+stop being rendered, replaced by a deterministic summary of the approved plan and
+what the tool results reported, with no model prose in it. Reopening is therefore
+not an undo: the fold stops applying. Eviction runs over items rather than turns,
+so a folded task is kept or dropped whole and the two ways history gives way
+compose. The budget gained a `summaries` bucket, because a fold nobody can see in
+the panel is a claim rather than a measurement.
+
+**How a task is approved**, in the two places there is something to approve:
+
+- **In `luu serve`**, by a person. A prompt arriving with no task open buys one
+  planning call — the agent is asked what it is about to do, and answers with a
+  fenced ```` ```plan ```` block, parsed the same way a tool call is. The prompt is
+  then **held on the server, unrun**, until someone approves or refuses it: no
+  turn, no tool, no model call happens behind the gate. A model that answers in
+  prose instead does not cost the gate — the proposal becomes the ask itself,
+  declaring nothing, and the panel says so.
+- **In a script**, which is where a repeatable run comes from. `## task:` names
+  the objective, `## step:` / `## file:` / `## command:` give the plan, `## close`
+  closes it. The written plan *is* the approval.
+
+Either way approving runs a real check: every file the plan names must be
+reachable in the sandbox and every command allowed by it. What it does not yet do
+is *narrow* — the plan is checked against the policy file and does not replace it.
+See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md).
+
+A refusal is kept, not erased: `rejected` is a state a task stays in, with the
+plan that was turned down. Nothing in a session is deleted — a closed task is
+folded, a reopened one unfolded, a refused one recorded.
+
 **Who declares a task done** is a ladder, not a single answer: deterministic checks
 (exit codes, tests) first, then a judge, then the user's final question, which is the
 only authority. The judge is the same model given a short context of **evidence, not
@@ -169,7 +200,7 @@ the precision given up.
 
 ### Still ahead
 
-- **Hierarchical compaction**: a closed task is replaced by its summary, and full text is kept only for the live one. The boundary is what a task gives the context manager; the token threshold stays as the fallback for a task that overflows alone. Not built: it is a strategy, and a strategy has to beat a recorded baseline — now with an instrument and a table to beat it in. The summary is deterministic first (the plan plus the evidence: diff, commands, exit codes), because a 7B's prose would be entering the write-once region every later turn is built on.
+- **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold currently *loses* is the conversation itself: a task that ran no tools folds to its objective and a turn count. Model prose in the summary stays rejected until a 7B has been measured writing one — it would enter the write-once region every later turn is built on.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
@@ -302,6 +333,13 @@ Level 3, and still ahead. The level-2 restrictions stay applied inside it.
 
 A local web UI (chat, session browser, context inspector) is the fastest way to see what the
 context manager is actually doing — the CLI can't show a token budget or a prompt diff.
+
+**v1 of the message enums is frozen.** `ClientMessage` is `prompt`, `cancel`,
+`approve_task`, `reject_task`, `close_task`, `reopen_task`; `ServerMessage` is
+the eleven the server emits, the task lifecycle included. It was frozen only once
+every one of them had been watched being sent and answered rather than imagined
+— the record format moved to 3 with it, and a change an older reader could not
+make sense of bumps both from here.
 
 ### Transport: HTTP + WebSocket, not REST-only and not gRPC
 
@@ -463,8 +501,8 @@ lives in memory for the life of the process.
 
 ## Suggested work order
 
-1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *`Context`, `Tool`, `SandboxPolicy` and the Ollama/mock backends exist; `Task` does not.*
-2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction and block eviction exist, and prefix reuse is measured per turn. Compaction and relevance selection are still ahead, and each has to beat the recorded baseline.*
+1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *Done.*
+2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction, block eviction and compaction on task boundaries exist, and prefix reuse is measured per turn. Relevance selection is still ahead, and has to beat the recorded baseline.*
 3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
    measure step 2. *Done.*
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
@@ -479,12 +517,17 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Finalize the remaining base type for `agent-core`: `Task`. Until it exists, the
-  policy file is the standing approval for a whole session — where the design
-  wants the approved plan to *be* the `SandboxPolicy` for one task, with the file
-  as its floor.
+- Make the approved plan *be* the `SandboxPolicy` for its task, with the file as
+  its floor. It is currently checked against the file and does not narrow it.
+  The gate now exists, so the person approving can widen a plan that forgot a
+  file rather than watching the run die four turns in — which was the
+  precondition.
+- Who else may close a task: exit codes and tests first, then the judge in
+  shadow mode. The user is the only authority that closes one today.
 - Design the concrete GBNF grammar to force valid tool calls with the target model
   (Qwen2.5-Coder), replacing the text parse.
 - `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window
   that canonicalize-then-open leaves.
-- Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format).
+- The CLI has no gate: `luu chat "prompt"` runs one turn with the policy file as
+  the standing approval, because a one-shot has no human loop to gate. Whether it
+  should grow one, or stay the scripted/one-shot surface it is, is open.

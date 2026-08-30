@@ -13,6 +13,7 @@ use crate::context::Counter;
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
+use crate::task::{Plan, TaskId, TaskState};
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
@@ -56,9 +57,26 @@ pub struct ToolCallView {
     pub duration_ms: Option<u64>,
 }
 
+/// One task as a client browses it. The transcript groups by this, which is
+/// the point: the view collapses exactly what the context collapses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskView {
+    pub id: TaskId,
+    pub objective: String,
+    pub plan: Plan,
+    pub state: TaskState,
+    /// What its turns are sent as once it is closed. The summary text only —
+    /// its token count belongs to whoever counted it, and a reader who needs
+    /// that has the budget on the turn beside it.
+    pub summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnView {
     pub turn: TurnId,
+    /// The task it was asked inside, when there was one.
+    #[serde(default)]
+    pub task: Option<TaskId>,
     /// What the user asked.
     pub prompt: String,
     /// What the model produced, assembled. Partial on a cancel or a failure.
@@ -80,9 +98,10 @@ pub struct TurnView {
 }
 
 impl TurnView {
-    fn new(turn: TurnId, prompt: String, started_at_ms: u64) -> Self {
+    fn new(turn: TurnId, task: Option<TaskId>, prompt: String, started_at_ms: u64) -> Self {
         Self {
             turn,
+            task,
             prompt,
             text: String::new(),
             reason: None,
@@ -124,6 +143,10 @@ pub struct SessionView {
     pub model: String,
     pub started_at: u64,
     pub turns: Vec<TurnView>,
+    /// In the order they were proposed. Empty for a session that ran without
+    /// tasks, which is every session recorded before they existed.
+    #[serde(default)]
+    pub tasks: Vec<TaskView>,
     pub record: Option<String>,
 }
 
@@ -141,6 +164,7 @@ impl SessionView {
             model: model.into(),
             started_at: 0,
             turns: Vec::new(),
+            tasks: Vec::new(),
             record: None,
         }
     }
@@ -165,6 +189,14 @@ impl SessionView {
         self.turns.iter_mut().find(|t| t.turn == turn)
     }
 
+    pub fn task(&self, task: TaskId) -> Option<&TaskView> {
+        self.tasks.iter().find(|t| t.id == task)
+    }
+
+    fn task_mut(&mut self, task: TaskId) -> Option<&mut TaskView> {
+        self.tasks.iter_mut().find(|t| t.id == task)
+    }
+
     /// Folds one protocol message in. `at_ms` is milliseconds since the session
     /// started, the same clock the record file uses.
     pub fn apply_protocol(&mut self, at_ms: u64, message: &ServerMessage) {
@@ -173,9 +205,49 @@ impl SessionView {
                 self.backend = backend.clone();
                 self.model = model.clone();
             }
-            ServerMessage::TurnStarted { turn, prompt } => {
+            ServerMessage::TurnStarted { turn, prompt, task } => {
                 if self.turn(*turn).is_none() {
-                    self.turns.push(TurnView::new(*turn, prompt.clone(), at_ms));
+                    self.turns
+                        .push(TurnView::new(*turn, *task, prompt.clone(), at_ms));
+                }
+            }
+            ServerMessage::TaskProposed {
+                task,
+                objective,
+                plan,
+            } => {
+                if self.task(*task).is_none() {
+                    self.tasks.push(TaskView {
+                        id: *task,
+                        objective: objective.clone(),
+                        plan: plan.clone(),
+                        state: TaskState::Proposed,
+                        summary: None,
+                    });
+                }
+            }
+            ServerMessage::TaskApproved { task } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Approved;
+                }
+            }
+            ServerMessage::TaskClosed { task, summary } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Closed;
+                    view.summary = Some(summary.clone());
+                }
+            }
+            ServerMessage::TaskRejected { task } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Rejected;
+                }
+            }
+            ServerMessage::TaskReopened { task } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Approved;
+                    // Dropped rather than kept beside the reopened task: it is
+                    // an account of work that is being written again.
+                    view.summary = None;
                 }
             }
             ServerMessage::Token { turn, text } => {
@@ -328,6 +400,7 @@ mod tests {
                 message: ServerMessage::TurnStarted {
                     turn: 1,
                     prompt: "hola".into(),
+                    task: None,
                 },
             },
             RecordLine::Trace {
@@ -374,6 +447,7 @@ mod tests {
                 message: ServerMessage::TurnStarted {
                     turn: 2,
                     prompt: "y otra".into(),
+                    task: None,
                 },
             },
             RecordLine::Trace {
@@ -473,6 +547,7 @@ mod tests {
             &ServerMessage::TurnStarted {
                 turn: 1,
                 prompt: "x".into(),
+                task: None,
             },
         );
         view.apply_protocol(

@@ -19,7 +19,13 @@ use crate::trace::TraceMessage;
 /// 2: the budget's `limit` became nullable and gained a `counter`, and the
 /// header says what the run was measured against. A format-1 reader would
 /// choke on `"limit": null`.
-pub const FORMAT: u32 = 2;
+///
+/// 3: the task lifecycle is on the protocol, so a recording carries
+/// `task_proposed`, `task_approved`, `task_closed` and `task_reopened` lines. A
+/// format-2 reader would choke on the first of them — an unknown `type` in a
+/// tagged enum is a parse error, not a line to skip. Turns also gained the task
+/// they belong to, and that half is backwards compatible: absent means none.
+pub const FORMAT: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]

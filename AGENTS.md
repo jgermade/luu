@@ -50,6 +50,12 @@ cargo fmt --all --check
 cargo run --bin luu -- chat "hola"                    # one turn, mock backend, to stdout
 cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
+
+# the gate, without a model: the planning call answers with a plan block, then
+# the turn answers. Type a prompt and the UI holds it until you approve it.
+cargo run --bin luu -- serve --mock-reply '```plan
+{"objective": "explain the budget", "steps": ["read the design"], "files": ["loude-design.md"]}
+```' --mock-reply 'The budget is split into buckets.'
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
 
 # the tool loop end to end without a model: one reply per model call
@@ -63,6 +69,10 @@ cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
 cargo run --bin luu -- chat --script scripts/tasks/long-session.txt \
   --context-limit 8192 --tokenizer path/to/tokenizer.json --record before.jsonl
 
+# the same twenty prompts grouped into tasks: the history folds at each `## close`
+cargo run --bin luu -- chat --script scripts/tasks/steady-state-tasks.txt \
+  --context-limit 1024 --reserve 64 --record tasks.jsonl
+
 # the same run under the other eviction policy — one flag apart, so comparable
 cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
   --context-limit 512 --evict block --low-water 0.5 --record after.jsonl
@@ -73,6 +83,21 @@ cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
 `--mock-delay-ms` paces the mock backend, `--mock-reply` scripts what it answers
 (repeatable, one per model call, the last repeating), `--cancel-after-ms` exercises
 cancelling, and `--record <file>` writes a replayable session from either subcommand.
+
+In `serve`, a prompt with no task open buys a planning call and is then **held,
+unrun**, until it is approved or refused in the UI — nothing runs behind the
+gate, and a client that sends a prompt anyway is ignored. A closed task collapses
+in the transcript to the summary the model now gets, expandable to what it no
+longer sees.
+
+A script is prompts one per line, `#` comments, and `##` directives for the task
+lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## command:`
+for its plan, and `## close`. **The written plan is the approval**: every file it
+names has to be reachable in the resolved sandbox and every command allowed by
+it, or the run stops before the first turn. Closing folds the task's turns into a
+deterministic summary (the plan, plus what the tool results reported), which is
+what the `summaries` bucket in the budget panel plots. A directive it does not
+recognise is an error, never a prompt.
 
 The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
 `network` and `enforcement` — and the `--allow-read/-write/-exec`,

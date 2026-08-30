@@ -24,6 +24,28 @@ use tokio::sync::mpsc;
 /// miss on every call, and nothing fails to tell you.
 pub const SYSTEM: &str = "You are Loude, a concise local coding agent.";
 
+/// What the agent is asked before a task starts, fused into the current user
+/// message and never into the system block.
+///
+/// That placement is the whole reason this is a `&str` here rather than a line
+/// appended to [`SYSTEM`]: the prefix is what the cache reuses, and a planning
+/// instruction living up there would be paid for on every call of every turn,
+/// including the ones that never plan.
+pub const PLANNING: &str = "\
+Before anything runs, propose a plan for the work below. Reply with one fenced \
+block and nothing after it:
+
+```plan
+{\"objective\": \"what this piece of work is\", \"steps\": [\"what you will do\"], \
+\"files\": [\"paths you will read or change\"], \"commands\": [\"programs you will run\"]}
+```
+
+Name only what this piece of work needs; leave a list empty if it needs none. \
+The person will read this and approve it or refuse it before you run anything.
+
+The work:
+";
+
 /// The sandbox and the tool set, resolved once and shared by `chat` and
 /// `serve`. Here for the same reason the prompt assembly is: two call sites
 /// resolving a policy differently is two sandboxes.
