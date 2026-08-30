@@ -28,6 +28,10 @@ export const state = $reactive({
   // one that is still running (or was denied) is visible as itself rather than
   // as nothing happening. Per turn, like the budget beside it.
   tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms }]
+  // The model calls after the first one of this turn — the tool round trips.
+  // The budget describes the first call only, while the backend's usage is
+  // summed over all of them, so the two are comparable only with these added in.
+  extraCalls: [],         // [{ step, prompt_tokens, shared_bytes, shared_tokens }]
   // The session's tasks, in the order they were proposed. A proposed one is a
   // gate: nothing runs behind it until someone answers.
   tasks: [],              // [{ id, objective, plan, state, summary }]
@@ -132,6 +136,7 @@ function onProtocol(message) {
       state.messages.push({ id: nextId++, role: "user", text: message.prompt, task: message.task, reason: null, usage: null })
       state.messages.push({ id: nextId++, role: "assistant", text: "", task: message.task, reason: null, usage: null })
       state.tools = []
+      state.extraCalls = []
       break
 
     // The lifecycle. Tasks are replaced rather than mutated, for the same
@@ -229,6 +234,14 @@ function onTrace(message) {
       shared_tokens: message.shared_tokens,
       prompt_tokens: message.prompt_tokens,
     }
+  }
+  if (message.type === "step_call") {
+    state.extraCalls = [...state.extraCalls, {
+      step: message.step,
+      prompt_tokens: message.prompt_tokens,
+      shared_bytes: message.shared_bytes,
+      shared_tokens: message.shared_tokens,
+    }]
   }
   if (message.type === "budget") {
     // Arrives before the call now, so a cancelled turn has one too. The
@@ -329,6 +342,7 @@ function reset() {
   state.tasks = []
   state.budget = null
   state.tools = []
+  state.extraCalls = []
   state.prompt = ""
   state.prefix = null
   state.error = null
@@ -385,6 +399,7 @@ export function send(text) {
   state.prompt = ""
   state.budget = null
   state.tools = []
+  state.extraCalls = []
   state.prefix = null
 }
 

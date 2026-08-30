@@ -38,6 +38,23 @@ pub struct PrefixReuse {
     pub prompt_tokens: u32,
 }
 
+/// One model call a turn made *after* its first.
+///
+/// A turn that uses a tool is several calls, and the backend's
+/// `usage.prompt_tokens` is summed over all of them. Without these the panel
+/// compares our count of one call against the backend's count of three, and
+/// presents the difference as chat-template overhead. See
+/// `RECORD/2026-08-27.the-m4-pro-run.md`, which is where a 1 962-token gap
+/// turned out to be this.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtraCall {
+    /// Counts from 1 within the turn, so these start at 2.
+    pub step: u32,
+    pub prompt_tokens: u32,
+    pub shared_bytes: usize,
+    pub shared_tokens: u32,
+}
+
 /// One tool call as a client browses it — the "tool call timeline" panel the
 /// design asks for, which is arguments, verdict, duration and result size.
 ///
@@ -90,6 +107,11 @@ pub struct TurnView {
     pub budget: Option<Budget>,
     /// What the prompt cache could reuse of the previous turn's prompt.
     pub prefix: Option<PrefixReuse>,
+    /// The round trips after the first, when the turn used a tool. `budget` and
+    /// `prefix` describe the first call only, so a client that adds these up is
+    /// the only one whose total matches `usage`.
+    #[serde(default)]
+    pub extra_calls: Vec<ExtraCall>,
     /// What the agent did during the turn, in order.
     #[serde(default)]
     pub tools: Vec<ToolCallView>,
@@ -110,6 +132,7 @@ impl TurnView {
             prompt_sent: None,
             budget: None,
             prefix: None,
+            extra_calls: Vec::new(),
             tools: Vec::new(),
             started_at_ms,
             ended_at_ms: None,
@@ -348,6 +371,23 @@ impl SessionView {
                         shared_bytes: *shared_bytes,
                         shared_tokens: *shared_tokens,
                         prompt_tokens: *prompt_tokens,
+                    });
+                }
+            }
+            TraceMessage::StepCall {
+                turn,
+                step,
+                prompt_tokens,
+                shared_bytes,
+                shared_tokens,
+                ..
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.extra_calls.push(ExtraCall {
+                        step: *step,
+                        prompt_tokens: *prompt_tokens,
+                        shared_bytes: *shared_bytes,
+                        shared_tokens: *shared_tokens,
                     });
                 }
             }

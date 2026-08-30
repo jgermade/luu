@@ -145,8 +145,15 @@ pub enum ServerMessage {
 
 impl ServerMessage {
     /// The one conversion at the core/wire boundary.
-    pub fn from_turn_event(turn: TurnId, event: TurnEvent) -> Self {
-        match event {
+    ///
+    /// `None` for an event that is not a protocol message. There is one:
+    /// [`TurnEvent::ModelCall`] explains the agent rather than driving it, so it
+    /// belongs on the trace channel and a stdio consumer never sees it. That is
+    /// the trace/protocol split stopping being a convention and becoming a
+    /// type — an internal event that provably cannot reach the wire.
+    pub fn from_turn_event(turn: TurnId, event: TurnEvent) -> Option<Self> {
+        Some(match event {
+            TurnEvent::ModelCall { .. } => return None,
             TurnEvent::Token(text) => Self::Token { turn, text },
             TurnEvent::Ended { reason, usage } => Self::Ended {
                 turn,
@@ -178,7 +185,7 @@ impl ServerMessage {
                     duration_ms,
                 }
             }
-        }
+        })
     }
 
     /// Which turn this is about, if any.
@@ -231,6 +238,22 @@ mod tests {
         });
         assert_eq!(json["reason"], "cancelled");
         assert!(json["usage"].is_null());
+    }
+
+    #[test]
+    fn a_model_call_never_reaches_the_wire() {
+        // It explains the agent rather than driving it, so it belongs on the
+        // trace channel and a stdio consumer never has to carry it.
+        assert!(
+            ServerMessage::from_turn_event(
+                1,
+                TurnEvent::ModelCall {
+                    step: 2,
+                    messages: Vec::new()
+                }
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -292,7 +315,7 @@ mod tests {
             reason: EndReason::Length,
             usage: None,
         };
-        let message = ServerMessage::from_turn_event(7, event);
+        let message = ServerMessage::from_turn_event(7, event).unwrap();
         assert_eq!(message.turn(), Some(7));
         assert!(matches!(
             message,

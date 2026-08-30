@@ -101,6 +101,15 @@ pub async fn run_agent_turn(
             })
         };
 
+        // Before the call, and including the first: the loop announces every
+        // call it makes, and what to do with that is the caller's business.
+        let _ = events
+            .send(TurnEvent::ModelCall {
+                step,
+                messages: messages.clone(),
+            })
+            .await;
+
         let outcome = run_turn(
             backend,
             CompletionRequest {
@@ -316,6 +325,45 @@ mod tests {
         )
         .await;
         (drain.await.unwrap(), outcome)
+    }
+
+    #[tokio::test]
+    async fn every_model_call_is_announced_with_what_it_sends() {
+        // A tooled turn is two calls, and the counts the backend reports on
+        // `Ended` are summed over both. Before this event only the first was
+        // measurable, so on any turn with a tool our count and the backend's
+        // were not counts of the same thing — 1 590 against 3 552 on the run
+        // that found it. See `RECORD/2026-08-27.the-m4-pro-run.md`.
+        let fixture = Fixture::new("modelcalls");
+        let (events, _) = drive(
+            &fixture,
+            &[
+                "Let me look.\n```tool\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\"}}\n```",
+                "It says the answer is 42.",
+            ],
+            DEFAULT_MAX_STEPS,
+        )
+        .await;
+
+        let calls: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                TurnEvent::ModelCall { step, messages } => Some((*step, messages)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            2,
+            "one call per round trip, the first included"
+        );
+        assert_eq!(calls[0].0, 1);
+        assert_eq!(calls[1].0, 2);
+        assert_eq!(
+            calls[1].1.len(),
+            calls[0].1.len() + 2,
+            "the second call carries the assistant's call and the tool's result",
+        );
     }
 
     #[tokio::test]

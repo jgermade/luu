@@ -76,6 +76,29 @@ pub enum TraceMessage {
         /// exact within one rendering.
         prompt_tokens: u32,
     },
+    /// A model call *after* the first one of a turn: the tool-use round trip.
+    ///
+    /// [`Self::Budget`] and [`Self::PrefixReuse`] describe the call that starts
+    /// a turn. A turn that uses a tool makes more, each one carrying the
+    /// previous result — and `usage.prompt_tokens` on `Ended` is summed over
+    /// all of them, so on a tooled turn our count and the backend's count
+    /// different things until these are added in. A call nothing measures is a
+    /// cost nothing accounts for, and the difference was showing up in the
+    /// panel as chat-template overhead.
+    StepCall {
+        turn: TurnId,
+        /// Counts from 1 within the turn; this message is only emitted from 2.
+        /// The first call is the turn's own prompt, already measured beside its
+        /// budget, and measuring it twice would put it in the chain twice.
+        step: u32,
+        /// The exact string this call handed to the model.
+        text: String,
+        prompt_tokens: u32,
+        /// Against the call before it — the previous step, or the turn's own
+        /// prompt — by the same counter and the same chain as everything else.
+        shared_bytes: usize,
+        shared_tokens: u32,
+    },
 }
 
 impl TraceMessage {
@@ -99,6 +122,27 @@ impl TraceMessage {
             shared_bytes,
             shared_tokens: counter.count(&current[..shared_bytes]),
             prompt_tokens: counter.count(current),
+        }
+    }
+
+    /// The same measurement for a call inside a turn, against the call before
+    /// it. Same counter, same chain, so the numbers are comparable with the
+    /// turn's own.
+    pub fn step_call(
+        turn: TurnId,
+        step: u32,
+        previous: &str,
+        current: &str,
+        counter: &dyn TokenCounter,
+    ) -> Self {
+        let shared_bytes = shared_prefix(previous, current);
+        Self::StepCall {
+            turn,
+            step,
+            shared_tokens: counter.count(&current[..shared_bytes]),
+            prompt_tokens: counter.count(current),
+            shared_bytes,
+            text: current.to_string(),
         }
     }
 }

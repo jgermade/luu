@@ -190,6 +190,13 @@ implementation detail from close up:
 - **Every token count carries which counter produced it.** Two runs measured by
   different counters are not comparable, and nothing else in the system would
   ever say so.
+- **Every model call a turn makes is measured, not just the first.** A turn that
+  uses a tool is several calls, each carrying the previous result, and the
+  backend's `usage.prompt_tokens` is summed over all of them. Measure only the
+  first and the two numbers count different things — a 2-token chat-template gap
+  reads as 1 962 — and nothing fails. The agent loop announces every call it
+  makes before making it; the trace channel measures the ones after the first
+  into the same chain. See `RECORD/2026-08-27.the-m4-pro-run.md`.
 - **The stable prompt prefix stays byte-identical across calls**, and how much of
   it survived is reported per turn rather than assumed. System text and
   tool definitions are what llama.cpp's prompt cache reuses. The definitions are

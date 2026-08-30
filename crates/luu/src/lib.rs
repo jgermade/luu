@@ -642,7 +642,10 @@ pub async fn run() -> Result<()> {
     // prompt differently from `serve` would be measuring something the server
     // never sends.
     let mut context = AgentContext::new(SYSTEM).with_tools(agency.definitions());
-    let mut prefix = PrefixTracker::default();
+    // Shared with the printer task, because the tool round trips are announced
+    // there and they belong in the same chain as the turns: two trackers would
+    // measure one session against two different pasts.
+    let prefix = std::sync::Arc::new(std::sync::Mutex::new(PrefixTracker::default()));
     let mut failed = false;
 
     let multi = steps
@@ -736,7 +739,10 @@ pub async fn run() -> Result<()> {
                 task,
             }));
             let text = rendered(&selection.messages);
-            let reuse = prefix.measure(turn, &text, counter.as_ref());
+            let reuse = prefix
+                .lock()
+                .expect("the prefix tracker is never held across an await")
+                .measure(turn, &text, counter.as_ref());
             recorder.write(&Event::Trace(TraceMessage::Prompt { turn, text }));
             if let Some(reuse) = reuse {
                 recorder.write(&Event::Trace(reuse));
@@ -768,6 +774,8 @@ pub async fn run() -> Result<()> {
         let printer = {
             let recorder = recorder.clone();
             let prompt = prompt.clone();
+            let prefix = prefix.clone();
+            let counter = counter.clone();
             tokio::spawn(async move {
                 let mut out = stdout();
                 if multi {
@@ -776,8 +784,38 @@ pub async fn run() -> Result<()> {
                     let _ = out.write_all(format!("\n> {prompt}\n\n").as_bytes()).await;
                 }
                 while let Some(event) = rx.recv().await {
-                    if let Some(recorder) = recorder.as_ref() {
-                        let message = ServerMessage::from_turn_event(turn, event.clone());
+                    // A model call is not a protocol message: it explains the
+                    // agent rather than driving it. Measured into the same
+                    // chain as the turns, from the second call on — the first
+                    // is the turn's own prompt and is already in it.
+                    if let TurnEvent::ModelCall { step, messages } = &event {
+                        if let (Some(recorder), true) = (recorder.as_ref(), *step > 1) {
+                            let text = rendered(messages);
+                            let mut tracker = prefix
+                                .lock()
+                                .expect("the prefix tracker is never held across an await");
+                            if let Some(TraceMessage::PrefixReuse {
+                                shared_bytes,
+                                shared_tokens,
+                                prompt_tokens,
+                                ..
+                            }) = tracker.measure(turn, &text, counter.as_ref())
+                            {
+                                recorder.write(&Event::Trace(TraceMessage::StepCall {
+                                    turn,
+                                    step: *step,
+                                    text,
+                                    prompt_tokens,
+                                    shared_bytes,
+                                    shared_tokens,
+                                }));
+                            }
+                        }
+                        continue;
+                    }
+                    if let Some(recorder) = recorder.as_ref()
+                        && let Some(message) = ServerMessage::from_turn_event(turn, event.clone())
+                    {
                         recorder.write(&Event::Protocol(message));
                     }
                     match event {
@@ -850,6 +888,9 @@ pub async fn run() -> Result<()> {
                                 .await;
                             let _ = out.flush().await;
                         }
+                        // Handled above, before the protocol conversion: it is
+                        // not a protocol message and it is not printed.
+                        TurnEvent::ModelCall { .. } => {}
                     }
                 }
             })
