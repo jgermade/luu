@@ -689,6 +689,11 @@ pub async fn run() -> Result<()> {
         .map(|spec| load_fragment(agency.sandbox.as_ref(), spec))
         .collect::<Result<_>>()?;
 
+    // The live task's own sandbox, from `## task:` to `## close`. A script's
+    // written plan is its approval, so it narrows exactly as a plan approved at
+    // the gate does: what the task may touch is what the plan named.
+    let mut narrowed: Option<std::sync::Arc<agent_core::sandbox::Sandbox>> = None;
+
     for step in &steps {
         // The task lifecycle happens between turns, and every part of it is
         // recorded: a run that cannot say what it was allowed to do is not a
@@ -707,13 +712,20 @@ pub async fn run() -> Result<()> {
                 }
                 let id = context.propose_task(objective.clone(), plan.clone());
                 context.approve_task(id);
+                narrowed = Some(std::sync::Arc::new(
+                    plan.narrow(agency.sandbox.as_ref(), id)
+                        .with_context(|| format!("resolving the plan of task `{objective}`"))?,
+                ));
                 if let Some(recorder) = &recorder {
                     recorder.write(&Event::Protocol(ServerMessage::TaskProposed {
                         task: id,
                         objective: objective.clone(),
                         plan: plan.clone(),
                     }));
-                    recorder.write(&Event::Protocol(ServerMessage::TaskApproved { task: id }));
+                    recorder.write(&Event::Protocol(ServerMessage::TaskApproved {
+                        task: id,
+                        plan: plan.clone(),
+                    }));
                 }
                 println!("\n== task {id} approved: {objective}");
                 print!("{}", plan.describe());
@@ -725,6 +737,8 @@ pub async fn run() -> Result<()> {
                     unreachable!("`## close` with no task open is refused when the script is read")
                 };
                 let summary = context.close_task(id, counter.as_ref()).unwrap_or_default();
+                // Outside a task the policy file is the whole answer again.
+                narrowed = None;
                 if let Some(recorder) = &recorder {
                     recorder.write(&Event::Protocol(ServerMessage::TaskClosed {
                         task: id,
@@ -738,7 +752,11 @@ pub async fn run() -> Result<()> {
                 continue;
             }
             Step::Fragment(spec) => {
-                let fragment = load_fragment(agency.sandbox.as_ref(), spec)?;
+                // Through the sandbox that holds *now*: a path `read_file`
+                // would refuse must not become readable by spelling it in a
+                // directive, and inside a task it is the plan that refuses.
+                let sandbox = narrowed.clone().unwrap_or_else(|| agency.sandbox.clone());
+                let fragment = load_fragment(sandbox.as_ref(), spec)?;
                 println!(
                     "\n== fragment {} — {} bytes into the next prompt",
                     fragment.path,
@@ -927,11 +945,14 @@ pub async fn run() -> Result<()> {
             })
         };
 
+        // Inside a task, the plan it was approved with; outside one, the policy
+        // file. Never both.
+        let sandbox = narrowed.clone().unwrap_or_else(|| agency.sandbox.clone());
         let outcome = run_agent_turn(
             backend.as_ref(),
             request,
             agency.tools.as_ref(),
-            agency.sandbox.as_ref(),
+            sandbox.as_ref(),
             agency.max_steps,
             tx,
             cancel,

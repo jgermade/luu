@@ -42,7 +42,20 @@ pub enum ClientMessage {
     Cancel,
     /// Approve a proposed task. Nothing has run under it until this arrives:
     /// the prompt that caused the proposal is held, unrun, until it does.
-    ApproveTask { task: TaskId },
+    ///
+    /// `files` and `commands` are what the person adds to the plan before
+    /// approving it — the half that makes narrowing survivable, because a small
+    /// model's first act is a plan that forgets a file. They are checked against
+    /// the policy file like any other plan: the gate widens a plan up to the
+    /// file and not past it. Both default to empty, which is the approval that
+    /// widens nothing.
+    ApproveTask {
+        task: TaskId,
+        #[serde(default)]
+        files: Vec<String>,
+        #[serde(default)]
+        commands: Vec<String>,
+    },
     /// Refuse it. The held prompt is dropped with it — a prompt whose plan was
     /// turned down is not a prompt that was approved on its own.
     RejectTask { task: TaskId },
@@ -83,8 +96,13 @@ pub enum ServerMessage {
         objective: String,
         plan: Plan,
     },
+    /// Approved, with the plan as approved rather than as proposed: it is what
+    /// the task's sandbox is built from, so a transcript that showed only the
+    /// proposal would be naming the wrong authority.
     TaskApproved {
         task: TaskId,
+        #[serde(default)]
+        plan: Plan,
     },
     /// The one rewrite in an otherwise write-once session: from here on the
     /// task's turns are sent as this summary. It travels on the wire because a
@@ -277,7 +295,11 @@ mod tests {
         assert_eq!(json["type"], "task_proposed");
         assert_eq!(json["plan"]["files"][0], "crates/luu/src/lib.rs");
         assert_eq!(
-            ServerMessage::TaskApproved { task: 2 }.turn(),
+            ServerMessage::TaskApproved {
+                task: 2,
+                plan: Plan::default(),
+            }
+            .turn(),
             None,
             "a task spans turns; pinning it to one would be a guess",
         );

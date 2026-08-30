@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::{Counter, Fragment, TokenCounter};
-use crate::sandbox::{Access, Sandbox};
+use crate::sandbox::{Access, Authority, Sandbox, SandboxError, SandboxPolicy};
 use crate::tools::{ToolCall, ToolStep};
 
 /// Tasks are numbered per session, in order, starting at 1.
@@ -85,6 +85,60 @@ impl Plan {
             }
         }
         unmet
+    }
+
+    /// The sandbox this plan *is*, once someone has approved it.
+    ///
+    /// Built out of what `session` already grants rather than out of the plan's
+    /// own words: a plan cannot invent access, so every path it names keeps
+    /// exactly the access the policy file gave it and a path the file never
+    /// granted is simply absent. [`Plan::unmet`] refuses that plan before this
+    /// is ever called, and this is the same rule applied a second time, where
+    /// it bites.
+    ///
+    /// **Narrowing is on extent, not on level.** A plan has no way to say
+    /// *read* versus *write*, so a file granted `read-write` by the policy stays
+    /// read-write here; making it read-only would answer that open question as a
+    /// side effect of this one and break every task that edits a file it named.
+    /// `network` and `enforcement` are the session's for the same reason: a plan
+    /// declares neither.
+    pub fn narrow(&self, session: &Sandbox, task: TaskId) -> Result<Sandbox, SandboxError> {
+        let mut policy = SandboxPolicy {
+            paths: Vec::new(),
+            commands: Vec::new(),
+            network: session.network(),
+            enforcement: session.enforcement(),
+        };
+        for file in &self.files {
+            if let Some(access) = session.access_for(std::path::Path::new(file)) {
+                policy.allow(file, access);
+            }
+        }
+        for command in &self.commands {
+            if session.commands().iter().any(|allowed| allowed == command) {
+                policy.allow_command(command);
+            }
+        }
+        Ok(Sandbox::new(&policy, session.base())?.under(Authority::Plan(task)))
+    }
+
+    /// Adds what a person put in at the gate, ignoring what is already there.
+    ///
+    /// The amendment is checked with [`Plan::unmet`] like any other plan, so
+    /// the human at the gate can widen the plan up to the policy file and not
+    /// past it — otherwise the gate is the policy and `luu.toml` is a
+    /// suggestion.
+    pub fn amend(&mut self, files: &[String], commands: &[String]) {
+        for file in files {
+            if !self.files.contains(file) {
+                self.files.push(file.clone());
+            }
+        }
+        for command in commands {
+            if !self.commands.contains(command) {
+                self.commands.push(command.clone());
+            }
+        }
     }
 
     /// One line per part it has, for a human reading a run go by.
@@ -397,7 +451,7 @@ fn target(call: &ToolCall) -> Option<String> {
 mod tests {
     use super::*;
     use crate::context::ApproximateCounter;
-    use crate::sandbox::{PathRule, SandboxPolicy, Verdict};
+    use crate::sandbox::{Enforcement, PathRule, SandboxPolicy, Verdict};
     use crate::tools::ToolOutcome;
 
     fn step(name: &str, arguments: serde_json::Value, error: Option<&str>) -> ToolStep {
@@ -639,5 +693,135 @@ mod tests {
         assert_eq!(unmet.len(), 2, "{unmet:?}");
         assert!(unmet[0].contains("/etc/passwd"));
         assert!(unmet[1].contains("curl"));
+    }
+
+    /// The session's sandbox for the narrowing tests: read-write on the tree,
+    /// two commands, which is roughly what `luu.toml` grants.
+    ///
+    /// `best-effort` because these tests are about *who granted what*, and
+    /// under `kernel` every `prepare_command` on a machine without Landlock is
+    /// denied before the allowlist is ever consulted — which would make the
+    /// assertions below pass or fail for a reason that is not theirs.
+    fn session() -> Sandbox {
+        Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: vec!["cargo".into(), "git".into()],
+                enforcement: Enforcement::BestEffort,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_approved_plan_grants_what_it_named_and_nothing_else() {
+        let session = session();
+        let plan = Plan {
+            steps: vec![],
+            files: vec!["Cargo.toml".into()],
+            commands: vec!["cargo".into()],
+        };
+        let narrowed = plan.narrow(&session, 1).unwrap();
+
+        assert!(
+            narrowed
+                .check_path(std::path::Path::new("Cargo.toml"), Access::Read)
+                .verdict
+                .allowed,
+        );
+        let refused = narrowed.check_path(std::path::Path::new("src/task.rs"), Access::Read);
+        assert!(!refused.verdict.allowed);
+        assert!(
+            refused
+                .verdict
+                .rule
+                .contains("the approved plan for task 1"),
+            "a denial has to say which authority refused: {}",
+            refused.verdict.rule,
+        );
+        assert!(
+            session
+                .check_path(std::path::Path::new("src/task.rs"), Access::Read)
+                .verdict
+                .allowed,
+            "the same file is still readable under the policy the task narrows",
+        );
+
+        assert!(narrowed.prepare_command("cargo").is_ok());
+        let refused = narrowed.prepare_command("git").expect_err("not planned");
+        assert!(
+            refused.rule.contains("the approved plan for task 1"),
+            "{refused:?}"
+        );
+    }
+
+    /// Narrowing is on extent, not on level: a plan cannot say *read* yet, so a
+    /// file the policy grants read-write stays read-write inside the task.
+    #[test]
+    fn a_planned_file_keeps_the_access_the_policy_gave_it() {
+        let plan = Plan {
+            files: vec!["Cargo.toml".into()],
+            ..Plan::default()
+        };
+        let narrowed = plan.narrow(&session(), 1).unwrap();
+
+        assert!(
+            narrowed
+                .check_path(std::path::Path::new("Cargo.toml"), Access::ReadWrite)
+                .verdict
+                .allowed,
+        );
+    }
+
+    /// A plan that declares nothing grants nothing. That is the point of
+    /// narrowing and it is also its sharpest edge, so it is pinned here.
+    #[test]
+    fn a_plan_that_declares_nothing_narrows_to_nothing() {
+        let narrowed = Plan::default().narrow(&session(), 4).unwrap();
+
+        assert!(
+            !narrowed
+                .check_path(std::path::Path::new("Cargo.toml"), Access::Read)
+                .verdict
+                .allowed,
+        );
+        assert!(narrowed.prepare_command("cargo").is_err());
+    }
+
+    /// What a person adds at the gate, and what they cannot add: the amendment
+    /// is a plan like any other and `unmet` is what refuses it.
+    #[test]
+    fn an_amendment_widens_the_plan_and_is_still_checked_against_the_file() {
+        let session = session();
+        let mut plan = Plan {
+            files: vec!["Cargo.toml".into()],
+            ..Plan::default()
+        };
+        plan.amend(
+            &["src/task.rs".into(), "Cargo.toml".into()],
+            &["git".into()],
+        );
+
+        assert_eq!(plan.files, ["Cargo.toml", "src/task.rs"], "no duplicate");
+        assert!(plan.unmet(&session).is_empty());
+
+        let narrowed = plan.narrow(&session, 1).unwrap();
+        assert!(
+            narrowed
+                .check_path(std::path::Path::new("src/task.rs"), Access::Read)
+                .verdict
+                .allowed,
+            "the file the person added at the gate is in the task's sandbox",
+        );
+
+        let mut past_the_file = Plan::default();
+        past_the_file.amend(&["/etc/passwd".into()], &["curl".into()]);
+        assert_eq!(
+            past_the_file.unmet(&session).len(),
+            2,
+            "the human at the gate widens up to the policy file and not past it",
+        );
     }
 }

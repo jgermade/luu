@@ -77,9 +77,21 @@ the panel is a claim rather than a measurement.
   closes it. The written plan *is* the approval.
 
 Either way approving runs a real check: every file the plan names must be
-reachable in the sandbox and every command allowed by it. What it does not yet do
-is *narrow* — the plan is checked against the policy file and does not replace it.
-See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md).
+reachable in the sandbox and every command allowed by it. **And the approved plan
+then becomes the sandbox for its task**: every turn inside it is checked against
+what the plan named, not against everything `luu.toml` grants, so the task
+boundary is the scope permission is granted at rather than a sentence saying it
+is. The policy file is the outer bound and the plan the inner one — a plan
+cannot grant what the file does not, and a plan that names nothing grants
+nothing. A denial says which of the two refused.
+
+Narrowing is on *extent*, not on level: a file the policy grants read-write
+stays read-write inside the task, because a plan has no way yet to say which of
+the two it means. Approving carries an amendment — the files and commands the
+person adds at the gate, checked against the policy file exactly as the model's
+plan was — which is what stops an under-specified plan from being a dead run.
+See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md) and
+[`RECORD/2026-08-30.narrowing.md`](RECORD/2026-08-30.narrowing.md).
 
 A refusal is kept, not erased: `rejected` is a state a task stays in, with the
 plan that was turned down. Nothing in a session is deleted — a closed task is
@@ -537,11 +549,13 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Make the approved plan *be* the `SandboxPolicy` for its task, with the file as
-  its floor. It is currently checked against the file and does not narrow it.
-  The gate now exists, so the person approving can widen a plan that forgot a
-  file rather than watching the run die four turns in — which was the
-  precondition.
+- A plan that says what it will **write**, not only what it will touch. The
+  check asks whether a file is readable, so a write into a read-only root passes
+  the gate and is denied at the call — the one case the check exists to catch
+  and misses. It is also what narrowing needs before it can cut the access level
+  as well as the extent.
+- Narrowing `network` and `enforcement` with the rest of the plan, which needs a
+  plan that declares them. Today a task inherits both from the policy file.
 - Who else may close a task: exit codes and tests first, then the judge in
   shadow mode. The user is the only authority that closes one today.
 - Design the concrete GBNF grammar to force valid tool calls with the target model

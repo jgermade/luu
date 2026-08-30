@@ -342,6 +342,23 @@ impl Context {
         id
     }
 
+    /// Adds to a proposed task's plan what a person put in at the gate, and
+    /// answers with the plan as it now stands.
+    ///
+    /// The amendment arrives with the approval, so this happens while the task
+    /// is still `Proposed`: the plan a task is approved with is the one it
+    /// keeps, and the one its sandbox is built from.
+    pub fn amend_plan(
+        &mut self,
+        id: TaskId,
+        files: &[String],
+        commands: &[String],
+    ) -> Option<Plan> {
+        let task = self.task_mut(id)?;
+        task.plan.amend(files, commands);
+        Some(task.plan.clone())
+    }
+
     /// Approves it. Turns pushed from here on belong to it.
     pub fn approve_task(&mut self, id: TaskId) -> bool {
         match self.task_mut(id) {

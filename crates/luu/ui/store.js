@@ -153,7 +153,13 @@ function onProtocol(message) {
       break
 
     case "task_approved":
-      patchTask(message.task, { state: "approved" })
+      // The plan as approved, which is what the task's sandbox is built from —
+      // the person at the gate may have added what the model forgot. An older
+      // recording carries none, and then the proposal is the best answer there
+      // is.
+      patchTask(message.task, message.plan
+        ? { state: "approved", plan: message.plan }
+        : { state: "approved" })
       break
 
     case "task_rejected":
@@ -434,7 +440,13 @@ function act(type, task) {
   socket.send(JSON.stringify({ type, task }))
 }
 
-export const approveTask = task => act("approve_task", task)
+/// Approving carries what the person added to the plan, which is the half that
+/// makes narrowing survivable: a task may touch what it was approved for, so a
+/// plan that forgot a file is widened here rather than rejected and retyped.
+export function approveTask(task, files = [], commands = []) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type: "approve_task", task, files, commands }))
+}
 export const rejectTask = task => act("reject_task", task)
 export const closeTask = task => act("close_task", task)
 export const reopenTask = task => act("reopen_task", task)

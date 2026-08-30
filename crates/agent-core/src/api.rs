@@ -249,9 +249,15 @@ impl SessionView {
                     });
                 }
             }
-            ServerMessage::TaskApproved { task } => {
+            ServerMessage::TaskApproved { task, plan } => {
                 if let Some(view) = self.task_mut(*task) {
                     view.state = TaskState::Approved;
+                    // The plan as approved, which is what the task's sandbox is
+                    // built from. An older recording carries none, and then what
+                    // was proposed is the best answer there is.
+                    if plan != &Plan::default() {
+                        view.plan = plan.clone();
+                    }
                 }
             }
             ServerMessage::TaskClosed { task, summary } => {

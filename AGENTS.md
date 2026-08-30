@@ -110,7 +110,15 @@ allowed to touch, a fragment is text put into the next prompt.
 
 **The written plan is the approval**: every file it names has to be reachable in
 the resolved sandbox and every command allowed by it, or the run stops before the
-first turn. Closing folds the task's turns into a
+first turn. **It is also the sandbox for its task** — from `## task:` to
+`## close`, and from an approval to a close in `serve`, a turn may touch what the
+plan named and nothing else, fragments included. The policy file is the outer
+bound (a plan cannot grant what it does not) and a plan that names nothing grants
+nothing; a denial says which of the two refused. In `serve`, `approve_task`
+carries the files and commands the person adds at the gate, checked against the
+policy file the same way, which is what keeps an under-specified plan from being
+a dead run. See
+[`RECORD/2026-08-30.narrowing.md`](RECORD/2026-08-30.narrowing.md). Closing folds the task's turns into a
 deterministic summary (the plan, what the tool results reported, and the
 fragments the turns were shown, quoted verbatim under a token cap), which is
 what the `summaries` bucket in the budget panel plots. A directive it does not
@@ -308,6 +316,10 @@ implementation detail from close up:
   parses it, validates it against the `SandboxPolicy`, and executes real Rust code.
   Any path where model output reaches a shell or the filesystem without passing
   that validation is a bug, however convenient.
+- **The approved plan is the sandbox for its task.** A task boundary is the
+  scope permission is granted at, and that is only true if a turn inside a task
+  is held to what the task was approved for. Checking the plan against the
+  policy and then running with the policy makes the plan a comment.
 - **Permission checks live in the code, not in the model behaving well.**
   Canonicalize paths (`std::fs::canonicalize`) before comparing, or a symlink walks
   straight out of the sandbox.

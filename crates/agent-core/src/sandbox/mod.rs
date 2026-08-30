@@ -21,6 +21,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::task::TaskId;
+
 use serde::{Deserialize, Serialize};
 
 pub mod policy;
@@ -139,6 +141,29 @@ pub enum SandboxError {
     Base(#[source] std::io::Error),
 }
 
+/// Who granted what this sandbox holds.
+///
+/// It rides on every denial for the same reason [`Applied`] rides on every
+/// allow: a run refused by the policy file and a run refused by the plan its
+/// task was approved with are not the same run, and afterwards the recording is
+/// the only thing that could tell them apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authority {
+    /// The policy file plus whatever the flags added to it.
+    Policy,
+    /// The plan a person approved, which narrows the policy for one task.
+    Plan(TaskId),
+}
+
+impl std::fmt::Display for Authority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Policy => write!(f, "the sandbox policy"),
+            Self::Plan(task) => write!(f, "the approved plan for task {task}"),
+        }
+    }
+}
+
 /// A resolved policy, and the thing tools ask.
 #[derive(Debug, Clone)]
 pub struct Sandbox {
@@ -147,6 +172,7 @@ pub struct Sandbox {
     commands: Vec<String>,
     network: bool,
     enforcement: Enforcement,
+    authority: Authority,
 }
 
 /// The answer to "may I touch this path", with the path as it resolved. The
@@ -226,7 +252,34 @@ impl Sandbox {
             commands: policy.commands.clone(),
             network: policy.network,
             enforcement: policy.enforcement,
+            authority: Authority::Policy,
         })
+    }
+
+    /// The same policy, resolved as one task's rather than the session's.
+    ///
+    /// Only the label changes: what a narrowed policy grants is decided by
+    /// [`crate::task::Plan::narrow`], which builds it out of what this sandbox
+    /// already allows. A plan cannot grant what the file does not.
+    pub fn under(mut self, authority: Authority) -> Self {
+        self.authority = authority;
+        self
+    }
+
+    /// Which authority answers here — the policy file, or a task's plan.
+    pub fn authority(&self) -> &Authority {
+        &self.authority
+    }
+
+    /// What this sandbox grants on a path, if anything. `None` is "no rule
+    /// covers it", which is the same answer [`Sandbox::check_path`] denies on.
+    ///
+    /// Implicit roots are excluded for the same reason they are excluded from
+    /// `check_path`: the grant that exists so a child can read libc is not a
+    /// grant a plan may inherit.
+    pub fn access_for(&self, path: &Path) -> Option<Access> {
+        let resolved = resolve(&self.base, path);
+        self.root_for(&resolved, false).map(|root| root.access)
     }
 
     /// The working directory relative paths are resolved against.
@@ -279,10 +332,15 @@ impl Sandbox {
                 Verdict::allow(root.to_string(), Applied::Process)
             }
             Some(root) => Verdict::deny(format!(
-                "{root} does not grant {needed} on {}",
-                resolved.display()
+                "{root} does not grant {needed} on {}, under {}",
+                resolved.display(),
+                self.authority,
             )),
-            None => Verdict::deny(format!("no rule grants {needed} on {}", resolved.display())),
+            None => Verdict::deny(format!(
+                "no rule grants {needed} on {}, under {}",
+                resolved.display(),
+                self.authority,
+            )),
         };
         PathCheck {
             verdict,
@@ -309,11 +367,13 @@ impl Sandbox {
         if !self.commands.iter().any(|allowed| allowed == program) {
             return Err(Verdict::deny(match self.commands.is_empty() {
                 true => format!(
-                    "no commands are allowed: `{program}` needs a `commands` entry in the sandbox policy"
+                    "no commands are allowed by {}: `{program}` needs a `commands` entry",
+                    self.authority,
                 ),
                 false => format!(
-                    "`{program}` is not in commands = [{}]",
-                    self.commands.join(", ")
+                    "`{program}` is not in commands = [{}], under {}",
+                    self.commands.join(", "),
+                    self.authority,
                 ),
             }));
         }

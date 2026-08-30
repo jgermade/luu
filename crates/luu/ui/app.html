@@ -9,6 +9,22 @@
   let draft = ""
   // Which closed tasks are open in the transcript. Reassigned, never mutated.
   let expanded = []
+  // What the person is adding to the proposed plan before approving it. The
+  // task's sandbox is built from the plan, so this is the only moment a file
+  // the model forgot can still get in. Reassigned, never mutated.
+  let adding = { files: [], commands: [] }
+  let addition = ""
+  const add = kind => {
+    const item = addition.trim()
+    if (!item || adding[kind].includes(item)) return
+    adding = { ...adding, [kind]: [...adding[kind], item] }
+    addition = ""
+  }
+  const approve = id => {
+    approveTask(id, adding.files, adding.commands)
+    adding = { files: [], commands: [] }
+    addition = ""
+  }
   const toggle = id => {
     expanded = expanded.includes(id) ? expanded.filter(open => open !== id) : [...expanded, id]
   }
@@ -123,8 +139,22 @@
         The model declared nothing. Approving runs with everything the policy
         file already grants — the plan does not narrow it yet.
       </p>
+      <!-- The plan is the sandbox for this task, so what it forgot is denied
+           until someone adds it. Bounded by the policy file: an entry it does
+           not grant comes back missing from the approved plan. -->
+      <div class="amend" :if="!replaying">
+        <input
+          :value="addition"
+          @input="addition = $event.target.value"
+          :attrs="{ placeholder: 'a file or command the plan forgot' }">
+        <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add file</button>
+        <button type="button" class="link" :disabled="!addition.trim()" @click="add('commands')">add command</button>
+      </div>
+      <p :if="adding.files.length" class="dim">adding files: {{ adding.files.join(" · ") }}</p>
+      <p :if="adding.commands.length" class="dim">adding commands: {{ adding.commands.join(" · ") }}</p>
+
       <div class="gate-buttons">
-        <button type="button" :disabled="replaying" @click="approveTask(proposed?.id)">Approve</button>
+        <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>
         <button type="button" class="cancel" :disabled="replaying" @click="rejectTask(proposed?.id)">Reject</button>
       </div>
     </div>
@@ -369,6 +399,12 @@
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
   .gate p { margin: .2rem 0; }
   .gate-buttons { display: flex; gap: .5rem; margin-top: .6rem; }
+  .amend { display: flex; align-items: center; gap: .4rem; margin: .5rem 0 .2rem; }
+  .amend input {
+    flex: 1; min-width: 0; padding: .3rem .5rem;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); color: var(--fg); font: inherit;
+  }
 
   .live-task {
     display: flex; align-items: center; gap: .6rem;

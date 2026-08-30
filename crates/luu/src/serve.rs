@@ -12,6 +12,7 @@ use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
+use agent_core::sandbox::Sandbox;
 use agent_core::task::{Plan, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
@@ -53,6 +54,12 @@ struct Session {
     /// While this is set, nothing runs: not a turn, not a tool, not a model
     /// call. That is the gate.
     pending: Option<Pending>,
+    /// The live task's own sandbox: the approved plan, resolved against the
+    /// policy file. Every turn inside the task is checked against this rather
+    /// than against the session's, which is what makes the task boundary the
+    /// scope permission is granted at instead of a comment saying it is.
+    /// `None` outside a task, where the policy file is the whole answer.
+    narrowed: Option<(TaskId, Arc<Sandbox>)>,
 }
 
 /// A prompt held between the proposal and the answer to it.
@@ -186,6 +193,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
             prefix: PrefixTracker::default(),
             pending: None,
+            narrowed: None,
         }),
         events: broadcast::channel(1024).0,
         recorder,
@@ -345,8 +353,12 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                             let _ = cancel.send(true);
                         }
                     }
-                    Ok(ClientMessage::ApproveTask { task }) => {
-                        approve_task(app.clone(), task).await;
+                    Ok(ClientMessage::ApproveTask {
+                        task,
+                        files,
+                        commands,
+                    }) => {
+                        approve_task(app.clone(), task, files, commands).await;
                     }
                     Ok(ClientMessage::RejectTask { task }) => {
                         reject_task(app.clone(), task).await;
@@ -457,9 +469,16 @@ async fn propose_task(app: Arc<App>, prompt: String) {
     });
 }
 
-/// Approves it and runs the prompt that was held.
-async fn approve_task(app: Arc<App>, task: TaskId) {
-    let prompt = {
+/// Approves it — with whatever the person added to the plan — and runs the
+/// prompt that was held.
+///
+/// The amendment is checked against the policy file exactly as the model's plan
+/// was: an entry the file does not grant is dropped rather than approved, and
+/// the plan that comes back on `task_approved` is what was actually approved.
+/// That is the whole feedback: a client that adds a path nobody may touch sees
+/// it missing from the plan it gets back, rather than being told nothing.
+async fn approve_task(app: Arc<App>, task: TaskId, files: Vec<String>, commands: Vec<String>) {
+    let approved = {
         let mut session = app.session.lock().await;
         // Nothing can be running here — a prompt behind the gate is refused, so
         // the planning turn is the last one there was. Checked anyway, because
@@ -468,19 +487,81 @@ async fn approve_task(app: Arc<App>, task: TaskId) {
         match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.task == task)
         {
             true => {
+                let (files, commands) = permitted(&app.agency.sandbox, files, commands);
+                let plan = session
+                    .context
+                    .amend_plan(task, &files, &commands)
+                    .unwrap_or_default();
                 session.context.approve_task(task);
-                session.pending.take().map(|pending| pending.prompt)
+                session.pending.take().map(|pending| (pending.prompt, plan))
             }
             // An approval for something else, or for a second time. Not an
             // error: two clients watching the same session can both press it.
             false => None,
         }
     };
-    let Some(prompt) = prompt else { return };
+    let Some((prompt, plan)) = approved else {
+        return;
+    };
 
-    app.publish(Event::Protocol(ServerMessage::TaskApproved { task }))
+    // The task's own sandbox, from here until it closes. A plan that names
+    // nothing narrows to nothing, which is the point: a turn inside a task may
+    // touch what the task was approved for.
+    let narrowed = match plan.narrow(app.agency.sandbox.as_ref(), task) {
+        Ok(sandbox) => Some(Arc::new(sandbox)),
+        // Only a path that stopped existing between the check and here can do
+        // this. Falling back to the session's sandbox would silently un-narrow
+        // the task, so the task runs with nothing granted and the denials say
+        // which plan refused.
+        Err(error) => {
+            eprintln!("task {task}: the approved plan could not be resolved: {error}");
+            None
+        }
+    };
+    {
+        let mut session = app.session.lock().await;
+        session.narrowed = narrowed.map(|sandbox| (task, sandbox));
+    }
+
+    app.publish(Event::Protocol(ServerMessage::TaskApproved { task, plan }))
         .await;
     start_turn(app, prompt).await;
+}
+
+/// The half of an amendment the policy file actually grants.
+///
+/// The person at the gate widens a plan up to the file and not past it —
+/// otherwise the gate is the policy and `luu.toml` is a suggestion.
+fn permitted(
+    sandbox: &Sandbox,
+    files: Vec<String>,
+    commands: Vec<String>,
+) -> (Vec<String>, Vec<String>) {
+    let asked = Plan {
+        steps: Vec::new(),
+        files,
+        commands,
+    };
+    let refused = asked.unmet(sandbox);
+    let keep = |item: &String, kind: &str| {
+        !refused
+            .iter()
+            .any(|line| line.starts_with(&format!("{kind} {item}:")))
+    };
+    (
+        asked
+            .files
+            .iter()
+            .filter(|f| keep(f, "file"))
+            .cloned()
+            .collect(),
+        asked
+            .commands
+            .iter()
+            .filter(|c| keep(c, "command"))
+            .cloned()
+            .collect(),
+    )
 }
 
 /// Refuses it. The held prompt goes with it: a prompt whose plan was turned
@@ -508,7 +589,14 @@ async fn close_task(app: Arc<App>, task: TaskId) {
             return;
         }
         let counter = app.counter.clone();
-        session.context.close_task(task, counter.as_ref())
+        let summary = session.context.close_task(task, counter.as_ref());
+        // The task's sandbox goes with the task. Outside one, the policy file
+        // is the whole answer again — and the next prompt proposes a new task
+        // before it runs anything.
+        if summary.is_some() && session.narrowed.as_ref().is_some_and(|(id, _)| *id == task) {
+            session.narrowed = None;
+        }
+        summary
     };
     let Some(summary) = summary else { return };
 
@@ -523,6 +611,13 @@ async fn reopen_task(app: Arc<App>, task: TaskId) {
         if session.current.is_some() || !session.context.reopen_task(task) {
             return;
         }
+        // Live again, so its plan is the authority again. Rebuilt rather than
+        // remembered: the sandbox is a resolution of the plan, and the plan is
+        // what the session keeps.
+        let plan = session.context.task(task).map(|task| task.plan.clone());
+        session.narrowed = plan
+            .and_then(|plan| plan.narrow(app.agency.sandbox.as_ref(), task).ok())
+            .map(|sandbox| (task, Arc::new(sandbox)));
     }
     app.publish(Event::Protocol(ServerMessage::TaskReopened { task }))
         .await;
@@ -616,6 +711,16 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         return;
     };
 
+    // Inside a task, the plan it was approved with is what holds this turn;
+    // outside one, the policy file. A turn is never checked against both.
+    let sandbox = {
+        let session = app.session.lock().await;
+        match (session.context.live_task(), &session.narrowed) {
+            (Some(live), Some((task, sandbox))) if live == *task => sandbox.clone(),
+            _ => app.agency.sandbox.clone(),
+        }
+    };
+
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel(256);
         let forwarder = {
@@ -665,7 +770,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             app.backend.as_ref(),
             request,
             app.agency.tools.as_ref(),
-            app.agency.sandbox.as_ref(),
+            sandbox.as_ref(),
             app.agency.max_steps,
             tx,
             cancel_rx,
@@ -813,6 +918,7 @@ mod tests {
                 context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
                 prefix: PrefixTracker::default(),
                 pending: None,
+                narrowed: None,
             }),
             events: broadcast::channel(1024).0,
             recorder: None,
@@ -860,7 +966,7 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
 
-        approve_task(app.clone(), 1).await;
+        approve_task(app.clone(), 1, vec![], vec![]).await;
         assert!(
             until(&app, |s| s.context.turns().len() == 1).await,
             "the held prompt never ran",
@@ -917,7 +1023,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1).await;
+        approve_task(app.clone(), 1, vec![], vec![]).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         on_prompt(app.clone(), "now the tests".into()).await;
@@ -933,7 +1039,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1).await;
+        approve_task(app.clone(), 1, vec![], vec![]).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         close_task(app.clone(), 1).await;

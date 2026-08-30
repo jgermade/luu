@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use agent_core::backend::mock::Mock;
 use agent_core::context::{ApproximateCounter, Budget, Eviction};
-use agent_core::sandbox::{Sandbox, SandboxPolicy};
+use agent_core::sandbox::{Access, Sandbox, SandboxPolicy};
 use agent_core::tools::Tools;
 use futures_util::{SinkExt, StreamExt};
 use luu::serve::{ServeOptions, bind};
@@ -36,9 +36,22 @@ const PATIENCE: Duration = Duration::from_secs(10);
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+/// A plan that names one file, and a turn that tries to read another. The
+/// mock answers the planning call, then asks for a tool, then concludes.
+const PLAN_FOR_CARGO_TOML: &str = "```plan\n{\"objective\":\"read the manifest\",\
+                                   \"steps\":[\"read it\"],\"files\":[\"Cargo.toml\"],\
+                                   \"commands\":[]}\n```";
+
+const READS_SERVE_RS: &str = "Let me look.\n```tool\n                              {\"name\":\"read_file\",\"arguments\":\
+                              {\"path\":\"src/serve.rs\",\"max_lines\":1}}\n```";
+
 /// The server on an ephemeral port, with the mock answering the planning call
 /// and then the turn.
 async fn server() -> String {
+    server_with(vec![PLAN.into(), ANSWER.into()]).await
+}
+
+async fn server_with(replies: Vec<String>) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
         tools: Arc::new(Tools::standard()),
@@ -47,7 +60,7 @@ async fn server() -> String {
     };
     let serving = bind(ServeOptions {
         address: "127.0.0.1:0".parse().expect("a loopback address"),
-        backend: Arc::new(Mock::replies(vec![PLAN.into(), ANSWER.into()]).delay(Duration::ZERO)),
+        backend: Arc::new(Mock::replies(replies).delay(Duration::ZERO)),
         model: "mock".into(),
         record: None,
         budget: Budget::new(0, 0, Eviction::Turn),
@@ -268,4 +281,117 @@ async fn the_page_and_the_missing_page() {
         .await
         .expect("the request");
     assert_eq!(missing.status(), 404);
+}
+
+/// Narrowing, over the socket: the plan names `Cargo.toml`, the turn asks for
+/// `src/serve.rs`, and the sandbox that refuses is the plan rather than the
+/// policy file — which still grants it.
+#[tokio::test]
+async fn a_turn_may_not_touch_what_its_task_was_not_approved_for() {
+    let address = server_with(vec![
+        PLAN_FOR_CARGO_TOML.into(),
+        READS_SERVE_RS.into(),
+        "I was not approved to read that.".into(),
+    ])
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "read the manifest"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_task", "task": 1}),
+    )
+    .await;
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["name"], "read_file");
+    assert_eq!(result["verdict"]["allowed"], false);
+    assert!(
+        result["verdict"]["rule"]
+            .as_str()
+            .expect("a rule")
+            .contains("the approved plan for task 1"),
+        "a denial has to say which authority refused: {}",
+        result["verdict"]["rule"],
+    );
+
+    // The same file, under the policy file the task narrowed: still granted.
+    // The refusal is the task's, not the session's.
+    let sandbox = Sandbox::new(
+        &SandboxPolicy::default(),
+        &std::env::current_dir().expect("the working directory"),
+    )
+    .expect("the sandbox");
+    assert!(
+        sandbox
+            .check_path(std::path::Path::new("src/serve.rs"), Access::Read)
+            .verdict
+            .allowed,
+    );
+}
+
+/// The other half, which is what makes narrowing survivable: the person at the
+/// gate adds the file the plan forgot, and the turn goes through.
+#[tokio::test]
+async fn a_file_added_at_the_gate_is_in_the_task_sandbox() {
+    let address = server_with(vec![
+        PLAN_FOR_CARGO_TOML.into(),
+        READS_SERVE_RS.into(),
+        "Read it.".into(),
+    ])
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "read the manifest"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+
+    // Approving *with* an amendment, plus one entry the policy file does not
+    // grant: the gate widens a plan up to the file and not past it.
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_task",
+            "task": 1,
+            "files": ["src/serve.rs", "/etc/passwd"],
+            "commands": [],
+        }),
+    )
+    .await;
+
+    let (approved, _) = until(&mut socket, "task_approved").await;
+    let files = approved["plan"]["files"]
+        .as_array()
+        .expect("the plan as approved");
+    assert_eq!(files, &["Cargo.toml", "src/serve.rs"]);
+    assert!(
+        !files.iter().any(|file| file == "/etc/passwd"),
+        "what the policy file does not grant is not approved by a person asking for it",
+    );
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["name"], "read_file");
+    assert_eq!(
+        result["verdict"]["allowed"], true,
+        "{}",
+        result["verdict"]["rule"],
+    );
+
+    // And the read API carries the plan as approved, not as proposed.
+    let session = get(&address, "/api/sessions/live").await;
+    assert_eq!(session["tasks"][0]["plan"]["files"][1], "src/serve.rs");
 }
