@@ -39,11 +39,33 @@ struct ChatRequest<'a> {
     options: Option<Options>,
 }
 
-/// Only what we have a reason to set. Sampling stays the server's business
-/// until there is something here that measures it.
-#[derive(serde::Serialize)]
+/// Only what we have a reason to set. Every field is optional and the struct
+/// itself is omitted from the request entirely when all three are — the
+/// server keeps its own default rather than being told one we made up.
+#[derive(serde::Serialize, Default)]
 struct Options {
-    num_ctx: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_ctx: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<u32>,
+}
+
+impl Options {
+    fn from_request(request: &CompletionRequest) -> Option<Self> {
+        if request.context_limit.is_none()
+            && request.temperature.is_none()
+            && request.seed.is_none()
+        {
+            return None;
+        }
+        Some(Self {
+            num_ctx: request.context_limit,
+            temperature: request.temperature,
+            seed: request.seed,
+        })
+    }
 }
 
 /// Only the fields we act on. Ollama sends more; ignoring the rest means a
@@ -114,7 +136,7 @@ impl Backend for Ollama {
                     model: &request.model,
                     messages: &request.messages,
                     stream: true,
-                    options: request.context_limit.map(|num_ctx| Options { num_ctx }),
+                    options: Options::from_request(&request),
                 })
                 .send()
                 .await
@@ -198,10 +220,47 @@ mod tests {
             model: "qwen2.5-coder:7b",
             messages: &messages,
             stream: true,
-            options: Some(Options { num_ctx: 8192 }),
+            options: Some(Options {
+                num_ctx: Some(8192),
+                ..Default::default()
+            }),
         })
         .unwrap();
         assert_eq!(body["options"]["num_ctx"], 8192);
+        assert!(body["options"].get("temperature").is_none());
+        assert!(body["options"].get("seed").is_none());
+    }
+
+    /// Pinned so two runs meant to be compared differ only by what they're
+    /// testing, not by where the sampler happened to wander.
+    #[test]
+    fn pinned_sampling_is_sent_alongside_the_window() {
+        let request = CompletionRequest {
+            model: "qwen2.5-coder:7b".into(),
+            messages: vec![Message::user("hola")],
+            context_limit: Some(8192),
+            temperature: Some(0.0),
+            seed: Some(42),
+        };
+        let options = Options::from_request(&request).unwrap();
+        let body = serde_json::to_value(options).unwrap();
+        assert_eq!(body["num_ctx"], 8192);
+        assert_eq!(body["temperature"], 0.0);
+        assert_eq!(body["seed"], 42);
+    }
+
+    /// Sampling with no known window still has to reach the server: the two
+    /// are independent knobs and neither implies the other.
+    #[test]
+    fn sampling_alone_still_sends_options() {
+        let request = CompletionRequest {
+            model: "qwen2.5-coder:7b".into(),
+            messages: vec![Message::user("hola")],
+            context_limit: None,
+            temperature: Some(0.0),
+            seed: Some(42),
+        };
+        assert!(Options::from_request(&request).is_some());
     }
 
     #[test]

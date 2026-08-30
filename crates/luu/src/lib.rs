@@ -125,6 +125,15 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// Pin the sampler's temperature. Unset leaves it to the server's own
+        /// default, which is not fixed across calls.
+        #[arg(long)]
+        temperature: Option<f32>,
+
+        /// Pin the sampler's seed. Unset leaves it to the server's own choice.
+        #[arg(long)]
+        seed: Option<u32>,
     },
 
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
@@ -202,6 +211,16 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// Pin the sampler's temperature, so two runs meant to be compared
+        /// differ only by what they're testing. Unset leaves it to the
+        /// server's own default.
+        #[arg(long)]
+        temperature: Option<f32>,
+
+        /// Pin the sampler's seed. Unset leaves it to the server's own choice.
+        #[arg(long)]
+        seed: Option<u32>,
     },
 }
 
@@ -555,6 +574,8 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        temperature,
+        seed,
     } = command
     {
         let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
@@ -573,6 +594,8 @@ pub async fn run() -> Result<()> {
             budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
             counter,
             agency,
+            temperature,
+            seed,
         })
         .await;
     }
@@ -594,6 +617,8 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        temperature,
+        seed,
     } = command
     else {
         unreachable!("serve and tools are handled above");
@@ -764,6 +789,8 @@ pub async fn run() -> Result<()> {
             // Budgeting 8k against a server truncating to 4k measures a prompt
             // the model never saw, and nothing in the recording would say so.
             context_limit: budget.limit,
+            temperature,
+            seed,
         };
 
         let (stop, cancel) = watch::channel(false);

@@ -215,6 +215,8 @@ mod tests {
             model: "mock".into(),
             messages: vec![Message::user("hola")],
             context_limit: None,
+            temperature: None,
+            seed: None,
         }
     }
 

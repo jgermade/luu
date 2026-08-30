@@ -74,6 +74,10 @@ struct App {
     counter: Arc<dyn TokenCounter>,
     budget: Budget,
     agency: Agency,
+    /// Pinned sampling, forwarded to every call the same way `budget` is.
+    /// `None` leaves it to the server's own default.
+    temperature: Option<f32>,
+    seed: Option<u32>,
     /// The read side, folded from the same events the sockets carry — so
     /// `GET /api/...` can never disagree with what a client watched happen.
     view: Mutex<SessionView>,
@@ -107,6 +111,8 @@ pub struct ServeOptions {
     pub budget: Budget,
     pub counter: Arc<dyn TokenCounter>,
     pub agency: Agency,
+    pub temperature: Option<f32>,
+    pub seed: Option<u32>,
 }
 
 pub async fn serve(options: ServeOptions) -> Result<()> {
@@ -118,6 +124,8 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         budget,
         counter,
         agency,
+        temperature,
+        seed,
     } = options;
     let started_at = now_ms();
 
@@ -154,6 +162,8 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
         counter,
         budget,
         agency,
+        temperature,
+        seed,
         view: Mutex::new({
             let mut view = SessionView::new(LIVE_SESSION, backend_name, &model_name);
             view.started_at = started_at;
@@ -561,6 +571,8 @@ async fn begin_turn(
             // The window we budgeted against, sent so the server serves it. The
             // same `None` the budget means by "unknown".
             context_limit: app.budget.limit,
+            temperature: app.temperature,
+            seed: app.seed,
         },
     ))
 }
@@ -773,6 +785,8 @@ mod tests {
             counter: Arc::new(ApproximateCounter),
             budget: Budget::new(0, 0, Eviction::Turn),
             agency,
+            temperature: None,
+            seed: None,
             view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
             started_at: 0,
         })

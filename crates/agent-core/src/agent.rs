@@ -81,6 +81,8 @@ pub async fn run_agent_turn(
         model,
         mut messages,
         context_limit,
+        temperature,
+        seed,
     } = request;
     let mut steps: Vec<ToolStep> = Vec::new();
     let mut usage: Option<Usage> = None;
@@ -119,6 +121,8 @@ pub async fn run_agent_turn(
                 // Every call of the turn budgets against the same window, so
                 // every call has to be told the same one.
                 context_limit,
+                temperature,
+                seed,
             },
             inner,
             cancel.clone(),
@@ -321,6 +325,8 @@ mod tests {
                 model: "scripted".into(),
                 messages: vec![Message::user("what is in notes.txt?")],
                 context_limit: None,
+                temperature: None,
+                seed: None,
             },
             &tools,
             &fixture.sandbox,

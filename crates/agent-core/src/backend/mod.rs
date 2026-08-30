@@ -69,6 +69,13 @@ pub struct CompletionRequest {
     /// count in that run is a reading of something else. `None` is the CLI's
     /// "unknown window", where there was nothing to budget and nothing to send.
     pub context_limit: Option<u32>,
+    /// Pinned sampling, so two runs meant to be compared differ only by what
+    /// they're testing. `None` leaves it to the server's own default — the
+    /// same "unknown, so nothing sent" rule `context_limit` follows, for the
+    /// same reason: a made-up default would be a second thing the two runs
+    /// could differ by without either one saying so.
+    pub temperature: Option<f32>,
+    pub seed: Option<u32>,
 }
 
 /// Token counts, as the backend reports them. Not our own tokenizer's opinion —
