@@ -50,6 +50,12 @@ cargo fmt --all --check
 cargo run --bin luu -- chat "hola"                    # one turn, mock backend, to stdout
 cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
+
+# the gate, without a model: the planning call answers with a plan block, then
+# the turn answers. Type a prompt and the UI holds it until you approve it.
+cargo run --bin luu -- serve --mock-reply '```plan
+{"objective": "explain the budget", "steps": ["read the design"], "files": ["loude-design.md"]}
+```' --mock-reply 'The budget is split into buckets.'
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
 
 # the tool loop end to end without a model: one reply per model call
@@ -77,6 +83,12 @@ cargo run --bin luu -- chat --script scripts/tasks/steady-state.txt \
 `--mock-delay-ms` paces the mock backend, `--mock-reply` scripts what it answers
 (repeatable, one per model call, the last repeating), `--cancel-after-ms` exercises
 cancelling, and `--record <file>` writes a replayable session from either subcommand.
+
+In `serve`, a prompt with no task open buys a planning call and is then **held,
+unrun**, until it is approved or refused in the UI — nothing runs behind the
+gate, and a client that sends a prompt anyway is ignored. A closed task collapses
+in the transcript to the summary the model now gets, expandable to what it no
+longer sees.
 
 A script is prompts one per line, `#` comments, and `##` directives for the task
 lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## command:`

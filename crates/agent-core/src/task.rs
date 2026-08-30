@@ -93,6 +93,30 @@ impl Plan {
     }
 }
 
+/// A plan as the model proposes it, before anyone has approved it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Proposal {
+    pub objective: String,
+    #[serde(flatten)]
+    pub plan: Plan,
+}
+
+/// Reads a proposal out of what the model said.
+///
+/// The same shape as [`crate::tools::parse_call`], and for the same reason:
+/// how a model expresses a plan is a transport detail — a fenced block today, a
+/// GBNF grammar next — and nothing above this line should care which.
+///
+/// `None` covers the ordinary case of a small model answering the planning call
+/// in prose. The caller proposes the user's own ask instead; a gate that
+/// disappeared because the model was vague would be the one failure mode this
+/// whole mechanism exists to prevent.
+pub fn parse_plan(text: &str) -> Option<Proposal> {
+    let proposal: Proposal =
+        crate::tools::fenced(text, "plan").and_then(|body| serde_json::from_str(body).ok())?;
+    (!proposal.objective.trim().is_empty()).then_some(proposal)
+}
+
 /// Where a task is in its life. `Closed` is the only one that changes how the
 /// history renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +128,11 @@ pub enum TaskState {
     Approved,
     /// Closed: its turns are folded to [`Task::summary`] from here on.
     Closed,
+    /// Proposed and refused. Kept rather than erased: that a plan was put up
+    /// and turned down is worth more than a gap in the numbering, and ids are
+    /// handed out by position, so removing one would make the next collide
+    /// with it.
+    Rejected,
 }
 
 /// What a closed task leaves behind, counted once at the close.
@@ -143,6 +172,12 @@ impl Task {
 
     pub fn approve(&mut self) {
         self.state = TaskState::Approved;
+    }
+
+    /// Refuses it. Nothing ran, so there is nothing to fold and nothing to
+    /// summarise — the plan stays as the record of what was turned down.
+    pub fn reject(&mut self) {
+        self.state = TaskState::Rejected;
     }
 
     /// Approved and not closed: the one task turns are attributed to.
@@ -361,6 +396,36 @@ mod tests {
             task.summary.is_none(),
             "the fold stops applying; the turns were never deleted to recover",
         );
+    }
+
+    #[test]
+    fn a_proposal_is_read_out_of_a_fenced_block() {
+        let proposal = parse_plan(
+            "I will need to touch the CLI.\n\n             ```plan\n             {\"objective\": \"add a --dry-run flag\", \"steps\": [\"read the CLI\"],              \"files\": [\"crates/luu/src/lib.rs\"], \"commands\": [\"cargo\"]}\n             ```",
+        )
+        .unwrap();
+
+        assert_eq!(proposal.objective, "add a --dry-run flag");
+        assert_eq!(proposal.plan.files, ["crates/luu/src/lib.rs"]);
+        assert_eq!(proposal.plan.commands, ["cargo"]);
+    }
+
+    #[test]
+    fn a_proposal_may_declare_nothing_at_all() {
+        let proposal = parse_plan("```plan\n{\"objective\": \"explain the design\"}\n```").unwrap();
+        assert_eq!(proposal.objective, "explain the design");
+        assert!(proposal.plan.steps.is_empty());
+        assert!(proposal.plan.files.is_empty());
+    }
+
+    #[test]
+    fn prose_is_not_a_plan_and_says_so_by_returning_nothing() {
+        // The ordinary answer from a small model, and the caller's cue to
+        // propose the user's own ask instead. A gate that vanished here would
+        // be the failure this mechanism exists to prevent.
+        assert!(parse_plan("I'll read the CLI and then add the flag.").is_none());
+        assert!(parse_plan("```plan\n{\"objective\": \"  \"}\n```").is_none());
+        assert!(parse_plan("```plan\nnot json\n```").is_none());
     }
 
     #[test]

@@ -1,11 +1,17 @@
 <script :setup>
   // A setup script takes `await import(...)`; a static `import` statement is
   // for factory scripts only.
-  const { state, connect, send, cancel, playFixture } = await import("./store.js")
+  const { state, connect, send, cancel, playFixture, foldTranscript,
+          approveTask, rejectTask, closeTask, reopenTask } = await import("./store.js")
 
   connect()
 
   let draft = ""
+  // Which closed tasks are open in the transcript. Reassigned, never mutated.
+  let expanded = []
+  const toggle = id => {
+    expanded = expanded.includes(id) ? expanded.filter(open => open !== id) : [...expanded, id]
+  }
 
   const submit = () => {
     send(draft)
@@ -14,6 +20,13 @@
 
   $: running = state.status === "running"
   $: replaying = state.status === "replay"
+  // The gate. While this is set the server is holding a prompt, unrun.
+  $: proposed = state.tasks.find(task => task.state === "proposed") || null
+  $: live = state.tasks.find(task => task.state === "approved") || null
+  $: declares = proposed
+    ? proposed.plan.steps.length + proposed.plan.files.length + proposed.plan.commands.length
+    : 0
+  $: entries = foldTranscript(state.messages, state.tasks, expanded)
   $: budgetTotal = state.budget
     ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
     : 0
@@ -57,32 +70,74 @@
 <div class="split">
   <section class="chat">
     <div class="transcript">
-      <article :each="message in state.messages" :key="message.id" :class="message.role">
-        <div class="who">{{ message.role }}</div>
-        <div class="text">{{ message.text }}</div>
-        <div :if="message.reason" class="meta">
-          <span :class.warn="message.reason !== 'stop'">{{ message.reason }}</span>
-          <span :if="message.usage">
-            {{ message.usage.prompt_tokens }} prompt / {{ message.usage.completion_tokens }} completion
-          </span>
-          <span :if="message.reason && !message.usage" class="dim">usage unknown</span>
-        </div>
-      </article>
+      <div :each="entry in entries" :key="entry.id">
+        <article :if="entry.kind === 'message'" :class="entry.message.role">
+          <div class="who">{{ entry.message.role }}</div>
+          <div class="text">{{ entry.message.text }}</div>
+          <div :if="entry.message.reason" class="meta">
+            <span :class.warn="entry.message.reason !== 'stop'">{{ entry.message.reason }}</span>
+            <span :if="entry.message.usage">
+              {{ entry.message.usage.prompt_tokens }} prompt / {{ entry.message.usage.completion_tokens }} completion
+            </span>
+            <span :if="entry.message.reason && !entry.message.usage" class="dim">usage unknown</span>
+          </div>
+        </article>
 
-      <p :if="!state.messages.length" class="empty">
+        <!-- A closed task, as the model now sees it: one summary where its
+             turns were. Opening it shows what the prompt no longer carries. -->
+        <div :if="entry.kind === 'fold'" class="fold">
+          <div class="fold-head">
+            <button type="button" class="link" @click="toggle(entry.task.id)">
+              {{ expanded.includes(entry.task.id) ? "▾" : "▸" }}
+              task {{ entry.task.id }} · {{ entry.task.objective }}
+            </button>
+            <button type="button" class="link" :disabled="replaying" @click="reopenTask(entry.task.id)">reopen</button>
+          </div>
+          <pre class="summary">{{ entry.task.summary }}</pre>
+        </div>
+      </div>
+
+      <p :if="!entries.length" class="empty">
         Nothing yet. Send a prompt.
       </p>
     </div>
 
     <div :if="state.error" class="error">{{ state.error }}</div>
 
+    <!-- Nothing has run under this task and nothing will until it is answered:
+         the prompt that caused it is held on the server, unrun. -->
+    <div :if="proposed" class="gate">
+      <div class="who">proposed task {{ proposed?.id }}</div>
+      <div class="objective">{{ proposed?.objective }}</div>
+      <ul :if="proposed?.plan.steps.length" class="plan">
+        <li :each="step in proposed?.plan.steps || []" :key="step">{{ step }}</li>
+      </ul>
+      <p :if="proposed?.plan.files.length" class="dim">files: {{ proposed?.plan.files.join(" · ") }}</p>
+      <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
+      <p :if="!declares" class="dim warn">
+        The model declared nothing. Approving runs with everything the policy
+        file already grants — the plan does not narrow it yet.
+      </p>
+      <div class="gate-buttons">
+        <button type="button" :disabled="replaying" @click="approveTask(proposed?.id)">Approve</button>
+        <button type="button" class="cancel" :disabled="replaying" @click="rejectTask(proposed?.id)">Reject</button>
+      </div>
+    </div>
+
+    <div :if="live" class="live-task">
+      <span>task {{ live?.id }} · {{ live?.objective }}</span>
+      <button type="button" class="link" :disabled="running || replaying" @click="closeTask(live?.id)">
+        close &amp; fold
+      </button>
+    </div>
+
     <form class="composer" @submit.prevent="submit()">
       <input
         :value="draft"
         @input="draft = $event.target.value"
-        :attrs="{ placeholder: replaying ? 'Replaying a recorded session — read only' : 'Ask something…', disabled: replaying }"
+        :attrs="{ placeholder: proposed ? 'Approve or reject the proposed task first' : (replaying ? 'Replaying a recorded session — read only' : 'Ask something…'), disabled: replaying || !!proposed }"
         autofocus>
-      <button :if="!running" type="submit" :disabled="!draft.trim() || replaying">Send</button>
+      <button :if="!running" type="submit" :disabled="!draft.trim() || replaying || !!proposed">Send</button>
       <button :if="running" type="button" class="cancel" @click="cancel()">Cancel</button>
     </form>
   </section>
@@ -294,6 +349,37 @@
     margin: 1.2rem 0 .5rem;
   }
   .inspector h2:first-child { margin-top: 0; }
+
+  /* The gate reads as a thing that stopped the conversation, because it is. */
+  .gate {
+    margin: 0 1rem .6rem; padding: .7rem .9rem;
+    border: 1px solid var(--warn); border-radius: 8px; background: #1a1712;
+  }
+  .gate .objective { font-weight: 600; margin: .2rem 0 .4rem; }
+  .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
+  .gate p { margin: .2rem 0; }
+  .gate-buttons { display: flex; gap: .5rem; margin-top: .6rem; }
+
+  .live-task {
+    display: flex; align-items: center; gap: .6rem;
+    margin: 0 1rem .4rem; font-size: 13px; color: var(--dim);
+  }
+  .live-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .live-task button { margin-left: auto; }
+
+  /* A closed task: one entry, where its turns were. */
+  .fold {
+    margin: .4rem 0; padding: .5rem .7rem;
+    border-left: 3px solid var(--b-summaries); background: #12151a; border-radius: 0 6px 6px 0;
+  }
+  .fold-head { display: flex; align-items: center; gap: .6rem; }
+  .fold-head button:first-child { flex: 1; text-align: left; }
+  .fold .summary { margin: .4rem 0 0; white-space: pre-wrap; font-size: 12px; color: var(--dim); }
+  button.link {
+    background: none; border: 0; color: inherit; cursor: pointer;
+    padding: 0; font: inherit; text-decoration: underline dotted;
+  }
+  button.link:disabled { opacity: .5; cursor: default; }
 
   .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #0e1014; }
   .bar span { min-width: 2px; }

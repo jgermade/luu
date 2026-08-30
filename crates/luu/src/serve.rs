@@ -12,9 +12,11 @@ use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
+use agent_core::task::{Plan, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
+use agent_core::turn::{EndReason, run_turn};
 
-use crate::session::{Agency, Event, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
+use crate::session::{Agency, Event, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -47,6 +49,16 @@ struct Session {
     /// Beside the context, because what it measures is a property of two
     /// consecutive prompts of *this* session.
     prefix: PrefixTracker,
+    /// A proposal waiting on a person, holding the prompt that caused it.
+    /// While this is set, nothing runs: not a turn, not a tool, not a model
+    /// call. That is the gate.
+    pending: Option<Pending>,
+}
+
+/// A prompt held between the proposal and the answer to it.
+struct Pending {
+    task: TaskId,
+    prompt: String,
 }
 
 /// The id the live session is served under. There is one until sessions are
@@ -135,6 +147,7 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
             cancel: None,
             context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
             prefix: PrefixTracker::default(),
+            pending: None,
         }),
         events: broadcast::channel(1024).0,
         recorder,
@@ -280,13 +293,25 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                 };
                 match serde_json::from_str::<ClientMessage>(&text) {
                     Ok(ClientMessage::Prompt { text }) => {
-                        start_turn(app.clone(), text).await;
+                        on_prompt(app.clone(), text).await;
                     }
                     Ok(ClientMessage::Cancel) => {
                         let session = app.session.lock().await;
                         if let Some(cancel) = &session.cancel {
                             let _ = cancel.send(true);
                         }
+                    }
+                    Ok(ClientMessage::ApproveTask { task }) => {
+                        approve_task(app.clone(), task).await;
+                    }
+                    Ok(ClientMessage::RejectTask { task }) => {
+                        reject_task(app.clone(), task).await;
+                    }
+                    Ok(ClientMessage::CloseTask { task }) => {
+                        close_task(app.clone(), task).await;
+                    }
+                    Ok(ClientMessage::ReopenTask { task }) => {
+                        reopen_task(app.clone(), task).await;
                     }
                     // Unparseable input from one client must not take the
                     // server down for the others.
@@ -297,12 +322,182 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
     }
 }
 
-async fn start_turn(app: Arc<App>, prompt: String) {
+/// A prompt either starts a task or belongs to one.
+///
+/// The gate is here and nowhere else: with no task open, the prompt buys a
+/// planning call and is then held until a person answers it. With one open, it
+/// is a turn inside work that was already approved — confirmation is per piece
+/// of work, not per message.
+async fn on_prompt(app: Arc<App>, prompt: String) {
+    let propose = {
+        let session = app.session.lock().await;
+        // A second prompt during a confirmation is a second thing nobody
+        // approved. The composer is disabled client-side; this is the half that
+        // does not depend on the client behaving.
+        if session.pending.is_some() {
+            return;
+        }
+        session.context.live_task().is_none()
+    };
+
+    match propose {
+        true => propose_task(app, prompt).await,
+        false => start_turn(app, prompt).await,
+    }
+}
+
+/// Asks the agent what it is about to do, then holds the prompt until someone
+/// answers.
+///
+/// The planning call is a turn: a prompt goes in, tokens come out, it costs a
+/// window, and every panel that explains a turn explains this one too. It is
+/// the one turn that is **not** remembered — what survives it is the task, and
+/// a plan block in the history would be paid for on every later call.
+///
+/// It runs through [`run_turn`] rather than the agent loop, so it has no tools:
+/// a planning call that could execute something would be the gate leaking.
+async fn propose_task(app: Arc<App>, prompt: String) {
+    let Some((turn, cancel_rx, request)) = begin_turn(&app, &prompt, Some(PLANNING)).await else {
+        return;
+    };
+
+    tokio::spawn(async move {
+        let (tx, mut rx) = mpsc::channel(256);
+        let forwarder = {
+            let app = app.clone();
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    app.publish(Event::Protocol(ServerMessage::from_turn_event(turn, event)))
+                        .await;
+                }
+            })
+        };
+        let outcome = run_turn(app.backend.as_ref(), request, tx, cancel_rx).await;
+        let _ = forwarder.await;
+
+        {
+            let mut session = app.session.lock().await;
+            session.current = None;
+            session.cancel = None;
+        }
+
+        // Cancelled or broken: there is no proposal, and inventing one would
+        // put a plan in front of a person that nothing produced.
+        if outcome.error.is_some() || outcome.reason == EndReason::Cancelled {
+            return;
+        }
+
+        // A small model answering in prose is the ordinary case, and it must
+        // not cost the gate. Then the proposal is the ask itself, declaring
+        // nothing, and the panel says the model did not declare a plan.
+        let proposal = parse_plan(&outcome.text).unwrap_or_else(|| Proposal {
+            objective: prompt.clone(),
+            plan: Plan::default(),
+        });
+
+        let task = {
+            let mut session = app.session.lock().await;
+            let task = session
+                .context
+                .propose_task(proposal.objective.clone(), proposal.plan.clone());
+            session.pending = Some(Pending { task, prompt });
+            task
+        };
+        app.publish(Event::Protocol(ServerMessage::TaskProposed {
+            task,
+            objective: proposal.objective,
+            plan: proposal.plan,
+        }))
+        .await;
+    });
+}
+
+/// Approves it and runs the prompt that was held.
+async fn approve_task(app: Arc<App>, task: TaskId) {
+    let prompt = {
+        let mut session = app.session.lock().await;
+        // Nothing can be running here — a prompt behind the gate is refused, so
+        // the planning turn is the last one there was. Checked anyway, because
+        // the alternative to being wrong about it is a held prompt taken out of
+        // `pending` and then silently dropped by a turn that could not start.
+        match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.task == task)
+        {
+            true => {
+                session.context.approve_task(task);
+                session.pending.take().map(|pending| pending.prompt)
+            }
+            // An approval for something else, or for a second time. Not an
+            // error: two clients watching the same session can both press it.
+            false => None,
+        }
+    };
+    let Some(prompt) = prompt else { return };
+
+    app.publish(Event::Protocol(ServerMessage::TaskApproved { task }))
+        .await;
+    start_turn(app, prompt).await;
+}
+
+/// Refuses it. The held prompt goes with it: a prompt whose plan was turned
+/// down is not a prompt that was approved on its own.
+async fn reject_task(app: Arc<App>, task: TaskId) {
+    {
+        let mut session = app.session.lock().await;
+        if session.pending.as_ref().is_none_or(|p| p.task != task) {
+            return;
+        }
+        session.pending = None;
+        session.context.reject_task(task);
+    }
+    app.publish(Event::Protocol(ServerMessage::TaskRejected { task }))
+        .await;
+}
+
+/// Closes it: from here its turns are sent as their summary.
+async fn close_task(app: Arc<App>, task: TaskId) {
+    let summary = {
+        let mut session = app.session.lock().await;
+        // Not while a turn is in flight: it would fold the history under the
+        // turn that is being answered against it.
+        if session.current.is_some() {
+            return;
+        }
+        let counter = app.counter.clone();
+        session.context.close_task(task, counter.as_ref())
+    };
+    let Some(summary) = summary else { return };
+
+    app.publish(Event::Protocol(ServerMessage::TaskClosed { task, summary }))
+        .await;
+}
+
+/// Unfolds it. Nothing is recovered, because nothing was deleted.
+async fn reopen_task(app: Arc<App>, task: TaskId) {
+    {
+        let mut session = app.session.lock().await;
+        if session.current.is_some() || !session.context.reopen_task(task) {
+            return;
+        }
+    }
+    app.publish(Event::Protocol(ServerMessage::TaskReopened { task }))
+        .await;
+}
+
+/// Everything two kinds of model call share: the turn number, the selection,
+/// and the three trace messages that explain it.
+///
+/// `instruction` is fused into the *current user message* when there is one —
+/// never into the system block, which is the part the cache reuses. `None`
+/// while a turn is already running: one at a time until sessions exist.
+async fn begin_turn(
+    app: &Arc<App>,
+    prompt: &str,
+    instruction: Option<&str>,
+) -> Option<(TurnId, watch::Receiver<bool>, CompletionRequest)> {
     let (turn, task, cancel_rx, selection, prompt_sent, reuse) = {
         let mut session = app.session.lock().await;
         if session.current.is_some() {
-            // One turn at a time until sessions exist.
-            return;
+            return None;
         }
         let turn = session.next_turn;
         session.next_turn += 1;
@@ -310,27 +505,30 @@ async fn start_turn(app: Arc<App>, prompt: String) {
 
         let (tx, rx) = watch::channel(false);
         session.cancel = Some(tx);
+        let text = match instruction {
+            Some(instruction) => format!("{instruction}{prompt}"),
+            None => prompt.to_string(),
+        };
         // Selected under the same lock that hands out the turn number, so the
         // history a turn is built from is the history at the moment it started.
         let selection = session
             .context
-            .select(&prompt, &[], app.budget, app.counter.as_ref());
+            .select(&text, &[], app.budget, app.counter.as_ref());
         // Measured under the same lock, so two turns cannot interleave and
         // measure themselves against each other's prompt.
         let prompt_sent = rendered(&selection.messages);
         let reuse = session
             .prefix
             .measure(turn, &prompt_sent, app.counter.as_ref());
-        // Always `None` until a client can approve a task over the socket;
-        // read from the context rather than written as one, so it starts
-        // reporting the truth the moment it can be something else.
         let task = session.context.live_task();
         (turn, task, rx, selection, prompt_sent, reuse)
     };
 
+    // The user's ask, not the instruction fused in front of it: `prompt` is
+    // what was asked and the trace below carries what was sent.
     app.publish(Event::Protocol(ServerMessage::TurnStarted {
         turn,
-        prompt: prompt.clone(),
+        prompt: prompt.to_string(),
         task,
     }))
     .await;
@@ -353,9 +551,19 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     }))
     .await;
 
-    let request = CompletionRequest {
-        model: app.model.clone(),
-        messages: selection.messages,
+    Some((
+        turn,
+        cancel_rx,
+        CompletionRequest {
+            model: app.model.clone(),
+            messages: selection.messages,
+        },
+    ))
+}
+
+async fn start_turn(app: Arc<App>, prompt: String) {
+    let Some((turn, cancel_rx, request)) = begin_turn(&app, &prompt, None).await else {
+        return;
     };
 
     tokio::spawn(async move {
@@ -483,4 +691,197 @@ async fn get_context(Path(id): Path<String>, State(state): State<AppRouterState>
         "budget": latest.and_then(|t| t.budget.clone()),
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use agent_core::backend::mock::Mock;
+    use agent_core::context::{ApproximateCounter, Eviction};
+    use agent_core::sandbox::SandboxPolicy;
+    use agent_core::task::TaskState;
+
+    use super::*;
+
+    const PLAN: &str = "```plan\n{\"objective\":\"add a flag\",\"steps\":[\"read the CLI\"],\
+                        \"files\":[\"Cargo.toml\"],\"commands\":[]}\n```";
+
+    /// The server without a socket in front of it. The handlers are what the
+    /// socket calls, one line each, so driving them directly tests the gate
+    /// rather than axum.
+    fn app(replies: &[&str]) -> Arc<App> {
+        let base = std::env::current_dir().unwrap();
+        let agency = Agency {
+            tools: Arc::new(agent_core::tools::Tools::standard()),
+            sandbox: Arc::new(
+                agent_core::sandbox::Sandbox::new(&SandboxPolicy::default(), &base).unwrap(),
+            ),
+            max_steps: 4,
+        };
+        Arc::new(App {
+            backend: Arc::new(
+                Mock::replies(replies.iter().map(|r| (*r).to_string()).collect())
+                    .delay(std::time::Duration::ZERO),
+            ),
+            model: "mock".into(),
+            session: Mutex::new(Session {
+                next_turn: 1,
+                current: None,
+                cancel: None,
+                context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
+                prefix: PrefixTracker::default(),
+                pending: None,
+            }),
+            events: broadcast::channel(1024).0,
+            recorder: None,
+            counter: Arc::new(ApproximateCounter),
+            budget: Budget::new(0, 0, Eviction::Turn),
+            agency,
+            view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
+            started_at: 0,
+        })
+    }
+
+    /// The handlers spawn, so the assertions wait for the state they are about.
+    async fn until(app: &Arc<App>, what: impl Fn(&Session) -> bool) -> bool {
+        for _ in 0..200 {
+            if what(&*app.session.lock().await) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn a_prompt_with_no_task_open_is_planned_and_then_held() {
+        let app = app(&[PLAN, "the answer"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
+
+        let session = app.session.lock().await;
+        let task = session.context.task(1).unwrap();
+        assert_eq!(task.state, TaskState::Proposed);
+        assert_eq!(task.plan.files, ["Cargo.toml"]);
+        assert_eq!(
+            session.context.turns().len(),
+            0,
+            "the planning call is not remembered, and nothing has run under the task",
+        );
+    }
+
+    #[tokio::test]
+    async fn approving_runs_the_prompt_that_was_held() {
+        let app = app(&[PLAN, "the answer"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+
+        approve_task(app.clone(), 1).await;
+        assert!(
+            until(&app, |s| s.context.turns().len() == 1).await,
+            "the held prompt never ran",
+        );
+
+        let session = app.session.lock().await;
+        assert!(session.pending.is_none());
+        assert_eq!(session.context.task(1).unwrap().state, TaskState::Approved);
+        assert_eq!(session.context.turns()[0].prompt, "add a flag");
+        assert_eq!(
+            session.context.turns()[0].task,
+            Some(1),
+            "the turn belongs to the task it was approved under",
+        );
+    }
+
+    #[tokio::test]
+    async fn rejecting_drops_the_prompt_with_the_plan() {
+        let app = app(&[PLAN, "the answer"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+
+        reject_task(app.clone(), 1).await;
+        let session = app.session.lock().await;
+        assert!(session.pending.is_none());
+        assert_eq!(session.context.task(1).unwrap().state, TaskState::Rejected);
+        assert!(
+            session.context.turns().is_empty(),
+            "a prompt whose plan was turned down is not a prompt that was approved on its own",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_prompt_behind_the_gate_does_not_run() {
+        let app = app(&[PLAN, "the answer"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+
+        on_prompt(app.clone(), "and also this".into()).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let session = app.session.lock().await;
+        assert_eq!(session.pending.as_ref().unwrap().prompt, "add a flag");
+        assert!(session.context.turns().is_empty());
+        assert_eq!(
+            session.context.tasks().len(),
+            1,
+            "a second prompt during a confirmation is a second thing nobody approved",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_prompt_inside_a_live_task_is_a_turn_and_not_another_gate() {
+        let app = app(&[PLAN, "the answer"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve_task(app.clone(), 1).await;
+        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+
+        on_prompt(app.clone(), "now the tests".into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
+
+        let session = app.session.lock().await;
+        assert_eq!(session.context.tasks().len(), 1, "no second proposal");
+        assert!(session.pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn closing_folds_the_task_and_reopening_unfolds_it() {
+        let app = app(&[PLAN, "the answer"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve_task(app.clone(), 1).await;
+        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+
+        close_task(app.clone(), 1).await;
+        {
+            let session = app.session.lock().await;
+            let task = session.context.task(1).unwrap();
+            assert_eq!(task.state, TaskState::Closed);
+            assert!(task.summary.as_ref().unwrap().text.contains("add a flag"));
+            assert_eq!(
+                session.context.turns().len(),
+                1,
+                "closing is an event: the turn is still there",
+            );
+        }
+
+        reopen_task(app.clone(), 1).await;
+        let session = app.session.lock().await;
+        assert_eq!(session.context.task(1).unwrap().state, TaskState::Approved);
+        assert!(session.context.task(1).unwrap().summary.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_model_that_answers_in_prose_still_gets_a_gate() {
+        let app = app(&["I'll read the CLI and add it.", "the answer"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
+
+        let session = app.session.lock().await;
+        let task = session.context.task(1).unwrap();
+        assert_eq!(
+            task.objective, "add a flag",
+            "the ask itself becomes the objective when the model declares nothing",
+        );
+        assert!(task.plan.files.is_empty());
+    }
 }

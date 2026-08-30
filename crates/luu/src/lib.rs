@@ -90,6 +90,12 @@ enum Command {
         #[arg(long, default_value_t = 25)]
         mock_delay_ms: u64,
 
+        /// What the mock backend answers, one per model call, the last
+        /// repeating. The gate needs two to be seen working without a model:
+        /// the plan block the planning call returns, then the answer.
+        #[arg(long = "mock-reply", value_name = "TEXT")]
+        mock_replies: Vec<String>,
+
         /// Write every protocol and trace message to a replayable JSON-lines file.
         #[arg(long)]
         record: Option<std::path::PathBuf>,
@@ -498,6 +504,7 @@ pub async fn run() -> Result<()> {
         model,
         ollama_url,
         mock_delay_ms,
+        mock_replies,
         record,
         context_limit,
         tokenizer,
@@ -506,7 +513,7 @@ pub async fn run() -> Result<()> {
         low_water,
     } = command
     {
-        let backend = build_backend(backend, &ollama_url, mock_delay_ms, Vec::new());
+        let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
         let model = model_for(backend.as_ref(), model);
         let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
         if let Some(warning) = &warning {

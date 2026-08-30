@@ -56,14 +56,27 @@ so a folded task is kept or dropped whole and the two ways history gives way
 compose. The budget gained a `summaries` bucket, because a fold nobody can see in
 the panel is a claim rather than a measurement.
 
-**How a task is approved today**: in a script, which is where a repeatable run
-comes from. `## task:` names the objective, `## step:` / `## file:` / `## command:`
-give the plan, `## close` closes it. The written plan *is* the approval, and
-approving it is a real check — every file it names must be reachable in the
-sandbox and every command allowed by it, or the run stops before the first turn.
-Interactive approval, and the plan *narrowing* the sandbox rather than being
-checked against it, are still ahead; see
-[`RECORD/2026-08-30.tasks-in-code.md`](RECORD/2026-08-30.tasks-in-code.md).
+**How a task is approved**, in the two places there is something to approve:
+
+- **In `luu serve`**, by a person. A prompt arriving with no task open buys one
+  planning call — the agent is asked what it is about to do, and answers with a
+  fenced ```` ```plan ```` block, parsed the same way a tool call is. The prompt is
+  then **held on the server, unrun**, until someone approves or refuses it: no
+  turn, no tool, no model call happens behind the gate. A model that answers in
+  prose instead does not cost the gate — the proposal becomes the ask itself,
+  declaring nothing, and the panel says so.
+- **In a script**, which is where a repeatable run comes from. `## task:` names
+  the objective, `## step:` / `## file:` / `## command:` give the plan, `## close`
+  closes it. The written plan *is* the approval.
+
+Either way approving runs a real check: every file the plan names must be
+reachable in the sandbox and every command allowed by it. What it does not yet do
+is *narrow* — the plan is checked against the policy file and does not replace it.
+See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md).
+
+A refusal is kept, not erased: `rejected` is a state a task stays in, with the
+plan that was turned down. Nothing in a session is deleted — a closed task is
+folded, a reopened one unfolded, a refused one recorded.
 
 **Who declares a task done** is a ladder, not a single answer: deterministic checks
 (exit codes, tests) first, then a judge, then the user's final question, which is the
@@ -321,6 +334,13 @@ Level 3, and still ahead. The level-2 restrictions stay applied inside it.
 A local web UI (chat, session browser, context inspector) is the fastest way to see what the
 context manager is actually doing — the CLI can't show a token budget or a prompt diff.
 
+**v1 of the message enums is frozen.** `ClientMessage` is `prompt`, `cancel`,
+`approve_task`, `reject_task`, `close_task`, `reopen_task`; `ServerMessage` is
+the eleven the server emits, the task lifecycle included. It was frozen only once
+every one of them had been watched being sent and answered rather than imagined
+— the record format moved to 3 with it, and a change an older reader could not
+make sense of bumps both from here.
+
 ### Transport: HTTP + WebSocket, not REST-only and not gRPC
 
 **Decision: one JSON message schema, several transports (stdio, WebSocket), served over plain HTTP.**
@@ -497,15 +517,17 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Interactive approval: `ClientMessage::{ApproveTask, RejectTask}` and the gate in
-  `luu chat` and `luu serve`. Today a task is approved by being written into a
-  script, which is enough to measure the fold and not enough to use.
 - Make the approved plan *be* the `SandboxPolicy` for its task, with the file as
-  its floor. It is currently checked against the file and does not narrow it;
-  narrowing needs the interactive gate, so a plan that forgot a file can be
-  widened by the person approving it rather than dying four turns in.
+  its floor. It is currently checked against the file and does not narrow it.
+  The gate now exists, so the person approving can widen a plan that forgot a
+  file rather than watching the run die four turns in — which was the
+  precondition.
+- Who else may close a task: exit codes and tests first, then the judge in
+  shadow mode. The user is the only authority that closes one today.
 - Design the concrete GBNF grammar to force valid tool calls with the target model
   (Qwen2.5-Coder), replacing the text parse.
 - `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window
   that canonicalize-then-open leaves.
-- Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format) — with the interactive gate, not before it: the client half of the task lifecycle has not been watched happen yet, and an enum written from imagination is wrong exactly where it matters.
+- The CLI has no gate: `luu chat "prompt"` runs one turn with the policy file as
+  the standing approval, because a one-shot has no human loop to gate. Whether it
+  should grow one, or stay the scripted/one-shot surface it is, is open.

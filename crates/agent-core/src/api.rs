@@ -237,6 +237,11 @@ impl SessionView {
                     view.summary = Some(summary.clone());
                 }
             }
+            ServerMessage::TaskRejected { task } => {
+                if let Some(view) = self.task_mut(*task) {
+                    view.state = TaskState::Rejected;
+                }
+            }
             ServerMessage::TaskReopened { task } => {
                 if let Some(view) = self.task_mut(*task) {
                     view.state = TaskState::Approved;

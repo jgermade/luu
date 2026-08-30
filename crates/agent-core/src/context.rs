@@ -353,6 +353,18 @@ impl Context {
         }
     }
 
+    /// Refuses a proposal. Nothing ran under it, so nothing folds; the task
+    /// stays in the session as the record of what was turned down.
+    pub fn reject_task(&mut self, id: TaskId) -> bool {
+        match self.task_mut(id) {
+            Some(task) => {
+                task.reject();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Closes it: from the next selection on, its turns render as one summary.
     ///
     /// The summary is written from the task's own tool steps, so it is evidence

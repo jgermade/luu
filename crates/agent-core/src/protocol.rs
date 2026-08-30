@@ -22,16 +22,15 @@ use crate::turn::{EndReason, TurnEvent};
 
 /// Bumped when a change would break an older client. `Hello` carries it so a
 /// mismatch is a message rather than a mystery.
+///
+/// **v1 is frozen.** Every message below has been watched being sent and
+/// answered — the task lifecycle included, which is what the freeze was waiting
+/// on. From here a change that an older reader could not make sense of bumps
+/// this, and [`crate::record::FORMAT`] with it.
 pub const VERSION: u32 = 1;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
-
-// The client half of the task lifecycle — approve, reject — is deliberately
-// absent, and so is the "v1 is frozen" claim that was meant to come with it.
-// Nothing has watched a human approve a task yet; the script's approval is a
-// parse, not a message, and an enum written from imagination is wrong exactly
-// where it matters. See `RECORD/2026-08-30.tasks-in-code.md`.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -41,6 +40,18 @@ pub enum ClientMessage {
     /// Stop the turn in flight. Cancelling when nothing is running is not an
     /// error — a client that raced the end of a turn did nothing wrong.
     Cancel,
+    /// Approve a proposed task. Nothing has run under it until this arrives:
+    /// the prompt that caused the proposal is held, unrun, until it does.
+    ApproveTask { task: TaskId },
+    /// Refuse it. The held prompt is dropped with it — a prompt whose plan was
+    /// turned down is not a prompt that was approved on its own.
+    RejectTask { task: TaskId },
+    /// Close it: from here its turns are sent as their summary. The user is the
+    /// only authority that closes a task today; the ladder above them
+    /// (exit codes, then a judge in shadow mode) is still ahead.
+    CloseTask { task: TaskId },
+    /// Unfold it. Not an undo: nothing was deleted to recover.
+    ReopenTask { task: TaskId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +95,11 @@ pub enum ServerMessage {
     },
     /// The fold stops applying. Not an undo — nothing was deleted.
     TaskReopened {
+        task: TaskId,
+    },
+    /// The plan was put up and turned down. The task stays in the session with
+    /// it: a refusal is a thing that happened.
+    TaskRejected {
         task: TaskId,
     },
     Token {
@@ -179,7 +195,8 @@ impl ServerMessage {
             Self::TaskProposed { .. }
             | Self::TaskApproved { .. }
             | Self::TaskClosed { .. }
-            | Self::TaskReopened { .. } => None,
+            | Self::TaskReopened { .. }
+            | Self::TaskRejected { .. } => None,
         }
     }
 }
@@ -241,6 +258,22 @@ mod tests {
             None,
             "a task spans turns; pinning it to one would be a guess",
         );
+    }
+
+    #[test]
+    fn the_client_half_of_the_lifecycle_parses_from_the_wire() {
+        for (text, expected) in [
+            (r#"{"type":"approve_task","task":2}"#, "ApproveTask"),
+            (r#"{"type":"reject_task","task":2}"#, "RejectTask"),
+            (r#"{"type":"close_task","task":2}"#, "CloseTask"),
+            (r#"{"type":"reopen_task","task":2}"#, "ReopenTask"),
+        ] {
+            let parsed: ClientMessage = serde_json::from_str(text).unwrap();
+            assert!(
+                format!("{parsed:?}").starts_with(expected),
+                "{text} parsed as {parsed:?}",
+            );
+        }
     }
 
     #[test]
