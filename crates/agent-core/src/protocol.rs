@@ -23,14 +23,36 @@ use crate::turn::{EndReason, TurnEvent};
 /// Bumped when a change would break an older client. `Hello` carries it so a
 /// mismatch is a message rather than a mystery.
 ///
-/// **v1 is frozen.** Every message below has been watched being sent and
-/// answered — the task lifecycle included, which is what the freeze was waiting
-/// on. From here a change that an older reader could not make sense of bumps
-/// this, and [`crate::record::FORMAT`] with it.
-pub const VERSION: u32 = 1;
+/// **v1 was frozen** once every message in it had been watched being sent and
+/// answered, the task lifecycle included, with the rule that a change an older
+/// reader could not make sense of bumps this and [`crate::record::FORMAT`] with
+/// it.
+///
+/// **2 is that rule being used**, for [`ServerMessage::Refused`]: an unknown
+/// `type` in a tagged enum is a parse error rather than a line to skip, so a new
+/// variant is exactly the change the rule names. See
+/// `RECORD/2026-08-30.a-refusal-is-a-message.md`.
+pub const VERSION: u32 = 2;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
+
+/// Why the server did not do what was asked. Small on purpose: a client
+/// branches on this and shows [`ServerMessage::Refused::detail`] to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Refusal {
+    /// A turn is running. One at a time until sessions exist.
+    Busy,
+    /// A proposal is waiting on a person. Nothing runs behind the gate.
+    Pending,
+    /// The task named is not in a state where the ask applies — approved
+    /// twice, closed while nothing was open, reopened when it was never closed.
+    Task,
+    /// Part of what was asked for is not granted by the policy file, which is
+    /// the outer bound nobody may widen past.
+    NotGranted,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -136,6 +158,23 @@ pub enum ServerMessage {
         turn: TurnId,
         message: String,
     },
+    /// The server did not do what a client asked, and why.
+    ///
+    /// Not a failure and not a turn: the session is in a state where the ask
+    /// does not apply. Before this existed the server simply returned, and a
+    /// client could not tell a refusal from a message that never arrived — so
+    /// the UI guessed, by disabling its own composer, which is not a permission
+    /// model and not an interface either.
+    ///
+    /// It travels on the protocol rather than the trace channel because it
+    /// *drives* a client: it is the answer to why nothing happened.
+    Refused {
+        /// The `type` of the client message being refused.
+        request: String,
+        reason: Refusal,
+        /// The same thing in words, for a person to read.
+        detail: String,
+    },
     /// A tool the model asked for, before it was checked. `step` counts from 1
     /// within the turn.
     ToolCall {
@@ -216,12 +255,15 @@ impl ServerMessage {
             | Self::Failed { turn, .. }
             | Self::ToolCall { turn, .. }
             | Self::ToolResult { turn, .. } => Some(*turn),
-            // A task spans turns and its lifecycle happens between them.
+            // A task spans turns and its lifecycle happens between them, and a
+            // refusal is about the ask rather than about a turn — three of the
+            // four happen when there is no turn to name.
             Self::TaskProposed { .. }
             | Self::TaskApproved { .. }
             | Self::TaskClosed { .. }
             | Self::TaskReopened { .. }
-            | Self::TaskRejected { .. } => None,
+            | Self::TaskRejected { .. }
+            | Self::Refused { .. } => None,
         }
     }
 }

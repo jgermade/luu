@@ -25,7 +25,11 @@ use crate::trace::TraceMessage;
 /// format-2 reader would choke on the first of them — an unknown `type` in a
 /// tagged enum is a parse error, not a line to skip. Turns also gained the task
 /// they belong to, and that half is backwards compatible: absent means none.
-pub const FORMAT: u32 = 3;
+///
+/// 4: `refused` lines, for the same reason as 3 — a new variant of a tagged
+/// enum. `task_approved` also gained the plan as approved, and that half is
+/// backwards compatible: absent means the proposal is the best answer there is.
+pub const FORMAT: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]

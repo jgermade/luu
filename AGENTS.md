@@ -98,7 +98,14 @@ cancelling, and `--record <file>` writes a replayable session from either subcom
 
 In `serve`, a prompt with no task open buys a planning call and is then **held,
 unrun**, until it is approved or refused in the UI — nothing runs behind the
-gate, and a client that sends a prompt anyway is ignored. A closed task collapses
+gate, and a client that sends a prompt anyway gets a `refused` message saying
+why: a turn is running, a proposal is pending, the task is not in that state, or
+the policy file does not grant part of what was asked. That message is what took
+the protocol to v2 (and the record format to 4) — a new variant of a tagged enum
+is a change an older reader cannot parse. The task lifecycle is a state machine
+and every transition is guarded: a proposal cannot be closed, a rejected plan
+cannot be reopened. See
+[`RECORD/2026-08-30.a-refusal-is-a-message.md`](RECORD/2026-08-30.a-refusal-is-a-message.md). A closed task collapses
 in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
 

@@ -35,7 +35,11 @@
   }
 
   $: running = state.status === "running"
-  $: replaying = state.status === "replay"
+  // Whether this is a recording, which is not the same question as what the
+  // status word says: it reads "running" while a recorded turn plays, and a
+  // composer that asked the status was enabled over a recording nobody can
+  // send into.
+  $: replaying = state.replay
   // The gate. While this is set the server is holding a prompt, unrun.
   $: proposed = state.tasks.find(task => task.state === "proposed") || null
   $: live = state.tasks.find(task => task.state === "approved") || null
@@ -124,6 +128,13 @@
     </div>
 
     <div :if="state.error" class="error">{{ state.error }}</div>
+
+    <!-- The server declining to do something. Not an error: the session is in
+         a state where the ask does not apply, and before this existed the ask
+         simply vanished. -->
+    <div :if="state.refused" class="refused">
+      <b>{{ state.refused?.request }}</b> refused — {{ state.refused?.detail }}
+    </div>
 
     <!-- Nothing has run under this task and nothing will until it is answered:
          the prompt that caused it is held on the server, unrun. -->
@@ -399,6 +410,13 @@
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
   .gate p { margin: .2rem 0; }
   .gate-buttons { display: flex; gap: .5rem; margin-top: .6rem; }
+  .refused {
+    margin: 0 1rem .4rem; padding: .4rem .7rem;
+    border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;
+    background: #1a1712; color: var(--dim); font-size: 13px;
+  }
+  .refused b { color: var(--warn); font-weight: 600; }
+
   .amend { display: flex; align-items: center; gap: .4rem; margin: .5rem 0 .2rem; }
   .amend input {
     flex: 1; min-width: 0; padding: .3rem .5rem;

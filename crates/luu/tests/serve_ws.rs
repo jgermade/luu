@@ -51,7 +51,17 @@ async fn server() -> String {
     server_with(vec![PLAN.into(), ANSWER.into()]).await
 }
 
+/// The same, at the pace the mock streams by default — a token every 30ms, so
+/// a turn is still running when the next message arrives.
+async fn server_slow(replies: Vec<String>) -> String {
+    server_at(replies, Duration::from_millis(30)).await
+}
+
 async fn server_with(replies: Vec<String>) -> String {
+    server_at(replies, Duration::ZERO).await
+}
+
+async fn server_at(replies: Vec<String>, delay: Duration) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
         tools: Arc::new(Tools::standard()),
@@ -60,7 +70,7 @@ async fn server_with(replies: Vec<String>) -> String {
     };
     let serving = bind(ServeOptions {
         address: "127.0.0.1:0".parse().expect("a loopback address"),
-        backend: Arc::new(Mock::replies(replies).delay(Duration::ZERO)),
+        backend: Arc::new(Mock::replies(replies).delay(delay)),
         model: "mock".into(),
         record: None,
         budget: Budget::new(0, 0, Eviction::Turn),
@@ -129,7 +139,9 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    assert_eq!(hello["protocol"], 1);
+    // 2 since `refused`: a new variant of a tagged enum is a change an older
+    // reader cannot parse, which is what this number is for.
+    assert_eq!(hello["protocol"], 2);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
 
@@ -158,12 +170,25 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
     assert_eq!(proposed["plan"]["files"][0], "Cargo.toml");
 
     // Nothing has run under the task yet. A second prompt here is a second
-    // thing nobody approved, and the server — not the client — refuses it.
+    // thing nobody approved, and the server — not the client — refuses it,
+    // out loud: a refusal a client cannot tell from a dropped message is why
+    // the UI used to have to guess by disabling its own composer.
     send(
         &mut socket,
         serde_json::json!({"type": "prompt", "text": "and also this"}),
     )
     .await;
+
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["request"], "prompt");
+    assert_eq!(refused["reason"], "pending");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .expect("a detail")
+            .contains("task 1"),
+        "{refused}",
+    );
 
     send(
         &mut socket,
@@ -394,4 +419,159 @@ async fn a_file_added_at_the_gate_is_in_the_task_sandbox() {
     // And the read API carries the plan as approved, not as proposed.
     let session = get(&address, "/api/sessions/live").await;
     assert_eq!(session["tasks"][0]["plan"]["files"][1], "src/serve.rs");
+}
+
+/// The three other silences, each of which used to be an early return.
+#[tokio::test]
+async fn the_server_says_why_it_did_not_do_something() {
+    // A slow mock, so the second prompt lands while the first turn is still
+    // running rather than after it — which is the state being tested.
+    let address = server_with(vec![PLAN.into(), ANSWER.into()]).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // Nothing is open, so nothing can be closed, reopened or rejected.
+    for (request, reason) in [
+        ("close_task", "task"),
+        ("reopen_task", "task"),
+        ("reject_task", "task"),
+        ("approve_task", "task"),
+    ] {
+        send(&mut socket, serde_json::json!({"type": request, "task": 7})).await;
+        let (refused, _) = until(&mut socket, "refused").await;
+        assert_eq!(refused["request"], request);
+        assert_eq!(refused["reason"], reason, "{refused}");
+        assert!(
+            refused["detail"].as_str().expect("a detail").contains("7"),
+            "a refusal names what was refused: {refused}",
+        );
+    }
+}
+
+/// A prompt sent while a turn is running: the one the `busy` item was named
+/// after. The planning call is still streaming when the second prompt arrives.
+#[tokio::test]
+async fn a_prompt_while_a_turn_runs_is_refused_as_busy() {
+    let address = server_slow(vec![PLAN.into(), ANSWER.into()]).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    // The turn has started and its tokens are arriving one every 30ms, so this
+    // arrives in the middle of it.
+    until(&mut socket, "turn_started").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "and this too"}),
+    )
+    .await;
+
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["request"], "prompt");
+    assert_eq!(refused["reason"], "busy");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .expect("a detail")
+            .contains("turn 1"),
+        "{refused}",
+    );
+}
+
+/// The fourth one, and the newest: an amendment at the gate naming something
+/// the policy file does not grant is dropped from the plan — and now says so.
+#[tokio::test]
+async fn an_amendment_the_policy_refuses_is_reported_not_only_dropped() {
+    let address = server_with(vec![
+        PLAN_FOR_CARGO_TOML.into(),
+        "Read it.".into(),
+        "Read it.".into(),
+    ])
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "read the manifest"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_task",
+            "task": 1,
+            "files": ["/etc/passwd"],
+            "commands": [],
+        }),
+    )
+    .await;
+
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["request"], "approve_task");
+    assert_eq!(refused["reason"], "not_granted");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .expect("a detail")
+            .contains("/etc/passwd"),
+        "{refused}",
+    );
+
+    // And the task still runs: the approval was not thrown away with the part
+    // of it nobody may grant.
+    let (approved, _) = until(&mut socket, "task_approved").await;
+    assert_eq!(approved["plan"]["files"], serde_json::json!(["Cargo.toml"]));
+}
+
+/// The lifecycle is a state machine and the socket is open to anyone: closing
+/// a task that was only *proposed* used to succeed, which took the gate off
+/// the screen with its prompt still held and left the session with no way to
+/// answer a proposal nobody could see. Found by driving the real page.
+#[tokio::test]
+async fn a_proposal_cannot_be_closed_out_from_under_the_gate() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "close_task", "task": 1}),
+    )
+    .await;
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["request"], "close_task");
+    assert_eq!(refused["reason"], "task");
+
+    // Still waiting on a person, and still answerable.
+    let session = get(&address, "/api/sessions/live").await;
+    assert_eq!(session["tasks"][0]["state"], "proposed");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_task", "task": 1}),
+    )
+    .await;
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(started["turn"], 2, "the held prompt still runs");
 }

@@ -11,7 +11,7 @@ use agent_core::agent::run_agent_turn;
 use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
-use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
+use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
 use agent_core::sandbox::Sandbox;
 use agent_core::task::{Plan, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
@@ -378,6 +378,20 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
     }
 }
 
+/// Says no, and why.
+///
+/// Every early return in this file that a client could not otherwise
+/// distinguish from a dropped message goes through here. See
+/// `RECORD/2026-08-30.a-refusal-is-a-message.md`.
+async fn refuse(app: &Arc<App>, request: &str, reason: Refusal, detail: impl Into<String>) {
+    app.publish(Event::Protocol(ServerMessage::Refused {
+        request: request.to_string(),
+        reason,
+        detail: detail.into(),
+    }))
+    .await;
+}
+
 /// A prompt either starts a task or belongs to one.
 ///
 /// The gate is here and nowhere else: with no task open, the prompt buys a
@@ -390,7 +404,16 @@ async fn on_prompt(app: Arc<App>, prompt: String) {
         // A second prompt during a confirmation is a second thing nobody
         // approved. The composer is disabled client-side; this is the half that
         // does not depend on the client behaving.
-        if session.pending.is_some() {
+        if let Some(pending) = &session.pending {
+            let task = pending.task;
+            drop(session);
+            refuse(
+                &app,
+                "prompt",
+                Refusal::Pending,
+                format!("task {task} is waiting to be approved or refused"),
+            )
+            .await;
             return;
         }
         session.context.live_task().is_none()
@@ -487,22 +510,50 @@ async fn approve_task(app: Arc<App>, task: TaskId, files: Vec<String>, commands:
         match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.task == task)
         {
             true => {
-                let (files, commands) = permitted(&app.agency.sandbox, files, commands);
+                let (files, commands, dropped) = permitted(&app.agency.sandbox, files, commands);
                 let plan = session
                     .context
                     .amend_plan(task, &files, &commands)
                     .unwrap_or_default();
                 session.context.approve_task(task);
-                session.pending.take().map(|pending| (pending.prompt, plan))
+                session
+                    .pending
+                    .take()
+                    .map(|pending| (pending.prompt, plan, dropped))
             }
             // An approval for something else, or for a second time. Not an
-            // error: two clients watching the same session can both press it.
+            // error — two clients watching the same session can both press it —
+            // but not silence either: the second one's button did nothing and
+            // this is what says so.
             false => None,
         }
     };
-    let Some((prompt, plan)) = approved else {
+    let Some((prompt, plan, dropped)) = approved else {
+        refuse(
+            &app,
+            "approve_task",
+            Refusal::Task,
+            format!("task {task} is not waiting to be approved"),
+        )
+        .await;
         return;
     };
+
+    // What the person added that the policy file does not grant. It was left
+    // out of the plan, and until now that was the whole feedback: a path
+    // missing from a message nobody reads that closely.
+    if !dropped.is_empty() {
+        refuse(
+            &app,
+            "approve_task",
+            Refusal::NotGranted,
+            format!(
+                "approved without what the sandbox policy does not grant: {}",
+                dropped.join("; "),
+            ),
+        )
+        .await;
+    }
 
     // The task's own sandbox, from here until it closes. A plan that names
     // nothing narrows to nothing, which is the point: a turn inside a task may
@@ -528,7 +579,8 @@ async fn approve_task(app: Arc<App>, task: TaskId, files: Vec<String>, commands:
     start_turn(app, prompt).await;
 }
 
-/// The half of an amendment the policy file actually grants.
+/// The half of an amendment the policy file grants, and the half it does not —
+/// which is what the refusal beside it is made of.
 ///
 /// The person at the gate widens a plan up to the file and not past it —
 /// otherwise the gate is the policy and `luu.toml` is a suggestion.
@@ -536,7 +588,7 @@ fn permitted(
     sandbox: &Sandbox,
     files: Vec<String>,
     commands: Vec<String>,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<String>, Vec<String>, Vec<String>) {
     let asked = Plan {
         steps: Vec::new(),
         files,
@@ -561,6 +613,7 @@ fn permitted(
             .filter(|c| keep(c, "command"))
             .cloned()
             .collect(),
+        refused,
     )
 }
 
@@ -570,6 +623,14 @@ async fn reject_task(app: Arc<App>, task: TaskId) {
     {
         let mut session = app.session.lock().await;
         if session.pending.as_ref().is_none_or(|p| p.task != task) {
+            drop(session);
+            refuse(
+                &app,
+                "reject_task",
+                Refusal::Task,
+                format!("task {task} is not waiting to be approved"),
+            )
+            .await;
             return;
         }
         session.pending = None;
@@ -585,7 +646,15 @@ async fn close_task(app: Arc<App>, task: TaskId) {
         let mut session = app.session.lock().await;
         // Not while a turn is in flight: it would fold the history under the
         // turn that is being answered against it.
-        if session.current.is_some() {
+        if let Some(running) = session.current {
+            drop(session);
+            refuse(
+                &app,
+                "close_task",
+                Refusal::Busy,
+                format!("turn {running} is running; closing would fold the history under it"),
+            )
+            .await;
             return;
         }
         let counter = app.counter.clone();
@@ -598,7 +667,16 @@ async fn close_task(app: Arc<App>, task: TaskId) {
         }
         summary
     };
-    let Some(summary) = summary else { return };
+    let Some(summary) = summary else {
+        refuse(
+            &app,
+            "close_task",
+            Refusal::Task,
+            format!("task {task} is not open"),
+        )
+        .await;
+        return;
+    };
 
     app.publish(Event::Protocol(ServerMessage::TaskClosed { task, summary }))
         .await;
@@ -608,7 +686,26 @@ async fn close_task(app: Arc<App>, task: TaskId) {
 async fn reopen_task(app: Arc<App>, task: TaskId) {
     {
         let mut session = app.session.lock().await;
-        if session.current.is_some() || !session.context.reopen_task(task) {
+        if let Some(running) = session.current {
+            drop(session);
+            refuse(
+                &app,
+                "reopen_task",
+                Refusal::Busy,
+                format!("turn {running} is running"),
+            )
+            .await;
+            return;
+        }
+        if !session.context.reopen_task(task) {
+            drop(session);
+            refuse(
+                &app,
+                "reopen_task",
+                Refusal::Task,
+                format!("task {task} is not closed"),
+            )
+            .await;
             return;
         }
         // Live again, so its plan is the authority again. Rebuilt rather than
@@ -636,7 +733,15 @@ async fn begin_turn(
 ) -> Option<(TurnId, watch::Receiver<bool>, CompletionRequest)> {
     let (turn, task, cancel_rx, selection, prompt_sent, reuse) = {
         let mut session = app.session.lock().await;
-        if session.current.is_some() {
+        if let Some(running) = session.current {
+            drop(session);
+            refuse(
+                app,
+                "prompt",
+                Refusal::Busy,
+                format!("turn {running} is running; one at a time until sessions exist"),
+            )
+            .await;
             return None;
         }
         let turn = session.next_turn;

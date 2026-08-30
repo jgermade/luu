@@ -36,6 +36,14 @@ export const state = $reactive({
   // gate: nothing runs behind it until someone answers.
   tasks: [],              // [{ id, objective, plan, state, summary }]
   error: null,
+  // The last thing the server declined to do, and why. Cleared when a turn
+  // starts, because by then the answer is on screen.
+  refused: null,          // { request, reason, detail }
+  // Whether this session is a recording rather than a server. The status word
+  // is not the same question: it says "running" while a recorded turn plays,
+  // and a composer that reads the status is enabled over a recording nobody can
+  // send into.
+  replay: false,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
 })
@@ -131,6 +139,8 @@ function onProtocol(message) {
       state.turn = message.turn
       state.status = "running"
       state.error = null
+      // Whatever was refused, the answer to it is on screen now.
+      state.refused = null
       // The task it belongs to travels with the turn, so the transcript can
       // group without replaying the lifecycle to work out what was open.
       state.messages.push({ id: nextId++, role: "user", text: message.prompt, task: message.task, reason: null, usage: null })
@@ -160,6 +170,12 @@ function onProtocol(message) {
       patchTask(message.task, message.plan
         ? { state: "approved", plan: message.plan }
         : { state: "approved" })
+      break
+
+    // The server declining to do something, which used to be an early return
+    // and therefore indistinguishable from a message that never arrived.
+    case "refused":
+      state.refused = { request: message.request, reason: message.reason, detail: message.detail }
       break
 
     case "task_rejected":
@@ -320,6 +336,10 @@ async function replay(file) {
   const token = ++replayToken
   reset()
   isReplay = true
+  // On the state, not only in this module: the composer asks "is this a
+  // recording", and the status word cannot answer it — it says "running" while
+  // a recorded turn plays.
+  state.replay = true
   state.status = "replay"
   state.fixture = file
 
@@ -371,6 +391,7 @@ function reset() {
   state.prompt = ""
   state.prefix = null
   state.error = null
+  state.refused = null
   state.turn = null
   pending = ""
 }

@@ -95,7 +95,18 @@ See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md) and
 
 A refusal is kept, not erased: `rejected` is a state a task stays in, with the
 plan that was turned down. Nothing in a session is deleted — a closed task is
-folded, a reopened one unfolded, a refused one recorded.
+folded, a reopened one unfolded, a refused one recorded. The lifecycle is a
+state machine and the messages that drive it come off a socket, so every
+transition is guarded: only a proposal is approved or rejected, only an open
+task closes, only a closed one reopens. A refused plan that could be *reopened*
+would be a plan a person turned down becoming the live task, with the gate
+behind it.
+
+**And the server says no out loud.** A `refused` message carries the request it
+answers, a reason (`busy`, `pending`, `task`, `not_granted`) and a sentence for
+a person. Before it, a client could not tell a refusal from a message that never
+arrived, and the debug UI had to guess by disabling its own composer — which is
+not a permission model and not an interface either.
 
 **Who declares a task done** is a ladder, not a single answer: deterministic checks
 (exit codes, tests) first, then a judge, then the user's final question, which is the

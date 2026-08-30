@@ -249,6 +249,11 @@ impl SessionView {
                     });
                 }
             }
+            // Transient feedback to whoever asked, not session state: a
+            // refusal is a thing the server declined to do, and there is
+            // nothing about the session afterwards that is different for it.
+            // It stays out of the view until something wants to count them.
+            ServerMessage::Refused { .. } => {}
             ServerMessage::TaskApproved { task, plan } => {
                 if let Some(view) = self.task_mut(*task) {
                     view.state = TaskState::Approved;
