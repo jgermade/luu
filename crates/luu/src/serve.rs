@@ -14,7 +14,7 @@ use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, ServerMessage, TurnId};
 use agent_core::task::{Plan, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
-use agent_core::turn::{EndReason, run_turn};
+use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
 use crate::session::{Agency, Event, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
 use anyhow::{Context, Result};
@@ -367,8 +367,9 @@ async fn propose_task(app: Arc<App>, prompt: String) {
             let app = app.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    app.publish(Event::Protocol(ServerMessage::from_turn_event(turn, event)))
-                        .await;
+                    if let Some(message) = ServerMessage::from_turn_event(turn, event) {
+                        app.publish(Event::Protocol(message)).await;
+                    }
                 }
             })
         };
@@ -557,6 +558,9 @@ async fn begin_turn(
         CompletionRequest {
             model: app.model.clone(),
             messages: selection.messages,
+            // The window we budgeted against, sent so the server serves it. The
+            // same `None` the budget means by "unknown".
+            context_limit: app.budget.limit,
         },
     ))
 }
@@ -572,8 +576,41 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             let app = app.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    app.publish(Event::Protocol(ServerMessage::from_turn_event(turn, event)))
-                        .await;
+                    // The tool round trips. `budget` and `prefix_reuse`
+                    // describe the call that starts a turn; a turn that used a
+                    // tool made more, and until these are published the panel
+                    // shows their cost as chat-template overhead. Measured into
+                    // the same chain as the turns, from the second call on.
+                    if let TurnEvent::ModelCall { step, messages } = &event {
+                        if *step > 1 {
+                            let text = rendered(messages);
+                            let measured = {
+                                let mut session = app.session.lock().await;
+                                session.prefix.measure(turn, &text, app.counter.as_ref())
+                            };
+                            if let Some(TraceMessage::PrefixReuse {
+                                shared_bytes,
+                                shared_tokens,
+                                prompt_tokens,
+                                ..
+                            }) = measured
+                            {
+                                app.publish(Event::Trace(TraceMessage::StepCall {
+                                    turn,
+                                    step: *step,
+                                    text,
+                                    prompt_tokens,
+                                    shared_bytes,
+                                    shared_tokens,
+                                }))
+                                .await;
+                            }
+                        }
+                        continue;
+                    }
+                    if let Some(message) = ServerMessage::from_turn_event(turn, event) {
+                        app.publish(Event::Protocol(message)).await;
+                    }
                 }
             })
         };

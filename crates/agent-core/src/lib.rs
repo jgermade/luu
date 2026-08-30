@@ -7,6 +7,7 @@ pub mod agent;
 pub mod api;
 pub mod backend;
 pub mod context;
+pub mod fragment;
 pub mod protocol;
 pub mod record;
 pub mod sandbox;
