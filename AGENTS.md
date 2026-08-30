@@ -150,6 +150,132 @@ real release.
 is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into
 the binary for release. Editing a component costs a reload, not a `cargo build`.
 
+## Running against a real model (Ollama)
+
+Everything measured so far comes from the mock backend and `chars/4`. That is
+legitimate for reuse and token accounting — both are properties of the string we
+assemble, decided before the call — and it is **not** legitimate for the question
+that decides whether a context strategy is any good: does the task still succeed.
+That needs a model. This is the setup for one.
+
+This has been run: `qwen2.5-coder:7b/14b/32b` pulled, tokenizer fetched, the
+setup below confirmed correct as written — `num_ctx` reached the server, the
+macOS `run_command` denial read exactly as described. What running it actually
+found is in [`RECORD/2026-08-27.the-m4-pro-run.md`](RECORD/2026-08-27.the-m4-pro-run.md):
+`steady-state`/`steady-state-tasks` carry no grounding, so they cannot answer
+whether an answer survives a fold; a tool call inside a turn was invisible to
+`prefix_reuse` the same way a planning call had been; and folding's token result
+flips with the window — losing narrowly at `--context-limit 1024` (chosen to
+force eviction), winning by more than half at the `8192` this recipe uses,
+because the baseline never evicts at 8192 and its history compounds unchecked.
+The first two are fixed; the grounded pair below is what the first one bought.
+
+**No administrator rights are needed for any of this.** Ollama runs entirely out
+of your home directory — the models live in `~/.ollama/models` (`OLLAMA_MODELS`
+moves them) and the server is an ordinary user process. What the package manager
+buys is a symlink in `/usr/local/bin`, which is the only part that wants `sudo`
+and the only part nothing here uses: `luu` talks to a URL.
+
+```sh
+# however the binary got onto the machine — unzipped .app, tarball, ~/.local/bin
+export OLLAMA_KEEP_ALIVE=30m                 # see below; set it *before* serving
+nohup ollama serve > ~/ollama.log 2>&1 &     # detached, listening on 11434
+ollama ps                                    # what is loaded, and until when
+
+ollama pull qwen2.5-coder:7b                 # ~4.7 GB, the CLI's default model
+ollama pull qwen2.5-coder:14b                # ~9 GB
+ollama pull qwen2.5-coder:32b                # ~20 GB — fits 48 GB, much slower
+
+# the tokenizer, which Ollama does not ship: GGUF carries its own vocab, and
+# `--tokenizer` wants the HuggingFace file. It must be the tokenizer of the
+# model actually being run, which is the entire point of `Counter::Model { id }`.
+mkdir -p ~/models/qwen2.5-coder-7b
+curl -L -o ~/models/qwen2.5-coder-7b/tokenizer.json \
+  https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct/resolve/main/tokenizer.json
+
+cargo run --release --bin luu -- chat "hola" --backend ollama \
+  --model qwen2.5-coder:7b --context-limit 8192 \
+  --tokenizer ~/models/qwen2.5-coder-7b/tokenizer.json
+```
+
+Four things that will otherwise waste a session:
+
+- **The window has to be sent, and it is.** `--context-limit` becomes
+  `options.num_ctx` on the request. Ollama's own default is a couple of thousand
+  tokens and it truncates the prompt to it *silently*, so without this a run
+  budgeting 8k measures a prompt the model never saw. `--context-limit 0` sends
+  no option at all and the server keeps its default.
+- **A larger window costs memory before it costs anything else.** The KV cache
+  grows with `num_ctx` and with the model; 7B at 8–16K is the place to start on
+  48 GB, and 32B at 32K is where it stops being comfortable.
+- **The prompt cache lives with the loaded model.** If Ollama unloads between
+  runs the next first call is cold, and a reuse comparison across runs is
+  measuring the unload. `OLLAMA_KEEP_ALIVE` is read by the *server*, so it has to
+  be set before `ollama serve` starts, not in the shell that runs `luu`; `ollama
+  ps` says what is resident and for how long. Check it between the two halves of
+  a comparison, not only before the first.
+- **The sandbox is weaker on macOS, and says so.** Landlock and seccomp are
+  Linux-only, so `run_command` is *denied* by default with a verdict naming what
+  is missing. `--sandbox-enforcement best-effort` runs it anyway, and then the
+  allowlist in our own process is all that holds the child — which is exactly
+  what the verdict will report. In-process tools (`read_file`, `write_file`,
+  `edit_file`, `list_dir`) are unaffected: they never had kernel enforcement.
+
+The runs worth recording first, because they are the ones the mock cannot answer:
+
+```sh
+# the pair that asks the question the mock cannot: `grounded.txt` attaches real
+# files from this repository and its twin groups the same prompts into tasks, so
+# the last five turns — which attach nothing and ask about all of it again — rest
+# on the full history in one run and on three summaries in the other.
+for script in grounded grounded-tasks; do
+  cargo run --release --bin luu -- chat --script scripts/tasks/$script.txt \
+    --backend ollama --model qwen2.5-coder:7b \
+    --context-limit 8192 --reserve 512 \
+    --tokenizer ~/models/qwen2.5-coder-7b/tokenizer.json \
+    --record ~/records/$script.jsonl
+done
+
+# and the ungrounded pair, which is what the eviction and fold numbers came from
+for script in steady-state steady-state-tasks; do
+  cargo run --release --bin luu -- chat --script scripts/tasks/$script.txt \
+    --backend ollama --model qwen2.5-coder:7b \
+    --context-limit 8192 --reserve 512 \
+    --tokenizer ~/models/qwen2.5-coder-7b/tokenizer.json \
+    --record ~/records/$script.jsonl
+done
+
+cargo run --release --bin luu -- serve --record ~/records/live.jsonl   # and look at them
+```
+
+**The protocol for that run — the commands, what a right answer to each of the
+last five turns contains, how to tell "the summary dropped it" from "the model
+ignored it", and the sampling precondition — is
+[`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
+Read it before running, and append what it says to append.**
+
+What to look at, in order: **the last five turns of the grounded pair**, where
+the same four questions are answered from a full history in one run and from
+three summaries in the other — that comparison is the only thing that says
+whether folding loses what the task needed; the gap between our count and
+`usage.prompt_tokens` per turn (stable is the chat template; a tooled turn's
+round trips are now counted, so they no longer masquerade as it); and whether
+reuse behaves as the mock said it would.
+
+## Commits
+
+Keep `Co-Authored-By` when an agent wrote the change — it is conventional
+attribution, and readable by anyone.
+
+**Do not add a `Claude-Session:` trailer.** Some agent harnesses append one by
+default; this repository is public, and a backlink into a tool nobody reading the
+log can open is not worth a permanent line in shared history. Three of the
+squashed commits carry one because it was added before anyone weighed that, and
+they are left alone rather than rewritten.
+
+This convention was itself written on a branch that was never merged, which is
+why it is arriving after the commits it describes rather than before them.
+
 ## Design commitments that are easy to erode
 
 These are not style preferences. Each one is load-bearing, and each looks like an
