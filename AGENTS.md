@@ -141,6 +141,14 @@ then holds still), and `--tokenizer` points at the model's `tokenizer.json`. **W
 `chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
 useless for a comparison, and the numbers say so themselves.
 
+Two of the tests are not unit tests and are the only ones that run the thing:
+`crates/agent-core/tests/ollama_wire.rs` puts a stub HTTP server on an ephemeral
+port and asserts what `Ollama::stream` actually sends — the window included,
+which is the bug that shipped once — and `crates/luu/tests/serve_ws.rs` binds the
+server, drives the gate over `/ws`, and checks the read API agrees with what the
+socket said. Both run under a plain `cargo test --workspace` in under a second.
+See [`RECORD/2026-08-30.tests-that-run-it.md`](RECORD/2026-08-30.tests-that-run-it.md).
+
 CI is `.github/workflows/build.yml` (fmt, clippy, tests, both binaries, the site) on
 every push and pull request. `release.yml` is manual: it takes `patch`/`minor`/`major`,
 raises the workspace version, tags it, calls `build.yml` at the new commit, publishes

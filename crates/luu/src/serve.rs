@@ -115,7 +115,37 @@ pub struct ServeOptions {
     pub seed: Option<u32>,
 }
 
+/// A server that has its port and has not started answering yet.
+///
+/// `serve` used to bind and serve in one call, which left a test no way to
+/// learn which port an ephemeral bind got — and a test that binds a *fixed*
+/// port is a test that fails whenever two jobs share a runner.
+pub struct Serving {
+    address: SocketAddr,
+    listener: tokio::net::TcpListener,
+    router: Router,
+}
+
+impl Serving {
+    /// The address actually bound, which is what a `:0` request resolved to.
+    pub fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    pub async fn run(self) -> Result<()> {
+        axum::serve(self.listener, self.router)
+            .await
+            .context("serving")
+    }
+}
+
 pub async fn serve(options: ServeOptions) -> Result<()> {
+    let serving = bind(options).await?;
+    println!("luu serve → http://{}", serving.address());
+    serving.run().await
+}
+
+pub async fn bind(options: ServeOptions) -> Result<Serving> {
     let ServeOptions {
         address,
         backend,
@@ -202,10 +232,14 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("binding {address}"))?;
+    // Not `address`: a `:0` request would print the port nobody can connect to.
+    let address = listener.local_addr().context("the bound address")?;
 
-    println!("luu serve → http://{address}");
-    axum::serve(listener, router).await.context("serving")?;
-    Ok(())
+    Ok(Serving {
+        address,
+        listener,
+        router,
+    })
 }
 
 #[derive(Clone)]

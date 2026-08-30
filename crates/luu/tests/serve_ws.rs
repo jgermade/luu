@@ -1,0 +1,271 @@
+//! One turn over `/ws`, against the running server.
+//!
+//! The unit tests in `serve.rs` call the handlers directly, which tests the
+//! gate and not the server: nothing there binds a port, upgrades a socket,
+//! serializes a `ServerMessage` onto the wire, or asks the read side what it
+//! thinks happened. Every bug this repository has had was found by running it,
+//! and this is the cheapest place to keep running it.
+//!
+//! It also asserts the one property the read side has that nothing else checks.
+//! `GET /api/...` is folded from the same events the socket carries, so it
+//! *cannot* disagree with what a client watched happen — a claim no test had
+//! ever made it prove.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use agent_core::backend::mock::Mock;
+use agent_core::context::{ApproximateCounter, Budget, Eviction};
+use agent_core::sandbox::{Sandbox, SandboxPolicy};
+use agent_core::tools::Tools;
+use futures_util::{SinkExt, StreamExt};
+use luu::serve::{ServeOptions, bind};
+use luu::session::{Agency, SYSTEM};
+use serde_json::Value;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+const PLAN: &str = "```plan\n{\"objective\":\"add a flag\",\"steps\":[\"read the CLI\"],\
+                    \"files\":[\"Cargo.toml\"],\"commands\":[]}\n```";
+
+const ANSWER: &str = "The flag is added in lib.rs.";
+
+/// A socket that fails rather than hangs: a turn that never ends is a bug, and
+/// a test that waits for it forever reports nothing about which one.
+const PATIENCE: Duration = Duration::from_secs(10);
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The server on an ephemeral port, with the mock answering the planning call
+/// and then the turn.
+async fn server() -> String {
+    let base = std::env::current_dir().expect("the working directory");
+    let agency = Agency {
+        tools: Arc::new(Tools::standard()),
+        sandbox: Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("the sandbox")),
+        max_steps: 4,
+    };
+    let serving = bind(ServeOptions {
+        address: "127.0.0.1:0".parse().expect("a loopback address"),
+        backend: Arc::new(Mock::replies(vec![PLAN.into(), ANSWER.into()]).delay(Duration::ZERO)),
+        model: "mock".into(),
+        record: None,
+        budget: Budget::new(0, 0, Eviction::Turn),
+        counter: Arc::new(ApproximateCounter),
+        agency,
+        temperature: None,
+        seed: None,
+    })
+    .await
+    .expect("binding the server");
+
+    let address = serving.address();
+    tokio::spawn(serving.run());
+    address.to_string()
+}
+
+async fn next_message(socket: &mut Socket) -> Value {
+    let frame = tokio::time::timeout(PATIENCE, socket.next())
+        .await
+        .expect("the server went quiet")
+        .expect("the socket closed")
+        .expect("a frame");
+    match frame {
+        WsMessage::Text(text) => serde_json::from_str(&text).expect("a protocol message"),
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+/// Reads until the named message arrives, collecting the tokens on the way.
+/// The transcript is what the assertions are about; the order tokens arrive in
+/// relative to each other is `run_turn`'s business and is tested there.
+async fn until(socket: &mut Socket, kind: &str) -> (Value, String) {
+    let mut text = String::new();
+    loop {
+        let message = next_message(socket).await;
+        match message["type"].as_str().expect("a typed message") {
+            "token" => text.push_str(message["text"].as_str().unwrap_or_default()),
+            found if found == kind => return (message, text),
+            _ => continue,
+        }
+    }
+}
+
+async fn send(socket: &mut Socket, message: Value) {
+    socket
+        .send(WsMessage::Text(message.to_string().into()))
+        .await
+        .expect("sending");
+}
+
+async fn get(address: &str, path: &str) -> Value {
+    reqwest::get(format!("http://{address}{path}"))
+        .await
+        .expect("the request")
+        .json()
+        .await
+        .expect("a JSON body")
+}
+
+#[tokio::test]
+async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+
+    let hello = next_message(&mut socket).await;
+    assert_eq!(hello["type"], "hello");
+    assert_eq!(hello["protocol"], 1);
+    assert_eq!(hello["backend"], "mock");
+    assert!(hello["turn"].is_null(), "nothing is running yet");
+
+    // The gate: the prompt buys a planning call and is then held.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(started["turn"], 1);
+    assert_eq!(
+        started["prompt"], "add a flag",
+        "the user's ask, not the planning instruction fused in front of it",
+    );
+
+    let (ended, planning) = until(&mut socket, "ended").await;
+    assert_eq!(ended["turn"], 1);
+    assert_eq!(ended["reason"], "stop");
+    assert_eq!(planning, PLAN, "the planning call's own text");
+
+    let (proposed, _) = until(&mut socket, "task_proposed").await;
+    assert_eq!(proposed["task"], 1);
+    assert_eq!(proposed["objective"], "add a flag");
+    assert_eq!(proposed["plan"]["files"][0], "Cargo.toml");
+
+    // Nothing has run under the task yet. A second prompt here is a second
+    // thing nobody approved, and the server — not the client — refuses it.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "and also this"}),
+    )
+    .await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_task", "task": 1}),
+    )
+    .await;
+
+    let (approved, _) = until(&mut socket, "task_approved").await;
+    assert_eq!(approved["task"], 1);
+
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(started["turn"], 2);
+    assert_eq!(started["prompt"], "add a flag", "the held prompt, now run");
+    assert_eq!(started["task"], 1, "inside the task it was approved under");
+
+    let (ended, answer) = until(&mut socket, "ended").await;
+    assert_eq!(ended["turn"], 2);
+    assert_eq!(answer, ANSWER);
+    assert!(ended["usage"]["completion_tokens"].as_u64().unwrap_or(0) > 0);
+
+    // The read side, folded from the events just watched. It is served by the
+    // same process over the same port, so this is the live API, not an export.
+    let sessions = get(&address, "/api/sessions").await;
+    assert_eq!(sessions.as_array().expect("an array").len(), 1);
+    assert_eq!(sessions[0]["id"], "live");
+    assert_eq!(sessions[0]["backend"], "mock");
+    assert_eq!(
+        sessions[0]["turns"], 2,
+        "the planning call is a turn: it costs a window and every panel explains it",
+    );
+
+    let turns = get(&address, "/api/sessions/live/turns").await;
+    assert_eq!(turns[0]["turn"], 1);
+    assert_eq!(turns[0]["text"], PLAN);
+    assert_eq!(turns[1]["turn"], 2);
+    assert_eq!(turns[1]["text"], ANSWER);
+    assert_eq!(turns[1]["task"], 1);
+    assert_eq!(
+        turns[1]["reason"], "stop",
+        "the read side agrees with the `ended` the socket carried",
+    );
+
+    // Both spellings answer, because a static host can only mirror one of them.
+    let suffixed = get(&address, "/api/sessions/live/turns.json").await;
+    assert_eq!(suffixed, turns);
+
+    let prompt = get(&address, "/api/sessions/live/turns/1/prompt").await;
+    let planning_prompt = prompt["text"].as_str().expect("the prompt as sent");
+    assert!(
+        planning_prompt.contains(SYSTEM),
+        "the system block is the prefix every call shares: {planning_prompt}",
+    );
+    assert!(
+        planning_prompt.contains("propose a plan"),
+        "the planning instruction is fused into the user message: {planning_prompt}",
+    );
+
+    let prompt = get(&address, "/api/sessions/live/turns/2/prompt").await;
+    let answer_prompt = prompt["text"].as_str().expect("the prompt as sent");
+    assert!(
+        !answer_prompt.contains("propose a plan"),
+        "the instruction is not paid for again on the turn that answers: {answer_prompt}",
+    );
+
+    // The second prompt sent behind the gate never became anything.
+    let session = get(&address, "/api/sessions/live").await;
+    assert_eq!(session["tasks"].as_array().expect("the tasks").len(), 1);
+    assert!(
+        !session["turns"]
+            .as_array()
+            .expect("the turns")
+            .iter()
+            .any(|turn| turn["prompt"] == "and also this"),
+        "a prompt sent while a proposal was pending must not have run",
+    );
+}
+
+/// A client that says something the protocol does not define must not take the
+/// server down for the others — the socket stays open and the next message is
+/// still answered.
+#[tokio::test]
+async fn unparseable_input_does_not_kill_the_socket() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(&mut socket, serde_json::json!({"type": "explode"})).await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(started["turn"], 1);
+}
+
+/// A path nobody serves is a 404 and not a panic, and the UI's own index is
+/// served from the embedded assets rather than from a directory that only
+/// exists in a checkout.
+#[tokio::test]
+async fn the_page_and_the_missing_page() {
+    let address = server().await;
+
+    let index = reqwest::get(format!("http://{address}/"))
+        .await
+        .expect("the request");
+    assert!(index.status().is_success());
+    let body = index.text().await.expect("the body");
+    assert!(body.contains('<'), "the index is not empty");
+
+    let missing = reqwest::get(format!("http://{address}/api/sessions/nope"))
+        .await
+        .expect("the request");
+    assert_eq!(missing.status(), 404);
+}
