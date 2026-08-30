@@ -558,6 +558,9 @@ async fn begin_turn(
         CompletionRequest {
             model: app.model.clone(),
             messages: selection.messages,
+            // The window we budgeted against, sent so the server serves it. The
+            // same `None` the budget means by "unknown".
+            context_limit: app.budget.limit,
         },
     ))
 }

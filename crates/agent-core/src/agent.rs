@@ -80,6 +80,7 @@ pub async fn run_agent_turn(
     let CompletionRequest {
         model,
         mut messages,
+        context_limit,
     } = request;
     let mut steps: Vec<ToolStep> = Vec::new();
     let mut usage: Option<Usage> = None;
@@ -115,6 +116,9 @@ pub async fn run_agent_turn(
             CompletionRequest {
                 model: model.clone(),
                 messages: messages.clone(),
+                // Every call of the turn budgets against the same window, so
+                // every call has to be told the same one.
+                context_limit,
             },
             inner,
             cancel.clone(),
@@ -316,6 +320,7 @@ mod tests {
             CompletionRequest {
                 model: "scripted".into(),
                 messages: vec![Message::user("what is in notes.txt?")],
+                context_limit: None,
             },
             &tools,
             &fixture.sandbox,

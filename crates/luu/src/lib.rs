@@ -760,6 +760,10 @@ pub async fn run() -> Result<()> {
         let request = CompletionRequest {
             model: model.clone(),
             messages: selection.messages,
+            // The window we budgeted against, sent so the server serves it.
+            // Budgeting 8k against a server truncating to 4k measures a prompt
+            // the model never saw, and nothing in the recording would say so.
+            context_limit: budget.limit,
         };
 
         let (stop, cancel) = watch::channel(false);
