@@ -12,6 +12,9 @@
   --b-system: #7aa2f7;
   --b-tools: #2ac3de;
   --b-history: #9ece6a;
+  /* Folded history: the same colour, darker. A closed task is history that
+     was compressed, and the bar should say so without a second reading. */
+  --b-summaries: #5c7f45;
   --b-code: #bb9af7;
   --b-prompt: #e0af68;
   --b-reserve: #3b4048;

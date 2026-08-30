@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
 use crate::sandbox::Verdict;
+use crate::task::{Plan, TaskId};
 use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
 
@@ -25,6 +26,12 @@ pub const VERSION: u32 = 1;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
+
+// The client half of the task lifecycle — approve, reject — is deliberately
+// absent, and so is the "v1 is frozen" claim that was meant to come with it.
+// Nothing has watched a human approve a task yet; the script's approval is a
+// parse, not a message, and an enum written from imagination is wrong exactly
+// where it matters. See `RECORD/2026-08-30.tasks-in-code.md`.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -52,6 +59,32 @@ pub enum ServerMessage {
     TurnStarted {
         turn: TurnId,
         prompt: String,
+        /// The task it was asked inside, when there is one. Here rather than
+        /// only on the task messages so that a client can group a transcript
+        /// without replaying the whole lifecycle to work out what was open.
+        #[serde(default)]
+        task: Option<TaskId>,
+    },
+    /// A piece of work, with the plan that is about to be approved or refused.
+    /// Nothing runs between this and `TaskApproved`.
+    TaskProposed {
+        task: TaskId,
+        objective: String,
+        plan: Plan,
+    },
+    TaskApproved {
+        task: TaskId,
+    },
+    /// The one rewrite in an otherwise write-once session: from here on the
+    /// task's turns are sent as this summary. It travels on the wire because a
+    /// transcript has to be able to show what the model will see from now on.
+    TaskClosed {
+        task: TaskId,
+        summary: String,
+    },
+    /// The fold stops applying. Not an undo — nothing was deleted.
+    TaskReopened {
+        task: TaskId,
     },
     Token {
         turn: TurnId,
@@ -142,6 +175,11 @@ impl ServerMessage {
             | Self::Failed { turn, .. }
             | Self::ToolCall { turn, .. }
             | Self::ToolResult { turn, .. } => Some(*turn),
+            // A task spans turns and its lifecycle happens between them.
+            Self::TaskProposed { .. }
+            | Self::TaskApproved { .. }
+            | Self::TaskClosed { .. }
+            | Self::TaskReopened { .. } => None,
         }
     }
 }
@@ -183,6 +221,36 @@ mod tests {
         let parsed: ClientMessage =
             serde_json::from_str(r#"{"type":"prompt","text":"hola"}"#).unwrap();
         assert!(matches!(parsed, ClientMessage::Prompt { text } if text == "hola"));
+    }
+
+    #[test]
+    fn a_task_message_is_about_a_task_rather_than_a_turn() {
+        let json = roundtrip(&ServerMessage::TaskProposed {
+            task: 2,
+            objective: "add a --dry-run flag".into(),
+            plan: Plan {
+                steps: vec!["read the CLI".into()],
+                files: vec!["crates/luu/src/lib.rs".into()],
+                commands: vec!["cargo".into()],
+            },
+        });
+        assert_eq!(json["type"], "task_proposed");
+        assert_eq!(json["plan"]["files"][0], "crates/luu/src/lib.rs");
+        assert_eq!(
+            ServerMessage::TaskApproved { task: 2 }.turn(),
+            None,
+            "a task spans turns; pinning it to one would be a guess",
+        );
+    }
+
+    #[test]
+    fn a_turn_recorded_before_tasks_existed_still_parses() {
+        let parsed: ServerMessage =
+            serde_json::from_str(r#"{"type":"turn_started","turn":1,"prompt":"hola"}"#).unwrap();
+        assert!(matches!(
+            parsed,
+            ServerMessage::TurnStarted { task: None, .. }
+        ));
     }
 
     #[test]

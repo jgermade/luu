@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
+use crate::task::{Plan, Task, TaskId};
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
 
@@ -135,6 +136,11 @@ pub struct Turn {
     /// Rendered fused into the user message, stored apart so that pruning can
     /// reach it later without parsing back what we already wrote.
     pub code_context: Vec<Fragment>,
+    /// The task this turn was asked inside, if any. The whole coupling between
+    /// a task and the history: the context manager never needs to know what a
+    /// task was *for*, only which turns belong to one that has closed.
+    #[serde(default)]
+    pub task: Option<TaskId>,
     /// Counted once, when the turn closed. A closed turn does not change, and
     /// re-counting every turn on every turn is quadratic over a session.
     pub tokens: u32,
@@ -202,6 +208,31 @@ pub struct Selection {
     pub evicted: usize,
 }
 
+/// One unit of rendered history: a live turn, or a closed task folded to its
+/// summary. Eviction works over these rather than over turns, so the two ways
+/// history gives way — forgetting the oldest and folding the finished —
+/// compose instead of cutting each other in half.
+#[derive(Debug, Clone, Copy)]
+enum Item {
+    /// An index into `turns`.
+    Turn(usize),
+    Folded {
+        task: TaskId,
+        /// Index of the task's first turn still above the floor.
+        first: usize,
+    },
+}
+
+impl Item {
+    /// The index of the oldest turn this item covers.
+    fn first(&self) -> usize {
+        match self {
+            Self::Turn(index) => *index,
+            Self::Folded { first, .. } => *first,
+        }
+    }
+}
+
 /// The conversation, and the rule for turning it into a prompt.
 #[derive(Debug, Clone)]
 pub struct Context {
@@ -223,6 +254,9 @@ pub struct Context {
     /// So the window a conversation has already lost is not a view that gets
     /// recomputed. It is something that happened.
     floor: usize,
+    /// The session's tasks, in order. Closed ones fold their turns at
+    /// selection time; nothing here rewrites the history.
+    tasks: Vec<Task>,
 }
 
 impl Context {
@@ -232,6 +266,7 @@ impl Context {
             tools: String::new(),
             turns: Vec::new(),
             floor: 0,
+            tasks: Vec::new(),
         }
     }
 
@@ -293,9 +328,133 @@ impl Context {
             answer,
             steps,
             code_context,
+            task: self.live_task(),
             tokens,
             counted_by: counter.id(),
         });
+    }
+
+    /// Proposes a task. Nothing runs in this state — approval is a separate
+    /// act, because that is the entire point of the boundary.
+    pub fn propose_task(&mut self, objective: impl Into<String>, plan: Plan) -> TaskId {
+        let id = self.tasks.len() as TaskId + 1;
+        self.tasks.push(Task::new(id, objective, plan));
+        id
+    }
+
+    /// Approves it. Turns pushed from here on belong to it.
+    pub fn approve_task(&mut self, id: TaskId) -> bool {
+        match self.task_mut(id) {
+            Some(task) => {
+                task.approve();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Closes it: from the next selection on, its turns render as one summary.
+    ///
+    /// The summary is written from the task's own tool steps, so it is evidence
+    /// rather than the model's account of itself. Returns the summary text, or
+    /// `None` if there is no such task.
+    pub fn close_task(&mut self, id: TaskId, counter: &dyn TokenCounter) -> Option<String> {
+        let steps: Vec<&ToolStep> = self
+            .turns
+            .iter()
+            .filter(|turn| turn.task == Some(id))
+            .flat_map(|turn| turn.steps.iter())
+            .collect();
+        let turns = self.turns.iter().filter(|t| t.task == Some(id)).count();
+        let task = self.tasks.iter_mut().find(|task| task.id == id)?;
+        task.close(&steps, turns, counter);
+        task.summary.as_ref().map(|summary| summary.text.clone())
+    }
+
+    /// Reopens it: the fold stops applying and its turns are sent verbatim
+    /// again. Nothing is recovered, because nothing was deleted.
+    pub fn reopen_task(&mut self, id: TaskId) -> bool {
+        match self.task_mut(id) {
+            Some(task) => {
+                task.reopen();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn tasks(&self) -> &[Task] {
+        &self.tasks
+    }
+
+    pub fn task(&self, id: TaskId) -> Option<&Task> {
+        self.tasks.iter().find(|task| task.id == id)
+    }
+
+    fn task_mut(&mut self, id: TaskId) -> Option<&mut Task> {
+        self.tasks.iter_mut().find(|task| task.id == id)
+    }
+
+    /// The task turns are currently attributed to: the last one approved and
+    /// not closed. One level, deliberately — see the tasks record.
+    pub fn live_task(&self) -> Option<TaskId> {
+        self.tasks
+            .iter()
+            .rev()
+            .find(|task| task.is_open())
+            .map(|task| task.id)
+    }
+
+    /// The history as it renders: live turns one by one, and each closed task
+    /// as a single folded item.
+    ///
+    /// Built from the floor forward, so a task closed after part of it was
+    /// evicted folds only from what the window still holds — except that the
+    /// summary it folds to is the whole task's. That is deliberate and it is a
+    /// cost: see `RECORD/2026-08-30.tasks-in-code.md`.
+    fn items(&self) -> Vec<Item> {
+        let mut items = Vec::new();
+        let mut index = self.floor;
+        while index < self.turns.len() {
+            let folded = self.turns[index]
+                .task
+                .filter(|id| self.task(*id).is_some_and(Task::is_closed));
+            match folded {
+                Some(id) => {
+                    let first = index;
+                    while index < self.turns.len() && self.turns[index].task == Some(id) {
+                        index += 1;
+                    }
+                    items.push(Item::Folded { task: id, first });
+                }
+                None => {
+                    items.push(Item::Turn(index));
+                    index += 1;
+                }
+            }
+        }
+        items
+    }
+
+    /// What an item costs in the prompt it renders into.
+    fn item_tokens(&self, item: &Item, counter: &dyn TokenCounter) -> u32 {
+        match item {
+            Item::Turn(index) => self.tokens_of(&self.turns[*index], counter),
+            Item::Folded { task, .. } => self
+                .task(*task)
+                .and_then(|task| {
+                    task.summary.as_ref().map(|summary| {
+                        // Stored counts are stale under a changed counter, the
+                        // same way a turn's are, and are redone rather than
+                        // summed into a different unit.
+                        match summary.counted_by == counter.id() {
+                            true => summary.tokens,
+                            false => counter.count(&summary.text),
+                        }
+                    })
+                })
+                .unwrap_or(0),
+        }
     }
 
     /// Chooses what fits, then renders it.
@@ -325,8 +484,6 @@ impl Context {
         let code_tokens = counter.count(&fragments_text(code_context));
         let prompt_tokens = counter.count(prompt);
 
-        // Only what the window has not already lost is a candidate.
-        let live = self.turns.len() - self.floor;
         if let Some(limit) = budget.limit {
             // The current turn and the reserve are not negotiable: nothing here
             // may trim the prompt the user just typed. If they alone exceed the
@@ -336,7 +493,7 @@ impl Context {
             let fixed = system_tokens + tools_tokens + code_tokens + prompt_tokens + budget.reserve;
             let available = limit.saturating_sub(fixed);
 
-            if self.fill(available, counter) < live {
+            if self.fits_from(available, counter) > self.floor {
                 // It no longer fits. How deep the cut goes is the whole
                 // difference between the two policies.
                 let target = match budget.eviction {
@@ -345,33 +502,61 @@ impl Context {
                         (available as f32 * low_water.clamp(0.0, 1.0)) as u32
                     }
                 };
-                self.floor = self.turns.len() - self.fill(target, counter);
+                self.floor = self.fits_from(target, counter);
             }
         }
 
-        let retained = &self.turns[self.floor..];
-        let history_tokens: u32 = retained
-            .iter()
-            .map(|turn| self.tokens_of(turn, counter))
-            .sum();
-
-        let mut messages = Vec::with_capacity(retained.len() * 2 + 2);
+        // Decided, then rendered — and the fold is part of the decision: a
+        // closed task is one item worth its summary, so eviction and compaction
+        // compose instead of arguing over the same turns.
+        let items = self.items();
+        let mut history_tokens = 0;
+        let mut summary_tokens = 0;
+        let mut messages = Vec::with_capacity(items.len() * 2 + 2);
         messages.push(Message::system(self.system_message()));
-        for turn in retained {
-            messages.push(Message::user(user_text(&turn.code_context, &turn.prompt)));
-            // Each step is a real exchange, so the alternation holds and no
-            // chat template has to decide what two user messages in a row mean.
-            for step in &turn.steps {
-                messages.push(Message::assistant(step.text.clone()));
-                messages.push(Message::user(step.result_text()));
+        for item in &items {
+            let tokens = self.item_tokens(item, counter);
+            match item {
+                Item::Turn(index) => {
+                    history_tokens += tokens;
+                    let turn = &self.turns[*index];
+                    messages.push(Message::user(user_text(&turn.code_context, &turn.prompt)));
+                    // Each step is a real exchange, so the alternation holds and
+                    // no chat template has to decide what two user messages in a
+                    // row mean.
+                    for step in &turn.steps {
+                        messages.push(Message::assistant(step.text.clone()));
+                        messages.push(Message::user(step.result_text()));
+                    }
+                    messages.push(Message::assistant(turn.answer.clone()));
+                }
+                Item::Folded { task, .. } => {
+                    summary_tokens += tokens;
+                    // One exchange, so the alternation a folded block sits in
+                    // is the same one a turn would have left behind. The user
+                    // half is the objective as it was approved: it is what was
+                    // asked, and inventing a sentence for it would be prose in
+                    // the one place this design keeps prose out of.
+                    let Some(task) = self.task(*task) else {
+                        continue;
+                    };
+                    let Some(summary) = &task.summary else {
+                        continue;
+                    };
+                    messages.push(Message::user(task.objective.clone()));
+                    messages.push(Message::assistant(summary.text.clone()));
+                }
             }
-            messages.push(Message::assistant(turn.answer.clone()));
         }
         messages.push(Message::user(user_text(code_context, prompt)));
 
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
             Bucket::new("tools", tools_tokens),
+            // Beside `history` rather than inside it: the fold is the one thing
+            // the panel exists to watch, and a single bar cannot show a block
+            // being replaced by a line.
+            Bucket::new("summaries", summary_tokens),
             Bucket::new("history", history_tokens),
             Bucket::new("code", code_tokens),
             Bucket::new("prompt", prompt_tokens),
@@ -390,20 +575,24 @@ impl Context {
         }
     }
 
-    /// How many turns, newest first and never reaching past the floor, fit in
-    /// `available`.
-    fn fill(&self, available: u32, counter: &dyn TokenCounter) -> usize {
+    /// The oldest turn that still fits, taking items newest first and never
+    /// reaching past the floor. Returns an index into `turns`.
+    ///
+    /// Items, not turns: a folded task is kept or dropped whole, because half a
+    /// summary is not a summary of half a task. So the floor only ever lands on
+    /// an item boundary.
+    fn fits_from(&self, available: u32, counter: &dyn TokenCounter) -> usize {
         let mut left = available;
-        let mut keep = 0;
-        for turn in self.turns[self.floor..].iter().rev() {
-            let tokens = self.tokens_of(turn, counter);
+        let mut start = self.turns.len();
+        for item in self.items().iter().rev() {
+            let tokens = self.item_tokens(item, counter);
             if tokens > left {
                 break;
             }
             left -= tokens;
-            keep += 1;
+            start = item.first();
         }
-        keep
+        start
     }
 
     /// The stored count, unless it was produced by a different counter — in
@@ -674,7 +863,135 @@ mod tests {
         let names: Vec<&str> = selection.buckets.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(
             names,
-            ["system", "tools", "history", "code", "prompt", "reserve"]
+            [
+                "system",
+                "tools",
+                "summaries",
+                "history",
+                "code",
+                "prompt",
+                "reserve"
+            ]
+        );
+    }
+
+    /// A task with turns in it, closed or not, for the fold cases below.
+    fn context_with_closed_task(live: usize, counter: &dyn TokenCounter) -> (Context, TaskId) {
+        let mut context = Context::new("system prompt here");
+        let task = context.propose_task("explain the context manager", Plan::default());
+        context.approve_task(task);
+        for n in 0..3 {
+            context.push_turn(
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![],
+                counter,
+            );
+        }
+        context.close_task(task, counter);
+        for n in 0..live {
+            context.push_turn(
+                format!("later question {n} padded out"),
+                format!("later answer {n} padded out"),
+                vec![],
+                counter,
+            );
+        }
+        (context, task)
+    }
+
+    #[test]
+    fn a_closed_task_folds_its_turns_into_one_exchange() {
+        let counter = WordCounter::default();
+        let (mut context, _) = context_with_closed_task(0, &counter);
+
+        let selection =
+            context.select("now this", &[], Budget::new(0, 0, Eviction::Turn), &counter);
+
+        assert_eq!(
+            selection.messages.len(),
+            1 + 2 + 1,
+            "system, the folded pair, and the current prompt",
+        );
+        assert_eq!(selection.messages[1].role, Role::User);
+        assert_eq!(
+            selection.messages[1].content, "explain the context manager",
+            "the user half of a fold is the objective as approved, not a sentence about it",
+        );
+        assert!(selection.messages[2].content.contains("[task closed]"));
+        assert_eq!(
+            context.turns().len(),
+            3,
+            "closing is an event, not a mutation: the turns are still there",
+        );
+
+        let bucket = |name: &str| {
+            selection
+                .buckets
+                .iter()
+                .find(|b| b.name == name)
+                .unwrap()
+                .tokens
+        };
+        assert!(bucket("summaries") > 0);
+        assert_eq!(bucket("history"), 0, "nothing is left unfolded");
+    }
+
+    #[test]
+    fn reopening_sends_the_turns_verbatim_again() {
+        let counter = WordCounter::default();
+        let (mut context, task) = context_with_closed_task(0, &counter);
+        let folded = context.select("now this", &[], Budget::new(0, 0, Eviction::Turn), &counter);
+
+        assert!(context.reopen_task(task));
+        let reopened = context.select("now this", &[], Budget::new(0, 0, Eviction::Turn), &counter);
+
+        assert_eq!(folded.messages.len(), 4);
+        assert_eq!(
+            reopened.messages.len(),
+            3 * 2 + 2,
+            "the fold stopped applying; nothing had to be recovered",
+        );
+    }
+
+    #[test]
+    fn a_folded_task_is_kept_or_dropped_whole_at_every_window_size() {
+        // The fold and eviction meet here: a folded block is one item, so the
+        // floor can land before it or after it and never inside it.
+        for limit in (20..240).step_by(4) {
+            let counter = WordCounter::default();
+            let (mut context, _) = context_with_closed_task(3, &counter);
+            let selection = context.select(
+                "now this",
+                &[],
+                Budget::new(limit, 0, Eviction::Turn),
+                &counter,
+            );
+            assert!(
+                selection.evicted == 0 || selection.evicted >= 3,
+                "limit {limit} cut inside the folded task ({} turns dropped): \
+                 half a summary is not a summary of half a task",
+                selection.evicted,
+            );
+        }
+    }
+
+    #[test]
+    fn turns_are_attributed_to_the_task_that_was_open_when_they_were_pushed() {
+        let counter = WordCounter::default();
+        let mut context = Context::new("system");
+        context.push_turn("before any task", "a", vec![], &counter);
+        let task = context.propose_task("do the thing", Plan::default());
+        context.push_turn("proposed, not approved", "b", vec![], &counter);
+        context.approve_task(task);
+        context.push_turn("inside the task", "c", vec![], &counter);
+
+        let attributed: Vec<Option<TaskId>> =
+            context.turns().iter().map(|turn| turn.task).collect();
+        assert_eq!(
+            attributed,
+            vec![None, None, Some(task)],
+            "nothing runs inside a proposal, so nothing is attributed to one",
         );
     }
 

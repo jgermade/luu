@@ -47,6 +47,24 @@ One boundary does three jobs, which is the argument for it:
 A task can still overflow the window on its own, so the boundary is the *preferred*
 cut point and the token threshold remains the fallback.
 
+**What exists**: the type, the lifecycle and the fold. A turn carries the task it
+was asked inside; closing one is an *event* — its turns stay in the history and
+stop being rendered, replaced by a deterministic summary of the approved plan and
+what the tool results reported, with no model prose in it. Reopening is therefore
+not an undo: the fold stops applying. Eviction runs over items rather than turns,
+so a folded task is kept or dropped whole and the two ways history gives way
+compose. The budget gained a `summaries` bucket, because a fold nobody can see in
+the panel is a claim rather than a measurement.
+
+**How a task is approved today**: in a script, which is where a repeatable run
+comes from. `## task:` names the objective, `## step:` / `## file:` / `## command:`
+give the plan, `## close` closes it. The written plan *is* the approval, and
+approving it is a real check — every file it names must be reachable in the
+sandbox and every command allowed by it, or the run stops before the first turn.
+Interactive approval, and the plan *narrowing* the sandbox rather than being
+checked against it, are still ahead; see
+[`RECORD/2026-08-30.tasks-in-code.md`](RECORD/2026-08-30.tasks-in-code.md).
+
 **Who declares a task done** is a ladder, not a single answer: deterministic checks
 (exit codes, tests) first, then a judge, then the user's final question, which is the
 only authority. The judge is the same model given a short context of **evidence, not
@@ -169,7 +187,7 @@ the precision given up.
 
 ### Still ahead
 
-- **Hierarchical compaction**: a closed task is replaced by its summary, and full text is kept only for the live one. The boundary is what a task gives the context manager; the token threshold stays as the fallback for a task that overflows alone. Not built: it is a strategy, and a strategy has to beat a recorded baseline — now with an instrument and a table to beat it in. The summary is deterministic first (the plan plus the evidence: diff, commands, exit codes), because a 7B's prose would be entering the write-once region every later turn is built on.
+- **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold currently *loses* is the conversation itself: a task that ran no tools folds to its objective and a turn count. Model prose in the summary stays rejected until a 7B has been measured writing one — it would enter the write-once region every later turn is built on.
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
@@ -463,8 +481,8 @@ lives in memory for the life of the process.
 
 ## Suggested work order
 
-1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *`Context`, `Tool`, `SandboxPolicy` and the Ollama/mock backends exist; `Task` does not.*
-2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction and block eviction exist, and prefix reuse is measured per turn. Compaction and relevance selection are still ahead, and each has to beat the recorded baseline.*
+1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *Done.*
+2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction, block eviction and compaction on task boundaries exist, and prefix reuse is measured per turn. Relevance selection is still ahead, and has to beat the recorded baseline.*
 3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
    measure step 2. *Done.*
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
@@ -479,12 +497,15 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Finalize the remaining base type for `agent-core`: `Task`. Until it exists, the
-  policy file is the standing approval for a whole session — where the design
-  wants the approved plan to *be* the `SandboxPolicy` for one task, with the file
-  as its floor.
+- Interactive approval: `ClientMessage::{ApproveTask, RejectTask}` and the gate in
+  `luu chat` and `luu serve`. Today a task is approved by being written into a
+  script, which is enough to measure the fold and not enough to use.
+- Make the approved plan *be* the `SandboxPolicy` for its task, with the file as
+  its floor. It is currently checked against the file and does not narrow it;
+  narrowing needs the interactive gate, so a plan that forgot a file can be
+  widened by the person approving it rather than dying four turns in.
 - Design the concrete GBNF grammar to force valid tool calls with the target model
   (Qwen2.5-Coder), replacing the text parse.
 - `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window
   that canonicalize-then-open leaves.
-- Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format).
+- Freeze v1 of the agent protocol message enums (shared by stdio, WebSocket and the record format) — with the interactive gate, not before it: the client half of the task lifecycle has not been watched happen yet, and an enum written from imagination is wrong exactly where it matters.

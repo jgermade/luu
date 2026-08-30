@@ -298,7 +298,7 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
 }
 
 async fn start_turn(app: Arc<App>, prompt: String) {
-    let (turn, cancel_rx, selection, prompt_sent, reuse) = {
+    let (turn, task, cancel_rx, selection, prompt_sent, reuse) = {
         let mut session = app.session.lock().await;
         if session.current.is_some() {
             // One turn at a time until sessions exist.
@@ -321,12 +321,17 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let reuse = session
             .prefix
             .measure(turn, &prompt_sent, app.counter.as_ref());
-        (turn, rx, selection, prompt_sent, reuse)
+        // Always `None` until a client can approve a task over the socket;
+        // read from the context rather than written as one, so it starts
+        // reporting the truth the moment it can be something else.
+        let task = session.context.live_task();
+        (turn, task, rx, selection, prompt_sent, reuse)
     };
 
     app.publish(Event::Protocol(ServerMessage::TurnStarted {
         turn,
         prompt: prompt.clone(),
+        task,
     }))
     .await;
     app.publish(Event::Trace(TraceMessage::Prompt {

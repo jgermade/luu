@@ -10,6 +10,7 @@ use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama
 use agent_core::context::{Budget, Context as AgentContext, Eviction};
 use agent_core::protocol::ServerMessage;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
+use agent_core::task::Plan;
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
@@ -344,6 +345,102 @@ fn model_for(backend: &dyn Backend, model: String) -> String {
     }
 }
 
+/// One instruction from a script, or the single prompt of a one-shot `chat`.
+///
+/// A script is the only harness that makes two runs comparable, and a task is
+/// confirmed before anything runs. Both hold: **the script carries the approved
+/// plan**, written down and reviewable in a diff, and approving it is a check
+/// rather than a question. See `RECORD/2026-08-30.tasks-in-code.md` for why
+/// this and not an `--auto-approve` flag.
+#[derive(Debug, Clone, PartialEq)]
+enum Step {
+    Prompt(String),
+    OpenTask { objective: String, plan: Plan },
+    CloseTask,
+}
+
+/// Parses a script: prompts one per line, `#` comments, and `##` directives.
+///
+/// ```text
+/// ## task: explain the context manager
+/// ## step: read the design
+/// ## file: loude-design.md
+/// what does the context manager do?
+/// ## close
+/// ```
+///
+/// A directive it does not know is an error rather than a prompt: a typo that
+/// silently becomes a question would put a line of `## fille: x` into a
+/// recorded baseline and nothing would ever say so.
+fn parse_script(text: &str) -> Result<Vec<Step>> {
+    let mut steps = Vec::new();
+    let mut open = false;
+
+    for (number, line) in text.lines().enumerate() {
+        let line = line.trim();
+        let number = number + 1;
+        if line.is_empty() || (line.starts_with('#') && !line.starts_with("##")) {
+            continue;
+        }
+        let Some(directive) = line.strip_prefix("##").map(str::trim) else {
+            steps.push(Step::Prompt(line.to_string()));
+            continue;
+        };
+
+        let (key, value) = match directive.split_once(':') {
+            Some((key, value)) => (key.trim(), value.trim()),
+            None => (directive, ""),
+        };
+
+        match key {
+            "task" => {
+                if open {
+                    anyhow::bail!("line {number}: a task is still open; `## close` it first");
+                }
+                if value.is_empty() {
+                    anyhow::bail!("line {number}: `## task:` needs an objective");
+                }
+                open = true;
+                steps.push(Step::OpenTask {
+                    objective: value.to_string(),
+                    plan: Plan::default(),
+                });
+            }
+            // The plan belongs to the task being opened and has to be the last
+            // thing pushed: it is approved before its turns run, so it cannot
+            // grow after one of them has.
+            "step" | "file" | "command" => {
+                let Some(Step::OpenTask { plan, .. }) = steps.last_mut() else {
+                    anyhow::bail!(
+                        "line {number}: `{line}` must follow a `## task:`, before its first prompt"
+                    );
+                };
+                match key {
+                    "step" => plan.steps.push(value.to_string()),
+                    "file" => plan.files.push(value.to_string()),
+                    _ => plan.commands.push(value.to_string()),
+                }
+            }
+            "close" => {
+                if !open {
+                    anyhow::bail!("line {number}: `## close` with no task open");
+                }
+                open = false;
+                steps.push(Step::CloseTask);
+            }
+            _ => anyhow::bail!(
+                "line {number}: `{line}` is not a directive \
+                 (`## task:`, `## step:`, `## file:`, `## command:`, `## close`)"
+            ),
+        }
+    }
+
+    if !steps.iter().any(|step| matches!(step, Step::Prompt(_))) {
+        anyhow::bail!("no prompts in it");
+    }
+    Ok(steps)
+}
+
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
@@ -454,23 +551,14 @@ pub async fn run() -> Result<()> {
 
     // One prompt, or a file of them: a script is what makes a multi-turn run
     // repeatable, and a baseline that cannot be re-run is not a baseline.
-    let prompts = match (&script, prompt) {
+    let steps = match (&script, prompt) {
         (Some(path), _) => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {}", path.display()))?;
-            let prompts: Vec<String> = text
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(str::to_string)
-                .collect();
-            if prompts.is_empty() {
-                anyhow::bail!("{} has no prompts in it", path.display());
-            }
-            prompts
+            parse_script(&text).with_context(|| path.display().to_string())?
         }
-        (None, Some(prompt)) => vec![prompt],
-        (None, None) => vec![std::io::read_to_string(std::io::stdin())?],
+        (None, Some(prompt)) => vec![Step::Prompt(prompt)],
+        (None, None) => vec![Step::Prompt(std::io::read_to_string(std::io::stdin())?)],
     };
 
     let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
@@ -505,14 +593,73 @@ pub async fn run() -> Result<()> {
     let mut prefix = PrefixTracker::default();
     let mut failed = false;
 
-    for (index, prompt) in prompts.iter().enumerate() {
-        let turn = index as agent_core::protocol::TurnId + 1;
+    let multi = steps
+        .iter()
+        .filter(|step| matches!(step, Step::Prompt(_)))
+        .count()
+        > 1;
+    let mut turn: agent_core::protocol::TurnId = 0;
+
+    for step in &steps {
+        // The task lifecycle happens between turns, and every part of it is
+        // recorded: a run that cannot say what it was allowed to do is not a
+        // baseline either.
+        let prompt = match step {
+            Step::OpenTask { objective, plan } => {
+                // The confirmation, as a check rather than a question. A plan
+                // that asks for what the sandbox does not grant does not run —
+                // the alternative is discovering it as a denial four turns in.
+                let unmet = plan.unmet(agency.sandbox.as_ref());
+                if !unmet.is_empty() {
+                    anyhow::bail!(
+                        "task `{objective}` asks for what the sandbox does not grant:\n  {}",
+                        unmet.join("\n  "),
+                    );
+                }
+                let id = context.propose_task(objective.clone(), plan.clone());
+                context.approve_task(id);
+                if let Some(recorder) = &recorder {
+                    recorder.write(&Event::Protocol(ServerMessage::TaskProposed {
+                        task: id,
+                        objective: objective.clone(),
+                        plan: plan.clone(),
+                    }));
+                    recorder.write(&Event::Protocol(ServerMessage::TaskApproved { task: id }));
+                }
+                println!("\n== task {id} approved: {objective}");
+                print!("{}", plan.describe());
+                continue;
+            }
+            Step::CloseTask => {
+                // The parser guarantees a task is open here.
+                let Some(id) = context.live_task() else {
+                    unreachable!("`## close` with no task open is refused when the script is read")
+                };
+                let summary = context.close_task(id, counter.as_ref()).unwrap_or_default();
+                if let Some(recorder) = &recorder {
+                    recorder.write(&Event::Protocol(ServerMessage::TaskClosed {
+                        task: id,
+                        summary: summary.clone(),
+                    }));
+                }
+                println!("\n== task {id} closed; its turns are now sent as:");
+                for line in summary.lines() {
+                    println!("   {line}");
+                }
+                continue;
+            }
+            Step::Prompt(prompt) => prompt,
+        };
+
+        turn += 1;
+        let task = context.live_task();
         let selection = context.select(prompt, &[], budget, counter.as_ref());
 
         if let Some(recorder) = &recorder {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
                 turn,
                 prompt: prompt.clone(),
+                task,
             }));
             let text = rendered(&selection.messages);
             let reuse = prefix.measure(turn, &text, counter.as_ref());
@@ -546,7 +693,6 @@ pub async fn run() -> Result<()> {
         let (tx, mut rx) = mpsc::channel::<TurnEvent>(256);
         let printer = {
             let recorder = recorder.clone();
-            let multi = prompts.len() > 1;
             let prompt = prompt.clone();
             tokio::spawn(async move {
                 let mut out = stdout();
@@ -675,4 +821,92 @@ pub async fn run() -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_script_without_tasks_parses_the_way_it_always_did() {
+        let steps = parse_script("# a comment\n\nfirst question\nsecond question\n").unwrap();
+        assert_eq!(
+            steps,
+            vec![
+                Step::Prompt("first question".into()),
+                Step::Prompt("second question".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_carries_its_approved_plan() {
+        let steps = parse_script(
+            "## task: explain the context manager\n\
+             ## step: read the design\n\
+             ## file: loude-design.md\n\
+             ## command: cargo\n\
+             what does it do?\n\
+             ## close\n",
+        )
+        .unwrap();
+
+        assert_eq!(steps.len(), 3);
+        let Step::OpenTask { objective, plan } = &steps[0] else {
+            panic!("{steps:?}")
+        };
+        assert_eq!(objective, "explain the context manager");
+        assert_eq!(plan.steps, ["read the design"]);
+        assert_eq!(plan.files, ["loude-design.md"]);
+        assert_eq!(plan.commands, ["cargo"]);
+        assert_eq!(steps[2], Step::CloseTask);
+    }
+
+    #[test]
+    fn a_mistyped_directive_is_refused_rather_than_asked_as_a_question() {
+        let error = parse_script("## task: x\n## fille: y\nq\n").unwrap_err();
+        assert!(
+            error.to_string().contains("is not a directive"),
+            "a typo that becomes a prompt would sit in a baseline unnoticed: {error}",
+        );
+    }
+
+    #[test]
+    fn the_lifecycle_has_to_make_sense_in_the_file() {
+        assert!(
+            parse_script("## close\nq\n")
+                .unwrap_err()
+                .to_string()
+                .contains("no task open")
+        );
+        assert!(
+            parse_script("## task: a\nq\n## task: b\nq\n")
+                .unwrap_err()
+                .to_string()
+                .contains("still open")
+        );
+        assert!(
+            parse_script("## step: read it\nq\n")
+                .unwrap_err()
+                .to_string()
+                .contains("must follow a `## task:`")
+        );
+        assert!(
+            parse_script("## task: a\nq\n## step: late\n")
+                .unwrap_err()
+                .to_string()
+                .contains("before its first prompt"),
+            "a plan cannot grow after a turn it was supposed to authorise",
+        );
+    }
+
+    #[test]
+    fn a_script_of_directives_and_no_questions_is_not_a_script() {
+        assert!(
+            parse_script("## task: a\n## close\n")
+                .unwrap_err()
+                .to_string()
+                .contains("no prompts")
+        );
+    }
 }
