@@ -17,11 +17,23 @@ there needs to say so and argue with it, not route around it.
 - [`RECORD/`](RECORD/) — dated proposals and the reasoning behind them,
   **append-only**. It is how the current answer was arrived at, including the
   answers that were wrong first.
+- [`ROADMAP/`](ROADMAP/) — what is **planned and not yet true**, one directory
+  per revision (`ROADMAP/YYYY-MM-DD/`). Rewritable *within* a revision and
+  superseded wholesale by a later one, so the roadmap can be corrected without
+  the correction erasing what was believed before it.
 
-The two overlap on purpose and must not be merged. If you only update the design
-doc, the reasoning is lost; if you only write a record, nobody can tell what is
-true today. A decision that changes touches both: rewrite the design doc, append
-to the record.
+The three overlap on purpose and must not be merged. If you only update the
+design doc, the reasoning is lost; if you only write a record, nobody can tell
+what is true today; if you only keep a roadmap, nobody can tell the plan from the
+tree. A decision that changes touches the first two: rewrite the design doc,
+append to the record.
+
+The rule that keeps the third honest, because it is the one that rots: **nothing
+in `ROADMAP/` is ever the answer to "what is true today."** An item that lands
+moves into `loude-design.md` and gets a record; the roadmap entry it came from is
+struck through in place, not deleted, so a revision reads as *what we set out to
+do and how much of it happened*. A roadmap that quietly loses its misses is a
+roadmap nobody can calibrate.
 
 ## Plans
 
@@ -31,6 +43,16 @@ touching code — the reasoning is the point, and it's what a future reader (or 
 next agent) needs in order to argue with the decision rather than rediscover it. A
 plan states the problem, the proposal, what it costs, what was rejected and why,
 and what's still open.
+
+**A record argues; a roadmap orders.** They answer different questions and the
+split is worth keeping: *why is this the right thing to build* belongs in a dated
+record and never changes afterwards, while *what are we building next and in what
+order* belongs in `ROADMAP/<revision>/` and is expected to change. So a roadmap
+entry is a few lines and a link to the record that argued for it, never a second
+copy of the argument — the moment it restates the reasoning it starts drifting
+from it, which is the same failure the design doc and the record are split to
+avoid. Sequencing, what blocks what, and the Gantt are the roadmap's own content
+and belong nowhere else.
 
 **`RECORD/` files are append-only.** Never edit or delete what's already in one,
 even to fix something the file gets wrong. A plan is a record of what was believed

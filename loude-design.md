@@ -4,7 +4,8 @@ Local AI agent written in Rust that orchestrates calls to models, optimized for 
 
 This file is the design as it stands now, and is rewritten as decisions change. The dated
 reasoning behind them — including the answers that were wrong first — lives in [`RECORD/`](RECORD/),
-which is append-only. See [AGENTS.md](AGENTS.md).
+which is append-only. What is *planned and not yet true* lives in [`ROADMAP/`](ROADMAP/), one
+directory per revision; nothing there is an answer to what this file answers. See [AGENTS.md](AGENTS.md).
 
 ## Goals
 
@@ -584,6 +585,13 @@ lives in memory for the life of the process.
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
 5. Container packaging (level 3), with the level-2 restrictions still applied inside it.
 6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
+
+The six steps are the *shape* of the work and have not changed. What is being
+built next, in what order, and what blocks what is a separate question with a
+separate answer: [`ROADMAP/`](ROADMAP/), latest revision. Federation — sovereign
+hosts, a coordinating portal, sessions moved between machines — is proposed and
+not decided; the argument is
+[`RECORD/2026-08-31.the-portal-and-the-gate.md`](RECORD/2026-08-31.the-portal-and-the-gate.md).
 
 ## Naming
 
