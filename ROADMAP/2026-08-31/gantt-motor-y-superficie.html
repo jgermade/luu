@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loude, motor y superficie</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+<style>
+  :root {
+    --paper:      #F2F5F6;
+    --panel:      #FBFCFC;
+    --ink:        #16202A;
+    --ink-2:      #4E606E;
+    --ink-3:      #7C8C99;
+    --rule:       #C9D4DA;
+    --rule-faint: #E1E8EC;
+    --band:       #EAEFF1;
+    --done:       #1F6E68;
+    --done-soft:  #C9E1DE;
+    --plan:       #AE5620;
+    --plan-soft:  #F0D8C6;
+    --probe:      #66539C;
+    --probe-soft: #DCD5EE;
+    --open:       #74838F;
+    --today:      #16202A;
+
+    --f-display: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    --f-mono:    "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+
+    --cols: 246px repeat(6, 30px) 22px repeat(20, 34px);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0E141A;
+      --panel:      #151D25;
+      --ink:        #E2EAEF;
+      --ink-2:      #9AAAB6;
+      --ink-3:      #74858F;
+      --rule:       #2B3A45;
+      --rule-faint: #1F2A33;
+      --band:       #19222B;
+      --done:       #3FA79E;
+      --done-soft:  #1D3B3B;
+      --plan:       #D6813F;
+      --plan-soft:  #3A2A1D;
+      --probe:      #9A87D0;
+      --probe-soft: #2A2440;
+      --open:       #7B8994;
+      --today:      #E2EAEF;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0E141A;
+    --panel:      #151D25;
+    --ink:        #E2EAEF;
+    --ink-2:      #9AAAB6;
+    --ink-3:      #74858F;
+    --rule:       #2B3A45;
+    --rule-faint: #1F2A33;
+    --band:       #19222B;
+    --done:       #3FA79E;
+    --done-soft:  #1D3B3B;
+    --plan:       #D6813F;
+    --plan-soft:  #3A2A1D;
+    --probe:      #9A87D0;
+    --probe-soft: #2A2440;
+    --open:       #7B8994;
+    --today:      #E2EAEF;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 56px 28px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead { display: flex; flex-direction: column; gap: 18px; }
+
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  h1 {
+    font-family: var(--f-display);
+    font-size: clamp(30px, 5vw, 44px);
+    font-weight: 700;
+    letter-spacing: -0.022em;
+    line-height: 1.08;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .dek {
+    max-width: 63ch;
+    font-size: 17px;
+    color: var(--ink-2);
+    margin: 0;
+  }
+
+  .caveat {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--plan);
+    padding: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 72ch;
+  }
+  .caveat p { margin: 0; font-size: 15px; color: var(--ink-2); }
+  .caveat strong { color: var(--ink); font-weight: 500; }
+
+  /* ---------- legend ---------- */
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 26px;
+    padding: 16px 0 0;
+    border-top: 1px solid var(--rule);
+  }
+  .key { display: flex; align-items: center; gap: 9px; font-family: var(--f-mono); font-size: 11.5px; color: var(--ink-2); }
+  .swatch { width: 26px; height: 11px; flex: none; border-radius: 1px; }
+  .swatch.done  { background: var(--done); }
+  .swatch.plan  { background: var(--plan); }
+  .swatch.probe { background: var(--probe); }
+  .swatch.open  { background: transparent; border: 1.5px dashed var(--open); }
+  .swatch.dia   { width: 11px; height: 11px; transform: rotate(45deg); border: 2px solid var(--ink); background: var(--panel); }
+  .swatch.shr   { background: var(--plan); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.55) 0 2px, transparent 2px 5px); }
+
+  /* ---------- chart ---------- */
+
+  .chart-block { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+
+  .chart-head { display: flex; flex-direction: column; gap: 6px; }
+  h2 {
+    font-family: var(--f-display);
+    font-size: 25px;
+    font-weight: 650;
+    letter-spacing: -0.014em;
+    margin: 0;
+  }
+  .chart-head p { margin: 0; font-size: 15px; color: var(--ink-2); max-width: 68ch; }
+
+  .scroll {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    background: var(--panel);
+  }
+  .chart { position: relative; width: max-content; min-width: 100%; }
+
+  .gridlayer {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: var(--cols);
+    z-index: 0;
+    pointer-events: none;
+  }
+  .gridlayer i { display: block; }
+  .gridlayer i.g   { border-left: 1px solid var(--rule-faint); }
+  .gridlayer i.gm  { border-left: 1px solid var(--rule); }
+  .gridlayer i.gb  { background: var(--band); }
+  .gridlayer i.brk {
+    border-left: 2px solid var(--today);
+    background-image: repeating-linear-gradient(135deg, var(--rule-faint) 0 3px, transparent 3px 7px);
+  }
+
+  .rows { position: relative; z-index: 1; }
+
+  .row {
+    display: grid;
+    grid-template-columns: var(--cols);
+    align-items: center;
+    min-height: 30px;
+  }
+  .row:hover .label { color: var(--ink); }
+  .row:hover .name { text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px; }
+
+  .label {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background: var(--panel);
+    border-right: 1px solid var(--rule);
+    padding: 5px 14px 5px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    color: var(--ink-2);
+  }
+  .name {
+    font-family: var(--f-display);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.3;
+    color: var(--ink);
+  }
+  .note {
+    font-family: var(--f-mono);
+    font-size: 10px;
+    line-height: 1.35;
+    color: var(--ink-3);
+  }
+
+  /* group headers */
+  .grouphead { min-height: 34px; border-top: 1px solid var(--rule); }
+  .grouphead .label {
+    background: var(--panel);
+    padding-top: 11px;
+    padding-bottom: 6px;
+  }
+  .grouphead .gname {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+  .grouphead .grule {
+    grid-column: 2 / -1;
+    height: 1px;
+    background: var(--rule);
+    align-self: center;
+    margin-top: 5px;
+  }
+
+  /* bars */
+  .bar {
+    height: 13px;
+    border-radius: 2px;
+    align-self: center;
+    position: relative;
+  }
+  .bar.done  { background: var(--done); }
+  .bar.plan  { background: var(--plan); }
+  .bar.probe { background: var(--probe); }
+  .bar.open  { background: transparent; border: 1.5px dashed var(--open); height: 13px; }
+  .bar.shared {
+    background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.55) 0 2px, transparent 2px 5px);
+  }
+  .bar.beyond {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    -webkit-mask-image: linear-gradient(90deg, #000 62%, transparent 100%);
+            mask-image: linear-gradient(90deg, #000 62%, transparent 100%);
+  }
+
+  /* milestones */
+  .milestone .label { padding-top: 6px; padding-bottom: 6px; }
+  .milestone .name { font-family: var(--f-body); font-style: italic; font-weight: 400; font-size: 12.5px; }
+  .diamond {
+    width: 11px; height: 11px;
+    transform: rotate(45deg);
+    border: 2px solid var(--ink);
+    background: var(--panel);
+    justify-self: center;
+    align-self: center;
+  }
+
+  /* axis */
+  .axis { position: relative; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--rule); }
+  .axis .label { border-right: 1px solid var(--rule); }
+  .zone {
+    font-family: var(--f-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 9px 0 3px 7px;
+    white-space: nowrap;
+  }
+  .axrow { min-height: 0; }
+  .tick, .mon, .wk {
+    font-family: var(--f-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    color: var(--ink-3);
+  }
+  .tick { font-size: 10.5px; padding-bottom: 3px; }
+  .mon  { font-size: 10.5px; padding-bottom: 3px; color: var(--ink-2); border-left: 1px solid var(--rule); }
+  .wk   { font-size: 9px; padding-bottom: 6px; }
+  .axis .label .name { font-size: 11px; color: var(--ink-3); font-family: var(--f-mono); font-weight: 400; }
+
+  figcaption {
+    font-size: 13.5px;
+    color: var(--ink-2);
+    max-width: 74ch;
+    font-style: italic;
+  }
+  figcaption code, .note code { font-family: var(--f-mono); font-style: normal; font-size: 0.92em; }
+
+  /* ---------- closing ---------- */
+
+  .closing { display: flex; flex-direction: column; gap: 16px; border-top: 1px solid var(--rule); padding-top: 30px; }
+  .closing h2 { font-size: 21px; }
+  .closing p { margin: 0; max-width: 68ch; color: var(--ink-2); }
+  .closing strong { color: var(--ink); font-weight: 500; }
+
+  .sums { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .sum { background: var(--panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 3px; }
+  .sum .n { font-family: var(--f-display); font-size: 27px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .sum .l { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+  .sum .d { font-size: 13px; color: var(--ink-2); }
+
+  a { color: var(--done); text-underline-offset: 2px; }
+  a:focus-visible, .row:focus-visible { outline: 2px solid var(--plan); outline-offset: 2px; }
+
+  @media (max-width: 720px) {
+    .wrap { padding: 36px 16px 72px; }
+    :root { --cols: 190px repeat(6, 26px) 20px repeat(20, 30px); }
+  }
+</style>
+<style>
+  /* Reset mínimo: en el artifact lo pone el host; aquí el fichero va suelto. */
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Loude · <code>luu</code> — 14 commits, 26–31 ago 2026</div>
+    <h1>Motor y superficie</h1>
+    <p class="dek">Dos calendarios del mismo proyecto. El primero es el agente por dentro: contexto, herramientas, sandbox, las mediciones que deciden si algo mejoró. El segundo son los cuatro sitios donde alguien lo usa: el CLI, la extensión de VSCode, la web local y la web remota.</p>
+
+    <div class="caveat">
+      <p><strong>Lo que hay a la izquierda de la línea vertical es real:</strong> fechas de commit, seis días de trabajo del 26 al 31 de agosto.</p>
+      <p><strong>Todo lo que hay a la derecha es estimación mía</strong>, no del repositorio. Las dependencias salen del código y de <code>RECORD/</code>; el calendario no está escrito en ningún sitio. Supone una persona a tiempo completo por vía.</p>
+      <p><strong>Los dos diagramas no se suman.</strong> Cada uno cuenta sus semanas desde el arranque de <em>su</em> vía, porque compiten por la misma persona. Las barras rayadas son la misma pieza de trabajo apareciendo en ambos: se hace una vez.</p>
+    </div>
+
+    <div class="legend">
+      <span class="key"><span class="swatch done"></span>entregado</span>
+      <span class="key"><span class="swatch plan"></span>por construir</span>
+      <span class="key"><span class="swatch probe"></span>una corrida, no código — necesita máquina con modelo</span>
+      <span class="key"><span class="swatch open"></span>sin diseñar ni decidir</span>
+      <span class="key"><span class="swatch shr"></span>compartida entre los dos diagramas</span>
+      <span class="key"><span class="swatch dia"></span>decisión — un instante, no una duración</span>
+    </div>
+  </header>
+
+  <!-- ============ CHART 1 ============ -->
+  <figure class="chart-block">
+    <div class="chart-head">
+      <h2>El motor: que funcione como agente</h2>
+      <p>Diez commits ya cerraron los pasos 1, 3 y 4 del orden de trabajo. Lo que queda del paso 2 es rankear el mapa — el diferenciador declarado — y por delante van dos corridas contra un modelo real que nadie ha hecho todavía.</p>
+    </div>
+
+    <div class="scroll">
+      <div class="chart">
+        <div class="gridlayer" aria-hidden="true">
+          <i></i>
+          <i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+          <i class="brk"></i>
+          <i class="gm"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+          <i class="gm gb"></i><i class="g gb"></i><i class="g gb"></i><i class="g gb"></i>
+          <i class="gm"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+          <i class="gm gb"></i><i class="g gb"></i><i class="g gb"></i><i class="g gb"></i>
+          <i class="gm"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+        </div>
+
+        <div class="axis">
+          <div class="row axrow">
+            <div class="label"><span class="name">tarea</span></div>
+            <div class="zone" style="grid-column: 2 / span 6">26–31 ago · días reales</div>
+            <div class="zone" style="grid-column: 9 / span 20">desde el arranque de esta vía · semanas estimadas</div>
+          </div>
+          <div class="row axrow">
+            <div class="label"></div>
+            <div class="tick" style="grid-column:2">26</div>
+            <div class="tick" style="grid-column:3">27</div>
+            <div class="tick" style="grid-column:4">28</div>
+            <div class="tick" style="grid-column:5">29</div>
+            <div class="tick" style="grid-column:6">30</div>
+            <div class="tick" style="grid-column:7">31</div>
+            <div class="mon" style="grid-column:9 / span 4">mes 1</div>
+            <div class="mon" style="grid-column:13 / span 4">mes 2</div>
+            <div class="mon" style="grid-column:17 / span 4">mes 3</div>
+            <div class="mon" style="grid-column:21 / span 4">mes 4</div>
+            <div class="mon" style="grid-column:25 / span 4">mes 5</div>
+          </div>
+          <div class="row axrow">
+            <div class="label"></div>
+            <div class="wk" style="grid-column:9">S1</div><div class="wk">S2</div><div class="wk">S3</div><div class="wk">S4</div>
+            <div class="wk">S5</div><div class="wk">S6</div><div class="wk">S7</div><div class="wk">S8</div>
+            <div class="wk">S9</div><div class="wk">S10</div><div class="wk">S11</div><div class="wk">S12</div>
+            <div class="wk">S13</div><div class="wk">S14</div><div class="wk">S15</div><div class="wk">S16</div>
+            <div class="wk">S17</div><div class="wk">S18</div><div class="wk">S19</div><div class="wk">S20</div>
+          </div>
+        </div>
+
+        <div class="rows">
+
+          <div class="row grouphead"><div class="label"><span class="gname">Entregado</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">Esqueleto, protocolo y cliente de depuración</span><span class="note">#1 · agent-core + serve + UI embebida</span></div>
+            <div class="bar done" style="grid-column:2 / span 1" title="26 ago · commit 725f5de" aria-label="Esqueleto, protocolo y cliente de depuración: 26 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Gestor de contexto: historia, presupuesto, desalojo</span><span class="note">#2 · la historia como tipo, buckets reales</span></div>
+            <div class="bar done" style="grid-column:3 / span 1" title="27 ago · commit 6a26841" aria-label="Gestor de contexto: 27 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Reuse de prefijo y desalojo por bloques</span><span class="note">#3 · medir primero, desalojar después</span></div>
+            <div class="bar done" style="grid-column:3 / span 1" title="27 ago · commit ee12beb" aria-label="Reuse de prefijo y desalojo por bloques: 27 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Herramientas y sandbox</span><span class="note">#4 · Landlock + seccomp: el kernel sujeta al hijo</span></div>
+            <div class="bar done" style="grid-column:3 / span 1" title="27 ago · commit 9b241e4" aria-label="Herramientas y sandbox: 27 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Tareas: la puerta, el fold y la aprobación</span><span class="note">#5 · el plan escrito es la aprobación</span></div>
+            <div class="bar done" style="grid-column:6 / span 1" title="30 ago · commit 5de89e2" aria-label="Tareas, la puerta y el fold: 30 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Fragmentos, <code>num_ctx</code> y todas las llamadas medidas</span><span class="note">#6 · el bucket «code» deja de ser cero</span></div>
+            <div class="bar done" style="grid-column:6 / span 1" title="30 ago · commit f588d4a" aria-label="Fragmentos y medición completa: 30 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Sonda del fold contra un 7B real, dos veces</span><span class="note">muestreo fijado · pierde 2 de 4 · el fix recupera ambas</span></div>
+            <div class="bar done" style="grid-column:6 / span 1" title="30 ago · 16b45d0, 1862400, d1b0e81" aria-label="Sonda del fold contra modelo real: 30 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Narrowing, <code>writes</code> y la negativa como mensaje</span><span class="note">#8 · el plan aprobado es el sandbox · protocolo v2</span></div>
+            <div class="bar done" style="grid-column:7 / span 1" title="31 ago · commit ddd869a" aria-label="Narrowing y writes: 31 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Tombstones de desalojo</span><span class="note">protocolo v3 · una grabación dice qué olvidó</span></div>
+            <div class="bar done" style="grid-column:7 / span 1" title="31 ago · commit e7bb400" aria-label="Tombstones de desalojo: 31 ago, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Mapa del repositorio con <code>tree-sitter</code></span><span class="note">#10 · en el prefijo cacheado · apagado por defecto</span></div>
+            <div class="bar done" style="grid-column:7 / span 1" title="31 ago · commit 8a4e80b" aria-label="Mapa del repositorio: 31 ago, entregado"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">Leer los instrumentos ya construidos</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">Sonda de la puerta</span><span class="note">15 prompts · necesita máquina <em>y</em> persona en la puerta</span></div>
+            <div class="bar probe" style="grid-column:9 / span 1" title="S1 · una corrida, no código" aria-label="Sonda de la puerta: semana 1, corrida pendiente"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Sonda del mapa</span><span class="note">¿recupera los 870 tokens que cuesta por turno?</span></div>
+            <div class="bar probe" style="grid-column:10 / span 1" title="S2 · una corrida, no código" aria-label="Sonda del mapa: semana 2, corrida pendiente"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Réplica en 14b/32b y fold a 32K</span><span class="note">y si el reuse llega a ser <em>segundos</em></span></div>
+            <div class="bar probe" style="grid-column:11 / span 1" title="S3 · una corrida, no código" aria-label="Réplica en 14b y 32b: semana 3, corrida pendiente"></div>
+          </div>
+
+          <div class="row milestone">
+            <div class="label"><span class="name">¿La gramática adelanta al ranking?</span><span class="note">si un 7B no propone un plan parseable, sí</span></div>
+            <div class="diamond" style="grid-column:12" title="Decisión al final de S3" aria-label="Decisión: si la gramática GBNF adelanta al ranking del mapa, final de semana 3"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">Cerrar el paso 2 — el diferenciador</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">Gramática GBNF y function calling nativo</span><span class="note">condicional a la decisión de arriba · sustituye el parseo de texto</span></div>
+            <div class="bar plan" style="grid-column:12 / span 3" title="S4–S6" aria-label="Gramática GBNF: semanas 4 a 6"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Rankear el mapa: el grafo de referencias</span><span class="note">lo único no construido del paso 2 · tiene baseline que batir</span></div>
+            <div class="bar plan" style="grid-column:15 / span 4" title="S7–S10" aria-label="Rankear el mapa con el grafo de referencias: semanas 7 a 10"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Refrescar un mapa obsoleto</span><span class="note"><code>mtime</code> lo detecta; cuándo pagar la rotura de prefijo, no</span></div>
+            <div class="bar plan" style="grid-column:19 / span 1" title="S11" aria-label="Refrescar un mapa obsoleto: semana 11"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Podar resultados de herramientas</span><span class="note">sería el primer desalojo <em>parcial</em></span></div>
+            <div class="bar plan" style="grid-column:19 / span 2" title="S11–S12" aria-label="Podar resultados de herramientas: semanas 11 y 12"></div>
+          </div>
+          <div class="row milestone">
+            <div class="label"><span class="name">¿Un tombstone parcial, o no se poda dentro del turno?</span><span class="note"><code>evicted</code> deliberadamente no sabe describir medio turno</span></div>
+            <div class="diamond" style="grid-column:19" title="Decisión en S11" aria-label="Decisión: tombstone parcial o no podar dentro del turno, semana 11"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">Proveedores y persistencia — compartidas</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">Backend OpenAI-compatible</span><span class="note">↔ un backend detrás del trait, y entran LM Studio, llama-server, vLLM</span></div>
+            <div class="bar plan shared" style="grid-column:9 / span 1" title="S1 · compartida con la superficie" aria-label="Backend OpenAI-compatible: semana 1, compartida"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Sesiones en SQLite</span><span class="note">↔ derivable del stream de eventos, no una segunda verdad</span></div>
+            <div class="bar plan shared" style="grid-column:10 / span 2" title="S2–S3 · compartida con la superficie" aria-label="Sesiones en SQLite: semanas 2 y 3, compartida"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Leer la ventana de contexto del backend</span><span class="note">hoy <code>--context-limit</code> es un flag que hay que acertar</span></div>
+            <div class="bar plan" style="grid-column:21 / span 1" title="S13" aria-label="Leer la ventana de contexto del backend: semana 13"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">Deudas de seguridad y de cierre</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name"><code>openat2(RESOLVE_BENEATH)</code></span><span class="note">cierra la ventana TOCTOU que hoy es un comentario</span></div>
+            <div class="bar plan" style="grid-column:21 / span 2" title="S13–S14" aria-label="openat2 RESOLVE_BENEATH: semanas 13 y 14"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Contenedor nivel 3</span><span class="note">↔ con las restricciones de nivel 2 aplicadas dentro</span></div>
+            <div class="bar plan shared" style="grid-column:23 / span 3" title="S15–S17 · compartida con la superficie" aria-label="Contenedor nivel 3: semanas 15 a 17, compartida"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Narrowing: <code>network</code> y <code>enforcement</code> en el plan</span><span class="note">hoy la tarea los hereda del fichero de política</span></div>
+            <div class="bar plan" style="grid-column:26 / span 1" title="S18" aria-label="Narrowing de network y enforcement: semana 18"></div>
+          </div>
+          <div class="row milestone">
+            <div class="label"><span class="name">¿<code>writes</code> acota <code>run_command</code>?</span><span class="note">un comando sigue siendo lo más ancho que un plan puede pedir</span></div>
+            <div class="diamond" style="grid-column:26" title="Decisión en S18" aria-label="Decisión: si writes acota run_command, semana 18"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Quién más puede cerrar una tarea</span><span class="note">exit codes y tests primero, luego el juez en shadow mode</span></div>
+            <div class="bar plan" style="grid-column:26 / span 2" title="S18–S19" aria-label="Quién más puede cerrar una tarea: semanas 18 y 19"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Deudas pequeñas antes de que sean folclore</span><span class="note">el <code>sleep</code> de 50 ms, <code>SessionView</code> clonado, <code>?from=&amp;limit=</code></span></div>
+            <div class="bar plan" style="grid-column:28 / span 1" title="S20" aria-label="Deudas pequeñas: semana 20"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name"><code>llama-cpp-rs</code> directo, para el KV cache</span><span class="note">en el diseño como «recomendado» y aplazado desde el principio</span></div>
+            <div class="bar open" style="grid-column:27 / span 2" title="Sin fecha · aplazado en el diseño" aria-label="llama-cpp-rs directo: aplazado, sin fecha"></div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+    <figcaption>Las tres barras violetas son el hueco real: la última corrida contra un modelo de verdad es del 30 de agosto, y narrowing, la negativa como mensaje, los tombstones y el mapa se han verificado todos contra el mock. Los instrumentos van por delante de las lecturas.</figcaption>
+  </figure>
+
+  <!-- ============ CHART 2 ============ -->
+  <figure class="chart-block">
+    <div class="chart-head">
+      <h2>La superficie: los cuatro entornos</h2>
+      <p>El CLI existe pero no conversa; la web local existe pero es un instrumento de una sola sesión; la extensión no tiene una línea escrita; la web remota no está en el diseño. Este es el orden en que se desbloquean unos a otros.</p>
+    </div>
+
+    <div class="scroll">
+      <div class="chart">
+        <div class="gridlayer" aria-hidden="true">
+          <i></i>
+          <i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+          <i class="brk"></i>
+          <i class="gm"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+          <i class="gm gb"></i><i class="g gb"></i><i class="g gb"></i><i class="g gb"></i>
+          <i class="gm"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+          <i class="gm gb"></i><i class="g gb"></i><i class="g gb"></i><i class="g gb"></i>
+          <i class="gm"></i><i class="g"></i><i class="g"></i><i class="g"></i>
+        </div>
+
+        <div class="axis">
+          <div class="row axrow">
+            <div class="label"><span class="name">tarea</span></div>
+            <div class="zone" style="grid-column: 2 / span 6">26–31 ago · días reales</div>
+            <div class="zone" style="grid-column: 9 / span 20">desde el arranque de esta vía · semanas estimadas</div>
+          </div>
+          <div class="row axrow">
+            <div class="label"></div>
+            <div class="tick" style="grid-column:2">26</div>
+            <div class="tick" style="grid-column:3">27</div>
+            <div class="tick" style="grid-column:4">28</div>
+            <div class="tick" style="grid-column:5">29</div>
+            <div class="tick" style="grid-column:6">30</div>
+            <div class="tick" style="grid-column:7">31</div>
+            <div class="mon" style="grid-column:9 / span 4">mes 1</div>
+            <div class="mon" style="grid-column:13 / span 4">mes 2</div>
+            <div class="mon" style="grid-column:17 / span 4">mes 3</div>
+            <div class="mon" style="grid-column:21 / span 4">mes 4</div>
+            <div class="mon" style="grid-column:25 / span 4">mes 5</div>
+          </div>
+          <div class="row axrow">
+            <div class="label"></div>
+            <div class="wk" style="grid-column:9">S1</div><div class="wk">S2</div><div class="wk">S3</div><div class="wk">S4</div>
+            <div class="wk">S5</div><div class="wk">S6</div><div class="wk">S7</div><div class="wk">S8</div>
+            <div class="wk">S9</div><div class="wk">S10</div><div class="wk">S11</div><div class="wk">S12</div>
+            <div class="wk">S13</div><div class="wk">S14</div><div class="wk">S15</div><div class="wk">S16</div>
+            <div class="wk">S17</div><div class="wk">S18</div><div class="wk">S19</div><div class="wk">S20</div>
+          </div>
+        </div>
+
+        <div class="rows">
+
+          <div class="row grouphead"><div class="label"><span class="gname">Entregado</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">CLI: <code>chat</code>, <code>tools</code>, <code>map</code>, <code>export</code>, <code>serve</code></span><span class="note">one-shot y scripted, streaming a stdout</span></div>
+            <div class="bar done" style="grid-column:2 / span 6" title="26–31 ago" aria-label="CLI con chat, tools, map, export y serve: del 26 al 31 de agosto, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Web local de depuración</span><span class="note">composer, transcripción, presupuesto, reuse, prompt enviado, replay</span></div>
+            <div class="bar done" style="grid-column:2 / span 6" title="26–31 ago" aria-label="Web local de depuración: del 26 al 31 de agosto, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Protocolo v3 y API de lectura</span><span class="note">un solo esquema JSON, varios transportes</span></div>
+            <div class="bar done" style="grid-column:2 / span 6" title="26–31 ago" aria-label="Protocolo v3 y API de lectura: del 26 al 31 de agosto, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">La puerta en la web</span><span class="note">aprobar añadiendo <code>files</code>/<code>writes</code>/<code>commands</code>, rechazar, cerrar, reabrir</span></div>
+            <div class="bar done" style="grid-column:6 / span 2" title="30–31 ago" aria-label="La puerta en la web: 30 y 31 de agosto, entregado"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Tests que corren la cosa</span><span class="note"><code>serve_ws</code>, <code>ollama_wire</code>, Playwright y el sitio en Pages</span></div>
+            <div class="bar done" style="grid-column:6 / span 2" title="30–31 ago" aria-label="Tests que corren la aplicación: 30 y 31 de agosto, entregado"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">CLI — al nivel de opencode</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">Proveedores: backend OpenAI-compatible</span><span class="note">↔ hoy sólo hay <code>ollama</code> y <code>mock</code> · más descubrimiento de modelos</span></div>
+            <div class="bar plan shared" style="grid-column:9 / span 1" title="S1 · compartida con el motor" aria-label="Backend OpenAI-compatible y descubrimiento de modelos: semana 1, compartida"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Config de usuario y perfiles de proveedor</span><span class="note"><code>luu.toml</code> es sólo <code>[sandbox]</code>; hoy todo va por flags</span></div>
+            <div class="bar plan" style="grid-column:10 / span 1" title="S2" aria-label="Config de usuario y perfiles de proveedor: semana 2"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Sesiones persistentes: reanudar una conversación</span><span class="note">↔ hoy cada <code>chat</code> empieza de cero y <code>--record</code> no se relee</span></div>
+            <div class="bar plan shared" style="grid-column:10 / span 2" title="S2–S3 · compartida con el motor" aria-label="Sesiones persistentes y reanudar: semanas 2 y 3, compartida"></div>
+          </div>
+          <div class="row milestone">
+            <div class="label"><span class="name">¿El CLI lleva puerta, o se queda one-shot?</span><span class="note">abierta en el diseño desde que la puerta existe</span></div>
+            <div class="diamond" style="grid-column:11" title="Decisión en S3" aria-label="Decisión: si el CLI lleva puerta o se queda one-shot, semana 3"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">REPL / TUI interactivo</span><span class="note">lo que falta para parecerse a opencode · no hay nada hoy</span></div>
+            <div class="bar plan" style="grid-column:12 / span 3" title="S4–S6" aria-label="REPL o TUI interactivo: semanas 4 a 6"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Puerta en el CLI</span><span class="note">sólo si la decisión de S3 dice que sí</span></div>
+            <div class="bar open" style="grid-column:15 / span 1" title="S7 · condicional" aria-label="Puerta en el CLI: semana 7, condicional a la decisión"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">MCP y subagentes</span><span class="note">ni construido ni decidido ni en el diseño</span></div>
+            <div class="bar open" style="grid-column:27 / span 2" title="Sin fecha · sin decidir" aria-label="MCP y subagentes: sin decidir, sin fecha"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">Web local — de instrumento a producto</span></div><div class="grule"></div></div>
+
+          <div class="row milestone">
+            <div class="label"><span class="name">¿Instrumento, producto, o los dos modos?</span><span class="note">hoy los paneles pesan más que el chat, y eso fue a propósito</span></div>
+            <div class="diamond" style="grid-column:15" title="Decisión en S7" aria-label="Decisión: instrumento, producto o dos modos, semana 7"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Multi-sesión en <code>serve</code></span><span class="note">hoy hay un <code>view</code> bajo un mutex y <code>/api/sessions</code> devuelve uno</span></div>
+            <div class="bar plan" style="grid-column:15 / span 2" title="S7–S8" aria-label="Multi-sesión en serve: semanas 7 y 8"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Elegir proveedor, modelo y ventana en caliente</span><span class="note">hoy se fijan por flags al arrancar el servidor</span></div>
+            <div class="bar plan" style="grid-column:17 / span 1" title="S9" aria-label="Elegir proveedor, modelo y ventana en caliente: semana 9"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Modo chat junto al inspector</span><span class="note">y las deudas de la UI: <code>?from=&amp;limit=</code>, el tope de 400 ms del replay</span></div>
+            <div class="bar plan" style="grid-column:18 / span 2" title="S10–S11" aria-label="Modo chat junto al inspector: semanas 10 y 11"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">VSCode — junto al CLI o por su cuenta</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">Transporte stdio del protocolo</span><span class="note">el diseño lo nombra; sólo existe <code>/ws</code></span></div>
+            <div class="bar plan" style="grid-column:20 / span 1" title="S12" aria-label="Transporte stdio del protocolo: semana 12"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Extensión TS con la Chat API</span><span class="note">cero líneas hoy · el plan editable antes de ejecutar encaja solo</span></div>
+            <div class="bar plan" style="grid-column:21 / span 3" title="S13–S15" aria-label="Extensión TypeScript con la Chat API de VSCode: semanas 13 a 15"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Puente contra el CLI y modo autónomo</span><span class="note">los dos modos que pediste, sobre el mismo protocolo</span></div>
+            <div class="bar plan" style="grid-column:24 / span 1" title="S16" aria-label="Puente contra el CLI y modo autónomo: semana 16"></div>
+          </div>
+
+          <div class="row grouphead"><div class="label"><span class="gname">Web remota — securizada y multi-host</span></div><div class="grule"></div></div>
+
+          <div class="row">
+            <div class="label"><span class="name">Contenedor nivel 3</span><span class="note">↔ precondición dura: sin aislamiento esto es una shell remota</span></div>
+            <div class="bar plan shared" style="grid-column:25 / span 3" title="S17–S19 · compartida con el motor" aria-label="Contenedor nivel 3: semanas 17 a 19, compartida y precondición"></div>
+          </div>
+          <div class="row milestone">
+            <div class="label"><span class="name">Autorización cruzada sandbox × usuario</span><span class="note">no está en <code>loude-design.md</code>: hay que diseñarla antes</span></div>
+            <div class="diamond" style="grid-column:27" title="Decisión en S19" aria-label="Decisión: autorización cruzada entre sandbox y usuario, semana 19"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">TLS y salir de loopback</span><span class="note">hoy <code>--bind</code> es <code>127.0.0.1:7878</code> y no hay auth</span></div>
+            <div class="bar plan beyond" style="grid-column:28 / span 1" title="S20 y más allá del horizonte" aria-label="TLS y salir de loopback: semana 20 y más allá"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Usuarios, auth y sesión por usuario</span><span class="note">nombrado sólo como deuda de seguridad, nunca diseñado</span></div>
+            <div class="bar plan beyond" style="grid-column:28 / span 1" title="Más allá del horizonte" aria-label="Usuarios, auth y sesión por usuario: más allá del horizonte del diagrama"></div>
+          </div>
+          <div class="row">
+            <div class="label"><span class="name">Registro y enrutado de hosts remotos</span><span class="note">lo de LM Studio · <code>--ollama-url</code> es lo único parecido que existe</span></div>
+            <div class="bar open beyond" style="grid-column:28 / span 1" title="Sin diseñar · más allá del horizonte" aria-label="Registro y enrutado de hosts remotos: sin diseñar, más allá del horizonte"></div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+    <figcaption>Las tres últimas barras se salen del diagrama a propósito: la web remota no cabe en cinco meses, y su precondición real —el contenedor— es lo que empuja todo lo demás hacia el borde. El bloque de VSCode, en cambio, es corto porque la mitad de su trabajo ya está hecha en el protocolo.</figcaption>
+  </figure>
+
+  <!-- ============ CLOSING ============ -->
+  <section class="closing">
+    <h2>Lo que los dos diagramas dicen juntos</h2>
+
+    <div class="sums">
+      <div class="sum"><span class="l">Entregado</span><span class="n">6 días</span><span class="d">14 commits, 188 tests, dos pasos del orden de trabajo cerrados</span></div>
+      <div class="sum"><span class="l">Motor, hasta cerrar</span><span class="n">~20 sem</span><span class="d">y el diferenciador —rankear el mapa— cae en la mitad</span></div>
+      <div class="sum"><span class="l">Superficie, hasta cerrar</span><span class="n">&gt;20 sem</span><span class="d">la web remota no cabe en el horizonte</span></div>
+      <div class="sum"><span class="l">A la vez, una persona</span><span class="n">~36 sem</span><span class="d">descontando las tres piezas compartidas</span></div>
+    </div>
+
+    <p><strong>Las dos vías compiten, no se suman.</strong> Puestas en fila son unos nueve meses; puestas en paralelo son dos personas. Tres piezas aparecen en ambos diagramas y se hacen una sola vez: el backend OpenAI-compatible, las sesiones en SQLite y el contenedor de nivel 3. Empezar por ellas es lo único que abarata las dos vías al mismo tiempo.</p>
+
+    <p><strong>El orden de la superficie está determinado, el del motor no.</strong> En el segundo diagrama casi nada es opcional: sin persistencia no hay web local usable ni multiusuario, sin transporte stdio no hay extensión, sin contenedor no hay web remota defendible. En el primero, en cambio, la primera semana decide el resto — si un 7B no propone un plan parseable, la gramática GBNF adelanta al ranking del mapa y el diagrama se reordena entero.</p>
+
+    <p><strong>Y hay una elección que ninguno de los dos diagramas puede tomar por ti:</strong> el motor es el diferenciador declarado del proyecto y la superficie es lo que lo convierte en algo que se usa. El repositorio ha invertido seis días enteros en el primero. Elegir cuál va primero ahora es una decisión de rumbo, no una priorización técnica.</p>
+  </section>
+
+</div>
+</body>
+</html>
