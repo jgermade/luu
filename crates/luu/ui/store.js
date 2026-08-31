@@ -464,9 +464,9 @@ function act(type, task) {
 /// Approving carries what the person added to the plan, which is the half that
 /// makes narrowing survivable: a task may touch what it was approved for, so a
 /// plan that forgot a file is widened here rather than rejected and retyped.
-export function approveTask(task, files = [], commands = []) {
+export function approveTask(task, files = [], writes = [], commands = []) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
-  socket.send(JSON.stringify({ type: "approve_task", task, files, commands }))
+  socket.send(JSON.stringify({ type: "approve_task", task, files, writes, commands }))
 }
 export const rejectTask = task => act("reject_task", task)
 export const closeTask = task => act("close_task", task)

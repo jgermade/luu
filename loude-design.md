@@ -85,11 +85,17 @@ is. The policy file is the outer bound and the plan the inner one — a plan
 cannot grant what the file does not, and a plan that names nothing grants
 nothing. A denial says which of the two refused.
 
-Narrowing is on *extent*, not on level: a file the policy grants read-write
-stays read-write inside the task, because a plan has no way yet to say which of
-the two it means. Approving carries an amendment — the files and commands the
-person adds at the gate, checked against the policy file exactly as the model's
-plan was — which is what stops an under-specified plan from being a dead run.
+Narrowing cuts the level as well as the extent. A plan has two path lists:
+`files` is what the task may **read** and `writes` what it may also **change**,
+so a file declared only as read is read-only inside the task even where the
+policy grants both — and a plan that says it will change a file under a
+read-only root is refused *at the gate* rather than four turns in, which is the
+one case the check exists for and used to miss. A write to a path that does not
+exist yet grants the directory that will hold it, because creating a file is a
+write to its directory and at the kernel rung a grant is a directory anyway.
+Approving carries an amendment — the reads, writes and commands the person adds
+at the gate, checked against the policy file exactly as the model's plan was —
+which is what stops an under-specified plan from being a dead run.
 See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md) and
 [`RECORD/2026-08-30.narrowing.md`](RECORD/2026-08-30.narrowing.md).
 
@@ -560,13 +566,12 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- A plan that says what it will **write**, not only what it will touch. The
-  check asks whether a file is readable, so a write into a read-only root passes
-  the gate and is denied at the call — the one case the check exists to catch
-  and misses. It is also what narrowing needs before it can cut the access level
-  as well as the extent.
 - Narrowing `network` and `enforcement` with the rest of the plan, which needs a
   plan that declares them. Today a task inherits both from the policy file.
+- Whether `writes` should also bound `run_command`: a child can write whatever
+  the task's roots allow, and a plan's `commands` list says nothing about paths.
+  Narrower than it was — the child is held to the *task's* roots now — but a
+  command is still the widest thing a plan can ask for.
 - Who else may close a task: exit codes and tests first, then the judge in
   shadow mode. The user is the only authority that closes one today.
 - Design the concrete GBNF grammar to force valid tool calls with the target model

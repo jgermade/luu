@@ -47,8 +47,15 @@ const MAX_QUOTED_TOKENS: u32 = 1024;
 pub struct Plan {
     #[serde(default)]
     pub steps: Vec<String>,
+    /// What the task may **read**.
     #[serde(default)]
     pub files: Vec<String>,
+    /// What it may also **change**. A path here need not be repeated in
+    /// `files`: writing implies reading, because `edit_file` reads before it
+    /// replaces. A plan that declares none may not write at all — the check is
+    /// worth having only if the answer can be no.
+    #[serde(default)]
+    pub writes: Vec<String>,
     #[serde(default)]
     pub commands: Vec<String>,
 }
@@ -63,18 +70,22 @@ impl Plan {
     /// turns in. Narrowing the sandbox *down* to the plan waits for a human who
     /// can add the file the plan forgot.
     ///
-    /// Reachability only: a plan says which files it will *touch*, and this
-    /// asks whether they can be read. A file the task will write into a
-    /// read-only root passes here and is denied at the call, which is the one
-    /// case this check was meant to catch and does not. Splitting the plan into
-    /// what it reads and what it writes is the fix, and it waits for the same
-    /// gate — a plan is only worth that precision once a human writes it.
+    /// Read and write are asked separately, which is the whole point: a plan
+    /// that names a file under a `read` root and then edits it used to pass
+    /// here and be denied at the call, four turns in — the one case this check
+    /// exists to prevent and the one it missed.
     pub fn unmet(&self, sandbox: &Sandbox) -> Vec<String> {
         let mut unmet = Vec::new();
         for file in &self.files {
             let check = sandbox.check_path(std::path::Path::new(file), Access::Read);
             if !check.verdict.allowed {
                 unmet.push(format!("file {file}: {}", check.verdict.rule));
+            }
+        }
+        for file in &self.writes {
+            let check = sandbox.check_path(std::path::Path::new(file), Access::ReadWrite);
+            if !check.verdict.allowed {
+                unmet.push(format!("write {file}: {}", check.verdict.rule));
             }
         }
         for command in &self.commands {
@@ -96,12 +107,19 @@ impl Plan {
     /// is ever called, and this is the same rule applied a second time, where
     /// it bites.
     ///
-    /// **Narrowing is on extent, not on level.** A plan has no way to say
-    /// *read* versus *write*, so a file granted `read-write` by the policy stays
-    /// read-write here; making it read-only would answer that open question as a
-    /// side effect of this one and break every task that edits a file it named.
-    /// `network` and `enforcement` are the session's for the same reason: a plan
-    /// declares neither.
+    /// **It narrows the level too.** `files` are granted `Read` and `writes`
+    /// `ReadWrite`, so a task that declared a file and did not declare a write
+    /// may read it and cannot touch it, even where the policy file allows both.
+    /// `network` and `enforcement` are still the session's: a plan declares
+    /// neither.
+    ///
+    /// A path that does not exist yet cannot be a root — Landlock takes a file
+    /// descriptor per root, so [`Sandbox::new`] requires it to be there. A read
+    /// of one grants nothing, because there is nothing to read. A **write** to
+    /// one grants its nearest existing ancestor, because creating a file is a
+    /// write to its directory — and at the kernel rung a grant *is* a
+    /// directory. That is wider than the plan's words and it is the honest
+    /// resolution: the alternative is that no plan may ever create a file.
     pub fn narrow(&self, session: &Sandbox, task: TaskId) -> Result<Sandbox, SandboxError> {
         let mut policy = SandboxPolicy {
             paths: Vec::new(),
@@ -110,8 +128,25 @@ impl Plan {
             enforcement: session.enforcement(),
         };
         for file in &self.files {
-            if let Some(access) = session.access_for(std::path::Path::new(file)) {
-                policy.allow(file, access);
+            let path = std::path::Path::new(file);
+            if !path_exists(session, path) {
+                continue;
+            }
+            if session.access_for(path).is_some() {
+                policy.allow(file, Access::Read);
+            }
+        }
+        for file in &self.writes {
+            let path = std::path::Path::new(file);
+            let grant = match path_exists(session, path) {
+                true => Some(std::path::PathBuf::from(file)),
+                // Creating a file is a write to the directory that will hold it.
+                false => nearest_existing(session, path),
+            };
+            if let Some(grant) = grant
+                && session.access_for(&grant) == Some(Access::ReadWrite)
+            {
+                policy.allow(grant, Access::ReadWrite);
             }
         }
         for command in &self.commands {
@@ -128,10 +163,15 @@ impl Plan {
     /// the human at the gate can widen the plan up to the policy file and not
     /// past it — otherwise the gate is the policy and `luu.toml` is a
     /// suggestion.
-    pub fn amend(&mut self, files: &[String], commands: &[String]) {
+    pub fn amend(&mut self, files: &[String], writes: &[String], commands: &[String]) {
         for file in files {
             if !self.files.contains(file) {
                 self.files.push(file.clone());
+            }
+        }
+        for file in writes {
+            if !self.writes.contains(file) {
+                self.writes.push(file.clone());
             }
         }
         for command in commands {
@@ -147,6 +187,7 @@ impl Plan {
         for (part, items) in [
             ("steps", &self.steps),
             ("files", &self.files),
+            ("writes", &self.writes),
             ("commands", &self.commands),
         ] {
             if !items.is_empty() {
@@ -154,6 +195,29 @@ impl Plan {
             }
         }
         text
+    }
+}
+
+/// Whether a path is there to be granted, resolved the way the sandbox does.
+fn path_exists(session: &Sandbox, path: &std::path::Path) -> bool {
+    absolute(session, path).exists()
+}
+
+/// The closest ancestor that exists, which is what a not-yet-created file needs
+/// written. `None` only if nothing up to the root is there, which cannot happen
+/// for a path under the base — and is not a grant either way.
+fn nearest_existing(session: &Sandbox, path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut candidate = absolute(session, path);
+    while !candidate.exists() {
+        candidate = candidate.parent()?.to_path_buf();
+    }
+    Some(candidate)
+}
+
+fn absolute(session: &Sandbox, path: &std::path::Path) -> std::path::PathBuf {
+    match path.is_absolute() {
+        true => path.to_path_buf(),
+        false => session.base().join(path),
     }
 }
 
@@ -479,6 +543,7 @@ mod tests {
             Plan {
                 steps: vec!["read the CLI".into(), "add the flag".into()],
                 files: vec!["crates/luu/src/lib.rs".into()],
+                writes: vec![],
                 commands: vec!["cargo".into()],
             },
         );
@@ -686,6 +751,7 @@ mod tests {
         let plan = Plan {
             steps: vec![],
             files: vec!["Cargo.toml".into(), "/etc/passwd".into()],
+            writes: vec![],
             commands: vec!["cargo".into(), "curl".into()],
         };
         let unmet = plan.unmet(&sandbox);
@@ -721,6 +787,7 @@ mod tests {
         let plan = Plan {
             steps: vec![],
             files: vec!["Cargo.toml".into()],
+            writes: vec![],
             commands: vec!["cargo".into()],
         };
         let narrowed = plan.narrow(&session, 1).unwrap();
@@ -757,12 +824,43 @@ mod tests {
         );
     }
 
-    /// Narrowing is on extent, not on level: a plan cannot say *read* yet, so a
-    /// file the policy grants read-write stays read-write inside the task.
+    /// Narrowing cuts the level too: a file the plan only says it will *read*
+    /// is read-only inside the task, even where the policy grants both. Before
+    /// `writes` existed a plan could not say which it meant, so every task ran
+    /// with write access to everything it named.
     #[test]
-    fn a_planned_file_keeps_the_access_the_policy_gave_it() {
+    fn a_file_the_plan_only_reads_cannot_be_written() {
         let plan = Plan {
             files: vec!["Cargo.toml".into()],
+            ..Plan::default()
+        };
+        let narrowed = plan.narrow(&session(), 1).unwrap();
+        let path = std::path::Path::new("Cargo.toml");
+
+        assert!(narrowed.check_path(path, Access::Read).verdict.allowed);
+        let refused = narrowed.check_path(path, Access::ReadWrite);
+        assert!(!refused.verdict.allowed);
+        assert!(
+            refused
+                .verdict
+                .rule
+                .contains("the approved plan for task 1"),
+            "{}",
+            refused.verdict.rule,
+        );
+        assert!(
+            session()
+                .check_path(path, Access::ReadWrite)
+                .verdict
+                .allowed,
+            "the policy still grants it: the task is what refuses",
+        );
+    }
+
+    #[test]
+    fn a_declared_write_is_granted_read_write() {
+        let plan = Plan {
+            writes: vec!["Cargo.toml".into()],
             ..Plan::default()
         };
         let narrowed = plan.narrow(&session(), 1).unwrap();
@@ -770,6 +868,82 @@ mod tests {
         assert!(
             narrowed
                 .check_path(std::path::Path::new("Cargo.toml"), Access::ReadWrite)
+                .verdict
+                .allowed,
+            "writing implies reading: `edit_file` reads before it replaces",
+        );
+    }
+
+    /// The check `unmet` exists for and used to miss: a plan that says it will
+    /// change a file under a read-only root is refused at the gate rather than
+    /// four turns in, at the call.
+    #[test]
+    fn a_write_into_a_read_only_root_is_refused_at_the_gate() {
+        let read_only = Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::Read)],
+                commands: Vec::new(),
+                enforcement: Enforcement::BestEffort,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
+
+        let plan = Plan {
+            files: vec!["Cargo.toml".into()],
+            writes: vec!["Cargo.toml".into()],
+            ..Plan::default()
+        };
+        let unmet = plan.unmet(&read_only);
+
+        assert_eq!(unmet.len(), 1, "{unmet:?}");
+        assert!(unmet[0].starts_with("write Cargo.toml:"), "{unmet:?}");
+    }
+
+    /// A plan that says it will create a file: the path is not there to be
+    /// granted, so what it gets is the directory that will hold it — which is
+    /// what creating a file actually needs, and what the kernel rung can
+    /// express at all.
+    #[test]
+    fn a_write_to_a_file_that_does_not_exist_grants_its_directory() {
+        let plan = Plan {
+            writes: vec!["src/not-written-yet.rs".into()],
+            ..Plan::default()
+        };
+        let narrowed = plan.narrow(&session(), 1).unwrap();
+
+        assert!(
+            narrowed
+                .check_path(
+                    std::path::Path::new("src/not-written-yet.rs"),
+                    Access::ReadWrite
+                )
+                .verdict
+                .allowed,
+        );
+        assert!(
+            !narrowed
+                .check_path(std::path::Path::new("Cargo.toml"), Access::Read)
+                .verdict
+                .allowed,
+            "the directory it needs, not the tree above it",
+        );
+    }
+
+    /// And a read of a file that is not there grants nothing: there is nothing
+    /// to read, and a plan naming one used to make the whole task unresolvable.
+    #[test]
+    fn a_read_of_a_file_that_does_not_exist_is_not_a_grant_and_not_an_error() {
+        let plan = Plan {
+            files: vec!["never-existed.md".into(), "Cargo.toml".into()],
+            ..Plan::default()
+        };
+        let narrowed = plan.narrow(&session(), 1).expect("resolves anyway");
+
+        assert!(
+            narrowed
+                .check_path(std::path::Path::new("Cargo.toml"), Access::Read)
                 .verdict
                 .allowed,
         );
@@ -801,6 +975,7 @@ mod tests {
         };
         plan.amend(
             &["src/task.rs".into(), "Cargo.toml".into()],
+            &[],
             &["git".into()],
         );
 
@@ -817,7 +992,7 @@ mod tests {
         );
 
         let mut past_the_file = Plan::default();
-        past_the_file.amend(&["/etc/passwd".into()], &["curl".into()]);
+        past_the_file.amend(&["/etc/passwd".into()], &[], &["curl".into()]);
         assert_eq!(
             past_the_file.unmet(&session).len(),
             2,

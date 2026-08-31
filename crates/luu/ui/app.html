@@ -12,7 +12,7 @@
   // What the person is adding to the proposed plan before approving it. The
   // task's sandbox is built from the plan, so this is the only moment a file
   // the model forgot can still get in. Reassigned, never mutated.
-  let adding = { files: [], commands: [] }
+  let adding = { files: [], writes: [], commands: [] }
   let addition = ""
   const add = kind => {
     const item = addition.trim()
@@ -21,8 +21,8 @@
     addition = ""
   }
   const approve = id => {
-    approveTask(id, adding.files, adding.commands)
-    adding = { files: [], commands: [] }
+    approveTask(id, adding.files, adding.writes, adding.commands)
+    adding = { files: [], writes: [], commands: [] }
     addition = ""
   }
   const toggle = id => {
@@ -144,7 +144,8 @@
       <ul :if="proposed?.plan.steps.length" class="plan">
         <li :each="step in proposed?.plan.steps || []" :key="step">{{ step }}</li>
       </ul>
-      <p :if="proposed?.plan.files.length" class="dim">files: {{ proposed?.plan.files.join(" · ") }}</p>
+      <p :if="proposed?.plan.files.length" class="dim">reads: {{ proposed?.plan.files.join(" · ") }}</p>
+      <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
       <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
       <p :if="!declares" class="dim warn">
         The model declared nothing. Approving runs with everything the policy
@@ -157,11 +158,13 @@
         <input
           :value="addition"
           @input="addition = $event.target.value"
-          :attrs="{ placeholder: 'a file or command the plan forgot' }">
-        <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add file</button>
+          :attrs="{ placeholder: 'a path or command the plan forgot' }">
+        <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add read</button>
+        <button type="button" class="link" :disabled="!addition.trim()" @click="add('writes')">add write</button>
         <button type="button" class="link" :disabled="!addition.trim()" @click="add('commands')">add command</button>
       </div>
-      <p :if="adding.files.length" class="dim">adding files: {{ adding.files.join(" · ") }}</p>
+      <p :if="adding.files.length" class="dim">adding reads: {{ adding.files.join(" · ") }}</p>
+      <p :if="adding.writes.length" class="dim">adding writes: {{ adding.writes.join(" · ") }}</p>
       <p :if="adding.commands.length" class="dim">adding commands: {{ adding.commands.join(" · ") }}</p>
 
       <div class="gate-buttons">

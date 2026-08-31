@@ -352,10 +352,11 @@ impl Context {
         &mut self,
         id: TaskId,
         files: &[String],
+        writes: &[String],
         commands: &[String],
     ) -> Option<Plan> {
         let task = self.task_mut(id)?;
-        task.plan.amend(files, commands);
+        task.plan.amend(files, writes, commands);
         Some(task.plan.clone())
     }
 

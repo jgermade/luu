@@ -356,9 +356,10 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                     Ok(ClientMessage::ApproveTask {
                         task,
                         files,
+                        writes,
                         commands,
                     }) => {
-                        approve_task(app.clone(), task, files, commands).await;
+                        approve_task(app.clone(), task, files, writes, commands).await;
                     }
                     Ok(ClientMessage::RejectTask { task }) => {
                         reject_task(app.clone(), task).await;
@@ -500,7 +501,13 @@ async fn propose_task(app: Arc<App>, prompt: String) {
 /// the plan that comes back on `task_approved` is what was actually approved.
 /// That is the whole feedback: a client that adds a path nobody may touch sees
 /// it missing from the plan it gets back, rather than being told nothing.
-async fn approve_task(app: Arc<App>, task: TaskId, files: Vec<String>, commands: Vec<String>) {
+async fn approve_task(
+    app: Arc<App>,
+    task: TaskId,
+    files: Vec<String>,
+    writes: Vec<String>,
+    commands: Vec<String>,
+) {
     let approved = {
         let mut session = app.session.lock().await;
         // Nothing can be running here — a prompt behind the gate is refused, so
@@ -510,10 +517,10 @@ async fn approve_task(app: Arc<App>, task: TaskId, files: Vec<String>, commands:
         match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.task == task)
         {
             true => {
-                let (files, commands, dropped) = permitted(&app.agency.sandbox, files, commands);
+                let (granted, dropped) = permitted(&app.agency.sandbox, files, writes, commands);
                 let plan = session
                     .context
-                    .amend_plan(task, &files, &commands)
+                    .amend_plan(task, &granted.files, &granted.writes, &granted.commands)
                     .unwrap_or_default();
                 session.context.approve_task(task);
                 session
@@ -587,11 +594,13 @@ async fn approve_task(app: Arc<App>, task: TaskId, files: Vec<String>, commands:
 fn permitted(
     sandbox: &Sandbox,
     files: Vec<String>,
+    writes: Vec<String>,
     commands: Vec<String>,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
+) -> (Plan, Vec<String>) {
     let asked = Plan {
         steps: Vec::new(),
         files,
+        writes,
         commands,
     };
     let refused = asked.unmet(sandbox);
@@ -600,21 +609,28 @@ fn permitted(
             .iter()
             .any(|line| line.starts_with(&format!("{kind} {item}:")))
     };
-    (
-        asked
+    let granted = Plan {
+        steps: Vec::new(),
+        files: asked
             .files
             .iter()
             .filter(|f| keep(f, "file"))
             .cloned()
             .collect(),
-        asked
+        writes: asked
+            .writes
+            .iter()
+            .filter(|f| keep(f, "write"))
+            .cloned()
+            .collect(),
+        commands: asked
             .commands
             .iter()
             .filter(|c| keep(c, "command"))
             .cloned()
             .collect(),
-        refused,
-    )
+    };
+    (granted, refused)
 }
 
 /// Refuses it. The held prompt goes with it: a prompt whose plan was turned
@@ -1071,7 +1087,7 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
 
-        approve_task(app.clone(), 1, vec![], vec![]).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![]).await;
         assert!(
             until(&app, |s| s.context.turns().len() == 1).await,
             "the held prompt never ran",
@@ -1128,7 +1144,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![]).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![]).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         on_prompt(app.clone(), "now the tests".into()).await;
@@ -1144,7 +1160,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![]).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![]).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         close_task(app.clone(), 1).await;

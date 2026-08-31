@@ -110,8 +110,11 @@ in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
 
 A script is prompts one per line, `#` comments, and `##` directives for the task
-lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## command:`
-for its plan, and `## close`. `## fragment: <path>[:start-end]` is the other
+lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## write:` /
+`## command:` for its plan, and `## close`. `## file:` is what the task may
+**read** and `## write:` what it may also **change**; a plan that declares no
+writes may not write, and a write into a read-only root is refused before the
+first turn. `## fragment: <path>[:start-end]` is the other
 directive, and it is **not** `## file:`: the plan's files are what the task is
 allowed to touch, a fragment is text put into the next prompt.
 
@@ -119,7 +122,8 @@ allowed to touch, a fragment is text put into the next prompt.
 the resolved sandbox and every command allowed by it, or the run stops before the
 first turn. **It is also the sandbox for its task** — from `## task:` to
 `## close`, and from an approval to a close in `serve`, a turn may touch what the
-plan named and nothing else, fragments included. The policy file is the outer
+plan named and nothing else, fragments included, at the level it named: `files`
+are granted read, `writes` read-write. The policy file is the outer
 bound (a plan cannot grant what it does not) and a plan that names nothing grants
 nothing; a denial says which of the two refused. In `serve`, `approve_task`
 carries the files and commands the person adds at the gate, checked against the
@@ -323,6 +327,10 @@ implementation detail from close up:
   parses it, validates it against the `SandboxPolicy`, and executes real Rust code.
   Any path where model output reaches a shell or the filesystem without passing
   that validation is a bug, however convenient.
+- **A plan says what it reads and what it writes, and is held to both.** The
+  distinction is the difference between a check that can say no and one that
+  only looks like it does: without it every task ran with write access to
+  everything it named.
 - **The approved plan is the sandbox for its task.** A task boundary is the
   scope permission is granted at, and that is only true if a turn inside a task
   is held to what the task was approved for. Checking the plan against the

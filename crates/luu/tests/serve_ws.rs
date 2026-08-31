@@ -42,6 +42,10 @@ const PLAN_FOR_CARGO_TOML: &str = "```plan\n{\"objective\":\"read the manifest\"
                                    \"steps\":[\"read it\"],\"files\":[\"Cargo.toml\"],\
                                    \"commands\":[]}\n```";
 
+/// A turn that edits a file the plan only said it would read.
+const WRITES_SCRATCH: &str = "Writing it.\n```tool\n                              {\"name\":\"write_file\",\"arguments\":\
+                              {\"path\":\"Cargo.toml\",\"content\":\"broken\"}}\n```";
+
 const READS_SERVE_RS: &str = "Let me look.\n```tool\n                              {\"name\":\"read_file\",\"arguments\":\
                               {\"path\":\"src/serve.rs\",\"max_lines\":1}}\n```";
 
@@ -61,11 +65,32 @@ async fn server_with(replies: Vec<String>) -> String {
     server_at(replies, Duration::ZERO).await
 }
 
+/// A server whose *policy* also grants write on `also`, so the gate has room
+/// to widen a plan into it: the person at the gate widens up to the policy file
+/// and not past it, which is the rule this exists to exercise rather than
+/// bypass.
+async fn server_writable(replies: Vec<String>, also: &std::path::Path) -> String {
+    let mut policy = SandboxPolicy::default();
+    policy.allow(
+        also.parent().expect("a parent directory"),
+        Access::ReadWrite,
+    );
+    server_with_policy(replies, Duration::ZERO, policy).await
+}
+
 async fn server_at(replies: Vec<String>, delay: Duration) -> String {
+    server_with_policy(replies, delay, SandboxPolicy::default()).await
+}
+
+async fn server_with_policy(
+    replies: Vec<String>,
+    delay: Duration,
+    policy: SandboxPolicy,
+) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
         tools: Arc::new(Tools::standard()),
-        sandbox: Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("the sandbox")),
+        sandbox: Arc::new(Sandbox::new(&policy, &base).expect("the sandbox")),
         max_steps: 4,
     };
     let serving = bind(ServeOptions {
@@ -574,4 +599,108 @@ async fn a_proposal_cannot_be_closed_out_from_under_the_gate() {
     .await;
     let (started, _) = until(&mut socket, "turn_started").await;
     assert_eq!(started["turn"], 2, "the held prompt still runs");
+}
+
+/// Narrowing on level, over the socket: the plan says it will *read* the
+/// manifest, so writing it is refused by the task's own plan — and the policy
+/// file, which grants read-write on the tree, is not what refused.
+#[tokio::test]
+async fn a_turn_may_not_write_a_file_its_plan_only_reads() {
+    let address = server_with(vec![
+        PLAN_FOR_CARGO_TOML.into(),
+        WRITES_SCRATCH.into(),
+        "I was not approved to change that.".into(),
+    ])
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "read the manifest"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_task", "task": 1}),
+    )
+    .await;
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["name"], "write_file");
+    assert_eq!(result["verdict"]["allowed"], false);
+    assert!(
+        result["verdict"]["rule"]
+            .as_str()
+            .expect("a rule")
+            .contains("the approved plan for task 1"),
+        "{}",
+        result["verdict"]["rule"],
+    );
+
+    // The manifest is untouched, which is the only assertion that would notice
+    // a check that ran after the write rather than before it.
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("the manifest");
+    assert!(
+        manifest.contains("[package]"),
+        "the file was written anyway"
+    );
+}
+
+/// And the gate can grant it: *add write* at the approval, and the same turn
+/// goes through. The path is one nothing else reads, so the test can write it.
+#[tokio::test]
+async fn a_write_added_at_the_gate_goes_through() {
+    let scratch = std::env::temp_dir().join(format!("luu-write-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&scratch);
+    let call = format!(
+        "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by the task\"}}}}\n```",
+        serde_json::to_string(&scratch.display().to_string()).expect("a path"),
+    );
+    let address = server_writable(
+        vec![PLAN_FOR_CARGO_TOML.into(), call, "Done.".into()],
+        &scratch,
+    )
+    .await;
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_task",
+            "task": 1,
+            "writes": [scratch.display().to_string()],
+        }),
+    )
+    .await;
+
+    let (approved, _) = until(&mut socket, "task_approved").await;
+    assert_eq!(
+        approved["plan"]["writes"].as_array().expect("writes").len(),
+        1
+    );
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(
+        result["verdict"]["allowed"], true,
+        "{}",
+        result["verdict"]["rule"],
+    );
+    assert_eq!(
+        std::fs::read_to_string(&scratch).expect("the file the task wrote"),
+        "written by the task",
+    );
+    let _ = std::fs::remove_file(&scratch);
 }

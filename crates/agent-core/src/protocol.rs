@@ -73,8 +73,14 @@ pub enum ClientMessage {
     /// widens nothing.
     ApproveTask {
         task: TaskId,
+        /// What the task may read, added to what the model declared.
         #[serde(default)]
         files: Vec<String>,
+        /// What it may also change. Separate from `files` for the same reason
+        /// the plan separates them: a grant that cannot say *read* cannot be
+        /// held to reading.
+        #[serde(default)]
+        writes: Vec<String>,
         #[serde(default)]
         commands: Vec<String>,
     },
@@ -331,6 +337,7 @@ mod tests {
             plan: Plan {
                 steps: vec!["read the CLI".into()],
                 files: vec!["crates/luu/src/lib.rs".into()],
+                writes: vec![],
                 commands: vec!["cargo".into()],
             },
         });
