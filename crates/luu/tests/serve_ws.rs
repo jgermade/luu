@@ -131,6 +131,7 @@ async fn server_full(
         agency,
         temperature: None,
         seed: None,
+        map_tokens: 0,
     })
     .await
     .expect("binding the server");

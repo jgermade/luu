@@ -57,6 +57,7 @@ cargo run --bin luu -- serve --mock-reply '```plan
 {"objective": "explain the budget", "steps": ["read the design"], "files": ["loude-design.md"]}
 ```' --mock-reply 'The budget is split into buckets.'
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
+cargo run --bin luu -- map --map-tokens 1024          # the repository outline that budget resolves to
 
 # the tool loop end to end without a model: one reply per model call
 cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
@@ -151,6 +152,27 @@ The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
 it for one run. `--max-tool-steps` caps the tool calls one turn may make and
 `--no-tools` runs without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
+
+`--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
+definitions with their signatures, bodies elided, from `tree-sitter`'s own
+`TAGS_QUERY`. It goes under the tool definitions and above the history, because
+blocks are ordered by how often they are *rewritten* and the map changes only
+when the repository does. It is **0 by default** — a map that arrived switched on
+would silently change every number in every recording made so far. `luu map`
+prints the exact bytes and what they cost.
+
+Files are outlined in **path order** until one does not fit, and the map says how
+many it left out. That is not relevance and does not pretend to be: it is the
+baseline the reference graph has to beat, and this repository makes the case by
+itself — the whole outline is 6 327 tokens, **77% of an 8K window**, so at any
+budget a real run can afford, most of the repository is missing and the alphabet
+picked which part. Two readings to keep straight: the map is paid on *every*
+call (870 tokens × 20 turns is +56% on the grounded script's total), and it
+**inflates prefix reuse as pure arithmetic** — a bigger constant block raises
+shared and total together, so 93.9% → 96.3% is not an improvement and a reuse
+number from a run with the map is not comparable to one without it. Numbers and
+the two bugs that running it found are in
+[`RECORD/2026-08-31.the-repo-map.md`](RECORD/2026-08-31.the-repo-map.md).
 
 `--fragment PATH[:START-END]` on `chat` fuses a real file into the next prompt —
 repeatable, 1-based inclusive lines, read **through the sandbox**, and attached
@@ -378,6 +400,16 @@ implementation detail from close up:
   command implies read+execute on the system roots, because a program cannot run
   without reading libc — and that reasoning says nothing about `read_file`, so the
   in-process path check ignores those roots.
+- **The map is prefix, so it is stable, and it is not ranked yet.** The
+  repository outline sits under the tool definitions and does not move for the
+  life of a run — that is what makes it cheap on a prompt cache, and it is why
+  ranking it (which personalizes it per turn, per task) is a trade to *measure*
+  rather than a patch to apply. `#[cfg(test)]` modules are skipped: a module the
+  compiler only builds for tests is not the interface the map describes, and in
+  this repository the test names were most of the budget. The first file that
+  does not fit stops the map rather than being skipped over, so a wider budget
+  always shows everything a tighter one did — a map whose contents do not nest
+  cannot be compared against itself.
 - **Decide what goes in, then render it.** `Context::select` chooses against a
   token budget and the rendering is a pure function of that choice, so every
   token sent is attributable to a bucket. Rendering first and trimming the

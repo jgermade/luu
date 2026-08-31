@@ -26,5 +26,7 @@ seccompiler = "0.5"
 thiserror = "2"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 tokio-tungstenite = "0.30"
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "process", "sync", "time"] }
 toml = "1"

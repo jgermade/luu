@@ -108,3 +108,21 @@ test("a replayed eviction marks the turns that left the window", async ({ page }
 
   expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
 })
+
+test("the repository map is a bucket of its own in the budget", async ({ page }) => {
+  const errors = watch(page)
+
+  await page.goto("/index.html")
+  await expect(page.locator("select.fixtures")).toBeVisible()
+  await page.locator("select.fixtures").selectOption("./fixtures/repo-map.jsonl")
+
+  // The map is prefix, so it is in the budget like anything else in the
+  // prompt — a block that were free would be a block that silently ate the
+  // answer. The panel plots it beside the tools rather than inside them.
+  const map = page.locator(".inspector .legend li").filter({ hasText: "map" })
+  await expect(map).toHaveCount(1)
+  const tokens = Number((await map.innerText()).replace(/[^0-9]/g, ""))
+  expect(tokens).toBeGreaterThan(0)
+
+  expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
+})

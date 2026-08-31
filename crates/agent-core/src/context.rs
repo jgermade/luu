@@ -280,6 +280,13 @@ pub struct Context {
     /// and counted as its own bucket, because "the system block grew" is not an
     /// answer to why the window is full.
     tools: String,
+    /// The repository outline, rendered once. Last of the cached prefix, which
+    /// is where blocks are ordered by how often they are *rewritten*: the
+    /// system block is a constant, the tools change when the tool set does, and
+    /// the map changes when the repository does. Empty unless asked for — a map
+    /// that arrived switched on would change every number in every recording
+    /// made so far. See `crate::repo_map`.
+    map: String,
     turns: Vec<Turn>,
     /// The oldest turn still in the window. It only ever moves forward.
     ///
@@ -303,6 +310,7 @@ impl Context {
         Self {
             system: system.into(),
             tools: String::new(),
+            map: String::new(),
             turns: Vec::new(),
             floor: 0,
             tasks: Vec::new(),
@@ -320,13 +328,27 @@ impl Context {
         &self.tools
     }
 
+    /// Adds the repository outline to the prefix, under the tool definitions.
+    pub fn with_map(mut self, map: impl Into<String>) -> Self {
+        self.map = map.into();
+        self
+    }
+
+    pub fn map(&self) -> &str {
+        &self.map
+    }
+
     /// The whole cached prefix, as one message. Assembled here and nowhere else
     /// so that two call sites cannot join it differently.
     fn system_message(&self) -> String {
-        match self.tools.is_empty() {
-            true => self.system.clone(),
-            false => format!("{}\n\n{}", self.system, self.tools),
+        let mut text = self.system.clone();
+        for block in [&self.tools, &self.map] {
+            if !block.is_empty() {
+                text.push_str("\n\n");
+                text.push_str(block);
+            }
         }
+        text
     }
 
     pub fn turns(&self) -> &[Turn] {
@@ -573,6 +595,7 @@ impl Context {
     ) -> Selection {
         let system_tokens = counter.count(&self.system);
         let tools_tokens = counter.count(&self.tools);
+        let map_tokens = counter.count(&self.map);
         // Counted as the two buckets they will be plotted as. Tokenization is
         // not additive across a boundary, so this can differ by a token or two
         // from counting the concatenation; that is the same order as the
@@ -587,7 +610,12 @@ impl Context {
             // window, history is empty and the turn still goes — being over the
             // limit is the backend's error to report, not ours to hide by
             // cutting the question in half.
-            let fixed = system_tokens + tools_tokens + code_tokens + prompt_tokens + budget.reserve;
+            let fixed = system_tokens
+                + tools_tokens
+                + map_tokens
+                + code_tokens
+                + prompt_tokens
+                + budget.reserve;
             let available = limit.saturating_sub(fixed);
 
             if self.fits_from(available, counter) > self.floor {
@@ -673,6 +701,9 @@ impl Context {
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
             Bucket::new("tools", tools_tokens),
+            // Beside the tools rather than inside them: both are prefix, and
+            // "the prefix grew" is not an answer to why the window is full.
+            Bucket::new("map", map_tokens),
             // Beside `history` rather than inside it: the fold is the one thing
             // the panel exists to watch, and a single bar cannot show a block
             // being replaced by a line.
@@ -924,10 +955,10 @@ mod tests {
             &counter,
         );
 
-        // System, the tool definitions, the fragments, the prompt. The ten
-        // stored turns are not re-counted, which is the whole point of storing
-        // their counts.
-        assert_eq!(counter.calls.load(Ordering::Relaxed) - after_building, 4);
+        // System, the tool definitions, the map, the fragments, the prompt.
+        // The ten stored turns are not re-counted, which is the whole point of
+        // storing their counts.
+        assert_eq!(counter.calls.load(Ordering::Relaxed) - after_building, 5);
     }
 
     #[test]
@@ -971,6 +1002,68 @@ mod tests {
     }
 
     #[test]
+    fn the_map_is_prefix_and_stays_byte_identical_as_the_history_grows() {
+        // The placement argument is worthless if the map wobbles: it is above
+        // the history precisely so that a prompt cache can keep it.
+        let counter = WordCounter::default();
+        let mut context = Context::new("system prompt here")
+            .with_tools("# Tools\nread_file")
+            .with_map("# Repository map\nsrc/lib.rs\n     1  pub fn main");
+        let budget = Budget::new(8192, 512, Eviction::Turn);
+
+        let first = context.select("one", &[], budget, &counter);
+        context.push_turn(1, "one", "an answer", vec![], &counter);
+        let second = context.select("two", &[], budget, &counter);
+
+        assert_eq!(
+            first.messages[0].content, second.messages[0].content,
+            "the whole prefix is one message and it does not move",
+        );
+        assert!(
+            first.messages[0].content.ends_with("     1  pub fn main"),
+            "system, then tools, then the map — most stable first: {}",
+            first.messages[0].content,
+        );
+        let map = |selection: &Selection| {
+            selection
+                .buckets
+                .iter()
+                .find(|bucket| bucket.name == "map")
+                .expect("the map bucket")
+                .tokens
+        };
+        assert!(map(&first) > 0);
+        assert_eq!(
+            map(&first),
+            map(&second),
+            "and it costs the same every turn"
+        );
+    }
+
+    #[test]
+    fn a_map_is_counted_against_the_window_rather_than_added_beside_it() {
+        // It is in the prompt, so it is in the budget: history has to give way
+        // for it like anything else. A map that was free would be a map that
+        // silently ate the answer.
+        let counter = WordCounter::default();
+        let mut bare = context_of_equal_turns(6, &counter);
+        let mut mapped = context_of_equal_turns(6, &counter);
+        mapped = mapped.with_map("aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp");
+        let system = counter.count(bare.system());
+        let budget = Budget::new(system + 1 + 8 * 5, 0, Eviction::Turn);
+
+        let without = bare.select("q", &[], budget, &counter);
+        let with = mapped.select("q", &[], budget, &counter);
+
+        assert!(
+            with.evicted > without.evicted,
+            "the map cost history: {} evicted with it, {} without",
+            with.evicted,
+            without.evicted,
+        );
+    }
+
+    #[test]
     fn buckets_are_in_prompt_order_with_the_reserve_last() {
         let counter = WordCounter::default();
         let mut context = context_with(1, &counter);
@@ -988,6 +1081,7 @@ mod tests {
             [
                 "system",
                 "tools",
+                "map",
                 "summaries",
                 "history",
                 "code",
