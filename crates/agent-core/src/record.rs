@@ -29,7 +29,12 @@ use crate::trace::TraceMessage;
 /// 4: `refused` lines, for the same reason as 3 — a new variant of a tagged
 /// enum. `task_approved` also gained the plan as approved, and that half is
 /// backwards compatible: absent means the proposal is the best answer there is.
-pub const FORMAT: u32 = 4;
+///
+/// 5: `evicted` lines — what the window dropped and never took back. Same rule
+/// as 3 and 4, a new variant of a tagged enum. A format-4 file does not say what
+/// its session forgot, and nothing can work it out afterwards: the floor lived
+/// in memory. See `RECORD/2026-08-31.eviction-tombstones.md`.
+pub const FORMAT: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]

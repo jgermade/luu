@@ -214,6 +214,14 @@ stable prefix.
   front of the history and is the one thing a prefix cache cannot survive — and it
   makes block eviction impossible, because the next fill walks straight back past the
   cut.
+- **And it says so: a cut is a message.** The selection that moves the floor emits
+  `evicted` — the turn that cut, the turns that left, what they were worth, the
+  counter that counted them and which policy did it. Without it a recording shows the
+  history bucket shrinking and cannot say whether that was the policy or the
+  arithmetic, which is how a set of degenerate fixtures survived a whole commit. The
+  turns are named rather than counted, because a reader months later cannot recover
+  *which* without re-implementing the floor. See
+  [`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md).
 - **An unknown window is not an unlimited one**: `--context-limit 0` means unknown, so
   nothing is budgeted and nothing is evicted, and the panel says so rather than
   drawing a bar against nothing.
@@ -413,7 +421,7 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `prompt`, `approve_plan`, `edit_plan`, `close_task`, `reopen_task`, `cancel` |
-| server → client | `token`, `tool_call`, `tool_result`, `ended`, `failed` — built; `task_proposed`, `task_approved`, `task_closed`, `context_snapshot` wait on the task lifecycle |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `task_proposed`, `task_approved`, `task_rejected`, `task_closed`, `task_reopened`, `refused`, `evicted` — all built, protocol v3; `context_snapshot` is still ahead |
 
 Closing a task is an event, not a mutation: reopening one is folding the log
 differently, never undoing a deletion. Freezing v1 of these enums waits on the task
@@ -510,7 +518,10 @@ Chat and session list are table stakes. The ones that justify building this at a
 
 `luu serve --record <file>` dumps the JSON-lines stream to disk, and the UI can load such a file
 instead of a live socket. Sessions become replayable offline — useful for bug reports and for
-comparing context strategies across runs without re-running inference.
+comparing context strategies across runs without re-running inference. What the run *forgot* is in
+there too: the recorded fixtures make the two policies visible as what they are — ten small cuts
+under `turn` against two deep ones under `block`, over the same twenty prompts, and none at all in
+the tasks run, where the fold kept the history under the limit and eviction never fired.
 
 `luu chat --script <file>` runs a file of prompts, one per line, against one shared history. That
 is what makes a multi-turn run repeatable: a baseline typed into a browser cannot be re-run, and
@@ -537,12 +548,17 @@ lives in memory for the life of the process.
   JSON-lines stream is the account of what happened, and `api::SessionView` already
   folds it; a store that accumulates state the events cannot regenerate is a second
   truth, which is how the static mirror and the live server start disagreeing.
-- **Forgetting is an event too.** Eviction — and later compaction — is recorded, not
-  just applied: a recording has to be able to say which turns left the window, when,
-  and under which policy. Today the eviction floor is in-memory and a recording can
-  only show the history bucket shrinking, which is the symptom without the cause.
-  Decided, not built; the shape is OpenHands' condensation tombstones, read in
-  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md).
+- **Forgetting is an event too.** Built for eviction: an `evicted` line names the
+  turns that left, what they were worth, who counted them and which policy cut —
+  so a recording says what a session forgot instead of only showing the history
+  bucket shrink. The transcript keeps those turns and marks them, because a view
+  that agreed with the prompt could no longer show the difference between them.
+  The shape is OpenHands' condensation tombstones, read in
+  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md);
+  the reasoning is in
+  [`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md).
+  Compaction's own tombstone already exists as `task_closed`; pruning tool results
+  out of a live turn would need a third, and deliberately has none until it does.
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums

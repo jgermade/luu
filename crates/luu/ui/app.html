@@ -96,8 +96,15 @@
   <section class="chat">
     <div class="transcript">
       <div :each="entry in entries" :key="entry.id">
-        <article :if="entry.kind === 'message'" :class="entry.message.role">
-          <div class="who">{{ entry.message.role }}</div>
+        <article :if="entry.kind === 'message'" :class="entry.message.role" :class.evicted="entry.message.evicted">
+          <div class="who">
+            {{ entry.message.role }}
+            <!-- Kept and marked, never removed: the prompt no longer carries
+                 this and the transcript still has to be able to say so. -->
+            <span :if="entry.message.evicted" class="gone">
+              · out of the window since turn {{ entry.message.evicted }}
+            </span>
+          </div>
           <div class="text">{{ entry.message.text }}</div>
           <div :if="entry.message.reason" class="meta">
             <span :class.warn="entry.message.reason !== 'stop'">{{ entry.message.reason }}</span>
@@ -224,6 +231,15 @@
         {{ state.extraCalls.length + 1 }} call(s): {{ templateOverhead }}
         more than we sent, the chat template applied on its side.
       </p>
+      <!-- What stopped being in the prompt. Beside the buckets rather than in
+           them: a bucket that got smaller cannot say whether that was the
+           policy or the arithmetic. -->
+      <p :if="state.evicted" class="dim">
+        Turn {{ state.evicted?.turn }} dropped turn(s)
+        {{ state.evicted?.turns.join(", ") }} — {{ state.evicted?.tokens }}
+        tokens out of the window, for good, under the
+        <b>{{ state.evicted?.policy.policy }}</b> policy.
+      </p>
     </div>
     <p :if="!state.budget" class="dim">
       No turn yet. The budget is decided before the call, so the first prompt
@@ -348,6 +364,10 @@
     margin-bottom: .2rem;
   }
   article.user .text { color: var(--accent); }
+  /* Dimmed, not hidden: it happened, and the model no longer sees it. */
+  article.evicted { opacity: .45; }
+  article.evicted .text { text-decoration: line-through solid color-mix(in srgb, currentColor 35%, transparent); }
+  .gone { color: var(--warn); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   .meta { margin-top: .3rem; font-size: 12px; color: var(--dim); display: flex; gap: .6rem; }
   .meta .warn { color: var(--warn); }

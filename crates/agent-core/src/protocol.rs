@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
+use crate::context::{Counter, Eviction};
 use crate::sandbox::Verdict;
 use crate::task::{Plan, TaskId};
 use crate::tools::ToolStep;
@@ -32,7 +33,13 @@ use crate::turn::{EndReason, TurnEvent};
 /// `type` in a tagged enum is a parse error rather than a line to skip, so a new
 /// variant is exactly the change the rule names. See
 /// `RECORD/2026-08-30.a-refusal-is-a-message.md`.
-pub const VERSION: u32 = 2;
+///
+/// **3 is the same rule again**, for [`ServerMessage::Evicted`]: what leaves the
+/// window is a thing that happened to the conversation, not a debug reading, so
+/// it is here rather than on the trace channel — and a client that could not
+/// parse it would be watching a transcript whose turns are silently no longer
+/// in the prompt. See `RECORD/2026-08-31.eviction-tombstones.md`.
+pub const VERSION: u32 = 3;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -138,6 +145,29 @@ pub enum ServerMessage {
     TaskClosed {
         task: TaskId,
         summary: String,
+    },
+    /// What left the window, and stays out.
+    ///
+    /// The other way the history stops being sent, and on the protocol for the
+    /// same reason [`Self::TaskClosed`] is: a transcript has to be able to show
+    /// the difference between what happened and what the model is still shown.
+    /// A fold is visible without this message and an eviction is not — before
+    /// it, a recording could show the history bucket shrink and could not say
+    /// whether that was the policy or the arithmetic.
+    ///
+    /// Belongs to the turn whose selection cut, because eviction happens when
+    /// the *next* prompt no longer fits — the same tense as the budget, which
+    /// describes the call about to be made.
+    Evicted {
+        turn: TurnId,
+        /// The turns that left, oldest first.
+        turns: Vec<TurnId>,
+        /// What they were worth in the prompt they are no longer in.
+        tokens: u32,
+        /// Which counter produced `tokens`.
+        counter: Counter,
+        /// Which cut this was: the minimum, or down to the low-water mark.
+        policy: Eviction,
     },
     /// The fold stops applying. Not an undo — nothing was deleted.
     TaskReopened {
@@ -260,7 +290,10 @@ impl ServerMessage {
             | Self::Ended { turn, .. }
             | Self::Failed { turn, .. }
             | Self::ToolCall { turn, .. }
-            | Self::ToolResult { turn, .. } => Some(*turn),
+            | Self::ToolResult { turn, .. }
+            // The turn that cut, not the turns that left: this is a thing the
+            // selection for `turn` did.
+            | Self::Evicted { turn, .. } => Some(*turn),
             // A task spans turns and its lifecycle happens between them, and a
             // refusal is about the ask rather than about a turn — three of the
             // four happen when there is no turn to name.
@@ -293,6 +326,39 @@ mod tests {
         });
         assert_eq!(json["type"], "token");
         assert_eq!(json["text"], "hola");
+    }
+
+    #[test]
+    fn an_eviction_names_the_turns_that_left_and_who_counted_them() {
+        let json = roundtrip(&ServerMessage::Evicted {
+            turn: 12,
+            turns: vec![1, 2, 3],
+            tokens: 843,
+            counter: Counter::Model {
+                id: "qwen2.5-coder:7b".into(),
+            },
+            policy: Eviction::Block { low_water: 0.5 },
+        });
+        assert_eq!(json["type"], "evicted");
+        assert_eq!(json["turn"], 12, "the turn whose selection cut");
+        assert_eq!(json["turns"], serde_json::json!([1, 2, 3]));
+        assert_eq!(json["counter"]["id"], "qwen2.5-coder:7b");
+        assert_eq!(
+            json["policy"]["policy"], "block",
+            "which cut it was, beside how much it took",
+        );
+        assert_eq!(
+            ServerMessage::Evicted {
+                turn: 12,
+                turns: vec![1],
+                tokens: 0,
+                counter: Counter::Approximate,
+                policy: Eviction::Turn,
+            }
+            .turn(),
+            Some(12),
+            "it is a thing the cutting turn did, not a message about the turns that left",
+        );
     }
 
     #[test]

@@ -102,7 +102,8 @@ gate, and a client that sends a prompt anyway gets a `refused` message saying
 why: a turn is running, a proposal is pending, the task is not in that state, or
 the policy file does not grant part of what was asked. That message is what took
 the protocol to v2 (and the record format to 4) — a new variant of a tagged enum
-is a change an older reader cannot parse. The task lifecycle is a state machine
+is a change an older reader cannot parse; `evicted` took it to **v3** and the
+format to **5** under the same rule. The task lifecycle is a state machine
 and every transition is guarded: a proposal cannot be closed, a rejected plan
 cannot be reopened. See
 [`RECORD/2026-08-30.a-refusal-is-a-message.md`](RECORD/2026-08-30.a-refusal-is-a-message.md). A closed task collapses
@@ -156,7 +157,13 @@ from training. See `RECORD/2026-08-27.grounded-fold-probe.md`.
 `--context-limit` is the model's window (`0` means unknown: no budget, no
 eviction), `--reserve` is what is held back for the answer, `--evict` is how the
 history gives way (`turn` drops the minimum, `block` cuts to `--low-water` and
-then holds still), and `--tokenizer` points at the model's `tokenizer.json`. **Without `--tokenizer` the counts are
+then holds still), and `--tokenizer` points at the model's `tokenizer.json`.
+A cut says so: the run prints `== evicted turn N` and the recording carries an
+`evicted` line naming the turns that left, what they were worth, who counted
+them and which policy did it. Over the same twenty prompts at 1024 tokens that
+is ten small cuts under `turn`, two deep ones under `block`, and none at all in
+the tasks run — the fold kept it under the limit. See
+[`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md). **Without `--tokenizer` the counts are
 `chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
 useless for a comparison, and the numbers say so themselves.
 
@@ -363,6 +370,17 @@ implementation detail from close up:
   answering. Eviction is also monotone — `Context` keeps a floor that only moves
   forward — because a turn that comes back rewrites the history from its front,
   and that is the prefix cache's worst case.
+- **Forgetting is an event, and it names names.** The selection that moves the
+  floor emits `evicted`, on the protocol beside `task_closed` rather than behind
+  `--trace`: a fold and an eviction are the two ways history stops being sent,
+  and a recording that could show one and not the other says the history bucket
+  shrank without saying whether that was the policy or the arithmetic. It names
+  the *turns*, which is why `Turn` carries the id the session handed it — the
+  position in `Context::turns` is a different number, since a turn that produced
+  nothing is never pushed and a planning call is never remembered. The transcript
+  keeps an evicted turn and marks it; removing it would make the view agree with
+  the prompt and lose the difference between them, which is what the debug client
+  is for.
 - **Every token count carries which counter produced it.** Two runs measured by
   different counters are not comparable, and nothing else in the system would
   ever say so.

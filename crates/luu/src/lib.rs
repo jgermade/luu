@@ -780,12 +780,48 @@ pub async fn run() -> Result<()> {
         let code = std::mem::take(&mut attached);
         let selection = context.select(prompt, &code, budget, counter.as_ref());
 
+        // Said out loud, not only into the recording: a run that quietly
+        // forgets half its history looks exactly like one that answers from all
+        // of it, and the difference is the whole subject.
+        if let Some(evicted) = &selection.eviction {
+            let turns = evicted
+                .turns
+                .iter()
+                .map(|turn| turn.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "\n== evicted turn{} {turns} — {} tokens{} out of the window, for good",
+                match evicted.turns.len() {
+                    1 => "",
+                    _ => "s",
+                },
+                evicted.tokens,
+                match evicted.counter.is_approximate() {
+                    true => " (approximate)",
+                    false => "",
+                },
+            );
+        }
+
         if let Some(recorder) = &recorder {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
                 turn,
                 prompt: prompt.clone(),
                 task,
             }));
+            // Before the prompt it explains, so a file reads in the order the
+            // session happened: the history was cut, then this is what was
+            // sent.
+            if let Some(evicted) = selection.eviction.clone() {
+                recorder.write(&Event::Protocol(ServerMessage::Evicted {
+                    turn,
+                    turns: evicted.turns,
+                    tokens: evicted.tokens,
+                    counter: evicted.counter,
+                    policy: evicted.policy,
+                }));
+            }
             let text = rendered(&selection.messages);
             let reuse = prefix
                 .lock()
@@ -970,6 +1006,7 @@ pub async fn run() -> Result<()> {
         // remembered — an empty assistant message is not a thing that happened.
         if !outcome.text.is_empty() || !outcome.steps.is_empty() {
             context.push_turn_with_steps(
+                turn,
                 prompt.clone(),
                 outcome.text,
                 code,

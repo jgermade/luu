@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_core::backend::mock::Mock;
-use agent_core::context::{ApproximateCounter, Budget, Eviction};
+use agent_core::context::{ApproximateCounter, Budget, Eviction, TokenCounter};
 use agent_core::sandbox::{Access, Sandbox, SandboxPolicy};
 use agent_core::tools::Tools;
 use futures_util::{SinkExt, StreamExt};
@@ -82,10 +82,38 @@ async fn server_at(replies: Vec<String>, delay: Duration) -> String {
     server_with_policy(replies, delay, SandboxPolicy::default()).await
 }
 
+/// A server with a window small enough that the history has to give way. The
+/// limit is measured from the prefix this very process assembles rather than
+/// picked by hand: a hard-coded one is how the degenerate 512-token fixtures
+/// happened.
+async fn server_evicting(replies: Vec<String>) -> String {
+    let prefix = ApproximateCounter.count(SYSTEM)
+        + ApproximateCounter.count(&Tools::standard().definitions());
+    server_full(
+        replies,
+        Duration::ZERO,
+        SandboxPolicy::default(),
+        Budget::new(prefix + ROOM_FOR_HISTORY, 0, Eviction::Turn),
+    )
+    .await
+}
+
+/// Room for a couple of the mock's answers and no more, in tokens.
+const ROOM_FOR_HISTORY: u32 = 220;
+
 async fn server_with_policy(
     replies: Vec<String>,
     delay: Duration,
     policy: SandboxPolicy,
+) -> String {
+    server_full(replies, delay, policy, Budget::new(0, 0, Eviction::Turn)).await
+}
+
+async fn server_full(
+    replies: Vec<String>,
+    delay: Duration,
+    policy: SandboxPolicy,
+    budget: Budget,
 ) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
@@ -98,7 +126,7 @@ async fn server_with_policy(
         backend: Arc::new(Mock::replies(replies).delay(delay)),
         model: "mock".into(),
         record: None,
-        budget: Budget::new(0, 0, Eviction::Turn),
+        budget,
         counter: Arc::new(ApproximateCounter),
         agency,
         temperature: None,
@@ -164,9 +192,9 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    // 2 since `refused`: a new variant of a tagged enum is a change an older
-    // reader cannot parse, which is what this number is for.
-    assert_eq!(hello["protocol"], 2);
+    // 3 since `evicted`, 2 since `refused`: a new variant of a tagged enum is
+    // a change an older reader cannot parse, which is what this number is for.
+    assert_eq!(hello["protocol"], 3);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
 
@@ -703,4 +731,110 @@ async fn a_write_added_at_the_gate_goes_through() {
         "written by the task",
     );
     let _ = std::fs::remove_file(&scratch);
+}
+
+/// The window filling up, over the socket: the tombstone that says what the
+/// session forgot. Before it, a client watched the history bucket shrink and
+/// could not tell the policy from the arithmetic.
+#[tokio::test]
+async fn the_window_filling_up_says_which_turns_it_dropped() {
+    // Long enough that a couple of them no longer fit together.
+    let answer = "padding ".repeat(60);
+    let address = server_evicting(vec![PLAN.into(), answer.clone()]).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // Through the gate once, so the prompts after it run inside a live task
+    // rather than each buying a proposal of its own.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_task", "task": 1}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+
+    // Then prompt until the window gives way. Bounded: a run that never cuts is
+    // this test failing, not this test waiting.
+    let mut evicted = None;
+    for n in 0..8 {
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": format!("question {n}")}),
+        )
+        .await;
+        loop {
+            let message = next_message(&mut socket).await;
+            match message["type"].as_str().expect("a typed message") {
+                "evicted" => evicted = Some(message),
+                "ended" => break,
+                _ => continue,
+            }
+        }
+        if evicted.is_some() {
+            break;
+        }
+    }
+
+    let evicted = evicted.expect("eight turns into a window this size, something left");
+    let turns: Vec<u64> = evicted["turns"]
+        .as_array()
+        .expect("the turns that left")
+        .iter()
+        .map(|turn| turn.as_u64().expect("a turn number"))
+        .collect();
+    assert_eq!(
+        turns[0], 2,
+        "the oldest in the *history* — turn 1 was the planning call, which is a \
+         turn of the session and was never remembered, so it cannot be dropped",
+    );
+    assert!(
+        turns.iter().max() < evicted["turn"].as_u64().as_ref(),
+        "a turn cannot evict itself: {evicted}",
+    );
+    assert!(evicted["tokens"].as_u64().expect("a count") > 0);
+    assert_eq!(
+        evicted["counter"]["kind"], "approximate",
+        "a count carries who produced it, and this one is not a measurement",
+    );
+    assert_eq!(evicted["policy"]["policy"], "turn");
+
+    // The read side, folded from the same events: both halves of the mark.
+    let cutting = evicted["turn"].as_u64().expect("the cutting turn");
+    let api = get(&address, "/api/sessions/live/turns").await;
+    let first = api
+        .as_array()
+        .expect("the turns")
+        .iter()
+        .find(|turn| turn["turn"] == 2)
+        .expect("turn 2 is still in the transcript");
+    assert_eq!(
+        first["evicted_by"], cutting,
+        "an evicted turn is kept and marked, never removed: the transcript exists \
+         to show the difference between what happened and what the model still sees",
+    );
+    let cutter = api
+        .as_array()
+        .expect("the turns")
+        .iter()
+        .find(|turn| turn["turn"] == cutting)
+        .expect("the turn that cut");
+    assert_eq!(cutter["dropped"]["turns"][0], 2);
+    assert!(
+        api.as_array()
+            .expect("the turns")
+            .iter()
+            .find(|turn| turn["turn"] == 1)
+            .expect("the planning call is still a turn")["evicted_by"]
+            .is_null(),
+        "nothing evicted the planning call: it was never in the window to leave it",
+    );
 }

@@ -793,6 +793,19 @@ async fn begin_turn(
         task,
     }))
     .await;
+    // Before the prompt it explains: this is what the turn no longer carries,
+    // and a client reading in order should learn that the history was cut
+    // before it is handed the prompt that was cut from.
+    if let Some(evicted) = selection.eviction.clone() {
+        app.publish(Event::Protocol(ServerMessage::Evicted {
+            turn,
+            turns: evicted.turns,
+            tokens: evicted.tokens,
+            counter: evicted.counter,
+            policy: evicted.policy,
+        }))
+        .await;
+    }
     app.publish(Event::Trace(TraceMessage::Prompt {
         turn,
         text: prompt_sent,
@@ -906,6 +919,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         // and several chat templates render it as a prompt to continue.
         if !outcome.text.is_empty() || !outcome.steps.is_empty() {
             session.context.push_turn_with_steps(
+                turn,
                 prompt,
                 outcome.text,
                 vec![],

@@ -78,3 +78,33 @@ test("every recorded session in the picker can be selected", async ({ page }) =>
 
   expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
 })
+
+test("a replayed eviction marks the turns that left the window", async ({ page }) => {
+  // A recording replays at the pace it was recorded, and the first cut lands
+  // halfway through this one — 11 turns in, because that is when the window
+  // this fixture was recorded against actually filled up. Waiting for it is
+  // the cost of a fixture that is a real run rather than a hand-made one.
+  test.setTimeout(90_000)
+  const errors = watch(page)
+
+  await page.goto("/index.html")
+  await expect(page.locator("select.fixtures")).toBeVisible()
+  // The block policy cuts deep and rarely, so its first tombstone names six
+  // turns at once — the policy's whole argument, in one message.
+  await page.locator("select.fixtures").selectOption("./fixtures/eviction-block.jsonl")
+
+  // The panel says which cut it was, which is the question a shrinking history
+  // bucket could never answer on its own.
+  await expect(page.locator(".inspector")).toContainText("out of the window, for good", {
+    timeout: 60_000,
+  })
+  await expect(page.locator(".inspector")).toContainText("block")
+
+  // And the turns are kept and marked, never removed: the transcript's whole
+  // job is the difference between what happened and what the model still sees.
+  await expect(page.locator(".transcript article.evicted").first()).toBeVisible()
+  await expect(page.locator(".transcript article.evicted .gone").first())
+    .toContainText("out of the window")
+
+  expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
+})
