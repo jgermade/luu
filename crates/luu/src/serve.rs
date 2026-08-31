@@ -13,7 +13,7 @@ use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
 use agent_core::sandbox::Sandbox;
-use agent_core::task::{Plan, Proposal, TaskId, parse_plan};
+use agent_core::task::{Plan, PlanSource, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
@@ -471,10 +471,21 @@ async fn propose_task(app: Arc<App>, prompt: String) {
         // A small model answering in prose is the ordinary case, and it must
         // not cost the gate. Then the proposal is the ask itself, declaring
         // nothing, and the panel says the model did not declare a plan.
-        let proposal = parse_plan(&outcome.text).unwrap_or_else(|| Proposal {
-            objective: prompt.clone(),
-            plan: Plan::default(),
-        });
+        //
+        // Which of the two happened travels with the proposal. It is the gate's
+        // headline number — how often a 7B plans at all — and the panel used to
+        // infer it from an empty plan, which cannot tell a model that answered
+        // in prose from one that declared an empty list.
+        let (proposal, source) = match parse_plan(&outcome.text) {
+            Some(proposal) => (proposal, PlanSource::Model),
+            None => (
+                Proposal {
+                    objective: prompt.clone(),
+                    plan: Plan::default(),
+                },
+                PlanSource::Prose,
+            ),
+        };
 
         let task = {
             let mut session = app.session.lock().await;
@@ -488,6 +499,7 @@ async fn propose_task(app: Arc<App>, prompt: String) {
             task,
             objective: proposal.objective,
             plan: proposal.plan,
+            source: Some(source),
         }))
         .await;
     });

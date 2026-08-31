@@ -245,6 +245,27 @@ pub fn parse_plan(text: &str) -> Option<Proposal> {
     (!proposal.objective.trim().is_empty()).then_some(proposal)
 }
 
+/// Where a plan came from — which is not the same question as what is in it.
+///
+/// The gate's headline number is *how often a small model produces a plan worth
+/// reading*, and without this nothing can answer it: a planning call that
+/// answered in prose and one that emitted a well-formed block declaring nothing
+/// arrive at the panel as the same empty plan. Guessing from emptiness is how a
+/// model that declared `"files": []` gets counted as a model that could not
+/// follow the format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanSource {
+    /// The planning call emitted a fenced `plan` block and it parsed.
+    Model,
+    /// It answered without one — the ordinary case for a 7B. The proposal is
+    /// then the user's own ask, declaring nothing, and the gate still holds.
+    Prose,
+    /// No planning call happened: a script's `## task:` directives carry the
+    /// plan, which is a person's approval written down in advance.
+    Written,
+}
+
 /// Where a task is in its life. `Closed` is the only one that changes how the
 /// history renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -13,7 +13,7 @@ use crate::context::{Counter, Evicted};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
-use crate::task::{Plan, TaskId, TaskState};
+use crate::task::{Plan, PlanSource, TaskId, TaskState};
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
@@ -80,7 +80,19 @@ pub struct ToolCallView {
 pub struct TaskView {
     pub id: TaskId,
     pub objective: String,
+    /// The plan the task is held to: as approved once it has been, as proposed
+    /// until then.
     pub plan: Plan,
+    /// The plan as it was *proposed*, kept beside the one above because the
+    /// difference between them is the cost of the gate — how much a person had
+    /// to add before a small model's plan could run. Overwriting it at approval
+    /// left that readable only by diffing two lines of a recording by hand.
+    #[serde(default)]
+    pub proposed: Option<Plan>,
+    /// Whether a planning call produced the proposal, or answered in prose.
+    /// `None` in a recording made before the distinction existed.
+    #[serde(default)]
+    pub source: Option<PlanSource>,
     pub state: TaskState,
     /// What its turns are sent as once it is closed. The summary text only —
     /// its token count belongs to whoever counted it, and a reader who needs
@@ -251,12 +263,15 @@ impl SessionView {
                 task,
                 objective,
                 plan,
+                source,
             } => {
                 if self.task(*task).is_none() {
                     self.tasks.push(TaskView {
                         id: *task,
                         objective: objective.clone(),
                         plan: plan.clone(),
+                        proposed: Some(plan.clone()),
+                        source: *source,
                         state: TaskState::Proposed,
                         summary: None,
                     });

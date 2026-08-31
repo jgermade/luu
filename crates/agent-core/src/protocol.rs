@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::backend::Usage;
 use crate::context::{Counter, Eviction};
 use crate::sandbox::Verdict;
-use crate::task::{Plan, TaskId};
+use crate::task::{Plan, PlanSource, TaskId};
 use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
 
@@ -130,6 +130,15 @@ pub enum ServerMessage {
         task: TaskId,
         objective: String,
         plan: Plan,
+        /// Whether the planning call produced this plan, or answered in prose
+        /// and left the proposal to be the ask itself. `None` in a recording
+        /// made before the distinction existed — the alternative is to guess it
+        /// from an empty plan, which is the guess this field exists to remove.
+        ///
+        /// An added optional field, so an older reader skips it: it does not
+        /// move [`VERSION`], which is for a change that reader could not parse.
+        #[serde(default)]
+        source: Option<PlanSource>,
     },
     /// Approved, with the plan as approved rather than as proposed: it is what
     /// the task's sandbox is built from, so a transcript that showed only the
@@ -406,9 +415,24 @@ mod tests {
                 writes: vec![],
                 commands: vec!["cargo".into()],
             },
+            source: Some(PlanSource::Model),
         });
         assert_eq!(json["type"], "task_proposed");
         assert_eq!(json["plan"]["files"][0], "crates/luu/src/lib.rs");
+        assert_eq!(
+            json["source"], "model",
+            "who wrote the plan, which an empty one cannot be asked",
+        );
+
+        // An older recording has no `source`, and it stays unknown rather than
+        // becoming a claim the recording never made.
+        let older: ServerMessage =
+            serde_json::from_str(r#"{"type":"task_proposed","task":1,"objective":"x","plan":{}}"#)
+                .expect("an added optional field is not a parse error");
+        assert!(matches!(
+            older,
+            ServerMessage::TaskProposed { source: None, .. }
+        ));
         assert_eq!(
             ServerMessage::TaskApproved {
                 task: 2,

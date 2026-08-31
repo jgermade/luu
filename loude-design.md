@@ -108,6 +108,16 @@ task closes, only a closed one reopens. A refused plan that could be *reopened*
 would be a plan a person turned down becoming the live task, with the gate
 behind it.
 
+**A proposal says who wrote it.** `task_proposed` carries `source` — `model` when
+the planning call emitted a parseable plan block, `prose` when it answered
+without one, `written` for a script's directives. The gate's headline number is
+how often a small model plans at all, and emptiness cannot answer it: a model
+that ignored the format and one that declared empty lists arrive as the same
+empty plan, and the two want different fixes (a grammar, or a sentence). The read
+side keeps the plan as proposed beside the plan as approved, because the
+difference between them is what a person had to add — the cost of the gate. How
+to measure it is [`RECORD/2026-08-31.the-gate-probe.md`](RECORD/2026-08-31.the-gate-probe.md).
+
 **And the server says no out loud.** A `refused` message carries the request it
 answers, a reason (`busy`, `pending`, `task`, `not_granted`) and a sentence for
 a person. Before it, a client could not tell a refusal from a message that never

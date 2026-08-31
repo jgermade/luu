@@ -838,3 +838,80 @@ async fn the_window_filling_up_says_which_turns_it_dropped() {
         "nothing evicted the planning call: it was never in the window to leave it",
     );
 }
+
+/// The gate's headline number, over the socket: whether the planning call
+/// produced the plan, or answered in prose and left the proposal to be the ask
+/// itself. The panel used to infer it from an empty plan, which cannot tell a
+/// model that ignored the format from one that declared an empty list.
+#[tokio::test]
+async fn a_proposal_says_whether_a_model_wrote_it_or_only_talked() {
+    for (reply, expected) in [
+        (PLAN, "model"),
+        // A 7B answering the planning call in prose is the ordinary case, and
+        // it must not cost the gate.
+        ("I could add the flag in lib.rs, I think.", "prose"),
+    ] {
+        let address = server_with(vec![reply.into(), ANSWER.into()]).await;
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+            .await
+            .expect("the websocket handshake");
+        assert_eq!(next_message(&mut socket).await["type"], "hello");
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": "add a flag"}),
+        )
+        .await;
+
+        let (proposed, _) = until(&mut socket, "task_proposed").await;
+        assert_eq!(proposed["source"], expected, "{proposed}");
+
+        let session = get(&address, "/api/sessions/live").await;
+        assert_eq!(
+            session["tasks"][0]["source"], expected,
+            "and on the read side"
+        );
+    }
+}
+
+/// What a person had to add before a small model's plan could run — the amend
+/// rate, which is the cost of the gate. Readable only by diffing two lines of a
+/// recording by hand until the view kept both.
+#[tokio::test]
+async fn the_view_keeps_the_plan_as_proposed_beside_the_plan_as_approved() {
+    let address = server_with(vec![PLAN.into(), ANSWER.into()]).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+
+    // The person adds the file the model forgot, which is the half that makes
+    // narrowing survivable.
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_task",
+            "task": 1,
+            "files": ["AGENTS.md"],
+        }),
+    )
+    .await;
+    until(&mut socket, "task_approved").await;
+
+    let task = get(&address, "/api/sessions/live").await["tasks"][0].clone();
+    assert_eq!(
+        task["proposed"]["files"],
+        serde_json::json!(["Cargo.toml"]),
+        "the plan as the model proposed it",
+    );
+    assert_eq!(
+        task["plan"]["files"],
+        serde_json::json!(["Cargo.toml", "AGENTS.md"]),
+        "the plan as approved, which is what the sandbox is built from",
+    );
+}

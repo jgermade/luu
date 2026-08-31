@@ -36,7 +36,7 @@ export const state = $reactive({
   extraCalls: [],         // [{ step, prompt_tokens, shared_bytes, shared_tokens }]
   // The session's tasks, in the order they were proposed. A proposed one is a
   // gate: nothing runs behind it until someone answers.
-  tasks: [],              // [{ id, objective, plan, state, summary }]
+  tasks: [],              // [{ id, objective, plan, proposed, source, state, summary }]
   error: null,
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
@@ -163,6 +163,13 @@ function onProtocol(message) {
         id: message.task,
         objective: message.objective,
         plan: message.plan,
+        // Kept beside the plan as approved: the difference between them is what
+        // a person had to add, which is the cost of the gate.
+        proposed: message.plan,
+        // Whether the planning call wrote this plan or answered in prose. Null
+        // in a recording made before the distinction existed, and then the
+        // panel has only emptiness to go on.
+        source: message.source ?? null,
         state: "proposed",
         summary: null,
       }]

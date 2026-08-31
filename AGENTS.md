@@ -103,9 +103,18 @@ why: a turn is running, a proposal is pending, the task is not in that state, or
 the policy file does not grant part of what was asked. That message is what took
 the protocol to v2 (and the record format to 4) — a new variant of a tagged enum
 is a change an older reader cannot parse; `evicted` took it to **v3** and the
-format to **5** under the same rule. The task lifecycle is a state machine
-and every transition is guarded: a proposal cannot be closed, a rejected plan
-cannot be reopened. See
+format to **5** under the same rule. A proposal says **who wrote it**: `source` is
+`model` when the planning call emitted a parseable plan block, `prose` when it
+answered without one (the ordinary case for a 7B — the proposal is then the ask
+itself, declaring nothing), and `written` for a script's `## task:`, where no
+planning call happened. Inferring that from an empty plan, which is what the
+panel used to do, cannot tell a model that ignored the format from one that
+declared an empty list — and which of the two it is decides whether the fix is a
+grammar or a sentence. The read side keeps the plan **as proposed** beside the
+plan as approved for the same reason: the difference between them is what a
+person had to add, which is the cost of the gate. The task lifecycle is a state
+machine and every transition is guarded: a proposal cannot be closed, a rejected
+plan cannot be reopened. See
 [`RECORD/2026-08-30.a-refusal-is-a-message.md`](RECORD/2026-08-30.a-refusal-is-a-message.md). A closed task collapses
 in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
@@ -302,6 +311,16 @@ last five turns contains, how to tell "the summary dropped it" from "the model
 ignored it", and the sampling precondition — is
 [`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
 Read it before running, and append what it says to append.**
+
+**The gate has its own, and it has never been run:**
+[`RECORD/2026-08-31.the-gate-probe.md`](RECORD/2026-08-31.the-gate-probe.md) —
+fifteen prompts typed through `serve`, what a plan worth approving names for
+each, the four ways a denial can happen and how to tell them apart, and the five
+numbers to write down. Everything verified for the gate, for narrowing and for
+`writes` so far was mock-backed or driven by hand; **no model has ever proposed a
+plan that this tree then held it to.** Read it before running that, too — and
+approve with the least that will run, because the count of what had to be added
+is the measurement.
 
 What to look at, in order: **the last five turns of the grounded pair**, where
 the same four questions are answered from a full history in one run and from

@@ -46,6 +46,14 @@
   $: declares = proposed
     ? proposed.plan.steps.length + proposed.plan.files.length + proposed.plan.commands.length
     : 0
+  // Whether the *planning call* produced this plan, which is not the same
+  // question as whether the plan has anything in it: a model that answered in
+  // prose and one that declared empty lists used to look identical here.
+  // `source` is absent in a recording made before the distinction existed, and
+  // then emptiness is the only evidence there is.
+  $: prose = proposed
+    ? (proposed.source ? proposed.source === "prose" : !declares)
+    : false
   $: entries = foldTranscript(state.messages, state.tasks, expanded)
   $: budgetTotal = state.budget
     ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
@@ -155,8 +163,12 @@
       <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
       <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
       <p :if="!declares" class="dim warn">
-        The model declared nothing. Approving runs with everything the policy
-        file already grants — the plan does not narrow it yet.
+        <span :if="prose">The planning call answered in prose, so the model
+        declared nothing.</span>
+        <span :if="!prose">The model declared an empty plan.</span>
+        The plan is the sandbox for its task, so approving as it stands runs a
+        task that may touch nothing — add what it needs below, up to what the
+        policy file grants.
       </p>
       <!-- The plan is the sandbox for this task, so what it forgot is denied
            until someone adds it. Bounded by the policy file: an entry it does

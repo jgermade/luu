@@ -11,7 +11,7 @@ use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
 use agent_core::fragment;
 use agent_core::protocol::ServerMessage;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
-use agent_core::task::Plan;
+use agent_core::task::{Plan, PlanSource};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
@@ -726,6 +726,9 @@ pub async fn run() -> Result<()> {
                         task: id,
                         objective: objective.clone(),
                         plan: plan.clone(),
+                        // No planning call happened: a script carries its plan,
+                        // which is an approval written down in advance.
+                        source: Some(PlanSource::Written),
                     }));
                     recorder.write(&Event::Protocol(ServerMessage::TaskApproved {
                         task: id,
