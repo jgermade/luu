@@ -108,6 +108,16 @@ task closes, only a closed one reopens. A refused plan that could be *reopened*
 would be a plan a person turned down becoming the live task, with the gate
 behind it.
 
+**A proposal says who wrote it.** `task_proposed` carries `source` — `model` when
+the planning call emitted a parseable plan block, `prose` when it answered
+without one, `written` for a script's directives. The gate's headline number is
+how often a small model plans at all, and emptiness cannot answer it: a model
+that ignored the format and one that declared empty lists arrive as the same
+empty plan, and the two want different fixes (a grammar, or a sentence). The read
+side keeps the plan as proposed beside the plan as approved, because the
+difference between them is what a person had to add — the cost of the gate. How
+to measure it is [`RECORD/2026-08-31.the-gate-probe.md`](RECORD/2026-08-31.the-gate-probe.md).
+
 **And the server says no out loud.** A `refused` message carries the request it
 answers, a reason (`busy`, `pending`, `task`, `not_granted`) and a sentence for
 a person. Before it, a client could not tell a refusal from a message that never
@@ -214,6 +224,14 @@ stable prefix.
   front of the history and is the one thing a prefix cache cannot survive — and it
   makes block eviction impossible, because the next fill walks straight back past the
   cut.
+- **And it says so: a cut is a message.** The selection that moves the floor emits
+  `evicted` — the turn that cut, the turns that left, what they were worth, the
+  counter that counted them and which policy did it. Without it a recording shows the
+  history bucket shrinking and cannot say whether that was the policy or the
+  arithmetic, which is how a set of degenerate fixtures survived a whole commit. The
+  turns are named rather than counted, because a reader months later cannot recover
+  *which* without re-implementing the floor. See
+  [`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md).
 - **An unknown window is not an unlimited one**: `--context-limit 0` means unknown, so
   nothing is budgeted and nothing is evicted, and the panel says so rather than
   drawing a bar against nothing.
@@ -246,6 +264,7 @@ nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.md`](RECORD/2026-08-27
 
 - **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold *loses* is the conversation itself — the turns' own prose — and, until it quoted them, the files the turns were shown: that second loss was measured against a real model (two of three closed-task questions came back wrong, one of them a refusal) and closed by quoting the fragments verbatim into the summary. On the mock pair that quote costs 16 927 → 24 356 tokens over the twenty prompts, against 30 682 unfolded, and leaves reuse where it was (89.6% → 89.3%). On the real model (`qwen2.5-coder:7b`, sampling pinned) both closed-task questions that broke before the fix now answer correctly, matching the unfolded run almost word for word, and the fold still wins on tokens but by less than estimated: 29 135 tokens against 36 288 unfolded, a 19.7% win rather than the ~50% win before the fix paid for the quote — see [`RECORD/2026-08-30.the-fold-fix-verified.md`](RECORD/2026-08-30.the-fold-fix-verified.md). Model prose in the summary stays rejected — it would enter the write-once region every later turn is built on, which is exactly why the quote is the file's bytes and not a digest of them.
 - **Grounding a turn with a real file**: built. `--fragment PATH[:START-END]`, and `## fragment:` in a script, read a file **through the sandbox** and fuse it into one turn's user message — the `code` bucket, which existed from the start and until now was always zero. A path the sandbox would refuse to `read_file` is refused here too, and a denial is an error rather than a warning: a run that quietly dropped its grounding answers out of the model's training and looks like it worked, which is exactly what a real 7B did to twenty ungrounded turns. It is attached to one turn and then gone, because which turns a file belongs in is the next item's question and attaching it to all of them answers it wrongly, at every turn's expense. `scripts/tasks/grounded{,-tasks}.txt` are the pair this makes possible: the same twenty prompts, one grouped into tasks, with a last group that attaches nothing and asks the first fifteen again — the first corpus in which *does the fold lose what the task needed* is a question with an answer. The protocol for asking it is [`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
+- **The repository map**: built, and *not ranked*. Every `.rs` file's definitions with their signatures, bodies elided, from `tree-sitter`'s own `TAGS_QUERY`, in the cached prefix under the tool definitions — where blocks are ordered by how often they are rewritten, and the map changes only when the repository does. `--map-tokens N`, off by default so that every recording made before it stays comparable, and `luu map` prints the exact bytes. Files are outlined in path order until one does not fit; the map then says how many it left out. This repository is the argument for the next step: its whole outline is **6 327 tokens, 77% of an 8K window**, so at any affordable budget most of it is missing and the alphabet chose which part. What it costs on the grounded script: 870 tokens a turn at `--map-tokens 1024`, +56% on the run's total prompt tokens — and a prefix-reuse number that rises from 93.9% to 96.3% for purely arithmetic reasons, which is why a map-on run is not comparable on reuse to a map-off one. See [`RECORD/2026-08-31.the-repo-map.md`](RECORD/2026-08-31.the-repo-map.md).
 - **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
@@ -413,7 +432,7 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `prompt`, `approve_plan`, `edit_plan`, `close_task`, `reopen_task`, `cancel` |
-| server → client | `token`, `tool_call`, `tool_result`, `ended`, `failed` — built; `task_proposed`, `task_approved`, `task_closed`, `context_snapshot` wait on the task lifecycle |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `task_proposed`, `task_approved`, `task_rejected`, `task_closed`, `task_reopened`, `refused`, `evicted` — all built, protocol v3; `context_snapshot` is still ahead |
 
 Closing a task is an event, not a mutation: reopening one is folding the log
 differently, never undoing a deletion. Freezing v1 of these enums waits on the task
@@ -510,7 +529,10 @@ Chat and session list are table stakes. The ones that justify building this at a
 
 `luu serve --record <file>` dumps the JSON-lines stream to disk, and the UI can load such a file
 instead of a live socket. Sessions become replayable offline — useful for bug reports and for
-comparing context strategies across runs without re-running inference.
+comparing context strategies across runs without re-running inference. What the run *forgot* is in
+there too: the recorded fixtures make the two policies visible as what they are — ten small cuts
+under `turn` against two deep ones under `block`, over the same twenty prompts, and none at all in
+the tasks run, where the fold kept the history under the limit and eviction never fired.
 
 `luu chat --script <file>` runs a file of prompts, one per line, against one shared history. That
 is what makes a multi-turn run repeatable: a baseline typed into a browser cannot be re-run, and
@@ -537,12 +559,17 @@ lives in memory for the life of the process.
   JSON-lines stream is the account of what happened, and `api::SessionView` already
   folds it; a store that accumulates state the events cannot regenerate is a second
   truth, which is how the static mirror and the live server start disagreeing.
-- **Forgetting is an event too.** Eviction — and later compaction — is recorded, not
-  just applied: a recording has to be able to say which turns left the window, when,
-  and under which policy. Today the eviction floor is in-memory and a recording can
-  only show the history bucket shrinking, which is the symptom without the cause.
-  Decided, not built; the shape is OpenHands' condensation tombstones, read in
-  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md).
+- **Forgetting is an event too.** Built for eviction: an `evicted` line names the
+  turns that left, what they were worth, who counted them and which policy cut —
+  so a recording says what a session forgot instead of only showing the history
+  bucket shrink. The transcript keeps those turns and marks them, because a view
+  that agreed with the prompt could no longer show the difference between them.
+  The shape is OpenHands' condensation tombstones, read in
+  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md);
+  the reasoning is in
+  [`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md).
+  Compaction's own tombstone already exists as `task_closed`; pruning tool results
+  out of a live turn would need a third, and deliberately has none until it does.
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums
@@ -551,7 +578,7 @@ lives in memory for the life of the process.
 ## Suggested work order
 
 1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *Done.*
-2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction, block eviction and compaction on task boundaries exist, and prefix reuse is measured per turn. Relevance selection is still ahead, and has to beat the recorded baseline.*
+2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction, block eviction, compaction on task boundaries and the repository map exist; eviction is recorded rather than only applied, and prefix reuse is measured per turn. What is left of the step is **ranking** the map — the reference graph — and it has to beat the path-order baseline the map now records.*
 3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
    measure step 2. *Done.*
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*

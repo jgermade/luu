@@ -15,8 +15,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
+use crate::context::{Counter, Eviction};
 use crate::sandbox::Verdict;
-use crate::task::{Plan, TaskId};
+use crate::task::{Plan, PlanSource, TaskId};
 use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
 
@@ -32,7 +33,13 @@ use crate::turn::{EndReason, TurnEvent};
 /// `type` in a tagged enum is a parse error rather than a line to skip, so a new
 /// variant is exactly the change the rule names. See
 /// `RECORD/2026-08-30.a-refusal-is-a-message.md`.
-pub const VERSION: u32 = 2;
+///
+/// **3 is the same rule again**, for [`ServerMessage::Evicted`]: what leaves the
+/// window is a thing that happened to the conversation, not a debug reading, so
+/// it is here rather than on the trace channel — and a client that could not
+/// parse it would be watching a transcript whose turns are silently no longer
+/// in the prompt. See `RECORD/2026-08-31.eviction-tombstones.md`.
+pub const VERSION: u32 = 3;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -123,6 +130,15 @@ pub enum ServerMessage {
         task: TaskId,
         objective: String,
         plan: Plan,
+        /// Whether the planning call produced this plan, or answered in prose
+        /// and left the proposal to be the ask itself. `None` in a recording
+        /// made before the distinction existed — the alternative is to guess it
+        /// from an empty plan, which is the guess this field exists to remove.
+        ///
+        /// An added optional field, so an older reader skips it: it does not
+        /// move [`VERSION`], which is for a change that reader could not parse.
+        #[serde(default)]
+        source: Option<PlanSource>,
     },
     /// Approved, with the plan as approved rather than as proposed: it is what
     /// the task's sandbox is built from, so a transcript that showed only the
@@ -138,6 +154,29 @@ pub enum ServerMessage {
     TaskClosed {
         task: TaskId,
         summary: String,
+    },
+    /// What left the window, and stays out.
+    ///
+    /// The other way the history stops being sent, and on the protocol for the
+    /// same reason [`Self::TaskClosed`] is: a transcript has to be able to show
+    /// the difference between what happened and what the model is still shown.
+    /// A fold is visible without this message and an eviction is not — before
+    /// it, a recording could show the history bucket shrink and could not say
+    /// whether that was the policy or the arithmetic.
+    ///
+    /// Belongs to the turn whose selection cut, because eviction happens when
+    /// the *next* prompt no longer fits — the same tense as the budget, which
+    /// describes the call about to be made.
+    Evicted {
+        turn: TurnId,
+        /// The turns that left, oldest first.
+        turns: Vec<TurnId>,
+        /// What they were worth in the prompt they are no longer in.
+        tokens: u32,
+        /// Which counter produced `tokens`.
+        counter: Counter,
+        /// Which cut this was: the minimum, or down to the low-water mark.
+        policy: Eviction,
     },
     /// The fold stops applying. Not an undo — nothing was deleted.
     TaskReopened {
@@ -260,7 +299,10 @@ impl ServerMessage {
             | Self::Ended { turn, .. }
             | Self::Failed { turn, .. }
             | Self::ToolCall { turn, .. }
-            | Self::ToolResult { turn, .. } => Some(*turn),
+            | Self::ToolResult { turn, .. }
+            // The turn that cut, not the turns that left: this is a thing the
+            // selection for `turn` did.
+            | Self::Evicted { turn, .. } => Some(*turn),
             // A task spans turns and its lifecycle happens between them, and a
             // refusal is about the ask rather than about a turn — three of the
             // four happen when there is no turn to name.
@@ -293,6 +335,39 @@ mod tests {
         });
         assert_eq!(json["type"], "token");
         assert_eq!(json["text"], "hola");
+    }
+
+    #[test]
+    fn an_eviction_names_the_turns_that_left_and_who_counted_them() {
+        let json = roundtrip(&ServerMessage::Evicted {
+            turn: 12,
+            turns: vec![1, 2, 3],
+            tokens: 843,
+            counter: Counter::Model {
+                id: "qwen2.5-coder:7b".into(),
+            },
+            policy: Eviction::Block { low_water: 0.5 },
+        });
+        assert_eq!(json["type"], "evicted");
+        assert_eq!(json["turn"], 12, "the turn whose selection cut");
+        assert_eq!(json["turns"], serde_json::json!([1, 2, 3]));
+        assert_eq!(json["counter"]["id"], "qwen2.5-coder:7b");
+        assert_eq!(
+            json["policy"]["policy"], "block",
+            "which cut it was, beside how much it took",
+        );
+        assert_eq!(
+            ServerMessage::Evicted {
+                turn: 12,
+                turns: vec![1],
+                tokens: 0,
+                counter: Counter::Approximate,
+                policy: Eviction::Turn,
+            }
+            .turn(),
+            Some(12),
+            "it is a thing the cutting turn did, not a message about the turns that left",
+        );
     }
 
     #[test]
@@ -340,9 +415,24 @@ mod tests {
                 writes: vec![],
                 commands: vec!["cargo".into()],
             },
+            source: Some(PlanSource::Model),
         });
         assert_eq!(json["type"], "task_proposed");
         assert_eq!(json["plan"]["files"][0], "crates/luu/src/lib.rs");
+        assert_eq!(
+            json["source"], "model",
+            "who wrote the plan, which an empty one cannot be asked",
+        );
+
+        // An older recording has no `source`, and it stays unknown rather than
+        // becoming a claim the recording never made.
+        let older: ServerMessage =
+            serde_json::from_str(r#"{"type":"task_proposed","task":1,"objective":"x","plan":{}}"#)
+                .expect("an added optional field is not a parse error");
+        assert!(matches!(
+            older,
+            ServerMessage::TaskProposed { source: None, .. }
+        ));
         assert_eq!(
             ServerMessage::TaskApproved {
                 task: 2,

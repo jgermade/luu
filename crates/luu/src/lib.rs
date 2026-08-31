@@ -10,8 +10,9 @@ use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama
 use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
 use agent_core::fragment;
 use agent_core::protocol::ServerMessage;
+use agent_core::repo_map::RepoMap;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
-use agent_core::task::Plan;
+use agent_core::task::{Plan, PlanSource};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
@@ -69,6 +70,26 @@ enum Command {
     Tools {
         #[command(flatten)]
         sandbox: SandboxArgs,
+    },
+
+    /// Print the repository map that a budget resolves to, and what it cost.
+    ///
+    /// The map is the last block of the cached prefix, so being able to look at
+    /// the bytes is the same difference `luu tools` exists for — and it is the
+    /// only place the walk's two rules (no dot-directories, no `target`) are
+    /// visible rather than inferred from a number that looks wrong.
+    Map {
+        #[command(flatten)]
+        sandbox: SandboxArgs,
+
+        /// Tokens to spend on the outline.
+        #[arg(long, default_value_t = 1024)]
+        map_tokens: u32,
+
+        /// The model's `tokenizer.json`. Without it the count is `chars/4` and
+        /// says so, which is a different number from what a run would spend.
+        #[arg(long)]
+        tokenizer: Option<std::path::PathBuf>,
     },
 
     /// Serve the debug UI and the agent protocol over HTTP.
@@ -134,6 +155,14 @@ enum Command {
         /// Pin the sampler's seed. Unset leaves it to the server's own choice.
         #[arg(long)]
         seed: Option<u32>,
+
+        /// Tokens of repository outline to put in the prefix — definitions
+        /// with their signatures, bodies elided, from tree-sitter. 0 is off,
+        /// which is the default: a map that arrived switched on would change
+        /// every number in every recording made so far. `luu map` prints what
+        /// a budget resolves to.
+        #[arg(long, default_value_t = 0)]
+        map_tokens: u32,
     },
 
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
@@ -221,6 +250,14 @@ enum Command {
         /// Pin the sampler's seed. Unset leaves it to the server's own choice.
         #[arg(long)]
         seed: Option<u32>,
+
+        /// Tokens of repository outline to put in the prefix — definitions
+        /// with their signatures, bodies elided, from tree-sitter. 0 is off,
+        /// which is the default: a map that arrived switched on would change
+        /// every number in every recording made so far. `luu map` prints what
+        /// a budget resolves to.
+        #[arg(long, default_value_t = 0)]
+        map_tokens: u32,
     },
 }
 
@@ -565,6 +602,35 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    if let Command::Map {
+        sandbox,
+        map_tokens,
+        tokenizer,
+    } = &command
+    {
+        let agency = sandbox.resolve()?;
+        // Named, because the warning that comes back says which model the
+        // count belongs to — and a map counted by `chars/4` is a different
+        // number from the one a run with a tokenizer would spend.
+        let (counter, warning) = counter_for("the map", tokenizer.as_deref())?;
+        if let Some(warning) = &warning {
+            eprintln!("warning: {warning}");
+        }
+        let map = RepoMap::build(agency.sandbox.as_ref(), *map_tokens, counter.as_ref());
+        print!("{}", map.render());
+        println!(
+            "\n--- {} file(s) outlined, {} left out, {} of {map_tokens} tokens{} ---",
+            map.files.len(),
+            map.left_out,
+            map.tokens,
+            match map.counted_by.is_approximate() {
+                true => " (approximate: pass --tokenizer)",
+                false => "",
+            },
+        );
+        return Ok(());
+    }
+
     if let Command::Serve {
         bind,
         sandbox_args,
@@ -581,6 +647,7 @@ pub async fn run() -> Result<()> {
         low_water,
         temperature,
         seed,
+        map_tokens,
     } = command
     {
         let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
@@ -601,6 +668,7 @@ pub async fn run() -> Result<()> {
             agency,
             temperature,
             seed,
+            map_tokens,
         })
         .await;
     }
@@ -624,6 +692,7 @@ pub async fn run() -> Result<()> {
         low_water,
         temperature,
         seed,
+        map_tokens,
     } = command
     else {
         unreachable!("serve and tools are handled above");
@@ -671,7 +740,22 @@ pub async fn run() -> Result<()> {
     // selection still runs either way, because a `chat` that assembled its
     // prompt differently from `serve` would be measuring something the server
     // never sends.
-    let mut context = AgentContext::new(SYSTEM).with_tools(agency.definitions());
+    // The map is built once, before the first turn: it is the last block of the
+    // cached prefix, and a block that is rebuilt mid-session is not a prefix.
+    // What that costs — an agent that edits a file then carries the outline it
+    // had — is named in `RECORD/2026-08-31.the-repo-map.md`.
+    let map = RepoMap::build(agency.sandbox.as_ref(), map_tokens, counter.as_ref());
+    if !map.is_empty() {
+        println!(
+            "== repository map: {} file(s), {} left out, {} of {map_tokens} tokens",
+            map.files.len(),
+            map.left_out,
+            map.tokens,
+        );
+    }
+    let mut context = AgentContext::new(SYSTEM)
+        .with_tools(agency.definitions())
+        .with_map(map.render());
     // Shared with the printer task, because the tool round trips are announced
     // there and they belong in the same chain as the turns: two trackers would
     // measure one session against two different pasts.
@@ -726,6 +810,9 @@ pub async fn run() -> Result<()> {
                         task: id,
                         objective: objective.clone(),
                         plan: plan.clone(),
+                        // No planning call happened: a script carries its plan,
+                        // which is an approval written down in advance.
+                        source: Some(PlanSource::Written),
                     }));
                     recorder.write(&Event::Protocol(ServerMessage::TaskApproved {
                         task: id,
@@ -780,12 +867,48 @@ pub async fn run() -> Result<()> {
         let code = std::mem::take(&mut attached);
         let selection = context.select(prompt, &code, budget, counter.as_ref());
 
+        // Said out loud, not only into the recording: a run that quietly
+        // forgets half its history looks exactly like one that answers from all
+        // of it, and the difference is the whole subject.
+        if let Some(evicted) = &selection.eviction {
+            let turns = evicted
+                .turns
+                .iter()
+                .map(|turn| turn.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "\n== evicted turn{} {turns} — {} tokens{} out of the window, for good",
+                match evicted.turns.len() {
+                    1 => "",
+                    _ => "s",
+                },
+                evicted.tokens,
+                match evicted.counter.is_approximate() {
+                    true => " (approximate)",
+                    false => "",
+                },
+            );
+        }
+
         if let Some(recorder) = &recorder {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
                 turn,
                 prompt: prompt.clone(),
                 task,
             }));
+            // Before the prompt it explains, so a file reads in the order the
+            // session happened: the history was cut, then this is what was
+            // sent.
+            if let Some(evicted) = selection.eviction.clone() {
+                recorder.write(&Event::Protocol(ServerMessage::Evicted {
+                    turn,
+                    turns: evicted.turns,
+                    tokens: evicted.tokens,
+                    counter: evicted.counter,
+                    policy: evicted.policy,
+                }));
+            }
             let text = rendered(&selection.messages);
             let reuse = prefix
                 .lock()
@@ -970,6 +1093,7 @@ pub async fn run() -> Result<()> {
         // remembered — an empty assistant message is not a thing that happened.
         if !outcome.text.is_empty() || !outcome.steps.is_empty() {
             context.push_turn_with_steps(
+                turn,
                 prompt.clone(),
                 outcome.text,
                 code,

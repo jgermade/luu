@@ -10,6 +10,7 @@ pub mod context;
 pub mod fragment;
 pub mod protocol;
 pub mod record;
+pub mod repo_map;
 pub mod sandbox;
 pub mod task;
 pub mod tools;

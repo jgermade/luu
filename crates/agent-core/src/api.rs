@@ -9,11 +9,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::Counter;
+use crate::context::{Counter, Evicted};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
-use crate::task::{Plan, TaskId, TaskState};
+use crate::task::{Plan, PlanSource, TaskId, TaskState};
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
@@ -80,7 +80,19 @@ pub struct ToolCallView {
 pub struct TaskView {
     pub id: TaskId,
     pub objective: String,
+    /// The plan the task is held to: as approved once it has been, as proposed
+    /// until then.
     pub plan: Plan,
+    /// The plan as it was *proposed*, kept beside the one above because the
+    /// difference between them is the cost of the gate — how much a person had
+    /// to add before a small model's plan could run. Overwriting it at approval
+    /// left that readable only by diffing two lines of a recording by hand.
+    #[serde(default)]
+    pub proposed: Option<Plan>,
+    /// Whether a planning call produced the proposal, or answered in prose.
+    /// `None` in a recording made before the distinction existed.
+    #[serde(default)]
+    pub source: Option<PlanSource>,
     pub state: TaskState,
     /// What its turns are sent as once it is closed. The summary text only —
     /// its token count belongs to whoever counted it, and a reader who needs
@@ -115,6 +127,17 @@ pub struct TurnView {
     /// What the agent did during the turn, in order.
     #[serde(default)]
     pub tools: Vec<ToolCallView>,
+    /// What this turn's selection dropped from the window, when it dropped
+    /// anything. Beside the budget rather than inside it: the buckets say what
+    /// the prompt is worth, this says what stopped being in it.
+    #[serde(default)]
+    pub dropped: Option<Evicted>,
+    /// The turn whose selection dropped *this* one. The transcript keeps an
+    /// evicted turn and marks it — removing it would make the view agree with
+    /// the prompt and lose the difference between them, which is the one thing
+    /// a debug client is for.
+    #[serde(default)]
+    pub evicted_by: Option<TurnId>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -134,6 +157,8 @@ impl TurnView {
             prefix: None,
             extra_calls: Vec::new(),
             tools: Vec::new(),
+            dropped: None,
+            evicted_by: None,
             started_at_ms,
             ended_at_ms: None,
         }
@@ -238,15 +263,42 @@ impl SessionView {
                 task,
                 objective,
                 plan,
+                source,
             } => {
                 if self.task(*task).is_none() {
                     self.tasks.push(TaskView {
                         id: *task,
                         objective: objective.clone(),
                         plan: plan.clone(),
+                        proposed: Some(plan.clone()),
+                        source: *source,
                         state: TaskState::Proposed,
                         summary: None,
                     });
+                }
+            }
+            ServerMessage::Evicted {
+                turn,
+                turns,
+                tokens,
+                counter,
+                policy,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.dropped = Some(Evicted {
+                        turns: turns.clone(),
+                        tokens: *tokens,
+                        counter: counter.clone(),
+                        policy: *policy,
+                    });
+                }
+                // Both halves, because a reader asks it both ways: what did
+                // this turn cost the history, and is that turn still in the
+                // prompt.
+                for dropped in turns {
+                    if let Some(view) = self.turn_mut(*dropped) {
+                        view.evicted_by = Some(*turn);
+                    }
                 }
             }
             // Transient feedback to whoever asked, not session state: a
@@ -625,6 +677,79 @@ mod tests {
             turn.budget.is_none(),
             "nothing to plot, so nothing is invented"
         );
+    }
+
+    #[test]
+    fn an_eviction_marks_both_the_turn_that_cut_and_the_turns_that_left() {
+        let mut view = SessionView::new("s", "mock", "mock");
+        for turn in 1..=3 {
+            view.apply_protocol(
+                0,
+                &ServerMessage::TurnStarted {
+                    turn,
+                    prompt: format!("q{turn}"),
+                    task: None,
+                },
+            );
+        }
+        view.apply_protocol(
+            9,
+            &ServerMessage::Evicted {
+                turn: 3,
+                turns: vec![1],
+                tokens: 42,
+                counter: Counter::Approximate,
+                policy: crate::context::Eviction::Turn,
+            },
+        );
+
+        let dropped = view
+            .turn(3)
+            .unwrap()
+            .dropped
+            .clone()
+            .expect("what turn 3 cut");
+        assert_eq!(dropped.turns, vec![1]);
+        assert_eq!(dropped.tokens, 42);
+        assert_eq!(
+            view.turn(1).unwrap().evicted_by,
+            Some(3),
+            "the turn is kept and marked: the transcript's job is the difference \
+             between what happened and what the model is still shown",
+        );
+        assert!(
+            view.turn(2).unwrap().evicted_by.is_none(),
+            "still in the window",
+        );
+    }
+
+    #[test]
+    fn an_eviction_naming_a_turn_the_view_never_saw_is_ignored() {
+        // A client that attached mid-session has turns the eviction names and
+        // it does not. Marking nothing beats inventing a turn to mark.
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.apply_protocol(
+            0,
+            &ServerMessage::TurnStarted {
+                turn: 7,
+                prompt: "q".into(),
+                task: None,
+            },
+        );
+        view.apply_protocol(
+            1,
+            &ServerMessage::Evicted {
+                turn: 7,
+                turns: vec![1, 2],
+                tokens: 10,
+                counter: Counter::Approximate,
+                policy: crate::context::Eviction::Turn,
+            },
+        );
+
+        assert_eq!(view.turns.len(), 1);
+        let dropped = view.turn(7).unwrap().dropped.clone().expect("the cut");
+        assert_eq!(dropped.turns, vec![1, 2]);
     }
 
     #[test]

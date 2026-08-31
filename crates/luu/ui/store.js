@@ -20,7 +20,9 @@ export const state = $reactive({
   model: "",
   protocol: 0,
   turn: null,
-  messages: [],           // { id, role, text, reason, usage }
+  // `turn` is the session's number for the exchange, which is what an eviction
+  // names; `evicted` is the turn whose selection dropped this one, or null.
+  messages: [],           // { id, turn, role, text, task, reason, usage, evicted }
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
@@ -34,11 +36,15 @@ export const state = $reactive({
   extraCalls: [],         // [{ step, prompt_tokens, shared_bytes, shared_tokens }]
   // The session's tasks, in the order they were proposed. A proposed one is a
   // gate: nothing runs behind it until someone answers.
-  tasks: [],              // [{ id, objective, plan, state, summary }]
+  tasks: [],              // [{ id, objective, plan, proposed, source, state, summary }]
   error: null,
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
   refused: null,          // { request, reason, detail }
+  // The last cut the window made. Kept beside the budget rather than inside it:
+  // the buckets say what the prompt is worth, this says what stopped being in
+  // it. Null in a session that never filled its window.
+  evicted: null,          // { turn, turns, tokens, counter, policy }
   // Whether this session is a recording rather than a server. The status word
   // is not the same question: it says "running" while a recorded turn plays,
   // and a composer that reads the status is enabled over a recording nobody can
@@ -143,8 +149,8 @@ function onProtocol(message) {
       state.refused = null
       // The task it belongs to travels with the turn, so the transcript can
       // group without replaying the lifecycle to work out what was open.
-      state.messages.push({ id: nextId++, role: "user", text: message.prompt, task: message.task, reason: null, usage: null })
-      state.messages.push({ id: nextId++, role: "assistant", text: "", task: message.task, reason: null, usage: null })
+      state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, task: message.task, reason: null, usage: null, evicted: null })
+      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", task: message.task, reason: null, usage: null, evicted: null })
       state.tools = []
       state.extraCalls = []
       break
@@ -157,6 +163,13 @@ function onProtocol(message) {
         id: message.task,
         objective: message.objective,
         plan: message.plan,
+        // Kept beside the plan as approved: the difference between them is what
+        // a person had to add, which is the cost of the gate.
+        proposed: message.plan,
+        // Whether the planning call wrote this plan or answered in prose. Null
+        // in a recording made before the distinction existed, and then the
+        // panel has only emptiness to go on.
+        source: message.source ?? null,
         state: "proposed",
         summary: null,
       }]
@@ -191,6 +204,22 @@ function onProtocol(message) {
       // written again.
       patchTask(message.task, { state: "approved", summary: null })
       break
+
+    // What left the window and stays out. The turns are kept and marked, never
+    // removed: a transcript that agreed with the prompt could no longer show
+    // the difference between them, which is the one thing this client is for.
+    case "evicted": {
+      const gone = new Set(message.turns)
+      state.messages = state.messages.map(m => gone.has(m.turn) ? { ...m, evicted: message.turn } : m)
+      state.evicted = {
+        turn: message.turn,
+        turns: message.turns,
+        tokens: message.tokens,
+        counter: message.counter,
+        policy: message.policy,
+      }
+      break
+    }
 
     case "token":
       appendToken(message.text)
@@ -392,6 +421,7 @@ function reset() {
   state.prefix = null
   state.error = null
   state.refused = null
+  state.evicted = null
   state.turn = null
   pending = ""
 }

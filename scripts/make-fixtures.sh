@@ -68,6 +68,16 @@ done
   --sandbox "$(dirname "$0")/../luu.toml" \
   --record "$out/one-task.jsonl" >/dev/null
 
+# The repository map in the prefix, which is the one recording where the `map`
+# bucket is not zero. 1024 tokens: five files of this repository outlined, and
+# the map says how many it left out — at 8K the whole outline is 6 327 tokens,
+# which is why a budget is a flag rather than a default. The same prompt as the
+# grounded turn below, so the two are one flag apart.
+"$luu" chat "which two commitments does the context manager open with?" \
+  --mock-delay-ms 20 --context-limit 8192 --map-tokens 1024 \
+  --sandbox "$(dirname "$0")/../luu.toml" \
+  --record "$out/repo-map.jsonl" >/dev/null
+
 # A real file fused into a turn — the first recording in which the `code` bucket
 # is not zero, which until the fragment surface existed it always was.
 "$luu" chat "which two commitments does this file open with?" \
@@ -95,6 +105,7 @@ done
   "$out/tool-calls.jsonl" \
   "$out/one-task.jsonl" \
   "$out/grounded-turn.jsonl" \
+  "$out/repo-map.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \

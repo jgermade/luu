@@ -57,6 +57,7 @@ cargo run --bin luu -- serve --mock-reply '```plan
 {"objective": "explain the budget", "steps": ["read the design"], "files": ["loude-design.md"]}
 ```' --mock-reply 'The budget is split into buckets.'
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
+cargo run --bin luu -- map --map-tokens 1024          # the repository outline that budget resolves to
 
 # the tool loop end to end without a model: one reply per model call
 cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
@@ -102,9 +103,19 @@ gate, and a client that sends a prompt anyway gets a `refused` message saying
 why: a turn is running, a proposal is pending, the task is not in that state, or
 the policy file does not grant part of what was asked. That message is what took
 the protocol to v2 (and the record format to 4) — a new variant of a tagged enum
-is a change an older reader cannot parse. The task lifecycle is a state machine
-and every transition is guarded: a proposal cannot be closed, a rejected plan
-cannot be reopened. See
+is a change an older reader cannot parse; `evicted` took it to **v3** and the
+format to **5** under the same rule. A proposal says **who wrote it**: `source` is
+`model` when the planning call emitted a parseable plan block, `prose` when it
+answered without one (the ordinary case for a 7B — the proposal is then the ask
+itself, declaring nothing), and `written` for a script's `## task:`, where no
+planning call happened. Inferring that from an empty plan, which is what the
+panel used to do, cannot tell a model that ignored the format from one that
+declared an empty list — and which of the two it is decides whether the fix is a
+grammar or a sentence. The read side keeps the plan **as proposed** beside the
+plan as approved for the same reason: the difference between them is what a
+person had to add, which is the cost of the gate. The task lifecycle is a state
+machine and every transition is guarded: a proposal cannot be closed, a rejected
+plan cannot be reopened. See
 [`RECORD/2026-08-30.a-refusal-is-a-message.md`](RECORD/2026-08-30.a-refusal-is-a-message.md). A closed task collapses
 in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
@@ -142,6 +153,27 @@ it for one run. `--max-tool-steps` caps the tool calls one turn may make and
 `--no-tools` runs without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
 
+`--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
+definitions with their signatures, bodies elided, from `tree-sitter`'s own
+`TAGS_QUERY`. It goes under the tool definitions and above the history, because
+blocks are ordered by how often they are *rewritten* and the map changes only
+when the repository does. It is **0 by default** — a map that arrived switched on
+would silently change every number in every recording made so far. `luu map`
+prints the exact bytes and what they cost.
+
+Files are outlined in **path order** until one does not fit, and the map says how
+many it left out. That is not relevance and does not pretend to be: it is the
+baseline the reference graph has to beat, and this repository makes the case by
+itself — the whole outline is 6 327 tokens, **77% of an 8K window**, so at any
+budget a real run can afford, most of the repository is missing and the alphabet
+picked which part. Two readings to keep straight: the map is paid on *every*
+call (870 tokens × 20 turns is +56% on the grounded script's total), and it
+**inflates prefix reuse as pure arithmetic** — a bigger constant block raises
+shared and total together, so 93.9% → 96.3% is not an improvement and a reuse
+number from a run with the map is not comparable to one without it. Numbers and
+the two bugs that running it found are in
+[`RECORD/2026-08-31.the-repo-map.md`](RECORD/2026-08-31.the-repo-map.md).
+
 `--fragment PATH[:START-END]` on `chat` fuses a real file into the next prompt —
 repeatable, 1-based inclusive lines, read **through the sandbox**, and attached
 to one turn only. Which turns a file belongs in is what relevance selection
@@ -156,7 +188,13 @@ from training. See `RECORD/2026-08-27.grounded-fold-probe.md`.
 `--context-limit` is the model's window (`0` means unknown: no budget, no
 eviction), `--reserve` is what is held back for the answer, `--evict` is how the
 history gives way (`turn` drops the minimum, `block` cuts to `--low-water` and
-then holds still), and `--tokenizer` points at the model's `tokenizer.json`. **Without `--tokenizer` the counts are
+then holds still), and `--tokenizer` points at the model's `tokenizer.json`.
+A cut says so: the run prints `== evicted turn N` and the recording carries an
+`evicted` line naming the turns that left, what they were worth, who counted
+them and which policy did it. Over the same twenty prompts at 1024 tokens that
+is ten small cuts under `turn`, two deep ones under `block`, and none at all in
+the tasks run — the fold kept it under the limit. See
+[`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md). **Without `--tokenizer` the counts are
 `chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
 useless for a comparison, and the numbers say so themselves.
 
@@ -296,6 +334,16 @@ ignored it", and the sampling precondition — is
 [`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
 Read it before running, and append what it says to append.**
 
+**The gate has its own, and it has never been run:**
+[`RECORD/2026-08-31.the-gate-probe.md`](RECORD/2026-08-31.the-gate-probe.md) —
+fifteen prompts typed through `serve`, what a plan worth approving names for
+each, the four ways a denial can happen and how to tell them apart, and the five
+numbers to write down. Everything verified for the gate, for narrowing and for
+`writes` so far was mock-backed or driven by hand; **no model has ever proposed a
+plan that this tree then held it to.** Read it before running that, too — and
+approve with the least that will run, because the count of what had to be added
+is the measurement.
+
 What to look at, in order: **the last five turns of the grounded pair**, where
 the same four questions are answered from a full history in one run and from
 three summaries in the other — that comparison is the only thing that says
@@ -352,6 +400,16 @@ implementation detail from close up:
   command implies read+execute on the system roots, because a program cannot run
   without reading libc — and that reasoning says nothing about `read_file`, so the
   in-process path check ignores those roots.
+- **The map is prefix, so it is stable, and it is not ranked yet.** The
+  repository outline sits under the tool definitions and does not move for the
+  life of a run — that is what makes it cheap on a prompt cache, and it is why
+  ranking it (which personalizes it per turn, per task) is a trade to *measure*
+  rather than a patch to apply. `#[cfg(test)]` modules are skipped: a module the
+  compiler only builds for tests is not the interface the map describes, and in
+  this repository the test names were most of the budget. The first file that
+  does not fit stops the map rather than being skipped over, so a wider budget
+  always shows everything a tighter one did — a map whose contents do not nest
+  cannot be compared against itself.
 - **Decide what goes in, then render it.** `Context::select` chooses against a
   token budget and the rendering is a pure function of that choice, so every
   token sent is attributable to a bucket. Rendering first and trimming the
@@ -363,6 +421,17 @@ implementation detail from close up:
   answering. Eviction is also monotone — `Context` keeps a floor that only moves
   forward — because a turn that comes back rewrites the history from its front,
   and that is the prefix cache's worst case.
+- **Forgetting is an event, and it names names.** The selection that moves the
+  floor emits `evicted`, on the protocol beside `task_closed` rather than behind
+  `--trace`: a fold and an eviction are the two ways history stops being sent,
+  and a recording that could show one and not the other says the history bucket
+  shrank without saying whether that was the policy or the arithmetic. It names
+  the *turns*, which is why `Turn` carries the id the session handed it — the
+  position in `Context::turns` is a different number, since a turn that produced
+  nothing is never pushed and a planning call is never remembered. The transcript
+  keeps an evicted turn and marks it; removing it would make the view agree with
+  the prompt and lose the difference between them, which is what the debug client
+  is for.
 - **Every token count carries which counter produced it.** Two runs measured by
   different counters are not comparable, and nothing else in the system would
   ever say so.

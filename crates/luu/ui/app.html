@@ -46,6 +46,14 @@
   $: declares = proposed
     ? proposed.plan.steps.length + proposed.plan.files.length + proposed.plan.commands.length
     : 0
+  // Whether the *planning call* produced this plan, which is not the same
+  // question as whether the plan has anything in it: a model that answered in
+  // prose and one that declared empty lists used to look identical here.
+  // `source` is absent in a recording made before the distinction existed, and
+  // then emptiness is the only evidence there is.
+  $: prose = proposed
+    ? (proposed.source ? proposed.source === "prose" : !declares)
+    : false
   $: entries = foldTranscript(state.messages, state.tasks, expanded)
   $: budgetTotal = state.budget
     ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
@@ -96,8 +104,15 @@
   <section class="chat">
     <div class="transcript">
       <div :each="entry in entries" :key="entry.id">
-        <article :if="entry.kind === 'message'" :class="entry.message.role">
-          <div class="who">{{ entry.message.role }}</div>
+        <article :if="entry.kind === 'message'" :class="entry.message.role" :class.evicted="entry.message.evicted">
+          <div class="who">
+            {{ entry.message.role }}
+            <!-- Kept and marked, never removed: the prompt no longer carries
+                 this and the transcript still has to be able to say so. -->
+            <span :if="entry.message.evicted" class="gone">
+              · out of the window since turn {{ entry.message.evicted }}
+            </span>
+          </div>
           <div class="text">{{ entry.message.text }}</div>
           <div :if="entry.message.reason" class="meta">
             <span :class.warn="entry.message.reason !== 'stop'">{{ entry.message.reason }}</span>
@@ -148,8 +163,12 @@
       <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
       <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
       <p :if="!declares" class="dim warn">
-        The model declared nothing. Approving runs with everything the policy
-        file already grants — the plan does not narrow it yet.
+        <span :if="prose">The planning call answered in prose, so the model
+        declared nothing.</span>
+        <span :if="!prose">The model declared an empty plan.</span>
+        The plan is the sandbox for its task, so approving as it stands runs a
+        task that may touch nothing — add what it needs below, up to what the
+        policy file grants.
       </p>
       <!-- The plan is the sandbox for this task, so what it forgot is denied
            until someone adds it. Bounded by the policy file: an entry it does
@@ -223,6 +242,15 @@
         Backend counted {{ state.budget?.backendPrompt }} over
         {{ state.extraCalls.length + 1 }} call(s): {{ templateOverhead }}
         more than we sent, the chat template applied on its side.
+      </p>
+      <!-- What stopped being in the prompt. Beside the buckets rather than in
+           them: a bucket that got smaller cannot say whether that was the
+           policy or the arithmetic. -->
+      <p :if="state.evicted" class="dim">
+        Turn {{ state.evicted?.turn }} dropped turn(s)
+        {{ state.evicted?.turns.join(", ") }} — {{ state.evicted?.tokens }}
+        tokens out of the window, for good, under the
+        <b>{{ state.evicted?.policy.policy }}</b> policy.
       </p>
     </div>
     <p :if="!state.budget" class="dim">
@@ -348,6 +376,10 @@
     margin-bottom: .2rem;
   }
   article.user .text { color: var(--accent); }
+  /* Dimmed, not hidden: it happened, and the model no longer sees it. */
+  article.evicted { opacity: .45; }
+  article.evicted .text { text-decoration: line-through solid color-mix(in srgb, currentColor 35%, transparent); }
+  .gone { color: var(--warn); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   .meta { margin-top: .3rem; font-size: 12px; color: var(--dim); display: flex; gap: .6rem; }
   .meta .warn { color: var(--warn); }
@@ -452,6 +484,7 @@
   .bar span { min-width: 2px; }
   .bar span.system, .legend span.system { background: var(--b-system); }
   .bar span.tools, .legend span.tools { background: var(--b-tools); }
+  .bar span.map, .legend span.map { background: var(--b-map); }
   .bar span.history, .legend span.history { background: var(--b-history); }
   .bar span.summaries, .legend span.summaries { background: var(--b-summaries); }
   .bar span.code, .legend span.code { background: var(--b-code); }

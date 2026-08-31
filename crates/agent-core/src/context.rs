@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
+use crate::protocol::TurnId;
 use crate::task::{Plan, Task, TaskId, TaskState};
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
@@ -125,6 +126,15 @@ pub struct Fragment {
 /// drops a turn, compaction replaces one, relevance scores one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Turn {
+    /// The turn number the session handed out, so that a turn dropped from the
+    /// window can be *named* rather than counted.
+    ///
+    /// Assigned by the caller rather than by the position in `turns`, because
+    /// the two come apart: a turn that produced nothing is never pushed, and
+    /// from then on the nth turn of a session is not the nth element here. An
+    /// index would be wrong silently, in the one file whose whole purpose is
+    /// to be trusted months later.
+    pub id: TurnId,
     pub prompt: String,
     pub answer: String,
     /// What the agent did before answering. Part of the turn, not of the
@@ -204,8 +214,37 @@ pub struct Selection {
     pub buckets: Vec<Bucket>,
     pub limit: Option<u32>,
     pub counter: Counter,
-    /// Whole turns dropped to make room, oldest first.
+    /// How many whole turns the window has lost since the session started —
+    /// the floor, as a number.
     pub evicted: usize,
+    /// What *this* selection dropped, when it dropped anything. `None` is a
+    /// selection that cut nothing, which is every one in a session that never
+    /// fills its window.
+    pub eviction: Option<Evicted>,
+}
+
+/// What one selection dropped from the window — and it stays dropped: the
+/// floor only ever moves forward.
+///
+/// Carried out of [`Context::select`] rather than logged inside it, because the
+/// context manager does not know which turn is about to be sent. The caller
+/// does, and it is the one that puts this on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Evicted {
+    /// The turns that left, oldest first. Named rather than counted: a reader
+    /// months later cannot recover *which* without re-implementing the floor,
+    /// and a transcript cannot mark them.
+    pub turns: Vec<TurnId>,
+    /// What they were worth in the prompt they are no longer in.
+    pub tokens: u32,
+    /// Which counter produced `tokens`. Every count in this system says who
+    /// produced it, because two runs measured differently are not comparable
+    /// and nothing else would say so.
+    pub counter: Counter,
+    /// Which cut this was. The whole difference between the policies is how
+    /// deep they go, so a tombstone that did not name the policy would leave
+    /// the reader doing the subtraction it exists to spare them.
+    pub policy: Eviction,
 }
 
 /// One unit of rendered history: a live turn, or a closed task folded to its
@@ -241,6 +280,13 @@ pub struct Context {
     /// and counted as its own bucket, because "the system block grew" is not an
     /// answer to why the window is full.
     tools: String,
+    /// The repository outline, rendered once. Last of the cached prefix, which
+    /// is where blocks are ordered by how often they are *rewritten*: the
+    /// system block is a constant, the tools change when the tool set does, and
+    /// the map changes when the repository does. Empty unless asked for — a map
+    /// that arrived switched on would change every number in every recording
+    /// made so far. See `crate::repo_map`.
+    map: String,
     turns: Vec<Turn>,
     /// The oldest turn still in the window. It only ever moves forward.
     ///
@@ -264,6 +310,7 @@ impl Context {
         Self {
             system: system.into(),
             tools: String::new(),
+            map: String::new(),
             turns: Vec::new(),
             floor: 0,
             tasks: Vec::new(),
@@ -281,13 +328,27 @@ impl Context {
         &self.tools
     }
 
+    /// Adds the repository outline to the prefix, under the tool definitions.
+    pub fn with_map(mut self, map: impl Into<String>) -> Self {
+        self.map = map.into();
+        self
+    }
+
+    pub fn map(&self) -> &str {
+        &self.map
+    }
+
     /// The whole cached prefix, as one message. Assembled here and nowhere else
     /// so that two call sites cannot join it differently.
     fn system_message(&self) -> String {
-        match self.tools.is_empty() {
-            true => self.system.clone(),
-            false => format!("{}\n\n{}", self.system, self.tools),
+        let mut text = self.system.clone();
+        for block in [&self.tools, &self.map] {
+            if !block.is_empty() {
+                text.push_str("\n\n");
+                text.push_str(block);
+            }
         }
+        text
     }
 
     pub fn turns(&self) -> &[Turn] {
@@ -298,20 +359,23 @@ impl Context {
         &self.system
     }
 
-    /// Closes a turn and counts it, once.
+    /// Closes a turn and counts it, once. `id` is the number the session gave
+    /// the turn — see [`Turn::id`].
     pub fn push_turn(
         &mut self,
+        id: TurnId,
         prompt: impl Into<String>,
         answer: impl Into<String>,
         code_context: Vec<Fragment>,
         counter: &dyn TokenCounter,
     ) {
-        self.push_turn_with_steps(prompt, answer, code_context, Vec::new(), counter);
+        self.push_turn_with_steps(id, prompt, answer, code_context, Vec::new(), counter);
     }
 
     /// The same, for a turn in which the agent used tools.
     pub fn push_turn_with_steps(
         &mut self,
+        id: TurnId,
         prompt: impl Into<String>,
         answer: impl Into<String>,
         code_context: Vec<Fragment>,
@@ -324,6 +388,7 @@ impl Context {
             + steps_tokens(&steps, counter)
             + counter.count(&answer);
         self.turns.push(Turn {
+            id,
             prompt,
             answer,
             steps,
@@ -530,6 +595,7 @@ impl Context {
     ) -> Selection {
         let system_tokens = counter.count(&self.system);
         let tools_tokens = counter.count(&self.tools);
+        let map_tokens = counter.count(&self.map);
         // Counted as the two buckets they will be plotted as. Tokenization is
         // not additive across a boundary, so this can differ by a token or two
         // from counting the concatenation; that is the same order as the
@@ -537,16 +603,29 @@ impl Context {
         let code_tokens = counter.count(&fragments_text(code_context));
         let prompt_tokens = counter.count(prompt);
 
+        let mut eviction = None;
         if let Some(limit) = budget.limit {
             // The current turn and the reserve are not negotiable: nothing here
             // may trim the prompt the user just typed. If they alone exceed the
             // window, history is empty and the turn still goes — being over the
             // limit is the backend's error to report, not ours to hide by
             // cutting the question in half.
-            let fixed = system_tokens + tools_tokens + code_tokens + prompt_tokens + budget.reserve;
+            let fixed = system_tokens
+                + tools_tokens
+                + map_tokens
+                + code_tokens
+                + prompt_tokens
+                + budget.reserve;
             let available = limit.saturating_sub(fixed);
 
             if self.fits_from(available, counter) > self.floor {
+                // Taken before the floor moves: these are the items the cut
+                // chooses from, and the ones it drops are unreachable
+                // afterwards — which is the whole reason this has to be
+                // reported from in here rather than reconstructed outside.
+                let before = self.floor;
+                let items = self.items();
+
                 // It no longer fits. How deep the cut goes is the whole
                 // difference between the two policies.
                 let target = match budget.eviction {
@@ -556,6 +635,22 @@ impl Context {
                     }
                 };
                 self.floor = self.fits_from(target, counter);
+
+                // The floor only ever lands on an item boundary, so summing the
+                // items below it is exact rather than a share of one.
+                eviction = (self.floor > before).then(|| Evicted {
+                    turns: self.turns[before..self.floor]
+                        .iter()
+                        .map(|turn| turn.id)
+                        .collect(),
+                    tokens: items
+                        .iter()
+                        .filter(|item| item.first() < self.floor)
+                        .map(|item| self.item_tokens(item, counter))
+                        .sum(),
+                    counter: counter.id(),
+                    policy: budget.eviction,
+                });
             }
         }
 
@@ -606,6 +701,9 @@ impl Context {
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
             Bucket::new("tools", tools_tokens),
+            // Beside the tools rather than inside them: both are prefix, and
+            // "the prefix grew" is not an answer to why the window is full.
+            Bucket::new("map", map_tokens),
             // Beside `history` rather than inside it: the fold is the one thing
             // the panel exists to watch, and a single bar cannot show a block
             // being replaced by a line.
@@ -625,6 +723,7 @@ impl Context {
             limit: budget.limit,
             counter: counter.id(),
             evicted: self.floor,
+            eviction,
         }
     }
 
@@ -718,6 +817,7 @@ mod tests {
         let mut context = Context::new("system prompt here");
         for n in 0..turns {
             context.push_turn(
+                n as TurnId + 1,
                 format!("question number {n} padded out"),
                 format!("answer number {n} padded out"),
                 vec![],
@@ -855,17 +955,17 @@ mod tests {
             &counter,
         );
 
-        // System, the tool definitions, the fragments, the prompt. The ten
-        // stored turns are not re-counted, which is the whole point of storing
-        // their counts.
-        assert_eq!(counter.calls.load(Ordering::Relaxed) - after_building, 4);
+        // System, the tool definitions, the map, the fragments, the prompt.
+        // The ten stored turns are not re-counted, which is the whole point of
+        // storing their counts.
+        assert_eq!(counter.calls.load(Ordering::Relaxed) - after_building, 5);
     }
 
     #[test]
     fn a_turn_counted_by_another_counter_is_recounted_rather_than_summed() {
         let words = WordCounter::default();
         let mut context = Context::new("system prompt here");
-        context.push_turn("one two three", "four five", vec![], &ApproximateCounter);
+        context.push_turn(1, "one two three", "four five", vec![], &ApproximateCounter);
 
         let selection = context.select(
             "now this",
@@ -902,6 +1002,68 @@ mod tests {
     }
 
     #[test]
+    fn the_map_is_prefix_and_stays_byte_identical_as_the_history_grows() {
+        // The placement argument is worthless if the map wobbles: it is above
+        // the history precisely so that a prompt cache can keep it.
+        let counter = WordCounter::default();
+        let mut context = Context::new("system prompt here")
+            .with_tools("# Tools\nread_file")
+            .with_map("# Repository map\nsrc/lib.rs\n     1  pub fn main");
+        let budget = Budget::new(8192, 512, Eviction::Turn);
+
+        let first = context.select("one", &[], budget, &counter);
+        context.push_turn(1, "one", "an answer", vec![], &counter);
+        let second = context.select("two", &[], budget, &counter);
+
+        assert_eq!(
+            first.messages[0].content, second.messages[0].content,
+            "the whole prefix is one message and it does not move",
+        );
+        assert!(
+            first.messages[0].content.ends_with("     1  pub fn main"),
+            "system, then tools, then the map — most stable first: {}",
+            first.messages[0].content,
+        );
+        let map = |selection: &Selection| {
+            selection
+                .buckets
+                .iter()
+                .find(|bucket| bucket.name == "map")
+                .expect("the map bucket")
+                .tokens
+        };
+        assert!(map(&first) > 0);
+        assert_eq!(
+            map(&first),
+            map(&second),
+            "and it costs the same every turn"
+        );
+    }
+
+    #[test]
+    fn a_map_is_counted_against_the_window_rather_than_added_beside_it() {
+        // It is in the prompt, so it is in the budget: history has to give way
+        // for it like anything else. A map that was free would be a map that
+        // silently ate the answer.
+        let counter = WordCounter::default();
+        let mut bare = context_of_equal_turns(6, &counter);
+        let mut mapped = context_of_equal_turns(6, &counter);
+        mapped = mapped.with_map("aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp");
+        let system = counter.count(bare.system());
+        let budget = Budget::new(system + 1 + 8 * 5, 0, Eviction::Turn);
+
+        let without = bare.select("q", &[], budget, &counter);
+        let with = mapped.select("q", &[], budget, &counter);
+
+        assert!(
+            with.evicted > without.evicted,
+            "the map cost history: {} evicted with it, {} without",
+            with.evicted,
+            without.evicted,
+        );
+    }
+
+    #[test]
     fn buckets_are_in_prompt_order_with_the_reserve_last() {
         let counter = WordCounter::default();
         let mut context = context_with(1, &counter);
@@ -919,6 +1081,7 @@ mod tests {
             [
                 "system",
                 "tools",
+                "map",
                 "summaries",
                 "history",
                 "code",
@@ -935,6 +1098,7 @@ mod tests {
         context.approve_task(task);
         for n in 0..3 {
             context.push_turn(
+                n as TurnId + 1,
                 format!("question number {n} padded out"),
                 format!("answer number {n} padded out"),
                 vec![],
@@ -944,6 +1108,7 @@ mod tests {
         context.close_task(task, counter);
         for n in 0..live {
             context.push_turn(
+                n as TurnId + 4,
                 format!("later question {n} padded out"),
                 format!("later answer {n} padded out"),
                 vec![],
@@ -964,6 +1129,7 @@ mod tests {
         let task = context.propose_task("work out what the policy grants", Plan::default());
         context.approve_task(task);
         context.push_turn(
+            1,
             "which programs does this policy allow?",
             "cargo, rustc, git, rg, ls",
             vec![Fragment {
@@ -1073,11 +1239,11 @@ mod tests {
     fn turns_are_attributed_to_the_task_that_was_open_when_they_were_pushed() {
         let counter = WordCounter::default();
         let mut context = Context::new("system");
-        context.push_turn("before any task", "a", vec![], &counter);
+        context.push_turn(1, "before any task", "a", vec![], &counter);
         let task = context.propose_task("do the thing", Plan::default());
-        context.push_turn("proposed, not approved", "b", vec![], &counter);
+        context.push_turn(2, "proposed, not approved", "b", vec![], &counter);
         context.approve_task(task);
-        context.push_turn("inside the task", "c", vec![], &counter);
+        context.push_turn(3, "inside the task", "c", vec![], &counter);
 
         let attributed: Vec<Option<TaskId>> =
             context.turns().iter().map(|turn| turn.task).collect();
@@ -1107,6 +1273,7 @@ mod tests {
         for n in 0..turns {
             // Four words each way: every turn costs exactly eight.
             context.push_turn(
+                n as TurnId + 1,
                 format!("q {n} aa bb"),
                 format!("a {n} cc dd"),
                 vec![],
@@ -1114,6 +1281,137 @@ mod tests {
             );
         }
         context
+    }
+
+    #[test]
+    fn a_selection_that_cuts_says_which_turns_it_dropped() {
+        // Eight tokens a turn, so the arithmetic is checkable by eye: room for
+        // three turns and a fourth one asked.
+        let counter = WordCounter::default();
+        let mut context = context_of_equal_turns(4, &counter);
+        let system = counter.count(context.system());
+
+        let selection = context.select(
+            "q",
+            &[],
+            Budget::new(system + 1 + 8 * 3, 0, Eviction::Turn),
+            &counter,
+        );
+
+        let evicted = selection.eviction.expect("the window could not hold four");
+        assert_eq!(
+            evicted.turns,
+            vec![1],
+            "the per-turn policy drops the minimum, and names it",
+        );
+        assert_eq!(evicted.tokens, 8, "what the dropped turn was worth");
+        assert_eq!(evicted.counter, counter.id(), "a count says who counted it");
+        assert_eq!(evicted.policy, Eviction::Turn);
+    }
+
+    #[test]
+    fn a_selection_that_fits_drops_nothing_and_says_so() {
+        let counter = WordCounter::default();
+        let mut context = context_of_equal_turns(3, &counter);
+        let system = counter.count(context.system());
+
+        let selection = context.select(
+            "q",
+            &[],
+            Budget::new(system + 1 + 8 * 4, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert!(
+            selection.eviction.is_none(),
+            "a tombstone for a cut that did not happen is a lie a panel would plot",
+        );
+    }
+
+    #[test]
+    fn the_cut_names_session_turns_rather_than_positions_in_the_history() {
+        // A turn that produced nothing is never pushed — both call sites skip
+        // it — so the third turn of a session can be the second one here. An
+        // index would name the wrong turn, quietly, in the one file whose
+        // purpose is to be trusted months later.
+        let counter = WordCounter::default();
+        let mut context = Context::new("sys");
+        context.push_turn(1, "q 1 aa bb", "a 1 cc dd", vec![], &counter);
+        // 2 is missing: it was cancelled before it produced anything.
+        context.push_turn(3, "q 3 aa bb", "a 3 cc dd", vec![], &counter);
+        context.push_turn(4, "q 4 aa bb", "a 4 cc dd", vec![], &counter);
+        let system = counter.count(context.system());
+
+        let selection = context.select(
+            "q",
+            &[],
+            Budget::new(system + 1 + 8 * 2, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert_eq!(
+            selection.eviction.expect("a cut").turns,
+            vec![1],
+            "the number the session handed out, not the index",
+        );
+    }
+
+    #[test]
+    fn the_block_policy_reports_the_deeper_cut_it_made() {
+        let counter = WordCounter::default();
+        let mut context = context_of_equal_turns(6, &counter);
+        let system = counter.count(context.system());
+        let policy = Eviction::Block { low_water: 0.5 };
+
+        let selection = context.select(
+            "q",
+            &[],
+            Budget::new(system + 1 + 8 * 5, 0, policy),
+            &counter,
+        );
+
+        let evicted = selection.eviction.expect("the window could not hold six");
+        assert_eq!(
+            evicted.policy, policy,
+            "which cut this was, not just that one happened"
+        );
+        assert!(
+            evicted.turns.len() > 1,
+            "block eviction cuts past what it needs: {:?}",
+            evicted.turns,
+        );
+        assert_eq!(
+            evicted.tokens as usize,
+            evicted.turns.len() * 8,
+            "the tokens are the turns that left, not a share of them",
+        );
+    }
+
+    #[test]
+    fn a_folded_task_leaving_the_window_names_the_turns_it_covered() {
+        // The two ways history stops being sent, composed: the task is already
+        // folded to its summary when the summary itself falls out.
+        let counter = WordCounter::default();
+        let (mut context, _) = context_with_closed_task(3, &counter);
+
+        let mut cut = None;
+        // Tightened one token at a time, so the first cut is caught wherever
+        // the summary happens to land rather than at a limit picked by hand.
+        for limit in (1..=200).rev() {
+            let selection =
+                context.select("q", &[], Budget::new(limit, 0, Eviction::Turn), &counter);
+            if let Some(evicted) = selection.eviction {
+                cut = Some(evicted);
+                break;
+            }
+        }
+
+        let evicted = cut.expect("some limit is too small for the whole history");
+        assert_eq!(
+            evicted.turns,
+            vec![1, 2, 3],
+            "a folded task is kept or dropped whole, and its turns are named",
+        );
     }
 
     #[test]
@@ -1159,8 +1457,8 @@ mod tests {
 
         // A closed turn is appended to each, and only the per-turn policy has
         // to move its front again to make room.
-        per_turn.push_turn("q 8 aa bb", "a 8 cc dd", vec![], &counter);
-        block.push_turn("q 8 aa bb", "a 8 cc dd", vec![], &counter);
+        per_turn.push_turn(9, "q 8 aa bb", "a 8 cc dd", vec![], &counter);
+        block.push_turn(9, "q 8 aa bb", "a 8 cc dd", vec![], &counter);
 
         let next_per_turn = per_turn.select("q", &[], turn, &counter).evicted;
         let next_block = block.select("q", &[], blocks, &counter).evicted;
@@ -1251,6 +1549,7 @@ mod tool_turn_tests {
     fn a_turn_with_tool_calls_renders_as_alternating_messages() {
         let mut context = Context::new("sys");
         context.push_turn_with_steps(
+            1,
             "read the file",
             "It defines main.",
             vec![],
@@ -1293,6 +1592,7 @@ mod tool_turn_tests {
         let mut context = Context::new("sys");
         for n in 0..4 {
             context.push_turn_with_steps(
+                n as TurnId + 1,
                 format!("question {n} padded out a little"),
                 format!("answer {n} padded out a little"),
                 vec![],
@@ -1318,9 +1618,10 @@ mod tool_turn_tests {
     fn the_steps_are_counted_into_the_turn_they_belong_to() {
         let counter = ApproximateCounter;
         let mut bare = Context::new("sys");
-        bare.push_turn("q", "a", vec![], &counter);
+        bare.push_turn(1, "q", "a", vec![], &counter);
         let mut with_steps = Context::new("sys");
         with_steps.push_turn_with_steps(
+            1,
             "q",
             "a",
             vec![],

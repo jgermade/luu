@@ -12,8 +12,9 @@ use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
+use agent_core::repo_map::RepoMap;
 use agent_core::sandbox::Sandbox;
-use agent_core::task::{Plan, Proposal, TaskId, parse_plan};
+use agent_core::task::{Plan, PlanSource, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
@@ -120,6 +121,9 @@ pub struct ServeOptions {
     pub agency: Agency,
     pub temperature: Option<f32>,
     pub seed: Option<u32>,
+    /// Tokens of repository outline for the prefix. 0 is off — see
+    /// `agent_core::repo_map`.
+    pub map_tokens: u32,
 }
 
 /// A server that has its port and has not started answering yet.
@@ -163,8 +167,22 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         agency,
         temperature,
         seed,
+        map_tokens,
     } = options;
     let started_at = now_ms();
+
+    // Built once, before the socket is up: the map is the last block of the
+    // cached prefix, and a block rebuilt mid-session is not a prefix. What that
+    // costs is named in `RECORD/2026-08-31.the-repo-map.md`.
+    let map = RepoMap::build(agency.sandbox.as_ref(), map_tokens, counter.as_ref());
+    if !map.is_empty() {
+        eprintln!(
+            "repository map — {} file(s), {} left out, {} of {map_tokens} tokens",
+            map.files.len(),
+            map.left_out,
+            map.tokens,
+        );
+    }
 
     let recorder = match record {
         Some(path) => Some(
@@ -190,7 +208,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             next_turn: 1,
             current: None,
             cancel: None,
-            context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
+            context: AgentContext::new(SYSTEM)
+                .with_tools(agency.definitions())
+                .with_map(map.render()),
             prefix: PrefixTracker::default(),
             pending: None,
             narrowed: None,
@@ -471,10 +491,21 @@ async fn propose_task(app: Arc<App>, prompt: String) {
         // A small model answering in prose is the ordinary case, and it must
         // not cost the gate. Then the proposal is the ask itself, declaring
         // nothing, and the panel says the model did not declare a plan.
-        let proposal = parse_plan(&outcome.text).unwrap_or_else(|| Proposal {
-            objective: prompt.clone(),
-            plan: Plan::default(),
-        });
+        //
+        // Which of the two happened travels with the proposal. It is the gate's
+        // headline number — how often a 7B plans at all — and the panel used to
+        // infer it from an empty plan, which cannot tell a model that answered
+        // in prose from one that declared an empty list.
+        let (proposal, source) = match parse_plan(&outcome.text) {
+            Some(proposal) => (proposal, PlanSource::Model),
+            None => (
+                Proposal {
+                    objective: prompt.clone(),
+                    plan: Plan::default(),
+                },
+                PlanSource::Prose,
+            ),
+        };
 
         let task = {
             let mut session = app.session.lock().await;
@@ -488,6 +519,7 @@ async fn propose_task(app: Arc<App>, prompt: String) {
             task,
             objective: proposal.objective,
             plan: proposal.plan,
+            source: Some(source),
         }))
         .await;
     });
@@ -793,6 +825,19 @@ async fn begin_turn(
         task,
     }))
     .await;
+    // Before the prompt it explains: this is what the turn no longer carries,
+    // and a client reading in order should learn that the history was cut
+    // before it is handed the prompt that was cut from.
+    if let Some(evicted) = selection.eviction.clone() {
+        app.publish(Event::Protocol(ServerMessage::Evicted {
+            turn,
+            turns: evicted.turns,
+            tokens: evicted.tokens,
+            counter: evicted.counter,
+            policy: evicted.policy,
+        }))
+        .await;
+    }
     app.publish(Event::Trace(TraceMessage::Prompt {
         turn,
         text: prompt_sent,
@@ -906,6 +951,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         // and several chat templates render it as a prompt to continue.
         if !outcome.text.is_empty() || !outcome.steps.is_empty() {
             session.context.push_turn_with_steps(
+                turn,
                 prompt,
                 outcome.text,
                 vec![],

@@ -78,3 +78,51 @@ test("every recorded session in the picker can be selected", async ({ page }) =>
 
   expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
 })
+
+test("a replayed eviction marks the turns that left the window", async ({ page }) => {
+  // A recording replays at the pace it was recorded, and the first cut lands
+  // halfway through this one — 11 turns in, because that is when the window
+  // this fixture was recorded against actually filled up. Waiting for it is
+  // the cost of a fixture that is a real run rather than a hand-made one.
+  test.setTimeout(90_000)
+  const errors = watch(page)
+
+  await page.goto("/index.html")
+  await expect(page.locator("select.fixtures")).toBeVisible()
+  // The block policy cuts deep and rarely, so its first tombstone names six
+  // turns at once — the policy's whole argument, in one message.
+  await page.locator("select.fixtures").selectOption("./fixtures/eviction-block.jsonl")
+
+  // The panel says which cut it was, which is the question a shrinking history
+  // bucket could never answer on its own.
+  await expect(page.locator(".inspector")).toContainText("out of the window, for good", {
+    timeout: 60_000,
+  })
+  await expect(page.locator(".inspector")).toContainText("block")
+
+  // And the turns are kept and marked, never removed: the transcript's whole
+  // job is the difference between what happened and what the model still sees.
+  await expect(page.locator(".transcript article.evicted").first()).toBeVisible()
+  await expect(page.locator(".transcript article.evicted .gone").first())
+    .toContainText("out of the window")
+
+  expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
+})
+
+test("the repository map is a bucket of its own in the budget", async ({ page }) => {
+  const errors = watch(page)
+
+  await page.goto("/index.html")
+  await expect(page.locator("select.fixtures")).toBeVisible()
+  await page.locator("select.fixtures").selectOption("./fixtures/repo-map.jsonl")
+
+  // The map is prefix, so it is in the budget like anything else in the
+  // prompt — a block that were free would be a block that silently ate the
+  // answer. The panel plots it beside the tools rather than inside them.
+  const map = page.locator(".inspector .legend li").filter({ hasText: "map" })
+  await expect(map).toHaveCount(1)
+  const tokens = Number((await map.innerText()).replace(/[^0-9]/g, ""))
+  expect(tokens).toBeGreaterThan(0)
+
+  expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
+})
