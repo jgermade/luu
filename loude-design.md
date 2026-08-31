@@ -77,13 +77,42 @@ the panel is a claim rather than a measurement.
   closes it. The written plan *is* the approval.
 
 Either way approving runs a real check: every file the plan names must be
-reachable in the sandbox and every command allowed by it. What it does not yet do
-is *narrow* — the plan is checked against the policy file and does not replace it.
-See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md).
+reachable in the sandbox and every command allowed by it. **And the approved plan
+then becomes the sandbox for its task**: every turn inside it is checked against
+what the plan named, not against everything `luu.toml` grants, so the task
+boundary is the scope permission is granted at rather than a sentence saying it
+is. The policy file is the outer bound and the plan the inner one — a plan
+cannot grant what the file does not, and a plan that names nothing grants
+nothing. A denial says which of the two refused.
+
+Narrowing cuts the level as well as the extent. A plan has two path lists:
+`files` is what the task may **read** and `writes` what it may also **change**,
+so a file declared only as read is read-only inside the task even where the
+policy grants both — and a plan that says it will change a file under a
+read-only root is refused *at the gate* rather than four turns in, which is the
+one case the check exists for and used to miss. A write to a path that does not
+exist yet grants the directory that will hold it, because creating a file is a
+write to its directory and at the kernel rung a grant is a directory anyway.
+Approving carries an amendment — the reads, writes and commands the person adds
+at the gate, checked against the policy file exactly as the model's plan was —
+which is what stops an under-specified plan from being a dead run.
+See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md) and
+[`RECORD/2026-08-30.narrowing.md`](RECORD/2026-08-30.narrowing.md).
 
 A refusal is kept, not erased: `rejected` is a state a task stays in, with the
 plan that was turned down. Nothing in a session is deleted — a closed task is
-folded, a reopened one unfolded, a refused one recorded.
+folded, a reopened one unfolded, a refused one recorded. The lifecycle is a
+state machine and the messages that drive it come off a socket, so every
+transition is guarded: only a proposal is approved or rejected, only an open
+task closes, only a closed one reopens. A refused plan that could be *reopened*
+would be a plan a person turned down becoming the live task, with the gate
+behind it.
+
+**And the server says no out loud.** A `refused` message carries the request it
+answers, a reason (`busy`, `pending`, `task`, `not_granted`) and a sentence for
+a person. Before it, a client could not tell a refusal from a message that never
+arrived, and the debug UI had to guess by disabling its own composer — which is
+not a permission model and not an interface either.
 
 **Who declares a task done** is a ladder, not a single answer: deterministic checks
 (exit codes, tests) first, then a judge, then the user's final question, which is the
@@ -537,11 +566,12 @@ lives in memory for the life of the process.
 
 ## Open questions / next steps
 
-- Make the approved plan *be* the `SandboxPolicy` for its task, with the file as
-  its floor. It is currently checked against the file and does not narrow it.
-  The gate now exists, so the person approving can widen a plan that forgot a
-  file rather than watching the run die four turns in — which was the
-  precondition.
+- Narrowing `network` and `enforcement` with the rest of the plan, which needs a
+  plan that declares them. Today a task inherits both from the policy file.
+- Whether `writes` should also bound `run_command`: a child can write whatever
+  the task's roots allow, and a plan's `commands` list says nothing about paths.
+  Narrower than it was — the child is held to the *task's* roots now — but a
+  command is still the widest thing a plan can ask for.
 - Who else may close a task: exit codes and tests first, then the judge in
   shadow mode. The user is the only authority that closes one today.
 - Design the concrete GBNF grammar to force valid tool calls with the target model

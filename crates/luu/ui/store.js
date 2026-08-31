@@ -36,6 +36,14 @@ export const state = $reactive({
   // gate: nothing runs behind it until someone answers.
   tasks: [],              // [{ id, objective, plan, state, summary }]
   error: null,
+  // The last thing the server declined to do, and why. Cleared when a turn
+  // starts, because by then the answer is on screen.
+  refused: null,          // { request, reason, detail }
+  // Whether this session is a recording rather than a server. The status word
+  // is not the same question: it says "running" while a recorded turn plays,
+  // and a composer that reads the status is enabled over a recording nobody can
+  // send into.
+  replay: false,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
 })
@@ -131,6 +139,8 @@ function onProtocol(message) {
       state.turn = message.turn
       state.status = "running"
       state.error = null
+      // Whatever was refused, the answer to it is on screen now.
+      state.refused = null
       // The task it belongs to travels with the turn, so the transcript can
       // group without replaying the lifecycle to work out what was open.
       state.messages.push({ id: nextId++, role: "user", text: message.prompt, task: message.task, reason: null, usage: null })
@@ -153,7 +163,19 @@ function onProtocol(message) {
       break
 
     case "task_approved":
-      patchTask(message.task, { state: "approved" })
+      // The plan as approved, which is what the task's sandbox is built from —
+      // the person at the gate may have added what the model forgot. An older
+      // recording carries none, and then the proposal is the best answer there
+      // is.
+      patchTask(message.task, message.plan
+        ? { state: "approved", plan: message.plan }
+        : { state: "approved" })
+      break
+
+    // The server declining to do something, which used to be an early return
+    // and therefore indistinguishable from a message that never arrived.
+    case "refused":
+      state.refused = { request: message.request, reason: message.reason, detail: message.detail }
       break
 
     case "task_rejected":
@@ -256,6 +278,8 @@ function onTrace(message) {
 }
 
 let everConnected = false
+// Set once the page has given up on a server and taken the recordings instead.
+let fellBack = false
 
 function open(path, onMessage, assign) {
   const ws = new WebSocket(url(path))
@@ -272,11 +296,26 @@ function open(path, onMessage, assign) {
     assign(null)
     state.status = "closed"
 
+    // A fallback already took the page into replay: there is no server to
+    // reconnect to and no second replay to start.
+    if (fellBack) return
+
     // No agent was ever there: this is a static deploy, not a server that
     // restarted. Offer the recorded sessions instead of retrying forever.
-    if (!everConnected && await loadFixtures()) {
-      socket = traceSocket = null
-      return replay(state.fixtures[0].file)
+    //
+    // Both sockets close at once on a static host, so the flag is set *before*
+    // the await and not after it. Without that, each of them started its own
+    // replay of the same file, and the loser left a turn it had already pushed
+    // at the top of the transcript — a user message with an assistant reply
+    // that never fills, on every visit to the deployed page.
+    if (!everConnected) {
+      fellBack = true
+      if (await loadFixtures()) {
+        socket = traceSocket = null
+        return replay(state.fixtures[0].file)
+      }
+      // Nothing to fall back to after all: a live server that went away.
+      fellBack = false
     }
 
     // The server restarting is the ordinary case during development.
@@ -292,8 +331,15 @@ function open(path, onMessage, assign) {
 /// agent behind it, and a recorded session is a truer fixture than a hand-made
 /// one, because it is a real run of the real protocol.
 async function replay(file) {
+  // Claimed before the reset, so a replay this one supersedes stops writing
+  // into the state we are about to fill: it re-reads this after every await.
+  const token = ++replayToken
   reset()
   isReplay = true
+  // On the state, not only in this module: the composer asks "is this a
+  // recording", and the status word cannot answer it — it says "running" while
+  // a recorded turn plays.
+  state.replay = true
   state.status = "replay"
   state.fixture = file
 
@@ -304,7 +350,6 @@ async function replay(file) {
   }
 
   const lines = (await response.text()).split("\n").filter(Boolean).map(JSON.parse)
-  const token = ++replayToken
 
   let previous = 0
   for (const line of lines) {
@@ -346,6 +391,7 @@ function reset() {
   state.prompt = ""
   state.prefix = null
   state.error = null
+  state.refused = null
   state.turn = null
   pending = ""
 }
@@ -415,7 +461,13 @@ function act(type, task) {
   socket.send(JSON.stringify({ type, task }))
 }
 
-export const approveTask = task => act("approve_task", task)
+/// Approving carries what the person added to the plan, which is the half that
+/// makes narrowing survivable: a task may touch what it was approved for, so a
+/// plan that forgot a file is widened here rather than rejected and retyped.
+export function approveTask(task, files = [], writes = [], commands = []) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type: "approve_task", task, files, writes, commands }))
+}
 export const rejectTask = task => act("reject_task", task)
 export const closeTask = task => act("close_task", task)
 export const reopenTask = task => act("reopen_task", task)

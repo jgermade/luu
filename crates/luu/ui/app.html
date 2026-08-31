@@ -9,6 +9,22 @@
   let draft = ""
   // Which closed tasks are open in the transcript. Reassigned, never mutated.
   let expanded = []
+  // What the person is adding to the proposed plan before approving it. The
+  // task's sandbox is built from the plan, so this is the only moment a file
+  // the model forgot can still get in. Reassigned, never mutated.
+  let adding = { files: [], writes: [], commands: [] }
+  let addition = ""
+  const add = kind => {
+    const item = addition.trim()
+    if (!item || adding[kind].includes(item)) return
+    adding = { ...adding, [kind]: [...adding[kind], item] }
+    addition = ""
+  }
+  const approve = id => {
+    approveTask(id, adding.files, adding.writes, adding.commands)
+    adding = { files: [], writes: [], commands: [] }
+    addition = ""
+  }
   const toggle = id => {
     expanded = expanded.includes(id) ? expanded.filter(open => open !== id) : [...expanded, id]
   }
@@ -19,7 +35,11 @@
   }
 
   $: running = state.status === "running"
-  $: replaying = state.status === "replay"
+  // Whether this is a recording, which is not the same question as what the
+  // status word says: it reads "running" while a recorded turn plays, and a
+  // composer that asked the status was enabled over a recording nobody can
+  // send into.
+  $: replaying = state.replay
   // The gate. While this is set the server is holding a prompt, unrun.
   $: proposed = state.tasks.find(task => task.state === "proposed") || null
   $: live = state.tasks.find(task => task.state === "approved") || null
@@ -109,6 +129,13 @@
 
     <div :if="state.error" class="error">{{ state.error }}</div>
 
+    <!-- The server declining to do something. Not an error: the session is in
+         a state where the ask does not apply, and before this existed the ask
+         simply vanished. -->
+    <div :if="state.refused" class="refused">
+      <b>{{ state.refused?.request }}</b> refused — {{ state.refused?.detail }}
+    </div>
+
     <!-- Nothing has run under this task and nothing will until it is answered:
          the prompt that caused it is held on the server, unrun. -->
     <div :if="proposed" class="gate">
@@ -117,14 +144,31 @@
       <ul :if="proposed?.plan.steps.length" class="plan">
         <li :each="step in proposed?.plan.steps || []" :key="step">{{ step }}</li>
       </ul>
-      <p :if="proposed?.plan.files.length" class="dim">files: {{ proposed?.plan.files.join(" · ") }}</p>
+      <p :if="proposed?.plan.files.length" class="dim">reads: {{ proposed?.plan.files.join(" · ") }}</p>
+      <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
       <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
       <p :if="!declares" class="dim warn">
         The model declared nothing. Approving runs with everything the policy
         file already grants — the plan does not narrow it yet.
       </p>
+      <!-- The plan is the sandbox for this task, so what it forgot is denied
+           until someone adds it. Bounded by the policy file: an entry it does
+           not grant comes back missing from the approved plan. -->
+      <div class="amend" :if="!replaying">
+        <input
+          :value="addition"
+          @input="addition = $event.target.value"
+          :attrs="{ placeholder: 'a path or command the plan forgot' }">
+        <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add read</button>
+        <button type="button" class="link" :disabled="!addition.trim()" @click="add('writes')">add write</button>
+        <button type="button" class="link" :disabled="!addition.trim()" @click="add('commands')">add command</button>
+      </div>
+      <p :if="adding.files.length" class="dim">adding reads: {{ adding.files.join(" · ") }}</p>
+      <p :if="adding.writes.length" class="dim">adding writes: {{ adding.writes.join(" · ") }}</p>
+      <p :if="adding.commands.length" class="dim">adding commands: {{ adding.commands.join(" · ") }}</p>
+
       <div class="gate-buttons">
-        <button type="button" :disabled="replaying" @click="approveTask(proposed?.id)">Approve</button>
+        <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>
         <button type="button" class="cancel" :disabled="replaying" @click="rejectTask(proposed?.id)">Reject</button>
       </div>
     </div>
@@ -369,6 +413,19 @@
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
   .gate p { margin: .2rem 0; }
   .gate-buttons { display: flex; gap: .5rem; margin-top: .6rem; }
+  .refused {
+    margin: 0 1rem .4rem; padding: .4rem .7rem;
+    border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;
+    background: #1a1712; color: var(--dim); font-size: 13px;
+  }
+  .refused b { color: var(--warn); font-weight: 600; }
+
+  .amend { display: flex; align-items: center; gap: .4rem; margin: .5rem 0 .2rem; }
+  .amend input {
+    flex: 1; min-width: 0; padding: .3rem .5rem;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); color: var(--fg); font: inherit;
+  }
 
   .live-task {
     display: flex; align-items: center; gap: .6rem;

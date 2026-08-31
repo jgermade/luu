@@ -37,10 +37,13 @@ block and nothing after it:
 
 ```plan
 {\"objective\": \"what this piece of work is\", \"steps\": [\"what you will do\"], \
-\"files\": [\"paths you will read or change\"], \"commands\": [\"programs you will run\"]}
+\"files\": [\"paths you will read\"], \"writes\": [\"paths you will change\"], \
+\"commands\": [\"programs you will run\"]}
 ```
 
-Name only what this piece of work needs; leave a list empty if it needs none. \
+A path you will change goes in `writes`, and you may not change one that is \
+only in `files`. Name only what this piece of work needs; leave a list empty if \
+it needs none. \
 The person will read this and approve it or refuse it before you run anything.
 
 The work:

@@ -1,0 +1,11 @@
+{
+  "name": "luu-smoke",
+  "private": true,
+  "description": "The Playwright smoke test over the assembled static site. Not part of the build: `cargo build` must not require node.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

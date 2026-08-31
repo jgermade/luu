@@ -98,19 +98,38 @@ cancelling, and `--record <file>` writes a replayable session from either subcom
 
 In `serve`, a prompt with no task open buys a planning call and is then **held,
 unrun**, until it is approved or refused in the UI — nothing runs behind the
-gate, and a client that sends a prompt anyway is ignored. A closed task collapses
+gate, and a client that sends a prompt anyway gets a `refused` message saying
+why: a turn is running, a proposal is pending, the task is not in that state, or
+the policy file does not grant part of what was asked. That message is what took
+the protocol to v2 (and the record format to 4) — a new variant of a tagged enum
+is a change an older reader cannot parse. The task lifecycle is a state machine
+and every transition is guarded: a proposal cannot be closed, a rejected plan
+cannot be reopened. See
+[`RECORD/2026-08-30.a-refusal-is-a-message.md`](RECORD/2026-08-30.a-refusal-is-a-message.md). A closed task collapses
 in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
 
 A script is prompts one per line, `#` comments, and `##` directives for the task
-lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## command:`
-for its plan, and `## close`. `## fragment: <path>[:start-end]` is the other
+lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## write:` /
+`## command:` for its plan, and `## close`. `## file:` is what the task may
+**read** and `## write:` what it may also **change**; a plan that declares no
+writes may not write, and a write into a read-only root is refused before the
+first turn. `## fragment: <path>[:start-end]` is the other
 directive, and it is **not** `## file:`: the plan's files are what the task is
 allowed to touch, a fragment is text put into the next prompt.
 
 **The written plan is the approval**: every file it names has to be reachable in
 the resolved sandbox and every command allowed by it, or the run stops before the
-first turn. Closing folds the task's turns into a
+first turn. **It is also the sandbox for its task** — from `## task:` to
+`## close`, and from an approval to a close in `serve`, a turn may touch what the
+plan named and nothing else, fragments included, at the level it named: `files`
+are granted read, `writes` read-write. The policy file is the outer
+bound (a plan cannot grant what it does not) and a plan that names nothing grants
+nothing; a denial says which of the two refused. In `serve`, `approve_task`
+carries the files and commands the person adds at the gate, checked against the
+policy file the same way, which is what keeps an under-specified plan from being
+a dead run. See
+[`RECORD/2026-08-30.narrowing.md`](RECORD/2026-08-30.narrowing.md). Closing folds the task's turns into a
 deterministic summary (the plan, what the tool results reported, and the
 fragments the turns were shown, quoted verbatim under a token cap), which is
 what the `summaries` bucket in the budget panel plots. A directive it does not
@@ -140,6 +159,28 @@ history gives way (`turn` drops the minimum, `block` cuts to `--low-water` and
 then holds still), and `--tokenizer` points at the model's `tokenizer.json`. **Without `--tokenizer` the counts are
 `chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
 useless for a comparison, and the numbers say so themselves.
+
+Two of the tests are not unit tests and are the only ones that run the thing:
+`crates/agent-core/tests/ollama_wire.rs` puts a stub HTTP server on an ephemeral
+port and asserts what `Ollama::stream` actually sends — the window included,
+which is the bug that shipped once — and `crates/luu/tests/serve_ws.rs` binds the
+server, drives the gate over `/ws`, and checks the read API agrees with what the
+socket said. Both run under a plain `cargo test --workspace` in under a second.
+
+The third one is the page, and it is the only thing here that wants node —
+`cargo build` still must not:
+
+```sh
+cp -r crates/luu/ui/. site/ && ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures
+cd tests/smoke && npm ci && npx playwright install chromium && npx playwright test
+```
+
+It loads the assembled site, replays a recording, clicks through every fixture
+in the picker, and fails on any console error other than the socket that cannot
+connect on a static host. It runs in the `web` job, after the site is assembled.
+It has already earned itself: it found a double replay that had been showing a
+ghost turn to every visitor of the deployed page. See
+[`RECORD/2026-08-30.tests-that-run-it.md`](RECORD/2026-08-30.tests-that-run-it.md).
 
 CI is `.github/workflows/build.yml` (fmt, clippy, tests, both binaries, the site) on
 every push and pull request. `release.yml` is manual: it takes `patch`/`minor`/`major`,
@@ -286,6 +327,14 @@ implementation detail from close up:
   parses it, validates it against the `SandboxPolicy`, and executes real Rust code.
   Any path where model output reaches a shell or the filesystem without passing
   that validation is a bug, however convenient.
+- **A plan says what it reads and what it writes, and is held to both.** The
+  distinction is the difference between a check that can say no and one that
+  only looks like it does: without it every task ran with write access to
+  everything it named.
+- **The approved plan is the sandbox for its task.** A task boundary is the
+  scope permission is granted at, and that is only true if a turn inside a task
+  is held to what the task was approved for. Checking the plan against the
+  policy and then running with the policy makes the plan a comment.
 - **Permission checks live in the code, not in the model behaving well.**
   Canonicalize paths (`std::fs::canonicalize`) before comparing, or a symlink walks
   straight out of the sandbox.

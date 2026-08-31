@@ -16,3 +16,9 @@ serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 tokio.workspace = true
+
+# The tests only: `tests/serve_ws.rs` drives the running server over its own
+# socket, which needs a client for each half of what it serves.
+[dev-dependencies]
+reqwest.workspace = true
+tokio-tungstenite.workspace = true

@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
-use crate::task::{Plan, Task, TaskId};
+use crate::task::{Plan, Task, TaskId, TaskState};
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
 
@@ -342,14 +342,38 @@ impl Context {
         id
     }
 
+    /// Adds to a proposed task's plan what a person put in at the gate, and
+    /// answers with the plan as it now stands.
+    ///
+    /// The amendment arrives with the approval, so this happens while the task
+    /// is still `Proposed`: the plan a task is approved with is the one it
+    /// keeps, and the one its sandbox is built from.
+    pub fn amend_plan(
+        &mut self,
+        id: TaskId,
+        files: &[String],
+        writes: &[String],
+        commands: &[String],
+    ) -> Option<Plan> {
+        let task = self.task_mut(id)?;
+        task.plan.amend(files, writes, commands);
+        Some(task.plan.clone())
+    }
+
     /// Approves it. Turns pushed from here on belong to it.
+    ///
+    /// Only a proposal can be approved. The lifecycle is a state machine and
+    /// every one of these is a guard on it: without them `reopen_task` on a
+    /// *rejected* task sets it approved, which reinstates a plan a person
+    /// turned down and hands the next prompt a live task to run inside — the
+    /// gate leaking through the message meant for unfolding a fold.
     pub fn approve_task(&mut self, id: TaskId) -> bool {
         match self.task_mut(id) {
-            Some(task) => {
+            Some(task) if task.state == TaskState::Proposed => {
                 task.approve();
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
@@ -357,11 +381,11 @@ impl Context {
     /// stays in the session as the record of what was turned down.
     pub fn reject_task(&mut self, id: TaskId) -> bool {
         match self.task_mut(id) {
-            Some(task) => {
+            Some(task) if task.state == TaskState::Proposed => {
                 task.reject();
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
@@ -389,6 +413,13 @@ impl Context {
             .collect();
         let turns = self.turns.iter().filter(mine).count();
         let task = self.tasks.iter_mut().find(|task| task.id == id)?;
+        // Only an open task folds. A proposal has no turns to fold and nothing
+        // has been approved to summarise; closing one would take the gate off
+        // the screen with its prompt still held, and the session would be stuck
+        // with no way to answer a proposal nobody can see.
+        if !task.is_open() {
+            return None;
+        }
         task.close(&steps, &shown, turns, counter);
         task.summary.as_ref().map(|summary| summary.text.clone())
     }
@@ -397,11 +428,11 @@ impl Context {
     /// again. Nothing is recovered, because nothing was deleted.
     pub fn reopen_task(&mut self, id: TaskId) -> bool {
         match self.task_mut(id) {
-            Some(task) => {
+            Some(task) if task.is_closed() => {
                 task.reopen();
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
@@ -1301,5 +1332,57 @@ mod tool_turn_tests {
             with_steps.turns()[0].tokens > bare.turns()[0].tokens,
             "a turn whose tool output is not in its count is a turn the budget cannot see"
         );
+    }
+
+    /// The lifecycle is a state machine, and the messages that drive it arrive
+    /// from a socket anyone can open. Every transition that is not legal has to
+    /// be refused rather than performed — found by driving the real page:
+    /// closing a *proposed* task took the gate off the screen with its prompt
+    /// still held, and the session had no way back.
+    #[test]
+    fn only_the_legal_task_transitions_happen() {
+        let counter = ApproximateCounter;
+        let mut context = Context::new("system");
+        let task = context.propose_task("add a flag", Plan::default());
+
+        assert!(
+            context.close_task(task, &counter).is_none(),
+            "a proposal has nothing to fold: nothing was approved and no turn ran",
+        );
+        assert!(!context.reopen_task(task), "it was never closed");
+        assert_eq!(context.task(task).unwrap().state, TaskState::Proposed);
+
+        assert!(context.approve_task(task));
+        assert!(
+            !context.approve_task(task),
+            "approving twice is not a state"
+        );
+        assert!(
+            !context.reject_task(task),
+            "an approved task is past refusing"
+        );
+
+        assert!(context.close_task(task, &counter).is_some());
+        assert!(
+            context.close_task(task, &counter).is_none(),
+            "closing a closed task would rewrite the summary the model already has",
+        );
+        assert!(context.reopen_task(task));
+        assert_eq!(context.task(task).unwrap().state, TaskState::Approved);
+    }
+
+    /// The sharp one: a refused plan must not come back through the message
+    /// that exists for unfolding a fold. Reopening a rejected task used to set
+    /// it approved, which makes it the live task — and the next prompt then
+    /// runs inside a plan a person turned down, with no gate in front of it.
+    #[test]
+    fn a_rejected_plan_cannot_be_reopened_into_a_live_task() {
+        let mut context = Context::new("system");
+        let task = context.propose_task("delete everything", Plan::default());
+        assert!(context.reject_task(task));
+
+        assert!(!context.reopen_task(task));
+        assert_eq!(context.task(task).unwrap().state, TaskState::Rejected);
+        assert!(context.live_task().is_none(), "nothing is live");
     }
 }

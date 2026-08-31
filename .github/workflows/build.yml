@@ -132,6 +132,32 @@ jobs:
           print(f"{len(sessions)} sessions exported, all files present")
           PY
 
+      # The page, opened. Everything above this line checks that files exist and
+      # parse; only this one loads the site in a browser, and it is the only
+      # test in CI that would notice a component that stopped mounting or a
+      # fixture the store cannot read. Node lives here and nowhere else:
+      # `cargo build` must not require it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/smoke/package-lock.json
+      - name: Smoke-test the page
+        working-directory: tests/smoke
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-report
+          path: |
+            tests/smoke/test-results
+            tests/smoke/playwright-report
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         with:
           name: site

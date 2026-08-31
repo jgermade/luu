@@ -249,9 +249,20 @@ impl SessionView {
                     });
                 }
             }
-            ServerMessage::TaskApproved { task } => {
+            // Transient feedback to whoever asked, not session state: a
+            // refusal is a thing the server declined to do, and there is
+            // nothing about the session afterwards that is different for it.
+            // It stays out of the view until something wants to count them.
+            ServerMessage::Refused { .. } => {}
+            ServerMessage::TaskApproved { task, plan } => {
                 if let Some(view) = self.task_mut(*task) {
                     view.state = TaskState::Approved;
+                    // The plan as approved, which is what the task's sandbox is
+                    // built from. An older recording carries none, and then what
+                    // was proposed is the best answer there is.
+                    if plan != &Plan::default() {
+                        view.plan = plan.clone();
+                    }
                 }
             }
             ServerMessage::TaskClosed { task, summary } => {
