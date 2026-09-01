@@ -181,6 +181,44 @@ impl PrefixTracker {
     }
 }
 
+/// Names, by [`TurnId`], what [`agent_core::context::Selection::evicted`] only
+/// counts.
+///
+/// `Context` tracks eviction as a floor over its own turn indices and knows
+/// nothing of `TurnId` — it is `agent-core`'s and deliberately not the
+/// context manager's, the same separation that keeps trace messages taking a
+/// `turn` from their caller rather than tracking one themselves. So this
+/// keeps the one thing `Context` does not: which id produced the turn at each
+/// index, pushed in the same call as [`agent_core::context::Context::push_turn_with_steps`]
+/// so the two can never drift apart.
+#[derive(Default)]
+pub struct EvictionTombstones {
+    turn_ids: Vec<TurnId>,
+    /// How much of `Selection::evicted` has already been reported. Eviction
+    /// only grows, so a rising count is turned into the slice of ids newly
+    /// past it and nothing has to be diffed against the floor itself.
+    reported: usize,
+}
+
+impl EvictionTombstones {
+    /// Records which id a just-pushed turn was, in the same order
+    /// `Context::turns()` grows in.
+    pub fn pushed(&mut self, turn: TurnId) {
+        self.turn_ids.push(turn);
+    }
+
+    /// The ids newly behind the floor after a `select`, if any left the
+    /// window this call.
+    pub fn mark(&mut self, evicted: usize) -> Option<Vec<TurnId>> {
+        if evicted <= self.reported {
+            return None;
+        }
+        let forgotten = self.turn_ids[self.reported..evicted].to_vec();
+        self.reported = evicted;
+        Some(forgotten)
+    }
+}
+
 /// One message on its way to clients, to the record, or both.
 #[derive(Clone)]
 pub enum Event {
@@ -269,5 +307,55 @@ impl Recorder {
             },
         };
         let _ = self.lines.send(line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nothing_evicted_yet_marks_nothing() {
+        let mut tombstones = EvictionTombstones::default();
+        tombstones.pushed(1);
+        tombstones.pushed(2);
+
+        assert_eq!(tombstones.mark(0), None, "the floor has not moved");
+    }
+
+    #[test]
+    fn a_rising_floor_names_the_ids_it_passed() {
+        let mut tombstones = EvictionTombstones::default();
+        for turn in 1..=5 {
+            tombstones.pushed(turn);
+        }
+
+        assert_eq!(
+            tombstones.mark(2),
+            Some(vec![1, 2]),
+            "the first two turns pushed, by the id they were given",
+        );
+        // The same floor reported again — the common case, most turns evict
+        // nothing new — must not repeat what was already named.
+        assert_eq!(tombstones.mark(2), None);
+
+        assert_eq!(
+            tombstones.mark(4),
+            Some(vec![3, 4]),
+            "only the ids newly behind the floor, not the ones already reported",
+        );
+    }
+
+    #[test]
+    fn ids_need_not_be_consecutive() {
+        // A turn that produced nothing is never pushed, so the id sequence a
+        // real session hands in can skip numbers.
+        let mut tombstones = EvictionTombstones::default();
+        tombstones.pushed(1);
+        tombstones.pushed(3);
+        tombstones.pushed(4);
+
+        assert_eq!(tombstones.mark(1), Some(vec![1]));
+        assert_eq!(tombstones.mark(3), Some(vec![3, 4]));
     }
 }

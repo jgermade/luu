@@ -539,10 +539,16 @@ lives in memory for the life of the process.
   truth, which is how the static mirror and the live server start disagreeing.
 - **Forgetting is an event too.** Eviction — and later compaction — is recorded, not
   just applied: a recording has to be able to say which turns left the window, when,
-  and under which policy. Today the eviction floor is in-memory and a recording can
-  only show the history bucket shrinking, which is the symptom without the cause.
-  Decided, not built; the shape is OpenHands' condensation tombstones, read in
-  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md).
+  and under which policy. **Built for eviction**: `TraceMessage::Evicted` names the
+  turn ids a `select` call pushed behind the floor, `EvictionTombstones` in
+  `crates/luu/src/session.rs` is what turns `Context`'s own index-based floor into
+  those ids, and `TurnView::evicted` is the fold. The shape is OpenHands' condensation
+  tombstones, read in
+  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md) and
+  built in
+  [`RECORD/2026-08-31.eviction-is-a-recorded-event.md`](RECORD/2026-08-31.eviction-is-a-recorded-event.md).
+  Compaction's half of this — recording *when* a task folded, beyond the
+  `TaskClosed` message that already exists — is unaffected and still open.
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums

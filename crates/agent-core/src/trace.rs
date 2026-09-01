@@ -99,6 +99,20 @@ pub enum TraceMessage {
         shared_bytes: usize,
         shared_tokens: u32,
     },
+    /// Turns that left the window to make room for this one.
+    ///
+    /// `Context::floor` is in-memory: without this, a recording can show the
+    /// `history` bucket shrinking and cannot say which turns caused it. Modeled
+    /// on OpenHands' condensation tombstones — forgetting is an event, not just
+    /// a state the live process remembers — see
+    /// `RECORD/2026-08-27.cline-openhands.md` and
+    /// `RECORD/2026-08-31.eviction-is-a-recorded-event.md`.
+    Evicted {
+        /// The turn whose selection caused this eviction.
+        turn: TurnId,
+        /// Oldest first, the same order they left in.
+        forgotten: Vec<TurnId>,
+    },
 }
 
 impl TraceMessage {
@@ -213,6 +227,23 @@ mod tests {
         // inside a character, and slicing there would panic.
         assert_eq!(shared_prefix("é", "è"), 0);
         assert_eq!(shared_prefix("añb", "añc"), 3, "the whole ñ is shared");
+    }
+
+    #[test]
+    fn an_eviction_names_the_turns_it_forgot() {
+        let message = TraceMessage::Evicted {
+            turn: 6,
+            forgotten: vec![1, 2],
+        };
+        let json = serde_json::to_value(&message).unwrap();
+        assert_eq!(json["type"], "evicted");
+        assert_eq!(json["forgotten"], serde_json::json!([1, 2]));
+
+        let back: TraceMessage = serde_json::from_value(json).unwrap();
+        assert!(matches!(
+            back,
+            TraceMessage::Evicted { turn: 6, forgotten } if forgotten == vec![1, 2]
+        ));
     }
 
     #[test]

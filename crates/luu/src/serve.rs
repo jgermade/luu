@@ -17,7 +17,9 @@ use agent_core::task::{Plan, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
-use crate::session::{Agency, Event, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
+use crate::session::{
+    Agency, Event, EvictionTombstones, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered,
+};
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -50,6 +52,10 @@ struct Session {
     /// Beside the context, because what it measures is a property of two
     /// consecutive prompts of *this* session.
     prefix: PrefixTracker,
+    /// Beside the context for the same reason: which id produced each turn,
+    /// so an eviction — which `Context` only ever names by index — can be
+    /// reported by the id a client actually knows.
+    tombstones: EvictionTombstones,
     /// A proposal waiting on a person, holding the prompt that caused it.
     /// While this is set, nothing runs: not a turn, not a tool, not a model
     /// call. That is the gate.
@@ -192,6 +198,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             cancel: None,
             context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
             prefix: PrefixTracker::default(),
+            tombstones: EvictionTombstones::default(),
             pending: None,
             narrowed: None,
         }),
@@ -747,7 +754,7 @@ async fn begin_turn(
     prompt: &str,
     instruction: Option<&str>,
 ) -> Option<(TurnId, watch::Receiver<bool>, CompletionRequest)> {
-    let (turn, task, cancel_rx, selection, prompt_sent, reuse) = {
+    let (turn, task, cancel_rx, selection, prompt_sent, reuse, forgotten) = {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
             drop(session);
@@ -781,8 +788,9 @@ async fn begin_turn(
         let reuse = session
             .prefix
             .measure(turn, &prompt_sent, app.counter.as_ref());
+        let forgotten = session.tombstones.mark(selection.evicted);
         let task = session.context.live_task();
-        (turn, task, rx, selection, prompt_sent, reuse)
+        (turn, task, rx, selection, prompt_sent, reuse, forgotten)
     };
 
     // The user's ask, not the instruction fused in front of it: `prompt` is
@@ -800,6 +808,10 @@ async fn begin_turn(
     .await;
     if let Some(reuse) = reuse {
         app.publish(Event::Trace(reuse)).await;
+    }
+    if let Some(forgotten) = forgotten {
+        app.publish(Event::Trace(TraceMessage::Evicted { turn, forgotten }))
+            .await;
     }
     // Published before the call: this is what we decided to send. A turn that
     // gets cancelled has a budget too, which the old after-the-fact version
@@ -912,6 +924,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                 outcome.steps,
                 app.counter.as_ref(),
             );
+            session.tombstones.pushed(turn);
         }
         session.current = None;
         session.cancel = None;
@@ -1038,6 +1051,7 @@ mod tests {
                 cancel: None,
                 context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
                 prefix: PrefixTracker::default(),
+                tombstones: EvictionTombstones::default(),
                 pending: None,
                 narrowed: None,
             }),

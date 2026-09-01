@@ -17,7 +17,8 @@ use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
 
 use crate::session::{
-    Agency, DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms, rendered,
+    Agency, DEFAULT_RESERVE, Event, EvictionTombstones, PrefixTracker, Recorder, SYSTEM,
+    counter_for, now_ms, rendered,
 };
 use anyhow::{Context, Result};
 
@@ -676,6 +677,7 @@ pub async fn run() -> Result<()> {
     // there and they belong in the same chain as the turns: two trackers would
     // measure one session against two different pasts.
     let prefix = std::sync::Arc::new(std::sync::Mutex::new(PrefixTracker::default()));
+    let mut tombstones = EvictionTombstones::default();
     let mut failed = false;
 
     let multi = steps
@@ -794,6 +796,9 @@ pub async fn run() -> Result<()> {
             recorder.write(&Event::Trace(TraceMessage::Prompt { turn, text }));
             if let Some(reuse) = reuse {
                 recorder.write(&Event::Trace(reuse));
+            }
+            if let Some(forgotten) = tombstones.mark(selection.evicted) {
+                recorder.write(&Event::Trace(TraceMessage::Evicted { turn, forgotten }));
             }
             // Before the call, not after: this is what we decided to send, and
             // a cancelled turn has it too.
@@ -976,6 +981,7 @@ pub async fn run() -> Result<()> {
                 outcome.steps,
                 counter.as_ref(),
             );
+            tombstones.pushed(turn);
         }
 
         // A script does not push on through a broken backend: the remaining

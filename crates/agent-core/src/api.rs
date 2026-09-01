@@ -115,6 +115,11 @@ pub struct TurnView {
     /// What the agent did during the turn, in order.
     #[serde(default)]
     pub tools: Vec<ToolCallView>,
+    /// Whether this turn has left the window. Set by a
+    /// [`TraceMessage::Evicted`] naming it — never unset, since nothing
+    /// currently un-evicts a turn short of reopening the task that folded it.
+    #[serde(default)]
+    pub evicted: bool,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -134,6 +139,7 @@ impl TurnView {
             prefix: None,
             extra_calls: Vec::new(),
             tools: Vec::new(),
+            evicted: false,
             started_at_ms,
             ended_at_ms: None,
         }
@@ -402,6 +408,13 @@ impl SessionView {
                     });
                 }
             }
+            TraceMessage::Evicted { forgotten, .. } => {
+                for id in forgotten {
+                    if let Some(view) = self.turn_mut(*id) {
+                        view.evicted = true;
+                    }
+                }
+            }
         }
     }
 
@@ -517,6 +530,13 @@ mod tests {
                     prompt_tokens: 4,
                 },
             },
+            RecordLine::Trace {
+                at_ms: 40,
+                message: TraceMessage::Evicted {
+                    turn: 2,
+                    forgotten: vec![1],
+                },
+            },
             RecordLine::Protocol {
                 at_ms: 60,
                 message: ServerMessage::Ended {
@@ -624,6 +644,36 @@ mod tests {
         assert!(
             turn.budget.is_none(),
             "nothing to plot, so nothing is invented"
+        );
+    }
+
+    #[test]
+    fn an_eviction_marks_the_turns_it_names_and_leaves_the_rest() {
+        let mut view = SessionView::new("s", "mock", "mock");
+        for turn in 1..=3 {
+            view.apply_protocol(
+                0,
+                &ServerMessage::TurnStarted {
+                    turn,
+                    prompt: "q".into(),
+                    task: None,
+                },
+            );
+        }
+
+        view.apply_trace(
+            10,
+            &TraceMessage::Evicted {
+                turn: 3,
+                forgotten: vec![1, 2],
+            },
+        );
+
+        assert!(view.turn(1).unwrap().evicted);
+        assert!(view.turn(2).unwrap().evicted);
+        assert!(
+            !view.turn(3).unwrap().evicted,
+            "the turn whose selection evicted the others is not itself evicted",
         );
     }
 
