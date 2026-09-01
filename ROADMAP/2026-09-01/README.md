@@ -26,7 +26,7 @@ is worth more than a reordering.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 1 | **An OpenAI-compatible backend** | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md) |
+| 1 | ~~**An OpenAI-compatible backend**~~ — built, and never yet pointed at a real server | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md), closed by [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
 | 2 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md) |
 | 3 | **Level 3 in its development posture** — `loude-worker` in a long-lived container, wide open | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) |
 | 4 | **The gate probe against a real model** | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) — written, unrun |
@@ -127,6 +127,23 @@ inside the container with a model in the loop.
   corpus to check it with exists.
 
 ## Landed since this revision was written
+
+**Item 1 of the order above**, struck through in place. The implementation is
+done and proven against a stub that reads the bytes off a socket; what is *not*
+done is a single call to a real `llama-server`, vLLM or hosted endpoint, and the
+distinction matters enough to keep in the row: a wire test proves we send what we
+think and read what they send, not that they agree. The first real run belongs
+with [`machines.md`](machines.md), and the thing to check first is whether
+`usage` arrives at all — the design assumes `stream_options.include_usage` is
+honoured and is built to survive it not being.
+
+It also found the thing worth carrying into every later comparison: **the window
+cannot be sent on this API**, so a run against a server started smaller than
+`--context-limit` is not comparable to an Ollama run at the same number, and the
+only place that shows is the gap between our count and `usage.prompt_tokens`.
+The gantt below is left as it was drawn: the bar for this item was a size, and
+striking the row is what records that it was wrong.
+
 
 Three findings from
 [`luu_architectural_audit_containerized.md`](luu_architectural_audit_containerized.md),
