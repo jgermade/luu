@@ -8,7 +8,7 @@
 //! exists so an unauthenticated non-loopback server is not a state the program
 //! can be in.
 //!
-//! See [`RECORD/2026-09-01.what-the-audit-left.WIP.md`](../../../../RECORD/2026-09-01.what-the-audit-left.WIP.md).
+//! See `RECORD/2026-09-01.what-the-audit-left.completed.md`.
 
 use std::net::SocketAddr;
 use std::path::Path;

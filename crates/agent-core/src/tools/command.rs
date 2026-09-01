@@ -18,7 +18,7 @@ use serde_json::json;
 
 use crate::sandbox::{Access, Sandbox, Verdict};
 
-use super::{Tool, ToolFuture, ToolOutcome};
+use super::{CommandResult, Tool, ToolFuture, ToolOutcome, clamp};
 
 /// Long enough for a test run, short enough that a hung command does not hold a
 /// session open forever. A default, not a law — `timeout_ms` overrides it.
@@ -122,6 +122,10 @@ impl Tool for RunCommand {
 
             let mut command = tokio::process::Command::from(command);
             command.kill_on_drop(true);
+            // Around the child and nothing else: the checks and the spawn are
+            // the step's time, not the command's, and a number that quietly
+            // includes them is the kind that gets compared against itself later.
+            let started = std::time::Instant::now();
             let output = match tokio::time::timeout(timeout, command.output()).await {
                 Ok(Ok(output)) => output,
                 Ok(Err(error)) => {
@@ -135,6 +139,8 @@ impl Tool for RunCommand {
                 }
             };
 
+            let duration_ms = started.elapsed().as_millis() as u64;
+
             let mut text = String::new();
             for (stream, bytes) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
                 if !bytes.is_empty() {
@@ -145,23 +151,50 @@ impl Tool for RunCommand {
                 }
             }
 
+            let result = CommandResult {
+                exit_code: output.status.code(),
+                signal: exit_signal(&output.status),
+                // Capped the same way the rendered blob is, and for the same
+                // reason: this is what a recording carries.
+                stdout: clamp(String::from_utf8_lossy(&output.stdout).into_owned()).0,
+                stderr: clamp(String::from_utf8_lossy(&output.stderr).into_owned()).0,
+                duration_ms,
+            };
+
             match output.status.success() {
-                true => ToolOutcome::ok(verdict, text),
+                true => ToolOutcome::from_command(verdict, text, result),
                 // A non-zero exit is the answer to the question, not a failure
                 // of the tool — but the model has to be able to tell, so it is
                 // an error with the output kept.
                 false => {
-                    let code = match output.status.code() {
-                        Some(code) => code.to_string(),
-                        None => "a signal".to_string(),
+                    let how = match (result.exit_code, result.signal) {
+                        (Some(code), _) => format!("exited with {code}"),
+                        // The sentence that says which limit stopped it, now
+                        // that there are limits that can.
+                        (None, Some(signal)) => {
+                            format!("was killed ({})", CommandResult::signal_name(signal))
+                        }
+                        (None, None) => "did not exit normally".to_string(),
                     };
-                    let mut outcome = ToolOutcome::ok(verdict, text);
-                    outcome.error = Some(format!("{program} exited with {code}"));
+                    let mut outcome = ToolOutcome::from_command(verdict, text, result);
+                    outcome.error = Some(format!("{program} {how}"));
                     outcome
                 }
             }
         })
     }
+}
+
+/// The signal that ended a child, where the platform has such a thing.
+#[cfg(unix)]
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: &std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 /// The program, as an absolute path.
@@ -184,7 +217,7 @@ fn resolve_program(program: &str, base: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::{Applied, Enforcement, PathRule, SandboxPolicy};
+    use crate::sandbox::{Applied, Enforcement, Limits, PathRule, SandboxPolicy};
     use crate::tools::{ToolCall, Tools};
 
     fn scratch(name: &str) -> PathBuf {
@@ -196,6 +229,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()
+    }
+
+    fn sandbox_limiting(dir: &Path, commands: &[&str], limits: Limits) -> Sandbox {
+        Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: commands.iter().map(|name| (*name).to_string()).collect(),
+                network: false,
+                enforcement: Enforcement::BestEffort,
+                limits,
+            },
+            dir,
+        )
+        .unwrap()
     }
 
     fn sandbox_allowing(dir: &Path, commands: &[&str], enforcement: Enforcement) -> Sandbox {
@@ -258,6 +305,74 @@ mod tests {
         let sandbox = sandbox_allowing(&dir, &["false"], Enforcement::BestEffort);
         let outcome = run(&sandbox, json!({"command": "false"})).await;
         assert!(outcome.error.unwrap().contains("exited with 1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The exit code, the two streams and the duration are **fields**, and the
+    /// rendering is still the same short text.
+    ///
+    /// The distinction is the whole of this change: a task cannot be closed on
+    /// an exit code that only ever existed inside a sentence, and a 7B must not
+    /// pay for a JSON wrapper it does not read.
+    #[tokio::test]
+    async fn what_the_child_did_survives_as_fields_and_not_only_as_a_sentence() {
+        let dir = scratch("structured");
+        let sandbox = sandbox_allowing(&dir, &["sh"], Enforcement::BestEffort);
+        let outcome = run(
+            &sandbox,
+            json!({"command": "sh", "args": ["-c", "echo out; echo err >&2; exit 3"]}),
+        )
+        .await;
+
+        let result = outcome.command.clone().expect("a subprocess ran");
+        assert_eq!(result.exit_code, Some(3));
+        assert_eq!(result.signal, None);
+        // Unmixed: a judge that has to re-split one blob on `--- stdout` is
+        // parsing a rendering.
+        assert_eq!(result.stdout.trim(), "out");
+        assert_eq!(result.stderr.trim(), "err");
+
+        let rendered = outcome.render("run_command");
+        assert!(rendered.contains("exited with 3"), "{rendered}");
+        assert!(
+            !rendered.contains("exit_code"),
+            "the rendering stayed frugal: {rendered}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And the payoff for the limits: the outcome says *which* one killed it.
+    ///
+    /// Before this, a child that hit `cpu-seconds` came back as "sh exited with
+    /// a signal" — indistinguishable from a crash, which is a different bug
+    /// with a different fix.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_killed_by_a_limit_says_which_limit() {
+        if !Path::new("/bin/sh").exists() {
+            return;
+        }
+        let dir = scratch("killed");
+        let sandbox = sandbox_limiting(
+            &dir,
+            &["sh"],
+            Limits {
+                cpu_seconds: Some(1),
+                ..Limits::NONE
+            },
+        );
+        let outcome = run(
+            &sandbox,
+            json!({"command": "sh", "args": ["-c", "while :; do :; done"]}),
+        )
+        .await;
+
+        let result = outcome.command.clone().expect("a subprocess ran");
+        assert_eq!(result.exit_code, None, "a signal is not an exit code");
+        assert_eq!(result.signal, Some(libc::SIGXCPU));
+        let error = outcome.error.clone().expect("a child that was killed");
+        assert!(error.contains("SIGXCPU"), "{error}");
+        assert!(error.contains("cpu-seconds limit"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

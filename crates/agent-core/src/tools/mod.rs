@@ -41,6 +41,64 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+/// What a subprocess did, beyond what it printed.
+///
+/// Every field here existed as a fact and survived as a sentence: the exit code
+/// lived for one moment inside `"{program} exited with {code}"`, the two streams
+/// were concatenated into one blob under `--- stdout` headers, and the duration
+/// was never captured at all. That is fine for something a model reads and
+/// nothing else, and it is the wrong shape for everything above it — **a task
+/// cannot be closed on an exit code that was never a field**, which is the next
+/// rung of the ladder `protocol.rs` describes above `CloseTask`.
+///
+/// So: the type and the record are structured, and [`ToolOutcome::render`]
+/// stays as frugal as it was. A 7B pays for every token of a wrapper it did not
+/// need.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandResult {
+    /// `None` when a signal ended the child, which is exactly when `signal` is
+    /// `Some` — the two together are the whole of `wait`'s answer.
+    pub exit_code: Option<i32>,
+    /// The signal that ended it, if one did. This is how a run says *which*
+    /// limit stopped a child: `SIGXCPU` and `SIGXFSZ` are `[sandbox.limits]`
+    /// arriving, and nothing else in the outcome could tell them from a crash.
+    pub signal: Option<i32>,
+    /// Separately, because a judge that has to re-split one blob on `---
+    /// stdout` is parsing a rendering. Capped like `output` is: a recording is
+    /// not a place to keep 2 MB of somebody's build log.
+    pub stdout: String,
+    pub stderr: String,
+    /// How long the child ran. Distinct from the step's own duration, which
+    /// includes the checks and the process spawn.
+    pub duration_ms: u64,
+}
+
+impl CommandResult {
+    /// How a signal reads, for the one sentence that mentions it.
+    ///
+    /// Only the signals a limit or a kill produces are named; anything else is
+    /// its number, which is honest and does not pretend to a table this does
+    /// not need.
+    pub fn signal_name(signal: i32) -> String {
+        #[cfg(unix)]
+        {
+            let named = match signal {
+                libc::SIGXCPU => Some("SIGXCPU: the cpu-seconds limit"),
+                libc::SIGXFSZ => Some("SIGXFSZ: the file-size-mb limit"),
+                libc::SIGKILL => Some("SIGKILL"),
+                libc::SIGSEGV => Some("SIGSEGV"),
+                libc::SIGABRT => Some("SIGABRT"),
+                libc::SIGTERM => Some("SIGTERM"),
+                _ => None,
+            };
+            if let Some(named) = named {
+                return format!("{named}, signal {signal}");
+            }
+        }
+        format!("signal {signal}")
+    }
+}
+
 /// What running it produced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolOutcome {
@@ -52,6 +110,15 @@ pub struct ToolOutcome {
     /// decide whether trying something else is worth a turn.
     pub error: Option<String>,
     pub truncated: bool,
+    /// Present for `run_command` and absent for everything else, which is the
+    /// honest shape: an in-process tool has no exit code, and a zero would be
+    /// a lie about a fact that does not exist.
+    ///
+    /// Additive on the wire and in the record — `#[serde(default)]`, absent
+    /// means "a recording from before this existed", which is why the format
+    /// number did not move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandResult>,
 }
 
 impl ToolOutcome {
@@ -62,6 +129,19 @@ impl ToolOutcome {
             output,
             error: None,
             truncated,
+            command: None,
+        }
+    }
+
+    /// The same, carrying what the subprocess did.
+    pub fn from_command(
+        verdict: Verdict,
+        output: impl Into<String>,
+        command: CommandResult,
+    ) -> Self {
+        Self {
+            command: Some(command),
+            ..Self::ok(verdict, output)
         }
     }
 
@@ -71,6 +151,7 @@ impl ToolOutcome {
             output: String::new(),
             error: Some(error.into()),
             truncated: false,
+            command: None,
         }
     }
 
@@ -81,6 +162,7 @@ impl ToolOutcome {
             output: String::new(),
             error: Some(error),
             truncated: false,
+            command: None,
         }
     }
 
@@ -107,7 +189,7 @@ impl ToolOutcome {
 }
 
 /// Cuts at a character boundary, so the result is still a string.
-fn clamp(mut text: String) -> (String, bool) {
+pub(crate) fn clamp(mut text: String) -> (String, bool) {
     if text.len() <= MAX_OUTPUT_BYTES {
         return (text, false);
     }

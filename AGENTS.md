@@ -210,6 +210,16 @@ reads `rlimits (…)` with the same `missing` instead of "in-process check only"
 `--no-tools` runs without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
 
+A `run_command` outcome is **structured**: `exit_code`, `signal`, `stdout`,
+`stderr` and `duration_ms` are fields on the protocol and in the record, while
+`ToolOutcome::render` still hands the model the same short plain text — a 7B
+pays for every token of a wrapper it does not read. It is what unblocks the rung
+above the user in the closing ladder: a task cannot be closed on an exit code
+that only ever existed inside a sentence. `signal` is also how a run says which
+limit killed a child (`SIGXCPU`, `SIGXFSZ`). The field is additive — absent for
+every in-process tool and in every older recording — so the record format stayed
+at 5.
+
 `--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
 definitions with their signatures, bodies elided, from `tree-sitter`'s own
 `TAGS_QUERY`. It goes under the tool definitions and above the history, because

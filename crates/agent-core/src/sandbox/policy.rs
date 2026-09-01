@@ -96,7 +96,7 @@ impl Enforcement {
 ///
 /// `setrlimit` is POSIX, not Linux, which is what makes this the first thing
 /// that holds a child on macOS as well: see
-/// `RECORD/2026-09-01.what-the-audit-left.WIP.md`.
+/// `RECORD/2026-09-01.what-the-audit-left.completed.md`.
 ///
 /// Every field is `Option` and every one of them is a *number someone chose*.
 /// Two are off by default, and the reason is the same in both cases — a default

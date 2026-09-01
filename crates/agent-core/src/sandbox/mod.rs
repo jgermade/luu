@@ -489,7 +489,7 @@ fn install_limits(limits: Limits, command: &mut std::process::Command) {
     // touching the allocator.
     unsafe {
         command.pre_exec(move || {
-            set_limit(libc::RLIMIT_CPU, cpu)?;
+            set_cpu_limit(cpu)?;
             set_limit(libc::RLIMIT_FSIZE, file)?;
             set_limit(libc::RLIMIT_AS, memory)?;
             set_limit(libc::RLIMIT_NPROC, processes)?;
@@ -498,8 +498,35 @@ fn install_limits(limits: Limits, command: &mut std::process::Command) {
     }
 }
 
+/// The CPU limit, and the one place soft and hard are deliberately *not* equal.
+///
+/// `RLIMIT_CPU` is two-stage by design: the soft limit sends `SIGXCPU`, and the
+/// hard one sends `SIGKILL`. Setting them equal collapses that into a plain
+/// `SIGKILL` — measured, not assumed: the first version of this did, and the
+/// child came back as signal 9, indistinguishable from a crash or an OOM kill.
+/// One second of grace buys the signal that *names the limit*, which is what
+/// `run_command` reports and what a judge would read. The cap it widens is one
+/// second, and the hard limit still ends the child if `SIGXCPU` is caught and
+/// ignored.
+#[cfg(unix)]
+fn set_cpu_limit(seconds: Option<u64>) -> std::io::Result<()> {
+    let Some(seconds) = seconds else {
+        return Ok(());
+    };
+    let limit = libc::rlimit {
+        rlim_cur: seconds as libc::rlim_t,
+        rlim_max: seconds.saturating_add(1) as libc::rlim_t,
+    };
+    // SAFETY: `limit` is a valid, initialised `rlimit` for the whole call.
+    match unsafe { libc::setrlimit(libc::RLIMIT_CPU, &limit) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
 /// One limit, soft and hard together — a child that could raise its own soft
-/// limit back to the hard one is not limited.
+/// limit back to the hard one is not limited. [`set_cpu_limit`] is the
+/// exception, and says why.
 #[cfg(unix)]
 fn set_limit(resource: Resource, value: Option<u64>) -> std::io::Result<()> {
     let Some(value) = value else { return Ok(()) };

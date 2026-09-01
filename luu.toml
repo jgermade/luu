@@ -26,7 +26,10 @@ commands = ["cargo", "rustc", "git", "rg", "ls"]
 # What a child may spend, as opposed to what it may reach. `setrlimit` is POSIX,
 # so this is the one rung that holds a subprocess on macOS too — where there is
 # no Landlock and no seccomp, and where the verdict used to say "in-process check
-# only". Every number here is applied soft and hard together, in the child.
+# only". Every number here is applied soft and hard together in the child, except
+# cpu-seconds, whose hard limit is one second higher: RLIMIT_CPU sends SIGXCPU at
+# the soft limit and SIGKILL at the hard one, and equal limits lose the signal
+# that says which limit killed the child.
 #
 # The two that are commented out are off by default, and turning them on is a
 # per-machine decision rather than a safer default:

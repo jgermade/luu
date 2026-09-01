@@ -310,6 +310,23 @@ The set: `read_file`, `list_dir`, `edit_file`, `write_file`, `run_command`.
 Output is capped at 8 KiB with a `truncated` flag — pruning old results out of
 the history is a later, measured change; a cap is the part that is not a strategy.
 
+**The outcome is structured and the rendering is not.** A `run_command` outcome
+carries `exit_code`, `signal`, `stdout`, `stderr` and `duration_ms` as *fields*,
+on the protocol and in the record; `ToolOutcome::render` still produces the same
+short plain text it always did, because a 7B pays for every token of a wrapper it
+does not read. The distinction is load-bearing rather than tidy: the exit code
+used to live for one moment inside the string `"{program} exited with {code}"`,
+and **a task cannot be closed on an exit code that was never a field** — the
+ladder above the user (exit codes and tests, then a judge in shadow mode) was
+blocked on this and on nothing else. The two streams are separate for the same
+reason: a judge that has to re-split one blob on `--- stdout` is parsing a
+rendering. `signal` is how a run says *which* limit stopped a child — `SIGXCPU`
+and `SIGXFSZ` are `[sandbox.limits]` arriving, and nothing else in the outcome
+could tell them from a crash. Absent for every in-process tool, where there is no
+exit code and a zero would be a lie; additive on the wire, so the record format
+did not move. See
+[`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
+
 ## Sandbox / security
 
 Three rungs, and the middle one is what makes the first worth having. Built: 1
@@ -375,9 +392,13 @@ access = "read-write"           # read | execute | read-write
   commits, and `processes` (`RLIMIT_NPROC`) is off because the kernel counts it
   **per real uid, not per process tree** — a default there would deny `fork`
   over processes this agent never started, and the right mechanism for it is a
-  pids cgroup with the container. A limit is applied soft and hard together: a
-  child that can raise its own soft limit back is not limited. See
-  [`RECORD/2026-09-01.what-the-audit-left.WIP.md`](RECORD/2026-09-01.what-the-audit-left.WIP.md).
+  pids cgroup with the container. A limit is applied soft and hard together — a
+  child that can raise its own soft limit back is not limited — with one
+  measured exception: `RLIMIT_CPU` is two-stage by design (soft sends `SIGXCPU`,
+  hard sends `SIGKILL`), so equal limits collapse into a bare signal 9 that
+  cannot be told from a crash. It gets one second of hard grace, which buys the
+  signal that names the limit. See
+  [`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
 
 ### Who enforced it is reported, never assumed
 
@@ -458,7 +479,7 @@ which carries task approval, and `/api/*`, which carries this session's prompts 
 not gate the embedded page, which is the same bytes in every copy of a public binary and which a
 browser cannot request with a header. `Authorization: Bearer <token>` everywhere, plus `?token=` on
 `/ws` alone, because the browser's `WebSocket` constructor cannot set a header. See
-[`RECORD/2026-09-01.what-the-audit-left.WIP.md`](RECORD/2026-09-01.what-the-audit-left.WIP.md).
+[`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
 
 The UI is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
 process in the loop.

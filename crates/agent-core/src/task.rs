@@ -129,7 +129,7 @@ impl Plan {
             // The session's, like `network` and `enforcement`: a plan declares
             // paths and commands, and what a child may *spend* is not something
             // it has words for. Whether it should is in
-            // `RECORD/2026-09-01.what-the-audit-left.WIP.md`.
+            // `RECORD/2026-09-01.what-the-audit-left.completed.md`.
             limits: session.limits(),
         };
         for file in &self.files {
@@ -556,6 +556,7 @@ mod tests {
                 output: String::new(),
                 error: error.map(str::to_string),
                 truncated: false,
+                command: None,
             },
             duration_ms: 0,
         }

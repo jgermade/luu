@@ -72,6 +72,10 @@ pub struct ToolCallView {
     pub output: String,
     pub truncated: bool,
     pub duration_ms: Option<u64>,
+    /// What the subprocess did, where there was one. `None` for an in-process
+    /// tool and for a recording made before the field existed.
+    #[serde(default)]
+    pub command: Option<crate::tools::CommandResult>,
 }
 
 /// One task as a client browses it. The transcript groups by this, which is
@@ -376,6 +380,7 @@ impl SessionView {
                         output: String::new(),
                         truncated: false,
                         duration_ms: None,
+                        command: None,
                     });
                 }
             }
@@ -387,6 +392,7 @@ impl SessionView {
                 output,
                 truncated,
                 duration_ms,
+                command,
                 ..
             } => {
                 if let Some(view) = self.turn_mut(*turn)
@@ -397,6 +403,7 @@ impl SessionView {
                     call.output = output.clone();
                     call.truncated = *truncated;
                     call.duration_ms = Some(*duration_ms);
+                    call.command = command.clone();
                 }
             }
         }

@@ -306,6 +306,17 @@
           <span :if="call.output" class="dim">· {{ call.output.length }} bytes back</span>
           <span :if="call.truncated" class="warn">· cut</span>
         </div>
+        <!-- What the child did, as facts rather than as a sentence: the exit
+             code the closing ladder will read, and the signal that says which
+             limit stopped it. -->
+        <div :if="call.command" class="held">
+          <span :class="call.command.exit_code === 0 ? 'ok' : 'bad'">
+            exit {{ call.command.exit_code === null ? "—" : call.command.exit_code }}
+          </span>
+          <span :if="call.command.signal !== null" class="warn">· signal {{ call.command.signal }}</span>
+          <span class="dim">· {{ call.command.duration_ms }} ms in the child</span>
+          <span :if="call.command.stderr" class="dim">· {{ call.command.stderr.length }} bytes on stderr</span>
+        </div>
         <div :if="!call.verdict" class="dim">running…</div>
         <div :if="call.error" class="err">{{ call.error }}</div>
       </li>
