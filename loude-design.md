@@ -426,9 +426,19 @@ make sense of bumps both from here.
 
 ### Server shape
 
-`luu serve --http 127.0.0.1:7878` (loopback by default, no auth; require a bearer token when bound
-to any other address). The UI is embedded in the binary with `rust-embed`, so there is one command,
-one URL, and no node process in the loop.
+`luu serve --bind 127.0.0.1:7878` — loopback by default and unauthenticated; **any other address
+requires a bearer token, and without one the bind is refused rather than warned about.** The check
+runs before the listener exists, so an unauthenticated non-loopback server is not a state the
+program can be in. The token comes from `--auth-token-file <PATH>`, whose mode is checked (a flag
+is greppable in `ps`, an env var is inherited by every child `run_command` spawns). It gates `/ws`,
+which carries task approval, and `/api/*`, which carries this session's prompts and source; it does
+not gate the embedded page, which is the same bytes in every copy of a public binary and which a
+browser cannot request with a header. `Authorization: Bearer <token>` everywhere, plus `?token=` on
+`/ws` alone, because the browser's `WebSocket` constructor cannot set a header. See
+[`RECORD/2026-09-01.what-the-audit-left.WIP.md`](RECORD/2026-09-01.what-the-audit-left.WIP.md).
+
+The UI is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
+process in the loop.
 
 Live channel — `WS /ws`:
 

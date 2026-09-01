@@ -158,6 +158,17 @@ plan cannot be reopened. See
 in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
 
+`serve` binds loopback and answers without authentication, and **any other
+address needs `--auth-token-file <PATH>`**: `/ws` carries task approval, so off
+loopback that authority is one request away from anyone who can reach the port.
+The bind is *refused* without one, before the listener exists, rather than
+warned about above a port that is already serving. The token gates `/ws` and
+`/api/*` — `Authorization: Bearer <token>`, or `?token=` on `/ws` alone,
+because that is all a browser's `WebSocket` constructor can send — and not the
+embedded page, so a guarded server is opened at `http://host:7878/?token=…` and
+the UI carries it from there. The file's mode is checked: a flag is greppable in
+`ps` and an env var is inherited by every child `run_command` spawns.
+
 A script is prompts one per line, `#` comments, and `##` directives for the task
 lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## write:` /
 `## command:` for its plan, and `## close`. `## file:` is what the task may

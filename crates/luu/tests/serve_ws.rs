@@ -109,11 +109,45 @@ async fn server_with_policy(
     server_full(replies, delay, policy, Budget::new(0, 0, Eviction::Turn)).await
 }
 
+/// A server that requires a bearer token, with the token in a file only its
+/// owner can read — which is what `resolve` insists on.
+async fn server_guarded(token: &str) -> (String, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("luu-serve-auth-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let path = dir.join("token");
+    std::fs::write(&path, token).expect("writing the token");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("tightening the mode");
+    }
+    let address = server_authed(
+        vec![PLAN.into(), ANSWER.into()],
+        Duration::ZERO,
+        SandboxPolicy::default(),
+        Budget::new(0, 0, Eviction::Turn),
+        Some(path.clone()),
+    )
+    .await;
+    (address, dir)
+}
+
 async fn server_full(
     replies: Vec<String>,
     delay: Duration,
     policy: SandboxPolicy,
     budget: Budget,
+) -> String {
+    server_authed(replies, delay, policy, budget, None).await
+}
+
+async fn server_authed(
+    replies: Vec<String>,
+    delay: Duration,
+    policy: SandboxPolicy,
+    budget: Budget,
+    auth_token_file: Option<std::path::PathBuf>,
 ) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
@@ -132,6 +166,7 @@ async fn server_full(
         temperature: None,
         seed: None,
         map_tokens: 0,
+        auth_token_file,
     })
     .await
     .expect("binding the server");
@@ -360,6 +395,57 @@ async fn the_page_and_the_missing_page() {
         .await
         .expect("the request");
     assert_eq!(missing.status(), 404);
+}
+
+/// The token gates authority and the read side, and does not gate the page.
+///
+/// Three surfaces, three answers: `/ws` carries `approve_task` and is refused
+/// without the token, `/api/*` carries this session's prompts and is refused
+/// the same way, and the embedded UI is served to anyone — it is the same
+/// bytes in every copy of the binary, and a browser cannot put a header on a
+/// navigation.
+#[tokio::test]
+async fn a_bearer_token_gates_the_socket_and_the_read_side() {
+    let (address, dir) = server_guarded("s3cret").await;
+
+    let anonymous = reqwest::get(format!("http://{address}/api/sessions"))
+        .await
+        .expect("the request");
+    assert_eq!(anonymous.status(), 401);
+    assert_eq!(
+        anonymous
+            .headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer"),
+    );
+
+    let bearer = reqwest::Client::new()
+        .get(format!("http://{address}/api/sessions"))
+        .bearer_auth("s3cret")
+        .send()
+        .await
+        .expect("the request");
+    assert!(bearer.status().is_success(), "{:?}", bearer.status());
+
+    // The page: open, and the only thing that is.
+    let index = reqwest::get(format!("http://{address}/"))
+        .await
+        .expect("the request");
+    assert!(index.status().is_success());
+
+    // The socket, both ways round. The browser concession is the query
+    // parameter, so that is what the passing half uses.
+    tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect_err("an unauthenticated upgrade");
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/ws?token=s3cret"))
+            .await
+            .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// Narrowing, over the socket: the plan names `Cargo.toml`, the turn asks for

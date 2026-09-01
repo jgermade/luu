@@ -22,6 +22,7 @@ use crate::session::{
 };
 use anyhow::{Context, Result};
 
+pub mod auth;
 pub mod export;
 pub mod serve;
 pub mod session;
@@ -99,6 +100,13 @@ enum Command {
 
         #[arg(long, default_value = "127.0.0.1:7878")]
         bind: std::net::SocketAddr,
+
+        /// A file holding the bearer token every `/ws` and `/api/*` request
+        /// must carry. Required to bind anything but a loopback address:
+        /// `/ws` approves plans, and off loopback that is one request away
+        /// from anyone who can reach the port.
+        #[arg(long, value_name = "PATH")]
+        auth_token_file: Option<std::path::PathBuf>,
 
         #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
         backend: BackendKind,
@@ -633,6 +641,7 @@ pub async fn run() -> Result<()> {
 
     if let Command::Serve {
         bind,
+        auth_token_file,
         sandbox_args,
         backend,
         model,
@@ -669,6 +678,7 @@ pub async fn run() -> Result<()> {
             temperature,
             seed,
             map_tokens,
+            auth_token_file,
         })
         .await;
     }

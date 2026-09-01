@@ -126,9 +126,24 @@ function appendToken(text) {
   if (frame === null) frame = requestAnimationFrame(flush)
 }
 
+// The bearer token, when the server was bound off loopback and asked for one.
+// The page itself is served without it — a browser navigation cannot carry a
+// header — so a person opens `…/?token=…` and the transport takes it from
+// there: on the socket as a query parameter, which is the only thing the
+// `WebSocket` constructor can do, and on the read side as the header it should
+// be everywhere. Null on the loopback default and on a static host, where both
+// halves are unchanged.
+const token = new URLSearchParams(location.search).get("token")
+
 function url(path) {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:"
-  return `${scheme}//${location.host}${path}`
+  const query = token ? `?token=${encodeURIComponent(token)}` : ""
+  return `${scheme}//${location.host}${path}${query}`
+}
+
+/// The read side, with the token when there is one.
+function apiHeaders() {
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 function onProtocol(message) {
@@ -441,7 +456,7 @@ export function playFixture(file) {
 /// reconnecting is still right.
 async function loadFixtures() {
   try {
-    const response = await fetch("./api/sessions.json")
+    const response = await fetch("./api/sessions.json", { headers: apiHeaders() })
     if (!response.ok) return false
     const sessions = await response.json()
     // Only sessions that ship a recording can be replayed; a live one cannot.

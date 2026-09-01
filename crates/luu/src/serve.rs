@@ -1,7 +1,8 @@
 //! `luu serve` — the local HTTP server behind the debug UI.
 //!
 //! Loopback by default and unauthenticated: it exposes an agent that runs
-//! commands, so binding it anywhere else needs a decision nobody has made yet.
+//! commands. Binding it anywhere else requires a bearer token, and [`bind`]
+//! refuses to hold the port without one — see [`crate::auth`].
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ use agent_core::task::{Plan, PlanSource, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
+use crate::auth::Auth;
 use crate::session::{Agency, Event, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
 use anyhow::{Context, Result};
 use axum::Json;
@@ -25,7 +27,9 @@ use axum::Router;
 use axum::extract::Path;
 use axum::extract::State;
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, Request};
 use axum::http::{StatusCode, Uri, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
@@ -124,6 +128,10 @@ pub struct ServeOptions {
     /// Tokens of repository outline for the prefix. 0 is off — see
     /// `agent_core::repo_map`.
     pub map_tokens: u32,
+    /// The file holding the bearer token this server requires, if any.
+    /// `None` on a loopback address means no auth; `None` on any other
+    /// address means [`bind`] refuses.
+    pub auth_token_file: Option<PathBuf>,
 }
 
 /// A server that has its port and has not started answering yet.
@@ -168,7 +176,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         temperature,
         seed,
         map_tokens,
+        auth_token_file,
     } = options;
+    // Before anything else, and before the listener exists: a port that would
+    // publish task approval to the network is not a port this binds and then
+    // warns about.
+    let auth = Arc::new(crate::auth::resolve(&address, auth_token_file.as_deref())?);
     let started_at = now_ms();
 
     // Built once, before the socket is up: the map is the last block of the
@@ -230,7 +243,13 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         started_at,
     });
 
-    let router = Router::new()
+    // Two halves, because they are two surfaces. `/ws` is authority and
+    // `/api/*` is this session's prompts and source — both behind the token
+    // when there is one. The embedded UI is not: it is the same bytes in every
+    // copy of a public binary, and a browser navigating to a page cannot carry
+    // an `Authorization` header, so gating it would only make the guarded
+    // server unusable from the client written for it.
+    let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
         // The read side. Every path also answers with a `.json` suffix, because
@@ -253,6 +272,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/sessions/{id}/context", get(get_context))
         .route("/api/sessions/{id}/context.json", get(get_context))
+        .layer(middleware::from_fn_with_state(auth.clone(), require_token));
+
+    let router = guarded
         .route("/", get(|| serve_asset("index.html")))
         .route("/{*path}", get(asset_handler))
         .with_state(AppRouterState { app: app.clone() });
@@ -287,6 +309,48 @@ async fn serve_asset(path: &str) -> Response {
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+/// The bearer check, on the control and read surfaces only.
+///
+/// Two ways to present the token, and the second one is a browser
+/// concession rather than a preference: `Authorization: Bearer <token>` is
+/// what `curl` and `fetch` send, and `?token=<token>` is accepted on `/ws`
+/// because the browser's `WebSocket` constructor cannot set a header. It is
+/// not accepted anywhere else — a query string is the part of a URL that ends
+/// up in shell history and proxy logs, so the exception stays as narrow as the
+/// thing that forces it.
+async fn require_token(State(auth): State<Arc<Auth>>, request: Request, next: Next) -> Response {
+    let header = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_string);
+    let presented = match header {
+        Some(token) => Some(token),
+        None if request.uri().path().starts_with("/ws") => {
+            Query::<TokenQuery>::try_from_uri(request.uri())
+                .ok()
+                .and_then(|Query(query)| query.token)
+        }
+        None => None,
+    };
+
+    if !auth.admits(presented.as_deref()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer")],
+            "this server requires a bearer token: --auth-token-file named one\n",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+#[derive(serde::Deserialize)]
+struct TokenQuery {
+    token: Option<String>,
 }
 
 async fn protocol_socket(ws: WebSocketUpgrade, State(state): State<AppRouterState>) -> Response {
