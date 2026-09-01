@@ -205,6 +205,7 @@ mod tests {
                 commands: commands.iter().map(|name| (*name).to_string()).collect(),
                 network: false,
                 enforcement,
+                limits: Default::default(),
             },
             dir,
         )

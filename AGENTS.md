@@ -196,9 +196,17 @@ what the `summaries` bucket in the budget panel plots. A directive it does not
 recognise is an error, never a prompt.
 
 The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
-`network` and `enforcement` — and the `--allow-read/-write/-exec`,
-`--allow-command`, `--allow-network` and `--sandbox-enforcement` flags **add** to
-it for one run. `--max-tool-steps` caps the tool calls one turn may make and
+`network`, `enforcement` and `[sandbox.limits]` — and the
+`--allow-read/-write/-exec`, `--allow-command`, `--allow-network` and
+`--sandbox-enforcement` flags **add** to it for one run. `paths` says what a
+child may *reach*; `limits` says what it may **spend**, as `setrlimit` in the
+child: `cpu-seconds` and `file-size-mb` are on by default, `memory-mb`
+(`RLIMIT_AS`, which a Rust toolchain's address-space reservation makes a
+build-breaker) and `processes` (`RLIMIT_NPROC`, which the kernel counts per uid
+rather than per process tree) are off until someone types a number. They are
+POSIX, not Linux, so they sit above the `linux.rs`/`fallback.rs` split and are
+the first thing that has ever held a child on macOS — where the verdict now
+reads `rlimits (…)` with the same `missing` instead of "in-process check only". `--max-tool-steps` caps the tool calls one turn may make and
 `--no-tools` runs without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
 

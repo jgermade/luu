@@ -126,6 +126,11 @@ impl Plan {
             commands: Vec::new(),
             network: session.network(),
             enforcement: session.enforcement(),
+            // The session's, like `network` and `enforcement`: a plan declares
+            // paths and commands, and what a child may *spend* is not something
+            // it has words for. Whether it should is in
+            // `RECORD/2026-09-01.what-the-audit-left.WIP.md`.
+            limits: session.limits(),
         };
         for file in &self.files {
             let path = std::path::Path::new(file);

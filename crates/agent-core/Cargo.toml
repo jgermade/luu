@@ -24,10 +24,15 @@ toml.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["net"] }
 
+# `setrlimit` and `pre_exec` are POSIX, which is the whole reason the limits sit
+# above the `linux.rs`/`fallback.rs` split: they hold a child on macOS too, where
+# there is no level 2 at all.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 # Level 2 of the sandbox ladder: the kernel holding a subprocess. Linux-only and
 # gated so that `cargo build` on macOS pulls none of it — the fallback there
 # reports what is missing rather than failing to compile.
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock.workspace = true
-libc.workspace = true
 seccompiler.workspace = true

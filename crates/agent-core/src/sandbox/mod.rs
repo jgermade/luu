@@ -19,6 +19,8 @@
 //! run whose subprocesses nothing held are not the same run, and afterwards the
 //! recording is the only thing that could tell them apart.
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use crate::task::TaskId;
@@ -27,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod policy;
 
-pub use policy::{Access, Enforcement, PathRule, PolicyError, SandboxPolicy};
+pub use policy::{Access, Enforcement, Limits, PathRule, PolicyError, SandboxPolicy};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(not(target_os = "linux"), path = "fallback.rs")]
@@ -172,6 +174,9 @@ pub struct Sandbox {
     commands: Vec<String>,
     network: bool,
     enforcement: Enforcement,
+    /// What a child may spend. Carried beside `roots` because it is the same
+    /// kind of thing: part of what the child is held to, decided in the parent.
+    limits: Limits,
     authority: Authority,
 }
 
@@ -252,6 +257,7 @@ impl Sandbox {
             commands: policy.commands.clone(),
             network: policy.network,
             enforcement: policy.enforcement,
+            limits: policy.limits,
             authority: Authority::Policy,
         })
     }
@@ -301,6 +307,10 @@ impl Sandbox {
 
     pub fn enforcement(&self) -> Enforcement {
         self.enforcement
+    }
+
+    pub fn limits(&self) -> Limits {
+        self.limits
     }
 
     /// May a tool touch this path, and where does it actually point?
@@ -379,7 +389,15 @@ impl Sandbox {
         }
 
         let prepared = kernel::prepare(&self.roots, self.network);
-        let enforced_by = match (&prepared.how, &prepared.missing) {
+        // The rlimits join `how` rather than living beside it: they are one
+        // more mechanism holding this child, and the rule is that a verdict
+        // names every one of them. On macOS this is the whole of `how` — the
+        // first thing that has ever actually held a child there.
+        let how = match (prepared.how.clone(), self.limits.describe()) {
+            (Some(kernel), Some(limits)) => Some(format!("{kernel} + {limits}")),
+            (kernel, limits) => kernel.or(limits),
+        };
+        let enforced_by = match (&how, &prepared.missing) {
             (Some(how), None) => Applied::Kernel { how: how.clone() },
             (Some(how), Some(missing)) => Applied::Partial {
                 how: how.clone(),
@@ -406,6 +424,7 @@ impl Sandbox {
         Ok(Restrictions {
             verdict: Verdict::allow(format!("commands allows `{program}`"), enforced_by),
             prepared,
+            limits: self.limits,
         })
     }
 }
@@ -414,6 +433,7 @@ impl Sandbox {
 pub struct Restrictions {
     pub verdict: Verdict,
     prepared: kernel::Prepared,
+    limits: Limits,
 }
 
 impl std::fmt::Debug for Restrictions {
@@ -429,8 +449,68 @@ impl std::fmt::Debug for Restrictions {
 impl Restrictions {
     /// Arranges for the restrictions to be applied in the child, after `fork`
     /// and before `exec`.
+    ///
+    /// The limits go on first, and the order is not cosmetic: `setrlimit` is
+    /// itself a syscall, and installing a filter before it would make the
+    /// sandbox's own setup subject to the sandbox.
     pub fn install(self, command: &mut std::process::Command) {
+        #[cfg(unix)]
+        install_limits(self.limits, command);
         self.prepared.install(command);
+    }
+}
+
+/// `setrlimit`'s first argument, which glibc types differently from everyone
+/// else — the only reason this alias exists.
+#[cfg(all(unix, target_env = "gnu"))]
+type Resource = libc::__rlimit_resource_t;
+#[cfg(all(unix, not(target_env = "gnu")))]
+type Resource = libc::c_int;
+
+/// The limits, applied in the child between `fork` and `exec`.
+///
+/// This lives here rather than in `kernel` because `setrlimit` is POSIX: the
+/// `linux.rs`/`fallback.rs` split is about what only Linux has, and a limit
+/// both platforms honour would be duplicated on both sides of it.
+#[cfg(unix)]
+fn install_limits(limits: Limits, command: &mut std::process::Command) {
+    if limits.is_empty() {
+        return;
+    }
+    const MIB: u64 = 1024 * 1024;
+    let cpu = limits.cpu_seconds;
+    let file = limits.file_size_mb.map(|mb| mb.saturating_mul(MIB));
+    let memory = limits.memory_mb.map(|mb| mb.saturating_mul(MIB));
+    let processes = limits.processes;
+
+    // SAFETY: the closure runs after `fork` and before `exec`, where only
+    // async-signal-safe work is allowed. It allocates nothing and makes one
+    // `setrlimit` syscall per limit; `last_os_error` stores a raw errno without
+    // touching the allocator.
+    unsafe {
+        command.pre_exec(move || {
+            set_limit(libc::RLIMIT_CPU, cpu)?;
+            set_limit(libc::RLIMIT_FSIZE, file)?;
+            set_limit(libc::RLIMIT_AS, memory)?;
+            set_limit(libc::RLIMIT_NPROC, processes)?;
+            Ok(())
+        });
+    }
+}
+
+/// One limit, soft and hard together — a child that could raise its own soft
+/// limit back to the hard one is not limited.
+#[cfg(unix)]
+fn set_limit(resource: Resource, value: Option<u64>) -> std::io::Result<()> {
+    let Some(value) = value else { return Ok(()) };
+    let limit = libc::rlimit {
+        rlim_cur: value as libc::rlim_t,
+        rlim_max: value as libc::rlim_t,
+    };
+    // SAFETY: `limit` is a valid, initialised `rlimit` for the whole call.
+    match unsafe { libc::setrlimit(resource, &limit) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
     }
 }
 
@@ -534,6 +614,70 @@ mod tests {
             paths: vec![PathRule::new(".", Access::ReadWrite)],
             ..SandboxPolicy::default()
         }
+    }
+
+    /// A policy that allows `/bin/sh` and holds it to one CPU second.
+    #[cfg(unix)]
+    fn one_cpu_second() -> SandboxPolicy {
+        SandboxPolicy {
+            paths: vec![PathRule::new(".", Access::ReadWrite)],
+            commands: vec!["/bin/sh".into()],
+            network: false,
+            // Not because the limits need it: on a kernel without Landlock the
+            // gap is a denial under `kernel`, and this test is about the limit
+            // rather than about which kernel the runner has.
+            enforcement: Enforcement::BestEffort,
+            limits: Limits {
+                cpu_seconds: Some(1),
+                ..Limits::NONE
+            },
+        }
+    }
+
+    /// The limits are in the verdict, with their numbers.
+    ///
+    /// "rlimits" without them is the same claim for a 300-second limit and a
+    /// 1-second one, and afterwards the recording is the only thing that could
+    /// tell those runs apart.
+    #[cfg(unix)]
+    #[test]
+    fn a_verdict_names_the_limits_the_child_is_held_to() {
+        let fixture = Fixture::new("limits-verdict");
+        let sandbox = fixture.sandbox(&one_cpu_second());
+        let restrictions = sandbox.prepare_command("/bin/sh").expect("sh is allowed");
+        let named = restrictions.verdict.enforced_by.to_string();
+        assert!(named.contains("rlimits (cpu 1s)"), "{named}");
+    }
+
+    /// And they are not only in the string: the child is actually held.
+    ///
+    /// A spin loop is what the 30-second clock in `run_command` cannot answer
+    /// — it kills what the tool is still waiting for, and this holds what
+    /// outlives it. One CPU second, so the test costs one.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_spins_forever_is_killed_by_its_cpu_limit() {
+        if !Path::new("/bin/sh").exists() {
+            return;
+        }
+        let fixture = Fixture::new("limits-cpu");
+        let sandbox = fixture.sandbox(&one_cpu_second());
+        let restrictions = sandbox.prepare_command("/bin/sh").expect("sh is allowed");
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("while :; do :; done")
+            .current_dir(sandbox.base())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        restrictions.install(&mut command);
+
+        let status = command.status().expect("the child ran");
+        assert!(
+            !status.success(),
+            "the child outlived a limit that was supposed to hold it",
+        );
     }
 
     #[test]

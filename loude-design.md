@@ -336,6 +336,12 @@ enforcement = "kernel"          # or "best-effort"
 network = false
 commands = ["cargo", "git"]     # program names, never a shell string
 
+[sandbox.limits]                # what a child may spend, not what it may reach
+cpu-seconds = 300               # RLIMIT_CPU, per process
+file-size-mb = 1024             # RLIMIT_FSIZE, per file
+# memory-mb = 4096              # RLIMIT_AS — off by default, see below
+# processes = 512               # RLIMIT_NPROC — off by default, see below
+
 [[sandbox.paths]]
 path = "."
 access = "read-write"           # read | execute | read-write
@@ -356,6 +362,22 @@ access = "read-write"           # read | execute | read-write
   only what was written down, or `commands = ["ls"]` would quietly grant the agent
   `/etc`.
 - **Permission validation lives in the program's code**, not in the model behaving well.
+- **The paths say what a child may reach and `limits` says what it may spend.**
+  Nothing said the second thing until the limits existed, and the gap was not
+  academic: a fork bomb, a disk bomb and a memory bomb all ran to completion
+  inside `run_command`'s 30-second clock, whose only other companion was an 8 KiB
+  cap on what got *reported* about them. `setrlimit` is POSIX rather than Linux,
+  so the limits sit **above** the `linux.rs`/`fallback.rs` split and are the
+  first rung that holds a child on macOS at all — where `how` reads `rlimits (…)`
+  with the same `missing` as before, instead of "in-process check only".
+  `cpu-seconds` and `file-size-mb` are on by default; `memory-mb` (`RLIMIT_AS`)
+  is off because a Rust toolchain reserves address space far above what it
+  commits, and `processes` (`RLIMIT_NPROC`) is off because the kernel counts it
+  **per real uid, not per process tree** — a default there would deny `fork`
+  over processes this agent never started, and the right mechanism for it is a
+  pids cgroup with the container. A limit is applied soft and hard together: a
+  child that can raise its own soft limit back is not limited. See
+  [`RECORD/2026-09-01.what-the-audit-left.WIP.md`](RECORD/2026-09-01.what-the-audit-left.WIP.md).
 
 ### Who enforced it is reported, never assumed
 
@@ -368,7 +390,8 @@ available — the one place in this design where a security property is a settin
 - `"best-effort"` — apply what this kernel has and report the gap.
 
 Either way every verdict carries `Applied` — `Process`, `Kernel { how }`, or
-`Partial { how, missing }` — and `how` names the mechanism *and its version*,
+`Partial { how, missing }` — and `how` names every mechanism holding the child,
+the rlimits and their numbers included, *and its version*,
 because Landlock's older ABIs mediate less. Nothing here may say "sandboxed"
 without saying by what: a run whose subprocesses the kernel held and a run whose
 subprocesses nothing held are not the same run, and afterwards the recording is

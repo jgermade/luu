@@ -23,6 +23,27 @@ network = false
 # any check that looks at the first word.
 commands = ["cargo", "rustc", "git", "rg", "ls"]
 
+# What a child may spend, as opposed to what it may reach. `setrlimit` is POSIX,
+# so this is the one rung that holds a subprocess on macOS too — where there is
+# no Landlock and no seccomp, and where the verdict used to say "in-process check
+# only". Every number here is applied soft and hard together, in the child.
+#
+# The two that are commented out are off by default, and turning them on is a
+# per-machine decision rather than a safer default:
+#
+#   memory-mb  is RLIMIT_AS, and a Rust toolchain *reserves* address space far
+#              above what it commits — a number that looks like "what a build
+#              needs" kills builds that were fine.
+#   processes  is RLIMIT_NPROC, which the kernel counts per real uid and not per
+#              process tree: every process you are already running counts against
+#              it. The right answer for a fork bomb is a pids cgroup, and that
+#              arrives with the container.
+[sandbox.limits]
+cpu-seconds = 300     # per process, and a second belt to run_command's 30s clock
+file-size-mb = 1024   # per file: one file growing without bound is a disk bomb
+# memory-mb = 4096
+# processes = 512
+
 [[sandbox.paths]]
 path = "."
 access = "read-write"
