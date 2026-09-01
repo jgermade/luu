@@ -3,7 +3,7 @@
 //! One trait, so the choice of backend is confined. The first implementation
 //! talks to Ollama over HTTP; binding `llama-cpp-rs` directly is the eventual
 //! answer for KV-cache control, deferred until there is something to measure
-//! (`RECORD/2026-08-26.walking-skeleton.md`).
+//! (`RECORD/2026-08-26.walking-skeleton.completed.md`).
 
 use std::pin::Pin;
 

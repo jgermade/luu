@@ -33,7 +33,7 @@ use crate::trace::TraceMessage;
 /// 5: `evicted` lines — what the window dropped and never took back. Same rule
 /// as 3 and 4, a new variant of a tagged enum. A format-4 file does not say what
 /// its session forgot, and nothing can work it out afterwards: the floor lived
-/// in memory. See `RECORD/2026-08-31.eviction-tombstones.md`.
+/// in memory. See `RECORD/2026-08-31.eviction-tombstones.completed.md`.
 pub const FORMAT: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

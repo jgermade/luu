@@ -6,7 +6,7 @@
 //! - **`tree-sitter` and the tags query the grammar already ships.** Every
 //!   `tree-sitter-*` crate exports `TAGS_QUERY` as a `pub const`, capturing
 //!   `@definition.*` and `@reference.call` both — there is nothing to vendor and
-//!   nothing to write. See `RECORD/2026-08-27.aider-repo-map.md`.
+//!   nothing to write. See `RECORD/2026-08-27.aider-repo-map.completed.md`.
 //! - **The map goes in the cached prefix, under the tool definitions**, not
 //!   fused into the turn the way a fragment is. Blocks are ordered by how often
 //!   they are *rewritten*: the system block is a constant, the tools change when
@@ -19,7 +19,7 @@
 //!   and it is the baseline the reference graph has to beat. Ranking would
 //!   personalize the map, and a map that changes per turn is not a prefix.
 //!
-//! See `RECORD/2026-08-31.the-repo-map.md`.
+//! See `RECORD/2026-08-31.the-repo-map.completed.md`.
 
 use std::path::{Path, PathBuf};
 

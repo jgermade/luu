@@ -1,0 +1,39 @@
+# Fifteen questions about this repository, with nothing attached, ever.
+#
+# `grounded.txt` hands the file over with the question, which is right for
+# measuring whether an answer survives a fold and useless for measuring the
+# repository map: the map is a *locator* — paths, line numbers and signatures,
+# bodies elided — and a corpus that supplies the answer cannot measure locating.
+# See RECORD/2026-09-01.the-map-against-a-7b.md.
+#
+# So: no `## fragment:` lines here, on purpose. Run it twice, one flag apart —
+# `--map-tokens 0` against `--map-tokens 1024` — and score each answer as names
+# the right path / names a wrong path / declines.
+#
+# The three groups are the design, and the second is what makes it a
+# measurement rather than a demonstration.
+
+# --- Group A: the four files a 1024-token map actually holds. -----------------
+# The map's ceiling. If it helps anywhere, it helps here.
+which file defines the function that runs one agent turn?
+which file and line define the Backend trait?
+which struct reports how much of the prompt was reused between turns, and where does it live?
+where is a SessionView built back from a recording?
+how do I make the mock backend answer several different replies in order?
+which file defines AgentOutcome?
+
+# --- Group B: the placebo. ----------------------------------------------------
+# None of these fit in the map at any budget short of the whole repository. If
+# the answers here improve too, the map's content is not what caused it.
+which file holds the HTTP router and the /ws handler?
+which file defines the CLI's subcommands?
+which file turns recordings into the static read API?
+which file decides what gets dropped when the context window is full?
+which file builds the Landlock ruleset?
+which file assembles the prompt that both chat and serve send?
+
+# --- Group C: things that are not in this tree. -------------------------------
+# Does the map suppress invention, or does the model invent regardless?
+which file defines the judge that closes a task?
+where is the SQLite session store?
+which file implements the MCP client?

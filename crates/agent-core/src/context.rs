@@ -12,7 +12,7 @@
 //!   selected code is fused into the *current* user message, as late as
 //!   possible.
 //!
-//! See `RECORD/2026-08-27.context-manager.md` for how both were arrived at.
+//! See `RECORD/2026-08-27.context-manager.completed.md` for how both were arrived at.
 
 use serde::{Deserialize, Serialize};
 
@@ -163,7 +163,7 @@ pub struct Turn {
 ///
 /// Not a preference: the two rewrite the prompt at completely different rates,
 /// and a prefix cache reuses the longest common prefix. See
-/// `RECORD/2026-08-27.prefix-reuse-and-block-eviction.md`.
+/// `RECORD/2026-08-27.prefix-reuse-and-block-eviction.completed.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "policy", rename_all = "snake_case")]
 pub enum Eviction {
@@ -469,7 +469,7 @@ impl Context {
             .collect();
         // The field beside the one above, and the reason the fold lost answers
         // until now: what a task read was in hand at the close and was never
-        // asked for. See `RECORD/2026-08-30.the-fold-probe-run.md`.
+        // asked for. See `RECORD/2026-08-30.the-fold-probe-run.completed.md`.
         let shown: Vec<&Fragment> = self
             .turns
             .iter()
@@ -529,7 +529,7 @@ impl Context {
     /// Built from the floor forward, so a task closed after part of it was
     /// evicted folds only from what the window still holds — except that the
     /// summary it folds to is the whole task's. That is deliberate and it is a
-    /// cost: see `RECORD/2026-08-30.tasks-in-code.md`.
+    /// cost: see `RECORD/2026-08-30.tasks-in-code.completed.md`.
     fn items(&self) -> Vec<Item> {
         let mut items = Vec::new();
         let mut index = self.floor;
@@ -1123,7 +1123,7 @@ mod tests {
         // The probe's turns 17 and 18: a task grounded by a fragment, closed,
         // and asked about afterwards. Before this, the summary said "no tools
         // ran" and the file was gone. See
-        // `RECORD/2026-08-30.the-fold-probe-run.md`.
+        // `RECORD/2026-08-30.the-fold-probe-run.completed.md`.
         let counter = WordCounter::default();
         let mut context = Context::new("system prompt here");
         let task = context.propose_task("work out what the policy grants", Plan::default());

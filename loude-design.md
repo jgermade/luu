@@ -1,6 +1,6 @@
 # Loude (CLI alias: `luu`)
 
-Local AI agent written in Rust that orchestrates calls to models, optimized for local inference (limited context, tight token budget).
+Local-first AI agent written in Rust that orchestrates calls to models: optimized for local inference (limited context, tight token budget), and free to reach a remote model when the user names one — never as a fallback. See [`RECORD/2026-09-01.local-first.completed.md`](RECORD/2026-09-01.local-first.completed.md) for what "local-first" obligates and what it costs.
 
 This file is the design as it stands now, and is rewritten as decisions change. The dated
 reasoning behind them — including the answers that were wrong first — lives in [`RECORD/`](RECORD/),
@@ -32,7 +32,7 @@ Every task is confirmed before anything runs, so there is no autonomy setting to
 remember and no mode that can be left open. `plan`/`run`/`auto` used to live here;
 they were global where approval is per piece of work, and — the reason they went —
 a mode cannot tell the context manager what to compact. See
-[`RECORD/2026-08-27.tasks-instead-of-modes.md`](RECORD/2026-08-27.tasks-instead-of-modes.md).
+[`RECORD/2026-08-27.tasks-instead-of-modes.completed.md`](RECORD/2026-08-27.tasks-instead-of-modes.completed.md).
 
 One boundary does three jobs, which is the argument for it:
 
@@ -55,9 +55,9 @@ what the tool results reported, and the fragments the task's turns were shown �
 quoted from the file's own bytes, newest first, under a per-summary token cap,
 with no model prose in it. The quote is there because the grounded probe measured
 its absence losing answers: see
-[`RECORD/2026-08-30.the-fold-probe-run.md`](RECORD/2026-08-30.the-fold-probe-run.md)
+[`RECORD/2026-08-30.the-fold-probe-run.completed.md`](RECORD/2026-08-30.the-fold-probe-run.completed.md)
 for the measurement and
-[`RECORD/2026-08-30.what-a-summary-should-carry.md`](RECORD/2026-08-30.what-a-summary-should-carry.md)
+[`RECORD/2026-08-30.what-a-summary-should-carry.WIP.md`](RECORD/2026-08-30.what-a-summary-should-carry.WIP.md)
 for why verbatim rather than a digest. Reopening is therefore
 not an undo: the fold stops applying. Eviction runs over items rather than turns,
 so a folded task is kept or dropped whole and the two ways history gives way
@@ -97,8 +97,8 @@ write to its directory and at the kernel rung a grant is a directory anyway.
 Approving carries an amendment — the reads, writes and commands the person adds
 at the gate, checked against the policy file exactly as the model's plan was —
 which is what stops an under-specified plan from being a dead run.
-See [`RECORD/2026-08-30.the-gate.md`](RECORD/2026-08-30.the-gate.md) and
-[`RECORD/2026-08-30.narrowing.md`](RECORD/2026-08-30.narrowing.md).
+See [`RECORD/2026-08-30.the-gate.completed.md`](RECORD/2026-08-30.the-gate.completed.md) and
+[`RECORD/2026-08-30.narrowing.completed.md`](RECORD/2026-08-30.narrowing.completed.md).
 
 A refusal is kept, not erased: `rejected` is a state a task stays in, with the
 plan that was turned down. Nothing in a session is deleted — a closed task is
@@ -117,7 +117,7 @@ that ignored the format and one that declared empty lists arrive as the same
 empty plan, and the two want different fixes (a grammar, or a sentence). The read
 side keeps the plan as proposed beside the plan as approved, because the
 difference between them is what a person had to add — the cost of the gate. How
-to measure it is [`RECORD/2026-08-31.the-gate-probe.md`](RECORD/2026-08-31.the-gate-probe.md).
+to measure it is [`RECORD/2026-08-31.the-gate-probe.WIP.md`](RECORD/2026-08-31.the-gate-probe.WIP.md).
 
 **And the server says no out loud.** A `refused` message carries the request it
 answers, a reason (`busy`, `pending`, `task`, `not_granted`) and a sentence for
@@ -153,7 +153,7 @@ accuracy figure arrives for free and gates nothing until it exists.
                   └─────────────────────┘
 ```
 
-The core knows nothing about CLI, VSCode or the browser — it exposes an internal API (Rust) plus a local server speaking a single JSON message schema over swappable transports. This gets container isolation for free: the container only wraps the core.
+The core knows nothing about CLI, VSCode or the browser — it exposes an internal API (Rust) plus a local server speaking a single JSON message schema over swappable transports. This is also what makes container isolation a packaging question: the container wraps tool execution, not the whole core — see [Container mode](#container-mode) and [`RECORD/2026-09-01.the-container-decided.WIP.md`](RECORD/2026-09-01.the-container-decided.WIP.md).
 
 ## Context management (the differentiating piece)
 
@@ -218,7 +218,7 @@ stable prefix.
   four or five turns and holds still in between: mean reuse over the same 20 turns
   goes from 33% to 67%. It costs 21% of the history, which is not free and is not
   yet known to be harmless. Numbers in
-  [`RECORD/2026-08-27.prefix-reuse-and-block-eviction.md`](RECORD/2026-08-27.prefix-reuse-and-block-eviction.md).
+  [`RECORD/2026-08-27.prefix-reuse-and-block-eviction.completed.md`](RECORD/2026-08-27.prefix-reuse-and-block-eviction.completed.md).
 - **What leaves the window stays out.** Eviction is monotone: `Context` keeps a floor
   that only moves forward. Recomputing the retained window from scratch each turn
   lets a dropped turn return the moment a shorter prompt leaves room, which moves the
@@ -232,7 +232,7 @@ stable prefix.
   arithmetic, which is how a set of degenerate fixtures survived a whole commit. The
   turns are named rather than counted, because a reader months later cannot recover
   *which* without re-implementing the floor. See
-  [`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md).
+  [`RECORD/2026-08-31.eviction-tombstones.completed.md`](RECORD/2026-08-31.eviction-tombstones.completed.md).
 - **An unknown window is not an unlimited one**: `--context-limit 0` means unknown, so
   nothing is budgeted and nothing is evicted, and the panel says so rather than
   drawing a bar against nothing.
@@ -259,14 +259,14 @@ the next reads the result — and `usage.prompt_tokens` is summed over all of th
 So the agent loop announces every call it makes before making it, and the trace
 measures the ones after the first into the same chain as the turns. Measure only
 the first and a 2-token template gap reads as 1 962, with nothing failing and
-nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.md`](RECORD/2026-08-27.the-m4-pro-run.md).
+nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.completed.md`](RECORD/2026-08-27.the-m4-pro-run.completed.md).
 
 ### Still ahead
 
-- **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold *loses* is the conversation itself — the turns' own prose — and, until it quoted them, the files the turns were shown: that second loss was measured against a real model (two of three closed-task questions came back wrong, one of them a refusal) and closed by quoting the fragments verbatim into the summary. On the mock pair that quote costs 16 927 → 24 356 tokens over the twenty prompts, against 30 682 unfolded, and leaves reuse where it was (89.6% → 89.3%). On the real model (`qwen2.5-coder:7b`, sampling pinned) both closed-task questions that broke before the fix now answer correctly, matching the unfolded run almost word for word, and the fold still wins on tokens but by less than estimated: 29 135 tokens against 36 288 unfolded, a 19.7% win rather than the ~50% win before the fix paid for the quote — see [`RECORD/2026-08-30.the-fold-fix-verified.md`](RECORD/2026-08-30.the-fold-fix-verified.md). Model prose in the summary stays rejected — it would enter the write-once region every later turn is built on, which is exactly why the quote is the file's bytes and not a digest of them.
-- **Grounding a turn with a real file**: built. `--fragment PATH[:START-END]`, and `## fragment:` in a script, read a file **through the sandbox** and fuse it into one turn's user message — the `code` bucket, which existed from the start and until now was always zero. A path the sandbox would refuse to `read_file` is refused here too, and a denial is an error rather than a warning: a run that quietly dropped its grounding answers out of the model's training and looks like it worked, which is exactly what a real 7B did to twenty ungrounded turns. It is attached to one turn and then gone, because which turns a file belongs in is the next item's question and attaching it to all of them answers it wrongly, at every turn's expense. `scripts/tasks/grounded{,-tasks}.txt` are the pair this makes possible: the same twenty prompts, one grouped into tasks, with a last group that attaches nothing and asks the first fifteen again — the first corpus in which *does the fold lose what the task needed* is a question with an answer. The protocol for asking it is [`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
-- **The repository map**: built, and *not ranked*. Every `.rs` file's definitions with their signatures, bodies elided, from `tree-sitter`'s own `TAGS_QUERY`, in the cached prefix under the tool definitions — where blocks are ordered by how often they are rewritten, and the map changes only when the repository does. `--map-tokens N`, off by default so that every recording made before it stays comparable, and `luu map` prints the exact bytes. Files are outlined in path order until one does not fit; the map then says how many it left out. This repository is the argument for the next step: its whole outline is **6 327 tokens, 77% of an 8K window**, so at any affordable budget most of it is missing and the alphabet chose which part. What it costs on the grounded script: 870 tokens a turn at `--map-tokens 1024`, +56% on the run's total prompt tokens — and a prefix-reuse number that rises from 93.9% to 96.3% for purely arithmetic reasons, which is why a map-on run is not comparable on reuse to a map-off one. See [`RECORD/2026-08-31.the-repo-map.md`](RECORD/2026-08-31.the-repo-map.md).
-- **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.md`](RECORD/2026-08-27.aider-repo-map.md). Tools and the sandbox now exist, so this is unblocked.
+- **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold *loses* is the conversation itself — the turns' own prose — and, until it quoted them, the files the turns were shown: that second loss was measured against a real model (two of three closed-task questions came back wrong, one of them a refusal) and closed by quoting the fragments verbatim into the summary. On the mock pair that quote costs 16 927 → 24 356 tokens over the twenty prompts, against 30 682 unfolded, and leaves reuse where it was (89.6% → 89.3%). On the real model (`qwen2.5-coder:7b`, sampling pinned) both closed-task questions that broke before the fix now answer correctly, matching the unfolded run almost word for word, and the fold still wins on tokens but by less than estimated: 29 135 tokens against 36 288 unfolded, a 19.7% win rather than the ~50% win before the fix paid for the quote — see [`RECORD/2026-08-30.the-fold-fix-verified.completed.md`](RECORD/2026-08-30.the-fold-fix-verified.completed.md). Model prose in the summary stays rejected — it would enter the write-once region every later turn is built on, which is exactly why the quote is the file's bytes and not a digest of them.
+- **Grounding a turn with a real file**: built. `--fragment PATH[:START-END]`, and `## fragment:` in a script, read a file **through the sandbox** and fuse it into one turn's user message — the `code` bucket, which existed from the start and until now was always zero. A path the sandbox would refuse to `read_file` is refused here too, and a denial is an error rather than a warning: a run that quietly dropped its grounding answers out of the model's training and looks like it worked, which is exactly what a real 7B did to twenty ungrounded turns. It is attached to one turn and then gone, because which turns a file belongs in is the next item's question and attaching it to all of them answers it wrongly, at every turn's expense. `scripts/tasks/grounded{,-tasks}.txt` are the pair this makes possible: the same twenty prompts, one grouped into tasks, with a last group that attaches nothing and asks the first fifteen again — the first corpus in which *does the fold lose what the task needed* is a question with an answer. The protocol for asking it is [`RECORD/2026-08-27.grounded-fold-probe.completed.md`](RECORD/2026-08-27.grounded-fold-probe.completed.md).
+- **The repository map**: built, and *not ranked*. Every `.rs` file's definitions with their signatures, bodies elided, from `tree-sitter`'s own `TAGS_QUERY`, in the cached prefix under the tool definitions — where blocks are ordered by how often they are rewritten, and the map changes only when the repository does. `--map-tokens N`, off by default so that every recording made before it stays comparable, and `luu map` prints the exact bytes. Files are outlined in path order until one does not fit; the map then says how many it left out. This repository is the argument for the next step: its whole outline is **6 327 tokens, 77% of an 8K window**, so at any affordable budget most of it is missing and the alphabet chose which part. What it costs on the grounded script: 870 tokens a turn at `--map-tokens 1024`, +56% on the run's total prompt tokens — and a prefix-reuse number that rises from 93.9% to 96.3% for purely arithmetic reasons, which is why a map-on run is not comparable on reuse to a map-off one. See [`RECORD/2026-08-31.the-repo-map.completed.md`](RECORD/2026-08-31.the-repo-map.completed.md).
+- **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.completed.md`](RECORD/2026-08-27.aider-repo-map.completed.md). Tools and the sandbox now exist, so this is unblocked.
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
 ## Tool calling: how actions actually get executed
@@ -313,7 +313,7 @@ the history is a later, measured change; a cap is the part that is not a strateg
 ## Sandbox / security
 
 Three rungs, and the middle one is what makes the first worth having. Built: 1
-and 2. See [`RECORD/2026-08-27.tools-and-sandbox.md`](RECORD/2026-08-27.tools-and-sandbox.md).
+and 2. See [`RECORD/2026-08-27.tools-and-sandbox.completed.md`](RECORD/2026-08-27.tools-and-sandbox.completed.md).
 
 1. **In-process checks.** Canonicalize (`std::fs::canonicalize`) before comparing,
    or a symlink walks straight out. Everything an in-process tool can have — and
@@ -383,15 +383,17 @@ in-process tools — `openat2(RESOLVE_BENEATH)` is the answer there and is not b
 
 Level 3, and still ahead. The level-2 restrictions stay applied inside it.
 
-- Compile to a static binary (`musl`) → minimal image (`scratch`/distroless).
+- Compile `loude-worker` to a Linux binary → an image holding it **and the programs the policy allows**. `scratch`/distroless is wrong here: the container's whole job is running `cargo`, `rustc`, `git`, `rg`, `ls`, and a minimal image has none of them. So `commands = [...]` is the image's manifest, and "granted by the policy, absent from the image" is a third failure mode that the verdict has to name.
 - Bind-mount only allowed folders, network disabled by default (`--network none`).
-- If the inference backend runs on the host (to use GPU/Metal), the container isolates only tool execution (fs, bash) and talks to the backend over an explicitly exposed socket.
-- First version: rootless Podman or Docker with `--cap-drop=ALL` + non-root user.
+- **The container isolates tool execution only** (fs, commands); the context manager and the model client stay on the host and talk to it over an explicitly exposed socket. The GPU is the obvious reason and not the strong one: the topology does not justify `network = false`, it is what makes it affordable. A model call born inside the container could not be made with the container's network off, and the build-script protection would be lost at the moment isolation was raised. Under local-first this weighs more, not less.
+- First version: rootless Podman or Docker with `--cap-drop=ALL` + non-root user. Produce an **OCI image** and invoke whatever runtime the user names, rather than speaking any runtime's API — the same shape `commands` already has.
+- **One long-lived container per session**, not one per command: a container per command is a start (on some runtimes a VM boot) per command. It is cheaper in time and dearer in memory, which is the binding constraint at 16 GB and not at 48.
+- **The network stays attached and is denied per command by seccomp.** The filter is built at every spawn, so the grant's scope is exactly the task that declared it, with no startup cost and no window that outlives the task. Connecting and disconnecting the container's network would move by hand what the kernel already decides per call.
 
 ## VSCode integration
 
 - Use the **VSCode Chat API** (`vscode.chat.createChatParticipant`) — requires a lightweight TypeScript extension.
-- The TS extension acts as a bridge: renders the UI (messages, plan approval) and talks to the Rust binary (`agent-core --serve`) over stdio or a socket, using JSON-lines or JSON-RPC (reusable for the CLI too).
+- The TS extension acts as a bridge: renders the UI (messages, plan approval) and talks to a **spawned `luu` over stdio** — one process per window, no port, no bind, no token. Not a socket: the moment there is one, `approve_task` is reachable on it, and signed approvals become a precondition rather than a later step. The socket transport stays what `serve` already offers and becomes interesting for the editor only once multi-session exists. See [`RECORD/2026-09-01.how-a-surface-reaches-the-engine.completed.md`](RECORD/2026-09-01.how-a-surface-reaches-the-engine.completed.md), which also says why WASM in the extension host is a different product rather than a build target.
 - The task's confirmation step maps well to this UX: an editable plan before execution (similar to how Copilot shows changes before applying them), then execution with streaming of which tool is being used, and a closed task collapsing to its summary in the thread.
 
 ## Debug web client (agent protocol)
@@ -566,9 +568,9 @@ lives in memory for the life of the process.
   bucket shrink. The transcript keeps those turns and marks them, because a view
   that agreed with the prompt could no longer show the difference between them.
   The shape is OpenHands' condensation tombstones, read in
-  [`RECORD/2026-08-27.cline-openhands.md`](RECORD/2026-08-27.cline-openhands.md);
+  [`RECORD/2026-08-27.cline-openhands.completed.md`](RECORD/2026-08-27.cline-openhands.completed.md);
   the reasoning is in
-  [`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md).
+  [`RECORD/2026-08-31.eviction-tombstones.completed.md`](RECORD/2026-08-31.eviction-tombstones.completed.md).
   Compaction's own tombstone already exists as `task_closed`; pruning tool results
   out of a live turn would need a third, and deliberately has none until it does.
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
@@ -591,7 +593,7 @@ built next, in what order, and what blocks what is a separate question with a
 separate answer: [`ROADMAP/`](ROADMAP/), latest revision. Federation — sovereign
 hosts, a coordinating portal, sessions moved between machines — is proposed and
 not decided; the argument is
-[`RECORD/2026-08-31.the-portal-and-the-gate.md`](RECORD/2026-08-31.the-portal-and-the-gate.md).
+[`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](RECORD/2026-08-31.the-portal-and-the-gate.completed.md).
 
 ## Naming
 

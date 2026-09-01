@@ -4,8 +4,8 @@
 //! boundary does three jobs — it is the cut point compaction takes, the scope
 //! permission is granted at, and the grouping the transcript shows — which is
 //! the whole argument for it. See
-//! `RECORD/2026-08-27.tasks-instead-of-modes.md` for the argument and
-//! `RECORD/2026-08-30.tasks-in-code.md` for what this file does and does not do.
+//! `RECORD/2026-08-27.tasks-instead-of-modes.completed.md` for the argument and
+//! `RECORD/2026-08-30.tasks-in-code.completed.md` for what this file does and does not do.
 //!
 //! **Closing is an event, not a mutation.** Nothing here deletes a turn: a
 //! closed task changes how its turns *render* (see [`crate::context`]), so
@@ -35,7 +35,7 @@ const MAX_EVIDENCE_LINES: usize = 12;
 /// the session, so what it costs must be a function of this number and not of
 /// how much the task was handed. The value is a starting point and wants the
 /// grounded probe to choose it — see
-/// `RECORD/2026-08-30.what-a-summary-should-carry.md`.
+/// `RECORD/2026-08-30.what-a-summary-should-carry.WIP.md`.
 const MAX_QUOTED_TOKENS: u32 = 1024;
 
 /// What the agent proposes to do, and what the user approves.
@@ -370,14 +370,14 @@ impl Task {
 }
 
 /// The deterministic summary: the approved plan, what the task was shown, and
-/// what the tools actually reported. Read `RECORD/2026-08-30.tasks-in-code.md`
+/// what the tools actually reported. Read `RECORD/2026-08-30.tasks-in-code.completed.md`
 /// before adding prose to it — it lands in the write-once region, where being
 /// wrong is unrecoverable for the rest of the session.
 ///
 /// A fragment is quoted from the file's own bytes for that reason: it cannot be
 /// a hallucination, and it is the thing the grounded probe showed the fold
-/// losing — `RECORD/2026-08-30.the-fold-probe-run.md` measured it and
-/// `RECORD/2026-08-30.what-a-summary-should-carry.md` argues the fix.
+/// losing — `RECORD/2026-08-30.the-fold-probe-run.completed.md` measured it and
+/// `RECORD/2026-08-30.what-a-summary-should-carry.WIP.md` argues the fix.
 fn summary_text(
     objective: &str,
     plan: &Plan,

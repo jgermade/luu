@@ -44,7 +44,7 @@ pub struct PrefixReuse {
 /// `usage.prompt_tokens` is summed over all of them. Without these the panel
 /// compares our count of one call against the backend's count of three, and
 /// presents the difference as chat-template overhead. See
-/// `RECORD/2026-08-27.the-m4-pro-run.md`, which is where a 1 962-token gap
+/// `RECORD/2026-08-27.the-m4-pro-run.completed.md`, which is where a 1 962-token gap
 /// turned out to be this.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtraCall {

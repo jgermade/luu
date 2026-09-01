@@ -2,7 +2,7 @@
 //!
 //! No tools and no context management yet — this is the walking skeleton's
 //! middle, and its job is to make the events real before they are written down
-//! as a wire protocol (`RECORD/2026-08-26.walking-skeleton.md`).
+//! as a wire protocol (`RECORD/2026-08-26.walking-skeleton.completed.md`).
 
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};

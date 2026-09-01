@@ -421,7 +421,7 @@ fn model_for(backend: &dyn Backend, model: String) -> String {
 /// A script is the only harness that makes two runs comparable, and a task is
 /// confirmed before anything runs. Both hold: **the script carries the approved
 /// plan**, written down and reviewable in a diff, and approving it is a check
-/// rather than a question. See `RECORD/2026-08-30.tasks-in-code.md` for why
+/// rather than a question. See `RECORD/2026-08-30.tasks-in-code.completed.md` for why
 /// this and not an `--auto-approve` flag.
 #[derive(Debug, Clone, PartialEq)]
 enum Step {
@@ -743,7 +743,7 @@ pub async fn run() -> Result<()> {
     // The map is built once, before the first turn: it is the last block of the
     // cached prefix, and a block that is rebuilt mid-session is not a prefix.
     // What that costs — an agent that edits a file then carries the outline it
-    // had — is named in `RECORD/2026-08-31.the-repo-map.md`.
+    // had — is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
     let map = RepoMap::build(agency.sandbox.as_ref(), map_tokens, counter.as_ref());
     if !map.is_empty() {
         println!(

@@ -1,7 +1,7 @@
 //! What the agent may reach, and who is holding it to that.
 //!
 //! Three rungs, of which this module builds the first two
-//! (`RECORD/2026-08-27.tools-and-sandbox.md`):
+//! (`RECORD/2026-08-27.tools-and-sandbox.completed.md`):
 //!
 //! 1. **In-process checks.** Canonicalize, compare against the policy, refuse.
 //!    Everything an in-process tool can have, and nothing a subprocess gets:

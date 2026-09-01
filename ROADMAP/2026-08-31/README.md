@@ -1,5 +1,9 @@
 # Roadmap — revision 2026-08-31
 
+> **Superseded by [`ROADMAP/2026-09-01/`](../2026-09-01/).** Nothing here landed before
+> it was superseded, so nothing is struck through — what changed was the premise and two
+> measured facts. Kept as written.
+
 **What this is:** the order of work as it stands on this date, and what blocks
 what. Not a decision and not a description of the tree — for *what is true
 today* read [`loude-design.md`](../../loude-design.md), and for *why* read the
@@ -8,7 +12,7 @@ dated file in [`RECORD/`](../../RECORD/) each item links to.
 This revision exists because a federated architecture was proposed
 (*"Loude — Sistema Federado de Agentes"*, v0.1-draft, 2026-08-31) and the
 argument about it —
-[`RECORD/2026-08-31.the-portal-and-the-gate.md`](../../RECORD/2026-08-31.the-portal-and-the-gate.md)
+[`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md)
 — ended in an ordering claim that had nowhere to live. This is that place.
 
 ## The thesis, in one paragraph
@@ -30,10 +34,10 @@ of what makes the surface affordable at all.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 1 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.md), [design §Persistence](../../loude-design.md) · spec'd in [`session-store.md`](session-store.md) |
-| 2 | **The gate probe against a real model** | a machine | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.md) — written, unrun |
-| 3 | **Relevance selection** — `tree-sitter` tags over a reference graph | nothing (unblocked since tools landed) | [`aider-repo-map`](../../RECORD/2026-08-27.aider-repo-map.md), [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.md) |
-| 4 | **Multi-backend as measurement** | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.md) §Where it is right |
+| 1 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md), [design §Persistence](../../loude-design.md) · spec'd in [`session-store.md`](session-store.md) |
+| 2 | **The gate probe against a real model** | a machine | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) — written, unrun |
+| 3 | **Relevance selection** — `tree-sitter` tags over a reference graph | nothing (unblocked since tools landed) | [`aider-repo-map`](../../RECORD/2026-08-27.aider-repo-map.completed.md), [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md) |
+| 4 | **Multi-backend as measurement** | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right |
 | 5 | **Federation without a portal** | 1, and signed approvals | [`federation.md`](federation.md) |
 | — | Container level 3 · VSCode extension | the core being stable | [design §Suggested work order](../../loude-design.md) · sequenced in [`surface.md`](surface.md) |
 
@@ -121,7 +125,7 @@ Two readings, and both are in the shape rather than the dates:
    *a host is reachable through a third party* and *approvals are unforgeable* is
    the widest span on the chart. Read the two charts side by side and that gap is
    the entire argument of
-   [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.md)
+   [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md)
    §3, drawn rather than written.
 
 ## When this revision is superseded

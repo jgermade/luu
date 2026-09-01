@@ -10,7 +10,7 @@
 //! never has to carry them.
 //!
 //! Every variant below was written after watching `run_turn` produce it —
-//! see `RECORD/2026-08-26.walking-skeleton.md`.
+//! see `RECORD/2026-08-26.walking-skeleton.completed.md`.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,13 +32,13 @@ use crate::turn::{EndReason, TurnEvent};
 /// **2 is that rule being used**, for [`ServerMessage::Refused`]: an unknown
 /// `type` in a tagged enum is a parse error rather than a line to skip, so a new
 /// variant is exactly the change the rule names. See
-/// `RECORD/2026-08-30.a-refusal-is-a-message.md`.
+/// `RECORD/2026-08-30.a-refusal-is-a-message.completed.md`.
 ///
 /// **3 is the same rule again**, for [`ServerMessage::Evicted`]: what leaves the
 /// window is a thing that happened to the conversation, not a debug reading, so
 /// it is here rather than on the trace channel — and a client that could not
 /// parse it would be watching a transcript whose turns are silently no longer
-/// in the prompt. See `RECORD/2026-08-31.eviction-tombstones.md`.
+/// in the prompt. See `RECORD/2026-08-31.eviction-tombstones.completed.md`.
 pub const VERSION: u32 = 3;
 
 /// Turns are numbered per session, in order, starting at 1.

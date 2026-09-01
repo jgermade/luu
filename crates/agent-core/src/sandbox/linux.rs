@@ -10,7 +10,7 @@
 //! holding the allocator's lock at the moment of the fork. What is left to do
 //! after the fork is three syscalls and no allocation.
 //!
-//! See `RECORD/2026-08-27.tools-and-sandbox.md`.
+//! See `RECORD/2026-08-27.tools-and-sandbox.completed.md`.
 
 use std::collections::BTreeMap;
 use std::os::fd::{AsRawFd, OwnedFd};

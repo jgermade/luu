@@ -4,7 +4,7 @@
 # There is no deny list, deliberately — Landlock is allow-only, so a subtraction
 # could be honoured in our own checks and not in a subprocess, which is where it
 # would matter. The way to deny is to not grant. See
-# RECORD/2026-08-27.tools-and-sandbox.md.
+# RECORD/2026-08-27.tools-and-sandbox.completed.md.
 #
 # `luu tools` prints the resolved result, the implicit grants included.
 

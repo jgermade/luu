@@ -15,7 +15,7 @@
 //! so the strict alternation the prompt shape depends on holds all the way
 //! through, and the turn that gets stored can be replayed exactly.
 //!
-//! See `RECORD/2026-08-27.tools-and-sandbox.md`.
+//! See `RECORD/2026-08-27.tools-and-sandbox.completed.md`.
 
 use tokio::sync::{mpsc, watch};
 
@@ -344,7 +344,7 @@ mod tests {
         // `Ended` are summed over both. Before this event only the first was
         // measurable, so on any turn with a tool our count and the backend's
         // were not counts of the same thing — 1 590 against 3 552 on the run
-        // that found it. See `RECORD/2026-08-27.the-m4-pro-run.md`.
+        // that found it. See `RECORD/2026-08-27.the-m4-pro-run.completed.md`.
         let fixture = Fixture::new("modelcalls");
         let (events, _) = drive(
             &fixture,

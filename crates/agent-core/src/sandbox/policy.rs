@@ -91,7 +91,7 @@ impl Enforcement {
 /// There is deliberately no deny list: Landlock is allow-only, so a subtraction
 /// could be honoured in-process and not in a subprocess — two sandboxes wearing
 /// one config file, with the weaker one applying where the danger is. The way
-/// to deny is to not grant. See `RECORD/2026-08-27.tools-and-sandbox.md`.
+/// to deny is to not grant. See `RECORD/2026-08-27.tools-and-sandbox.completed.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxPolicy {

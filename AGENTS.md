@@ -1,7 +1,8 @@
 # Loude (CLI alias: `luu`)
 
-A local AI agent in Rust that orchestrates calls to models, built for local
-inference — 7B–32B models with 8K–32K of context. The differentiator is context
+A local-first AI agent in Rust that orchestrates calls to models, built for local
+inference — 7B–32B models with 8K–32K of context — and free to reach a remote
+model when you name one, never as a fallback. The differentiator is context
 management: what gets into the prompt, and what earns its place there.
 
 Be concise in your answers. I prefer examples over long text.
@@ -38,7 +39,22 @@ roadmap nobody can calibrate.
 ## Plans
 
 Design work that isn't code yet lives in `RECORD/`, one file per proposal, named
-`YYYY-MM-DD.<slug>.md` after the day it was written. Write the plan there *before*
+`YYYY-MM-DD.<slug>.<state>.md` after the day it was written, where `<state>` is
+`WIP` or `completed`.
+
+**The suffix is the record's own state, not the project's.** A record is `WIP`
+while it is still waiting on the thing it exists to produce — code it plans, a run
+it specifies, a decision it asks for — and becomes `completed` once that has
+happened. A *Still open* section does not make a record `WIP`: every record ends
+with one by design, and if open threads counted, nothing would ever be complete.
+A study, a stock-taking or an argument is `completed` the day it is written,
+because writing it is the whole of what it was for.
+
+Renaming is the **only** change a finished record may receive; the content stays
+append-only, and the state moves in the filename rather than in an edited line. A
+rename breaks every link that points at the file — including the ones in Rust doc
+comments — so it updates all of them in the same commit, and `RECORD/` is checked
+for dangling links before the commit lands. Write the plan there *before*
 touching code — the reasoning is the point, and it's what a future reader (or the
 next agent) needs in order to argue with the decision rather than rediscover it. A
 plan states the problem, the proposal, what it costs, what was rejected and why,
@@ -138,7 +154,7 @@ plan as approved for the same reason: the difference between them is what a
 person had to add, which is the cost of the gate. The task lifecycle is a state
 machine and every transition is guarded: a proposal cannot be closed, a rejected
 plan cannot be reopened. See
-[`RECORD/2026-08-30.a-refusal-is-a-message.md`](RECORD/2026-08-30.a-refusal-is-a-message.md). A closed task collapses
+[`RECORD/2026-08-30.a-refusal-is-a-message.completed.md`](RECORD/2026-08-30.a-refusal-is-a-message.completed.md). A closed task collapses
 in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
 
@@ -162,7 +178,7 @@ nothing; a denial says which of the two refused. In `serve`, `approve_task`
 carries the files and commands the person adds at the gate, checked against the
 policy file the same way, which is what keeps an under-specified plan from being
 a dead run. See
-[`RECORD/2026-08-30.narrowing.md`](RECORD/2026-08-30.narrowing.md). Closing folds the task's turns into a
+[`RECORD/2026-08-30.narrowing.completed.md`](RECORD/2026-08-30.narrowing.completed.md). Closing folds the task's turns into a
 deterministic summary (the plan, what the tool results reported, and the
 fragments the turns were shown, quoted verbatim under a token cap), which is
 what the `summaries` bucket in the budget panel plots. A directive it does not
@@ -194,7 +210,7 @@ call (870 tokens × 20 turns is +56% on the grounded script's total), and it
 shared and total together, so 93.9% → 96.3% is not an improvement and a reuse
 number from a run with the map is not comparable to one without it. Numbers and
 the two bugs that running it found are in
-[`RECORD/2026-08-31.the-repo-map.md`](RECORD/2026-08-31.the-repo-map.md).
+[`RECORD/2026-08-31.the-repo-map.completed.md`](RECORD/2026-08-31.the-repo-map.completed.md).
 
 `--fragment PATH[:START-END]` on `chat` fuses a real file into the next prompt —
 repeatable, 1-based inclusive lines, read **through the sandbox**, and attached
@@ -205,7 +221,7 @@ a warning: a run that quietly dropped its grounding answers out of the model's
 training and looks like it worked. This is what fills the `code` bucket, which
 was zero in every recording before the surface existed — and why every script in
 `scripts/tasks/` except the grounded pair is ungrounded Q&A that a 7B will answer
-from training. See `RECORD/2026-08-27.grounded-fold-probe.md`.
+from training. See `RECORD/2026-08-27.grounded-fold-probe.completed.md`.
 
 `--context-limit` is the model's window (`0` means unknown: no budget, no
 eviction), `--reserve` is what is held back for the answer, `--evict` is how the
@@ -216,7 +232,7 @@ A cut says so: the run prints `== evicted turn N` and the recording carries an
 them and which policy did it. Over the same twenty prompts at 1024 tokens that
 is ten small cuts under `turn`, two deep ones under `block`, and none at all in
 the tasks run — the fold kept it under the limit. See
-[`RECORD/2026-08-31.eviction-tombstones.md`](RECORD/2026-08-31.eviction-tombstones.md). **Without `--tokenizer` the counts are
+[`RECORD/2026-08-31.eviction-tombstones.completed.md`](RECORD/2026-08-31.eviction-tombstones.completed.md). **Without `--tokenizer` the counts are
 `chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
 useless for a comparison, and the numbers say so themselves.
 
@@ -240,7 +256,7 @@ in the picker, and fails on any console error other than the socket that cannot
 connect on a static host. It runs in the `web` job, after the site is assembled.
 It has already earned itself: it found a double replay that had been showing a
 ghost turn to every visitor of the deployed page. See
-[`RECORD/2026-08-30.tests-that-run-it.md`](RECORD/2026-08-30.tests-that-run-it.md).
+[`RECORD/2026-08-30.tests-that-run-it.completed.md`](RECORD/2026-08-30.tests-that-run-it.completed.md).
 
 CI is `.github/workflows/build.yml` (fmt, clippy, tests, both binaries, the site) on
 every push and pull request. `release.yml` is manual: it takes `patch`/`minor`/`major`,
@@ -263,7 +279,7 @@ That needs a model. This is the setup for one.
 This has been run: `qwen2.5-coder:7b/14b/32b` pulled, tokenizer fetched, the
 setup below confirmed correct as written — `num_ctx` reached the server, the
 macOS `run_command` denial read exactly as described. What running it actually
-found is in [`RECORD/2026-08-27.the-m4-pro-run.md`](RECORD/2026-08-27.the-m4-pro-run.md):
+found is in [`RECORD/2026-08-27.the-m4-pro-run.completed.md`](RECORD/2026-08-27.the-m4-pro-run.completed.md):
 `steady-state`/`steady-state-tasks` carry no grounding, so they cannot answer
 whether an answer survives a fold; a tool call inside a turn was invisible to
 `prefix_reuse` the same way a planning call had been; and folding's token result
@@ -353,11 +369,11 @@ cargo run --release --bin luu -- serve --record ~/records/live.jsonl   # and loo
 **The protocol for that run — the commands, what a right answer to each of the
 last five turns contains, how to tell "the summary dropped it" from "the model
 ignored it", and the sampling precondition — is
-[`RECORD/2026-08-27.grounded-fold-probe.md`](RECORD/2026-08-27.grounded-fold-probe.md).
+[`RECORD/2026-08-27.grounded-fold-probe.completed.md`](RECORD/2026-08-27.grounded-fold-probe.completed.md).
 Read it before running, and append what it says to append.**
 
 **The gate has its own, and it has never been run:**
-[`RECORD/2026-08-31.the-gate-probe.md`](RECORD/2026-08-31.the-gate-probe.md) —
+[`RECORD/2026-08-31.the-gate-probe.WIP.md`](RECORD/2026-08-31.the-gate-probe.WIP.md) —
 fifteen prompts typed through `serve`, what a plan worth approving names for
 each, the four ways a denial can happen and how to tell them apart, and the five
 numbers to write down. Everything verified for the gate, for narrowing and for
@@ -463,7 +479,7 @@ implementation detail from close up:
   first and the two numbers count different things — a 2-token chat-template gap
   reads as 1 962 — and nothing fails. The agent loop announces every call it
   makes before making it; the trace channel measures the ones after the first
-  into the same chain. See `RECORD/2026-08-27.the-m4-pro-run.md`.
+  into the same chain. See `RECORD/2026-08-27.the-m4-pro-run.completed.md`.
 - **The stable prompt prefix stays byte-identical across calls**, and how much of
   it survived is reported per turn rather than assumed. System text and
   tool definitions are what llama.cpp's prompt cache reuses. The definitions are

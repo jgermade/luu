@@ -1,7 +1,7 @@
 # Federation, in the order it can safely be built
 
 Sequencing only. The argument for every change below is in
-[`RECORD/2026-08-31.the-portal-and-the-gate.md`](../../RECORD/2026-08-31.the-portal-and-the-gate.md)
+[`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md)
 and is deliberately not repeated here.
 
 ## Kept from the draft plan

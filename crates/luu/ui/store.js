@@ -2,7 +2,7 @@
 //
 // Two reasons, both deliberate:
 //
-// 1. jq79 has no teardown hook yet (RECORD/2026-08-26.web-debug-client.md), so
+// 1. jq79 has no teardown hook yet (RECORD/2026-08-26.web-debug-client.completed.md), so
 //    nothing a component owns can be closed when it unmounts. The socket lives
 //    here, at module scope, where its lifetime is the page's. That is fine for
 //    one page and will not survive per-session components — which is why the
@@ -70,7 +70,7 @@ let frame = null
 // jq79 does not wake an `:each` binding when a property of an object inside a
 // reactive array is assigned from outside the component — `items[0].text = x`
 // renders nothing, `items[0] = {...}` renders. Minimal repro and the upstream
-// note are in RECORD/2026-08-26.walking-skeleton.md. Replacing costs one object
+// note are in RECORD/2026-08-26.walking-skeleton.completed.md. Replacing costs one object
 // per frame, and `:key` keeps the DOM.
 function replaceLast(patch) {
   const index = state.messages.length - 1

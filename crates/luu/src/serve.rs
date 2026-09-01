@@ -173,7 +173,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
 
     // Built once, before the socket is up: the map is the last block of the
     // cached prefix, and a block rebuilt mid-session is not a prefix. What that
-    // costs is named in `RECORD/2026-08-31.the-repo-map.md`.
+    // costs is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
     let map = RepoMap::build(agency.sandbox.as_ref(), map_tokens, counter.as_ref());
     if !map.is_empty() {
         eprintln!(
@@ -403,7 +403,7 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
 ///
 /// Every early return in this file that a client could not otherwise
 /// distinguish from a dropped message goes through here. See
-/// `RECORD/2026-08-30.a-refusal-is-a-message.md`.
+/// `RECORD/2026-08-30.a-refusal-is-a-message.completed.md`.
 async fn refuse(app: &Arc<App>, request: &str, reason: Refusal, detail: impl Into<String>) {
     app.publish(Event::Protocol(ServerMessage::Refused {
         request: request.to_string(),
