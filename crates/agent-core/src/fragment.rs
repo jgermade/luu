@@ -6,7 +6,7 @@
 //! a 7B asked "what does the context manager do?" answered about Python's
 //! `__enter__`/`__exit__`, and *does a closed task's summary lose something the
 //! task needed* could not be asked at all — there was no grounded answer for a
-//! fold to lose. See `RECORD/2026-08-27.tasks-in-the-core.md`, fourth pass.
+//! fold to lose. See `RECORD/2026-08-27.the-m4-pro-run.completed.md`, the fourth pass.
 //!
 //! Two decisions here, both easy to get wrong:
 //!

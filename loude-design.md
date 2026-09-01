@@ -57,7 +57,7 @@ with no model prose in it. The quote is there because the grounded probe measure
 its absence losing answers: see
 [`RECORD/2026-08-30.the-fold-probe-run.completed.md`](RECORD/2026-08-30.the-fold-probe-run.completed.md)
 for the measurement and
-[`RECORD/2026-08-30.what-a-summary-should-carry.WIP.md`](RECORD/2026-08-30.what-a-summary-should-carry.WIP.md)
+[`RECORD/2026-08-30.what-a-summary-should-carry.completed.md`](RECORD/2026-08-30.what-a-summary-should-carry.completed.md)
 for why verbatim rather than a digest. Reopening is therefore
 not an undo: the fold stops applying. Eviction runs over items rather than turns,
 so a folded task is kept or dropped whole and the two ways history gives way

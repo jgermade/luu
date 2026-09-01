@@ -30,7 +30,7 @@ mkdir -p "$out"
 #
 # Same script, same window, same counter. The first two are one flag apart; the
 # third is the same twenty prompts grouped into four tasks, which is a boundary
-# apart rather than a flag apart. See `RECORD/2026-08-30.tasks-in-code.md`.
+# apart rather than a flag apart. See `RECORD/2026-08-30.tasks-in-code.completed.md`.
 for policy in turn block; do
   "$luu" chat --script "$(dirname "$0")/tasks/steady-state.txt" \
     --mock-delay-ms 8 --context-limit 1024 --reserve 64 --evict "$policy" \
