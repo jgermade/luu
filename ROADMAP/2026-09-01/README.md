@@ -103,9 +103,14 @@ inside the container with a model in the loop.
   group B into the map without growing it, and watch B move the way A did. That
   is the item most likely to be crowded out by work that feels more urgent, which
   is why it stays on the critical path.
-- **Signed approvals still block the first off-loopback bind.** Unchanged, and
-  now with a second instance: the IPC between the host and `loude-worker` carries
-  approvals across a trust boundary inside one machine.
+- **Signed approvals still block the first *shared* off-loopback bind.**
+  Narrower than it read yesterday: a bearer token now gates `/ws` and `/api/*`,
+  and without one the bind is refused — see *Landed since this revision* below.
+  That makes an off-loopback bind possible for one operator with one secret; it
+  is not identity, so an approval still cannot say *who* approved it, and that
+  is what federation needs. The second instance is unchanged: the IPC between
+  the host and `loude-worker` carries approvals across a trust boundary inside
+  one machine.
 
 ## Corrected from the previous revision
 
@@ -120,6 +125,30 @@ inside the container with a model in the loop.
 - The engine track said relevance selection "has to beat the path-order
   baseline". It now has to do something specific and falsifiable instead, and the
   corpus to check it with exists.
+
+## Landed since this revision was written
+
+Three findings from
+[`luu_architectural_audit_containerized.md`](luu_architectural_audit_containerized.md),
+none of which waits on level 3 and two of which were enforcement this project
+already claimed in prose. They are not rows in the order above — they came out of
+the audit rather than out of the sequencing — and they are recorded here so this
+revision can be read afterwards as *what was true while it was current*. Argued
+and closed in
+[`what-the-audit-left`](../../RECORD/2026-09-01.what-the-audit-left.completed.md):
+
+- ~~`serve` binds where it is told and asks nobody~~ — a non-loopback bind is
+  refused without `--auth-token-file`, before the listener exists; the token
+  gates `/ws` and `/api/*`.
+- ~~A child has a clock and nothing else~~ — `[sandbox.limits]` as `setrlimit`
+  in the child. POSIX, so it is the first rung that holds a child on macOS at
+  all. `RLIMIT_NPROC` shipped **off**, against the plan: the kernel counts it
+  per uid, not per process tree.
+- ~~`run_command` answers in a paragraph~~ — `exit_code`, `signal`, `stdout`,
+  `stderr` and `duration_ms` are fields now, and the rendering the model reads
+  is unchanged. This is what unblocks the closing ladder's next rung, which
+  nothing in the order above covers and which is the honest thing this revision
+  is missing.
 
 ## When this revision is superseded
 
