@@ -164,14 +164,14 @@ pub async fn run_turn(
             }
             Some(Ok(Chunk::Done { stop, usage })) => {
                 let reason = EndReason::from(stop);
-                emit!(TurnEvent::Ended {
-                    reason,
-                    usage: Some(usage)
-                });
+                // Passed through as it arrived: a backend that did not report
+                // usage says `None` here, and turning that into zeros would be
+                // the one lie this field cannot afford.
+                emit!(TurnEvent::Ended { reason, usage });
                 return TurnOutcome {
                     text,
                     reason,
-                    usage: Some(usage),
+                    usage,
                     error: None,
                 };
             }

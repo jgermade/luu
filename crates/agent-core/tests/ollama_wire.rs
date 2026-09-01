@@ -159,8 +159,15 @@ async fn the_ndjson_comes_back_as_text_chunks_and_a_done() {
         .collect();
     assert_eq!(text, "Hola mundo");
 
-    let Some(Chunk::Done { stop, usage }) = chunks.last() else {
-        panic!("the stream ended without a Done: {chunks:?}");
+    // `Some`, not merely non-zero: Ollama's done line always carries the
+    // counts, and a run of this backend that reported "not reported" would be
+    // a change worth failing on.
+    let Some(Chunk::Done {
+        stop,
+        usage: Some(usage),
+    }) = chunks.last()
+    else {
+        panic!("the stream ended without a Done carrying usage: {chunks:?}");
     };
     assert_eq!(*stop, StopReason::Stop);
     assert_eq!(usage.prompt_tokens, 26);

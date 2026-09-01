@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
-use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama};
+use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
 use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
 use agent_core::fragment;
 use agent_core::protocol::ServerMessage;
@@ -117,6 +117,20 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
 
+        /// Where the OpenAI-compatible server is. `llama-server`, vLLM, LM
+        /// Studio and the hosted endpoints all answer here — and none of them
+        /// takes the window on a request, so start the server with the window
+        /// this run budgets against.
+        #[arg(long, default_value = agent_core::backend::openai::DEFAULT_BASE_URL)]
+        openai_url: String,
+
+        /// A file holding the bearer token for `--backend openai`. Omitted
+        /// means no `Authorization` header at all, which is what a local
+        /// server wants. A file rather than a flag or an env var, for the
+        /// reason `--auth-token-file` gives.
+        #[arg(long, value_name = "PATH")]
+        api_key_file: Option<std::path::PathBuf>,
+
         #[arg(long, default_value_t = 25)]
         mock_delay_ms: u64,
 
@@ -203,6 +217,20 @@ enum Command {
 
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
+
+        /// Where the OpenAI-compatible server is. `llama-server`, vLLM, LM
+        /// Studio and the hosted endpoints all answer here — and none of them
+        /// takes the window on a request, so start the server with the window
+        /// this run budgets against.
+        #[arg(long, default_value = agent_core::backend::openai::DEFAULT_BASE_URL)]
+        openai_url: String,
+
+        /// A file holding the bearer token for `--backend openai`. Omitted
+        /// means no `Authorization` header at all, which is what a local
+        /// server wants. A file rather than a flag or an env var, for the
+        /// reason `--auth-token-file` gives.
+        #[arg(long, value_name = "PATH")]
+        api_key_file: Option<std::path::PathBuf>,
 
         /// Milliseconds between mock tokens, for exercising slow generation.
         #[arg(long, default_value_t = 25)]
@@ -395,24 +423,57 @@ impl EvictionKind {
 enum BackendKind {
     Mock,
     Ollama,
+    /// Any OpenAI-compatible server: `llama-server`, vLLM, LM Studio, a hosted
+    /// endpoint, or Ollama's own `/v1`.
+    Openai,
 }
 
-fn build_backend(
+/// Where a backend is, and what it needs to be reached. Grouped because two
+/// subcommands build the same thing from the same flags, and a seventh
+/// positional argument is how they drift apart.
+struct BackendArgs<'a> {
     kind: BackendKind,
-    ollama_url: &str,
+    ollama_url: &'a str,
+    openai_url: &'a str,
+    api_key_file: Option<&'a std::path::Path>,
     mock_delay_ms: u64,
     mock_replies: Vec<String>,
-) -> Box<dyn Backend> {
-    match kind {
+    /// What this run budgets against, only so the OpenAI backend can say that
+    /// it cannot send it. Nothing else here reads it.
+    context_limit: u32,
+}
+
+fn build_backend(args: BackendArgs<'_>) -> Result<Box<dyn Backend>> {
+    Ok(match args.kind {
         BackendKind::Mock => Box::new(
-            match mock_replies.is_empty() {
+            match args.mock_replies.is_empty() {
                 true => Mock::default(),
-                false => Mock::replies(mock_replies),
+                false => Mock::replies(args.mock_replies),
             }
-            .delay(Duration::from_millis(mock_delay_ms)),
+            .delay(Duration::from_millis(args.mock_delay_ms)),
         ),
-        BackendKind::Ollama => Box::new(Ollama::new(ollama_url)),
-    }
+        BackendKind::Ollama => Box::new(Ollama::new(args.ollama_url)),
+        BackendKind::Openai => {
+            // Once, before anything is measured: this API has no field for the
+            // window, so a run that budgets 8192 against a server started with
+            // 4096 can only be told apart afterwards, by the prompt_tokens each
+            // turn reports. Saying nothing here is how that becomes invisible.
+            if let Some(caveat) = OpenAi::window_caveat(Some(args.context_limit)) {
+                eprintln!("note: {caveat}");
+            }
+            let mut backend = OpenAi::new(args.openai_url);
+            if let Some(path) = args.api_key_file {
+                let key = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading the API key from {}", path.display()))?;
+                let key = key.trim();
+                if key.is_empty() {
+                    anyhow::bail!("the API key file {} is empty", path.display());
+                }
+                backend = backend.with_api_key(key);
+            }
+            Box::new(backend)
+        }
+    })
 }
 
 /// The mock ignores the model name; passing the Ollama default through would
@@ -646,6 +707,8 @@ pub async fn run() -> Result<()> {
         backend,
         model,
         ollama_url,
+        openai_url,
+        api_key_file,
         mock_delay_ms,
         mock_replies,
         record,
@@ -659,7 +722,15 @@ pub async fn run() -> Result<()> {
         map_tokens,
     } = command
     {
-        let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
+        let backend = build_backend(BackendArgs {
+            kind: backend,
+            ollama_url: &ollama_url,
+            openai_url: &openai_url,
+            api_key_file: api_key_file.as_deref(),
+            mock_delay_ms,
+            mock_replies,
+            context_limit,
+        })?;
         let model = model_for(backend.as_ref(), model);
         let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
         if let Some(warning) = &warning {
@@ -691,6 +762,8 @@ pub async fn run() -> Result<()> {
         backend,
         model,
         ollama_url,
+        openai_url,
+        api_key_file,
         mock_delay_ms,
         mock_replies,
         cancel_after_ms,
@@ -722,7 +795,15 @@ pub async fn run() -> Result<()> {
         (None, None) => vec![Step::Prompt(std::io::read_to_string(std::io::stdin())?)],
     };
 
-    let backend = build_backend(backend, &ollama_url, mock_delay_ms, mock_replies);
+    let backend = build_backend(BackendArgs {
+        kind: backend,
+        ollama_url: &ollama_url,
+        openai_url: &openai_url,
+        api_key_file: api_key_file.as_deref(),
+        mock_delay_ms,
+        mock_replies,
+        context_limit,
+    })?;
     let model = model_for(backend.as_ref(), model);
     let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
     if let Some(warning) = &warning {

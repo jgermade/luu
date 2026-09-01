@@ -87,6 +87,10 @@ cargo fmt --all --check
 
 cargo run --bin luu -- chat "hola"                    # one turn, mock backend, to stdout
 cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
+# and against anything OpenAI-compatible: llama-server, vLLM, LM Studio, a
+# hosted endpoint, or Ollama's own /v1. The window is the server's — see below.
+cargo run --bin luu -- chat "hola" --backend openai \
+  --openai-url http://127.0.0.1:8080/v1 --model qwen2.5-coder-7b
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 
 # the gate, without a model: the planning call answers with a plan block, then
@@ -296,6 +300,40 @@ real release.
 **Do not edit the UI's `dist`-like output, because there isn't one.** `crates/luu/ui/`
 is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into
 the binary for release. Editing a component costs a reload, not a `cargo build`.
+
+## The two backends, and the one rule that does not transfer
+
+`--backend ollama` and `--backend openai` are both built, behind one trait.
+The second is not about hosted APIs: it is how `llama-server`, vLLM and LM Studio
+are reached, which is most of the machines in
+[`ROADMAP/2026-09-01/machines.md`](ROADMAP/2026-09-01/machines.md).
+
+**`--context-limit` reaches Ollama and cannot reach an OpenAI-compatible
+server.** Ollama takes it as `options.num_ctx` and truncates the prompt silently
+without it. The chat-completions API has no field for the window at all —
+`max_tokens` caps the *output*, and on `llama-server`, vLLM and LM Studio the
+window is what the server was started with (`llama-server -c 8192`, vLLM
+`--max-model-len 8192`). So `luu` budgets against it, prints a note saying it
+cannot send it, and the check moves to the response: `usage.prompt_tokens` per
+turn is what actually arrived, and it is already compared against our own count.
+**A run against a server started smaller than `--context-limit` is not
+comparable to one against Ollama at the same number**, and that gap is the only
+place it shows.
+
+Usage itself is the second half of that. These servers stream *no* usage unless
+`stream_options.include_usage` is on the request — it always is here — and some
+still send none, so `Chunk::Done` carries `Option<Usage>`: `None` is **not
+reported**, which the budget panel shows as absent rather than as a prompt of
+zero tokens. Ollama always reports counts, so nothing about existing recordings
+moved. See
+[`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
+
+`--api-key-file` is the bearer token for a hosted endpoint, a file for the same
+reason `--auth-token-file` is one; with no key, no `Authorization` header is sent
+at all, which is what a local server wants. The backend's name in a recording is
+`openai@<host>`, not `openai`, because a header whose job is to make two runs
+comparable cannot call a 7B on a laptop and a hosted frontier model the same
+thing.
 
 ## Running against a real model (Ollama)
 

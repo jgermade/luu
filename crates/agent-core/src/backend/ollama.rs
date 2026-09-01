@@ -109,10 +109,12 @@ fn parse_line(line: &[u8]) -> Result<Option<Chunk>, BackendError> {
                 Some("length") => StopReason::Length,
                 Some(_) => StopReason::Other,
             },
-            usage: Usage {
+            // Always `Some` here: Ollama's done line carries the counts, and
+            // a missing field means zero rather than unknown.
+            usage: Some(Usage {
                 prompt_tokens: parsed.prompt_eval_count.unwrap_or(0),
                 completion_tokens: parsed.eval_count.unwrap_or(0),
-            },
+            }),
         }));
     }
 
@@ -202,8 +204,12 @@ mod tests {
     #[test]
     fn the_done_line_carries_the_usage() {
         let line = br#"{"done":true,"done_reason":"stop","prompt_eval_count":26,"eval_count":7}"#;
-        let Ok(Some(Chunk::Done { stop, usage })) = parse_line(line) else {
-            panic!("expected a Done chunk");
+        let Ok(Some(Chunk::Done {
+            stop,
+            usage: Some(usage),
+        })) = parse_line(line)
+        else {
+            panic!("expected a Done chunk with usage");
         };
         assert_eq!(stop, StopReason::Stop);
         assert_eq!(usage.prompt_tokens, 26);

@@ -242,10 +242,12 @@ stable prefix.
 
 ### The overhead we cannot see
 
-Talking to Ollama's `/api/chat` means the chat template is applied on its side: the
-`<|im_start|>` markers and per-message separators are tokens we never count. Owning
-that number would mean owning the prompt string (`/api/generate` with `raw: true`),
-which is deliberately not where this sits today.
+Talking to Ollama's `/api/chat` — or to any OpenAI-compatible `/chat/completions`
+— means the chat template is applied on its side: the `<|im_start|>` markers and
+per-message separators are tokens we never count. Owning that number would mean
+owning the prompt string (`/api/generate` with `raw: true`, or the completions
+endpoint rather than the chat one), which is deliberately not where this sits
+today.
 
 So the gap is **accepted and reported**: the trace carries our count per bucket,
 measured before the call, and the backend's own `usage.prompt_tokens` afterwards, and
@@ -602,9 +604,30 @@ against it; baselines need a real model.
 
 ## Inference backend
 
-Decide between:
-- Talking to Ollama/llama.cpp via its local HTTP API (simpler).
-- Binding directly to `llama-cpp-rs` (FFI bindings) for fine-grained control over the KV cache across calls and avoiding the overhead of an intermediate HTTP server — recommended given the performance goal.
+**Two are built, behind one trait**: `ollama` (`POST /api/chat`, NDJSON) and
+`openai` (`POST /chat/completions`, SSE) — the second is not a hosted-API feature,
+it is how `llama-server`, vLLM and LM Studio are reached, which is five of the six
+machines in [`ROADMAP/2026-09-01/machines.md`](ROADMAP/2026-09-01/machines.md) plus
+two hosted endpoints. Binding `llama-cpp-rs` directly, for KV-cache control across
+calls without an HTTP server in the way, is still the eventual answer and still
+deferred until there is something to measure.
+
+**The window is sent to one of them and cannot be sent to the other**, and the
+difference is worth stating where someone will read it before running a
+comparison. Ollama takes `options.num_ctx` and truncates silently without it —
+the rule AGENTS.md prints in bold. The OpenAI chat-completions API has **no field
+for the window at all**: `max_tokens` caps the output, and on `llama-server`,
+vLLM and LM Studio the window is what the server was *started* with. So
+`--context-limit` is budgeted against and not sent, the CLI says so once before
+the run, and the check moves to the response — `usage.prompt_tokens` is already
+compared against our own count per turn, and a server serving a smaller window
+than we budgeted shows up there.
+
+Which is why **`Chunk::Done` carries `Option<Usage>`**: these servers report no
+usage at all unless `stream_options.include_usage` is on the request, and some
+report none even then. `None` is *not reported*; zero would claim the server saw
+an empty prompt, in exactly the number the budget panel plots against ours. See
+[`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
 
 ## Persistence
 
