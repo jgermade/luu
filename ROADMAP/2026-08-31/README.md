@@ -22,6 +22,12 @@ on a LAN before anyone operates a portal.
 
 ## The order
 
+This is the engine track. The surface — the four places a person actually
+reaches this from, and what each is missing — is
+[`surface.md`](surface.md), sequenced on its own because it is a chain where
+this one is a fan. Items 1 and 4 below are shared between the two, which is most
+of what makes the surface affordable at all.
+
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 1 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.md), [design §Persistence](../../loude-design.md) · spec'd in [`session-store.md`](session-store.md) |
@@ -29,7 +35,7 @@ on a LAN before anyone operates a portal.
 | 3 | **Relevance selection** — `tree-sitter` tags over a reference graph | nothing (unblocked since tools landed) | [`aider-repo-map`](../../RECORD/2026-08-27.aider-repo-map.md), [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.md) |
 | 4 | **Multi-backend as measurement** | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.md) §Where it is right |
 | 5 | **Federation without a portal** | 1, and signed approvals | [`federation.md`](federation.md) |
-| — | Container level 3 · VSCode extension | the core being stable | [design §Suggested work order](../../loude-design.md) |
+| — | Container level 3 · VSCode extension | the core being stable | [design §Suggested work order](../../loude-design.md) · sequenced in [`surface.md`](surface.md) |
 
 ```mermaid
 gantt
@@ -56,10 +62,10 @@ gantt
     VSCode extension                       :vsc, after cont, 21d
 ```
 
-[`gantt.html`](gantt.html) is the same three charts on one standalone page, SVG
-inlined, no network needed — generated from this markdown by
-[`scripts/render-gantt.mjs`](../../scripts/render-gantt.mjs), so edit the
-markdown and re-run it rather than editing the page.
+[`gantt.html`](gantt.html) is every chart in this revision on one standalone
+page, SVG inlined, no network needed — generated from the markdown in this
+directory by [`scripts/render-gantt.mjs`](../../scripts/render-gantt.mjs), so
+edit the markdown and re-run it rather than editing the page.
 
 **The bars are sizes, not commitments.** They assume one person working evenings,
 they start from an arbitrary 1 September, and the only thing in them worth
