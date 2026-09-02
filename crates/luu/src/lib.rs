@@ -10,7 +10,7 @@ use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama
 use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
 use agent_core::fragment;
 use agent_core::protocol::ServerMessage;
-use agent_core::repo_map::RepoMap;
+use agent_core::repo_map::{Order, RepoMap};
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
 use agent_core::task::{ClosedBy, Plan, PlanSource};
 use agent_core::tools::Tools;
@@ -108,10 +108,31 @@ enum Command {
         #[arg(long, default_value_t = 1024)]
         map_tokens: u32,
 
+        /// Order the map by what the rest of the tree depends on, instead of
+        /// by path. Off, and the reason is a measurement rather than caution:
+        /// at 1024 tokens the alphabet holds five files and the ranking holds
+        /// two, because rank order puts the big central files first and the
+        /// fill rule stops at the first that does not fit. `luu map --explain`
+        /// prints the ranking either way. See
+        /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
+        #[arg(long)]
+        map_rank: bool,
+
         /// The model's `tokenizer.json`. Without it the count is `chars/4` and
         /// says so, which is a different number from what a run would spend.
         #[arg(long)]
         tokenizer: Option<std::path::PathBuf>,
+
+        /// Print the ranking that chose the order: every outlined file, its
+        /// score, and the files that reference it.
+        ///
+        /// The order stopped being the alphabet's, so it stopped being legible
+        /// from `ls` — and a selection nobody can interrogate is the thing
+        /// embeddings were rejected for. It prints *after* the block and never
+        /// inside it: a map that explained itself to the model would spend the
+        /// budget on its own footnotes.
+        #[arg(long)]
+        explain: bool,
     },
 
     /// Serve the debug UI and the agent protocol over HTTP.
@@ -222,6 +243,16 @@ enum Command {
         /// a budget resolves to.
         #[arg(long, default_value_t = 0)]
         map_tokens: u32,
+
+        /// Order the map by what the rest of the tree depends on, instead of
+        /// by path. Off, and the reason is a measurement rather than caution:
+        /// at 1024 tokens the alphabet holds five files and the ranking holds
+        /// two, because rank order puts the big central files first and the
+        /// fill rule stops at the first that does not fit. `luu map --explain`
+        /// prints the ranking either way. See
+        /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
+        #[arg(long)]
+        map_rank: bool,
     },
 
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
@@ -331,7 +362,29 @@ enum Command {
         /// a budget resolves to.
         #[arg(long, default_value_t = 0)]
         map_tokens: u32,
+
+        /// Order the map by what the rest of the tree depends on, instead of
+        /// by path. Off, and the reason is a measurement rather than caution:
+        /// at 1024 tokens the alphabet holds five files and the ranking holds
+        /// two, because rank order puts the big central files first and the
+        /// fill rule stops at the first that does not fit. `luu map --explain`
+        /// prints the ranking either way. See
+        /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
+        #[arg(long)]
+        map_rank: bool,
     },
+}
+
+/// The flag, as the map's own type.
+///
+/// A `bool` at the edge and an [`Order`] inside: the CLI is where a preference
+/// is spelled, and everything below it should be told what to do rather than
+/// asked to interpret a flag.
+fn order_of(rank: bool) -> Order {
+    match rank {
+        true => Order::Ranked,
+        false => Order::Path,
+    }
 }
 
 /// The sandbox flags, shared by every subcommand that can act.
@@ -793,7 +846,9 @@ pub async fn run() -> Result<()> {
     if let Command::Map {
         sandbox,
         map_tokens,
+        map_rank,
         tokenizer,
+        explain,
     } = &command
     {
         let agency = sandbox.resolve().await?;
@@ -804,8 +859,40 @@ pub async fn run() -> Result<()> {
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
-        let map = RepoMap::build(agency.sandbox.as_ref(), *map_tokens, counter.as_ref());
+        let map = RepoMap::build(
+            agency.sandbox.as_ref(),
+            *map_tokens,
+            counter.as_ref(),
+            order_of(*map_rank),
+        );
         print!("{}", map.render());
+        if *explain {
+            println!("\n--- the ranking, most depended-on first ---");
+            for file in &map.ranked {
+                let why = match file.referrers.is_empty() {
+                    // Named rather than left blank: a file at the top with
+                    // nothing pointing at it is the ranking admitting it had
+                    // nothing to go on, which is worth seeing.
+                    true => "referenced by nothing the sandbox can read".to_string(),
+                    false => file
+                        .referrers
+                        .iter()
+                        .take(3)
+                        .map(|(path, weight)| format!("{path} ({weight:.2})"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                };
+                println!(
+                    "{} {:.5}  {}\n         {why}",
+                    match file.in_map {
+                        true => "in ",
+                        false => "out",
+                    },
+                    file.score,
+                    file.path,
+                );
+            }
+        }
         println!(
             "\n--- {} file(s) outlined, {} left out, {} of {map_tokens} tokens{} ---",
             map.files.len(),
@@ -841,6 +928,7 @@ pub async fn run() -> Result<()> {
         temperature,
         seed,
         map_tokens,
+        map_rank,
     } = command
     {
         let backend = build_backend(BackendArgs {
@@ -887,6 +975,7 @@ pub async fn run() -> Result<()> {
             seed,
             store,
             map_tokens,
+            map_order: order_of(map_rank),
             auth_token_file,
         })
         .await;
@@ -914,6 +1003,7 @@ pub async fn run() -> Result<()> {
         temperature,
         seed,
         map_tokens,
+        map_rank,
     } = command
     else {
         unreachable!("serve and tools are handled above");
@@ -973,7 +1063,12 @@ pub async fn run() -> Result<()> {
     // cached prefix, and a block that is rebuilt mid-session is not a prefix.
     // What that costs — an agent that edits a file then carries the outline it
     // had — is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
-    let map = RepoMap::build(agency.sandbox.as_ref(), map_tokens, counter.as_ref());
+    let map = RepoMap::build(
+        agency.sandbox.as_ref(),
+        map_tokens,
+        counter.as_ref(),
+        order_of(map_rank),
+    );
     if !map.is_empty() {
         println!(
             "== repository map: {} file(s), {} left out, {} of {map_tokens} tokens",

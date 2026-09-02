@@ -13,7 +13,7 @@ use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
-use agent_core::repo_map::RepoMap;
+use agent_core::repo_map::{Order, RepoMap};
 use agent_core::sandbox::Sandbox;
 use agent_core::task::{ClosedBy, Plan, PlanSource, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
@@ -204,6 +204,9 @@ pub struct ServeOptions {
     /// Tokens of repository outline for the prefix. 0 is off — see
     /// `agent_core::repo_map`.
     pub map_tokens: u32,
+    /// Which files that budget buys. Path order unless asked otherwise — see
+    /// [`Order`], which carries the measurement that keeps it the default.
+    pub map_order: Order,
     /// The file holding the bearer token this server requires, if any.
     /// `None` on a loopback address means no auth; `None` on any other
     /// address means [`bind`] refuses.
@@ -256,6 +259,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         temperature,
         seed,
         map_tokens,
+        map_order,
         auth_token_file,
         store,
     } = options;
@@ -268,7 +272,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     // Built once, before the socket is up: the map is the last block of the
     // cached prefix, and a block rebuilt mid-session is not a prefix. What that
     // costs is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
-    let map = RepoMap::build(agency.sandbox.as_ref(), map_tokens, counter.as_ref());
+    let map = RepoMap::build(
+        agency.sandbox.as_ref(),
+        map_tokens,
+        counter.as_ref(),
+        map_order,
+    );
     if !map.is_empty() {
         eprintln!(
             "repository map — {} file(s), {} left out, {} of {map_tokens} tokens",

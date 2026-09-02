@@ -235,6 +235,40 @@ Two findings from building it, neither of which was in the plan:
   *for*. Two spellings of one flag (`--user uid:gid`, `--uid`/`--gid`), which is
   the second thing this layer found that is not uniform across runtimes.
 
+**And item 5 was touched at last, without being closed.** The row's own
+prediction — that it is "the one nothing has moved in two revisions" — held for a
+third, and then the thing that moved it produced a *negative* result worth more
+than a quiet landing would have been. The reference graph and the ranking exist,
+they explain themselves, and they are **off by default**, because measured
+against the path-order baseline on this tree they hold two files where the
+alphabet holds five. Argued and built in
+[`ranking-the-map`](../../RECORD/2026-09-02.ranking-the-map.completed.md).
+
+The row stays open, and it is a better-posed row than it was:
+
+- **The corpus cannot compare two orders.** `map-probe.txt`'s group A is defined
+  in its own comment as "the four files a 1024-token map actually holds" — the
+  files a *path-ordered* map holds. It is the baseline's home turf by
+  construction, so any reordering loses on it before a model is asked anything.
+  The scoring this row cites was a real answer to *does a map help*, and it
+  cannot be reused for *which map*. Building a corpus that can is now the first
+  thing the row is blocked on, and it blocks nothing else.
+- **Ranking and the fill rule are one decision.** Whole files, stopping at the
+  first that does not fit, was chosen so a wider budget is always a superset of a
+  tighter one. Under path order size and position were uncorrelated and it cost
+  little; under rank order the big files lead, so the rule refuses everything
+  behind them. Neither half can be settled without the other.
+- **The entry points, transitively.** The record predicted that a graph ranks
+  what is depended on rather than what is asked about, and that `serve.rs` and
+  `lib.rs` would stay last. What it missed is that PageRank passes that low score
+  *on*: `context.rs` fell out of the top ten because the files that reference it
+  are the entry points. Whether weighted in-degree is the better aggregator here
+  is now a named, unmeasured question.
+
+So the order below ends this revision with **the same two rows open** it has had
+throughout — the gate probe, still waiting on a person and a model, and relevance
+selection, which is no longer untouched but is not closed either.
+
 ## When this revision is superseded
 
 A new `ROADMAP/<date>/` directory, not an edit to this one. Items that land get
