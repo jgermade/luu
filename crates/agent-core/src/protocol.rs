@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::backend::Usage;
 use crate::context::{Counter, Eviction};
 use crate::sandbox::Verdict;
-use crate::task::{Plan, PlanSource, TaskId};
+use crate::task::{ClosedBy, Plan, PlanSource, TaskId};
 use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
 
@@ -90,13 +90,21 @@ pub enum ClientMessage {
         writes: Vec<String>,
         #[serde(default)]
         commands: Vec<String>,
+        /// What would close this task without anyone present: a command line
+        /// whose exit code of 0 folds it. The one part of a plan a model is
+        /// never asked for — "what would convince me this is finished" is the
+        /// judgement the person at the gate is there to make. Absent leaves the
+        /// person as the only authority, which is every task to date.
+        #[serde(default)]
+        closes_on: Option<String>,
     },
     /// Refuse it. The held prompt is dropped with it — a prompt whose plan was
     /// turned down is not a prompt that was approved on its own.
     RejectTask { task: TaskId },
-    /// Close it: from here its turns are sent as their summary. The user is the
-    /// only authority that closes a task today; the ladder above them
-    /// (exit codes, then a judge in shadow mode) is still ahead.
+    /// Close it: from here its turns are sent as their summary. A person is one
+    /// of two authorities that close a task now — the other is the task's own
+    /// `closes_on`, on an exit code of 0. The rung above both, a judge in
+    /// shadow mode, is still ahead.
     CloseTask { task: TaskId },
     /// Unfold it. Not an undo: nothing was deleted to recover.
     ReopenTask { task: TaskId },
@@ -154,6 +162,11 @@ pub enum ServerMessage {
     TaskClosed {
         task: TaskId,
         summary: String,
+        /// Which authority folded it. `None` in a recording made before there
+        /// was more than one, where it means a person: that is what every close
+        /// in every file to date was.
+        #[serde(default)]
+        by: Option<ClosedBy>,
     },
     /// What left the window, and stays out.
     ///
@@ -422,6 +435,7 @@ mod tests {
                 files: vec!["crates/luu/src/lib.rs".into()],
                 writes: vec![],
                 commands: vec!["cargo".into()],
+                closes_on: None,
             },
             source: Some(PlanSource::Model),
         });

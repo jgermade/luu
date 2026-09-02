@@ -190,6 +190,7 @@ function onProtocol(message) {
         source: message.source ?? null,
         state: "proposed",
         summary: null,
+        closedBy: null,
       }]
       break
 
@@ -214,13 +215,20 @@ function onProtocol(message) {
       break
 
     case "task_closed":
-      patchTask(message.task, { state: "closed", summary: message.summary })
+      // Who folded it. Absent in a recording made before there was more than
+      // one authority, and then it was a person: nothing else could close a
+      // task when the file was written.
+      patchTask(message.task, {
+        state: "closed",
+        summary: message.summary,
+        closedBy: message.by ?? "user",
+      })
       break
 
     case "task_reopened":
       // The summary goes with the fold: it is an account of work that is being
       // written again.
-      patchTask(message.task, { state: "approved", summary: null })
+      patchTask(message.task, { state: "approved", summary: null, closedBy: null })
       break
 
     // What left the window and stays out. The turns are kept and marked, never
@@ -514,9 +522,16 @@ function act(type, task) {
 /// Approving carries what the person added to the plan, which is the half that
 /// makes narrowing survivable: a task may touch what it was approved for, so a
 /// plan that forgot a file is widened here rather than rejected and retyped.
-export function approveTask(task, files = [], writes = [], commands = []) {
+/// `closesOn` is the one part of a plan the model is never asked for: a command
+/// line whose exit code of 0 folds the task without anyone present. Empty
+/// leaves the person as the only authority, which is what every task did before
+/// the field existed.
+export function approveTask(task, files = [], writes = [], commands = [], closesOn = "") {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
-  socket.send(JSON.stringify({ type: "approve_task", task, files, writes, commands }))
+  socket.send(JSON.stringify({
+    type: "approve_task", task, files, writes, commands,
+    closes_on: closesOn.trim() || null,
+  }))
 }
 export const rejectTask = task => act("reject_task", task)
 export const closeTask = task => act("close_task", task)

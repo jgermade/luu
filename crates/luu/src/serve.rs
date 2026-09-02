@@ -15,12 +15,13 @@ use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
 use agent_core::repo_map::RepoMap;
 use agent_core::sandbox::Sandbox;
-use agent_core::task::{Plan, PlanSource, Proposal, TaskId, parse_plan};
+use agent_core::task::{ClosedBy, Plan, PlanSource, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
 use crate::auth::Auth;
 use crate::session::{Agency, Event, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
+use crate::store::SessionStore;
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -94,6 +95,15 @@ struct App {
     /// `GET /api/...` can never disagree with what a client watched happen.
     view: Mutex<SessionView>,
     started_at: u64,
+    /// What this session is called on disk. The live view is served as
+    /// [`LIVE_SESSION`] whatever it is called, because a client watching *the*
+    /// session should not have to learn its name first — but a store keyed on
+    /// "live" would overwrite the previous session on every restart, which is a
+    /// history that only ever holds one thing.
+    session_id: String,
+    /// Where the fold is cached between restarts. `None` leaves the session in
+    /// memory, which is what every run did before this existed.
+    store: Option<Mutex<SessionStore>>,
 }
 
 impl App {
@@ -110,8 +120,74 @@ impl App {
                 Event::Trace(message) => view.apply_trace(at_ms, message),
             }
         }
+        // At checkpoints, not per event. The store is a *cache* of the fold, so
+        // it is allowed to lag the record — and writing the whole fold on every
+        // token is quadratic in the length of a session. What it is never
+        // allowed to do is contradict the record, which is why the checkpoints
+        // are the moments the session's shape changed rather than a timer.
+        if is_checkpoint(&event) {
+            self.checkpoint().await;
+        }
+
         // No subscribers is the ordinary state of a server nobody has opened yet.
         let _ = self.events.send(event);
+    }
+
+    /// Writes the fold as it stands. Failures are reported once and do not stop
+    /// a turn: a session whose cache could not be written is still a session,
+    /// and the record beside it is the account that matters.
+    async fn checkpoint(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let stored = {
+            let view = self.view.lock().await;
+            let mut stored = view.clone();
+            // The id is the session's *name* rather than part of the fold —
+            // `SessionView::from_record` takes it as an argument for the same
+            // reason, and `luu export` takes it from the file stem.
+            stored.id = self.session_id.clone();
+            if stored.title == LIVE_SESSION {
+                stored.title = self.session_id.clone();
+            }
+            stored
+        };
+        if let Err(error) = store.lock().await.save(&stored) {
+            eprintln!("warning: could not write the session store: {error:#}");
+        }
+    }
+}
+
+/// What a session is called on disk: when it started, then enough to keep two
+/// of them apart.
+///
+/// Sortable and readable first, because the one thing a person listing sessions
+/// wants is when it happened. Unique second, and it has to be: two servers
+/// started in the same millisecond would otherwise be one row, and the second
+/// would silently overwrite the first — a history that loses sessions is worse
+/// than none, because nothing says it did.
+fn session_id(started_at: u64) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("session-{started_at}-{:x}{n:x}", std::process::id())
+}
+
+/// Which events are worth a write: the ones after which the session is a
+/// different shape. Tokens are not — a turn's text is only complete at
+/// `ended`, and a cache of half a turn is a cache of nothing.
+fn is_checkpoint(event: &Event) -> bool {
+    match event {
+        Event::Protocol(message) => matches!(
+            message,
+            ServerMessage::Ended { .. }
+                | ServerMessage::Failed { .. }
+                | ServerMessage::TaskProposed { .. }
+                | ServerMessage::TaskApproved { .. }
+                | ServerMessage::TaskClosed { .. }
+                | ServerMessage::TaskRejected { .. }
+                | ServerMessage::TaskReopened { .. }
+        ),
+        Event::Trace(_) => false,
     }
 }
 
@@ -132,6 +208,10 @@ pub struct ServeOptions {
     /// `None` on a loopback address means no auth; `None` on any other
     /// address means [`bind`] refuses.
     pub auth_token_file: Option<PathBuf>,
+    /// Where sessions are cached between restarts. `None` keeps the session in
+    /// memory for the life of the process, which is what `serve` did before the
+    /// store existed.
+    pub store: Option<PathBuf>,
 }
 
 /// A server that has its port and has not started answering yet.
@@ -177,6 +257,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         seed,
         map_tokens,
         auth_token_file,
+        store,
     } = options;
     // Before anything else, and before the listener exists: a port that would
     // publish task approval to the network is not a port this binds and then
@@ -212,6 +293,18 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         None => None,
     };
 
+    // Opened before the listener, like the token: a store that cannot be
+    // opened is a configuration error, and finding out four turns in means
+    // four turns nobody can resume.
+    let sessions = match &store {
+        Some(path) => {
+            let store = SessionStore::open(path)?;
+            eprintln!("sessions — {}", path.display());
+            Some(Mutex::new(store))
+        }
+        None => None,
+    };
+
     let backend_name = backend.name().to_string();
     let model_name = model.clone();
     let app = Arc::new(App {
@@ -241,6 +334,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             view
         }),
         started_at,
+        session_id: session_id(started_at),
+        store: sessions,
     });
 
     // Two halves, because they are two surfaces. `/ws` is authority and
@@ -442,8 +537,9 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                         files,
                         writes,
                         commands,
+                        closes_on,
                     }) => {
-                        approve_task(app.clone(), task, files, writes, commands).await;
+                        approve_task(app.clone(), task, files, writes, commands, closes_on).await;
                     }
                     Ok(ClientMessage::RejectTask { task }) => {
                         reject_task(app.clone(), task).await;
@@ -603,6 +699,7 @@ async fn approve_task(
     files: Vec<String>,
     writes: Vec<String>,
     commands: Vec<String>,
+    closes_on: Option<String>,
 ) {
     let approved = {
         let mut session = app.session.lock().await;
@@ -613,10 +710,28 @@ async fn approve_task(
         match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.task == task)
         {
             true => {
-                let (granted, dropped) = permitted(&app.agency.sandbox, files, writes, commands);
+                let (granted, mut dropped) =
+                    permitted(&app.agency.sandbox, files, writes, commands);
+                // Checked against the plan as it will *be* rather than against
+                // the amendment alone: the person types `closes_on` for a
+                // command the model already declared more often than for one
+                // they are adding in the same breath.
+                let (closes_on, refused) = closing_condition(
+                    &app.agency.sandbox,
+                    session.context.task(task).map(|t| &t.plan),
+                    &granted,
+                    closes_on,
+                );
+                dropped.extend(refused);
                 let plan = session
                     .context
-                    .amend_plan(task, &granted.files, &granted.writes, &granted.commands)
+                    .amend_plan(
+                        task,
+                        &granted.files,
+                        &granted.writes,
+                        &granted.commands,
+                        closes_on.as_deref(),
+                    )
                     .unwrap_or_default();
                 session.context.approve_task(task);
                 session
@@ -698,6 +813,9 @@ fn permitted(
         files,
         writes,
         commands,
+        // Not here: a closing condition is checked against the merged plan,
+        // which this function has never seen. See `closing_condition`.
+        closes_on: None,
     };
     let refused = asked.unmet(sandbox);
     let keep = |item: &String, kind: &str| {
@@ -725,8 +843,59 @@ fn permitted(
             .filter(|c| keep(c, "command"))
             .cloned()
             .collect(),
+        closes_on: None,
     };
     (granted, refused)
+}
+
+/// The closing condition the person typed, if the task will actually be able to
+/// run it — and the one line that says why not, when it will not.
+///
+/// Checked against the *merged* plan: what the model declared, plus what the
+/// gate is adding in the same approval, intersected with what the policy file
+/// allows. A condition naming a command the task may not run can never be met,
+/// and a task that can never close is worse than one closed by hand, because it
+/// looks like it will close itself.
+fn closing_condition(
+    sandbox: &Sandbox,
+    existing: Option<&Plan>,
+    granted: &Plan,
+    closes_on: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let Some(closes_on) = closes_on
+        .map(|it| it.trim().to_string())
+        .filter(|it| !it.is_empty())
+    else {
+        return (None, None);
+    };
+
+    let mut commands: Vec<String> = existing.map(|p| p.commands.clone()).unwrap_or_default();
+    for command in &granted.commands {
+        if !commands.contains(command) {
+            commands.push(command.clone());
+        }
+    }
+    let merged = Plan {
+        steps: Vec::new(),
+        files: Vec::new(),
+        writes: Vec::new(),
+        // What the plan may really run: `narrow` drops a declared command the
+        // policy file never granted, silently, so checking against the
+        // declaration alone would accept a condition the sandbox will deny.
+        commands: commands
+            .into_iter()
+            .filter(|c| sandbox.commands().iter().any(|allowed| allowed == c))
+            .collect(),
+        closes_on: Some(closes_on.clone()),
+    };
+    match merged
+        .unmet(sandbox)
+        .into_iter()
+        .find(|line| line.starts_with("closes_on "))
+    {
+        Some(refusal) => (None, Some(refusal)),
+        None => (Some(closes_on), None),
+    }
 }
 
 /// Refuses it. The held prompt goes with it: a prompt whose plan was turned
@@ -790,8 +959,12 @@ async fn close_task(app: Arc<App>, task: TaskId) {
         return;
     };
 
-    app.publish(Event::Protocol(ServerMessage::TaskClosed { task, summary }))
-        .await;
+    app.publish(Event::Protocol(ServerMessage::TaskClosed {
+        task,
+        summary,
+        by: Some(ClosedBy::User),
+    }))
+    .await;
 }
 
 /// Unfolds it. Nothing is recovered, because nothing was deleted.
@@ -1008,23 +1181,50 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         .await;
         let _ = forwarder.await;
 
-        let mut session = app.session.lock().await;
-        // A cancelled turn keeps its partial answer: the user saw it, so the
-        // model should too. A turn that produced nothing at all is not
-        // remembered — an empty assistant message is not a thing that happened,
-        // and several chat templates render it as a prompt to continue.
-        if !outcome.text.is_empty() || !outcome.steps.is_empty() {
-            session.context.push_turn_with_steps(
-                turn,
-                prompt,
-                outcome.text,
-                vec![],
-                outcome.steps,
-                app.counter.as_ref(),
-            );
+        let closed = {
+            let mut session = app.session.lock().await;
+            // A cancelled turn keeps its partial answer: the user saw it, so
+            // the model should too. A turn that produced nothing at all is not
+            // remembered — an empty assistant message is not a thing that
+            // happened, and several chat templates render it as a prompt to
+            // continue.
+            if !outcome.text.is_empty() || !outcome.steps.is_empty() {
+                session.context.push_turn_with_steps(
+                    turn,
+                    prompt,
+                    outcome.text,
+                    vec![],
+                    outcome.steps,
+                    app.counter.as_ref(),
+                );
+            }
+            session.current = None;
+            session.cancel = None;
+
+            // After the turn is in the history, so the close sees this turn's
+            // steps — the ones that just ran the command it closes on. Before
+            // the lock is dropped, so a prompt arriving between the two cannot
+            // start a turn inside a task that is already folding.
+            let counter = app.counter.clone();
+            let closed = session.context.close_if_met(counter.as_ref());
+            if let Some((task, _)) = &closed
+                && session.narrowed.as_ref().is_some_and(|(id, _)| id == task)
+            {
+                // The task's sandbox goes with the task, exactly as it does
+                // when a person closes one.
+                session.narrowed = None;
+            }
+            closed
+        };
+
+        if let Some((task, summary)) = closed {
+            app.publish(Event::Protocol(ServerMessage::TaskClosed {
+                task,
+                summary,
+                by: Some(ClosedBy::ExitCode),
+            }))
+            .await;
         }
-        session.current = None;
-        session.cancel = None;
     });
 }
 
@@ -1037,24 +1237,64 @@ fn not_found(what: &str) -> Response {
     (StatusCode::NOT_FOUND, format!("no such {what}")).into_response()
 }
 
+/// The live session, then whatever the store has — the live one first because
+/// it is the one a client that just connected is watching.
+///
+/// Its own row is left out of the stored half rather than shown twice: the
+/// store is a cache of this very fold, and a listing that showed both would be
+/// showing one session under two names, the older of them by however long ago
+/// the last checkpoint was.
 async fn list_sessions(State(state): State<AppRouterState>) -> Response {
-    let view = state.app.view.lock().await;
-    Json(vec![view.summary()]).into_response()
+    let live = state.app.view.lock().await.summary();
+    let mut sessions = vec![live];
+    if let Some(store) = &state.app.store {
+        match store.lock().await.list() {
+            Ok(stored) => sessions.extend(
+                stored
+                    .into_iter()
+                    .filter(|row| row.id != state.app.session_id),
+            ),
+            Err(error) => eprintln!("warning: could not list the session store: {error:#}"),
+        }
+    }
+    Json(sessions).into_response()
+}
+
+/// The fold for one session: the live one under either of its names, and
+/// anything else out of the store.
+///
+/// The live view is answered from memory rather than from the store even when
+/// both have it, because the store is allowed to lag by design and the live
+/// fold never is.
+async fn view_for(state: &AppRouterState, id: &str) -> Option<SessionView> {
+    let id = bare(id);
+    {
+        let view = state.app.view.lock().await;
+        if id == view.id || id == state.app.session_id {
+            return Some(view.clone());
+        }
+    }
+    let store = state.app.store.as_ref()?;
+    match store.lock().await.load(id) {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("warning: could not read the session store: {error:#}");
+            None
+        }
+    }
 }
 
 async fn get_session(Path(id): Path<String>, State(state): State<AppRouterState>) -> Response {
-    let view = state.app.view.lock().await;
-    match bare(&id) == view.id {
-        true => Json(view.clone()).into_response(),
-        false => not_found("session"),
+    match view_for(&state, &id).await {
+        Some(view) => Json(view).into_response(),
+        None => not_found("session"),
     }
 }
 
 async fn get_turns(Path(id): Path<String>, State(state): State<AppRouterState>) -> Response {
-    let view = state.app.view.lock().await;
-    match bare(&id) == view.id {
-        true => Json(view.turns.clone()).into_response(),
-        false => not_found("session"),
+    match view_for(&state, &id).await {
+        Some(view) => Json(view.turns).into_response(),
+        None => not_found("session"),
     }
 }
 
@@ -1068,12 +1308,14 @@ async fn get_turn(
     Path((id, turn)): Path<(String, String)>,
     State(state): State<AppRouterState>,
 ) -> Response {
-    let view = state.app.view.lock().await;
     let Some(number) = parse_turn(&turn) else {
         return not_found("turn");
     };
-    match (bare(&id) == view.id).then(|| view.turn(number)).flatten() {
-        Some(turn) => Json(turn.clone()).into_response(),
+    match view_for(&state, &id)
+        .await
+        .and_then(|view| view.turn(number).cloned())
+    {
+        Some(turn) => Json(turn).into_response(),
         None => not_found("turn"),
     }
 }
@@ -1082,11 +1324,11 @@ async fn get_prompt(
     Path((id, turn)): Path<(String, String)>,
     State(state): State<AppRouterState>,
 ) -> Response {
-    let view = state.app.view.lock().await;
     let Some(number) = parse_turn(&turn) else {
         return not_found("turn");
     };
-    let found = (bare(&id) == view.id).then(|| view.turn(number)).flatten();
+    let view = view_for(&state, &id).await;
+    let found = view.as_ref().and_then(|view| view.turn(number));
     match found {
         Some(turn) => Json(serde_json::json!({
             "turn": turn.turn,
@@ -1100,10 +1342,9 @@ async fn get_prompt(
 /// The budget of the newest turn that has one — the panel asks "what is the
 /// context doing now", and a running turn has not reported yet.
 async fn get_context(Path(id): Path<String>, State(state): State<AppRouterState>) -> Response {
-    let view = state.app.view.lock().await;
-    if bare(&id) != view.id {
+    let Some(view) = view_for(&state, &id).await else {
         return not_found("session");
-    }
+    };
     let latest = view.turns.iter().rev().find(|t| t.budget.is_some());
     Json(serde_json::json!({
         "turn": latest.map(|t| t.turn),
@@ -1159,6 +1400,10 @@ mod tests {
             temperature: None,
             seed: None,
             view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
+            session_id: "session-test".into(),
+            // In memory, like everything else these handler tests touch: the
+            // store's own behaviour is `tests/store_parity.rs`.
+            store: None,
             started_at: 0,
         })
     }
@@ -1197,7 +1442,7 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
 
-        approve_task(app.clone(), 1, vec![], vec![], vec![]).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![], None).await;
         assert!(
             until(&app, |s| s.context.turns().len() == 1).await,
             "the held prompt never ran",
@@ -1254,7 +1499,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![], vec![]).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![], None).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         on_prompt(app.clone(), "now the tests".into()).await;
@@ -1270,7 +1515,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![], vec![]).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![], None).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         close_task(app.clone(), 1).await;

@@ -20,6 +20,10 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 mime_guess = "2"
 rust-embed = "8"
+# `bundled`: SQLite compiled in, so the store does not depend on what the host
+# happens to have installed. Local-first applied to the one dependency that
+# would otherwise be a system package.
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 seccompiler = "0.5"

@@ -12,6 +12,7 @@ axum.workspace = true
 futures-util.workspace = true
 mime_guess.workspace = true
 rust-embed.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true

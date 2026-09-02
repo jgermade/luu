@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
 use crate::protocol::TurnId;
-use crate::task::{Plan, Task, TaskId, TaskState};
+use crate::task::{ClosedBy, Plan, Task, TaskId, TaskState};
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
 
@@ -419,9 +419,10 @@ impl Context {
         files: &[String],
         writes: &[String],
         commands: &[String],
+        closes_on: Option<&str>,
     ) -> Option<Plan> {
         let task = self.task_mut(id)?;
-        task.plan.amend(files, writes, commands);
+        task.plan.amend(files, writes, commands, closes_on);
         Some(task.plan.clone())
     }
 
@@ -454,12 +455,48 @@ impl Context {
         }
     }
 
+    /// Closes it because a person said so. The rung below
+    /// [`Context::close_if_met`], and the only one there was until it existed.
+    pub fn close_task(&mut self, id: TaskId, counter: &dyn TokenCounter) -> Option<String> {
+        self.close_task_by(id, counter, ClosedBy::User)
+    }
+
+    /// Closes the live task if its plan's `closes_on` has been met by its own
+    /// steps, and returns what closed and what it folded to.
+    ///
+    /// Called after a turn is folded into the history, which is what makes the
+    /// close see that turn's steps. Nothing happens for a task whose plan
+    /// declares no closing condition, which is every task a model planned on
+    /// its own — see `RECORD/2026-09-02.closing-on-an-exit-code.completed.md` for why
+    /// the field arrives at the gate and never from the planning call.
+    pub fn close_if_met(&mut self, counter: &dyn TokenCounter) -> Option<(TaskId, String)> {
+        let id = self.live_task()?;
+        let mine = |turn: &&Turn| turn.task == Some(id);
+        let steps: Vec<&ToolStep> = self
+            .turns
+            .iter()
+            .filter(mine)
+            .flat_map(|turn| turn.steps.iter())
+            .collect();
+        let task = self.tasks.iter().find(|task| task.id == id)?;
+        if !task.plan.met_by(&steps) {
+            return None;
+        }
+        let summary = self.close_task_by(id, counter, ClosedBy::ExitCode)?;
+        Some((id, summary))
+    }
+
     /// Closes it: from the next selection on, its turns render as one summary.
     ///
     /// The summary is written from the task's own tool steps and the fragments
     /// its turns were handed, so it is evidence rather than the model's account
     /// of itself. Returns the summary text, or `None` if there is no such task.
-    pub fn close_task(&mut self, id: TaskId, counter: &dyn TokenCounter) -> Option<String> {
+    pub fn close_task_by(
+        &mut self,
+        id: TaskId,
+        counter: &dyn TokenCounter,
+        by: ClosedBy,
+    ) -> Option<String> {
         let mine = |turn: &&Turn| turn.task == Some(id);
         let steps: Vec<&ToolStep> = self
             .turns
@@ -485,7 +522,7 @@ impl Context {
         if !task.is_open() {
             return None;
         }
-        task.close(&steps, &shown, turns, counter);
+        task.close(&steps, &shown, turns, counter, by);
         task.summary.as_ref().map(|summary| summary.text.clone())
     }
 
@@ -1520,6 +1557,101 @@ mod tool_turn_tests {
             outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
             duration_ms: 1,
         }
+    }
+
+    /// A step that ran a command and came back with an exit code, which is the
+    /// only kind `close_if_met` looks at.
+    fn ran(command: &str, args: &[&str], exit_code: Option<i32>) -> ToolStep {
+        let mut step = step("run_command", "running it", "");
+        step.call.arguments = serde_json::json!({"command": command, "args": args});
+        step.outcome.command = Some(crate::tools::CommandResult {
+            exit_code,
+            signal: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 1,
+        });
+        step
+    }
+
+    /// An open task whose plan closes on `cargo test`, and one turn that ran
+    /// the command with the exit code given.
+    fn task_that_ran(exit_code: Option<i32>) -> (Context, TaskId) {
+        let counter = ApproximateCounter;
+        let mut context = Context::new("system");
+        let task = context.propose_task(
+            "make the tests pass",
+            Plan {
+                commands: vec!["cargo".into()],
+                closes_on: Some("cargo test".into()),
+                ..Plan::default()
+            },
+        );
+        context.approve_task(task);
+        context.push_turn_with_steps(
+            1,
+            "fix the failing test",
+            "Fixed.",
+            vec![],
+            vec![ran("cargo", &["test"], exit_code)],
+            &counter,
+        );
+        (context, task)
+    }
+
+    #[test]
+    fn a_green_run_closes_the_task_and_says_which_authority_did() {
+        let (mut context, task) = task_that_ran(Some(0));
+        let closed = context.close_if_met(&ApproximateCounter);
+
+        assert_eq!(closed.map(|(id, _)| id), Some(task));
+        let task = context.task(task).expect("the task");
+        assert!(task.is_closed());
+        assert_eq!(
+            task.closed_by,
+            Some(ClosedBy::ExitCode),
+            "a recording where both closes look the same cannot count either",
+        );
+    }
+
+    #[test]
+    fn a_red_run_leaves_it_open_and_leaves_the_person_the_authority() {
+        let (mut context, task) = task_that_ran(Some(1));
+        assert!(context.close_if_met(&ApproximateCounter).is_none());
+        assert!(context.task(task).expect("the task").is_open());
+
+        // And the rung below still works on it, which is the whole point of the
+        // condition being opt-in: nothing was taken away from the person.
+        assert!(context.close_task(task, &ApproximateCounter).is_some());
+        assert_eq!(
+            context.task(task).expect("the task").closed_by,
+            Some(ClosedBy::User),
+        );
+    }
+
+    #[test]
+    fn another_tasks_green_run_is_not_this_ones_evidence() {
+        let counter = ApproximateCounter;
+        let (mut context, first) = task_that_ran(Some(0));
+        context.close_if_met(&counter);
+
+        let second = context.propose_task(
+            "something else",
+            Plan {
+                commands: vec!["cargo".into()],
+                closes_on: Some("cargo test".into()),
+                ..Plan::default()
+            },
+        );
+        context.approve_task(second);
+        context.push_turn(2, "and now this", "Looking.", vec![], &counter);
+
+        assert!(
+            context.close_if_met(&counter).is_none(),
+            "the first task's steps closed the first task and nothing else",
+        );
+        assert!(context.task(first).expect("the task").is_closed());
+        assert!(context.task(second).expect("the task").is_open());
     }
 
     #[test]

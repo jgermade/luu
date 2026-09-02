@@ -58,6 +58,16 @@ pub struct Plan {
     pub writes: Vec<String>,
     #[serde(default)]
     pub commands: Vec<String>,
+    /// The command line whose success closes this task, rendered exactly as
+    /// [`command_line`] renders a call — `"cargo test"`, not `"cargo"`.
+    ///
+    /// `None` in every plan a model writes, because the model is never asked
+    /// for it: this is the one part of a plan that arrives at the gate rather
+    /// than from the planning call, and a task whose plan has none closes only
+    /// when a person says so. See
+    /// `RECORD/2026-09-02.closing-on-an-exit-code.completed.md`.
+    #[serde(default)]
+    pub closes_on: Option<String>,
 }
 
 impl Plan {
@@ -95,7 +105,44 @@ impl Plan {
                 ));
             }
         }
+        // A closing condition the task may not run is one that can never be
+        // met, and a task that can never close is worse than one that closes
+        // by hand: it looks like it will close itself.
+        if let Some(closes_on) = &self.closes_on {
+            match closes_on.split_whitespace().next() {
+                Some(program) if self.commands.iter().any(|allowed| allowed == program) => {}
+                Some(program) => unmet.push(format!(
+                    "closes_on {closes_on}: the plan does not allow the command {program}"
+                )),
+                None => unmet.push("closes_on: empty".to_string()),
+            }
+        }
         unmet
+    }
+
+    /// Whether this task's own steps have met its closing condition.
+    ///
+    /// Narrow deliberately, and each narrowing is a case that would otherwise
+    /// close a task that is not finished:
+    ///
+    /// - the whole command line, so `cargo test` does not match
+    ///   `cargo test --no-run`, which compiles the tests and runs none;
+    /// - `exit_code == Some(0)`, so a child killed by `SIGXCPU` — which has no
+    ///   exit code at all — is the limit reporting a command that never
+    ///   finished, rather than a success;
+    /// - the caller's `steps`, which is this task's, so another task's green
+    ///   test run is not this one's evidence.
+    pub fn met_by(&self, steps: &[&ToolStep]) -> bool {
+        let Some(closes_on) = &self.closes_on else {
+            return false;
+        };
+        steps.iter().any(|step| {
+            step.outcome
+                .command
+                .as_ref()
+                .is_some_and(|result| result.exit_code == Some(0))
+                && command_line(&step.call).as_deref() == Some(closes_on.as_str())
+        })
     }
 
     /// The sandbox this plan *is*, once someone has approved it.
@@ -168,7 +215,13 @@ impl Plan {
     /// the human at the gate can widen the plan up to the policy file and not
     /// past it — otherwise the gate is the policy and `luu.toml` is a
     /// suggestion.
-    pub fn amend(&mut self, files: &[String], writes: &[String], commands: &[String]) {
+    pub fn amend(
+        &mut self,
+        files: &[String],
+        writes: &[String],
+        commands: &[String],
+        closes_on: Option<&str>,
+    ) {
         for file in files {
             if !self.files.contains(file) {
                 self.files.push(file.clone());
@@ -184,6 +237,11 @@ impl Plan {
                 self.commands.push(command.clone());
             }
         }
+        // Replaced rather than merged: there is one closing condition, and a
+        // person who types a second one is correcting the first.
+        if let Some(closes_on) = closes_on.map(str::trim).filter(|it| !it.is_empty()) {
+            self.closes_on = Some(closes_on.to_string());
+        }
     }
 
     /// One line per part it has, for a human reading a run go by.
@@ -198,6 +256,14 @@ impl Plan {
             if !items.is_empty() {
                 text.push_str(&format!("  {part:<9}{}\n", items.join(" · ")));
             }
+        }
+        // Last, and named for what it does rather than for what it is: this is
+        // the line that says the task may close without anyone present.
+        if let Some(closes_on) = &self.closes_on {
+            text.push_str(&format!(
+                "  {:<9}{closes_on} (exit 0 closes it)\n",
+                "closes on"
+            ));
         }
         text
     }
@@ -289,6 +355,23 @@ pub enum TaskState {
     Rejected,
 }
 
+/// Which authority closed a task.
+///
+/// On the close rather than inferred afterwards, because the ladder above the
+/// person is only worth climbing if each rung can be *counted*: how often the
+/// exit code closed a task a person would have left open, and how often a
+/// person closed one it missed. A recording where both closes look the same
+/// cannot answer either, and by then the sessions are on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosedBy {
+    /// A person, at the gate. What every close before this existed was, which
+    /// is why an absent value reads as this one.
+    User,
+    /// The task's own [`Plan::closes_on`], on an exit code of 0.
+    ExitCode,
+}
+
 /// What a closed task leaves behind, counted once at the close.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
@@ -311,6 +394,10 @@ pub struct Task {
     /// task is being written again and the old account of it is not an account
     /// of what it will have been.
     pub summary: Option<Summary>,
+    /// Who closed it. Beside the summary and dropped with it: a reopened task
+    /// has not been closed by anyone.
+    #[serde(default)]
+    pub closed_by: Option<ClosedBy>,
 }
 
 impl Task {
@@ -321,6 +408,7 @@ impl Task {
             plan,
             state: TaskState::Proposed,
             summary: None,
+            closed_by: None,
         }
     }
 
@@ -355,6 +443,7 @@ impl Task {
         shown: &[&Fragment],
         turns: usize,
         counter: &dyn TokenCounter,
+        by: ClosedBy,
     ) {
         let text = summary_text(&self.objective, &self.plan, steps, shown, turns, counter);
         self.summary = Some(Summary {
@@ -363,6 +452,7 @@ impl Task {
             text,
         });
         self.state = TaskState::Closed;
+        self.closed_by = Some(by);
     }
 
     /// Reopens it: the fold stops applying and the turns are sent verbatim
@@ -371,6 +461,7 @@ impl Task {
     pub fn reopen(&mut self) {
         self.state = TaskState::Approved;
         self.summary = None;
+        self.closed_by = None;
     }
 }
 
@@ -487,7 +578,7 @@ fn evidence(steps: &[&ToolStep]) -> Vec<String> {
     let mut lines: Vec<(String, usize)> = Vec::new();
     for step in steps {
         let status = step.outcome.error.as_deref().unwrap_or("ok");
-        let line = match target(&step.call) {
+        let line = match command_line(&step.call) {
             Some(target) => format!("{} {target} — {status}", step.call.name),
             None => format!("{} — {status}", step.call.name),
         };
@@ -515,7 +606,11 @@ fn evidence(steps: &[&ToolStep]) -> Vec<String> {
 /// What a call acted on, in as few tokens as say it: the path, or the command
 /// line. Arguments a reader cannot act on are left out — the summary is
 /// evidence, not a replay.
-fn target(call: &ToolCall) -> Option<String> {
+///
+/// Public because [`Plan::met_by`] matches against the same rendering the
+/// summary shows. Two renderings of one command line would drift, and the day
+/// they drift a task stops closing for a reason nobody can see.
+pub fn command_line(call: &ToolCall) -> Option<String> {
     if let Some(path) = call.arguments.get("path").and_then(|v| v.as_str()) {
         return Some(path.to_string());
     }
@@ -562,6 +657,113 @@ mod tests {
         }
     }
 
+    /// The same, for a command that actually ran: `met_by` reads the exit code
+    /// and nothing else, so a step without one can never meet a condition.
+    fn ran(command: &str, args: &[&str], exit_code: Option<i32>, signal: Option<i32>) -> ToolStep {
+        let mut step = step(
+            "run_command",
+            serde_json::json!({"command": command, "args": args}),
+            None,
+        );
+        step.outcome.command = Some(crate::tools::CommandResult {
+            exit_code,
+            signal,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 1,
+        });
+        step
+    }
+
+    fn closing_on(closes_on: &str) -> Plan {
+        Plan {
+            commands: vec!["cargo".into()],
+            closes_on: Some(closes_on.into()),
+            ..Plan::default()
+        }
+    }
+
+    #[test]
+    fn a_closing_condition_is_met_by_the_whole_command_line_and_an_exit_of_zero() {
+        let plan = closing_on("cargo test");
+        let met = ran("cargo", &["test"], Some(0), None);
+        assert!(plan.met_by(&[&met]), "the command it names, green");
+    }
+
+    #[test]
+    fn a_longer_command_line_is_a_different_command() {
+        let plan = closing_on("cargo test");
+        // Compiles the tests and runs none of them. A prefix match would close
+        // the task here, and the difference between these two command lines is
+        // the whole difference between the work being done and not.
+        let compiled = ran("cargo", &["test", "--no-run"], Some(0), None);
+        assert!(!plan.met_by(&[&compiled]));
+    }
+
+    #[test]
+    fn a_failing_run_leaves_the_task_open() {
+        let plan = closing_on("cargo test");
+        assert!(!plan.met_by(&[&ran("cargo", &["test"], Some(1), None)]));
+    }
+
+    #[test]
+    fn a_child_the_limits_killed_is_not_a_success() {
+        let plan = closing_on("cargo test");
+        // No exit code at all, which is exactly when `signal` is `Some`: the
+        // `[sandbox.limits]` rung reporting a command that never finished. The
+        // one case a "no error" test would have got wrong.
+        let killed = ran("cargo", &["test"], None, Some(24));
+        assert!(!plan.met_by(&[&killed]));
+    }
+
+    #[test]
+    fn a_plan_that_declares_no_condition_is_never_met() {
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            ..Plan::default()
+        };
+        assert!(
+            !plan.met_by(&[&ran("cargo", &["test"], Some(0), None)]),
+            "which is every plan a model writes: the person stays the authority",
+        );
+    }
+
+    #[test]
+    fn a_condition_the_plan_may_not_run_is_refused_at_the_gate() {
+        let session = session();
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            closes_on: Some("git status".into()),
+            ..Plan::default()
+        };
+        let unmet = plan.unmet(&session);
+        assert!(
+            unmet.iter().any(|line| line.starts_with("closes_on ")),
+            "a condition that can never be met looks like one that will: {unmet:?}",
+        );
+    }
+
+    #[test]
+    fn the_gate_is_where_a_closing_condition_comes_from() {
+        let mut plan = Plan {
+            commands: vec!["cargo".into()],
+            ..Plan::default()
+        };
+        assert!(plan.closes_on.is_none(), "the model was never asked");
+        plan.amend(&[], &[], &[], Some("  cargo test  "));
+        assert_eq!(plan.closes_on.as_deref(), Some("cargo test"));
+        // One condition, and a person who types a second is correcting the
+        // first — unlike the lists beside it, which accumulate.
+        plan.amend(&[], &[], &[], Some("cargo clippy"));
+        assert_eq!(plan.closes_on.as_deref(), Some("cargo clippy"));
+        plan.amend(&[], &[], &[], Some("   "));
+        assert_eq!(
+            plan.closes_on.as_deref(),
+            Some("cargo clippy"),
+            "an empty box is not an instruction to clear it",
+        );
+    }
+
     #[test]
     fn the_summary_is_the_plan_and_the_evidence_and_nothing_the_model_said() {
         let mut task = Task::new(
@@ -572,6 +774,7 @@ mod tests {
                 files: vec!["crates/luu/src/lib.rs".into()],
                 writes: vec![],
                 commands: vec!["cargo".into()],
+                closes_on: None,
             },
         );
         task.approve();
@@ -588,6 +791,7 @@ mod tests {
             &[],
             3,
             &ApproximateCounter,
+            ClosedBy::User,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -612,6 +816,7 @@ mod tests {
             &[],
             8,
             &ApproximateCounter,
+            ClosedBy::User,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -626,7 +831,7 @@ mod tests {
     #[test]
     fn a_task_that_ran_no_tools_says_so_rather_than_stopping() {
         let mut task = Task::new(1, "explain the design", Plan::default());
-        task.close(&[], &[], 4, &ApproximateCounter);
+        task.close(&[], &[], 4, &ApproximateCounter, ClosedBy::User);
         let text = &task.summary.as_ref().unwrap().text;
         assert!(text.contains("no tools ran"), "{text}");
         assert!(text.contains("4 turn(s) folded"), "{text}");
@@ -655,6 +860,7 @@ mod tests {
             &shown.iter().collect::<Vec<_>>(),
             5,
             &ApproximateCounter,
+            ClosedBy::User,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -683,6 +889,7 @@ mod tests {
             &twice.iter().collect::<Vec<_>>(),
             2,
             &ApproximateCounter,
+            ClosedBy::User,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -706,6 +913,7 @@ mod tests {
             &shown.iter().collect::<Vec<_>>(),
             4,
             &ApproximateCounter,
+            ClosedBy::User,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -723,7 +931,7 @@ mod tests {
     #[test]
     fn reopening_drops_the_summary_without_recovering_anything() {
         let mut task = Task::new(1, "x", Plan::default());
-        task.close(&[], &[], 1, &ApproximateCounter);
+        task.close(&[], &[], 1, &ApproximateCounter, ClosedBy::User);
         task.reopen();
         assert!(task.is_open());
         assert!(
@@ -780,6 +988,7 @@ mod tests {
             files: vec!["Cargo.toml".into(), "/etc/passwd".into()],
             writes: vec![],
             commands: vec!["cargo".into(), "curl".into()],
+            closes_on: None,
         };
         let unmet = plan.unmet(&sandbox);
 
@@ -816,6 +1025,7 @@ mod tests {
             files: vec!["Cargo.toml".into()],
             writes: vec![],
             commands: vec!["cargo".into()],
+            closes_on: None,
         };
         let narrowed = plan.narrow(&session, 1).unwrap();
 
@@ -1004,6 +1214,7 @@ mod tests {
             &["src/task.rs".into(), "Cargo.toml".into()],
             &[],
             &["git".into()],
+            None,
         );
 
         assert_eq!(plan.files, ["Cargo.toml", "src/task.rs"], "no duplicate");
@@ -1019,7 +1230,7 @@ mod tests {
         );
 
         let mut past_the_file = Plan::default();
-        past_the_file.amend(&["/etc/passwd".into()], &[], &["curl".into()]);
+        past_the_file.amend(&["/etc/passwd".into()], &[], &["curl".into()], None);
         assert_eq!(
             past_the_file.unmet(&session).len(),
             2,
