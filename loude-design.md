@@ -57,7 +57,7 @@ with no model prose in it. The quote is there because the grounded probe measure
 its absence losing answers: see
 [`RECORD/2026-08-30.the-fold-probe-run.completed.md`](RECORD/2026-08-30.the-fold-probe-run.completed.md)
 for the measurement and
-[`RECORD/2026-08-30.what-a-summary-should-carry.WIP.md`](RECORD/2026-08-30.what-a-summary-should-carry.WIP.md)
+[`RECORD/2026-08-30.what-a-summary-should-carry.completed.md`](RECORD/2026-08-30.what-a-summary-should-carry.completed.md)
 for why verbatim rather than a digest. Reopening is therefore
 not an undo: the fold stops applying. Eviction runs over items rather than turns,
 so a folded task is kept or dropped whole and the two ways history gives way
@@ -242,10 +242,12 @@ stable prefix.
 
 ### The overhead we cannot see
 
-Talking to Ollama's `/api/chat` means the chat template is applied on its side: the
-`<|im_start|>` markers and per-message separators are tokens we never count. Owning
-that number would mean owning the prompt string (`/api/generate` with `raw: true`),
-which is deliberately not where this sits today.
+Talking to Ollama's `/api/chat` — or to any OpenAI-compatible `/chat/completions`
+— means the chat template is applied on its side: the `<|im_start|>` markers and
+per-message separators are tokens we never count. Owning that number would mean
+owning the prompt string (`/api/generate` with `raw: true`, or the completions
+endpoint rather than the chat one), which is deliberately not where this sits
+today.
 
 So the gap is **accepted and reported**: the trace carries our count per bucket,
 measured before the call, and the backend's own `usage.prompt_tokens` afterwards, and
@@ -310,6 +312,23 @@ The set: `read_file`, `list_dir`, `edit_file`, `write_file`, `run_command`.
 Output is capped at 8 KiB with a `truncated` flag — pruning old results out of
 the history is a later, measured change; a cap is the part that is not a strategy.
 
+**The outcome is structured and the rendering is not.** A `run_command` outcome
+carries `exit_code`, `signal`, `stdout`, `stderr` and `duration_ms` as *fields*,
+on the protocol and in the record; `ToolOutcome::render` still produces the same
+short plain text it always did, because a 7B pays for every token of a wrapper it
+does not read. The distinction is load-bearing rather than tidy: the exit code
+used to live for one moment inside the string `"{program} exited with {code}"`,
+and **a task cannot be closed on an exit code that was never a field** — the
+ladder above the user (exit codes and tests, then a judge in shadow mode) was
+blocked on this and on nothing else. The two streams are separate for the same
+reason: a judge that has to re-split one blob on `--- stdout` is parsing a
+rendering. `signal` is how a run says *which* limit stopped a child — `SIGXCPU`
+and `SIGXFSZ` are `[sandbox.limits]` arriving, and nothing else in the outcome
+could tell them from a crash. Absent for every in-process tool, where there is no
+exit code and a zero would be a lie; additive on the wire, so the record format
+did not move. See
+[`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
+
 ## Sandbox / security
 
 Three rungs, and the middle one is what makes the first worth having. Built: 1
@@ -336,6 +355,12 @@ enforcement = "kernel"          # or "best-effort"
 network = false
 commands = ["cargo", "git"]     # program names, never a shell string
 
+[sandbox.limits]                # what a child may spend, not what it may reach
+cpu-seconds = 300               # RLIMIT_CPU, per process
+file-size-mb = 1024             # RLIMIT_FSIZE, per file
+# memory-mb = 4096              # RLIMIT_AS — off by default, see below
+# processes = 512               # RLIMIT_NPROC — off by default, see below
+
 [[sandbox.paths]]
 path = "."
 access = "read-write"           # read | execute | read-write
@@ -356,6 +381,26 @@ access = "read-write"           # read | execute | read-write
   only what was written down, or `commands = ["ls"]` would quietly grant the agent
   `/etc`.
 - **Permission validation lives in the program's code**, not in the model behaving well.
+- **The paths say what a child may reach and `limits` says what it may spend.**
+  Nothing said the second thing until the limits existed, and the gap was not
+  academic: a fork bomb, a disk bomb and a memory bomb all ran to completion
+  inside `run_command`'s 30-second clock, whose only other companion was an 8 KiB
+  cap on what got *reported* about them. `setrlimit` is POSIX rather than Linux,
+  so the limits sit **above** the `linux.rs`/`fallback.rs` split and are the
+  first rung that holds a child on macOS at all — where `how` reads `rlimits (…)`
+  with the same `missing` as before, instead of "in-process check only".
+  `cpu-seconds` and `file-size-mb` are on by default; `memory-mb` (`RLIMIT_AS`)
+  is off because a Rust toolchain reserves address space far above what it
+  commits, and `processes` (`RLIMIT_NPROC`) is off because the kernel counts it
+  **per real uid, not per process tree** — a default there would deny `fork`
+  over processes this agent never started, and the right mechanism for it is a
+  pids cgroup with the container. A limit is applied soft and hard together — a
+  child that can raise its own soft limit back is not limited — with one
+  measured exception: `RLIMIT_CPU` is two-stage by design (soft sends `SIGXCPU`,
+  hard sends `SIGKILL`), so equal limits collapse into a bare signal 9 that
+  cannot be told from a crash. It gets one second of hard grace, which buys the
+  signal that names the limit. See
+  [`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
 
 ### Who enforced it is reported, never assumed
 
@@ -368,7 +413,8 @@ available — the one place in this design where a security property is a settin
 - `"best-effort"` — apply what this kernel has and report the gap.
 
 Either way every verdict carries `Applied` — `Process`, `Kernel { how }`, or
-`Partial { how, missing }` — and `how` names the mechanism *and its version*,
+`Partial { how, missing }` — and `how` names every mechanism holding the child,
+the rlimits and their numbers included, *and its version*,
 because Landlock's older ABIs mediate less. Nothing here may say "sandboxed"
 without saying by what: a run whose subprocesses the kernel held and a run whose
 subprocesses nothing held are not the same run, and afterwards the recording is
@@ -426,9 +472,19 @@ make sense of bumps both from here.
 
 ### Server shape
 
-`luu serve --http 127.0.0.1:7878` (loopback by default, no auth; require a bearer token when bound
-to any other address). The UI is embedded in the binary with `rust-embed`, so there is one command,
-one URL, and no node process in the loop.
+`luu serve --bind 127.0.0.1:7878` — loopback by default and unauthenticated; **any other address
+requires a bearer token, and without one the bind is refused rather than warned about.** The check
+runs before the listener exists, so an unauthenticated non-loopback server is not a state the
+program can be in. The token comes from `--auth-token-file <PATH>`, whose mode is checked (a flag
+is greppable in `ps`, an env var is inherited by every child `run_command` spawns). It gates `/ws`,
+which carries task approval, and `/api/*`, which carries this session's prompts and source; it does
+not gate the embedded page, which is the same bytes in every copy of a public binary and which a
+browser cannot request with a header. `Authorization: Bearer <token>` everywhere, plus `?token=` on
+`/ws` alone, because the browser's `WebSocket` constructor cannot set a header. See
+[`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
+
+The UI is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
+process in the loop.
 
 Live channel — `WS /ws`:
 
@@ -548,9 +604,30 @@ against it; baselines need a real model.
 
 ## Inference backend
 
-Decide between:
-- Talking to Ollama/llama.cpp via its local HTTP API (simpler).
-- Binding directly to `llama-cpp-rs` (FFI bindings) for fine-grained control over the KV cache across calls and avoiding the overhead of an intermediate HTTP server — recommended given the performance goal.
+**Two are built, behind one trait**: `ollama` (`POST /api/chat`, NDJSON) and
+`openai` (`POST /chat/completions`, SSE) — the second is not a hosted-API feature,
+it is how `llama-server`, vLLM and LM Studio are reached, which is five of the six
+machines in [`ROADMAP/2026-09-01/machines.md`](ROADMAP/2026-09-01/machines.md) plus
+two hosted endpoints. Binding `llama-cpp-rs` directly, for KV-cache control across
+calls without an HTTP server in the way, is still the eventual answer and still
+deferred until there is something to measure.
+
+**The window is sent to one of them and cannot be sent to the other**, and the
+difference is worth stating where someone will read it before running a
+comparison. Ollama takes `options.num_ctx` and truncates silently without it —
+the rule AGENTS.md prints in bold. The OpenAI chat-completions API has **no field
+for the window at all**: `max_tokens` caps the output, and on `llama-server`,
+vLLM and LM Studio the window is what the server was *started* with. So
+`--context-limit` is budgeted against and not sent, the CLI says so once before
+the run, and the check moves to the response — `usage.prompt_tokens` is already
+compared against our own count per turn, and a server serving a smaller window
+than we budgeted shows up there.
+
+Which is why **`Chunk::Done` carries `Option<Usage>`**: these servers report no
+usage at all unless `stream_options.include_usage` is on the request, and some
+report none even then. `None` is *not reported*; zero would claim the server saw
+an empty prompt, in exactly the number the budget panel plots against ours. See
+[`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
 
 ## Persistence
 

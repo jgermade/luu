@@ -610,6 +610,7 @@ fn private_helper(x: u32) -> u32 {
             commands: Vec::new(),
             network: false,
             enforcement: Default::default(),
+            limits: Default::default(),
         };
         let sandbox = Sandbox::new(&policy, dir.path()).expect("the sandbox");
 

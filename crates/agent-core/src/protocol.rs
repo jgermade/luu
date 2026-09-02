@@ -242,6 +242,13 @@ pub enum ServerMessage {
         output: String,
         truncated: bool,
         duration_ms: u64,
+        /// What a subprocess did, for the tool where that is a fact: the exit
+        /// code, the signal, the two streams unmixed. Absent for every
+        /// in-process tool and in every recording made before it existed, which
+        /// is why it is additive rather than a format bump — an older reader
+        /// ignores a field it does not know, and this variant is not new.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<crate::tools::CommandResult>,
     },
 }
 
@@ -285,6 +292,7 @@ impl ServerMessage {
                     output: outcome.output,
                     truncated: outcome.truncated,
                     duration_ms,
+                    command: outcome.command,
                 }
             }
         })

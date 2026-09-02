@@ -92,7 +92,10 @@ impl Backend for Mock {
 
             yield Chunk::Done {
                 stop: StopReason::Stop,
-                usage: Usage { prompt_tokens: 0, completion_tokens },
+                // `Some`, and the prompt count is honestly zero: the mock never
+                // read a prompt. That is not the same as a backend that read
+                // one and did not say how big it was, which is `None`.
+                usage: Some(Usage { prompt_tokens: 0, completion_tokens }),
             };
         })
     }

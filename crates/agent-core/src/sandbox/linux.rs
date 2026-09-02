@@ -254,6 +254,7 @@ mod tests {
                 commands: vec!["/bin/sh".into()],
                 network,
                 enforcement: Enforcement::BestEffort,
+                limits: Default::default(),
             },
             dir,
         )

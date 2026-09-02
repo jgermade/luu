@@ -260,10 +260,10 @@ mod tests {
                 Ok(Chunk::Text(text)),
                 Ok(Chunk::Done {
                     stop: StopReason::Stop,
-                    usage: Usage {
+                    usage: Some(Usage {
                         prompt_tokens: 10,
                         completion_tokens: 2,
-                    },
+                    }),
                 }),
             ]))
         }

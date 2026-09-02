@@ -35,7 +35,7 @@ const MAX_EVIDENCE_LINES: usize = 12;
 /// the session, so what it costs must be a function of this number and not of
 /// how much the task was handed. The value is a starting point and wants the
 /// grounded probe to choose it — see
-/// `RECORD/2026-08-30.what-a-summary-should-carry.WIP.md`.
+/// `RECORD/2026-08-30.what-a-summary-should-carry.completed.md`.
 const MAX_QUOTED_TOKENS: u32 = 1024;
 
 /// What the agent proposes to do, and what the user approves.
@@ -126,6 +126,11 @@ impl Plan {
             commands: Vec::new(),
             network: session.network(),
             enforcement: session.enforcement(),
+            // The session's, like `network` and `enforcement`: a plan declares
+            // paths and commands, and what a child may *spend* is not something
+            // it has words for. Whether it should is in
+            // `RECORD/2026-09-01.what-the-audit-left.completed.md`.
+            limits: session.limits(),
         };
         for file in &self.files {
             let path = std::path::Path::new(file);
@@ -377,7 +382,7 @@ impl Task {
 /// A fragment is quoted from the file's own bytes for that reason: it cannot be
 /// a hallucination, and it is the thing the grounded probe showed the fold
 /// losing — `RECORD/2026-08-30.the-fold-probe-run.completed.md` measured it and
-/// `RECORD/2026-08-30.what-a-summary-should-carry.WIP.md` argues the fix.
+/// `RECORD/2026-08-30.what-a-summary-should-carry.completed.md` argues the fix.
 fn summary_text(
     objective: &str,
     plan: &Plan,
@@ -551,6 +556,7 @@ mod tests {
                 output: String::new(),
                 error: error.map(str::to_string),
                 truncated: false,
+                command: None,
             },
             duration_ms: 0,
         }

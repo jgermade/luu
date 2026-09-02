@@ -96,6 +96,15 @@ impl Agency {
             },
             self.sandbox.enforcement().as_str(),
         ));
+        // Beside `enforce`, because it is the same question: what holds a
+        // child. On macOS it is the only line here that is true.
+        text.push_str(&format!(
+            "  limits     {}\n",
+            self.sandbox
+                .limits()
+                .describe()
+                .unwrap_or_else(|| "(none: the clock alone)".to_string()),
+        ));
         text.push_str(&format!(
             "  tools      {}\n",
             match self.tools.is_empty() {

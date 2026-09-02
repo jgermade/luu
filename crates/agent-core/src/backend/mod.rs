@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod mock;
 pub mod ollama;
+pub mod openai;
 
 /// A message in the conversation handed to the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,7 +103,17 @@ pub enum StopReason {
 #[derive(Debug, Clone)]
 pub enum Chunk {
     Text(String),
-    Done { stop: StopReason, usage: Usage },
+    Done {
+        stop: StopReason,
+        /// `None` is **not reported**, which is a different fact from zero and
+        /// has to stay different: this is the number the budget panel plots
+        /// against our own count, and a zero would read as "the server saw an
+        /// empty prompt". Ollama always reports counts; an OpenAI-compatible
+        /// server reports them only when asked (`stream_options.include_usage`)
+        /// and some do not report them at all. See
+        /// `RECORD/2026-09-01.an-openai-compatible-backend.completed.md`.
+        usage: Option<Usage>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]

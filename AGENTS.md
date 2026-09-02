@@ -87,6 +87,10 @@ cargo fmt --all --check
 
 cargo run --bin luu -- chat "hola"                    # one turn, mock backend, to stdout
 cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
+# and against anything OpenAI-compatible: llama-server, vLLM, LM Studio, a
+# hosted endpoint, or Ollama's own /v1. The window is the server's — see below.
+cargo run --bin luu -- chat "hola" --backend openai \
+  --openai-url http://127.0.0.1:8080/v1 --model qwen2.5-coder-7b
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 
 # the gate, without a model: the planning call answers with a plan block, then
@@ -158,6 +162,17 @@ plan cannot be reopened. See
 in the transcript to the summary the model now gets, expandable to what it no
 longer sees.
 
+`serve` binds loopback and answers without authentication, and **any other
+address needs `--auth-token-file <PATH>`**: `/ws` carries task approval, so off
+loopback that authority is one request away from anyone who can reach the port.
+The bind is *refused* without one, before the listener exists, rather than
+warned about above a port that is already serving. The token gates `/ws` and
+`/api/*` — `Authorization: Bearer <token>`, or `?token=` on `/ws` alone,
+because that is all a browser's `WebSocket` constructor can send — and not the
+embedded page, so a guarded server is opened at `http://host:7878/?token=…` and
+the UI carries it from there. The file's mode is checked: a flag is greppable in
+`ps` and an env var is inherited by every child `run_command` spawns.
+
 A script is prompts one per line, `#` comments, and `##` directives for the task
 lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## write:` /
 `## command:` for its plan, and `## close`. `## file:` is what the task may
@@ -185,11 +200,29 @@ what the `summaries` bucket in the budget panel plots. A directive it does not
 recognise is an error, never a prompt.
 
 The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
-`network` and `enforcement` — and the `--allow-read/-write/-exec`,
-`--allow-command`, `--allow-network` and `--sandbox-enforcement` flags **add** to
-it for one run. `--max-tool-steps` caps the tool calls one turn may make and
+`network`, `enforcement` and `[sandbox.limits]` — and the
+`--allow-read/-write/-exec`, `--allow-command`, `--allow-network` and
+`--sandbox-enforcement` flags **add** to it for one run. `paths` says what a
+child may *reach*; `limits` says what it may **spend**, as `setrlimit` in the
+child: `cpu-seconds` and `file-size-mb` are on by default, `memory-mb`
+(`RLIMIT_AS`, which a Rust toolchain's address-space reservation makes a
+build-breaker) and `processes` (`RLIMIT_NPROC`, which the kernel counts per uid
+rather than per process tree) are off until someone types a number. They are
+POSIX, not Linux, so they sit above the `linux.rs`/`fallback.rs` split and are
+the first thing that has ever held a child on macOS — where the verdict now
+reads `rlimits (…)` with the same `missing` instead of "in-process check only". `--max-tool-steps` caps the tool calls one turn may make and
 `--no-tools` runs without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
+
+A `run_command` outcome is **structured**: `exit_code`, `signal`, `stdout`,
+`stderr` and `duration_ms` are fields on the protocol and in the record, while
+`ToolOutcome::render` still hands the model the same short plain text — a 7B
+pays for every token of a wrapper it does not read. It is what unblocks the rung
+above the user in the closing ladder: a task cannot be closed on an exit code
+that only ever existed inside a sentence. `signal` is also how a run says which
+limit killed a child (`SIGXCPU`, `SIGXFSZ`). The field is additive — absent for
+every in-process tool and in every older recording — so the record format stayed
+at 5.
 
 `--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
 definitions with their signatures, bodies elided, from `tree-sitter`'s own
@@ -267,6 +300,40 @@ real release.
 **Do not edit the UI's `dist`-like output, because there isn't one.** `crates/luu/ui/`
 is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into
 the binary for release. Editing a component costs a reload, not a `cargo build`.
+
+## The two backends, and the one rule that does not transfer
+
+`--backend ollama` and `--backend openai` are both built, behind one trait.
+The second is not about hosted APIs: it is how `llama-server`, vLLM and LM Studio
+are reached, which is most of the machines in
+[`ROADMAP/2026-09-01/machines.md`](ROADMAP/2026-09-01/machines.md).
+
+**`--context-limit` reaches Ollama and cannot reach an OpenAI-compatible
+server.** Ollama takes it as `options.num_ctx` and truncates the prompt silently
+without it. The chat-completions API has no field for the window at all —
+`max_tokens` caps the *output*, and on `llama-server`, vLLM and LM Studio the
+window is what the server was started with (`llama-server -c 8192`, vLLM
+`--max-model-len 8192`). So `luu` budgets against it, prints a note saying it
+cannot send it, and the check moves to the response: `usage.prompt_tokens` per
+turn is what actually arrived, and it is already compared against our own count.
+**A run against a server started smaller than `--context-limit` is not
+comparable to one against Ollama at the same number**, and that gap is the only
+place it shows.
+
+Usage itself is the second half of that. These servers stream *no* usage unless
+`stream_options.include_usage` is on the request — it always is here — and some
+still send none, so `Chunk::Done` carries `Option<Usage>`: `None` is **not
+reported**, which the budget panel shows as absent rather than as a prompt of
+zero tokens. Ollama always reports counts, so nothing about existing recordings
+moved. See
+[`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
+
+`--api-key-file` is the bearer token for a hosted endpoint, a file for the same
+reason `--auth-token-file` is one; with no key, no `Authorization` header is sent
+at all, which is what a local server wants. The backend's name in a recording is
+`openai@<host>`, not `openai`, because a header whose job is to make two runs
+comparable cannot call a 7B on a laptop and a hosted frontier model the same
+thing.
 
 ## Running against a real model (Ollama)
 

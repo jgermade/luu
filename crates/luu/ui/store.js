@@ -29,7 +29,10 @@ export const state = $reactive({
   // This turn's tool calls, in order. A call is pushed before it is checked, so
   // one that is still running (or was denied) is visible as itself rather than
   // as nothing happening. Per turn, like the budget beside it.
-  tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms }]
+  // `command` is present for run_command only: { exit_code, signal, stdout,
+  // stderr, duration_ms }. Null everywhere else, because an in-process tool has
+  // no exit code and a zero would be a lie about a fact that does not exist.
+  tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms, command }]
   // The model calls after the first one of this turn — the tool round trips.
   // The budget describes the first call only, while the backend's usage is
   // summed over all of them, so the two are comparable only with these added in.
@@ -126,9 +129,24 @@ function appendToken(text) {
   if (frame === null) frame = requestAnimationFrame(flush)
 }
 
+// The bearer token, when the server was bound off loopback and asked for one.
+// The page itself is served without it — a browser navigation cannot carry a
+// header — so a person opens `…/?token=…` and the transport takes it from
+// there: on the socket as a query parameter, which is the only thing the
+// `WebSocket` constructor can do, and on the read side as the header it should
+// be everywhere. Null on the loopback default and on a static host, where both
+// halves are unchanged.
+const token = new URLSearchParams(location.search).get("token")
+
 function url(path) {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:"
-  return `${scheme}//${location.host}${path}`
+  const query = token ? `?token=${encodeURIComponent(token)}` : ""
+  return `${scheme}//${location.host}${path}${query}`
+}
+
+/// The read side, with the token when there is one.
+function apiHeaders() {
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 function onProtocol(message) {
@@ -250,6 +268,7 @@ function onProtocol(message) {
         output: "",
         truncated: false,
         duration_ms: null,
+        command: null,
       }]
       break
 
@@ -262,6 +281,7 @@ function onProtocol(message) {
             output: message.output,
             truncated: message.truncated,
             duration_ms: message.duration_ms,
+            command: message.command ?? null,
           }
         : call)
       break
@@ -441,7 +461,7 @@ export function playFixture(file) {
 /// reconnecting is still right.
 async function loadFixtures() {
   try {
-    const response = await fetch("./api/sessions.json")
+    const response = await fetch("./api/sessions.json", { headers: apiHeaders() })
     if (!response.ok) return false
     const sessions = await response.json()
     // Only sessions that ship a recording can be replayed; a live one cannot.
