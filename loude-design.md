@@ -96,7 +96,10 @@ exist yet grants the directory that will hold it, because creating a file is a
 write to its directory and at the kernel rung a grant is a directory anyway.
 Approving carries an amendment — the reads, writes and commands the person adds
 at the gate, checked against the policy file exactly as the model's plan was —
-which is what stops an under-specified plan from being a dead run.
+which is what stops an under-specified plan from being a dead run. It carries one
+more thing the plan never had: `closes_on`, below, checked against the plan as it
+will *be* rather than against the amendment alone, since the command it names is
+usually one the model already declared.
 See [`RECORD/2026-08-30.the-gate.completed.md`](RECORD/2026-08-30.the-gate.completed.md) and
 [`RECORD/2026-08-30.narrowing.completed.md`](RECORD/2026-08-30.narrowing.completed.md).
 
@@ -132,6 +135,31 @@ narrative** — the objective as typed, the diff, the commands and their exit co
 because a judge fed the model's own account of its work inherits its hallucinations.
 It runs in shadow mode until measured: every task the user closes is a label, so the
 accuracy figure arrives for free and gates nothing until it exists.
+
+**The exit-code rung exists.** A plan carries `closes_on`, one command line, and
+the task folds itself the moment a `run_command` step of its own runs exactly
+that line and comes back `exit_code: 0` — matched whole, so `cargo test` is not
+`cargo test --no-run`, and on the code rather than on the absence of an error, so
+a child killed by `SIGXCPU` is the limit reporting an unfinished command rather
+than a success. A plan without one closes only when a person says so, which is
+every plan a model writes.
+
+**The model is never asked for `closes_on`; the person at the gate types it.**
+`PLANNING` keeps its five keys, so the cached prefix does not move and every run
+recorded before it stays comparable. The reason is not economy: *what would
+convince me this is finished* is the judgement the gate exists for, and a 7B
+asked for its own success criterion restates the plan it was about to run. It is
+the first thing the gate can add that the model was never asked to propose.
+
+**Every close says which authority folded it.** `task_closed` carries `by` —
+`user` or `exit_code` — because a ladder is only worth climbing if each rung can
+be counted: how often the exit code closed a task a person would have left open,
+and how often a person closed one it missed. Absent means `user`, which is what
+every close before the field existed was. See
+[`RECORD/2026-09-02.closing-on-an-exit-code.completed.md`](RECORD/2026-09-02.closing-on-an-exit-code.completed.md) —
+including the finding that the rung is **unreachable wherever the kernel cannot
+hold a child**, macOS included, because it sits on top of `run_command`. The
+container is what makes it real.
 
 ## Overall architecture
 
@@ -497,7 +525,10 @@ Closing a task is an event, not a mutation: reopening one is folding the log
 differently, never undoing a deletion. Freezing v1 of these enums waits on the task
 lifecycle for that reason — it is the last cheap moment to add it.
 
-Read side — plain GETs, browsable and curl-able:
+Read side — plain GETs, browsable and curl-able. Every path answers for the live
+session, under `live` or under its own stored id, **and for any session the store
+has** — so a second `serve` pointed at the same database can be asked what the
+first one did:
 
 - `GET /api/sessions` · `GET /api/sessions/:id` · `POST /api/sessions` · `DELETE /api/sessions/:id`
 - `GET /api/sessions/:id/turns?from=&limit=`
@@ -631,10 +662,27 @@ an empty prompt, in exactly the number the budget panel plots against ours. See
 
 ## Persistence
 
-Nothing is persisted yet: `--record` is opt-in and per-run, and a session's history
-lives in memory for the life of the process.
+**Sessions are stored**, as SQLite (`rusqlite`, with SQLite compiled in so the
+store does not depend on the host's system packages). `luu serve` caches its fold
+into `~/.loude/sessions.db` by default — `--store <path>` names another,
+`--no-store` keeps the session in memory the way every run did before. The store
+is deliberately not beside `luu.toml`: the policy file describes *this project*
+and is committed with it, and a session store that travelled with a checkout
+would put one project's conversation into every clone of it.
 
-- Sessions in SQLite (`rusqlite`) with compressed state, to resume long tasks without recomputing context from scratch.
+**A row is the fold, whole, and nothing else.** `SessionView` serialised into one
+column, with the listing columns derived from `SessionView::summary()` beside it
+so a listing does not parse every blob. The normalised alternative — a table per
+turn, task and tool call — is a *second definition of the fold*, and the first
+time DDL and `api.rs` are changed apart the store and the live server start
+disagreeing about a session. `GET /api/sessions` lists the live session and the
+stored ones; every read path answers for a stored id as well as for `live`.
+
+What it does **not** yet do is resume: the view is the read side and `Context` is
+the write side, and folding one back into the other is a second fold that has to
+be argued before it is written. See
+[`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md).
+
 - **Whatever the store holds must be reproducible by folding the record.** The
   JSON-lines stream is the account of what happened, and `api::SessionView` already
   folds it; a store that accumulates state the events cannot regenerate is a second
@@ -654,6 +702,14 @@ lives in memory for the life of the process.
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums
   two different units into one bar.
+- **The parity is a test, not a promise.** `fold(record) == load(store, id)`, over
+  recordings produced by running the binary rather than hand-written, so a store
+  that drifted from the fold is a red test instead of a support question. Writes
+  happen at checkpoints — a turn ending, a task changing state — so the store is
+  allowed to *lag* the record and never to contradict it.
+- Compression is deferred until a real session has been measured and is not tens
+  of kilobytes of JSON: `zstd` is a dependency, a format decision, and a thing to
+  get wrong.
 
 ## Suggested work order
 
@@ -663,6 +719,9 @@ lives in memory for the life of the process.
    measure step 2. *Done.*
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
 5. Container packaging (level 3), with the level-2 restrictions still applied inside it.
+   *Now blocking two things rather than one: the gate probe's command prompts, and
+   the exit-code rung of the closing ladder — both sit on `run_command`, which is
+   denied wherever the kernel cannot hold a child.*
 6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
 
 The six steps are the *shape* of the work and have not changed. What is being
@@ -686,8 +745,11 @@ not decided; the argument is
   the task's roots allow, and a plan's `commands` list says nothing about paths.
   Narrower than it was — the child is held to the *task's* roots now — but a
   command is still the widest thing a plan can ask for.
-- Who else may close a task: exit codes and tests first, then the judge in
-  shadow mode. The user is the only authority that closes one today.
+- Who else may close a task: **exit codes are in** — a plan's `closes_on`, matched
+  whole, on an exit of 0, and every close says which authority folded it. Tests
+  as a distinct rung, and then the judge in shadow mode, are still ahead. Nothing
+  counts the two authorities against each other yet, which wants closed tasks in
+  quantity and therefore the store.
 - Design the concrete GBNF grammar to force valid tool calls with the target model
   (Qwen2.5-Coder), replacing the text parse.
 - `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window

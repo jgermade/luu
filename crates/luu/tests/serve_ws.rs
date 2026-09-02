@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use agent_core::backend::mock::Mock;
 use agent_core::context::{ApproximateCounter, Budget, Eviction, TokenCounter};
-use agent_core::sandbox::{Access, Sandbox, SandboxPolicy};
+use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
 use agent_core::tools::Tools;
 use futures_util::{SinkExt, StreamExt};
 use luu::serve::{ServeOptions, bind};
@@ -75,6 +75,20 @@ async fn server_writable(replies: Vec<String>, also: &std::path::Path) -> String
         also.parent().expect("a parent directory"),
         Access::ReadWrite,
     );
+    server_with_policy(replies, Duration::ZERO, policy).await
+}
+
+/// A server whose policy allows one program, so a plan can declare it and the
+/// gate can name it as what closes the task.
+async fn server_running(replies: Vec<String>, command: &str) -> String {
+    let mut policy = SandboxPolicy::default();
+    policy.allow_command(command);
+    // `best-effort`, so the test runs where the kernel rung does not: under
+    // the default `kernel` a child is denied wherever Landlock is missing,
+    // which is macOS and any container whose kernel lacks it. What is being
+    // asserted here is the closing rung, and a test that only runs on one
+    // kernel asserts it nowhere else.
+    policy.enforcement = Enforcement::BestEffort;
     server_with_policy(replies, Duration::ZERO, policy).await
 }
 
@@ -142,6 +156,36 @@ async fn server_full(
     server_authed(replies, delay, policy, budget, None).await
 }
 
+/// A server that caches its fold into the store at `path`, so a second one
+/// pointed at the same file can be asked what the first one did.
+async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String {
+    let base = std::env::current_dir().expect("the working directory");
+    let agency = Agency {
+        tools: Arc::new(Tools::standard()),
+        sandbox: Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("the sandbox")),
+        max_steps: 4,
+    };
+    let serving = bind(ServeOptions {
+        address: "127.0.0.1:0".parse().expect("a loopback address"),
+        backend: Arc::new(Mock::replies(replies).delay(Duration::ZERO)),
+        model: "mock".into(),
+        record: None,
+        budget: Budget::new(0, 0, Eviction::Turn),
+        counter: Arc::new(ApproximateCounter),
+        agency,
+        temperature: None,
+        seed: None,
+        map_tokens: 0,
+        auth_token_file: None,
+        store: Some(path.to_path_buf()),
+    })
+    .await
+    .expect("binding the server");
+    let address = serving.address();
+    tokio::spawn(serving.run());
+    address.to_string()
+}
+
 async fn server_authed(
     replies: Vec<String>,
     delay: Duration,
@@ -167,6 +211,7 @@ async fn server_authed(
         seed: None,
         map_tokens: 0,
         auth_token_file,
+        store: None,
     })
     .await
     .expect("binding the server");
@@ -1001,4 +1046,251 @@ async fn the_view_keeps_the_plan_as_proposed_beside_the_plan_as_approved() {
         serde_json::json!(["Cargo.toml", "AGENTS.md"]),
         "the plan as approved, which is what the sandbox is built from",
     );
+}
+
+/// The rung above the person: a task that closes itself on an exit code.
+///
+/// The one test that asserts the payoff rather than the field. A plan declares
+/// `sh`, the person at the gate names `sh -c exit 0` as what would convince
+/// them the work is finished, the turn runs it, and the task folds with nobody
+/// having clicked anything. See
+/// `RECORD/2026-09-02.closing-on-an-exit-code.completed.md`.
+const PLAN_THAT_RUNS_SH: &str = "```plan\n{\"objective\":\"make it pass\",\
+                                 \"steps\":[\"run it\"],\"files\":[],\
+                                 \"commands\":[\"sh\"]}\n```";
+
+fn runs(script: &str) -> String {
+    format!(
+        "Running it.\n```tool\n{{\"name\":\"run_command\",\"arguments\":\
+         {{\"command\":\"sh\",\"args\":[\"-c\",\"{script}\"]}}}}\n```"
+    )
+}
+
+#[tokio::test]
+async fn a_green_command_closes_the_task_with_nobody_at_the_gate() {
+    let address = server_running(
+        vec![
+            PLAN_THAT_RUNS_SH.into(),
+            runs("exit 0"),
+            "It passes.".into(),
+        ],
+        "sh",
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "make the tests pass"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+
+    // The one part of a plan the model was never asked for, arriving from the
+    // person who is already reading the plan.
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_task",
+            "task": 1,
+            "closes_on": "sh -c exit 0",
+        }),
+    )
+    .await;
+    let (approved, _) = until(&mut socket, "task_approved").await;
+    assert_eq!(approved["plan"]["closes_on"], "sh -c exit 0");
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(
+        result["verdict"]["allowed"], true,
+        "the command has to run before its exit code can close anything: {result}",
+    );
+    assert_eq!(result["command"]["exit_code"], 0, "{result}");
+
+    let (closed, _) = until(&mut socket, "task_closed").await;
+    assert_eq!(closed["task"], 1);
+    assert_eq!(
+        closed["by"], "exit_code",
+        "which authority folded it is on the wire, or nothing can ever count the rungs",
+    );
+    assert!(
+        closed["summary"]
+            .as_str()
+            .expect("a summary")
+            .contains("run_command sh -c exit 0"),
+        "the close still writes the evidence: {}",
+        closed["summary"],
+    );
+
+    // And the read side agrees with what the socket carried, which is the one
+    // property this file exists to keep proving.
+    let session = get(&address, "/api/sessions/live").await;
+    assert_eq!(session["tasks"][0]["state"], "closed");
+    assert_eq!(session["tasks"][0]["closed_by"], "exit_code");
+}
+
+#[tokio::test]
+async fn a_red_command_leaves_the_task_open() {
+    let address = server_running(
+        vec![
+            PLAN_THAT_RUNS_SH.into(),
+            runs("exit 1"),
+            "It still fails.".into(),
+            "Looking again.".into(),
+        ],
+        "sh",
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "make the tests pass"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_task",
+            "task": 1,
+            "closes_on": "sh -c exit 0",
+        }),
+    )
+    .await;
+    until(&mut socket, "task_approved").await;
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(
+        result["command"]["exit_code"], 1,
+        "the command has to have run for its exit code to mean anything: {result}",
+    );
+    until(&mut socket, "ended").await;
+
+    // Asserted by asking for something the answer changes, rather than by
+    // waiting for a message that should not arrive: inside a live task a prompt
+    // is a turn, and behind a closed one it is a new proposal.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "what failed?"}),
+    )
+    .await;
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(
+        started["task"], 1,
+        "a task whose condition was not met is still the live one",
+    );
+}
+
+/// The gate widens a plan up to the policy file and not past it, and a closing
+/// condition is no exception — one naming a command the task may not run can
+/// never be met, and a task that can never close looks like one that will.
+#[tokio::test]
+async fn a_closing_condition_the_plan_cannot_run_is_refused() {
+    let address = server_running(vec![PLAN_THAT_RUNS_SH.into(), "Done.".into()], "sh").await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "make the tests pass"}),
+    )
+    .await;
+    until(&mut socket, "task_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_task",
+            "task": 1,
+            "closes_on": "cargo test",
+        }),
+    )
+    .await;
+
+    let (approved, _) = until(&mut socket, "task_approved").await;
+    assert!(
+        approved["plan"]["closes_on"].is_null(),
+        "the condition is missing from the plan that comes back, which is the feedback",
+    );
+}
+
+/// What the store is for: a session that outlives the process that had it.
+///
+/// The assertion is not that a row exists — it is that the *second* server can
+/// answer the read side's questions about a session it never ran, which is the
+/// whole of "resume" that the fold alone can deliver. See
+/// `RECORD/2026-09-02.sessions-in-sqlite.completed.md` for what it deliberately does
+/// not deliver.
+#[tokio::test]
+async fn a_session_outlives_the_server_that_ran_it() {
+    let dir = std::env::temp_dir().join(format!("luu-store-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let db = dir.join("sessions.db");
+
+    let first = server_storing(vec![PLAN.into(), ANSWER.into()], &db).await;
+    {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{first}/ws"))
+            .await
+            .expect("the websocket handshake");
+        assert_eq!(next_message(&mut socket).await["type"], "hello");
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": "add a flag"}),
+        )
+        .await;
+        until(&mut socket, "task_proposed").await;
+        send(
+            &mut socket,
+            serde_json::json!({"type": "approve_task", "task": 1}),
+        )
+        .await;
+        until(&mut socket, "ended").await;
+    }
+
+    // A second server, same file, nothing shared but the store.
+    let second = server_storing(vec!["another answer".into()], &db).await;
+    let listed = get(&second, "/api/sessions").await;
+    let sessions = listed.as_array().expect("a listing");
+    assert!(
+        sessions.len() >= 2,
+        "the live session and the one that ended: {listed}",
+    );
+
+    // The live row is the second server's, under the name every client asks
+    // for; the other is the first server's session, which nothing in this
+    // process is holding any more.
+    let earlier = sessions
+        .iter()
+        .find(|row| row["id"] != "live")
+        .expect("the session the first server ran");
+    let id = earlier["id"].as_str().expect("its id");
+    assert_ne!(
+        id, "live",
+        "a store keyed on `live` holds one session forever"
+    );
+    assert_eq!(
+        earlier["turns"].as_u64(),
+        Some(2),
+        "the planning call is a turn too, and the fold keeps it: {earlier}",
+    );
+
+    let session = get(&second, &format!("/api/sessions/{id}")).await;
+    assert_eq!(session["turns"][0]["prompt"], "add a flag");
+    assert_eq!(session["tasks"][0]["state"], "approved");
+    assert_eq!(
+        session["turns"][1]["text"], ANSWER,
+        "the fold, not a summary of it: {session}",
+    );
+
+    let turns = get(&second, &format!("/api/sessions/{id}/turns")).await;
+    assert_eq!(turns.as_array().expect("its turns").len(), 2);
+
+    std::fs::remove_dir_all(&dir).ok();
 }

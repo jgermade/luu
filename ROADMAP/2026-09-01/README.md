@@ -27,7 +27,7 @@ is worth more than a reordering.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 1 | ~~**An OpenAI-compatible backend**~~ — built, and never yet pointed at a real server | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md), closed by [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
-| 2 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md) |
+| 2 | ~~**Sessions in SQLite, derived from the record**~~ — the store and the parity; **not** the resume | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md), closed by [`sessions-in-sqlite`](../../RECORD/2026-09-02.sessions-in-sqlite.completed.md) |
 | 3 | **Level 3 in its development posture** — `loude-worker` in a long-lived container, wide open | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) |
 | 4 | **The gate probe against a real model** | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) — written, unrun |
 | 5 | **Relevance selection** — the reference graph and the ranking | nothing | [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md), scored by [`the-map-against-a-7b`](../../RECORD/2026-09-01.the-map-against-a-7b.completed.md) |
@@ -94,10 +94,14 @@ inside the container with a model in the loop.
 
 - **The session store blocks the extension and all of federation.** It blocks
   neither the container nor relevance selection, which is why 3 and 5 run beside
-  it.
+  it. *Half true as of the store landing: what the extension and federation
+  actually need is a session that can be **resumed**, and storing the fold is the
+  half of that which is derivable. The rest is its own record.*
 - **Level 3 blocks the narrowing, and nothing else.** Its development posture is
   deliberately not a dependency of anything: it is wide open precisely so it does
-  not become one.
+  not become one. *No longer true, and the correction is the useful part: it also
+  blocks every `run_command` on a Mac, which now includes a built feature — the
+  exit-code rung — and not only the probe's three prompts.*
 - **Relevance selection blocks nothing and is blocked by nothing**, and now has a
   scored baseline: get [`map-probe.txt`](../../scripts/tasks/map-probe.txt)'s
   group B into the map without growing it, and watch B move the way A did. That
@@ -166,6 +170,35 @@ and closed in
   is unchanged. This is what unblocks the closing ladder's next rung, which
   nothing in the order above covers and which is the honest thing this revision
   is missing.
+
+## Landed after that, and what it did to the order
+
+**The closing ladder's next rung**, which the paragraph above named as the thing
+this revision was missing and which was therefore never a row. A plan carries
+`closes_on`, one command line typed by the person at the gate and never asked of
+the model, and the task folds itself on an exit code of 0. Every close now says
+which authority folded it. Argued and built in
+[`closing-on-an-exit-code`](../../RECORD/2026-09-02.closing-on-an-exit-code.completed.md).
+
+**Item 2**, struck through above. What landed is the store and the parity
+assertion `session-store.md` asked for; what did not is the *resume* the item's
+motivation names. The distinction is kept in the row rather than smoothed over:
+`SessionView` is the read side and `Context` is the write side, and folding one
+back into the other is a second fold that wants a record of its own before it
+wants code.
+
+**And item 3 moved again, without being touched.** It was already before the gate
+probe because `run_command` has never been observed with a model in the loop.
+Building the closing rung found the second half of the same sentence: the rung
+sits on `run_command`, so **it is code that cannot run wherever the kernel cannot
+hold a child** — macOS, and this repository's own CI container. The container now
+blocks a built feature as well as an unmade measurement, which is a stronger
+claim on it than the one this revision opened with.
+
+Two rows of the order are now struck. The three that are not — the probe, the
+narrowing and relevance selection — are the same three, and **relevance selection
+is the one nothing has moved in two revisions**, which is exactly what its row
+predicted would happen to it.
 
 ## When this revision is superseded
 

@@ -92,6 +92,9 @@ cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 cargo run --bin luu -- chat "hola" --backend openai \
   --openai-url http://127.0.0.1:8080/v1 --model qwen2.5-coder-7b
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
+# sessions are cached in ~/.loude/sessions.db by default, so a restart does not
+# lose the conversation: `--store <path>` moves it, `--no-store` turns it off.
+cargo run --bin luu -- serve --no-store
 
 # the gate, without a model: the planning call answers with a plan block, then
 # the turn answers. Type a prompt and the UI holds it until you approve it.
@@ -217,12 +220,38 @@ implicit grants included.
 A `run_command` outcome is **structured**: `exit_code`, `signal`, `stdout`,
 `stderr` and `duration_ms` are fields on the protocol and in the record, while
 `ToolOutcome::render` still hands the model the same short plain text — a 7B
-pays for every token of a wrapper it does not read. It is what unblocks the rung
+pays for every token of a wrapper it does not read. It is what unblocked the rung
 above the user in the closing ladder: a task cannot be closed on an exit code
 that only ever existed inside a sentence. `signal` is also how a run says which
 limit killed a child (`SIGXCPU`, `SIGXFSZ`). The field is additive — absent for
 every in-process tool and in every older recording — so the record format stayed
 at 5.
+
+**That rung is built.** A plan carries `closes_on` — one command line — and the
+task folds itself when a `run_command` step of its own runs exactly that line and
+exits 0. Matched whole (`cargo test` is not `cargo test --no-run`) and on the
+code rather than the absence of an error (a child killed by `SIGXCPU` has no exit
+code, and that is the limit reporting an unfinished command). **The model is
+never asked for it**: `PLANNING` keeps its five keys, so the cached prefix does
+not move, and the field arrives in the amendment at the gate — *what would
+convince me this is finished* is the person's judgement, not the model's.
+`task_closed` carries `by` (`user` or `exit_code`), because a ladder nobody can
+count is a ladder nobody can climb. All three are optional fields on existing
+types, so the format stayed at 5 and the protocol at v3 — **new variant bumps,
+new optional field does not**. It is also unreachable wherever the kernel cannot
+hold a child, macOS included, because it sits on `run_command`. See
+[`RECORD/2026-09-02.closing-on-an-exit-code.completed.md`](RECORD/2026-09-02.closing-on-an-exit-code.completed.md).
+
+**Sessions survive the process.** `serve` caches its fold into SQLite —
+`~/.loude/sessions.db` by default, `--store <path>`, `--no-store` to turn it off
+— and every read path answers for a stored session as well as the live one. A row
+is the `SessionView` whole, because a normalised schema is a second definition of
+the fold and the day it disagrees with `api.rs` the store lies about a session.
+The rule that keeps it honest is a test: `fold(record) == load(store, id)`, over
+recordings produced by running the binary. It does **not** resume a session yet —
+the view is the read side, `Context` is the write side, and folding one back into
+the other is a second fold that has to be argued first. See
+[`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md).
 
 `--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
 definitions with their signatures, bodies elided, from `tree-sitter`'s own

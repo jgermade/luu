@@ -13,7 +13,7 @@ use crate::context::{Counter, Evicted};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
-use crate::task::{Plan, PlanSource, TaskId, TaskState};
+use crate::task::{ClosedBy, Plan, PlanSource, TaskId, TaskState};
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
@@ -102,6 +102,10 @@ pub struct TaskView {
     /// its token count belongs to whoever counted it, and a reader who needs
     /// that has the budget on the turn beside it.
     pub summary: Option<String>,
+    /// Which authority closed it, beside what the close produced. `None` on an
+    /// open task and in any recording made before the ladder had a second rung.
+    #[serde(default)]
+    pub closed_by: Option<ClosedBy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +282,7 @@ impl SessionView {
                         source: *source,
                         state: TaskState::Proposed,
                         summary: None,
+                        closed_by: None,
                     });
                 }
             }
@@ -321,10 +326,14 @@ impl SessionView {
                     }
                 }
             }
-            ServerMessage::TaskClosed { task, summary } => {
+            ServerMessage::TaskClosed { task, summary, by } => {
                 if let Some(view) = self.task_mut(*task) {
                     view.state = TaskState::Closed;
                     view.summary = Some(summary.clone());
+                    // An older recording carries none, and then it was a
+                    // person: nothing else could close a task when it was
+                    // written.
+                    view.closed_by = Some(by.unwrap_or(ClosedBy::User));
                 }
             }
             ServerMessage::TaskRejected { task } => {
@@ -338,6 +347,7 @@ impl SessionView {
                     // Dropped rather than kept beside the reopened task: it is
                     // an account of work that is being written again.
                     view.summary = None;
+                    view.closed_by = None;
                 }
             }
             ServerMessage::Token { turn, text } => {

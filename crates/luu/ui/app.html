@@ -14,6 +14,9 @@
   // the model forgot can still get in. Reassigned, never mutated.
   let adding = { files: [], writes: [], commands: [] }
   let addition = ""
+  // What would close the task without anyone present. Typed rather than added
+  // to a list: there is one closing condition, and the model never proposes it.
+  let closesOn = ""
   const add = kind => {
     const item = addition.trim()
     if (!item || adding[kind].includes(item)) return
@@ -21,9 +24,10 @@
     addition = ""
   }
   const approve = id => {
-    approveTask(id, adding.files, adding.writes, adding.commands)
+    approveTask(id, adding.files, adding.writes, adding.commands, closesOn)
     adding = { files: [], writes: [], commands: [] }
     addition = ""
+    closesOn = ""
   }
   const toggle = id => {
     expanded = expanded.includes(id) ? expanded.filter(open => open !== id) : [...expanded, id]
@@ -131,6 +135,10 @@
               {{ expanded.includes(entry.task.id) ? "▾" : "▸" }}
               task {{ entry.task.id }} · {{ entry.task.objective }}
             </button>
+            <!-- Which authority folded it. Shown rather than counted in
+                 private: the ladder above the person is only worth climbing if
+                 a reader can see which rung took each task. -->
+            <span :if="entry.task.closedBy === 'exit_code'" class="dim">closed by exit code</span>
             <button type="button" class="link" :disabled="replaying" @click="reopenTask(entry.task.id)">reopen</button>
           </div>
           <pre class="summary">{{ entry.task.summary }}</pre>
@@ -185,6 +193,20 @@
       <p :if="adding.files.length" class="dim">adding reads: {{ adding.files.join(" · ") }}</p>
       <p :if="adding.writes.length" class="dim">adding writes: {{ adding.writes.join(" · ") }}</p>
       <p :if="adding.commands.length" class="dim">adding commands: {{ adding.commands.join(" · ") }}</p>
+
+      <!-- The one part of the plan the model was never asked for. A person is
+           being asked what would convince them the work is finished, which is
+           the judgement the gate exists for. -->
+      <div class="amend" :if="!replaying">
+        <input
+          :value="closesOn"
+          @input="closesOn = $event.target.value"
+          :attrs="{ placeholder: 'closes itself when this command exits 0 (optional)' }">
+      </div>
+      <p :if="closesOn.trim()" class="dim warn">
+        this task folds itself when <code>{{ closesOn.trim() }}</code> exits 0,
+        with nobody watching — its summary is written either way
+      </p>
 
       <div class="gate-buttons">
         <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>

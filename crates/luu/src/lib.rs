@@ -12,7 +12,7 @@ use agent_core::fragment;
 use agent_core::protocol::ServerMessage;
 use agent_core::repo_map::RepoMap;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
-use agent_core::task::{Plan, PlanSource};
+use agent_core::task::{ClosedBy, Plan, PlanSource};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
@@ -26,6 +26,7 @@ pub mod auth;
 pub mod export;
 pub mod serve;
 pub mod session;
+pub mod store;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::io::{AsyncWriteExt, stdout};
 use tokio::sync::{mpsc, watch};
@@ -107,6 +108,22 @@ enum Command {
         /// from anyone who can reach the port.
         #[arg(long, value_name = "PATH")]
         auth_token_file: Option<std::path::PathBuf>,
+
+        /// Where sessions are cached between restarts, as SQLite. Defaults to
+        /// `~/.loude/sessions.db`; `--no-store` keeps the session in memory,
+        /// which is what `serve` did before the store existed.
+        ///
+        /// Deliberately not beside `luu.toml`: the policy file describes *this
+        /// project* and is meant to be committed with it, and a session store
+        /// that travelled with a checkout would put one project's conversation
+        /// into every clone of it. See
+        /// `RECORD/2026-09-02.sessions-in-sqlite.completed.md`.
+        #[arg(long, value_name = "PATH")]
+        store: Option<std::path::PathBuf>,
+
+        /// Keep the session in memory only.
+        #[arg(long, conflicts_with = "store")]
+        no_store: bool,
 
         #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
         backend: BackendKind,
@@ -703,6 +720,8 @@ pub async fn run() -> Result<()> {
     if let Command::Serve {
         bind,
         auth_token_file,
+        store,
+        no_store,
         sandbox_args,
         backend,
         model,
@@ -738,6 +757,22 @@ pub async fn run() -> Result<()> {
         }
         let agency = sandbox_args.resolve()?;
         eprint!("{}", agency.describe());
+        // Named, or the default, or nothing at all. A missing `HOME` leaves
+        // the default undecidable, and the run says so rather than picking a
+        // directory of its own and writing history into it.
+        let store = match (no_store, store) {
+            (true, _) => None,
+            (false, Some(path)) => Some(path),
+            (false, None) => {
+                let path = crate::store::default_path();
+                if path.is_none() {
+                    eprintln!(
+                        "warning: no HOME, so no default session store:                          this session stays in memory. Pass --store <path> to keep it."
+                    );
+                }
+                path
+            }
+        };
         return serve::serve(serve::ServeOptions {
             address: bind,
             backend: backend.into(),
@@ -748,6 +783,7 @@ pub async fn run() -> Result<()> {
             agency,
             temperature,
             seed,
+            store,
             map_tokens,
             auth_token_file,
         })
@@ -926,6 +962,9 @@ pub async fn run() -> Result<()> {
                     recorder.write(&Event::Protocol(ServerMessage::TaskClosed {
                         task: id,
                         summary: summary.clone(),
+                        // `## close` is a person's instruction written down in
+                        // advance, which is the same authority typed later.
+                        by: Some(ClosedBy::User),
                     }));
                 }
                 println!("\n== task {id} closed; its turns are now sent as:");
