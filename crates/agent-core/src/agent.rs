@@ -21,8 +21,9 @@ use tokio::sync::{mpsc, watch};
 
 use crate::backend::{Backend, CompletionRequest, Message, Usage};
 use crate::sandbox::Sandbox;
-use crate::tools::{ToolStep, Tools, parse_call};
+use crate::tools::{ToolStep, parse_call};
 use crate::turn::{EndReason, TurnEvent, TurnOutcome, run_turn};
+use crate::worker::Executor;
 
 /// How many tool calls one turn may make before it has to answer.
 ///
@@ -68,10 +69,16 @@ impl AgentOutcome {
 /// `request.messages` is the prompt as the context manager assembled it; the
 /// steps are appended to a copy, so the caller's selection is not rewritten
 /// underneath it.
+///
+/// `tools` is an [`Executor`] rather than a [`crate::tools::Tools`] because
+/// **where** a call runs is not this loop's business: in this process, or down
+/// a pipe into a container. That is the whole of what level 3 changed here —
+/// and if adding the container had had to touch this function, the loop was
+/// wrong. See `RECORD/2026-09-02.the-worker-and-the-seam.completed.md`.
 pub async fn run_agent_turn(
     backend: &dyn Backend,
     request: CompletionRequest,
-    tools: &Tools,
+    tools: &dyn Executor,
     sandbox: &Sandbox,
     max_steps: u32,
     events: mpsc::Sender<TurnEvent>,
@@ -309,7 +316,7 @@ mod tests {
         max_steps: u32,
     ) -> (Vec<TurnEvent>, AgentOutcome) {
         let backend = Scripted::new(replies);
-        let tools = Tools::standard();
+        let tools = crate::tools::Tools::standard();
         let (tx, mut rx) = mpsc::channel(256);
         let drain = tokio::spawn(async move {
             let mut seen = Vec::new();

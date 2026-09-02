@@ -360,7 +360,8 @@ did not move. See
 ## Sandbox / security
 
 Three rungs, and the middle one is what makes the first worth having. Built: 1
-and 2. See [`RECORD/2026-08-27.tools-and-sandbox.completed.md`](RECORD/2026-08-27.tools-and-sandbox.completed.md).
+and 2, and 3 in its development posture. See
+[`RECORD/2026-08-27.tools-and-sandbox.completed.md`](RECORD/2026-08-27.tools-and-sandbox.completed.md).
 
 1. **In-process checks.** Canonicalize (`std::fs::canonicalize`) before comparing,
    or a symlink walks straight out. Everything an in-process tool can have — and
@@ -372,7 +373,9 @@ and 2. See [`RECORD/2026-08-27.tools-and-sandbox.completed.md`](RECORD/2026-08-2
    authority the agent has, and checking the string `cargo` against an allowlist
    and calling that a sandbox is the part that would be a lie.
 3. **A container.** Below, and *on top of* level 2 rather than instead of it:
-   Landlock survives `exec` and cannot be dropped.
+   Landlock survives `exec` and cannot be dropped. On a Mac it is not a
+   duplicate boundary, it is **the only one there is** — which is why it comes
+   before the measurements that need it rather than after them.
 
 **Declarative config (TOML)** per project — `luu.toml`, and `luu tools` prints the
 resolved result:
@@ -455,14 +458,98 @@ in-process tools — `openat2(RESOLVE_BENEATH)` is the answer there and is not b
 
 ## Container mode
 
-Level 3, and still ahead. The level-2 restrictions stay applied inside it.
+Level 3. **The development posture is built**: `loude-worker` in a long-lived
+container, wide open, with the narrowing kept as a separate item whose trigger is
+a fact rather than a date. Level 2 stays applied inside it — inside a Linux
+container Landlock works, is free, and is the one part of the sandbox the whole
+exercise exists to reach, so the loosening widens `commands` and `network` and
+leaves `enforcement` alone. See
+[`RECORD/2026-09-01.the-container-decided.WIP.md`](RECORD/2026-09-01.the-container-decided.WIP.md)
+for the decision and
+[`RECORD/2026-09-02.the-worker-and-the-seam.completed.md`](RECORD/2026-09-02.the-worker-and-the-seam.completed.md)
+for where it cuts in the code.
 
-- Compile `loude-worker` to a Linux binary → an image holding it **and the programs the policy allows**. `scratch`/distroless is wrong here: the container's whole job is running `cargo`, `rustc`, `git`, `rg`, `ls`, and a minimal image has none of them. So `commands = [...]` is the image's manifest, and "granted by the policy, absent from the image" is a third failure mode that the verdict has to name.
-- Bind-mount only allowed folders, network disabled by default (`--network none`).
-- **The container isolates tool execution only** (fs, commands); the context manager and the model client stay on the host and talk to it over an explicitly exposed socket. The GPU is the obvious reason and not the strong one: the topology does not justify `network = false`, it is what makes it affordable. A model call born inside the container could not be made with the container's network off, and the build-script protection would be lost at the moment isolation was raised. Under local-first this weighs more, not less.
-- First version: rootless Podman or Docker with `--cap-drop=ALL` + non-root user. Produce an **OCI image** and invoke whatever runtime the user names, rather than speaking any runtime's API — the same shape `commands` already has.
-- **One long-lived container per session**, not one per command: a container per command is a start (on some runtimes a VM boot) per command. It is cheaper in time and dearer in memory, which is the binding constraint at 16 GB and not at 48.
-- **The network stays attached and is denied per command by seccomp.** The filter is built at every spawn, so the grant's scope is exactly the task that declared it, with no startup cost and no window that outlives the task. Connecting and disconnecting the container's network would move by hand what the kernel already decides per call.
+**The seam is one function.** The tool loop touches the tool set in exactly one
+place, so the container arrives as an `Executor` behind it: `Tools` runs a call
+here, `Worker` writes it down a pipe. The tool *definitions* stay on the host,
+because they are the second half of the cached prefix and a prefix assembled
+inside the image is one that moves every time the image is rebuilt. If adding
+the container had had to touch the loop, the loop was wrong.
+
+**The container's only process is the worker.** `<runtime> run --rm -i … luu
+worker`, spoken to over stdio — the same transport the VSCode extension uses,
+pointed the other way. So the container's lifetime *is* the worker's: no name to
+allocate, no `docker rm` to forget, and no way to leave one running after the
+session that owned it died. One per session, not one per command, because a
+container per command is a start — on some runtimes a VM boot — per command.
+
+**What crosses the pipe is the policy, not the sandbox.** A resolved `Sandbox` is
+canonical paths on a filesystem the worker does not have; a `SandboxPolicy` is
+portable, and the far side runs the same `Sandbox::new` the host would.
+`Sandbox::to_policy` is the inverse, and a test asserts the round trip grants
+what the original granted. The task's `Authority` crosses too, so a denial from
+inside still says *the approved plan for task 7* rather than *the sandbox
+policy*.
+
+**The base is mounted at its own absolute path**, not `/workspace`. Paths appear
+in verdicts, prompts, tool results and the record; translating them would make a
+contained run and a host run of the same script differ in their bytes, and "one
+flag apart" is what every probe in `scripts/tasks/` depends on. `[[worker.paths]]`
+is for the other direction — trees that exist only inside the image, added to the
+policy the worker resolves and never resolved on the host, because a granted path
+that is not there is a load error and `/usr/local/cargo` is not a directory on a
+Mac.
+
+```toml
+[worker]
+runtime = "docker"          # host | direct | docker | podman | nerdctl | container
+image = "loude-worker:dev"
+
+[[worker.paths]]            # the image's toolchain, resolved only on its side
+path = "/usr/local/cargo"
+access = "execute"
+```
+
+- **A runtime is a name, not an integration.** This layer builds an argv, which
+  is the same shape `commands` already has, so Docker, Podman, `nerdctl` and
+  Apple's `container` substitute for each other and the dependency becomes a
+  choice. Where the flags are *not* uniform it says so rather than assuming:
+  `--user uid:gid` against `--uid`/`--gid`, and Apple's runtime having no
+  `--network none` at all — under which the container stays attached, the
+  per-command seccomp filter is doing all the denying, and the verdict reports
+  it.
+- **`runtime = "host"` is the default** and is every run this repository has
+  measured. `direct` runs the worker as a plain child with no container: it
+  isolates nothing, says so in every line that reports it, and exists so the seam
+  is testable where no runtime is installed and so a failure can be attributed to
+  the IPC or to the container in one flag.
+- **The image is declared, not generated** — `Containerfile` in the tree, and
+  `luu.container.toml` is the wide-open posture, a separate file so that in three
+  weeks nobody has to tell a default from a leftover. `scratch`/distroless is
+  wrong here: the container's whole job is running `cargo`, `rustc`, `git`, `rg`
+  and `ls`, and a minimal image has none of them.
+- **`commands = [...]` is the image's manifest.** The worker is the only process
+  standing on the image's `PATH`, so its handshake answers which allowed commands
+  the image actually has, and `luu tools` prints the gap under `absent` —
+  "granted by the policy, absent from the image", a third failure mode distinct
+  from *denied by the policy* and *the kernel will not hold it*. The handshake
+  also carries the protocol number and the worker's own `luu` version, because an
+  image is the easiest thing in this design to leave stale.
+- **The container isolates tool execution only**; the context manager and the
+  model client stay on the host. The GPU is the obvious reason and not the strong
+  one: the topology does not justify `network = false`, it is what makes it
+  *affordable*. A model call born inside the container could not be made with the
+  container's network off, and the build-script protection would be lost at the
+  moment isolation was raised. Under local-first this weighs more, not less.
+- **The network is decided once, at creation, and never changed.** `--network
+  none` when the session's policy denies it, attached when it allows it. Nothing
+  toggles a running container's network: the filter is built at every spawn, so a
+  *task's* grant is scoped to exactly the task that declared it, with no startup
+  cost and no window that outlives it. Connecting and disconnecting by hand would
+  move what the kernel already decides per call.
+- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
+  egress through a host-side proxy so `network` can become
+  `network: ["crates.io"]` in a plan. That last one is proposed, not decided.
 
 ## VSCode integration
 
@@ -719,9 +806,12 @@ be argued before it is written. See
    measure step 2. *Done.*
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
 5. Container packaging (level 3), with the level-2 restrictions still applied inside it.
-   *Now blocking two things rather than one: the gate probe's command prompts, and
-   the exit-code rung of the closing ladder — both sit on `run_command`, which is
-   denied wherever the kernel cannot hold a child.*
+   *The development posture is built — the worker, the seam, the runtime layer
+   and the image — and what is left of the step is the narrowing: egress through
+   the host, and `network` per plan. It stopped blocking the two things it was
+   blocking (the gate probe's command prompts and the exit-code rung, both of
+   which sit on `run_command` and are denied wherever the kernel cannot hold a
+   child) on the day the image can be built and pointed at.*
 6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
 
 The six steps are the *shape* of the work and have not changed. What is being
@@ -741,6 +831,14 @@ not decided; the argument is
 
 - Narrowing `network` and `enforcement` with the rest of the plan, which needs a
   plan that declares them. Today a task inherits both from the policy file.
+  Half-answered by the container: a *session* that denies the network gets a
+  container created `--network none`, and the per-spawn seccomp filter is what a
+  task's own grant would ride on. What is missing is a plan that has words for
+  it, and a destination allowlist the kernel cannot express at all.
+- **A tool call has no timeout at the seam.** `run_command` has its own clock
+  inside the worker, and a worker that dies mid-call surfaces as EOF — an error
+  rather than a hang. A worker that is alive and stuck is not covered, and the
+  honest place for that clock is the seam rather than each tool.
 - Whether `writes` should also bound `run_command`: a child can write whatever
   the task's roots allow, and a plan's `commands` list says nothing about paths.
   Narrower than it was — the child is held to the *task's* roots now — but a

@@ -15,6 +15,7 @@ use agent_core::record::{self, RecordLine};
 use agent_core::sandbox::Sandbox;
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
+use agent_core::worker::{Executor, Worker};
 use anyhow::{Context, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -57,6 +58,18 @@ pub struct Agency {
     pub tools: Arc<Tools>,
     pub sandbox: Arc<Sandbox>,
     pub max_steps: u32,
+    /// Where a tool call actually runs, when that is not this process.
+    ///
+    /// `None` is `runtime = "host"`, which is every run this repository has
+    /// made so far and stays the default. `Some` is a `luu worker` on the other
+    /// end of a pipe — a plain child under `direct`, and the container's only
+    /// process under a container runtime. See
+    /// `RECORD/2026-09-02.the-worker-and-the-seam.completed.md`.
+    ///
+    /// The *definitions* never move: they are the second half of the cached
+    /// prefix, and a prefix assembled inside the image is one that shifts every
+    /// time the image is rebuilt.
+    pub worker: Option<Arc<Worker>>,
 }
 
 impl Agency {
@@ -64,6 +77,15 @@ impl Agency {
     /// are no tools, so a run without them sends the same bytes it always did.
     pub fn definitions(&self) -> String {
         self.tools.definitions()
+    }
+
+    /// Where tool calls go. The seam, resolved once: the loop asks this and
+    /// never asks where it runs.
+    pub fn executor(&self) -> &dyn Executor {
+        match &self.worker {
+            Some(worker) => worker.as_ref(),
+            None => self.tools.as_ref(),
+        }
     }
 
     /// What `luu tools` prints and what a session says on startup.
@@ -105,6 +127,9 @@ impl Agency {
                 .describe()
                 .unwrap_or_else(|| "(none: the clock alone)".to_string()),
         ));
+        if let Some(worker) = self.worker.as_ref().and_then(|worker| worker.describe()) {
+            text.push_str(&worker);
+        }
         text.push_str(&format!(
             "  tools      {}\n",
             match self.tools.is_empty() {

@@ -16,3 +16,4 @@ pub mod task;
 pub mod tools;
 pub mod trace;
 pub mod turn;
+pub mod worker;

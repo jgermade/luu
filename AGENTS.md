@@ -104,6 +104,14 @@ cargo run --bin luu -- serve --mock-reply '```plan
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
 cargo run --bin luu -- map --map-tokens 1024          # the repository outline that budget resolves to
 
+# level 3: the same run, with every tool call executed inside a container.
+# `--worker direct` is the same seam with no container at all, which is how the
+# IPC gets tested where no runtime is installed.
+docker build -t loude-worker:dev -f Containerfile .
+cargo run --bin luu -- tools --sandbox luu.container.toml
+cargo run --bin luu -- chat "hola" --sandbox luu.container.toml
+cargo run --bin luu -- tools --worker direct          # the seam, no container
+
 # the tool loop end to end without a model: one reply per model call
 cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
   --mock-reply 'looking
@@ -216,6 +224,31 @@ the first thing that has ever held a child on macOS — where the verdict now
 reads `rlimits (…)` with the same `missing` instead of "in-process check only". `--max-tool-steps` caps the tool calls one turn may make and
 `--no-tools` runs without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
+
+**Level 3 exists, in its development posture.** `[worker] runtime` decides where
+a tool call actually runs: `host` (this process, the default, and every run this
+repository has measured), `direct` (a `luu worker` child with no container), or a
+container runtime — `docker`, `podman`, `nerdctl`, Apple's `container`. That
+layer builds an *argv* and speaks no runtime's API, which is what makes them
+substitutable, and it names the flags that are not uniform rather than assuming
+they are. The container's only process **is** `luu worker`, spoken to over stdio,
+so its lifetime is the session's and `--rm` plus a closed stdin is the whole of
+the cleanup. What crosses the pipe is the **policy**, never the resolved sandbox
+— canonical paths are facts about the machine that resolved them — and the
+task's `Authority` crosses with it, so a denial from inside still names the plan
+that refused. The base is mounted at *its own absolute path*, not `/workspace`,
+because a contained run and a host run of the same script have to be diffable
+and not merely comparable; `[[worker.paths]]` is the other direction, trees that
+exist only inside the image and are therefore never resolved on the host.
+`commands` is the image's **manifest**: the worker's handshake reports which of
+them the image actually has, and `luu tools` prints the gap under `absent` —
+*granted by the policy, absent from the image*, a third failure mode distinct
+from a denial and from a kernel that will not hold a child. `direct` isolates
+nothing and says so in every line that reports it; it is there so the seam is
+testable where no runtime is installed. `Containerfile` builds the image and
+`luu.container.toml` is the wide-open posture — a separate file, never a default,
+and runs made under it are **not comparable** with runs made without it. See
+[`RECORD/2026-09-02.the-worker-and-the-seam.completed.md`](RECORD/2026-09-02.the-worker-and-the-seam.completed.md).
 
 A `run_command` outcome is **structured**: `exit_code`, `signal`, `stdout`,
 `stderr` and `duration_ms` are fields on the protocol and in the record, while
@@ -590,6 +623,13 @@ implementation detail from close up:
   the protocol doesn't grow a debug half that stdio has to carry forever.
 - **`agent-core` knows nothing about the CLI, VSCode or the browser.** That is what
   makes container isolation a packaging question rather than a rewrite.
+- **Where a tool call runs is not the loop's business.** The loop asks an
+  `Executor`, and there are two: `Tools`, which runs it here, and `Worker`, which
+  writes it down a pipe to a `luu worker` inside a container. Adding the
+  container touched one parameter of `run_agent_turn` and nothing else, which was
+  the test of whether the seam was in the right place. The tool *definitions*
+  never cross — they are the cached prefix, and a prefix assembled inside the
+  image moves every time the image is rebuilt.
 - **`cargo build` must not require node.** The debug UI ships as
   [jq79](https://github.com/jgermade/jq79) — one runtime file plus `.html`
   components, embedded with `rust-embed`. Keep npm out of `build.rs`.
