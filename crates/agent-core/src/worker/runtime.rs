@@ -1,0 +1,550 @@
+//! Which container runtime, as a name rather than an integration.
+//!
+//! The whole of this layer is *building an argv*. That is the same shape the
+//! policy already has — `commands` is an allowlist of program names, not a
+//! plugin per program — and it is what makes Docker, Podman, `nerdctl` and
+//! Apple's `container` substitute for each other. The dependency becomes a
+//! choice, which is local-first applied to runtimes instead of to models.
+//!
+//! Two things this layer must do rather than assume, because the flags are
+//! **not** uniform (`RECORD/2026-09-01.the-container-decided.WIP.md` found the
+//! gap): declare what it requires, and say what is missing when a runtime
+//! cannot express it.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::sandbox::{PathRule, PolicyError};
+
+/// Where the tools of a session run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Runtime {
+    /// In this process. Every run that has happened in this repository so far,
+    /// and the default, so nothing changes for anyone who does not type a line.
+    #[default]
+    Host,
+    /// A `luu worker` child process on this machine, with no container.
+    ///
+    /// **It isolates nothing, and it is here on purpose**: it is what makes the
+    /// seam testable where there is no runtime installed — which is CI — and it
+    /// answers "is it the IPC or is it the container" in one flag. It is not
+    /// silently weaker: every verdict for the session names it as what it is.
+    Direct,
+    Docker,
+    Podman,
+    Nerdctl,
+    /// Apple's `container`, on macOS 26 and Apple silicon.
+    Container,
+}
+
+impl Runtime {
+    /// The program this runtime is invoked as, or `None` when there is no
+    /// program because there is no container.
+    pub fn program(self) -> Option<&'static str> {
+        match self {
+            Self::Host | Self::Direct => None,
+            Self::Docker => Some("docker"),
+            Self::Podman => Some("podman"),
+            Self::Nerdctl => Some("nerdctl"),
+            Self::Container => Some("container"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Direct => "direct",
+            Self::Docker => "docker",
+            Self::Podman => "podman",
+            Self::Nerdctl => "nerdctl",
+            Self::Container => "container",
+        }
+    }
+
+    /// Whether tools run in another process at all. `Host` is the one that
+    /// does not, and it is the one that needs no worker.
+    pub fn is_worker(self) -> bool {
+        self != Self::Host
+    }
+
+    /// Whether this runtime puts a container around the worker. `Direct` does
+    /// not, which is the whole of what makes it weaker and is why every line
+    /// that reports it says so.
+    pub fn is_contained(self) -> bool {
+        self.program().is_some()
+    }
+
+    /// What this runtime cannot express, named rather than silently skipped.
+    ///
+    /// Apple's `container` documents `--network <net>` and `--no-dns` and has
+    /// no `--network none` equivalent. Under it the container stays attached
+    /// and the per-spawn seccomp filter is doing all of the denying — which is
+    /// survivable, because the filter is what actually denies, and reportable,
+    /// which is the part that matters.
+    pub fn cannot(self) -> Option<&'static str> {
+        match self {
+            Self::Container => Some(
+                "no --network none: the container stays attached and the \
+                 per-command seccomp filter is the only thing denying the network",
+            ),
+            _ => None,
+        }
+    }
+}
+
+impl std::str::FromStr for Runtime {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "host" => Ok(Self::Host),
+            "direct" => Ok(Self::Direct),
+            "docker" => Ok(Self::Docker),
+            "podman" => Ok(Self::Podman),
+            "nerdctl" => Ok(Self::Nerdctl),
+            "container" => Ok(Self::Container),
+            other => Err(format!(
+                "unknown worker runtime `{other}`: \
+                 host, direct, docker, podman, nerdctl or container"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for Runtime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeError {
+    #[error("worker runtime `{runtime}` needs an image: set [worker] image, or --worker-image")]
+    NoImage { runtime: Runtime },
+    #[error("`{0}` runs no worker")]
+    NoWorker(Runtime),
+    #[error("the path to this binary could not be resolved, so no worker can be started: {0}")]
+    NoBinary(#[source] std::io::Error),
+}
+
+/// Everything needed to start one worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerSpec {
+    pub runtime: Runtime,
+    /// The image reference, for the runtimes that take one.
+    pub image: Option<String>,
+    /// The directory mounted into the container **at the same absolute path**,
+    /// and the worker's working directory. Not `/workspace`: paths appear in
+    /// verdicts, in prompts, in tool results and in the record, and a mount
+    /// point that rewrote all of them would make a contained run and a host run
+    /// of the same script differ in their bytes. "One flag apart" is the
+    /// sentence the measurement discipline rests on.
+    pub base: PathBuf,
+    /// Whether the session's policy allows the network.
+    ///
+    /// It decides how the container is *created* and is never changed
+    /// afterwards: `--network none` when the session denies it, attached when
+    /// it allows it. Nothing toggles a running container's network — that is
+    /// the per-command seccomp filter's job, and its window lines up with the
+    /// task that asked for it in a way a `docker network disconnect` never
+    /// could.
+    pub network: bool,
+    /// Where `luu` is, for [`Runtime::Direct`]. Inside an image it is on `PATH`
+    /// by its own name.
+    pub binary: Option<PathBuf>,
+    /// Trees that exist only inside the image, from `[[worker.paths]]`. Never
+    /// resolved on this side; added to every sandbox that crosses the pipe.
+    pub paths: Vec<PathRule>,
+    /// The uid and gid the worker runs as, for the runtimes that take them.
+    ///
+    /// Not cosmetic. The base is bind-mounted, so a worker running as root
+    /// writes root-owned files into the person's own checkout — and `writes` in
+    /// an approved plan is the whole point of the mount. Defaults to whoever
+    /// started the session, which is the only answer that leaves the tree the
+    /// way it was found.
+    pub user: Option<(u32, u32)>,
+}
+
+impl WorkerSpec {
+    pub fn new(runtime: Runtime, base: impl Into<PathBuf>) -> Self {
+        Self {
+            runtime,
+            image: None,
+            base: base.into(),
+            network: false,
+            binary: None,
+            paths: Vec::new(),
+            user: current_user(),
+        }
+    }
+
+    pub fn with_image(mut self, image: Option<String>) -> Self {
+        self.image = image;
+        self
+    }
+
+    pub fn with_network(mut self, network: bool) -> Self {
+        self.network = network;
+        self
+    }
+
+    pub fn with_binary(mut self, binary: Option<PathBuf>) -> Self {
+        self.binary = binary;
+        self
+    }
+
+    pub fn with_paths(mut self, paths: Vec<PathRule>) -> Self {
+        self.paths = paths;
+        self
+    }
+
+    pub fn with_user(mut self, user: Option<(u32, u32)>) -> Self {
+        self.user = user;
+        self
+    }
+
+    /// How a verdict and `luu tools` name this worker.
+    pub fn label(&self) -> String {
+        match (self.runtime.is_contained(), &self.image) {
+            (true, Some(image)) => format!("{} ({image})", self.runtime),
+            (true, None) => self.runtime.to_string(),
+            (false, _) => format!("{} (no container)", self.runtime),
+        }
+    }
+
+    /// The command line that starts the worker.
+    ///
+    /// The container's only process **is** the worker, rather than a keep-alive
+    /// that is later `exec`'d into: then the container's lifetime is the
+    /// worker's, there is no name to allocate and no `docker rm` to forget, and
+    /// there is no way to leave a container running after the session that
+    /// owned it died.
+    ///
+    /// `commands` is passed through to the worker so its handshake can answer
+    /// which of them the image actually has.
+    pub fn argv(&self, commands: &[String]) -> Result<Vec<String>, RuntimeError> {
+        let base = self.base.display().to_string();
+        let worker_args = |program: String| {
+            let mut argv = vec![program, "worker".to_string()];
+            for command in commands {
+                argv.push("--command".to_string());
+                argv.push(command.clone());
+            }
+            argv
+        };
+
+        let Some(program) = self.runtime.program() else {
+            return match self.runtime {
+                Runtime::Host => Err(RuntimeError::NoWorker(Runtime::Host)),
+                _ => {
+                    let binary = match &self.binary {
+                        Some(path) => path.clone(),
+                        None => std::env::current_exe().map_err(RuntimeError::NoBinary)?,
+                    };
+                    Ok(worker_args(binary.display().to_string()))
+                }
+            };
+        };
+
+        let Some(image) = self.image.clone() else {
+            return Err(RuntimeError::NoImage {
+                runtime: self.runtime,
+            });
+        };
+
+        let mut argv = vec![
+            program.to_string(),
+            "run".to_string(),
+            // `--rm` and a piped stdin are the whole of the cleanup.
+            "--rm".to_string(),
+            "-i".to_string(),
+            "--mount".to_string(),
+            format!("type=bind,source={base},target={base}"),
+            "--workdir".to_string(),
+            base,
+        ];
+        // `--init` reaps what a build leaves behind. Apple's runtime does not
+        // document it, so it is asked for where it exists and skipped where it
+        // does not, rather than assumed uniform.
+        if self.runtime != Runtime::Container {
+            argv.insert(3, "--init".to_string());
+        }
+        // Fixed for the container's whole life, and only where the runtime can
+        // say it. `Runtime::cannot` is what reports the gap where it cannot.
+        if !self.network && self.runtime.cannot().is_none() {
+            argv.push("--network".to_string());
+            argv.push("none".to_string());
+        }
+        // Two spellings of one idea, which is this layer's whole reason for
+        // existing: Docker, Podman and nerdctl take `--user uid:gid`, Apple's
+        // `container` takes `--uid` and `--gid` separately.
+        if let Some((uid, gid)) = self.user {
+            match self.runtime {
+                Runtime::Container => argv.extend([
+                    "--uid".to_string(),
+                    uid.to_string(),
+                    "--gid".to_string(),
+                    gid.to_string(),
+                ]),
+                _ => argv.extend(["--user".to_string(), format!("{uid}:{gid}")]),
+            }
+        }
+        argv.push(image);
+        argv.extend(worker_args("luu".to_string()));
+        Ok(argv)
+    }
+}
+
+/// Whoever started this session, so the worker writes as them.
+#[cfg(unix)]
+fn current_user() -> Option<(u32, u32)> {
+    // SAFETY: `getuid` and `getgid` take no arguments, touch no memory and
+    // cannot fail.
+    unsafe { Some((libc::getuid(), libc::getgid())) }
+}
+
+#[cfg(not(unix))]
+fn current_user() -> Option<(u32, u32)> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(runtime: Runtime) -> WorkerSpec {
+        WorkerSpec::new(runtime, "/home/you/project")
+            .with_image(Some("loude-worker:dev".into()))
+            .with_user(Some((501, 20)))
+    }
+
+    #[test]
+    fn a_runtime_is_an_argv_and_nothing_else() {
+        let argv = spec(Runtime::Docker).argv(&["cargo".to_string()]).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--init",
+                "-i",
+                "--mount",
+                "type=bind,source=/home/you/project,target=/home/you/project",
+                "--workdir",
+                "/home/you/project",
+                "--network",
+                "none",
+                "--user",
+                "501:20",
+                "loude-worker:dev",
+                "luu",
+                "worker",
+                "--command",
+                "cargo",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_base_is_mounted_where_it_lives_so_two_runs_can_be_diffed() {
+        // Not /workspace. A mount point that rewrote every path would make a
+        // contained run and a host run of the same script differ in their
+        // bytes, which is more than one flag apart.
+        let argv = spec(Runtime::Podman).argv(&[]).unwrap();
+        let mount = argv.iter().position(|word| word == "--mount").unwrap();
+        assert_eq!(
+            argv[mount + 1],
+            "type=bind,source=/home/you/project,target=/home/you/project"
+        );
+        assert_eq!(
+            argv[0], "podman",
+            "the runtime is the program, nothing else"
+        );
+    }
+
+    #[test]
+    fn a_session_that_allows_the_network_gets_a_container_that_has_one() {
+        let argv = spec(Runtime::Docker).with_network(true).argv(&[]).unwrap();
+        assert!(
+            !argv.iter().any(|word| word == "--network"),
+            "the container is created attached and never changed afterwards: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn a_runtime_that_cannot_deny_the_network_says_so_instead_of_pretending() {
+        // Apple's `container` has no --network none. The seccomp filter is
+        // still what denies a command the network; what must not happen is a
+        // flag being silently dropped and the verdict reading as if it held.
+        let apple = spec(Runtime::Container);
+        let argv = apple.argv(&[]).unwrap();
+        assert!(!argv.iter().any(|word| word == "--network"));
+        assert!(Runtime::Container.cannot().is_some());
+        assert!(Runtime::Docker.cannot().is_none());
+    }
+
+    #[test]
+    fn direct_runs_the_binary_and_names_itself_as_uncontained() {
+        // No container, so no --user either: it is already this user.
+        let argv = WorkerSpec::new(Runtime::Direct, "/tmp")
+            .with_binary(Some("/usr/local/bin/luu".into()))
+            .argv(&["git".to_string()])
+            .unwrap();
+        assert_eq!(argv, ["/usr/local/bin/luu", "worker", "--command", "git"]);
+        assert!(!Runtime::Direct.is_contained());
+        assert!(Runtime::Direct.is_worker());
+        assert_eq!(
+            WorkerSpec::new(Runtime::Direct, "/tmp").label(),
+            "direct (no container)",
+            "a mode that isolates nothing must not read as one that does"
+        );
+    }
+
+    #[test]
+    fn a_contained_runtime_without_an_image_is_an_error_rather_than_a_guess() {
+        let error = WorkerSpec::new(Runtime::Docker, "/tmp")
+            .argv(&[])
+            .unwrap_err();
+        assert!(error.to_string().contains("needs an image"), "{error}");
+        // And `host` has no worker to start at all.
+        assert!(!Runtime::Host.is_worker());
+        assert!(
+            WorkerSpec::new(Runtime::Host, "/tmp").argv(&[]).is_err(),
+            "host is the absence of a worker, not a worker with no flags"
+        );
+    }
+
+    #[test]
+    fn the_worker_writes_as_whoever_started_the_session() {
+        // The base is bind-mounted, so a worker running as root leaves
+        // root-owned files in the person's own checkout — and `writes` in an
+        // approved plan is what the mount is for.
+        let docker = spec(Runtime::Docker).argv(&[]).unwrap();
+        let user = docker.iter().position(|word| word == "--user").unwrap();
+        assert_eq!(docker[user + 1], "501:20");
+
+        // The same idea, spelled the way this runtime spells it. Assuming the
+        // flags are uniform is the mistake this layer exists to not make.
+        let apple = spec(Runtime::Container).argv(&[]).unwrap();
+        assert!(!apple.iter().any(|word| word == "--user"));
+        let uid = apple.iter().position(|word| word == "--uid").unwrap();
+        assert_eq!(apple[uid + 1], "501");
+        let gid = apple.iter().position(|word| word == "--gid").unwrap();
+        assert_eq!(apple[gid + 1], "20");
+    }
+
+    #[test]
+    fn a_runtime_name_round_trips_and_an_unknown_one_lists_the_known_ones() {
+        for runtime in [
+            Runtime::Host,
+            Runtime::Direct,
+            Runtime::Docker,
+            Runtime::Podman,
+            Runtime::Nerdctl,
+            Runtime::Container,
+        ] {
+            assert_eq!(runtime.as_str().parse::<Runtime>().unwrap(), runtime);
+        }
+        let error = "lxc".parse::<Runtime>().unwrap_err();
+        assert!(error.contains("nerdctl"), "{error}");
+    }
+}
+
+/// The `[worker]` block of `luu.toml`.
+///
+/// It sits beside `[sandbox]` rather than inside it because it answers a
+/// different question: `[sandbox]` is *what the agent may reach*, and this is
+/// *where the thing reaching it runs*. A policy is the same policy whichever
+/// side of the pipe resolves it — which is the property the whole seam rests
+/// on — so folding this into `[sandbox]` would have made the two look like one
+/// decision.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct WorkerConfig {
+    /// `host` by default: no worker, and the run every one of this
+    /// repository's measurements was made under.
+    #[serde(default)]
+    pub runtime: Runtime,
+    /// The image, for the runtimes that take one. Declared rather than
+    /// generated: see `Containerfile`.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// Trees that exist **only inside the image**, added to the policy the
+    /// worker resolves and never resolved here.
+    ///
+    /// They cannot go in `[sandbox]`, and the reason is a rule worth keeping:
+    /// a granted path that is not there is a load error rather than a rule that
+    /// silently does nothing. `/usr/local/cargo` is the image's toolchain and
+    /// there is no such directory on a Mac, so a `[sandbox]` naming it would
+    /// refuse to load on the host that is meant to start the container.
+    ///
+    /// They behave like [`crate::sandbox::SYSTEM_ROOTS`] in what they are for —
+    /// the furniture a command needs in order to be able to run at all — and
+    /// unlike them in being declared rather than fixed, so they grant exactly
+    /// what they say to every tool, on the far side only.
+    #[serde(default)]
+    pub paths: Vec<PathRule>,
+}
+
+/// The file `luu.toml` is, read for its `[worker]` block. The `[sandbox]` half
+/// is [`crate::sandbox::SandboxPolicy::from_file`]'s, and the two are separate
+/// readers of one file for the same reason they are separate blocks.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WorkerFile {
+    #[serde(default)]
+    worker: Option<WorkerConfig>,
+}
+
+impl WorkerConfig {
+    /// Reads `[worker]`. A file without one is not an error — it is a
+    /// `luu.toml` from before this existed, and the default is `host`.
+    pub fn from_file(path: &Path) -> Result<Self, PolicyError> {
+        let text = std::fs::read_to_string(path).map_err(|source| PolicyError::Read {
+            path: path.display().to_string(),
+            source,
+        })?;
+        Self::from_toml(&text).map_err(|source| PolicyError::Parse {
+            path: path.display().to_string(),
+            source,
+        })
+    }
+
+    pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
+        let file: WorkerFile = toml::from_str(text)?;
+        Ok(file.worker.unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn a_file_without_a_worker_block_is_the_host_and_not_an_error() {
+        // Which is every `luu.toml` written before this existed.
+        let config = WorkerConfig::from_toml("[sandbox]\nnetwork = false\n").unwrap();
+        assert_eq!(config, WorkerConfig::default());
+        assert_eq!(config.runtime, Runtime::Host);
+    }
+
+    #[test]
+    fn a_worker_block_reads_as_it_looks() {
+        let config = WorkerConfig::from_toml(
+            "[worker]\nruntime = \"docker\"\nimage = \"loude-worker:dev\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.runtime, Runtime::Docker);
+        assert_eq!(config.image.as_deref(), Some("loude-worker:dev"));
+    }
+
+    #[test]
+    fn a_misspelled_key_is_an_error_like_every_other_grant() {
+        // `runtimee = "docker"` that parsed and did nothing would read as a
+        // session whose tools run in a container while they ran here.
+        assert!(WorkerConfig::from_toml("[worker]\nruntimee = \"docker\"\n").is_err());
+        assert!(WorkerConfig::from_toml("[worker]\nruntime = \"lxc\"\n").is_err());
+    }
+}

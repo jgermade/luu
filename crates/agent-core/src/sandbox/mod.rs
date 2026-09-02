@@ -149,7 +149,14 @@ pub enum SandboxError {
 /// allow: a run refused by the policy file and a run refused by the plan its
 /// task was approved with are not the same run, and afterwards the recording is
 /// the only thing that could tell them apart.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serialized because it crosses the worker IPC: a denial that reached the host
+/// having lost which authority refused would read as a policy refusal whatever
+/// it was, and those are different runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Adjacently tagged, not internally: `Plan(TaskId)` is a newtype variant
+// wrapping a number, and an internal tag has nowhere to put it.
+#[serde(tag = "granted_by", content = "task", rename_all = "snake_case")]
 pub enum Authority {
     /// The policy file plus whatever the flags added to it.
     Policy,
@@ -275,6 +282,38 @@ impl Sandbox {
     /// Which authority answers here — the policy file, or a task's plan.
     pub fn authority(&self) -> &Authority {
         &self.authority
+    }
+
+    /// The declaration this sandbox would be rebuilt from — the inverse of
+    /// [`Sandbox::new`].
+    ///
+    /// It exists so a resolved sandbox can cross a process boundary: the worker
+    /// on the far side of the IPC cannot be handed *this* type, because every
+    /// path in it was resolved against a filesystem that is not the worker's.
+    /// A policy is portable; a resolved sandbox is not. See
+    /// `RECORD/2026-09-02.the-worker-and-the-seam.completed.md`.
+    ///
+    /// Implicit roots are left out, because the far side adds its **own** — the
+    /// `/usr` a child needs to reach its libc is the image's, not ours. That is
+    /// the same reason they are left out of [`Sandbox::access_for`].
+    ///
+    /// What does not survive: `Root::source`, the path as the user typed it. A
+    /// rebuilt sandbox grants exactly what this one grants and names it by its
+    /// canonical path, so a verdict reads `/home/you/.cargo` where this one
+    /// would have read `~/.cargo`.
+    pub fn to_policy(&self) -> SandboxPolicy {
+        SandboxPolicy {
+            paths: self
+                .roots
+                .iter()
+                .filter(|root| !root.implicit)
+                .map(|root| PathRule::new(root.path.clone(), root.access))
+                .collect(),
+            commands: self.commands.clone(),
+            network: self.network,
+            enforcement: self.enforcement,
+            limits: self.limits,
+        }
     }
 
     /// What this sandbox grants on a path, if anything. `None` is "no rule
@@ -633,6 +672,75 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn a_sandbox_survives_being_rebuilt_from_its_own_declaration() {
+        // The property the worker IPC rests on: what crosses the pipe is the
+        // policy, and the far side resolves it. If this round trip lost a
+        // grant, a contained run would be silently narrower than a host one;
+        // if it gained one, the container would be the wider sandbox.
+        let fixture = Fixture::new("to-policy");
+        let mut policy = read_write_here();
+        policy.commands = vec!["ls".into()];
+        policy.allow(fixture.root.join("outside"), Access::Read);
+        let original = fixture.sandbox(&policy);
+
+        let rebuilt = Sandbox::new(&original.to_policy(), original.base())
+            .unwrap()
+            .under(Authority::Plan(7));
+
+        for path in [
+            fixture.proj().join("src/main.rs"),
+            fixture.root.join("outside/secret"),
+            fixture.root.join("nowhere"),
+        ] {
+            for needed in [Access::Read, Access::ReadWrite] {
+                assert_eq!(
+                    original.check_path(&path, needed).verdict.allowed,
+                    rebuilt.check_path(&path, needed).verdict.allowed,
+                    "{} at {needed}",
+                    path.display(),
+                );
+            }
+        }
+        assert_eq!(original.commands(), rebuilt.commands());
+        assert_eq!(original.network(), rebuilt.network());
+        assert_eq!(original.enforcement(), rebuilt.enforcement());
+        assert_eq!(original.limits(), rebuilt.limits());
+        // The authority is the caller's to re-attach, and a denial from the far
+        // side has to name the plan that refused rather than the policy file.
+        assert!(
+            rebuilt
+                .check_path(&fixture.root.join("nowhere"), Access::Read)
+                .verdict
+                .rule
+                .contains("the approved plan for task 7")
+        );
+        // The implicit roots are *not* carried: the far side adds its own,
+        // because the `/usr` a child needs is the one it is standing on.
+        assert!(
+            original
+                .to_policy()
+                .paths
+                .iter()
+                .all(|rule| { !SYSTEM_ROOTS.contains(&rule.path.to_str().unwrap_or_default()) }),
+        );
+    }
+
+    #[test]
+    fn the_authority_a_denial_names_survives_a_json_round_trip() {
+        // Adjacently tagged, because `Plan(TaskId)` is a newtype variant and an
+        // internal tag has nowhere to put the number — which serde discovers at
+        // runtime rather than at compile time, so it is worth a test.
+        for authority in [Authority::Policy, Authority::Plan(12)] {
+            let text = serde_json::to_string(&authority).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Authority>(&text).unwrap(),
+                authority,
+                "{text}"
+            );
         }
     }
 

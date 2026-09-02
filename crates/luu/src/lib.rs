@@ -16,6 +16,7 @@ use agent_core::task::{ClosedBy, Plan, PlanSource};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
+use agent_core::worker::{Runtime, Worker, WorkerConfig, WorkerSpec, serve_stdio};
 
 use crate::session::{
     Agency, DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms, rendered,
@@ -61,6 +62,25 @@ enum Command {
         /// How the page reaches the recordings, relative to the site root.
         #[arg(long, default_value = "./fixtures")]
         record_base: String,
+    },
+
+    /// The executor half of the worker IPC: read tool calls on stdin, run them,
+    /// write outcomes on stdout.
+    ///
+    /// This is what runs *inside* the container — the container's only process,
+    /// so its lifetime is the session's and `--rm` plus a closed stdin is the
+    /// whole of the cleanup. It takes no sandbox flags on purpose: the sandbox
+    /// arrives with every call, as the policy it is built from, because the
+    /// paths a host resolved are not the paths an image has. See
+    /// `RECORD/2026-09-02.the-worker-and-the-seam.completed.md`.
+    Worker {
+        /// A command the policy allows, so the handshake can report whether
+        /// this side's `PATH` actually has it. Repeatable.
+        ///
+        /// It is the third failure mode — granted by the policy, absent from
+        /// the image — answered by the only process that can see the image.
+        #[arg(long = "command", value_name = "NAME")]
+        commands: Vec<String>,
     },
 
     /// Print the resolved sandbox and the exact tool definitions that go into
@@ -361,6 +381,23 @@ struct SandboxArgs {
     /// not the same prompt with the tools ignored — it is a different one.
     #[arg(long)]
     no_tools: bool,
+
+    /// Where tool calls run: `host` (this process), `direct` (a `luu worker`
+    /// child, no container), or a container runtime — `docker`, `podman`,
+    /// `nerdctl`, `container`. Overrides `[worker] runtime`.
+    ///
+    /// `direct` isolates nothing and says so in every line that reports it. It
+    /// exists so the seam can be exercised where no runtime is installed.
+    #[arg(long = "worker", value_name = "RUNTIME")]
+    worker: Option<Runtime>,
+
+    /// The image the worker runs in. Overrides `[worker] image`.
+    #[arg(long = "worker-image", value_name = "REF")]
+    worker_image: Option<String>,
+
+    /// Where `luu` is, for `--worker direct`. Defaults to this binary.
+    #[arg(long = "worker-binary", value_name = "PATH")]
+    worker_binary: Option<std::path::PathBuf>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -372,7 +409,12 @@ enum EnforcementKind {
 impl SandboxArgs {
     /// Resolves the policy: the file, then the flags, then the working
     /// directory as the base every relative path is taken against.
-    fn resolve(&self) -> Result<Agency> {
+    ///
+    /// Async because the last step may be starting a worker, and a worker is
+    /// not started until its handshake has come back: a session that announced
+    /// a container and then could not reach one would be a session whose
+    /// verdicts lie.
+    async fn resolve(&self) -> Result<Agency> {
         let base = std::env::current_dir().context("the working directory")?;
 
         let explicit = self.sandbox.is_some();
@@ -410,13 +452,59 @@ impl SandboxArgs {
             };
         }
 
+        // The `[worker]` block of the same file, and the flags over it. A
+        // `luu.toml` from before this existed has no block and resolves to
+        // `host`, which is the run every measurement in this repository was
+        // made under.
+        let mut worker_config = match path.exists() {
+            true => WorkerConfig::from_file(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+            false => WorkerConfig::default(),
+        };
+        if let Some(runtime) = self.worker {
+            worker_config.runtime = runtime;
+        }
+        if self.worker_image.is_some() {
+            worker_config.image = self.worker_image.clone();
+        }
+
+        let sandbox = Sandbox::new(&policy, &base)?;
+        let worker = match worker_config.runtime.is_worker() {
+            false => None,
+            true => {
+                let spec = WorkerSpec::new(worker_config.runtime, sandbox.base())
+                    .with_image(worker_config.image.clone())
+                    // How the container is *created*, and never changed
+                    // afterwards. A task that may not reach the network inside
+                    // a session that may is the per-spawn seccomp filter's job.
+                    .with_network(sandbox.network())
+                    .with_binary(self.worker_binary.clone())
+                    // The image's own trees, which the host must not try to
+                    // resolve: `/usr/local/cargo` is the image's toolchain and
+                    // is not a directory here.
+                    .with_paths(worker_config.paths.clone());
+                // What the runtime cannot express, said once, where a person
+                // reads it — rather than silently dropped from the argv. Before
+                // the start rather than after it, so a run that fails for an
+                // unrelated reason still says what it would have been missing.
+                if let Some(gap) = worker_config.runtime.cannot() {
+                    eprintln!("warning: {}: {gap}", worker_config.runtime);
+                }
+                let worker = Worker::start(&spec, sandbox.commands())
+                    .await
+                    .with_context(|| format!("the {} worker", spec.label()))?;
+                Some(std::sync::Arc::new(worker))
+            }
+        };
+
         Ok(Agency {
             tools: std::sync::Arc::new(match self.no_tools {
                 true => Tools::new(Vec::new()),
                 false => Tools::standard(),
             }),
-            sandbox: std::sync::Arc::new(Sandbox::new(&policy, &base)?),
+            sandbox: std::sync::Arc::new(sandbox),
             max_steps: self.max_tool_steps,
+            worker,
         })
     }
 }
@@ -678,8 +766,22 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Before everything else, and reading no policy file: the worker is handed
+    // its sandbox with every call, because the paths a host resolved are not
+    // the paths this side has.
+    if let Command::Worker { commands } = &command {
+        return serve_stdio(
+            std::sync::Arc::new(Tools::standard()),
+            commands.clone(),
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+        )
+        .await
+        .context("the worker");
+    }
+
     if let Command::Tools { sandbox } = &command {
-        let agency = sandbox.resolve()?;
+        let agency = sandbox.resolve().await?;
         print!("{}", agency.describe());
         let definitions = agency.definitions();
         if !definitions.is_empty() {
@@ -694,7 +796,7 @@ pub async fn run() -> Result<()> {
         tokenizer,
     } = &command
     {
-        let agency = sandbox.resolve()?;
+        let agency = sandbox.resolve().await?;
         // Named, because the warning that comes back says which model the
         // count belongs to — and a map counted by `chars/4` is a different
         // number from the one a run with a tokenizer would spend.
@@ -755,7 +857,7 @@ pub async fn run() -> Result<()> {
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
-        let agency = sandbox_args.resolve()?;
+        let agency = sandbox_args.resolve().await?;
         eprint!("{}", agency.describe());
         // Named, or the default, or nothing at all. A missing `HOME` leaves
         // the default undecidable, and the run says so rather than picking a
@@ -817,7 +919,7 @@ pub async fn run() -> Result<()> {
         unreachable!("serve and tools are handled above");
     };
 
-    let agency = sandbox_args.resolve()?;
+    let agency = sandbox_args.resolve().await?;
 
     // One prompt, or a file of them: a script is what makes a multi-turn run
     // repeatable, and a baseline that cannot be re-run is not a baseline.
@@ -1209,7 +1311,7 @@ pub async fn run() -> Result<()> {
         let outcome = run_agent_turn(
             backend.as_ref(),
             request,
-            agency.tools.as_ref(),
+            agency.executor(),
             sandbox.as_ref(),
             agency.max_steps,
             tx,

@@ -1,0 +1,468 @@
+//! Where tools actually run, when that is not this process.
+//!
+//! Level 3 of the sandbox (`RECORD/2026-08-27.tools-and-sandbox.completed.md`), in
+//! the shape `RECORD/2026-09-02.the-worker-and-the-seam.completed.md` settled: **all
+//! tools inside the container, the context manager and the model client
+//! outside**, and one enforcement point rather than two mechanisms wearing one
+//! config file.
+//!
+//! The seam is [`Executor`], which has one method. [`crate::tools::Tools`]
+//! implements it by running the call here; [`Worker`] implements it by writing
+//! the call down a pipe to a `luu worker` on the other side — a plain child
+//! process under [`Runtime::Direct`], and the container's only process under
+//! everything else.
+//!
+//! What crosses the pipe is a [`WireSandbox`]: the **policy**, not the resolved
+//! sandbox. A resolved sandbox is a set of canonical paths on a filesystem the
+//! worker does not have, and the container's `/usr` is the image's.
+//!
+//! The tool *definitions* deliberately do not cross. They are the second half
+//! of the cached prefix, byte-stable across processes on purpose, and a prefix
+//! assembled inside the image is a prefix that moves when the image is rebuilt.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
+
+use crate::sandbox::{Authority, PathRule, Sandbox, SandboxPolicy, Verdict};
+use crate::tools::{ToolCall, ToolFuture, ToolOutcome, Tools};
+
+pub mod runtime;
+
+pub use runtime::{Runtime, RuntimeError, WorkerConfig, WorkerSpec};
+
+/// The IPC's version, bumped when a reader of the old one could not parse the
+/// new one.
+///
+/// It is checked in the handshake and a mismatch is a refusal naming both
+/// numbers, because the one thing in this design that is easiest to leave stale
+/// is an image: the host is a binary someone just built and the worker is
+/// whatever was in the image the last time it was made.
+pub const PROTOCOL: u32 = 1;
+
+/// One thing the host asks the worker to do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Request {
+    /// Run a tool call under this sandbox.
+    Call {
+        call: ToolCall,
+        sandbox: WireSandbox,
+    },
+}
+
+/// What the worker says back. Exactly one per [`Request`], in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Response {
+    /// Sent once, unprompted, before anything else.
+    Hello(Hello),
+    Outcome(Box<ToolOutcome>),
+    /// The worker could not even get as far as a verdict — a malformed line, a
+    /// policy that would not resolve on its side. Distinct from a denial, which
+    /// is an [`Response::Outcome`] with an unallowed verdict in it.
+    Error {
+        message: String,
+    },
+}
+
+/// What the worker is, said before it is asked anything.
+///
+/// `commands` is the finding `the-container-decided` named and did not build: a
+/// **third** failure mode, distinct from *denied by the policy* and *the kernel
+/// will not hold it* — **granted by the policy, absent from the image**. The
+/// worker is the only thing standing on the image's `PATH`, so it is the only
+/// thing that can answer it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    pub protocol: u32,
+    /// The worker's own `luu` version, so a stale image is a fact rather than a
+    /// mystery.
+    pub version: String,
+    /// Every command the policy allows, and where it resolved — `None` when it
+    /// is not on this side's `PATH` at all.
+    pub commands: Vec<CommandOnPath>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandOnPath {
+    pub name: String,
+    pub path: Option<PathBuf>,
+}
+
+impl Hello {
+    /// The commands the policy granted that this side does not have. The
+    /// difference between a policy and the image it is meant to run in.
+    pub fn absent(&self) -> Vec<&str> {
+        self.commands
+            .iter()
+            .filter(|found| found.path.is_none())
+            .map(|found| found.name.as_str())
+            .collect()
+    }
+
+    pub fn present(&self) -> Vec<&str> {
+        self.commands
+            .iter()
+            .filter(|found| found.path.is_some())
+            .map(|found| found.name.as_str())
+            .collect()
+    }
+}
+
+/// A sandbox as it crosses a process boundary: what it is built *from*.
+///
+/// `Plan::narrow` is the proof this is the right shape — narrowing a session's
+/// sandbox for one task is already written as *build a policy, resolve it*, and
+/// this is the same three lines with a pipe in the middle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireSandbox {
+    /// The working directory relative paths resolve against. **The same
+    /// absolute path on both sides**: the base is mounted into the container
+    /// where it lives on the host, so that a run inside and a run outside can
+    /// be diffed rather than merely compared.
+    pub base: PathBuf,
+    pub policy: SandboxPolicy,
+    /// Which authority granted this — the policy file, or a task's approved
+    /// plan. Carried so a denial from inside the worker still says which.
+    pub authority: Authority,
+}
+
+impl WireSandbox {
+    /// `image_paths` are the trees that exist only on the far side — the
+    /// image's toolchain. They are added here rather than to the session's
+    /// policy because the host cannot resolve them: a granted path that is not
+    /// there is a load error, and `/usr/local/cargo` is not there on a Mac.
+    pub fn of(sandbox: &Sandbox, image_paths: &[PathRule]) -> Self {
+        let mut policy = sandbox.to_policy();
+        policy.paths.extend_from_slice(image_paths);
+        Self {
+            base: sandbox.base().to_path_buf(),
+            policy,
+            authority: sandbox.authority().clone(),
+        }
+    }
+
+    /// The same sandbox, resolved against *this* machine — which is the point:
+    /// the implicit system roots a child needs are the ones that are here.
+    pub fn resolve(&self) -> Result<Sandbox, crate::sandbox::SandboxError> {
+        Ok(Sandbox::new(&self.policy, &self.base)?.under(self.authority.clone()))
+    }
+}
+
+/// Where a tool call is executed. The one seam level 3 needed.
+///
+/// One method, because everything else [`Tools`] does is the *prefix* rather
+/// than execution, and the prefix stays on the host.
+pub trait Executor: Send + Sync {
+    fn call<'a>(&'a self, call: &'a ToolCall, sandbox: &'a Sandbox) -> ToolFuture<'a>;
+
+    /// What a session says about where its tools run. `None` for the in-process
+    /// executor: there is nothing to say that the rest of `luu tools` does not
+    /// already say.
+    fn describe(&self) -> Option<String> {
+        None
+    }
+}
+
+impl Executor for Tools {
+    fn call<'a>(&'a self, call: &'a ToolCall, sandbox: &'a Sandbox) -> ToolFuture<'a> {
+        Box::pin(async move { Tools::call(self, call, sandbox).await })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WorkerError {
+    #[error("{0}")]
+    Runtime(#[from] RuntimeError),
+    #[error("starting the worker with `{command}`: {source}")]
+    Spawn {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "the worker speaks protocol {theirs} and this build speaks {ours}: \
+         the image is from a different version of luu, so rebuild it"
+    )]
+    Protocol { ours: u32, theirs: u32 },
+    #[error("the worker said nothing before it was asked: {0}")]
+    NoHello(String),
+}
+
+/// The host's half: a `luu worker` on the other end of a pipe.
+///
+/// Long-lived and one per session, which under a container runtime means the
+/// container is long-lived and one per session — because the container *is* this
+/// process. `--rm` plus a closed stdin is the whole of the cleanup, and there is
+/// no way to leave one running after the session that owned it died.
+pub struct Worker {
+    /// How it was started, for the verdict line. Kept as text rather than as
+    /// the spec so that a reader of a recording sees what a reader of the
+    /// terminal saw.
+    label: String,
+    /// The image's own trees, added to every sandbox that crosses. See
+    /// [`WireSandbox::of`].
+    image_paths: Vec<PathRule>,
+    hello: Hello,
+    /// One call at a time. The agent loop is sequential and this makes that a
+    /// fact rather than an assumption — two interleaved calls on one pipe would
+    /// pair the wrong outcome with the wrong call.
+    pipe: Mutex<Pipe>,
+}
+
+impl std::fmt::Debug for Worker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The pipe is a pair of file descriptors; the label and the handshake
+        // are the parts anyone reading a failure wants.
+        f.debug_struct("Worker")
+            .field("label", &self.label)
+            .field("hello", &self.hello)
+            .finish_non_exhaustive()
+    }
+}
+
+struct Pipe {
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: BufReader<tokio::process::ChildStdout>,
+}
+
+impl Worker {
+    /// Starts a worker and completes the handshake.
+    ///
+    /// `commands` is what the policy allows, sent so the worker can answer
+    /// which of them its `PATH` actually has. It is asked once, at startup,
+    /// rather than per call: an image does not change while it is running, and
+    /// the whole value of the answer is having it *before* a model finds the
+    /// gap.
+    pub async fn start(spec: &WorkerSpec, commands: &[String]) -> Result<Self, WorkerError> {
+        let argv = spec.argv(commands)?;
+        let label = spec.label();
+
+        let mut command = tokio::process::Command::new(&argv[0]);
+        command
+            .args(&argv[1..])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true);
+
+        let mut child = command.spawn().map_err(|source| WorkerError::Spawn {
+            command: argv.join(" "),
+            source,
+        })?;
+        let stdin = child.stdin.take().expect("stdin was piped");
+        let stdout = BufReader::new(child.stdout.take().expect("stdout was piped"));
+        let mut pipe = Pipe {
+            child,
+            stdin,
+            stdout,
+        };
+
+        let hello = match pipe.read().await {
+            Ok(Some(Response::Hello(hello))) => hello,
+            Ok(Some(Response::Error { message })) => return Err(WorkerError::NoHello(message)),
+            Ok(Some(other)) => {
+                return Err(WorkerError::NoHello(format!("{other:?}")));
+            }
+            Ok(None) => return Err(WorkerError::NoHello(pipe.epitaph().await)),
+            Err(error) => return Err(WorkerError::NoHello(error)),
+        };
+        if hello.protocol != PROTOCOL {
+            return Err(WorkerError::Protocol {
+                ours: PROTOCOL,
+                theirs: hello.protocol,
+            });
+        }
+
+        Ok(Self {
+            label,
+            image_paths: spec.paths.clone(),
+            hello,
+            pipe: Mutex::new(pipe),
+        })
+    }
+
+    pub fn hello(&self) -> &Hello {
+        &self.hello
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+impl Executor for Worker {
+    fn call<'a>(&'a self, call: &'a ToolCall, sandbox: &'a Sandbox) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let request = Request::Call {
+                call: call.clone(),
+                sandbox: WireSandbox::of(sandbox, &self.image_paths),
+            };
+            let mut pipe = self.pipe.lock().await;
+            // A worker that died is reported as a failed call and not as a
+            // panic: it is one tool call that did not happen, and the turn is
+            // allowed to say so and carry on.
+            match pipe.round_trip(&request).await {
+                Ok(Response::Outcome(outcome)) => *outcome,
+                Ok(Response::Error { message }) => ToolOutcome::failed(
+                    Verdict::deny(format!("the worker refused: {message}")),
+                    message,
+                ),
+                Ok(Response::Hello(_)) => ToolOutcome::failed(
+                    Verdict::deny("the worker greeted twice"),
+                    "the worker greeted twice",
+                ),
+                Err(error) => ToolOutcome::failed(
+                    Verdict::deny(format!("{}: {error}", self.label)),
+                    format!("{}: {error}", self.label),
+                ),
+            }
+        })
+    }
+
+    fn describe(&self) -> Option<String> {
+        let mut text = format!(
+            "  worker     {} — luu {}, protocol {}\n",
+            self.label, self.hello.version, self.hello.protocol,
+        );
+        if !self.hello.commands.is_empty() {
+            text.push_str(&format!(
+                "  on PATH    {}\n",
+                match self.hello.present().is_empty() {
+                    true => "(none)".to_string(),
+                    false => self.hello.present().join(", "),
+                }
+            ));
+            // The third failure mode, said before a model can find it: granted
+            // by the policy, absent from the image.
+            let absent = self.hello.absent();
+            if !absent.is_empty() {
+                text.push_str(&format!(
+                    "  absent     {}   (granted by the policy, absent from the image)\n",
+                    absent.join(", "),
+                ));
+            }
+        }
+        Some(text)
+    }
+}
+
+impl Pipe {
+    async fn round_trip(&mut self, request: &Request) -> Result<Response, String> {
+        let line = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        self.stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|error| error.to_string())?;
+        self.stdin
+            .flush()
+            .await
+            .map_err(|error| error.to_string())?;
+        match self.read().await? {
+            Some(response) => Ok(response),
+            None => Err(self.epitaph().await),
+        }
+    }
+
+    async fn read(&mut self) -> Result<Option<Response>, String> {
+        let mut line = String::new();
+        match self.stdout.read_line(&mut line).await {
+            Ok(0) => Ok(None),
+            Ok(_) => serde_json::from_str(line.trim())
+                .map(Some)
+                .map_err(|error| format!("unreadable answer ({error}): {}", line.trim())),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Why the pipe closed, in the words of the thing that closed it. A worker
+    /// that could not start says so on the exit code, and "broken pipe" is not
+    /// an answer anyone can act on.
+    async fn epitaph(&mut self) -> String {
+        match self.child.try_wait() {
+            Ok(Some(status)) => format!("the worker exited ({status})"),
+            _ => "the worker closed its output".to_string(),
+        }
+    }
+}
+
+/// The worker's own loop: read a call, run it, answer.
+///
+/// This is `Tools::standard()` and `Sandbox::new` on the far side of a pipe —
+/// the same code, not a second copy of it, which is the property that makes the
+/// container one enforcement point rather than two.
+pub async fn serve_stdio(
+    tools: Arc<Tools>,
+    commands: Vec<String>,
+    input: impl tokio::io::AsyncRead + Unpin,
+    mut output: impl tokio::io::AsyncWrite + Unpin,
+) -> std::io::Result<()> {
+    let hello = Response::Hello(Hello {
+        protocol: PROTOCOL,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        commands: commands
+            .iter()
+            .map(|name| CommandOnPath {
+                name: name.clone(),
+                path: which(name),
+            })
+            .collect(),
+    });
+    write_line(&mut output, &hello).await?;
+
+    let mut lines = BufReader::new(input).lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<Request>(&line) {
+            Ok(Request::Call { call, sandbox }) => match sandbox.resolve() {
+                Ok(sandbox) => Response::Outcome(Box::new(tools.call(&call, &sandbox).await)),
+                Err(error) => Response::Error {
+                    message: format!("the policy did not resolve here: {error}"),
+                },
+            },
+            Err(error) => Response::Error {
+                message: format!("unreadable request ({error})"),
+            },
+        };
+        write_line(&mut output, &response).await?;
+    }
+    Ok(())
+}
+
+async fn write_line(
+    output: &mut (impl tokio::io::AsyncWrite + Unpin),
+    response: &Response,
+) -> std::io::Result<()> {
+    let line = serde_json::to_string(response)?;
+    output.write_all(line.as_bytes()).await?;
+    output.write_all(b"\n").await?;
+    output.flush().await
+}
+
+/// Where a program name resolves on this side's `PATH`, if anywhere.
+///
+/// Deliberately not `Command::new(name).spawn()`: the question is whether the
+/// image *has* it, and running it to find out is a side effect nobody asked
+/// for.
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::path::Path::new(name);
+    if path.components().count() > 1 {
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|directory| directory.join(name))
+            .find(|candidate| candidate.is_file())
+    })
+}

@@ -28,7 +28,7 @@ is worth more than a reordering.
 | --- | --- | --- | --- |
 | 1 | ~~**An OpenAI-compatible backend**~~ — built, and never yet pointed at a real server | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md), closed by [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
 | 2 | ~~**Sessions in SQLite, derived from the record**~~ — the store and the parity; **not** the resume | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md), closed by [`sessions-in-sqlite`](../../RECORD/2026-09-02.sessions-in-sqlite.completed.md) |
-| 3 | **Level 3 in its development posture** — `loude-worker` in a long-lived container, wide open | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) |
+| 3 | ~~**Level 3 in its development posture**~~ — `loude-worker` in a long-lived container, wide open; the image is **declared, not generated**, and no container has been started yet | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) |
 | 4 | **The gate probe against a real model** | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) — written, unrun |
 | 5 | **Relevance selection** — the reference graph and the ranking | nothing | [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md), scored by [`the-map-against-a-7b`](../../RECORD/2026-09-01.the-map-against-a-7b.completed.md) |
 | 6 | **Narrowing: `network` per plan, then egress through the host** | 3 | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) §Network, §Egress |
@@ -199,6 +199,41 @@ Two rows of the order are now struck. The three that are not — the probe, the
 narrowing and relevance selection — are the same three, and **relevance selection
 is the one nothing has moved in two revisions**, which is exactly what its row
 predicted would happen to it.
+
+**Item 3**, struck through above, and the row keeps what the strike would
+otherwise smooth over. What landed is the seam, the worker, the runtime layer,
+the image's manifest check and the wide-open posture file — all of it exercised
+under `direct`, which is the runtime that puts no container around anything.
+What has **not** happened is a single `docker build` of `Containerfile` followed
+by a single tool call inside the container it produces. The distinction is the
+same one item 1's row makes about a real `llama-server`, and for the same
+reason: a wire test proves we send what we think, not that the other side agrees.
+Argued and built in
+[`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md).
+
+That leaves the order in a shape worth naming. Three of the five rows are struck,
+and the two that remain are **the gate probe** (item 4, which item 3 was blocking
+and no longer is) and **relevance selection** (item 5). The probe now waits only
+on a person and a model. Relevance selection is untouched for a **third**
+revision, which its own row predicted in the first — it "blocks nothing and is
+blocked by nothing", and that turns out to describe what gets done to it rather
+than what it is free to do.
+
+Two findings from building it, neither of which was in the plan:
+
+- **`[[worker.paths]]` had to exist.** `[sandbox]` has to resolve on *both* sides
+  of the pipe, and the image's toolchain is at `/usr/local/cargo` while the host
+  starting the container is a Mac. A granted path that is not there is a load
+  error — deliberately, and the rule is worth keeping — so the trees that exist
+  only inside the image needed a block that the host never resolves. It is the
+  concrete case for sending the *policy* rather than resolved paths: `~/.cargo`
+  and `/usr/local/cargo` are the same grant, and only one of them survives
+  canonicalization.
+- **The worker has to run as whoever started the session.** The base is
+  bind-mounted, so a container running as root leaves root-owned files in the
+  person's checkout — and `writes` in an approved plan is what the mount is
+  *for*. Two spellings of one flag (`--user uid:gid`, `--uid`/`--gid`), which is
+  the second thing this layer found that is not uniform across runtimes.
 
 ## When this revision is superseded
 

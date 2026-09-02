@@ -1,0 +1,90 @@
+# The development posture of level 3: `loude-worker` in a container, wide open.
+#
+# A **separate file**, never an edit to `luu.toml` and never a default, because
+# "we'll tighten it later" is the thing that does not happen. In three weeks
+# nobody has to do archaeology to tell a default from a leftover: the file's
+# name is what it is for. See
+# RECORD/2026-09-01.the-container-decided.WIP.md §The development posture.
+#
+#   docker build -t loude-worker:dev -f Containerfile .
+#   cargo run --bin luu -- tools --sandbox luu.container.toml
+#
+# **Probes run under this file are not comparable with probes run without it.**
+# A permissive environment that is not recorded is what makes two numbers
+# incomparable, and "one flag apart" is the sentence the whole measurement
+# discipline rests on — so this file exists to be named in the run that used it.
+
+[worker]
+# The container is created per session and its only process is `luu worker`.
+# Any of docker, podman, nerdctl or container: this layer builds an argv and
+# does not speak any runtime's API, so they substitute for each other.
+runtime = "docker"
+image = "loude-worker:dev"
+
+# The toolchain, at the path the *image* keeps it.
+#
+# These are `[[worker.paths]]` and not `[[sandbox.paths]]`, and the difference
+# is the whole reason the block exists: a granted path that is not there is a
+# load error rather than a rule that silently does nothing, and
+# `/usr/local/cargo` is not a directory on the Mac that starts the container.
+# `[sandbox]` has to resolve on *both* sides of the pipe; this resolves only on
+# the far one, and is added to every sandbox that crosses.
+#
+# It is also the point of sending the *policy* rather than resolved paths:
+# `~/.cargo` on a host and `/usr/local/cargo` in a Debian rust image are the
+# same grant, and only one of them is expressible as a canonical path.
+[[worker.paths]]
+path = "/usr/local/cargo"
+access = "execute"
+
+[[worker.paths]]
+path = "/usr/local/rustup"
+access = "execute"
+
+[sandbox]
+# **Unchanged from luu.toml, deliberately.** Not everything costs the same, so
+# do not loosen everything: inside a Linux container Landlock works, is free,
+# and is the one part of the sandbox this whole exercise exists to reach.
+# Widening `commands` and `network` is what the posture is for; widening this
+# would switch off the thing being measured.
+enforcement = "kernel"
+
+# **This is the loosening.** On the host it is `false`, because a build script
+# phoning home is exactly what is not trusted. Here the blast radius is a
+# disposable filesystem with one bind mount in it, and `cargo fetch` has to work
+# for the image to be worth having.
+#
+# It decides how the container is *created* — attached rather than
+# `--network none` — and is never changed afterwards. A task that may not reach
+# the network inside a session that may is the per-command seccomp filter's job,
+# and its window lines up with the task that asked for it in a way that toggling
+# a running container's network never could.
+#
+# Narrowing this is item 6 of ROADMAP/2026-09-01, and its trigger is a fact
+# rather than a date: the first `run_command` that runs inside the container
+# with a model in the loop.
+network = true
+
+# Wider than luu.toml's, and this is the other half of the loosening. Every name
+# here has to exist in the image as well — that is the third failure mode,
+# "granted by the policy, absent from the image", and `luu tools` prints it
+# under `absent` before a model can find it.
+commands = ["cargo", "rustc", "rustup", "git", "rg", "ls", "cat", "sh"]
+
+# `sh` is in that list and the grant reads as what it is: a shell makes the
+# allowlist meaningless, because `sh -c "a; b"` passes any check that looks at
+# the first word. It is here because this is the posture where a person is
+# debugging the image, and it is one of the first things to take out.
+
+[sandbox.limits]
+cpu-seconds = 600     # a release build inside a VM is slower than one outside
+file-size-mb = 1024
+# `processes` is still off, and for a *different* reason than on the host: there
+# the kernel counts RLIMIT_NPROC per uid rather than per process tree, which
+# makes a default deny `fork` over browser tabs. In a container the right answer
+# is a pids cgroup — `--pids-limit` — which this layer does not build yet.
+
+[[sandbox.paths]]
+path = "."
+access = "read-write"
+
