@@ -9,6 +9,7 @@ pub mod backend;
 pub mod context;
 pub mod fragment;
 pub mod protocol;
+pub mod rank;
 pub mod record;
 pub mod repo_map;
 pub mod sandbox;

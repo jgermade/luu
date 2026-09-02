@@ -103,6 +103,9 @@ cargo run --bin luu -- serve --mock-reply '```plan
 ```' --mock-reply 'The budget is split into buckets.'
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
 cargo run --bin luu -- map --map-tokens 1024          # the repository outline that budget resolves to
+# and the order it did not take: scores, who references what, and what dropped.
+# `--map-rank` makes the map obey it — off by default, and the record says why.
+cargo run --bin luu -- map --map-tokens 1024 --explain
 
 # level 3: the same run, with every tool call executed inside a container.
 # `--worker direct` is the same seam with no container at all, which is how the
@@ -296,8 +299,8 @@ prints the exact bytes and what they cost.
 
 Files are outlined in **path order** until one does not fit, and the map says how
 many it left out. That is not relevance and does not pretend to be: it is the
-baseline the reference graph has to beat, and this repository makes the case by
-itself — the whole outline is 6 327 tokens, **77% of an 8K window**, so at any
+baseline the reference graph has to beat, and — measured — **still beats it**.
+This repository makes the case by itself — the whole outline is 6 327 tokens, **77% of an 8K window**, so at any
 budget a real run can afford, most of the repository is missing and the alphabet
 picked which part. Two readings to keep straight: the map is paid on *every*
 call (870 tokens × 20 turns is +56% on the grounded script's total), and it
@@ -306,6 +309,24 @@ shared and total together, so 93.9% → 96.3% is not an improvement and a reuse
 number from a run with the map is not comparable to one without it. Numbers and
 the two bugs that running it found are in
 [`RECORD/2026-08-31.the-repo-map.completed.md`](RECORD/2026-08-31.the-repo-map.completed.md).
+
+`--map-rank` orders the map by **what the rest of the tree depends on** instead:
+a reference graph over the same query's `@reference.*` captures, PageRank with a
+*uniform* teleport. The uniform part is the whole design — Aider seeds its
+ranking with the files in the conversation, and that seed is what would rewrite
+the block every turn and cost the map its place in the prefix. Without it a score
+depends on nothing but the tree.
+
+It is **off**, and the reason is a measurement rather than caution: at 1024
+tokens path order holds five files and the ranking holds two, because rank order
+leads with the big central files and the fill rule stops at the first that does
+not fit. Two things that finding made clear and neither was in the plan —
+**ranking and the fill rule are one decision**, and **`map-probe.txt` cannot
+compare two orders**, because its control group is defined as the files a
+path-ordered map holds. `luu map --explain` prints the ranking under either
+order — each file's score and who references it — so the order the map did not
+take can be read beside the one it did. See
+[`RECORD/2026-09-02.ranking-the-map.completed.md`](RECORD/2026-09-02.ranking-the-map.completed.md).
 
 `--fragment PATH[:START-END]` on `chat` fuses a real file into the next prompt —
 repeatable, 1-based inclusive lines, read **through the sandbox**, and attached

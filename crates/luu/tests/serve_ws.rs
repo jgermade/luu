@@ -177,6 +177,7 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
         temperature: None,
         seed: None,
         map_tokens: 0,
+        map_order: Default::default(),
         auth_token_file: None,
         store: Some(path.to_path_buf()),
     })
@@ -212,6 +213,7 @@ async fn server_authed(
         temperature: None,
         seed: None,
         map_tokens: 0,
+        map_order: Default::default(),
         auth_token_file,
         store: None,
     })
