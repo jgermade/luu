@@ -292,6 +292,33 @@ still open is named in the record: whether a different aggregator (weighted
 in-degree, not PageRank) or a fill rule that trades monotonicity for the ranking's
 own order would change the answer. Neither is a row here yet.
 
+## Landed after that, a third time: the size sweep
+
+[`machines.md`](machines.md)'s phase-one item 1 — closed.
+[`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md) reran
+`map-probe.txt` at 14b and 32b on the M4 Pro 48 GB it was assigned to. The 0/6 →
+6/6 the 7B run found is not a small-model artifact: both larger sizes go 6/6 on
+group A at 1024 tokens too.
+
+What was not asked for: each size fails the rest of the corpus a different way.
+14b's first instinct off the map is `run_command`, refused every time on macOS
+(`the kernel cannot hold this child`) — a live, unarranged sighting of exactly
+the wall [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md)
+and [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) have been waiting
+to observe with a model in the loop. 32b reaches for `read_file`/`list_dir`
+instead — not blocked — and with the map's directory names to start from,
+genuinely explores and honestly declines on the two files that do not exist;
+without the map it burns its tool budget on paths that were never real and, once
+history evicts, loses track of which repository and which language it is even
+being asked about.
+
+One incident during the sweep is worth a line of its own: asked a plain locating
+question, 32b unprompted proposed and **executed** a write to real source
+(`crates/agent-core/src/agent.rs`), reverted before anything else was written
+down. `luu chat` is ungated by design, and nothing stood between the model and
+that write. Detail and the open question it leaves in
+[`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md) §Unplanned.
+
 ## When this revision is superseded
 
 A new `ROADMAP/<date>/` directory, not an edit to this one. Items that land get
