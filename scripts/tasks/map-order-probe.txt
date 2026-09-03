@@ -1,0 +1,55 @@
+# Thirty-eight questions, one per source file this tree has, with nothing
+# attached, ever.
+#
+# Unlike map-probe.txt, these are not split into a group the map already holds
+# and a placebo the map does not: that split is how map-probe.txt's own group A
+# was built (by reading off what a 1024-token path-ordered map contained), which
+# means it cannot be reused to compare orders without re-committing the bias it
+# was built with. See RECORD/2026-09-03.the-map-order-probe.completed.md.
+#
+# Every question here is written from its target file's own module doc — what
+# the file says it is for — never from a token count and never from either
+# order's output. Run it twice, one flag apart — path order against
+# `--map-rank` — at the same budget, and score each answer as names the right
+# path / names a wrong path / declines. Then split the score by whether that
+# question's target is structurally inside that run's map, to read coverage and
+# precision apart.
+
+which file runs the loop that turns a prompt into tool calls and back into an answer?
+which file defines the read-side structure that both the live server and `luu export` fold into?
+which file implements the backend that streams canned replies without a real model on the machine?
+which file defines the Backend trait every inference backend implements?
+which file talks to Ollama's chat endpoint over HTTP?
+which file implements the OpenAI-compatible backend that also covers llama-server and vLLM?
+which file decides what earns its place in the prompt and what gets evicted when it is full?
+which file fuses a real file into a single turn as a fragment?
+which file is agent-core's crate root, with no knowledge of the CLI, VSCode or the browser?
+which file defines the one message schema carried over stdio, the WebSocket and the record format?
+which file builds the reference graph and ranks the repository's files by what depends on what?
+which file defines the JSON-lines format a session is recorded to?
+which file turns the repository into an outline of definitions with their bodies elided?
+which file is the sandbox's implementation for platforms that are not Linux?
+which file applies Landlock and seccomp to a child process between fork and exec?
+which file defines the sandbox's rungs — what the agent may reach, checked in-process?
+which file defines what a project declares the agent may reach, before any path is resolved?
+which file defines the task type — the unit of work, of approval and of forgetting?
+which file implements run_command, the one tool whose verdict is about the kernel rather than this process?
+which file implements the filesystem tools that check a path before touching it?
+which file parses a model's structured tool request and validates it against the sandbox?
+which file carries the trace channel that explains the context manager's choices?
+which file runs one turn — prompt in, tokens out — with no tools involved?
+which file is level 3 of the sandbox, where tools run in a container rather than this process?
+which file builds the argv for whichever container runtime is in use?
+which test file asserts what the Ollama backend actually puts on the socket?
+which test file asserts what the OpenAI-compatible backend puts on the wire and reads back?
+which file decides who may reach the control surface?
+which file is the `main` function for the `loude` binary alias?
+which file is the `main` function for the `luu` binary?
+which file turns a recording into the static twin of the read API, for a host with no server behind it?
+which file installs both the `luu` and `loude` binaries as thin wrappers over one function?
+which file is the local HTTP server behind the debug UI?
+which file makes sure chat and serve assemble the same prompt the same way?
+which file caches sessions on disk as a cache of the fold, never a second log?
+which test file drives one turn over the WebSocket against a running server?
+which test file asserts that folding a record equals saving it to the store and loading it back?
+which test file drives a real worker end to end through a real pipe, outside a container?

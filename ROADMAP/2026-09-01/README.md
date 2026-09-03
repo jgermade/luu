@@ -269,6 +269,29 @@ So the order below ends this revision with **the same two rows open** it has had
 throughout — the gate probe, still waiting on a person and a model, and relevance
 selection, which is no longer untouched but is not closed either.
 
+## Landed after that, a second time: the corpus itself
+
+**Item 5's own still-open row** — "a corpus that can compare orders" — closed, and
+the answer it gives is sharper than the flag `--map-rank` already shipped off with.
+[`ranking-the-map`](../../RECORD/2026-09-02.ranking-the-map.completed.md)'s numbers
+were real but came with a stated flaw: its comparison group was defined by what the
+path-ordered map already held, so any reordering lost on it before a model answered
+anything. The new corpus picks one question per file — all 38 the tree has — before
+either order is checked, closing that gap.
+
+It does not soften the result; it sharpens it. On the un-biased corpus path order
+answers **100%** of what it holds and rank order **12.5%** of what it holds, and
+rank order's denser files pushed the model into fabricated Rust that evicted the
+session's own history 24 times in 38 turns where path order evicted nothing. Argued
+and run in
+[`the-map-order-probe`](../../RECORD/2026-09-03.the-map-order-probe.completed.md).
+
+That leaves relevance selection's row closed on a negative result rather than an
+unmeasured one — the row does not get a fourth revision of "untouched." What is
+still open is named in the record: whether a different aggregator (weighted
+in-degree, not PageRank) or a fill rule that trades monotonicity for the ranking's
+own order would change the answer. Neither is a row here yet.
+
 ## When this revision is superseded
 
 A new `ROADMAP/<date>/` directory, not an edit to this one. Items that land get
