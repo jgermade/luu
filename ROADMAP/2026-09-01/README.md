@@ -28,7 +28,7 @@ is worth more than a reordering.
 | --- | --- | --- | --- |
 | 1 | ~~**An OpenAI-compatible backend**~~ — built, and never yet pointed at a real server | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md), closed by [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
 | 2 | ~~**Sessions in SQLite, derived from the record**~~ — the store and the parity; **not** the resume | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md), closed by [`sessions-in-sqlite`](../../RECORD/2026-09-02.sessions-in-sqlite.completed.md) |
-| 3 | ~~**Level 3 in its development posture**~~ — `loude-worker` in a long-lived container, wide open; the image is **declared, not generated**, and no container has been started yet | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) |
+| 3 | ~~**Level 3 in its development posture**~~ — `loude-worker` in a long-lived container, wide open; the image is **declared, not generated**, and verified live with Landlock ABI v8 | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) and [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
 | 4 | **The gate probe against a real model** | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) — written, unrun |
 | 5 | **Relevance selection** — the reference graph and the ranking | nothing | [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md), scored by [`the-map-against-a-7b`](../../RECORD/2026-09-01.the-map-against-a-7b.completed.md) |
 | 6 | **Narrowing: `network` per plan, then egress through the host** | 3 | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) §Network, §Egress |
@@ -318,6 +318,22 @@ question, 32b unprompted proposed and **executed** a write to real source
 down. `luu chat` is ungated by design, and nothing stood between the model and
 that write. Detail and the open question it leaves in
 [`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md) §Unplanned.
+
+## Landed after that, a fourth time: level 3 observed live
+
+**Item 3's remaining reservation** — *"no container has been started yet"* — closed.
+[`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md)
+built `Containerfile` as `loude-worker:dev` and ran tool calls against it through
+`luu.container.toml` on Apple Silicon (Docker Desktop 29.7.2, kernel
+`6.12.76-linuxkit aarch64`).
+
+The check confirmed what the audit and `machines.md` anticipated:
+**Landlock ABI v8 + seccomp + rlimits are active and enforcing inside the guest**.
+The wall that blocked 14b during the size sweep on macOS (*"the kernel cannot
+hold this child"*) does not exist inside the container: `run_command` executed
+with full kernel confinement (9 ms), unallowed programs were denied in-process,
+and filesystem traversal (`ls /root`) was blocked by Landlock. The exit-code
+rung and gate probe command prompts are unblocked on Mac.
 
 ## When this revision is superseded
 

@@ -37,6 +37,8 @@ pub enum Runtime {
     Nerdctl,
     /// Apple's `container`, on macOS 26 and Apple silicon.
     Container,
+    /// Colima with containerd (`colima nerdctl`).
+    Colima,
 }
 
 impl Runtime {
@@ -49,6 +51,7 @@ impl Runtime {
             Self::Podman => Some("podman"),
             Self::Nerdctl => Some("nerdctl"),
             Self::Container => Some("container"),
+            Self::Colima => Some("colima"),
         }
     }
 
@@ -60,6 +63,7 @@ impl Runtime {
             Self::Podman => "podman",
             Self::Nerdctl => "nerdctl",
             Self::Container => "container",
+            Self::Colima => "colima",
         }
     }
 
@@ -105,9 +109,10 @@ impl std::str::FromStr for Runtime {
             "podman" => Ok(Self::Podman),
             "nerdctl" => Ok(Self::Nerdctl),
             "container" => Ok(Self::Container),
+            "colima" => Ok(Self::Colima),
             other => Err(format!(
                 "unknown worker runtime `{other}`: \
-                 host, direct, docker, podman, nerdctl or container"
+                 host, direct, docker, podman, nerdctl, container or colima"
             )),
         }
     }
@@ -254,23 +259,29 @@ impl WorkerSpec {
             });
         };
 
-        let mut argv = vec![
-            program.to_string(),
-            "run".to_string(),
-            // `--rm` and a piped stdin are the whole of the cleanup.
-            "--rm".to_string(),
+        let mut argv = match self.runtime {
+            Runtime::Colima => vec![
+                program.to_string(),
+                "nerdctl".to_string(),
+                "--".to_string(),
+                "run".to_string(),
+                "--rm".to_string(),
+            ],
+            _ => vec![program.to_string(), "run".to_string(), "--rm".to_string()],
+        };
+        // `--init` reaps what a build leaves behind. Apple's runtime does not
+        // document it, so it is asked for where it exists and skipped where it
+        // does not, rather than assumed uniform.
+        if self.runtime != Runtime::Container {
+            argv.push("--init".to_string());
+        }
+        argv.extend([
             "-i".to_string(),
             "--mount".to_string(),
             format!("type=bind,source={base},target={base}"),
             "--workdir".to_string(),
             base,
-        ];
-        // `--init` reaps what a build leaves behind. Apple's runtime does not
-        // document it, so it is asked for where it exists and skipped where it
-        // does not, rather than assumed uniform.
-        if self.runtime != Runtime::Container {
-            argv.insert(3, "--init".to_string());
-        }
+        ]);
         // Fixed for the container's whole life, and only where the runtime can
         // say it. `Runtime::cannot` is what reports the gap where it cannot.
         if !self.network && self.runtime.cannot().is_none() {
@@ -437,6 +448,36 @@ mod tests {
     }
 
     #[test]
+    fn colima_uses_nerdctl_subcommand_with_double_dash() {
+        let argv = spec(Runtime::Colima).argv(&["cargo".to_string()]).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "colima",
+                "nerdctl",
+                "--",
+                "run",
+                "--rm",
+                "--init",
+                "-i",
+                "--mount",
+                "type=bind,source=/home/you/project,target=/home/you/project",
+                "--workdir",
+                "/home/you/project",
+                "--network",
+                "none",
+                "--user",
+                "501:20",
+                "loude-worker:dev",
+                "luu",
+                "worker",
+                "--command",
+                "cargo",
+            ]
+        );
+    }
+
+    #[test]
     fn a_runtime_name_round_trips_and_an_unknown_one_lists_the_known_ones() {
         for runtime in [
             Runtime::Host,
@@ -445,11 +486,13 @@ mod tests {
             Runtime::Podman,
             Runtime::Nerdctl,
             Runtime::Container,
+            Runtime::Colima,
         ] {
             assert_eq!(runtime.as_str().parse::<Runtime>().unwrap(), runtime);
         }
         let error = "lxc".parse::<Runtime>().unwrap_err();
         assert!(error.contains("nerdctl"), "{error}");
+        assert!(error.contains("colima"), "{error}");
     }
 }
 

@@ -806,12 +806,12 @@ be argued before it is written. See
    measure step 2. *Done.*
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
 5. Container packaging (level 3), with the level-2 restrictions still applied inside it.
-   *The development posture is built — the worker, the seam, the runtime layer
-   and the image — and what is left of the step is the narrowing: egress through
-   the host, and `network` per plan. It stopped blocking the two things it was
-   blocking (the gate probe's command prompts and the exit-code rung, both of
-   which sit on `run_command` and are denied wherever the kernel cannot hold a
-   child) on the day the image can be built and pointed at.*
+   *The development posture is built and verified live — the worker, the seam,
+   the runtime layer, the image, and Landlock ABI v8 active inside Docker
+   Desktop on macOS ([`RECORD/2026-09-03.the-container-observed.completed.md`](RECORD/2026-09-03.the-container-observed.completed.md)).
+   What is left of the step is the narrowing: egress through the host, and
+   `network` per plan. It no longer blocks the exit-code rung or the gate probe's
+   command prompts on macOS.*
 6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
 
 The six steps are the *shape* of the work and have not changed. What is being

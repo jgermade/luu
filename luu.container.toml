@@ -16,7 +16,7 @@
 
 [worker]
 # The container is created per session and its only process is `luu worker`.
-# Any of docker, podman, nerdctl or container: this layer builds an argv and
+# Any of docker, podman, nerdctl, container or colima: this layer builds an argv and
 # does not speak any runtime's API, so they substitute for each other.
 runtime = "docker"
 image = "loude-worker:dev"
