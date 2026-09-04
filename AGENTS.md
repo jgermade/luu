@@ -1,4 +1,4 @@
-# Loude (CLI alias: `luu`)
+# luu
 
 A local-first AI agent in Rust that orchestrates calls to models, built for local
 inference — 7B–32B models with 8K–32K of context — and free to reach a remote
@@ -7,13 +7,13 @@ management: what gets into the prompt, and what earns its place there.
 
 Be concise in your answers. I prefer examples over long text.
 
-[`loude-design.md`](loude-design.md) is the design as it stands. Read it before
+[`luu-design.md`](luu-design.md) is the design as it stands. Read it before
 proposing anything; a suggestion that contradicts a decision already recorded
 there needs to say so and argue with it, not route around it.
 
 ## Where things live
 
-- [`loude-design.md`](loude-design.md) — the design as it stands **now**. It is
+- [`luu-design.md`](luu-design.md) — the design as it stands **now**. It is
   rewritten as decisions change, so it always reads as the current answer.
 - [`RECORD/`](RECORD/) — dated proposals and the reasoning behind them,
   **append-only**. It is how the current answer was arrived at, including the
@@ -31,7 +31,7 @@ append to the record.
 
 The rule that keeps the third honest, because it is the one that rots: **nothing
 in `ROADMAP/` is ever the answer to "what is true today."** An item that lands
-moves into `loude-design.md` and gets a record; the roadmap entry it came from is
+moves into `luu-design.md` and gets a record; the roadmap entry it came from is
 struck through in place, not deleted, so a revision reads as *what we set out to
 do and how much of it happened*. A roadmap that quietly loses its misses is a
 roadmap nobody can calibrate.
@@ -92,15 +92,17 @@ cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 cargo run --bin luu -- chat "hola" --backend openai \
   --openai-url http://127.0.0.1:8080/v1 --model qwen2.5-coder-7b
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
-# sessions are cached in ~/.loude/sessions.db by default, so a restart does not
-# lose the conversation: `--store <path>` moves it, `--no-store` turns it off.
+# sessions are cached in the state directory's sessions.db by default, so a
+# restart does not lose the conversation: `--store <path>` moves it,
+# `--no-store` turns it off. The first run asks where that directory goes —
+# ~/.luu or ~/.config/luu — and LUU_HOME answers it without being asked.
 cargo run --bin luu -- serve --no-store
 cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
 # the gate, without a model: the planning call answers with a plan block, then
 # the turn answers. Type a prompt and the UI holds it until you approve it.
 cargo run --bin luu -- serve --mock-reply '```plan
-{"objective": "explain the budget", "steps": ["read the design"], "files": ["loude-design.md"]}
+{"objective": "explain the budget", "steps": ["read the design"], "files": ["luu-design.md"]}
 ```' --mock-reply 'The budget is split into buckets.'
 cargo run --bin luu -- tools                          # the resolved sandbox and the exact prefix block
 cargo run --bin luu -- map --map-tokens 1024          # the repository outline that budget resolves to
@@ -111,14 +113,14 @@ cargo run --bin luu -- map --map-tokens 1024 --explain
 # signed approvals: a key, and the signature over one `approve_job`. The public
 # half goes in `[[approvals.key]]`; `[approvals] required = true` then refuses an
 # unsigned approval. A wrong one is refused either way.
-cargo run --bin luu -- key new --out ~/.loude/approval.key --name jgermade
+cargo run --bin luu -- key new --out ~/.luu/approval.key --name jgermade
 echo '{"type":"approve_job","job":1,"files":["Cargo.toml"]}' \
-  | cargo run --bin luu -- key sign --key ~/.loude/approval.key --session <id> --as jgermade
+  | cargo run --bin luu -- key sign --key ~/.luu/approval.key --session <id> --as jgermade
 
 # level 3: the same run, with every tool call executed inside a container.
 # `--worker direct` is the same seam with no container at all, which is how the
 # IPC gets tested where no runtime is installed.
-docker build -t loude-worker:dev -f Containerfile .
+docker build -t luu-worker:dev -f Containerfile .
 cargo run --bin luu -- tools --sandbox luu.container.toml
 cargo run --bin luu -- chat "hola" --sandbox luu.container.toml
 cargo run --bin luu -- tools --worker direct          # the seam, no container
@@ -287,8 +289,9 @@ hold a child, macOS included, because it sits on `run_command`. See
 [`RECORD/2026-09-02.closing-on-an-exit-code.completed.md`](RECORD/2026-09-02.closing-on-an-exit-code.completed.md).
 
 **Sessions survive the process.** `serve` caches its fold into SQLite —
-`~/.loude/sessions.db` by default, `--store <path>`, `--no-store` to turn it off
-— and every read path answers for a stored session as well as the live one. A row
+`sessions.db` in the state directory by default (`~/.luu` or `~/.config/luu`,
+whichever the first run was told to make; `LUU_HOME` overrides both),
+`--store <path>`, `--no-store` to turn it off — and every read path answers for a stored session as well as the live one. A row
 is the `SessionView` whole, because a normalised schema is a second definition of
 the fold and the day it disagrees with `api.rs` the store lies about a session.
 The rule that keeps it honest is a test: `fold(record) == load(store, id)`, over

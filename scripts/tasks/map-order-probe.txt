@@ -43,10 +43,10 @@ which file builds the argv for whichever container runtime is in use?
 which test file asserts what the Ollama backend actually puts on the socket?
 which test file asserts what the OpenAI-compatible backend puts on the wire and reads back?
 which file decides who may reach the control surface?
-which file is the `main` function for the `loude` binary alias?
 which file is the `main` function for the `luu` binary?
+which file defines every subcommand the CLI takes and dispatches them?
 which file turns a recording into the static twin of the read API, for a host with no server behind it?
-which file installs both the `luu` and `loude` binaries as thin wrappers over one function?
+which file decides where this machine's state directory lives?
 which file is the local HTTP server behind the debug UI?
 which file makes sure chat and serve assemble the same prompt the same way?
 which file caches sessions on disk as a cache of the fold, never a second log?

@@ -5,7 +5,7 @@ restart, so there is no long task to resume and nothing to transfer.
 
 ## The rule it has to obey
 
-From [`loude-design.md`](../../loude-design.md) §Persistence, and it is the whole
+From [`luu-design.md`](../../luu-design.md) §Persistence, and it is the whole
 design of this item:
 
 > Whatever the store holds must be reproducible by folding the record.
@@ -41,7 +41,7 @@ temptation:
 
 ## Open
 
-Where the database lives (`~/.loude/` in the draft, against `luu.toml` sitting in
+Where the database lives (`~/.luu/` in the draft, against `luu.toml` sitting in
 the project — they answer different questions and probably both exist);
 compression; whether the record file is the write-ahead log or a sibling artifact;
 and what happens to a session whose record was truncated or lost while the store

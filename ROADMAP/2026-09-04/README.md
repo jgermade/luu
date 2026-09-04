@@ -2,7 +2,7 @@
 
 **What this is:** the order of work as it stands on this date, and what blocks
 what. Not a decision and not a description of the tree — for *what is true today*
-read [`loude-design.md`](../../loude-design.md), and for *why* read the dated file
+read [`luu-design.md`](../../luu-design.md), and for *why* read the dated file
 in [`RECORD/`](../../RECORD/) each item links to.
 
 Supersedes [`ROADMAP/2026-09-01/`](../2026-09-01/) wholesale. Over three days,
@@ -15,7 +15,7 @@ operational container is a **job** (Protocol v5, Record format 7).
 | | |
 | --- | --- |
 | **OpenAI-compatible backend** | Wire test passing, supports local `llama-server`, vLLM, and remote hosted endpoints — [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
-| **Level 3 container observed live** | `loude-worker:dev` built and run in Docker Desktop VM on Apple Silicon with Landlock ABI v8, seccomp, and rlimits enforcing — [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
+| **Level 3 container observed live** | `luu-worker:dev` built and run in Docker Desktop VM on Apple Silicon with Landlock ABI v8, seccomp, and rlimits enforcing — [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
 | **Closing on an exit code** | A plan carries `closes_on`; the task folds itself when the command exits 0, reporting closing authority on the wire — [`closing-on-an-exit-code`](../../RECORD/2026-09-02.closing-on-an-exit-code.completed.md) |
 | **Sessions in SQLite & Resume** | Sessions persist to SQLite whole; `SessionStore::resume` restores write-side context, turns, and fold summaries — [`sessions-in-sqlite`](../../RECORD/2026-09-02.sessions-in-sqlite.completed.md), [`session-resume`](../../RECORD/2026-09-04.session-resume.completed.md) |
 | **Protocol over stdio** | `luu stdio` speaks line-oriented NDJSON over stdin/stdout, unblocking subprocess-based editors without open ports — [`protocol-over-stdio`](../../RECORD/2026-09-04.protocol-over-stdio.completed.md) |

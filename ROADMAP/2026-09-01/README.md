@@ -2,7 +2,7 @@
 
 **What this is:** the order of work as it stands on this date, and what blocks
 what. Not a decision and not a description of the tree — for *what is true today*
-read [`loude-design.md`](../../loude-design.md), and for *why* read the dated file
+read [`luu-design.md`](../../luu-design.md), and for *why* read the dated file
 in [`RECORD/`](../../RECORD/) each item links to.
 
 Supersedes [`ROADMAP/2026-08-31/`](../2026-08-31/) wholesale. That revision is
@@ -28,7 +28,7 @@ is worth more than a reordering.
 | --- | --- | --- | --- |
 | 1 | ~~**An OpenAI-compatible backend**~~ — built, and never yet pointed at a real server | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md), closed by [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
 | 2 | ~~**Sessions in SQLite, derived from the record**~~ — the store, parity, and the resume | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md), closed by [`sessions-in-sqlite`](../../RECORD/2026-09-02.sessions-in-sqlite.completed.md) and [`session-resume`](../../RECORD/2026-09-04.session-resume.completed.md) |
-| 3 | ~~**Level 3 in its development posture**~~ — `loude-worker` in a long-lived container, wide open; the image is **declared, not generated**, and verified live with Landlock ABI v8 | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) and [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
+| 3 | ~~**Level 3 in its development posture**~~ — `luu-worker` in a long-lived container, wide open; the image is **declared, not generated**, and verified live with Landlock ABI v8 | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) and [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
 | 4 | ~~**The gate probe against a real model**~~ | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) — completed |
 | 5 | ~~**Relevance selection** — the reference graph and the ranking~~ | nothing | [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md), closed on a negative result by [`the-map-order-probe`](../../RECORD/2026-09-03.the-map-order-probe.completed.md) |
 | 6 | **Narrowing: ~~`network` per plan~~, then egress through the host** | 3 | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) §Network, §Egress, closed by [`network-per-plan`](../../RECORD/2026-09-04.network-per-plan.completed.md) |
@@ -44,7 +44,7 @@ gantt
     section Unblocked today
     OpenAI compatible backend              :crit, bk, 2026-09-01, 10d
     Sessions in SQLite from the record     :crit, store, 2026-09-01, 14d
-    Level 3 wide open loude-worker         :crit, l3, 2026-09-01, 14d
+    Level 3 wide open luu-worker         :crit, l3, 2026-09-01, 14d
     section Waiting on those
     The gate probe with commands observable :probe, after l3, 7d
     Relevance selection graph and ranking  :rel, after bk, 28d
@@ -113,7 +113,7 @@ inside the container with a model in the loop.
   That makes an off-loopback bind possible for one operator with one secret; it
   is not identity, so an approval still cannot say *who* approved it, and that
   is what federation needs. The second instance is unchanged: the IPC between
-  the host and `loude-worker` carries approvals across a trust boundary inside
+  the host and `luu-worker` carries approvals across a trust boundary inside
   one machine.
 
 ## Corrected from the previous revision
@@ -323,7 +323,7 @@ that write. Detail and the open question it leaves in
 
 **Item 3's remaining reservation** — *"no container has been started yet"* — closed.
 [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md)
-built `Containerfile` as `loude-worker:dev` and ran tool calls against it through
+built `Containerfile` as `luu-worker:dev` and ran tool calls against it through
 `luu.container.toml` on Apple Silicon (Docker Desktop 29.7.2, kernel
 `6.12.76-linuxkit aarch64`).
 

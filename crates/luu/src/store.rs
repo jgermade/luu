@@ -35,14 +35,17 @@ const SCHEMA: i32 = 1;
 
 /// Where the store lives when nobody says otherwise.
 ///
-/// `~/.loude/`, and deliberately not beside `luu.toml`. The two answer
+/// In [`crate::config::dir`] — the machine's state directory, which the first
+/// run asks about — and deliberately not beside `luu.toml`. The two answer
 /// different questions: the policy file describes *this project* and is meant
 /// to be committed with it, while the store is *this machine's* history — and a
 /// session store that travelled with a checkout would put one project's
 /// conversation into every clone of it.
+///
+/// `None` means there is nowhere to put it (no `$HOME`, no `LUU_HOME`), which
+/// the callers report rather than repair.
 pub fn default_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
-    Some(PathBuf::from(home).join(".loude").join("sessions.db"))
+    Some(crate::config::dir()?.join("sessions.db"))
 }
 
 pub struct SessionStore {

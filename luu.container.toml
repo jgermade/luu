@@ -1,4 +1,4 @@
-# The development posture of level 3: `loude-worker` in a container, wide open.
+# The development posture of level 3: `luu-worker` in a container, wide open.
 #
 # A **separate file**, never an edit to `luu.toml` and never a default, because
 # "we'll tighten it later" is the thing that does not happen. In three weeks
@@ -6,7 +6,7 @@
 # name is what it is for. See
 # RECORD/2026-09-01.the-container-decided.WIP.md §The development posture.
 #
-#   docker build -t loude-worker:dev -f Containerfile .
+#   docker build -t luu-worker:dev -f Containerfile .
 #   cargo run --bin luu -- tools --sandbox luu.container.toml
 #
 # **Probes run under this file are not comparable with probes run without it.**
@@ -19,7 +19,7 @@
 # Any of docker, podman, nerdctl, container or colima: this layer builds an argv and
 # does not speak any runtime's API, so they substitute for each other.
 runtime = "docker"
-image = "loude-worker:dev"
+image = "luu-worker:dev"
 
 # The toolchain, at the path the *image* keeps it.
 #

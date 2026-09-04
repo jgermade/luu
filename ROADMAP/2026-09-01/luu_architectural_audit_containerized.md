@@ -1,4 +1,4 @@
-# Luu/Loude Architectural Audit for the Final Containerized Version
+# luu Architectural Audit for the Final Containerized Version
 
 **Date:** 2026-09-01\
 **Audited repository:** `jgermade/luu`\
@@ -2019,7 +2019,7 @@ Before considering container mode complete:
 ## Sources reviewed
 
 -   Repository: `https://github.com/jgermade/luu`
--   Design: `loude-design.md`
+-   Design: `luu-design.md`
 -   Sandbox: `crates/agent-core/src/sandbox/mod.rs`
 -   Server: `crates/luu/src/serve.rs`
 

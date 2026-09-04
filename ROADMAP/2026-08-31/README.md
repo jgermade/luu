@@ -6,11 +6,11 @@
 
 **What this is:** the order of work as it stands on this date, and what blocks
 what. Not a decision and not a description of the tree — for *what is true
-today* read [`loude-design.md`](../../loude-design.md), and for *why* read the
+today* read [`luu-design.md`](../../luu-design.md), and for *why* read the
 dated file in [`RECORD/`](../../RECORD/) each item links to.
 
 This revision exists because a federated architecture was proposed
-(*"Loude — Sistema Federado de Agentes"*, v0.1-draft, 2026-08-31) and the
+(*"luu — Sistema Federado de Agentes"*, v0.1-draft, 2026-08-31) and the
 argument about it —
 [`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md)
 — ended in an ordering claim that had nowhere to live. This is that place.
@@ -34,12 +34,12 @@ of what makes the surface affordable at all.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 1 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md), [design §Persistence](../../loude-design.md) · spec'd in [`session-store.md`](session-store.md) |
+| 1 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md), [design §Persistence](../../luu-design.md) · spec'd in [`session-store.md`](session-store.md) |
 | 2 | ~~**The gate probe against a real model**~~ | a machine | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) — completed |
 | 3 | **Relevance selection** — `tree-sitter` tags over a reference graph | nothing (unblocked since tools landed) | [`aider-repo-map`](../../RECORD/2026-08-27.aider-repo-map.completed.md), [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md) |
 | 4 | **Multi-backend as measurement** | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right |
 | 5 | **Federation without a portal** | 1, and signed approvals | [`federation.md`](federation.md) |
-| — | Container level 3 · VSCode extension | the core being stable | [design §Suggested work order](../../loude-design.md) · sequenced in [`surface.md`](surface.md) |
+| — | Container level 3 · VSCode extension | the core being stable | [design §Suggested work order](../../luu-design.md) · sequenced in [`surface.md`](surface.md) |
 
 ```mermaid
 gantt
@@ -108,7 +108,7 @@ gantt
     Host daemon and host registry          :p1, 2026-09-01, 21d
     Relay WS and remote chat in the browser :p2, after p1, 21d
     section Fase 3 and 4
-    Session portability the .loude format  :p3, after p2, 21d
+    Session portability the .luu format  :p3, after p2, 21d
     Multi-backend                          :p4, after p3, 14d
     section Fase 5 and 6
     Cloud workers and an autoscaling pool  :p5, after p4, 30d
