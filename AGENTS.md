@@ -99,6 +99,7 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 cargo run --bin luu -- serve --no-store
 cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
+
 # the gate, without a model: the planning call answers with a plan block, then
 # the turn answers. Type a prompt and the UI holds it until you approve it.
 cargo run --bin luu -- serve --mock-reply '```plan
@@ -295,10 +296,33 @@ whichever the first run was told to make; `LUU_HOME` overrides both),
 is the `SessionView` whole, because a normalised schema is a second definition of
 the fold and the day it disagrees with `api.rs` the store lies about a session.
 The rule that keeps it honest is a test: `fold(record) == load(store, id)`, over
-recordings produced by running the binary. It does **not** resume a session yet —
-the view is the read side, `Context` is the write side, and folding one back into
-the other is a second fold that has to be argued first. See
-[`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md).
+recordings produced by running the binary. **Resuming is the second fold**, which
+had to be argued before it was written: `SessionStore::resume` folds the view
+back into a `Context`, and `serve` lists, creates, resumes and deletes stored
+sessions. See
+[`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md),
+[`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md)
+and
+[`RECORD/2026-09-04.multi-session-in-serve.completed.md`](RECORD/2026-09-04.multi-session-in-serve.completed.md).
+**The stream is in there too** (schema 2), one row per `RecordLine` appended at
+the same checkpoints: the fold is a cache, and the thing it is a cache *of* used
+to exist only when somebody passed `--record` — so the parity rule could only be
+checked against files somebody remembered to write, and a stored session could
+not be replayed at all. A session stored before schema 2 has no stream, and that
+is reported rather than repaired: folding a view back into a stream would invent
+line orders and timings the session never had.
+
+**A session stays on the host that made it.** There is no transfer and no
+portal: the model you want on a bigger machine is reached with `--backend openai
+--openai-url http://other-box:8080/v1`, the tree moves by git, and what a session
+is about is the tree — so what would have crossed is the conversation, at the
+price of shipping every `tool_result`'s bytes off the machine. The rule, rather
+than a mitigation, is also what makes a fork and a two-tokenizer history
+impossible. It says nothing about the worker seam, where the policy and one tool
+call cross and the session never does. See
+[`RECORD/2026-09-04.sessions-stay-home.completed.md`](RECORD/2026-09-04.sessions-stay-home.completed.md),
+and the mechanism it removed:
+[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
 
 `--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
 definitions with their signatures, bodies elided, from `tree-sitter`'s own

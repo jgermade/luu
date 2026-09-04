@@ -826,6 +826,17 @@ time DDL and `api.rs` are changed apart the store and the live server start
 disagreeing about a session. `GET /api/sessions` lists the live session and the
 stored ones; every read path answers for a stored id as well as for `live`.
 
+**And the stream is beside it**, one row per `RecordLine`, appended at the same
+checkpoints in the same transaction (schema 2). That is not the normalised
+schema above wearing a hat: those rows would be a second *definition* of a turn,
+competing with `api.rs`, while a record line is the account itself and SQL never
+looks inside one. It is there because the fold is a cache and until this the
+thing it was a cache **of** existed only if somebody had passed `--record` — so
+the parity rule could only be checked against files somebody remembered to write,
+and a stored session could not be replayed at all. A session stored before schema
+2 has none, and that is reported rather than repaired: folding a view back into a
+stream would invent line orders and timings the session never had.
+
 **Resuming and multi-session switching are supported.** `SessionStore::resume`
 reconstructs the write-side `AgentContext` and turn counter from stored turns and
 jobs, validated in `store_parity.rs`. In `serve`, `POST /api/sessions` starts a
@@ -864,6 +875,42 @@ dropdown alongside a `+ New` button. See
   of kilobytes of JSON: `zstd` is a dependency, a format decision, and a thing to
   get wrong.
 
+## A session stays on the host that made it
+
+**Sessions do not move between machines, and there is no portal.** Not
+"discouraged" and not "an explicit act you may take": there is no mechanism, so
+the tree says what this file says.
+
+The reason the question came up was that the model somebody wants is often on a
+bigger machine — 32b fits in 48 GB and not in 16 — and the reason it is settled
+is that **the model is reachable without moving anything**: `--backend openai
+--openai-url http://other-box:8080/v1` has pointed at another machine's
+`llama-server` or vLLM since
+[`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
+The GPU is a URL; the session, its history, its approvals and its evidence stay
+where the person is. And what a session is *about* — this repository — already
+moves by the means everyone has: the map is rebuilt from the checkout, fragments
+are read from disk at run time, and a plan names paths that would have to be
+re-resolved on any other tree anyway.
+
+Three things fall out of the rule rather than being managed by it. **Evidence
+never leaves the machine** — a `tool_result` carries the bytes the model was
+given, which was the largest thing in this design pointing away from local-first.
+**A session cannot fork**, which with an append-only stream is what two copies
+of one session are. And **a history cannot be continued under a second
+tokenizer**, which would be a budget counted with two rulers.
+
+None of this touches the worker seam: what crosses *there* is the policy and one
+tool call, never the session, so a container — local or remote — is unaffected.
+A session that has to be read somewhere else is a job for `luu export`, which
+folds a recording into the static twin of the read API and moves a recording
+rather than a conversation somebody continues.
+
+Argued in
+[`RECORD/2026-09-04.sessions-stay-home.completed.md`](RECORD/2026-09-04.sessions-stay-home.completed.md),
+against the mechanism that was built first and removed:
+[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
+
 ## Suggested work order
 
 1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *Done.*
@@ -882,9 +929,15 @@ dropdown alongside a `+ New` button. See
 
 The six steps are the *shape* of the work and have not changed. What is being
 built next, in what order, and what blocks what is a separate question with a
-separate answer: [`ROADMAP/`](ROADMAP/), latest revision. Federation — sovereign
-hosts, a coordinating portal, sessions moved between machines — is proposed and
-not decided; the argument is
+separate answer: [`ROADMAP/`](ROADMAP/), latest revision. **Federation is
+closed**, and the two pieces of it that were built stay because neither was about
+moving a session: the wire says its version, so two `luu` builds refuse each
+other out loud rather than by misparsing, and an approval is signed with a key no
+relay holds, so *who approved* is answered where a bearer token only answers who
+could reach the port. Transfer, the probe and the portal are decided against —
+see the section above and
+[`RECORD/2026-09-04.sessions-stay-home.completed.md`](RECORD/2026-09-04.sessions-stay-home.completed.md);
+the argument they were measured against is
 [`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](RECORD/2026-08-31.the-portal-and-the-gate.completed.md).
 
 ## Naming
@@ -932,4 +985,5 @@ not decided; the argument is
   editing `luu.toml` and restarting — the same shape as everything else that file
   decides, and not enough once the fleet is more than the boxes in one room.
 - **Nothing signs a *recording*.** A signed approval can be re-verified out of the
-  record stream, but a relay that drops lines is not detected by that.
+  record stream, but a reader that dropped lines is not detected by that. There
+  is no relay now, and `luu export` still writes files that travel.

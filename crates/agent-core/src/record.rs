@@ -44,6 +44,11 @@ use crate::trace::TraceMessage;
 /// 4 and 5 — a new value of a tagged enum — and the second is additive: absent
 /// means the operator, because that is what every approval before it was. See
 /// `RECORD/2026-09-04.signed-approvals.completed.md`.
+///
+/// 8 was `imported` lines, and is not a format anything writes: a session
+/// belongs to the host that made it, so no stream ever arrives from elsewhere.
+/// Un-made with the protocol bump beside it, for the same reason. See
+/// `RECORD/2026-09-04.sessions-stay-home.completed.md`.
 pub const FORMAT: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

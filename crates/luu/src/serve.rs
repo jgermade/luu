@@ -71,9 +71,15 @@ struct Session {
 }
 
 /// A prompt held between the proposal and the answer to it.
+///
+/// `prompt` is `None` for a proposal that outlived the process which made it:
+/// resuming re-establishes the gate, and the prompt that bought the planning
+/// call is long gone. Inventing one to give the gate something to release would
+/// put words in a person's mouth, so approving such a job opens it and starts
+/// nothing — the next prompt is a turn inside it.
 struct Pending {
     job: JobId,
-    prompt: String,
+    prompt: Option<String>,
 }
 
 /// The id the live session is served under. There is one until sessions are
@@ -96,7 +102,15 @@ struct App {
     /// The read side, folded from the same events the sockets carry — so
     /// `GET /api/...` can never disagree with what a client watched happen.
     view: Mutex<SessionView>,
-    started_at: u64,
+    /// When the session now live started.
+    ///
+    ///
+    /// Every `at_ms` is relative to this, so a session's lines are timed from
+    /// its own beginning whether it was created here or resumed out of the
+    /// store — and not from the process's clock, which stopped being the same
+    /// number the moment `serve` learned to switch sessions: measuring from the
+    /// process would give a resumed session a first turn several days in.
+    session_started_at: Mutex<u64>,
     /// What this session is called on disk. The live view is served as
     /// [`LIVE_SESSION`] whatever it is called, because a client watching *the*
     /// session should not have to learn its name first — but a store keyed on
@@ -107,6 +121,15 @@ struct App {
     /// Where the fold is cached between restarts. `None` leaves the session in
     /// memory, which is what every run did before this existed.
     store: Option<Mutex<SessionStore>>,
+    /// The lines this session has produced and the store has not been given
+    /// yet, oldest first.
+    ///
+    /// The store keeps the stream as well as the fold — the fold is a cache and
+    /// this is the thing it is a cache of — but a write per token would be
+    /// quadratic in the length of a session for no reader's benefit. So the
+    /// lines queue here and go down at the same checkpoints the fold does, in
+    /// the same order they were published.
+    stream: Mutex<Vec<record::RecordLine>>,
     /// Who may approve, and whether anyone must sign to. Empty and not
     /// required is the local operator with a keyboard, which is every session
     /// before `RECORD/2026-09-04.signed-approvals.completed.md`.
@@ -204,6 +227,7 @@ impl App {
 
         let backend_name = backend.name().to_string();
         let model_name = model.clone();
+        let counter_id = counter.id();
         let map_rendered = map.render();
         Ok(Arc::new(App {
             backend,
@@ -228,14 +252,24 @@ impl App {
             temperature,
             seed,
             view: Mutex::new({
-                let mut view = SessionView::new(LIVE_SESSION, backend_name, &model_name);
+                let mut view = SessionView::new(LIVE_SESSION, &backend_name, &model_name);
                 view.started_at = started_at;
                 view
             }),
-            started_at,
+            session_started_at: Mutex::new(started_at),
             session_id: Mutex::new(session_id(started_at)),
             map_rendered,
             store: sessions,
+            // The first line of a stream is what makes two runs comparable, so
+            // a session's own stream starts with one exactly as a `--record`
+            // file does.
+            stream: Mutex::new(vec![crate::session::header(
+                &backend_name,
+                &model_name,
+                budget,
+                counter_id,
+                started_at,
+            )]),
         }))
     }
 
@@ -245,11 +279,17 @@ impl App {
             recorder.write(&event);
         }
         {
-            let at_ms = now_ms().saturating_sub(self.started_at);
+            let at_ms = now_ms().saturating_sub(*self.session_started_at.lock().await);
             let mut view = self.view.lock().await;
             match &event {
                 Event::Protocol(message) => view.apply_protocol(at_ms, message),
                 Event::Trace(message) => view.apply_trace(at_ms, message),
+            }
+            if self.store.is_some() {
+                self.stream
+                    .lock()
+                    .await
+                    .push(crate::session::line(&event, at_ms));
             }
         }
         // At checkpoints, not per event. The store is a *cache* of the fold, so
@@ -285,7 +325,17 @@ impl App {
             }
             stored
         };
-        if let Err(error) = store.lock().await.save(&stored) {
+        // The stream before the fold, and never the other way round: the fold is
+        // a cache of it, so a crash between the two must leave a store whose
+        // fold lags its stream rather than one whose fold claims a line the
+        // stream does not have.
+        let queued: Vec<record::RecordLine> = self.stream.lock().await.drain(..).collect();
+        let id = stored.id.clone();
+        let mut store = store.lock().await;
+        if let Err(error) = store.append(&id, &queued) {
+            eprintln!("warning: could not write the session stream: {error:#}");
+        }
+        if let Err(error) = store.save(&stored) {
             eprintln!("warning: could not write the session store: {error:#}");
         }
     }
@@ -985,7 +1035,10 @@ async fn propose_job(app: Arc<App>, prompt: String) {
             let job = session
                 .context
                 .propose_job(proposal.objective.clone(), proposal.plan.clone());
-            session.pending = Some(Pending { job, prompt });
+            session.pending = Some(Pending {
+                job,
+                prompt: Some(prompt),
+            });
             job
         };
         app.publish(Event::Protocol(ServerMessage::JobProposed {
@@ -1153,7 +1206,12 @@ async fn approve_job(
         approved_by: Some(approved_by),
     }))
     .await;
-    start_turn(app, prompt).await;
+    // A proposal restored by a resume has no held prompt — the process that
+    // took it is gone. Approving it opens the job, and the next prompt is a
+    // turn inside work that has now been approved.
+    if let Some(prompt) = prompt {
+        start_turn(app, prompt).await;
+    }
 }
 
 /// The half of an amendment the policy file grants, and the half it does not —
@@ -1610,6 +1668,18 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     });
 }
 
+/// The job a resumed session has to be held at, if there is one.
+///
+/// The *last* one, not any one: ids are handed out by position and a proposal
+/// that was refused or approved long ago is answered. Only a trailing proposal
+/// is a question still waiting on a person.
+fn pending_proposal(view: &SessionView) -> Option<JobId> {
+    view.jobs
+        .last()
+        .filter(|job| job.state == agent_core::job::JobState::Proposed)
+        .map(|job| job.id)
+}
+
 /// Strips the `.json` a static mirror needs, so both spellings reach one handler.
 fn bare(id: &str) -> &str {
     id.strip_suffix(".json").unwrap_or(id)
@@ -1653,6 +1723,16 @@ async fn create_session(State(state): State<AppRouterState>) -> Response {
     let started_at = now_ms();
     let new_id = session_id(started_at);
     *app.session_id.lock().await = new_id.clone();
+    *app.session_started_at.lock().await = started_at;
+    // A new session is a new stream, and a stream starts with the header that
+    // says what it is comparable with.
+    *app.stream.lock().await = vec![crate::session::header(
+        app.backend.name(),
+        &app.model,
+        app.budget,
+        app.counter.id(),
+        started_at,
+    )];
 
     {
         let mut session = app.session.lock().await;
@@ -1733,6 +1813,10 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
     };
 
     *app.session_id.lock().await = id.to_string();
+    // Its own clock, and its own stream: appends continue the one the store
+    // already holds rather than starting a second one under the same name.
+    *app.session_started_at.lock().await = loaded_view.started_at;
+    app.stream.lock().await.clear();
 
     {
         let mut session = app.session.lock().await;
@@ -1741,7 +1825,11 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         session.cancel = None;
         session.context = resumed_context;
         session.prefix = PrefixTracker::default();
-        session.pending = None;
+        // A session whose last job is a proposal comes back *at the gate*.
+        // Without this the job sat in `proposed` with nothing holding it, and
+        // the next prompt quietly proposed a second one beside it — a question
+        // nobody answered, and a second one asked over it.
+        session.pending = pending_proposal(&loaded_view).map(|job| Pending { job, prompt: None });
         session.narrowed = None;
     }
 
@@ -1936,7 +2024,8 @@ mod tests {
             // In memory, like everything else these handler tests touch: the
             // store's own behaviour is `tests/store_parity.rs`.
             store: None,
-            started_at: 0,
+            session_started_at: Mutex::new(0),
+            stream: Mutex::new(Vec::new()),
         })
     }
 
@@ -2028,7 +2117,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let session = app.session.lock().await;
-        assert_eq!(session.pending.as_ref().unwrap().prompt, "add a flag");
+        assert_eq!(
+            session.pending.as_ref().unwrap().prompt.as_deref(),
+            Some("add a flag"),
+        );
         assert!(session.context.turns().is_empty());
         assert_eq!(
             session.context.jobs().len(),

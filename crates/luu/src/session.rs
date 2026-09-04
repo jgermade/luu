@@ -229,6 +229,47 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// The first line of every stream, wherever the stream is kept.
+///
+/// One function because there are now two places that start one — the recorder
+/// writing a `.jsonl` and the store keeping a session's own — and a header
+/// assembled twice is two claims about what a run was comparable with. See
+/// `RECORD/2026-09-04.the-border-and-the-gate.completed.md`.
+pub fn header(
+    backend: &str,
+    model: &str,
+    budget: Budget,
+    counter: Counter,
+    started_at: u64,
+) -> RecordLine {
+    RecordLine::Header {
+        format: record::FORMAT,
+        protocol: protocol::VERSION,
+        backend: backend.to_string(),
+        model: model.to_string(),
+        context_limit: budget.limit,
+        counter: Some(counter),
+        eviction: Some(budget.eviction),
+        started_at,
+    }
+}
+
+/// One event as the line that records it. Beside [`header`] and for the same
+/// reason: the file and the store keep the same stream, so they had better turn
+/// an event into a line the same way.
+pub fn line(event: &Event, at_ms: u64) -> RecordLine {
+    match event {
+        Event::Protocol(message) => RecordLine::Protocol {
+            at_ms,
+            message: message.clone(),
+        },
+        Event::Trace(message) => RecordLine::Trace {
+            at_ms,
+            message: message.clone(),
+        },
+    }
+}
+
 /// Writes the JSON-lines record, on its own task so a slow disk never stalls a
 /// turn.
 pub struct Recorder {
@@ -255,16 +296,7 @@ impl Recorder {
             .await
             .with_context(|| format!("creating {}", path.display()))?;
 
-        let header = RecordLine::Header {
-            format: record::FORMAT,
-            protocol: protocol::VERSION,
-            backend: backend.to_string(),
-            model: model.to_string(),
-            context_limit: budget.limit,
-            counter: Some(counter),
-            eviction: Some(budget.eviction),
-            started_at,
-        };
+        let header = header(backend, model, budget, counter, started_at);
         file.write_all(format!("{}\n", serde_json::to_string(&header)?).as_bytes())
             .await?;
 
@@ -292,16 +324,6 @@ impl Recorder {
 
     pub fn write(&self, event: &Event) {
         let at_ms = now_ms().saturating_sub(self.started_at);
-        let line = match event {
-            Event::Protocol(message) => RecordLine::Protocol {
-                at_ms,
-                message: message.clone(),
-            },
-            Event::Trace(message) => RecordLine::Trace {
-                at_ms,
-                message: message.clone(),
-            },
-        };
-        let _ = self.lines.send(line);
+        let _ = self.lines.send(line(event, at_ms));
     }
 }

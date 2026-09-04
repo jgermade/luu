@@ -51,6 +51,13 @@ use crate::turn::{EndReason, TurnEvent};
 /// client learns about by failing to parse: from here a client says its version
 /// and is refused out loud. See
 /// `RECORD/2026-09-04.signed-approvals.completed.md`.
+///
+/// **6 was a session arriving from another host, and is not a version anything
+/// speaks.** `imported` was built and removed the same day: a session belongs to
+/// the host that made it, so there is no border for a message to describe. The
+/// bump was un-made rather than left standing — a number whose whole job is to
+/// tell two peers what they can parse must not carry a variant that no longer
+/// exists. See `RECORD/2026-09-04.sessions-stay-home.completed.md`.
 pub const VERSION: u32 = 5;
 
 /// Turns are numbered per session, in order, starting at 1.
