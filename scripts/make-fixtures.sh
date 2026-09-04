@@ -86,27 +86,6 @@ done
   --sandbox "$(dirname "$0")/../luu.toml" \
   --record "$out/grounded-turn.jsonl" >/dev/null
 
-# A session that crossed a border, produced by actually crossing one: a job is
-# approved and left open on the "origin", the bundle is written, imported into a
-# throwaway store, and read back out with the same command. So the fixture is a
-# real crossing — the origin's own stream, plus the one line the destination
-# appended saying what returning to the gate did to its jobs — and the page has
-# a gate that is judging a difference between two machines rather than a plan on
-# its own.
-crossing="$(mktemp -d)"
-"$luu" chat --script "$(dirname "$0")/tasks/open-job.txt" \
-  --mock-delay-ms 20 --context-limit 8192 \
-  --sandbox "$(dirname "$0")/../luu.toml" \
-  --record "$crossing/origin.jsonl" >/dev/null
-"$luu" transfer --record "$crossing/origin.jsonl" --out "$crossing/bundle" \
-  --sandbox "$(dirname "$0")/../luu.toml" >/dev/null
-"$luu" import "$crossing/bundle" --store "$crossing/destination.db" \
-  --sandbox "$(dirname "$0")/../luu.toml" >/dev/null
-"$luu" transfer origin --store "$crossing/destination.db" --out "$crossing/arrived" \
-  --sandbox "$(dirname "$0")/../luu.toml" >/dev/null
-cp "$crossing/arrived/record.jsonl" "$out/imported-session.jsonl"
-rm -rf "$crossing"
-
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
   --record "$out/backend-failure.jsonl" >/dev/null 2>&1 || true
@@ -125,7 +104,6 @@ rm -rf "$crossing"
   "$out/eviction-tasks.jsonl" \
   "$out/tool-calls.jsonl" \
   "$out/one-task.jsonl" \
-  "$out/imported-session.jsonl" \
   "$out/grounded-turn.jsonl" \
   "$out/repo-map.jsonl" \
   "$out/completed-turn.jsonl" \

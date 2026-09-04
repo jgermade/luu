@@ -18,8 +18,8 @@ import { $reactive } from "./vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 6
-const FORMAT = 8
+const PROTOCOL = 5
+const FORMAT = 7
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -49,16 +49,8 @@ export const state = $reactive({
   extraCalls: [],         // [{ step, prompt_tokens, shared_bytes, shared_tokens }]
   // The session's jobs, in the order they were proposed. A proposed one is a
   // gate: nothing runs behind it until someone answers.
-  jobs: [],               // [{ id, objective, plan, proposed, source, state, summary, unmet }]
+  jobs: [],               // [{ id, objective, plan, proposed, source, state, summary }]
   tasks: [],              // alias for jobs
-  // Where this session came from, when it did not start on this host: the
-  // origin's name, what it was called there, and the sandbox its jobs sat
-  // inside. Null for every session that was born here.
-  //
-  // The gate reads it, because approving an imported job is the one approval
-  // where a person is judging a difference between two machines rather than a
-  // plan on its own.
-  imported: null,         // { host, session, sandbox }
   error: null,
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
@@ -222,9 +214,6 @@ function onProtocol(message) {
         state: "proposed",
         summary: null,
         closedBy: null,
-        // What this host's policy does not grant of the plan. Only ever filled
-        // at a border; a proposal made here is checked when it is approved.
-        unmet: [],
       }
       state.jobs = [...state.jobs, newJob]
       state.tasks = state.jobs
@@ -241,17 +230,6 @@ function onProtocol(message) {
       patchJob(id, message.plan
         ? { state: "approved", plan: message.plan }
         : { state: "approved" })
-      break
-    }
-
-    // A session that arrived from another host, and what the border did to it.
-    // Folded exactly as the server folds it: the state each job is in *here*,
-    // and why a refused one was refused.
-    case "imported": {
-      state.imported = message.from
-      for (const entry of (message.jobs || [])) {
-        patchJob(entry.job, { state: entry.state, unmet: entry.unmet || [] })
-      }
       break
     }
 
@@ -519,7 +497,6 @@ function reset() {
   state.refused = null
   state.evicted = null
   state.turn = null
-  state.imported = null
   pending = ""
 }
 
@@ -627,10 +604,8 @@ export async function refreshLiveSession() {
       state: j.state,
       summary: j.summary,
       closedBy: j.closed_by || null,
-      unmet: j.unmet || [],
     }))
     state.tasks = state.jobs
-    state.imported = view.imported || null
 
     const msgs = []
     let id = 1

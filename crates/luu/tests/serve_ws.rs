@@ -343,10 +343,10 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    // 6 since `imported`, 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since
-    // `refused`: a new variant of a tagged enum is a change an older reader cannot parse,
-    // which is what this number is for.
-    assert_eq!(hello["protocol"], 6);
+    // 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since `refused`: a new
+    // variant of a tagged enum is a change an older reader cannot parse, which is what this
+    // number is for.
+    assert_eq!(hello["protocol"], 5);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
     assert!(
@@ -1370,6 +1370,96 @@ async fn a_session_outlives_the_server_that_ran_it() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A proposal that outlived the server that made it comes back as a gate.
+///
+/// Without this the job was restored in `proposed` with nothing holding it: the
+/// next prompt did not belong to it, so it bought a second planning call and a
+/// second proposal beside a question nobody had answered. The held prompt is
+/// gone with the process that took it, so approving opens the job and starts
+/// nothing — and the next prompt is a turn inside it.
+#[tokio::test]
+async fn a_proposal_that_outlived_its_server_comes_back_at_the_gate() {
+    let dir = std::env::temp_dir().join(format!("luu-gate-resume-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let db = dir.join("sessions.db");
+
+    // A prompt, planned, and left at the gate: nothing approves it.
+    let first = server_storing(vec![PLAN.into()], &db).await;
+    let session = {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{first}/ws"))
+            .await
+            .expect("the websocket handshake");
+        let hello = next_message(&mut socket).await;
+        let session = hello["session"]
+            .as_str()
+            .expect("the session id")
+            .to_string();
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": "add a flag"}),
+        )
+        .await;
+        until(&mut socket, "job_proposed").await;
+        session
+    };
+
+    // A second server, same file. Resuming puts the gate back up.
+    let second = server_storing(vec!["a later answer".into()], &db).await;
+    let resumed = post(&second, &format!("/api/sessions/{session}/resume")).await;
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK);
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{second}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let _ = next_message(&mut socket).await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "and now something else"}),
+    )
+    .await;
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["reason"], "pending");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .expect("a detail")
+            .contains("job 1"),
+        "the refusal names the job still waiting on a person: {refused}",
+    );
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_job", "job": 1}),
+    )
+    .await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
+    assert_eq!(approved["job"], 1);
+
+    // The prompt that bought the planning call went with the process that held
+    // it, so approving starts nothing — and the next prompt is the turn.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "now say something"}),
+    )
+    .await;
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(
+        started["job"], 1,
+        "the turn belongs to the job that was approved: {started}",
+    );
+    assert_eq!(started["prompt"], "now say something");
+
+    let live = get(&second, "/api/sessions/live").await;
+    assert_eq!(
+        live["jobs"].as_array().expect("its jobs").len(),
+        1,
+        "one job, answered — not a second proposal beside an unanswered one: {live}",
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[tokio::test]
 async fn multi_session_lifecycle_and_switching() {
     let dir = std::env::temp_dir().join(format!("luu-test-multi-{}", std::process::id()));
@@ -1484,7 +1574,7 @@ async fn a_client_that_speaks_another_protocol_is_refused_out_loud() {
         refused["detail"]
             .as_str()
             .expect("a detail")
-            .contains("protocol 6"),
+            .contains("protocol 5"),
         "the refusal says what this host speaks: {refused}",
     );
     let closed = tokio::time::timeout(PATIENCE, socket.next())
@@ -1506,7 +1596,7 @@ async fn a_newer_client_is_refused_in_the_other_direction_too() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 7}),
+        serde_json::json!({"type": "hello", "protocol": 6}),
     )
     .await;
 
@@ -1527,7 +1617,7 @@ async fn a_matching_client_is_greeted_and_then_ignored() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 6, "format": 8}),
+        serde_json::json!({"type": "hello", "protocol": 5, "format": 7}),
     )
     .await;
     // Nothing comes back: a handshake that matches is not an event in the

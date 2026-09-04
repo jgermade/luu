@@ -72,11 +72,11 @@ struct Session {
 
 /// A prompt held between the proposal and the answer to it.
 ///
-/// `prompt` is `None` for a job that arrived from another host: the prompt that
-/// opened it already ran, over there, and inventing one to give the gate
-/// something to release would put words in a person's mouth. Approving such a
-/// job opens it and starts nothing — the next prompt is a turn inside it. See
-/// `RECORD/2026-09-04.the-border-and-the-gate.completed.md`.
+/// `prompt` is `None` for a proposal that outlived the process which made it:
+/// resuming re-establishes the gate, and the prompt that bought the planning
+/// call is long gone. Inventing one to give the gate something to release would
+/// put words in a person's mouth, so approving such a job opens it and starts
+/// nothing — the next prompt is a turn inside it.
 struct Pending {
     job: JobId,
     prompt: Option<String>,
@@ -106,11 +106,10 @@ struct App {
     ///
     ///
     /// Every `at_ms` is relative to this, so a session's lines are timed from
-    /// its own beginning whether it was created here, resumed out of the store,
-    /// or imported from another host — and it is not the process's clock, which
-    /// stopped being the same number the moment `serve` learned to switch
-    /// sessions: measuring from the process would give a resumed session a first
-    /// turn several days in.
+    /// its own beginning whether it was created here or resumed out of the
+    /// store — and not from the process's clock, which stopped being the same
+    /// number the moment `serve` learned to switch sessions: measuring from the
+    /// process would give a resumed session a first turn several days in.
     session_started_at: Mutex<u64>,
     /// What this session is called on disk. The live view is served as
     /// [`LIVE_SESSION`] whatever it is called, because a client watching *the*
@@ -125,8 +124,8 @@ struct App {
     /// The lines this session has produced and the store has not been given
     /// yet, oldest first.
     ///
-    /// The store keeps the stream as well as the fold — it is what a transfer
-    /// ships, and a fold is not a stream — but a write per token would be
+    /// The store keeps the stream as well as the fold — the fold is a cache and
+    /// this is the thing it is a cache of — but a write per token would be
     /// quadratic in the length of a session for no reader's benefit. So the
     /// lines queue here and go down at the same checkpoints the fold does, in
     /// the same order they were published.
@@ -1207,9 +1206,9 @@ async fn approve_job(
         approved_by: Some(approved_by),
     }))
     .await;
-    // A job that arrived from another host has no held prompt: what opened it
-    // ran on the origin. Approving it opens it, and the next prompt is a turn
-    // inside work this host has now approved.
+    // A proposal restored by a resume has no held prompt — the process that
+    // took it is gone. Approving it opens the job, and the next prompt is a
+    // turn inside work that has now been approved.
     if let Some(prompt) = prompt {
         start_turn(app, prompt).await;
     }
@@ -1826,12 +1825,10 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         session.cancel = None;
         session.context = resumed_context;
         session.prefix = PrefixTracker::default();
-        // A session whose last job is a proposal comes back *at the gate*. That
-        // is what an imported job is — it returned to the gate at the border and
-        // the stream says so — and it is also what a proposal that was pending
-        // when the process stopped always should have been: without this the job
-        // sat in `proposed` with nothing holding it, and the next prompt quietly
-        // proposed a second one beside it.
+        // A session whose last job is a proposal comes back *at the gate*.
+        // Without this the job sat in `proposed` with nothing holding it, and
+        // the next prompt quietly proposed a second one beside it — a question
+        // nobody answered, and a second one asked over it.
         session.pending = pending_proposal(&loaded_view).map(|job| Pending { job, prompt: None });
         session.narrowed = None;
     }

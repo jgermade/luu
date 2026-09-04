@@ -15,14 +15,15 @@
 //!
 //! **The stream is here too, and that is not the same claim.** A row per
 //! [`RecordLine`], in order, appended at the checkpoints the fold is written at
-//! and in the same transaction — see
-//! `RECORD/2026-09-04.the-border-and-the-gate.completed.md`. It is not the
-//! normalised schema this module rejects: those rows would be a second
-//! *definition* of a turn, competing with `api.rs`, while a record line is the
-//! account itself and SQL never looks inside it. What it buys is that the fold
-//! finally has, in the same file, the thing it is a cache *of* — which is what
-//! `luu transfer` ships, because a session moves as its own stream and never as
-//! a rendering of it.
+//! and in the same transaction. It is not the normalised schema this module
+//! rejects: those rows would be a second *definition* of a turn, competing with
+//! `api.rs`, while a record line is the account itself and SQL never looks
+//! inside it. What it buys is that the fold finally has, in the same file, the
+//! thing it is a cache *of* — until this, that existed only when somebody had
+//! passed `--record`, so the parity rule could only be checked against files
+//! somebody remembered to write, and a stored session could not be replayed at
+//! all. See `RECORD/2026-09-04.sessions-stay-home.completed.md`, which is also
+//! why nothing here ships one anywhere.
 //!
 //! The listing columns beside it are duplicated *out of* the view at write
 //! time, so `GET /api/sessions` does not parse every blob to list them, and
@@ -47,8 +48,9 @@ use rusqlite::Connection;
 /// **2 is the event stream.** Additive: the `sessions` table does not move, so
 /// a store written by an older `luu` keeps its sessions and gains the table.
 /// What those sessions cannot gain is a stream they never wrote, which is why
-/// [`SessionStore::stream`] answers with nothing rather than with something
-/// reconstructed.
+/// [`SessionStore::stream`] answers with nothing rather than with a stream
+/// folded back out of a view — that would invent line orders and timings the
+/// session never had.
 const SCHEMA: i32 = 2;
 
 /// Where the store lives when nobody says otherwise.
@@ -176,9 +178,8 @@ impl SessionStore {
     }
 
     /// The session's stream, in order. Empty for a session stored before the
-    /// stream was kept — which callers must not paper over: a fold is not a
-    /// stream, and folding one back into the other would invent line orders and
-    /// timings the session never had.
+    /// stream was kept, which callers report rather than repair: a fold is not
+    /// a stream.
     pub fn stream(&self, id: &str) -> Result<Vec<RecordLine>> {
         let mut statement = self
             .connection
