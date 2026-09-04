@@ -46,6 +46,12 @@ pub enum Source {
 pub fn write(source: &Source, sandbox: &Sandbox, out: &Path) -> Result<(String, usize)> {
     let (id, lines) = match source {
         Source::Store { path, id } => {
+            // Checked before opening, because opening *creates*: a transfer that
+            // named the wrong store would otherwise leave an empty one behind
+            // and report a missing session rather than a missing store.
+            if !path.exists() {
+                bail!("no session store at {}", path.display());
+            }
             let store = SessionStore::open(path)
                 .with_context(|| format!("opening the session store at {}", path.display()))?;
             if store.load(id)?.is_none() {

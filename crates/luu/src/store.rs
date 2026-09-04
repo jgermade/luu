@@ -197,17 +197,6 @@ impl SessionStore {
         Ok(lines)
     }
 
-    /// How many lines the stream has, without parsing any of them — what the
-    /// server tracks to know where its next append starts.
-    pub fn stream_len(&self, id: &str) -> Result<usize> {
-        let count: i64 = self.connection.query_row(
-            "SELECT COUNT(*) FROM events WHERE session = ?1",
-            [id],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
-    }
-
     /// Writes the fold, replacing whatever was there.
     ///
     /// A whole-row replace rather than a patch, because the thing being stored
@@ -372,7 +361,6 @@ mod tests {
 
         let stream = store.stream("one").expect("reading it back");
         assert_eq!(stream.len(), 3);
-        assert_eq!(store.stream_len("one").expect("counting"), 3);
         let texts: Vec<String> = stream
             .iter()
             .map(|line| match line {
