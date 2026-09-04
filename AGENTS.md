@@ -99,6 +99,12 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 cargo run --bin luu -- serve --no-store
 cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
+# moving a session to another machine: the record stream and an envelope naming
+# the origin's resolved sandbox. `scp -r` the directory; there is no wire leg yet.
+cargo run --bin luu -- transfer <session-id> --out ./sess
+cargo run --bin luu -- transfer --record run.jsonl --out ./sess   # or a recording
+cargo run --bin luu -- import ./sess                  # on the other host
+
 # the gate, without a model: the planning call answers with a plan block, then
 # the turn answers. Type a prompt and the UI holds it until you approve it.
 cargo run --bin luu -- serve --mock-reply '```plan
@@ -295,10 +301,37 @@ whichever the first run was told to make; `LUU_HOME` overrides both),
 is the `SessionView` whole, because a normalised schema is a second definition of
 the fold and the day it disagrees with `api.rs` the store lies about a session.
 The rule that keeps it honest is a test: `fold(record) == load(store, id)`, over
-recordings produced by running the binary. It does **not** resume a session yet —
-the view is the read side, `Context` is the write side, and folding one back into
-the other is a second fold that has to be argued first. See
-[`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md).
+recordings produced by running the binary. **Resuming is the second fold**, which
+had to be argued before it was written: `SessionStore::resume` folds the view
+back into a `Context`, and `serve` lists, creates, resumes and deletes stored
+sessions. See
+[`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md),
+[`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md)
+and
+[`RECORD/2026-09-04.multi-session-in-serve.completed.md`](RECORD/2026-09-04.multi-session-in-serve.completed.md).
+**The stream is in there too** (schema 2), one row per `RecordLine` appended at
+the same checkpoints: the fold is a cache, and until transfer needed one the
+thing it was a cache *of* existed only when somebody passed `--record`. A session
+stored before that is refused for transfer rather than having a stream invented
+from its fold.
+
+**A session moves between hosts as its own stream.** `luu transfer` writes
+`record.jsonl` — copied out of the store, never re-rendered — beside a
+`manifest.json` that carries only what folding the stream cannot answer: the
+kind, the protocol and format, and the origin's host, session name and
+**resolved** sandbox. `luu import` reads one in, refusing on the envelope before
+it parses a line, which is the socket handshake's rule applied to a file. What
+does not cross is authority: a `Closed` job crosses unchanged, every other job
+returns to the destination's gate as `proposed` with its approval moved to
+`approved_at_origin`, and a plan this host's `luu.toml` does not grant arrives
+`rejected` carrying the `unmet` lines that refused it. **The crossing is an
+event** — one `imported` line the destination appends and then folds — so the
+stored view stays a fold of the stored stream instead of an edit on top of it;
+that is protocol **v6** and record format **8**, by the same new-variant rule as
+every bump before it. An imported job has no held prompt, because what opened it
+ran on the origin: approving it opens the job and starts nothing. See
+[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
+
 
 `--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
 definitions with their signatures, bodies elided, from `tree-sitter`'s own

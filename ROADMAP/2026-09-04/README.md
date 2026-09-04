@@ -8,7 +8,9 @@ in [`RECORD/`](../../RECORD/) each item links to.
 Supersedes [`ROADMAP/2026-09-01/`](../2026-09-01/) wholesale. Over three days,
 almost the entire sequence of that revision has landed, and the vocabulary of the
 project was clarified: **tasks** are model plan checklists, while the bounded
-operational container is a **job** (Protocol v5, Record format 7).
+operational container is a **job**. Protocol v6 and record format 8 as this
+revision stands: `imported`, the line a host appends when a session arrives from
+another one, is the last variant to bump them.
 
 ## What landed since 2026-09-01
 
@@ -25,6 +27,8 @@ operational container is a **job** (Protocol v5, Record format 7).
 | **From Tasks to Jobs** | Resolved vocabulary clash: `Job` is the bounded execution container; `tasks` is the model's checklist in `plan.tasks` — [`from-tasks-to-jobs`](../../RECORD/2026-09-04.from-tasks-to-jobs.completed.md) |
 | **Narrowing phase 2: Egress through the host** | Host CONNECT proxy filters outbound traffic by destination hostname/wildcard when `network: true` — [`egress-through-the-host`](../../RECORD/2026-09-04.egress-through-the-host.completed.md) |
 | **The handshake and signed approvals** | Federation stage 1, items 1–2: the client says what it speaks and is refused out loud on a mismatch; `approve_job` carries an Ed25519 signature over the grant, and `job_approved` says who approved — [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) |
+| **The border and the gate** | Federation stage 1, items 3–4: the store keeps the stream as well as the fold, `luu transfer`/`luu import` move a session as that stream plus an envelope naming the origin's sandbox, and every job that is not `Closed` returns to the destination's gate — [`the-border-and-the-gate`](../../RECORD/2026-09-04.the-border-and-the-gate.completed.md) |
+| **The name and the config directory** | The project is `luu` everywhere, and the state directory is the user's to pick — `~/.luu` or `~/.config/luu`, asked once — [`the-name-and-the-config-dir`](../../RECORD/2026-09-04.the-name-and-the-config-dir.completed.md) |
 
 ---
 
@@ -36,10 +40,10 @@ operational container is a **job** (Protocol v5, Record format 7).
 | 2 | ~**Narrowing phase 2: Egress through the host** — proxy/filter outbound traffic when `network: true`, restricting destinations~ | nothing | [`egress-through-the-host`](../../RECORD/2026-09-04.egress-through-the-host.completed.md) |
 | 3 | ~**Multi-session in `serve` & UI** — session switching, creation, and resume of stored sessions in the web UI~ | nothing | [`multi-session-in-serve`](../../RECORD/2026-09-04.multi-session-in-serve.completed.md) |
 | 4 | ~**Relevance selection: In-degree and non-greedy fill** — alternative ranking avoiding PageRank's entry-point penalty and oversized file traps~ | nothing | [`in-degree-and-fill`](../../RECORD/2026-09-04.in-degree-and-fill.completed.md) |
-| 5 | **Fleet measurement across target machines** — benchmark matrix against local hardware platforms | 1, 3 | [`machines.md`](machines.md) |
+| 5 | **Fleet measurement across target machines** — benchmark matrix against local hardware platforms | nothing (1 and 3 landed) | [`machines.md`](machines.md) |
 | 6 | ~**Federation stage 1, items 1–2** — a versioned handshake, and approvals signed with a key no relay holds~ | nothing | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) |
-| 7 | **Federation stage 1, items 3–4** — transfer ships the record stream rather than a snapshot, and an imported job that is not `Closed` returns to the destination's gate | 6 | [`federation.md`](../2026-08-31/federation.md) |
-| 8 | **The transfer probe** — two machines on a LAN, a session moved, an open job re-approved on arrival; the decision on whether the portal earns a place waits on it | 7 | [`federation.md`](../2026-08-31/federation.md) |
+| 7 | ~**Federation stage 1, items 3–4** — transfer ships the record stream rather than a snapshot, and an imported job that is not `Closed` returns to the destination's gate~ | nothing | [`the-border-and-the-gate`](../../RECORD/2026-09-04.the-border-and-the-gate.completed.md) |
+| 8 | **The transfer probe** — two machines on a LAN, a session moved, an open job re-approved on arrival; the decision on whether the portal earns a place waits on it | nothing | [`federation.md`](../2026-08-31/federation.md) |
 
 ```mermaid
 gantt
@@ -52,11 +56,10 @@ gantt
     VSCode extension (stdio)               :done, vsc, 2026-09-04, 1d
     Relevance selection (in-degree/fill)   :done, rel, 2026-09-04, 1d
     Handshake and signed approvals         :done, sig, 2026-09-04, 1d
+    Transfer: the record stream and import :done, fed, 2026-09-04, 1d
     section Unblocked today
     Fleet measurements across machines     :crit, bench, 2026-09-04, 10d
-    section Waiting on those
-    Transfer: the record stream and import :fed, after sig, 11d
-    The transfer probe                     :probe, after fed, 7d
+    The transfer probe                     :probe, 2026-09-04, 7d
 ```
 
 ---
@@ -72,12 +75,20 @@ gantt
 - **Multi-session in `serve` is ready for the UI.** The SQLite storage layer
   and `context.resume` engine are fully functional; all that remains is UI
   affordances to list, select, and resume previous sessions.
-- **Federation's safety-ordered half is done, and the rest of stage 1 is now
-  unblocked.** The two items whose ordering is a safety property — a wire that
-  says its version, and approvals signed with a key no relay holds — landed
-  together, so transfer can be built without the destination having to trust
-  what reached its socket. What it still cannot do is move a session: that is
-  items 3 and 4, and the transfer probe cannot run until they exist.
+- **All four items of federation stage 1 are in, so the probe is what is left.**
+  The two whose ordering is a safety property landed first — a wire that says its
+  version, and approvals signed with a key no relay holds — and transfer was then
+  built on top of them: a session moves as its own record stream, and an open job
+  re-enters the destination's gate rather than arriving approved about another
+  machine's paths. What nobody has done is *run* it between two machines, which
+  is item 8 and is the only thing that can say whether host-to-host earns its
+  place — and therefore whether the portal inherits one.
+- **The transfer probe needs no more code, only two machines.** `luu transfer`
+  writes a directory and `luu import` reads one, so `scp` is the transport for
+  the probe. Its control is written down already in
+  [`federation.md`](../2026-08-31/federation.md): the same session continued on
+  the same model on both hosts, or *the history moved* and *the destination model
+  is worse* are one reading.
 - **Relevance selection has its falsifiable test.** `the-map-order-probe` built a
   38-question neutral corpus. Any new ranking algorithm (such as weighted
   in-degree) or non-greedy fill rule must beat path order on that exact corpus.

@@ -619,7 +619,7 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `hello`, `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 7); `context_snapshot` is still ahead |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted`, `imported` — all built, protocol v6 (record format 8); `context_snapshot` is still ahead |
 
 **The wire says what it speaks, in both directions.** The server's `hello` has always
 carried `protocol`; the client's now answers with its own, and with the record format it
@@ -826,6 +826,18 @@ time DDL and `api.rs` are changed apart the store and the live server start
 disagreeing about a session. `GET /api/sessions` lists the live session and the
 stored ones; every read path answers for a stored id as well as for `live`.
 
+**And the stream is beside it**, one row per `RecordLine`, appended at the same
+checkpoints in the same transaction (schema 2). That is not the normalised
+schema above wearing a hat: those rows would be a second *definition* of a turn,
+competing with `api.rs`, while a record line is the account itself and SQL never
+looks inside one. It is there because the fold is a cache and until this the
+thing it was a cache **of** existed only if somebody had passed `--record` — so
+there was nothing to hand a transfer, and the parity rule could only be checked
+against files somebody remembered to write. A session stored before schema 2 has
+no stream and is refused for transfer rather than having one reconstructed from
+its fold. See
+[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
+
 **Resuming and multi-session switching are supported.** `SessionStore::resume`
 reconstructs the write-side `AgentContext` and turn counter from stored turns and
 jobs, validated in `store_parity.rs`. In `serve`, `POST /api/sessions` starts a
@@ -864,6 +876,58 @@ dropdown alongside a `+ New` button. See
   of kilobytes of JSON: `zstd` is a dependency, a format decision, and a thing to
   get wrong.
 
+## Moving a session between hosts
+
+**A session crosses as its own record stream.** `luu transfer <session> --out
+<dir>` writes two files — `record.jsonl`, copied verbatim out of the store, and
+`manifest.json`, which carries only what folding the stream cannot answer: the
+kind, the protocol and format, and the origin (its host name, what the session
+was called there, and its **resolved** sandbox). `luu import <dir>` reads one
+into this host's store. Move the directory however you move a directory; stage 1
+of federation is host to host with no portal at all, and the wire leg is a
+transport question with its own argument.
+
+Not a snapshot of the fold, and that is the whole design. The fold is a
+rendering of the events; the events are the account. A transfer built on the
+stream inherits the parity test that makes the fold trustworthy in the first
+place, and one built on a rendering would need its own and would not get one.
+The envelope is checked **before** the stream is parsed — a bundle from a host
+speaking another protocol or format is refused out loud, in either direction,
+which is the socket handshake's rule applied to a file.
+
+**What does not cross is authority.** An approval is a statement about resolved
+paths on one tree, and `src/auth.rs` here and `src/auth.rs` there are two files.
+So on arrival:
+
+- a `Closed` job crosses unchanged — it runs nothing, it *is* the summary its
+  turns are sent as, and re-gating it would be asking somebody to approve a
+  paragraph;
+- every other job **returns to this host's gate** as `proposed`, with who
+  approved it over there moved to `approved_at_origin` rather than dropped,
+  because the difference between an approval given here and one given elsewhere
+  is exactly what this gate exists to show;
+- a plan this host's `luu.toml` does not grant arrives `rejected`, carrying the
+  `unmet` lines that refused it — in the same words the local gate uses.
+
+That crossing is itself an event: the destination appends one `imported` line
+naming the origin and what happened to each job, and folds the result. So the
+view stored beside the stream is still a fold *of* that stream, rather than an
+edit applied on top of it — which is the same rule the whole store is built on.
+
+An imported job has **no held prompt**: what opened it ran on the origin.
+Approving it opens the job and starts nothing, and the next prompt is a turn
+inside work this host has now approved. `Pending.prompt` is optional for that
+reason, and resuming any session whose last job is a proposal puts the gate back
+up — which also fixes a local proposal that outlived the server that made it.
+
+Argued in
+[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md);
+the shape it had to fit is
+[`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](RECORD/2026-08-31.the-portal-and-the-gate.completed.md).
+**Nothing archives the origin**, so after a transfer both hosts hold the session
+and an append to either is a fork; and *a session moves without loss of context*
+remains an unmeasured claim — the transfer probe is written and unrun.
+
 ## Suggested work order
 
 1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *Done.*
@@ -882,9 +946,14 @@ dropdown alongside a `+ New` button. See
 
 The six steps are the *shape* of the work and have not changed. What is being
 built next, in what order, and what blocks what is a separate question with a
-separate answer: [`ROADMAP/`](ROADMAP/), latest revision. Federation — sovereign
-hosts, a coordinating portal, sessions moved between machines — is proposed and
-not decided; the argument is
+separate answer: [`ROADMAP/`](ROADMAP/), latest revision. Federation is being
+built in the order its own safety allows: the wire says its version, approvals
+are signed, and a session moves host to host on its own stream with its open
+jobs returning to the destination's gate — all four items of stage 1. The
+**portal** — a registry, a relay, a transfer service — is still proposed and not
+decided, and deliberately waits on the transfer probe: if host-to-host does not
+earn its place, the portal cannot inherit a justification it never had. The
+argument is
 [`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](RECORD/2026-08-31.the-portal-and-the-gate.completed.md).
 
 ## Naming
@@ -932,4 +1001,11 @@ not decided; the argument is
   editing `luu.toml` and restarting — the same shape as everything else that file
   decides, and not enough once the fleet is more than the boxes in one room.
 - **Nothing signs a *recording*.** A signed approval can be re-verified out of the
-  record stream, but a relay that drops lines is not detected by that.
+  record stream, but a relay that drops lines is not detected by that — and a
+  transfer is exactly a stream arriving from somewhere else.
+- **Nothing archives a transferred session.** Both hosts hold it afterwards and
+  an append to either is a fork. Forbidding it is smaller than naming it, and it
+  wants a state the store does not have yet.
+- **Counters do not travel.** A stream's header names the counter that measured
+  the origin's history; a destination running another model counts the same
+  turns with a different ruler. The header says so and nothing warns.
