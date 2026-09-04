@@ -253,6 +253,8 @@ mod tests {
                 paths: vec![PathRule::new(".", Access::ReadWrite)],
                 commands: vec!["/bin/sh".into()],
                 network,
+                egress: Vec::new(),
+                proxy: None,
                 enforcement: Enforcement::BestEffort,
                 limits: Default::default(),
             },
