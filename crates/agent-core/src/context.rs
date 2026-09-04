@@ -338,6 +338,101 @@ impl Context {
         &self.map
     }
 
+    pub fn floor(&self) -> usize {
+        self.floor
+    }
+
+    /// Reconstructs an active context from a stored session view — the inverse fold.
+    ///
+    /// Rebuilds turns, tasks, summaries and eviction floor from the view,
+    /// counting tokens with the supplied counter so the resumed context
+    /// budgets identically to the original session.
+    pub fn from_view(
+        view: &crate::api::SessionView,
+        system: impl Into<String>,
+        tools: impl Into<String>,
+        map: impl Into<String>,
+        counter: &dyn TokenCounter,
+    ) -> Self {
+        let mut tasks = Vec::with_capacity(view.tasks.len());
+        for tv in &view.tasks {
+            let summary = tv.summary.as_ref().map(|text| crate::task::Summary {
+                text: text.clone(),
+                tokens: counter.count(text),
+                counted_by: counter.id(),
+            });
+            tasks.push(Task {
+                id: tv.id,
+                objective: tv.objective.clone(),
+                plan: tv.plan.clone(),
+                state: tv.state,
+                summary,
+                closed_by: tv.closed_by,
+            });
+        }
+
+        let mut turns = Vec::with_capacity(view.turns.len());
+        for tv in &view.turns {
+            let mut steps = Vec::with_capacity(tv.tools.len());
+            for call_view in &tv.tools {
+                let call = crate::tools::ToolCall {
+                    name: call_view.name.clone(),
+                    arguments: call_view.arguments.clone(),
+                };
+                let text = format!(
+                    "```tool\n{}\n```",
+                    serde_json::to_string(&call).unwrap_or_default()
+                );
+                let outcome = crate::tools::ToolOutcome {
+                    verdict: call_view.verdict.clone().unwrap_or_else(|| {
+                        crate::sandbox::Verdict::allow("resumed", crate::sandbox::Applied::Process)
+                    }),
+                    output: call_view.output.clone(),
+                    error: call_view.error.clone(),
+                    truncated: call_view.truncated,
+                    command: call_view.command.clone(),
+                };
+                steps.push(ToolStep {
+                    text,
+                    call,
+                    outcome,
+                    duration_ms: call_view.duration_ms.unwrap_or(0),
+                });
+            }
+
+            let prompt = tv.prompt.clone();
+            let answer = tv.text.clone();
+            let tokens =
+                counter.count(&prompt) + steps_tokens(&steps, counter) + counter.count(&answer);
+
+            turns.push(Turn {
+                id: tv.turn,
+                prompt,
+                answer,
+                steps,
+                code_context: Vec::new(),
+                task: tv.task,
+                tokens,
+                counted_by: counter.id(),
+            });
+        }
+
+        let floor = view
+            .turns
+            .iter()
+            .take_while(|t| t.evicted_by.is_some())
+            .count();
+
+        Self {
+            system: system.into(),
+            tools: tools.into(),
+            map: map.into(),
+            turns,
+            floor,
+            tasks,
+        }
+    }
+
     /// The whole cached prefix, as one message. Assembled here and nowhere else
     /// so that two call sites cannot join it differently.
     fn system_message(&self) -> String {

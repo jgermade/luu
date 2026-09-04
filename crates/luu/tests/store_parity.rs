@@ -250,3 +250,79 @@ fn a_stored_fold_still_answers_the_read_side_questions() {
         "the view's own accessors work on what came out of the store",
     );
 }
+
+#[test]
+fn a_resumed_context_produces_matching_budget_and_prompt_selection() {
+    use agent_core::context::{ApproximateCounter, Budget, Eviction};
+
+    let store = SessionStore::in_memory().expect("a store");
+    let (id, lines) = recordings()
+        .into_iter()
+        .find(|(id, _)| id == "one-task")
+        .expect("the task recording");
+    let folded = SessionView::from_record(id.clone(), &lines);
+    store.save(&folded).expect("saving");
+
+    let counter = ApproximateCounter;
+    let mut resumed = store
+        .resume(&id, "system preamble", "tool definitions", "", &counter)
+        .expect("resuming")
+        .expect("session exists");
+
+    assert_eq!(resumed.turns().len(), folded.turns.len());
+    assert_eq!(resumed.tasks().len(), folded.tasks.len());
+
+    let summary_text = resumed
+        .tasks()
+        .iter()
+        .find(|t| t.is_closed())
+        .and_then(|t| t.summary.as_ref())
+        .map(|s| s.text.clone())
+        .expect("closed task in resumed context");
+
+    let budget = Budget::new(8192, 512, Eviction::Turn);
+    let selection = resumed.select("next question", &[], budget, &counter);
+
+    // Summary message is in the prompt
+    assert!(
+        selection.messages.iter().any(|m| m.content == summary_text),
+        "folded summary message is in the prompt"
+    );
+    // System message is in the prompt
+    assert_eq!(
+        selection.messages[0].content,
+        "system preamble\n\ntool definitions"
+    );
+    // Reserve bucket is present
+    assert!(
+        selection
+            .buckets
+            .iter()
+            .any(|b| b.name == "summaries" && b.tokens > 0)
+    );
+    assert!(
+        selection
+            .buckets
+            .iter()
+            .any(|b| b.name == "prompt" && b.tokens > 0)
+    );
+
+    // And eviction floor survives resume
+    let (ev_id, ev_lines) = recordings()
+        .into_iter()
+        .find(|(id, _)| id == "eviction")
+        .expect("the eviction recording");
+    let ev_folded = SessionView::from_record(ev_id.clone(), &ev_lines);
+    store.save(&ev_folded).expect("saving eviction");
+
+    let resumed_ev = store
+        .resume(&ev_id, "sys", "", "", &counter)
+        .expect("resuming eviction")
+        .expect("eviction session exists");
+
+    assert!(
+        resumed_ev.floor() > 0,
+        "eviction floor survived resume: {}",
+        resumed_ev.floor()
+    );
+}

@@ -262,5 +262,8 @@ async fn a_plans_network_narrowing_crosses_the_seam() {
     let wire = agent_core::worker::WireSandbox::of(&narrowed, &[]);
     assert!(!wire.policy.network, "wire policy has network disabled");
     let resolved = wire.resolve().unwrap();
-    assert!(!resolved.network(), "resolved sandbox on far side has network disabled");
+    assert!(
+        !resolved.network(),
+        "resolved sandbox on far side has network disabled"
+    );
 }

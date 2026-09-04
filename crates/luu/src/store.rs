@@ -158,6 +158,23 @@ impl SessionStore {
         })?))
     }
 
+    /// Resumes a stored session into an active context — the inverse fold.
+    pub fn resume(
+        &self,
+        id: &str,
+        system: impl Into<String>,
+        tools: impl Into<String>,
+        map: impl Into<String>,
+        counter: &dyn agent_core::context::TokenCounter,
+    ) -> Result<Option<agent_core::context::Context>> {
+        let Some(view) = self.load(id)? else {
+            return Ok(None);
+        };
+        Ok(Some(agent_core::context::Context::from_view(
+            &view, system, tools, map, counter,
+        )))
+    }
+
     /// What `GET /api/sessions` lists, newest first.
     pub fn list(&self) -> Result<Vec<SessionSummary>> {
         let mut statement = self.connection.prepare(
