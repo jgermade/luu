@@ -66,6 +66,19 @@
   $: prose = proposed
     ? (proposed.source ? proposed.source === "prose" : !declares)
     : false
+  // A job at the gate that got here by crossing a border. Approving one is the
+  // one approval where a person is judging a *difference*: the same words named
+  // different files on the machine that approved it before.
+  $: crossed = proposed && state.imported ? state.imported : null
+  $: originRoots = crossed
+    ? (crossed.sandbox.roots || []).filter(root => !root.implicit)
+        .map(root => `${root.path} (${root.access})`)
+    : []
+  // Jobs the border refused: their plan asks for something this host does not
+  // grant, so there is nothing to approve until the policy file says otherwise.
+  $: refusedAtBorder = state.imported
+    ? (state.jobs || state.tasks).filter(job => (job.unmet || []).length)
+    : []
   $: entries = foldTranscript(state.messages, state.jobs || state.tasks, expanded)
   $: budgetTotal = state.budget
     ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
@@ -183,6 +196,20 @@
     <div :if="proposed" class="gate">
       <div class="who">proposed job {{ proposed?.id }}</div>
       <div class="objective">{{ proposed?.objective }}</div>
+      <!-- What crossed a border is the work, never the authority: this job was
+           approved somewhere else, about that machine's paths. -->
+      <div :if="crossed" class="crossed">
+        <p class="dim warn">
+          this job arrived from {{ crossed?.host }} (session
+          {{ crossed?.session }}) and was approved <em>there</em>. The plan's
+          words name different files here, so approving it approves it against
+          this host's paths.
+        </p>
+        <p class="dim">it could reach, over there: {{ originRoots.join(" · ") || "nothing" }}</p>
+        <p :if="crossed?.sandbox.commands.length" class="dim">
+          and could run: {{ crossed?.sandbox.commands.join(", ") }}
+        </p>
+      </div>
       <ul :if="planTasks.length" class="plan">
         <li :each="task in planTasks" :key="task">{{ task }}</li>
       </ul>
@@ -230,6 +257,18 @@
       <div class="gate-buttons">
         <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>
         <button type="button" class="cancel" :disabled="replaying" @click="rejectJob(proposed?.id)">Reject</button>
+      </div>
+    </div>
+
+    <!-- A plan this host does not grant does not reach the gate at all: there
+         is nothing to approve until `luu.toml` says otherwise, and saying so is
+         the difference between a refusal and a job that looks like it is
+         waiting on somebody. -->
+    <div :if="refusedAtBorder.length" class="gate refused-border">
+      <div class="who">refused on arrival</div>
+      <div :each="job in refusedAtBorder" :key="job.id">
+        <div class="objective">job {{ job.id }} — {{ job.objective }}</div>
+        <p :each="line in job.unmet" :key="line" class="dim warn">{{ line }}</p>
       </div>
     </div>
 
@@ -516,6 +555,10 @@
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
   .gate p { margin: .2rem 0; }
   .gate-buttons { display: flex; gap: .5rem; margin-top: .6rem; }
+  /* The border reads as part of the gate, because it is the same judgement
+     with one more thing in it: which machine the plan was approved about. */
+  .gate .crossed { margin: .3rem 0 .5rem; padding-left: .6rem; border-left: 2px solid currentColor; }
+  .gate.refused-border { opacity: .85; }
   .refused {
     margin: 0 1rem .4rem; padding: .4rem .7rem;
     border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;

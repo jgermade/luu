@@ -1,0 +1,11 @@
+# One job, approved and left open: what a session looks like at the moment
+# somebody moves it to another machine.
+#
+# `one-task.txt` closes its job, and a closed job crosses a border unchanged —
+# there is nothing to approve about a summary. This is the other case, and the
+# only one the border does anything with. See
+# RECORD/2026-09-04.the-border-and-the-gate.completed.md.
+## task: find out what AGENTS.md is for
+## step: read it
+## file: AGENTS.md
+what is in AGENTS.md?
