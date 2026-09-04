@@ -619,7 +619,7 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `hello`, `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted`, `imported` — all built, protocol v6 (record format 8); `context_snapshot` is still ahead |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 7); `context_snapshot` is still ahead |
 
 **The wire says what it speaks, in both directions.** The server's `hello` has always
 carried `protocol`; the client's now answers with its own, and with the record format it
@@ -832,11 +832,10 @@ schema above wearing a hat: those rows would be a second *definition* of a turn,
 competing with `api.rs`, while a record line is the account itself and SQL never
 looks inside one. It is there because the fold is a cache and until this the
 thing it was a cache **of** existed only if somebody had passed `--record` — so
-there was nothing to hand a transfer, and the parity rule could only be checked
-against files somebody remembered to write. A session stored before schema 2 has
-no stream and is refused for transfer rather than having one reconstructed from
-its fold. See
-[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
+the parity rule could only be checked against files somebody remembered to write,
+and a stored session could not be replayed at all. A session stored before schema
+2 has none, and that is reported rather than repaired: folding a view back into a
+stream would invent line orders and timings the session never had.
 
 **Resuming and multi-session switching are supported.** `SessionStore::resume`
 reconstructs the write-side `AgentContext` and turn counter from stored turns and
@@ -876,57 +875,41 @@ dropdown alongside a `+ New` button. See
   of kilobytes of JSON: `zstd` is a dependency, a format decision, and a thing to
   get wrong.
 
-## Moving a session between hosts
+## A session stays on the host that made it
 
-**A session crosses as its own record stream.** `luu transfer <session> --out
-<dir>` writes two files — `record.jsonl`, copied verbatim out of the store, and
-`manifest.json`, which carries only what folding the stream cannot answer: the
-kind, the protocol and format, and the origin (its host name, what the session
-was called there, and its **resolved** sandbox). `luu import <dir>` reads one
-into this host's store. Move the directory however you move a directory; stage 1
-of federation is host to host with no portal at all, and the wire leg is a
-transport question with its own argument.
+**Sessions do not move between machines, and there is no portal.** Not
+"discouraged" and not "an explicit act you may take": there is no mechanism, so
+the tree says what this file says.
 
-Not a snapshot of the fold, and that is the whole design. The fold is a
-rendering of the events; the events are the account. A transfer built on the
-stream inherits the parity test that makes the fold trustworthy in the first
-place, and one built on a rendering would need its own and would not get one.
-The envelope is checked **before** the stream is parsed — a bundle from a host
-speaking another protocol or format is refused out loud, in either direction,
-which is the socket handshake's rule applied to a file.
+The reason the question came up was that the model somebody wants is often on a
+bigger machine — 32b fits in 48 GB and not in 16 — and the reason it is settled
+is that **the model is reachable without moving anything**: `--backend openai
+--openai-url http://other-box:8080/v1` has pointed at another machine's
+`llama-server` or vLLM since
+[`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
+The GPU is a URL; the session, its history, its approvals and its evidence stay
+where the person is. And what a session is *about* — this repository — already
+moves by the means everyone has: the map is rebuilt from the checkout, fragments
+are read from disk at run time, and a plan names paths that would have to be
+re-resolved on any other tree anyway.
 
-**What does not cross is authority.** An approval is a statement about resolved
-paths on one tree, and `src/auth.rs` here and `src/auth.rs` there are two files.
-So on arrival:
+Three things fall out of the rule rather than being managed by it. **Evidence
+never leaves the machine** — a `tool_result` carries the bytes the model was
+given, which was the largest thing in this design pointing away from local-first.
+**A session cannot fork**, which with an append-only stream is what two copies
+of one session are. And **a history cannot be continued under a second
+tokenizer**, which would be a budget counted with two rulers.
 
-- a `Closed` job crosses unchanged — it runs nothing, it *is* the summary its
-  turns are sent as, and re-gating it would be asking somebody to approve a
-  paragraph;
-- every other job **returns to this host's gate** as `proposed`, with who
-  approved it over there moved to `approved_at_origin` rather than dropped,
-  because the difference between an approval given here and one given elsewhere
-  is exactly what this gate exists to show;
-- a plan this host's `luu.toml` does not grant arrives `rejected`, carrying the
-  `unmet` lines that refused it — in the same words the local gate uses.
-
-That crossing is itself an event: the destination appends one `imported` line
-naming the origin and what happened to each job, and folds the result. So the
-view stored beside the stream is still a fold *of* that stream, rather than an
-edit applied on top of it — which is the same rule the whole store is built on.
-
-An imported job has **no held prompt**: what opened it ran on the origin.
-Approving it opens the job and starts nothing, and the next prompt is a turn
-inside work this host has now approved. `Pending.prompt` is optional for that
-reason, and resuming any session whose last job is a proposal puts the gate back
-up — which also fixes a local proposal that outlived the server that made it.
+None of this touches the worker seam: what crosses *there* is the policy and one
+tool call, never the session, so a container — local or remote — is unaffected.
+A session that has to be read somewhere else is a job for `luu export`, which
+folds a recording into the static twin of the read API and moves a recording
+rather than a conversation somebody continues.
 
 Argued in
-[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md);
-the shape it had to fit is
-[`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](RECORD/2026-08-31.the-portal-and-the-gate.completed.md).
-**Nothing archives the origin**, so after a transfer both hosts hold the session
-and an append to either is a fork; and *a session moves without loss of context*
-remains an unmeasured claim — the transfer probe is written and unrun.
+[`RECORD/2026-09-04.sessions-stay-home.completed.md`](RECORD/2026-09-04.sessions-stay-home.completed.md),
+against the mechanism that was built first and removed:
+[`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
 
 ## Suggested work order
 
@@ -946,14 +929,15 @@ remains an unmeasured claim — the transfer probe is written and unrun.
 
 The six steps are the *shape* of the work and have not changed. What is being
 built next, in what order, and what blocks what is a separate question with a
-separate answer: [`ROADMAP/`](ROADMAP/), latest revision. Federation is being
-built in the order its own safety allows: the wire says its version, approvals
-are signed, and a session moves host to host on its own stream with its open
-jobs returning to the destination's gate — all four items of stage 1. The
-**portal** — a registry, a relay, a transfer service — is still proposed and not
-decided, and deliberately waits on the transfer probe: if host-to-host does not
-earn its place, the portal cannot inherit a justification it never had. The
-argument is
+separate answer: [`ROADMAP/`](ROADMAP/), latest revision. **Federation is
+closed**, and the two pieces of it that were built stay because neither was about
+moving a session: the wire says its version, so two `luu` builds refuse each
+other out loud rather than by misparsing, and an approval is signed with a key no
+relay holds, so *who approved* is answered where a bearer token only answers who
+could reach the port. Transfer, the probe and the portal are decided against —
+see the section above and
+[`RECORD/2026-09-04.sessions-stay-home.completed.md`](RECORD/2026-09-04.sessions-stay-home.completed.md);
+the argument they were measured against is
 [`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](RECORD/2026-08-31.the-portal-and-the-gate.completed.md).
 
 ## Naming
@@ -1001,11 +985,5 @@ argument is
   editing `luu.toml` and restarting — the same shape as everything else that file
   decides, and not enough once the fleet is more than the boxes in one room.
 - **Nothing signs a *recording*.** A signed approval can be re-verified out of the
-  record stream, but a relay that drops lines is not detected by that — and a
-  transfer is exactly a stream arriving from somewhere else.
-- **Nothing archives a transferred session.** Both hosts hold it afterwards and
-  an append to either is a fork. Forbidding it is smaller than naming it, and it
-  wants a state the store does not have yet.
-- **Counters do not travel.** A stream's header names the counter that measured
-  the origin's history; a destination running another model counts the same
-  turns with a different ruler. The header says so and nothing warns.
+  record stream, but a reader that dropped lines is not detected by that. There
+  is no relay now, and `luu export` still writes files that travel.

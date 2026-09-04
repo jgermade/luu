@@ -99,11 +99,6 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 cargo run --bin luu -- serve --no-store
 cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
-# moving a session to another machine: the record stream and an envelope naming
-# the origin's resolved sandbox. `scp -r` the directory; there is no wire leg yet.
-cargo run --bin luu -- transfer <session-id> --out ./sess
-cargo run --bin luu -- transfer --record run.jsonl --out ./sess   # or a recording
-cargo run --bin luu -- import ./sess                  # on the other host
 
 # the gate, without a model: the planning call answers with a plan block, then
 # the turn answers. Type a prompt and the UI holds it until you approve it.
@@ -310,28 +305,24 @@ sessions. See
 and
 [`RECORD/2026-09-04.multi-session-in-serve.completed.md`](RECORD/2026-09-04.multi-session-in-serve.completed.md).
 **The stream is in there too** (schema 2), one row per `RecordLine` appended at
-the same checkpoints: the fold is a cache, and until transfer needed one the
-thing it was a cache *of* existed only when somebody passed `--record`. A session
-stored before that is refused for transfer rather than having a stream invented
-from its fold.
+the same checkpoints: the fold is a cache, and the thing it is a cache *of* used
+to exist only when somebody passed `--record` — so the parity rule could only be
+checked against files somebody remembered to write, and a stored session could
+not be replayed at all. A session stored before schema 2 has no stream, and that
+is reported rather than repaired: folding a view back into a stream would invent
+line orders and timings the session never had.
 
-**A session moves between hosts as its own stream.** `luu transfer` writes
-`record.jsonl` — copied out of the store, never re-rendered — beside a
-`manifest.json` that carries only what folding the stream cannot answer: the
-kind, the protocol and format, and the origin's host, session name and
-**resolved** sandbox. `luu import` reads one in, refusing on the envelope before
-it parses a line, which is the socket handshake's rule applied to a file. What
-does not cross is authority: a `Closed` job crosses unchanged, every other job
-returns to the destination's gate as `proposed` with its approval moved to
-`approved_at_origin`, and a plan this host's `luu.toml` does not grant arrives
-`rejected` carrying the `unmet` lines that refused it. **The crossing is an
-event** — one `imported` line the destination appends and then folds — so the
-stored view stays a fold of the stored stream instead of an edit on top of it;
-that is protocol **v6** and record format **8**, by the same new-variant rule as
-every bump before it. An imported job has no held prompt, because what opened it
-ran on the origin: approving it opens the job and starts nothing. See
+**A session stays on the host that made it.** There is no transfer and no
+portal: the model you want on a bigger machine is reached with `--backend openai
+--openai-url http://other-box:8080/v1`, the tree moves by git, and what a session
+is about is the tree — so what would have crossed is the conversation, at the
+price of shipping every `tool_result`'s bytes off the machine. The rule, rather
+than a mitigation, is also what makes a fork and a two-tokenizer history
+impossible. It says nothing about the worker seam, where the policy and one tool
+call cross and the session never does. See
+[`RECORD/2026-09-04.sessions-stay-home.completed.md`](RECORD/2026-09-04.sessions-stay-home.completed.md),
+and the mechanism it removed:
 [`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
-
 
 `--map-tokens N` puts a **repository map** in the prefix: every `.rs` file's
 definitions with their signatures, bodies elided, from `tree-sitter`'s own
