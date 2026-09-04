@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
 use crate::context::{Counter, Evicted};
+use crate::job::{ClosedBy, JobId, JobState, Plan, PlanSource};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
-use crate::task::{ClosedBy, Plan, PlanSource, TaskId, TaskState};
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
 
@@ -78,42 +78,38 @@ pub struct ToolCallView {
     pub command: Option<crate::tools::CommandResult>,
 }
 
-/// One task as a client browses it. The transcript groups by this, which is
+/// One job as a client browses it. The transcript groups by this, which is
 /// the point: the view collapses exactly what the context collapses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskView {
-    pub id: TaskId,
+pub struct JobView {
+    pub id: JobId,
     pub objective: String,
-    /// The plan the task is held to: as approved once it has been, as proposed
+    /// The plan the job is held to: as approved once it has been, as proposed
     /// until then.
     pub plan: Plan,
     /// The plan as it was *proposed*, kept beside the one above because the
-    /// difference between them is the cost of the gate — how much a person had
-    /// to add before a small model's plan could run. Overwriting it at approval
-    /// left that readable only by diffing two lines of a recording by hand.
+    /// difference between them is the cost of the gate.
     #[serde(default)]
     pub proposed: Option<Plan>,
     /// Whether a planning call produced the proposal, or answered in prose.
-    /// `None` in a recording made before the distinction existed.
     #[serde(default)]
     pub source: Option<PlanSource>,
-    pub state: TaskState,
-    /// What its turns are sent as once it is closed. The summary text only —
-    /// its token count belongs to whoever counted it, and a reader who needs
-    /// that has the budget on the turn beside it.
+    pub state: JobState,
+    /// What its turns are sent as once it is closed. The summary text only.
     pub summary: Option<String>,
-    /// Which authority closed it, beside what the close produced. `None` on an
-    /// open task and in any recording made before the ladder had a second rung.
+    /// Which authority closed it, beside what the close produced.
     #[serde(default)]
     pub closed_by: Option<ClosedBy>,
 }
 
+pub type TaskView = JobView;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnView {
     pub turn: TurnId,
-    /// The task it was asked inside, when there was one.
-    #[serde(default)]
-    pub task: Option<TaskId>,
+    /// The job it was asked inside, when there was one.
+    #[serde(default, alias = "task")]
+    pub job: Option<JobId>,
     /// What the user asked.
     pub prompt: String,
     /// What the model produced, assembled. Partial on a cancel or a failure.
@@ -151,10 +147,10 @@ pub struct TurnView {
 }
 
 impl TurnView {
-    fn new(turn: TurnId, task: Option<TaskId>, prompt: String, started_at_ms: u64) -> Self {
+    fn new(turn: TurnId, job: Option<JobId>, prompt: String, started_at_ms: u64) -> Self {
         Self {
             turn,
-            task,
+            job,
             prompt,
             text: String::new(),
             reason: None,
@@ -170,6 +166,11 @@ impl TurnView {
             started_at_ms,
             ended_at_ms: None,
         }
+    }
+
+    /// Backwards compatibility accessor for callers that called `turn.task`.
+    pub fn task(&self) -> Option<JobId> {
+        self.job
     }
 
     pub fn is_running(&self) -> bool {
@@ -200,9 +201,9 @@ pub struct SessionView {
     pub started_at: u64,
     pub turns: Vec<TurnView>,
     /// In the order they were proposed. Empty for a session that ran without
-    /// tasks, which is every session recorded before they existed.
-    #[serde(default)]
-    pub tasks: Vec<TaskView>,
+    /// jobs, which is every session recorded before they existed.
+    #[serde(default, alias = "tasks")]
+    pub jobs: Vec<JobView>,
     pub record: Option<String>,
 }
 
@@ -220,7 +221,7 @@ impl SessionView {
             model: model.into(),
             started_at: 0,
             turns: Vec::new(),
-            tasks: Vec::new(),
+            jobs: Vec::new(),
             record: None,
         }
     }
@@ -245,12 +246,26 @@ impl SessionView {
         self.turns.iter_mut().find(|t| t.turn == turn)
     }
 
-    pub fn task(&self, task: TaskId) -> Option<&TaskView> {
-        self.tasks.iter().find(|t| t.id == task)
+    pub fn job(&self, job: JobId) -> Option<&JobView> {
+        self.jobs.iter().find(|j| j.id == job)
     }
 
-    fn task_mut(&mut self, task: TaskId) -> Option<&mut TaskView> {
-        self.tasks.iter_mut().find(|t| t.id == task)
+    fn job_mut(&mut self, job: JobId) -> Option<&mut JobView> {
+        self.jobs.iter_mut().find(|j| j.id == job)
+    }
+
+    pub fn jobs(&self) -> &[JobView] {
+        &self.jobs
+    }
+
+    /// Backwards compatibility accessor for callers that called `session.task`.
+    pub fn task(&self, task: JobId) -> Option<&JobView> {
+        self.job(task)
+    }
+
+    /// Backwards compatibility accessor for callers that called `session.tasks`.
+    pub fn tasks(&self) -> &[JobView] {
+        &self.jobs
     }
 
     /// Folds one protocol message in. `at_ms` is milliseconds since the session
@@ -261,26 +276,26 @@ impl SessionView {
                 self.backend = backend.clone();
                 self.model = model.clone();
             }
-            ServerMessage::TurnStarted { turn, prompt, task } => {
+            ServerMessage::TurnStarted { turn, prompt, job } => {
                 if self.turn(*turn).is_none() {
                     self.turns
-                        .push(TurnView::new(*turn, *task, prompt.clone(), at_ms));
+                        .push(TurnView::new(*turn, *job, prompt.clone(), at_ms));
                 }
             }
-            ServerMessage::TaskProposed {
-                task,
+            ServerMessage::JobProposed {
+                job,
                 objective,
                 plan,
                 source,
             } => {
-                if self.task(*task).is_none() {
-                    self.tasks.push(TaskView {
-                        id: *task,
+                if self.job(*job).is_none() {
+                    self.jobs.push(JobView {
+                        id: *job,
                         objective: objective.clone(),
                         plan: plan.clone(),
                         proposed: Some(plan.clone()),
                         source: *source,
-                        state: TaskState::Proposed,
+                        state: JobState::Proposed,
                         summary: None,
                         closed_by: None,
                     });
@@ -315,37 +330,29 @@ impl SessionView {
             // nothing about the session afterwards that is different for it.
             // It stays out of the view until something wants to count them.
             ServerMessage::Refused { .. } => {}
-            ServerMessage::TaskApproved { task, plan } => {
-                if let Some(view) = self.task_mut(*task) {
-                    view.state = TaskState::Approved;
-                    // The plan as approved, which is what the task's sandbox is
-                    // built from. An older recording carries none, and then what
-                    // was proposed is the best answer there is.
+            ServerMessage::JobApproved { job, plan } => {
+                if let Some(view) = self.job_mut(*job) {
+                    view.state = JobState::Approved;
                     if plan != &Plan::default() {
                         view.plan = plan.clone();
                     }
                 }
             }
-            ServerMessage::TaskClosed { task, summary, by } => {
-                if let Some(view) = self.task_mut(*task) {
-                    view.state = TaskState::Closed;
+            ServerMessage::JobClosed { job, summary, by } => {
+                if let Some(view) = self.job_mut(*job) {
+                    view.state = JobState::Closed;
                     view.summary = Some(summary.clone());
-                    // An older recording carries none, and then it was a
-                    // person: nothing else could close a task when it was
-                    // written.
                     view.closed_by = Some(by.unwrap_or(ClosedBy::User));
                 }
             }
-            ServerMessage::TaskRejected { task } => {
-                if let Some(view) = self.task_mut(*task) {
-                    view.state = TaskState::Rejected;
+            ServerMessage::JobRejected { job } => {
+                if let Some(view) = self.job_mut(*job) {
+                    view.state = JobState::Rejected;
                 }
             }
-            ServerMessage::TaskReopened { task } => {
-                if let Some(view) = self.task_mut(*task) {
-                    view.state = TaskState::Approved;
-                    // Dropped rather than kept beside the reopened task: it is
-                    // an account of work that is being written again.
+            ServerMessage::JobReopened { job } => {
+                if let Some(view) = self.job_mut(*job) {
+                    view.state = JobState::Approved;
                     view.summary = None;
                     view.closed_by = None;
                 }
@@ -520,7 +527,7 @@ mod tests {
                 message: ServerMessage::TurnStarted {
                     turn: 1,
                     prompt: "hola".into(),
-                    task: None,
+                    job: None,
                 },
             },
             RecordLine::Trace {
@@ -567,7 +574,7 @@ mod tests {
                 message: ServerMessage::TurnStarted {
                     turn: 2,
                     prompt: "y otra".into(),
-                    task: None,
+                    job: None,
                 },
             },
             RecordLine::Trace {
@@ -667,7 +674,7 @@ mod tests {
             &ServerMessage::TurnStarted {
                 turn: 1,
                 prompt: "x".into(),
-                task: None,
+                job: None,
             },
         );
         view.apply_protocol(
@@ -705,7 +712,7 @@ mod tests {
                 &ServerMessage::TurnStarted {
                     turn,
                     prompt: format!("q{turn}"),
-                    task: None,
+                    job: None,
                 },
             );
         }
@@ -750,7 +757,7 @@ mod tests {
             &ServerMessage::TurnStarted {
                 turn: 7,
                 prompt: "q".into(),
-                task: None,
+                job: None,
             },
         );
         view.apply_protocol(

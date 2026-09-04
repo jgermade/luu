@@ -94,25 +94,26 @@ async fn stdio_greets_with_hello_and_answers_prompts() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    // Expect TurnStarted, Token(s), Ended, and TaskProposed.
-    let mut task_id = None;
+    // Expect TurnStarted, Token(s), Ended, and JobProposed.
+    let mut job_id = None;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if let ServerMessage::TaskProposed { task, .. } = msg {
-            task_id = Some(task);
+        if let ServerMessage::JobProposed { job, .. } = msg {
+            job_id = Some(job);
             break;
         }
     }
-    let task = task_id.expect("received task proposal");
+    let job = job_id.expect("received job proposal");
 
-    // 3. Approve task.
-    let approve_msg = serde_json::to_string(&ClientMessage::ApproveTask {
-        task,
+    // 3. Approve job.
+    let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+        job,
         files: vec![],
         writes: vec![],
         commands: vec![],
         closes_on: None,
         network: None,
+        egress: None,
     })
     .unwrap();
     client_out
@@ -121,7 +122,7 @@ async fn stdio_greets_with_hello_and_answers_prompts() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    // Expect TaskApproved, TurnStarted, tokens, Ended.
+    // Expect JobApproved, TurnStarted, tokens, Ended.
     let mut ended = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
@@ -166,16 +167,16 @@ async fn unparseable_lines_do_not_break_stdio_stream() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    // Should still receive TaskProposed!
+    // Should still receive JobProposed!
     let mut proposed = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if matches!(msg, ServerMessage::TaskProposed { .. }) {
+        if matches!(msg, ServerMessage::JobProposed { .. }) {
             proposed = true;
             break;
         }
     }
-    assert!(proposed, "task proposed despite preceding invalid lines");
+    assert!(proposed, "job proposed despite preceding invalid lines");
 
     drop(client_out);
     let _ = server_handle.await.unwrap();
@@ -197,7 +198,7 @@ async fn prompt_while_task_is_pending_is_refused() {
     // Read Hello.
     let _ = client_lines.next_line().await.unwrap().unwrap();
 
-    // Send first prompt -> leads to TaskProposed.
+    // Send first prompt -> leads to JobProposed.
     let prompt1 = serde_json::to_string(&ClientMessage::Prompt {
         text: "first prompt".to_string(),
     })
@@ -210,12 +211,12 @@ async fn prompt_while_task_is_pending_is_refused() {
 
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if matches!(msg, ServerMessage::TaskProposed { .. }) {
+        if matches!(msg, ServerMessage::JobProposed { .. }) {
             break;
         }
     }
 
-    // Send second prompt while first task is still pending -> must be Refused!
+    // Send second prompt while first job is still pending -> must be Refused!
     let prompt2 = serde_json::to_string(&ClientMessage::Prompt {
         text: "second prompt while pending".to_string(),
     })
@@ -268,24 +269,25 @@ async fn close_and_reopen_task_over_stdio() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    let mut task_id = None;
+    let mut job_id = None;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if let ServerMessage::TaskProposed { task, .. } = msg {
-            task_id = Some(task);
+        if let ServerMessage::JobProposed { job, .. } = msg {
+            job_id = Some(job);
             break;
         }
     }
-    let task = task_id.expect("task proposed");
+    let job = job_id.expect("job proposed");
 
-    // 2. Approve task.
-    let approve_msg = serde_json::to_string(&ClientMessage::ApproveTask {
-        task,
+    // 2. Approve job.
+    let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+        job,
         files: vec![],
         writes: vec![],
         commands: vec![],
         closes_on: None,
         network: None,
+        egress: None,
     })
     .unwrap();
     client_out
@@ -302,8 +304,8 @@ async fn close_and_reopen_task_over_stdio() {
         }
     }
 
-    // 3. Close task.
-    let close_msg = serde_json::to_string(&ClientMessage::CloseTask { task }).unwrap();
+    // 3. Close job.
+    let close_msg = serde_json::to_string(&ClientMessage::CloseJob { job }).unwrap();
     client_out
         .write_all(format!("{close_msg}\n").as_bytes())
         .await
@@ -313,19 +315,19 @@ async fn close_and_reopen_task_over_stdio() {
     let mut closed = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if let ServerMessage::TaskClosed {
-            task: closed_task, ..
+        if let ServerMessage::JobClosed {
+            job: closed_job, ..
         } = msg
         {
-            assert_eq!(closed_task, task);
+            assert_eq!(closed_job, job);
             closed = true;
             break;
         }
     }
-    assert!(closed, "task was closed");
+    assert!(closed, "job was closed");
 
-    // 4. Reopen task.
-    let reopen_msg = serde_json::to_string(&ClientMessage::ReopenTask { task }).unwrap();
+    // 4. Reopen job.
+    let reopen_msg = serde_json::to_string(&ClientMessage::ReopenJob { job }).unwrap();
     client_out
         .write_all(format!("{reopen_msg}\n").as_bytes())
         .await
@@ -335,16 +337,13 @@ async fn close_and_reopen_task_over_stdio() {
     let mut reopened = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if let ServerMessage::TaskReopened {
-            task: reopened_task,
-        } = msg
-        {
-            assert_eq!(reopened_task, task);
+        if let ServerMessage::JobReopened { job: reopened_job } = msg {
+            assert_eq!(reopened_job, job);
             reopened = true;
             break;
         }
     }
-    assert!(reopened, "task was reopened");
+    assert!(reopened, "job was reopened");
 
     drop(client_out);
     let _ = server_handle.await.unwrap();

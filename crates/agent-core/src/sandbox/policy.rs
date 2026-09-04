@@ -204,6 +204,12 @@ pub struct SandboxPolicy {
     pub commands: Vec<String>,
     #[serde(default)]
     pub network: bool,
+    /// Permitted domain patterns when network is enabled. Empty permits all.
+    #[serde(default)]
+    pub egress: Vec<String>,
+    /// Optional HTTP/HTTPS proxy URL for outbound traffic.
+    #[serde(default)]
+    pub proxy: Option<String>,
     #[serde(default)]
     pub enforcement: Enforcement,
     /// What a subprocess may spend. Applies to the child only: an in-process
@@ -222,6 +228,8 @@ impl Default for SandboxPolicy {
             paths: vec![PathRule::new(".", Access::ReadWrite)],
             commands: Vec::new(),
             network: false,
+            egress: Vec::new(),
+            proxy: None,
             enforcement: Enforcement::default(),
             limits: Limits::default(),
         }

@@ -763,18 +763,18 @@ enum Step {
     Prompt(String),
     /// `## fragment: <path>[:start-end]` — fuses a file into the next prompt.
     Fragment(String),
-    OpenTask {
+    OpenJob {
         objective: String,
         plan: Plan,
     },
-    CloseTask,
+    CloseJob,
 }
 
 /// Parses a script: prompts one per line, `#` comments, and `##` directives.
 ///
 /// ```text
-/// ## task: explain the context manager
-/// ## step: read the design
+/// ## job: explain the context manager
+/// ## task: read the design
 /// ## file: loude-design.md
 /// ## write: loude-design.md
 /// ## fragment: loude-design.md:1-40
@@ -811,32 +811,48 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
         };
 
         match key {
-            "task" => {
+            "job" => {
                 if open {
-                    anyhow::bail!("line {number}: a task is still open; `## close` it first");
+                    anyhow::bail!("line {number}: a job is still open; `## close` it first");
                 }
                 if value.is_empty() {
-                    anyhow::bail!("line {number}: `## task:` needs an objective");
+                    anyhow::bail!("line {number}: `## job:` needs an objective");
                 }
                 open = true;
-                steps.push(Step::OpenTask {
+                steps.push(Step::OpenJob {
                     objective: value.to_string(),
                     plan: Plan::default(),
                 });
             }
-            // The plan belongs to the task being opened and has to be the last
+            "task" => {
+                if !open {
+                    if value.is_empty() {
+                        anyhow::bail!("line {number}: `## task:` needs an objective");
+                    }
+                    open = true;
+                    steps.push(Step::OpenJob {
+                        objective: value.to_string(),
+                        plan: Plan::default(),
+                    });
+                } else if let Some(Step::OpenJob { plan, .. }) = steps.last_mut() {
+                    plan.tasks.push(value.to_string());
+                } else {
+                    anyhow::bail!("line {number}: a job is still open; `## close` it first");
+                }
+            }
+            // The plan belongs to the job being opened and has to be the last
             // thing pushed: it is approved before its turns run, so it cannot
             // grow after one of them has.
-            "step" | "file" | "write" | "command" | "network" => {
-                let Some(Step::OpenTask { plan, .. }) = steps.last_mut() else {
+            "step" | "file" | "write" | "command" | "network" | "egress" => {
+                let Some(Step::OpenJob { plan, .. }) = steps.last_mut() else {
                     anyhow::bail!(
-                        "line {number}: `{line}` must follow a `## task:`, before its first prompt"
+                        "line {number}: `{line}` must follow a `## job:` (or `## task:`), before its first prompt"
                     );
                 };
                 match key {
-                    "step" => plan.steps.push(value.to_string()),
+                    "step" => plan.tasks.push(value.to_string()),
                     "file" => plan.files.push(value.to_string()),
-                    // `## file:` is what the task may read; `## write:` what it
+                    // `## file:` is what the job may read; `## write:` what it
                     // may also change. A plan that declares no writes may not
                     // write — the check is worth having only if it can say no.
                     "write" => plan.writes.push(value.to_string()),
@@ -850,10 +866,20 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
                             ),
                         };
                     }
+                    "egress" => {
+                        for domain in value
+                            .split([',', ' '])
+                            .map(str::trim)
+                            .filter(|d| !d.is_empty())
+                        {
+                            plan.egress.push(domain.to_string());
+                        }
+                        plan.network = true;
+                    }
                     _ => unreachable!(),
                 }
             }
-            // Attached to the next prompt, wherever it appears — inside a task
+            // Attached to the next prompt, wherever it appears — inside a job
             // or not. It is grounding for one turn, not part of the plan.
             "fragment" => {
                 if value.is_empty() {
@@ -863,15 +889,15 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             }
             "close" => {
                 if !open {
-                    anyhow::bail!("line {number}: `## close` with no task open");
+                    anyhow::bail!("line {number}: `## close` with no job open");
                 }
                 open = false;
-                steps.push(Step::CloseTask);
+                steps.push(Step::CloseJob);
             }
             _ => anyhow::bail!(
                 "line {number}: `{line}` is not a directive \
-                 (`## task:`, `## step:`, `## file:`, `## write:`, \
-                 `## command:`, `## network:`, `## fragment:`, `## close`)"
+                 (`## job:`, `## task:`, `## step:`, `## file:`, `## write:`, \
+                 `## command:`, `## network:`, `## egress:`, `## fragment:`, `## close`)"
             ),
         }
     }
@@ -1298,59 +1324,59 @@ pub async fn run() -> Result<()> {
         // recorded: a run that cannot say what it was allowed to do is not a
         // baseline either.
         let prompt = match step {
-            Step::OpenTask { objective, plan } => {
+            Step::OpenJob { objective, plan } => {
                 // The confirmation, as a check rather than a question. A plan
                 // that asks for what the sandbox does not grant does not run —
                 // the alternative is discovering it as a denial four turns in.
                 let unmet = plan.unmet(agency.sandbox.as_ref());
                 if !unmet.is_empty() {
                     anyhow::bail!(
-                        "task `{objective}` asks for what the sandbox does not grant:\n  {}",
+                        "job `{objective}` asks for what the sandbox does not grant:\n  {}",
                         unmet.join("\n  "),
                     );
                 }
-                let id = context.propose_task(objective.clone(), plan.clone());
-                context.approve_task(id);
+                let id = context.propose_job(objective.clone(), plan.clone());
+                context.approve_job(id);
                 narrowed = Some(std::sync::Arc::new(
                     plan.narrow(agency.sandbox.as_ref(), id)
-                        .with_context(|| format!("resolving the plan of task `{objective}`"))?,
+                        .with_context(|| format!("resolving the plan of job `{objective}`"))?,
                 ));
                 if let Some(recorder) = &recorder {
-                    recorder.write(&Event::Protocol(ServerMessage::TaskProposed {
-                        task: id,
+                    recorder.write(&Event::Protocol(ServerMessage::JobProposed {
+                        job: id,
                         objective: objective.clone(),
                         plan: plan.clone(),
                         // No planning call happened: a script carries its plan,
                         // which is an approval written down in advance.
                         source: Some(PlanSource::Written),
                     }));
-                    recorder.write(&Event::Protocol(ServerMessage::TaskApproved {
-                        task: id,
+                    recorder.write(&Event::Protocol(ServerMessage::JobApproved {
+                        job: id,
                         plan: plan.clone(),
                     }));
                 }
-                println!("\n== task {id} approved: {objective}");
+                println!("\n== job {id} approved: {objective}");
                 print!("{}", plan.describe());
                 continue;
             }
-            Step::CloseTask => {
-                // The parser guarantees a task is open here.
-                let Some(id) = context.live_task() else {
-                    unreachable!("`## close` with no task open is refused when the script is read")
+            Step::CloseJob => {
+                // The parser guarantees a job is open here.
+                let Some(id) = context.live_job() else {
+                    unreachable!("`## close` with no job open is refused when the script is read")
                 };
-                let summary = context.close_task(id, counter.as_ref()).unwrap_or_default();
-                // Outside a task the policy file is the whole answer again.
+                let summary = context.close_job(id, counter.as_ref()).unwrap_or_default();
+                // Outside a job the policy file is the whole answer again.
                 narrowed = None;
                 if let Some(recorder) = &recorder {
-                    recorder.write(&Event::Protocol(ServerMessage::TaskClosed {
-                        task: id,
+                    recorder.write(&Event::Protocol(ServerMessage::JobClosed {
+                        job: id,
                         summary: summary.clone(),
                         // `## close` is a person's instruction written down in
                         // advance, which is the same authority typed later.
                         by: Some(ClosedBy::User),
                     }));
                 }
-                println!("\n== task {id} closed; its turns are now sent as:");
+                println!("\n== job {id} closed; its turns are now sent as:");
                 for line in summary.lines() {
                     println!("   {line}");
                 }
@@ -1359,7 +1385,7 @@ pub async fn run() -> Result<()> {
             Step::Fragment(spec) => {
                 // Through the sandbox that holds *now*: a path `read_file`
                 // would refuse must not become readable by spelling it in a
-                // directive, and inside a task it is the plan that refuses.
+                // directive, and inside a job it is the plan that refuses.
                 let sandbox = narrowed.clone().unwrap_or_else(|| agency.sandbox.clone());
                 let fragment = load_fragment(sandbox.as_ref(), spec)?;
                 println!(
@@ -1374,7 +1400,7 @@ pub async fn run() -> Result<()> {
         };
 
         turn += 1;
-        let task = context.live_task();
+        let job = context.live_job();
         // Taken, not copied: these fragments are this turn's, and the next turn
         // starts with none.
         let code = std::mem::take(&mut attached);
@@ -1408,7 +1434,7 @@ pub async fn run() -> Result<()> {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
                 turn,
                 prompt: prompt.clone(),
-                task,
+                job,
             }));
             // Before the prompt it explains, so a file reads in the order the
             // session happened: the history was cut, then this is what was
@@ -1661,14 +1687,32 @@ mod tests {
         .unwrap();
 
         assert_eq!(steps.len(), 3);
-        let Step::OpenTask { objective, plan } = &steps[0] else {
+        let Step::OpenJob { objective, plan } = &steps[0] else {
             panic!("{steps:?}")
         };
         assert_eq!(objective, "explain the context manager");
-        assert_eq!(plan.steps, ["read the design"]);
+        assert_eq!(plan.tasks, ["read the design"]);
         assert_eq!(plan.files, ["loude-design.md"]);
         assert_eq!(plan.commands, ["cargo"]);
-        assert_eq!(steps[2], Step::CloseTask);
+        assert_eq!(steps[2], Step::CloseJob);
+    }
+
+    #[test]
+    fn a_job_carries_its_approved_egress() {
+        let steps = parse_script(
+            "## job: fetch updates\n\
+             ## egress: crates.io, *.github.com\n\
+             fetch them\n\
+             ## close\n",
+        )
+        .unwrap();
+
+        assert_eq!(steps.len(), 3);
+        let Step::OpenJob { plan, .. } = &steps[0] else {
+            panic!("{steps:?}")
+        };
+        assert!(plan.network);
+        assert_eq!(plan.egress, ["crates.io", "*.github.com"]);
     }
 
     #[test]
@@ -1681,8 +1725,8 @@ mod tests {
             Step::Fragment("luu.toml:1-5".into()),
             "it stands on its own: grounding for a turn, not a path the plan declares",
         );
-        let Step::OpenTask { plan, .. } = &steps[1] else {
-            panic!("expected the task after it, {steps:?}");
+        let Step::OpenJob { plan, .. } = &steps[1] else {
+            panic!("expected the job after it, {steps:?}");
         };
         assert_eq!(plan.files, ["luu.toml"]);
 
@@ -1709,7 +1753,7 @@ mod tests {
             parse_script("## close\nq\n")
                 .unwrap_err()
                 .to_string()
-                .contains("no task open")
+                .contains("no job open")
         );
         assert!(
             parse_script("## task: a\nq\n## task: b\nq\n")
@@ -1721,7 +1765,7 @@ mod tests {
             parse_script("## step: read it\nq\n")
                 .unwrap_err()
                 .to_string()
-                .contains("must follow a `## task:`")
+                .contains("must follow a `## job:`")
         );
         assert!(
             parse_script("## task: a\nq\n## step: late\n")

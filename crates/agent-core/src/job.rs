@@ -17,14 +17,15 @@ use crate::context::{Counter, Fragment, TokenCounter};
 use crate::sandbox::{Access, Authority, Sandbox, SandboxError, SandboxPolicy};
 use crate::tools::{ToolCall, ToolStep};
 
-/// Tasks are numbered per session, in order, starting at 1.
-pub type TaskId = u64;
+/// Jobs are numbered per session, in order, starting at 1.
+pub type JobId = u64;
+pub type TaskId = JobId;
 
 /// How many distinct actions a summary lists before it stops listing them.
 ///
 /// The summary enters the write-once region every later turn is built on, so
-/// its size is not free and must not grow with the length of the task. A cap
-/// is not a strategy — it is what stops one long task quietly becoming the
+/// its size is not free and must not grow with the length of the job. A cap
+/// is not a strategy — it is what stops one long job quietly becoming the
 /// prompt.
 const MAX_EVIDENCE_LINES: usize = 12;
 
@@ -33,7 +34,7 @@ const MAX_EVIDENCE_LINES: usize = 12;
 /// The same argument as [`MAX_EVIDENCE_LINES`], applied to the other half of
 /// the summary: a quote is paid for on every call from the close to the end of
 /// the session, so what it costs must be a function of this number and not of
-/// how much the task was handed. The value is a starting point and wants the
+/// how much the job was handed. The value is a starting point and wants the
 /// grounded probe to choose it — see
 /// `RECORD/2026-08-30.what-a-summary-should-carry.completed.md`.
 const MAX_QUOTED_TOKENS: u32 = 1024;
@@ -45,9 +46,10 @@ const MAX_QUOTED_TOKENS: u32 = 1024;
 /// have to parse back.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
-    #[serde(default)]
-    pub steps: Vec<String>,
-    /// What the task may **read**.
+    /// The model's checklist of tasks to perform.
+    #[serde(default, alias = "steps")]
+    pub tasks: Vec<String>,
+    /// What the job may **read**.
     #[serde(default)]
     pub files: Vec<String>,
     /// What it may also **change**. A path here need not be repeated in
@@ -58,21 +60,28 @@ pub struct Plan {
     pub writes: Vec<String>,
     #[serde(default)]
     pub commands: Vec<String>,
-    /// The command line whose success closes this task, rendered exactly as
+    /// The command line whose success closes this job, rendered exactly as
     /// [`command_line`] renders a call — `"cargo test"`, not `"cargo"`.
     ///
     /// `None` in every plan a model writes, because the model is never asked
     /// for it: this is the one part of a plan that arrives at the gate rather
-    /// than from the planning call, and a task whose plan has none closes only
+    /// than from the planning call, and a job whose plan has none closes only
     /// when a person says so. See
     /// `RECORD/2026-09-02.closing-on-an-exit-code.completed.md`.
     #[serde(default)]
     pub closes_on: Option<String>,
     #[serde(default)]
     pub network: bool,
+    #[serde(default)]
+    pub egress: Vec<String>,
 }
 
 impl Plan {
+    /// Backwards compatibility accessor for callers that called `steps`.
+    pub fn steps(&self) -> &[String] {
+        &self.tasks
+    }
+
     /// What the plan asks for that the sandbox does not grant, one line each.
     ///
     /// The design wants the approved plan to *be* the policy for its task, with
@@ -125,6 +134,14 @@ impl Plan {
                 sandbox.authority()
             ));
         }
+        for domain in &self.egress {
+            if !sandbox.allows_domain(domain) {
+                unmet.push(format!(
+                    "egress domain `{domain}`: not allowed by the policy ({})",
+                    sandbox.authority()
+                ));
+            }
+        }
         unmet
     }
 
@@ -175,11 +192,24 @@ impl Plan {
     /// write to its directory — and at the kernel rung a grant *is* a
     /// directory. That is wider than the plan's words and it is the honest
     /// resolution: the alternative is that no plan may ever create a file.
-    pub fn narrow(&self, session: &Sandbox, task: TaskId) -> Result<Sandbox, SandboxError> {
+    pub fn narrow(&self, session: &Sandbox, job: JobId) -> Result<Sandbox, SandboxError> {
+        let narrowed_egress = match (session.egress().is_empty(), self.egress.is_empty()) {
+            (false, false) => self
+                .egress
+                .iter()
+                .filter(|d| session.allows_domain(d))
+                .cloned()
+                .collect(),
+            (false, true) => session.egress().to_vec(),
+            (true, false) => self.egress.clone(),
+            (true, true) => Vec::new(),
+        };
         let mut policy = SandboxPolicy {
             paths: Vec::new(),
             commands: Vec::new(),
-            network: session.network() && self.network,
+            network: session.network() && (self.network || !self.egress.is_empty()),
+            egress: narrowed_egress,
+            proxy: session.proxy().map(String::from),
             enforcement: session.enforcement(),
             // The session's, like `network` and `enforcement`: a plan declares
             // paths and commands, and what a child may *spend* is not something
@@ -214,7 +244,7 @@ impl Plan {
                 policy.allow_command(command);
             }
         }
-        Ok(Sandbox::new(&policy, session.base())?.under(Authority::Plan(task)))
+        Ok(Sandbox::new(&policy, session.base())?.under(Authority::Plan(job)))
     }
 
     /// Adds what a person put in at the gate, ignoring what is already there.
@@ -230,6 +260,7 @@ impl Plan {
         commands: &[String],
         closes_on: Option<&str>,
         network: Option<bool>,
+        egress: Option<&[String]>,
     ) {
         for file in files {
             if !self.files.contains(file) {
@@ -254,13 +285,23 @@ impl Plan {
         if let Some(net) = network {
             self.network = net;
         }
+        if let Some(domains) = egress {
+            for domain in domains {
+                if !self.egress.contains(domain) {
+                    self.egress.push(domain.clone());
+                }
+            }
+            if !domains.is_empty() {
+                self.network = true;
+            }
+        }
     }
 
     /// One line per part it has, for a human reading a run go by.
     pub fn describe(&self) -> String {
         let mut text = String::new();
         for (part, items) in [
-            ("steps", &self.steps),
+            ("tasks", &self.tasks),
             ("files", &self.files),
             ("writes", &self.writes),
             ("commands", &self.commands),
@@ -271,6 +312,9 @@ impl Plan {
         }
         if self.network {
             text.push_str("  network  allowed\n");
+        }
+        if !self.egress.is_empty() {
+            text.push_str(&format!("  egress   {}\n", self.egress.join(" · ")));
         }
         // Last, and named for what it does rather than for what it is: this is
         // the line that says the task may close without anyone present.
@@ -352,16 +396,16 @@ pub enum PlanSource {
     Written,
 }
 
-/// Where a task is in its life. `Closed` is the only one that changes how the
+/// Where a job is in its life. `Closed` is the only one that changes how the
 /// history renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TaskState {
+pub enum JobState {
     /// Proposed and not yet approved. Nothing runs in this state.
     Proposed,
     /// Approved. Its turns are the live ones, sent verbatim.
     Approved,
-    /// Closed: its turns are folded to [`Task::summary`] from here on.
+    /// Closed: its turns are folded to [`Job::summary`] from here on.
     Closed,
     /// Proposed and refused. Kept rather than erased: that a plan was put up
     /// and turned down is worth more than a gap in the numbering, and ids are
@@ -370,11 +414,13 @@ pub enum TaskState {
     Rejected,
 }
 
-/// Which authority closed a task.
+pub type TaskState = JobState;
+
+/// Which authority closed a job.
 ///
 /// On the close rather than inferred afterwards, because the ladder above the
 /// person is only worth climbing if each rung can be *counted*: how often the
-/// exit code closed a task a person would have left open, and how often a
+/// exit code closed a job a person would have left open, and how often a
 /// person closed one it missed. A recording where both closes look the same
 /// cannot answer either, and by then the sessions are on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,11 +429,11 @@ pub enum ClosedBy {
     /// A person, at the gate. What every close before this existed was, which
     /// is why an absent value reads as this one.
     User,
-    /// The task's own [`Plan::closes_on`], on an exit code of 0.
+    /// The job's own [`Plan::closes_on`], on an exit code of 0.
     ExitCode,
 }
 
-/// What a closed task leaves behind, counted once at the close.
+/// What a closed job leaves behind, counted once at the close.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
     pub text: String,
@@ -399,56 +445,58 @@ pub struct Summary {
 
 /// One piece of work: proposed, approved, run, closed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Task {
-    pub id: TaskId,
+pub struct Job {
+    pub id: JobId,
     /// What the user asked for, as they asked for it.
     pub objective: String,
     pub plan: Plan,
-    pub state: TaskState,
+    pub state: JobState,
     /// Present from the close onwards. Dropped on a reopen, because a reopened
-    /// task is being written again and the old account of it is not an account
+    /// job is being written again and the old account of it is not an account
     /// of what it will have been.
     pub summary: Option<Summary>,
-    /// Who closed it. Beside the summary and dropped with it: a reopened task
+    /// Who closed it. Beside the summary and dropped with it: a reopened job
     /// has not been closed by anyone.
     #[serde(default)]
     pub closed_by: Option<ClosedBy>,
 }
 
-impl Task {
-    pub fn new(id: TaskId, objective: impl Into<String>, plan: Plan) -> Self {
+pub type Task = Job;
+
+impl Job {
+    pub fn new(id: JobId, objective: impl Into<String>, plan: Plan) -> Self {
         Self {
             id,
             objective: objective.into(),
             plan,
-            state: TaskState::Proposed,
+            state: JobState::Proposed,
             summary: None,
             closed_by: None,
         }
     }
 
     pub fn approve(&mut self) {
-        self.state = TaskState::Approved;
+        self.state = JobState::Approved;
     }
 
     /// Refuses it. Nothing ran, so there is nothing to fold and nothing to
     /// summarise — the plan stays as the record of what was turned down.
     pub fn reject(&mut self) {
-        self.state = TaskState::Rejected;
+        self.state = JobState::Rejected;
     }
 
-    /// Approved and not closed: the one task turns are attributed to.
+    /// Approved and not closed: the one job turns are attributed to.
     pub fn is_open(&self) -> bool {
-        self.state == TaskState::Approved
+        self.state == JobState::Approved
     }
 
     pub fn is_closed(&self) -> bool {
-        self.state == TaskState::Closed
+        self.state == JobState::Closed
     }
 
-    /// Closes the task and writes its summary, once.
+    /// Closes the job and writes its summary, once.
     ///
-    /// `steps` is everything the task's turns did and `shown` is every fragment
+    /// `steps` is everything the job's turns did and `shown` is every fragment
     /// they were handed, both in order, and `turns` is how many turns it took.
     /// All three are facts about what happened; nothing the model said about
     /// what happened is used.
@@ -466,7 +514,7 @@ impl Task {
             counted_by: counter.id(),
             text,
         });
-        self.state = TaskState::Closed;
+        self.state = JobState::Closed;
         self.closed_by = Some(by);
     }
 
@@ -474,13 +522,13 @@ impl Task {
     /// again. Not an undo — nothing was deleted — which is the whole reason
     /// closing was made an event.
     pub fn reopen(&mut self) {
-        self.state = TaskState::Approved;
+        self.state = JobState::Approved;
         self.summary = None;
         self.closed_by = None;
     }
 }
 
-/// The deterministic summary: the approved plan, what the task was shown, and
+/// The deterministic summary: the approved plan, what the job was shown, and
 /// what the tools actually reported. Read `RECORD/2026-08-30.tasks-in-code.completed.md`
 /// before adding prose to it — it lands in the write-once region, where being
 /// wrong is unrecoverable for the rest of the session.
@@ -497,11 +545,11 @@ fn summary_text(
     turns: usize,
     counter: &dyn TokenCounter,
 ) -> String {
-    let mut text = format!("[task closed] {objective}\n");
-    if !plan.steps.is_empty() {
+    let mut text = format!("[job closed] {objective}\n");
+    if !plan.tasks.is_empty() {
         text.push_str("approved plan:\n");
-        for step in &plan.steps {
-            text.push_str(&format!("  - {step}\n"));
+        for task in &plan.tasks {
+            text.push_str(&format!("  - {task}\n"));
         }
     }
 
@@ -765,13 +813,13 @@ mod tests {
             ..Plan::default()
         };
         assert!(plan.closes_on.is_none(), "the model was never asked");
-        plan.amend(&[], &[], &[], Some("  cargo test  "), None);
+        plan.amend(&[], &[], &[], Some("  cargo test  "), None, None);
         assert_eq!(plan.closes_on.as_deref(), Some("cargo test"));
         // One condition, and a person who types a second is correcting the
         // first — unlike the lists beside it, which accumulate.
-        plan.amend(&[], &[], &[], Some("cargo clippy"), None);
+        plan.amend(&[], &[], &[], Some("cargo clippy"), None, None);
         assert_eq!(plan.closes_on.as_deref(), Some("cargo clippy"));
-        plan.amend(&[], &[], &[], Some("   "), None);
+        plan.amend(&[], &[], &[], Some("   "), None, None);
         assert_eq!(
             plan.closes_on.as_deref(),
             Some("cargo clippy"),
@@ -785,12 +833,13 @@ mod tests {
             2,
             "add a --dry-run flag",
             Plan {
-                steps: vec!["read the CLI".into(), "add the flag".into()],
+                tasks: vec!["read the CLI".into(), "add the flag".into()],
                 files: vec!["crates/luu/src/lib.rs".into()],
                 writes: vec![],
                 commands: vec!["cargo".into()],
                 closes_on: None,
                 network: false,
+                ..Plan::default()
             },
         );
         task.approve();
@@ -972,7 +1021,7 @@ mod tests {
     fn a_proposal_may_declare_nothing_at_all() {
         let proposal = parse_plan("```plan\n{\"objective\": \"explain the design\"}\n```").unwrap();
         assert_eq!(proposal.objective, "explain the design");
-        assert!(proposal.plan.steps.is_empty());
+        assert!(proposal.plan.tasks.is_empty());
         assert!(proposal.plan.files.is_empty());
     }
 
@@ -1000,12 +1049,13 @@ mod tests {
         .unwrap();
 
         let plan = Plan {
-            steps: vec![],
+            tasks: vec![],
             files: vec!["Cargo.toml".into(), "/etc/passwd".into()],
             writes: vec![],
             commands: vec!["cargo".into(), "curl".into()],
             closes_on: None,
             network: false,
+            ..Plan::default()
         };
         let unmet = plan.unmet(&sandbox);
 
@@ -1038,12 +1088,13 @@ mod tests {
     fn an_approved_plan_grants_what_it_named_and_nothing_else() {
         let session = session();
         let plan = Plan {
-            steps: vec![],
+            tasks: vec![],
             files: vec!["Cargo.toml".into()],
             writes: vec![],
             commands: vec!["cargo".into()],
             closes_on: None,
             network: false,
+            ..Plan::default()
         };
         let narrowed = plan.narrow(&session, 1).unwrap();
 
@@ -1053,19 +1104,16 @@ mod tests {
                 .verdict
                 .allowed,
         );
-        let refused = narrowed.check_path(std::path::Path::new("src/task.rs"), Access::Read);
+        let refused = narrowed.check_path(std::path::Path::new("src/job.rs"), Access::Read);
         assert!(!refused.verdict.allowed);
         assert!(
-            refused
-                .verdict
-                .rule
-                .contains("the approved plan for task 1"),
+            refused.verdict.rule.contains("the approved plan for job 1"),
             "a denial has to say which authority refused: {}",
             refused.verdict.rule,
         );
         assert!(
             session
-                .check_path(std::path::Path::new("src/task.rs"), Access::Read)
+                .check_path(std::path::Path::new("src/job.rs"), Access::Read)
                 .verdict
                 .allowed,
             "the same file is still readable under the policy the task narrows",
@@ -1074,7 +1122,7 @@ mod tests {
         assert!(narrowed.prepare_command("cargo").is_ok());
         let refused = narrowed.prepare_command("git").expect_err("not planned");
         assert!(
-            refused.rule.contains("the approved plan for task 1"),
+            refused.rule.contains("the approved plan for job 1"),
             "{refused:?}"
         );
     }
@@ -1096,10 +1144,7 @@ mod tests {
         let refused = narrowed.check_path(path, Access::ReadWrite);
         assert!(!refused.verdict.allowed);
         assert!(
-            refused
-                .verdict
-                .rule
-                .contains("the approved plan for task 1"),
+            refused.verdict.rule.contains("the approved plan for job 1"),
             "{}",
             refused.verdict.rule,
         );
@@ -1229,27 +1274,35 @@ mod tests {
             ..Plan::default()
         };
         plan.amend(
-            &["src/task.rs".into(), "Cargo.toml".into()],
+            &["src/job.rs".into(), "Cargo.toml".into()],
             &[],
             &["git".into()],
             None,
             None,
+            None,
         );
 
-        assert_eq!(plan.files, ["Cargo.toml", "src/task.rs"], "no duplicate");
+        assert_eq!(plan.files, ["Cargo.toml", "src/job.rs"], "no duplicate");
         assert!(plan.unmet(&session).is_empty());
 
         let narrowed = plan.narrow(&session, 1).unwrap();
         assert!(
             narrowed
-                .check_path(std::path::Path::new("src/task.rs"), Access::Read)
+                .check_path(std::path::Path::new("src/job.rs"), Access::Read)
                 .verdict
                 .allowed,
             "the file the person added at the gate is in the task's sandbox",
         );
 
         let mut past_the_file = Plan::default();
-        past_the_file.amend(&["/etc/passwd".into()], &[], &["curl".into()], None, None);
+        past_the_file.amend(
+            &["/etc/passwd".into()],
+            &[],
+            &["curl".into()],
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             past_the_file.unmet(&session).len(),
             2,
@@ -1324,13 +1377,56 @@ mod tests {
             commands: vec!["cargo".into()],
             ..Plan::default()
         };
-        plan.amend(&[], &[], &[], None, Some(true));
+        plan.amend(&[], &[], &[], None, Some(true), None);
         assert!(plan.network);
 
         let unmet = plan.unmet(&session);
         assert!(
             unmet.iter().any(|line| line.starts_with("network:")),
             "unmet should report network refusal: {unmet:?}",
+        );
+    }
+
+    #[test]
+    fn a_plan_with_egress_narrows_domains_and_unmet_checks_them() {
+        let session = Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: vec!["cargo".into()],
+                network: true,
+                egress: vec!["crates.io".into(), "*.github.com".into()],
+                proxy: Some("http://127.0.0.1:8888".into()),
+                enforcement: Enforcement::BestEffort,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
+
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            network: true,
+            egress: vec!["crates.io".into(), "api.github.com".into()],
+            ..Plan::default()
+        };
+        assert!(plan.unmet(&session).is_empty());
+
+        let narrowed = plan.narrow(&session, 1).unwrap();
+        assert_eq!(narrowed.egress(), &["crates.io", "api.github.com"]);
+        assert_eq!(narrowed.proxy(), Some("http://127.0.0.1:8888"));
+        assert!(narrowed.allows_domain("crates.io"));
+        assert!(!narrowed.allows_domain("evil.com"));
+
+        let plan_forbidden = Plan {
+            commands: vec!["cargo".into()],
+            network: true,
+            egress: vec!["evil.com".into()],
+            ..Plan::default()
+        };
+        let unmet = plan_forbidden.unmet(&session);
+        assert!(
+            unmet.iter().any(|line| line.contains("evil.com")),
+            "evil.com should be unmet: {unmet:?}",
         );
     }
 }

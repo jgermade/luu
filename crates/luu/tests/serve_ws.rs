@@ -268,6 +268,24 @@ async fn get(address: &str, path: &str) -> Value {
         .expect("a JSON body")
 }
 
+async fn post(address: &str, path: &str) -> reqwest::Response {
+    let client = reqwest::Client::new();
+    client
+        .post(format!("http://{address}{path}"))
+        .send()
+        .await
+        .expect("the request")
+}
+
+async fn delete(address: &str, path: &str) -> reqwest::Response {
+    let client = reqwest::Client::new();
+    client
+        .delete(format!("http://{address}{path}"))
+        .send()
+        .await
+        .expect("the request")
+}
+
 #[tokio::test]
 async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
     let address = server().await;
@@ -277,9 +295,9 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    // 3 since `evicted`, 2 since `refused`: a new variant of a tagged enum is
+    // 4 since `jobs`, 3 since `evicted`, 2 since `refused`: a new variant of a tagged enum is
     // a change an older reader cannot parse, which is what this number is for.
-    assert_eq!(hello["protocol"], 3);
+    assert_eq!(hello["protocol"], 4);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
 
@@ -302,12 +320,12 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
     assert_eq!(ended["reason"], "stop");
     assert_eq!(planning, PLAN, "the planning call's own text");
 
-    let (proposed, _) = until(&mut socket, "task_proposed").await;
-    assert_eq!(proposed["task"], 1);
+    let (proposed, _) = until(&mut socket, "job_proposed").await;
+    assert_eq!(proposed["job"], 1);
     assert_eq!(proposed["objective"], "add a flag");
     assert_eq!(proposed["plan"]["files"][0], "Cargo.toml");
 
-    // Nothing has run under the task yet. A second prompt here is a second
+    // Nothing has run under the job yet. A second prompt here is a second
     // thing nobody approved, and the server — not the client — refuses it,
     // out loud: a refusal a client cannot tell from a dropped message is why
     // the UI used to have to guess by disabling its own composer.
@@ -324,23 +342,23 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
         refused["detail"]
             .as_str()
             .expect("a detail")
-            .contains("task 1"),
+            .contains("job 1"),
         "{refused}",
     );
 
     send(
         &mut socket,
-        serde_json::json!({"type": "approve_task", "task": 1}),
+        serde_json::json!({"type": "approve_job", "job": 1}),
     )
     .await;
 
-    let (approved, _) = until(&mut socket, "task_approved").await;
-    assert_eq!(approved["task"], 1);
+    let (approved, _) = until(&mut socket, "job_approved").await;
+    assert_eq!(approved["job"], 1);
 
     let (started, _) = until(&mut socket, "turn_started").await;
     assert_eq!(started["turn"], 2);
     assert_eq!(started["prompt"], "add a flag", "the held prompt, now run");
-    assert_eq!(started["task"], 1, "inside the task it was approved under");
+    assert_eq!(started["job"], 1, "inside the job it was approved under");
 
     let (ended, answer) = until(&mut socket, "ended").await;
     assert_eq!(ended["turn"], 2);
@@ -363,7 +381,7 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
     assert_eq!(turns[0]["text"], PLAN);
     assert_eq!(turns[1]["turn"], 2);
     assert_eq!(turns[1]["text"], ANSWER);
-    assert_eq!(turns[1]["task"], 1);
+    assert_eq!(turns[1]["job"], 1);
     assert_eq!(
         turns[1]["reason"], "stop",
         "the read side agrees with the `ended` the socket carried",
@@ -393,7 +411,7 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     // The second prompt sent behind the gate never became anything.
     let session = get(&address, "/api/sessions/live").await;
-    assert_eq!(session["tasks"].as_array().expect("the tasks").len(), 1);
+    assert_eq!(session["jobs"].as_array().expect("the jobs").len(), 1);
     assert!(
         !session["turns"]
             .as_array()
@@ -518,10 +536,10 @@ async fn a_turn_may_not_touch_what_its_task_was_not_approved_for() {
         serde_json::json!({"type": "prompt", "text": "read the manifest"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
     send(
         &mut socket,
-        serde_json::json!({"type": "approve_task", "task": 1}),
+        serde_json::json!({"type": "approve_job", "job": 1}),
     )
     .await;
 
@@ -532,13 +550,13 @@ async fn a_turn_may_not_touch_what_its_task_was_not_approved_for() {
         result["verdict"]["rule"]
             .as_str()
             .expect("a rule")
-            .contains("the approved plan for task 1"),
+            .contains("the approved plan for job 1"),
         "a denial has to say which authority refused: {}",
         result["verdict"]["rule"],
     );
 
-    // The same file, under the policy file the task narrowed: still granted.
-    // The refusal is the task's, not the session's.
+    // The same file, under the policy file the job narrowed: still granted.
+    // The refusal is the job's, not the session's.
     let sandbox = Sandbox::new(
         &SandboxPolicy::default(),
         &std::env::current_dir().expect("the working directory"),
@@ -572,22 +590,22 @@ async fn a_file_added_at_the_gate_is_in_the_task_sandbox() {
         serde_json::json!({"type": "prompt", "text": "read the manifest"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
 
     // Approving *with* an amendment, plus one entry the policy file does not
     // grant: the gate widens a plan up to the file and not past it.
     send(
         &mut socket,
         serde_json::json!({
-            "type": "approve_task",
-            "task": 1,
+            "type": "approve_job",
+            "job": 1,
             "files": ["src/serve.rs", "/etc/passwd"],
             "commands": [],
         }),
     )
     .await;
 
-    let (approved, _) = until(&mut socket, "task_approved").await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
     let files = approved["plan"]["files"]
         .as_array()
         .expect("the plan as approved");
@@ -607,7 +625,7 @@ async fn a_file_added_at_the_gate_is_in_the_task_sandbox() {
 
     // And the read API carries the plan as approved, not as proposed.
     let session = get(&address, "/api/sessions/live").await;
-    assert_eq!(session["tasks"][0]["plan"]["files"][1], "src/serve.rs");
+    assert_eq!(session["jobs"][0]["plan"]["files"][1], "src/serve.rs");
 }
 
 /// The three other silences, each of which used to be an early return.
@@ -623,12 +641,12 @@ async fn the_server_says_why_it_did_not_do_something() {
 
     // Nothing is open, so nothing can be closed, reopened or rejected.
     for (request, reason) in [
-        ("close_task", "task"),
-        ("reopen_task", "task"),
-        ("reject_task", "task"),
-        ("approve_task", "task"),
+        ("close_job", "job"),
+        ("reopen_job", "job"),
+        ("reject_job", "job"),
+        ("approve_job", "job"),
     ] {
-        send(&mut socket, serde_json::json!({"type": request, "task": 7})).await;
+        send(&mut socket, serde_json::json!({"type": request, "job": 7})).await;
         let (refused, _) = until(&mut socket, "refused").await;
         assert_eq!(refused["request"], request);
         assert_eq!(refused["reason"], reason, "{refused}");
@@ -695,12 +713,12 @@ async fn an_amendment_the_policy_refuses_is_reported_not_only_dropped() {
         serde_json::json!({"type": "prompt", "text": "read the manifest"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
     send(
         &mut socket,
         serde_json::json!({
-            "type": "approve_task",
-            "task": 1,
+            "type": "approve_job",
+            "job": 1,
             "files": ["/etc/passwd"],
             "commands": [],
         }),
@@ -708,7 +726,7 @@ async fn an_amendment_the_policy_refuses_is_reported_not_only_dropped() {
     .await;
 
     let (refused, _) = until(&mut socket, "refused").await;
-    assert_eq!(refused["request"], "approve_task");
+    assert_eq!(refused["request"], "approve_job");
     assert_eq!(refused["reason"], "not_granted");
     assert!(
         refused["detail"]
@@ -718,14 +736,14 @@ async fn an_amendment_the_policy_refuses_is_reported_not_only_dropped() {
         "{refused}",
     );
 
-    // And the task still runs: the approval was not thrown away with the part
+    // And the job still runs: the approval was not thrown away with the part
     // of it nobody may grant.
-    let (approved, _) = until(&mut socket, "task_approved").await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
     assert_eq!(approved["plan"]["files"], serde_json::json!(["Cargo.toml"]));
 }
 
 /// The lifecycle is a state machine and the socket is open to anyone: closing
-/// a task that was only *proposed* used to succeed, which took the gate off
+/// a job that was only *proposed* used to succeed, which took the gate off
 /// the screen with its prompt still held and left the session with no way to
 /// answer a proposal nobody could see. Found by driving the real page.
 #[tokio::test]
@@ -741,24 +759,24 @@ async fn a_proposal_cannot_be_closed_out_from_under_the_gate() {
         serde_json::json!({"type": "prompt", "text": "add a flag"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
 
     send(
         &mut socket,
-        serde_json::json!({"type": "close_task", "task": 1}),
+        serde_json::json!({"type": "close_job", "job": 1}),
     )
     .await;
     let (refused, _) = until(&mut socket, "refused").await;
-    assert_eq!(refused["request"], "close_task");
-    assert_eq!(refused["reason"], "task");
+    assert_eq!(refused["request"], "close_job");
+    assert_eq!(refused["reason"], "job");
 
     // Still waiting on a person, and still answerable.
     let session = get(&address, "/api/sessions/live").await;
-    assert_eq!(session["tasks"][0]["state"], "proposed");
+    assert_eq!(session["jobs"][0]["state"], "proposed");
 
     send(
         &mut socket,
-        serde_json::json!({"type": "approve_task", "task": 1}),
+        serde_json::json!({"type": "approve_job", "job": 1}),
     )
     .await;
     let (started, _) = until(&mut socket, "turn_started").await;
@@ -786,10 +804,10 @@ async fn a_turn_may_not_write_a_file_its_plan_only_reads() {
         serde_json::json!({"type": "prompt", "text": "read the manifest"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
     send(
         &mut socket,
-        serde_json::json!({"type": "approve_task", "task": 1}),
+        serde_json::json!({"type": "approve_job", "job": 1}),
     )
     .await;
 
@@ -800,7 +818,7 @@ async fn a_turn_may_not_write_a_file_its_plan_only_reads() {
         result["verdict"]["rule"]
             .as_str()
             .expect("a rule")
-            .contains("the approved plan for task 1"),
+            .contains("the approved plan for job 1"),
         "{}",
         result["verdict"]["rule"],
     );
@@ -839,18 +857,18 @@ async fn a_write_added_at_the_gate_goes_through() {
         serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
     send(
         &mut socket,
         serde_json::json!({
-            "type": "approve_task",
-            "task": 1,
+            "type": "approve_job",
+            "job": 1,
             "writes": [scratch.display().to_string()],
         }),
     )
     .await;
 
-    let (approved, _) = until(&mut socket, "task_approved").await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
     assert_eq!(
         approved["plan"]["writes"].as_array().expect("writes").len(),
         1
@@ -883,17 +901,17 @@ async fn the_window_filling_up_says_which_turns_it_dropped() {
 
     assert_eq!(next_message(&mut socket).await["type"], "hello");
 
-    // Through the gate once, so the prompts after it run inside a live task
+    // Through the gate once, so the prompts after it run inside a live job
     // rather than each buying a proposal of its own.
     send(
         &mut socket,
         serde_json::json!({"type": "prompt", "text": "add a flag"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
     send(
         &mut socket,
-        serde_json::json!({"type": "approve_task", "task": 1}),
+        serde_json::json!({"type": "approve_job", "job": 1}),
     )
     .await;
     until(&mut socket, "ended").await;
@@ -998,12 +1016,12 @@ async fn a_proposal_says_whether_a_model_wrote_it_or_only_talked() {
         )
         .await;
 
-        let (proposed, _) = until(&mut socket, "task_proposed").await;
+        let (proposed, _) = until(&mut socket, "job_proposed").await;
         assert_eq!(proposed["source"], expected, "{proposed}");
 
         let session = get(&address, "/api/sessions/live").await;
         assert_eq!(
-            session["tasks"][0]["source"], expected,
+            session["jobs"][0]["source"], expected,
             "and on the read side"
         );
     }
@@ -1024,39 +1042,39 @@ async fn the_view_keeps_the_plan_as_proposed_beside_the_plan_as_approved() {
         serde_json::json!({"type": "prompt", "text": "add a flag"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
 
     // The person adds the file the model forgot, which is the half that makes
     // narrowing survivable.
     send(
         &mut socket,
         serde_json::json!({
-            "type": "approve_task",
-            "task": 1,
+            "type": "approve_job",
+            "job": 1,
             "files": ["AGENTS.md"],
         }),
     )
     .await;
-    until(&mut socket, "task_approved").await;
+    until(&mut socket, "job_approved").await;
 
-    let task = get(&address, "/api/sessions/live").await["tasks"][0].clone();
+    let job = get(&address, "/api/sessions/live").await["jobs"][0].clone();
     assert_eq!(
-        task["proposed"]["files"],
+        job["proposed"]["files"],
         serde_json::json!(["Cargo.toml"]),
         "the plan as the model proposed it",
     );
     assert_eq!(
-        task["plan"]["files"],
+        job["plan"]["files"],
         serde_json::json!(["Cargo.toml", "AGENTS.md"]),
         "the plan as approved, which is what the sandbox is built from",
     );
 }
 
-/// The rung above the person: a task that closes itself on an exit code.
+/// The rung above the person: a job that closes itself on an exit code.
 ///
 /// The one test that asserts the payoff rather than the field. A plan declares
 /// `sh`, the person at the gate names `sh -c exit 0` as what would convince
-/// them the work is finished, the turn runs it, and the task folds with nobody
+/// them the work is finished, the turn runs it, and the job folds with nobody
 /// having clicked anything. See
 /// `RECORD/2026-09-02.closing-on-an-exit-code.completed.md`.
 const PLAN_THAT_RUNS_SH: &str = "```plan\n{\"objective\":\"make it pass\",\
@@ -1091,20 +1109,20 @@ async fn a_green_command_closes_the_task_with_nobody_at_the_gate() {
         serde_json::json!({"type": "prompt", "text": "make the tests pass"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
 
     // The one part of a plan the model was never asked for, arriving from the
     // person who is already reading the plan.
     send(
         &mut socket,
         serde_json::json!({
-            "type": "approve_task",
-            "task": 1,
+            "type": "approve_job",
+            "job": 1,
             "closes_on": "sh -c exit 0",
         }),
     )
     .await;
-    let (approved, _) = until(&mut socket, "task_approved").await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
     assert_eq!(approved["plan"]["closes_on"], "sh -c exit 0");
 
     let (result, _) = until(&mut socket, "tool_result").await;
@@ -1114,8 +1132,8 @@ async fn a_green_command_closes_the_task_with_nobody_at_the_gate() {
     );
     assert_eq!(result["command"]["exit_code"], 0, "{result}");
 
-    let (closed, _) = until(&mut socket, "task_closed").await;
-    assert_eq!(closed["task"], 1);
+    let (closed, _) = until(&mut socket, "job_closed").await;
+    assert_eq!(closed["job"], 1);
     assert_eq!(
         closed["by"], "exit_code",
         "which authority folded it is on the wire, or nothing can ever count the rungs",
@@ -1132,8 +1150,8 @@ async fn a_green_command_closes_the_task_with_nobody_at_the_gate() {
     // And the read side agrees with what the socket carried, which is the one
     // property this file exists to keep proving.
     let session = get(&address, "/api/sessions/live").await;
-    assert_eq!(session["tasks"][0]["state"], "closed");
-    assert_eq!(session["tasks"][0]["closed_by"], "exit_code");
+    assert_eq!(session["jobs"][0]["state"], "closed");
+    assert_eq!(session["jobs"][0]["closed_by"], "exit_code");
 }
 
 #[tokio::test]
@@ -1158,17 +1176,17 @@ async fn a_red_command_leaves_the_task_open() {
         serde_json::json!({"type": "prompt", "text": "make the tests pass"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
     send(
         &mut socket,
         serde_json::json!({
-            "type": "approve_task",
-            "task": 1,
+            "type": "approve_job",
+            "job": 1,
             "closes_on": "sh -c exit 0",
         }),
     )
     .await;
-    until(&mut socket, "task_approved").await;
+    until(&mut socket, "job_approved").await;
     let (result, _) = until(&mut socket, "tool_result").await;
     assert_eq!(
         result["command"]["exit_code"], 1,
@@ -1177,7 +1195,7 @@ async fn a_red_command_leaves_the_task_open() {
     until(&mut socket, "ended").await;
 
     // Asserted by asking for something the answer changes, rather than by
-    // waiting for a message that should not arrive: inside a live task a prompt
+    // waiting for a message that should not arrive: inside a live job a prompt
     // is a turn, and behind a closed one it is a new proposal.
     send(
         &mut socket,
@@ -1186,14 +1204,14 @@ async fn a_red_command_leaves_the_task_open() {
     .await;
     let (started, _) = until(&mut socket, "turn_started").await;
     assert_eq!(
-        started["task"], 1,
-        "a task whose condition was not met is still the live one",
+        started["job"], 1,
+        "a job whose condition was not met is still the live one",
     );
 }
 
 /// The gate widens a plan up to the policy file and not past it, and a closing
-/// condition is no exception — one naming a command the task may not run can
-/// never be met, and a task that can never close looks like one that will.
+/// condition is no exception — one naming a command the job may not run can
+/// never be met, and a job that can never close looks like one that will.
 #[tokio::test]
 async fn a_closing_condition_the_plan_cannot_run_is_refused() {
     let address = server_running(vec![PLAN_THAT_RUNS_SH.into(), "Done.".into()], "sh").await;
@@ -1207,18 +1225,18 @@ async fn a_closing_condition_the_plan_cannot_run_is_refused() {
         serde_json::json!({"type": "prompt", "text": "make the tests pass"}),
     )
     .await;
-    until(&mut socket, "task_proposed").await;
+    until(&mut socket, "job_proposed").await;
     send(
         &mut socket,
         serde_json::json!({
-            "type": "approve_task",
-            "task": 1,
+            "type": "approve_job",
+            "job": 1,
             "closes_on": "cargo test",
         }),
     )
     .await;
 
-    let (approved, _) = until(&mut socket, "task_approved").await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
     assert!(
         approved["plan"]["closes_on"].is_null(),
         "the condition is missing from the plan that comes back, which is the feedback",
@@ -1249,10 +1267,10 @@ async fn a_session_outlives_the_server_that_ran_it() {
             serde_json::json!({"type": "prompt", "text": "add a flag"}),
         )
         .await;
-        until(&mut socket, "task_proposed").await;
+        until(&mut socket, "job_proposed").await;
         send(
             &mut socket,
-            serde_json::json!({"type": "approve_task", "task": 1}),
+            serde_json::json!({"type": "approve_job", "job": 1}),
         )
         .await;
         until(&mut socket, "ended").await;
@@ -1287,7 +1305,7 @@ async fn a_session_outlives_the_server_that_ran_it() {
 
     let session = get(&second, &format!("/api/sessions/{id}")).await;
     assert_eq!(session["turns"][0]["prompt"], "add a flag");
-    assert_eq!(session["tasks"][0]["state"], "approved");
+    assert_eq!(session["jobs"][0]["state"], "approved");
     assert_eq!(
         session["turns"][1]["text"], ANSWER,
         "the fold, not a summary of it: {session}",
@@ -1295,6 +1313,98 @@ async fn a_session_outlives_the_server_that_ran_it() {
 
     let turns = get(&second, &format!("/api/sessions/{id}/turns")).await;
     assert_eq!(turns.as_array().expect("its turns").len(), 2);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn multi_session_lifecycle_and_switching() {
+    let dir = std::env::temp_dir().join(format!("luu-test-multi-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("sessions.db");
+
+    let address = server_storing(
+        vec![PLAN.into(), ANSWER.into(), PLAN.into(), ANSWER.into()],
+        &db,
+    )
+    .await;
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("websocket connection");
+
+    let hello = next_message(&mut socket).await;
+    assert_eq!(hello["type"], "hello");
+
+    // Run a turn in the initial session
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "initial prompt"}),
+    )
+    .await;
+    until(&mut socket, "job_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_job", "job": 1}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+
+    // Verify initial session has 2 turns
+    let live_one = get(&address, "/api/sessions/live").await;
+    assert_eq!(live_one["turns"].as_array().unwrap().len(), 2);
+
+    // Create a new session via POST /api/sessions
+    let res = post(&address, "/api/sessions").await;
+    assert_eq!(res.status(), reqwest::StatusCode::CREATED);
+    let new_summary: Value = res.json().await.expect("json");
+    let session_two_id = new_summary["id"].as_str().expect("new id").to_string();
+    assert_eq!(new_summary["turns"], 0);
+
+    // Socket received a new hello broadcast
+    let (hello2, _) = until(&mut socket, "hello").await;
+    assert_eq!(hello2["type"], "hello");
+    let live2 = get(&address, "/api/sessions/live").await;
+    assert_eq!(live2["turns"].as_array().unwrap().len(), 0);
+
+    // Verify store has 2 sessions now: "live" (new session) and the checkpointed session one
+    let listed2 = get(&address, "/api/sessions").await;
+    let sessions2 = listed2.as_array().expect("listing 2");
+    assert_eq!(sessions2.len(), 2);
+
+    let session_one = sessions2
+        .iter()
+        .find(|s| s["id"] != "live")
+        .expect("checkpointed session one");
+    let session_one_id = session_one["id"].as_str().expect("id").to_string();
+    assert_ne!(session_one_id, session_two_id);
+    assert_eq!(session_one["turns"], 2);
+
+    // Cannot delete active session
+    let del_active = delete(&address, &format!("/api/sessions/{session_two_id}")).await;
+    assert_eq!(del_active.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Resume session one
+    let resume_res = post(&address, &format!("/api/sessions/{session_one_id}/resume")).await;
+    assert_eq!(resume_res.status(), reqwest::StatusCode::OK);
+    let resumed_summary: Value = resume_res.json().await.expect("json");
+    assert_eq!(resumed_summary["turns"], 2);
+
+    // Socket receives hello with session one resumed
+    let (hello_resumed, _) = until(&mut socket, "hello").await;
+    assert_eq!(hello_resumed["type"], "hello");
+    let live_resumed = get(&address, "/api/sessions/live").await;
+    assert_eq!(live_resumed["turns"].as_array().unwrap().len(), 2);
+
+    // Now session one is active, session two is inactive. Delete session two!
+    let del_res = delete(&address, &format!("/api/sessions/{session_two_id}")).await;
+    assert_eq!(del_res.status(), reqwest::StatusCode::NO_CONTENT);
+
+    // Session two is gone
+    let check_del = reqwest::get(format!("http://{address}/api/sessions/{session_two_id}"))
+        .await
+        .unwrap();
+    assert_eq!(check_del.status(), reqwest::StatusCode::NOT_FOUND);
 
     std::fs::remove_dir_all(&dir).ok();
 }

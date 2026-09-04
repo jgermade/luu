@@ -23,13 +23,15 @@
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
-use crate::task::TaskId;
+use crate::job::JobId;
 
 use serde::{Deserialize, Serialize};
 
 pub mod policy;
+pub mod proxy;
 
 pub use policy::{Access, Enforcement, Limits, PathRule, PolicyError, SandboxPolicy};
+pub use proxy::{EgressFilter, EgressProxy};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(not(target_os = "linux"), path = "fallback.rs")]
@@ -154,21 +156,21 @@ pub enum SandboxError {
 /// having lost which authority refused would read as a policy refusal whatever
 /// it was, and those are different runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// Adjacently tagged, not internally: `Plan(TaskId)` is a newtype variant
+// Adjacently tagged, not internally: `Plan(JobId)` is a newtype variant
 // wrapping a number, and an internal tag has nowhere to put it.
-#[serde(tag = "granted_by", content = "task", rename_all = "snake_case")]
+#[serde(tag = "granted_by", content = "job", rename_all = "snake_case")]
 pub enum Authority {
     /// The policy file plus whatever the flags added to it.
     Policy,
-    /// The plan a person approved, which narrows the policy for one task.
-    Plan(TaskId),
+    /// The plan a person approved, which narrows the policy for one job.
+    Plan(JobId),
 }
 
 impl std::fmt::Display for Authority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Policy => write!(f, "the sandbox policy"),
-            Self::Plan(task) => write!(f, "the approved plan for task {task}"),
+            Self::Plan(job) => write!(f, "the approved plan for job {job}"),
         }
     }
 }
@@ -180,6 +182,8 @@ pub struct Sandbox {
     roots: Vec<Root>,
     commands: Vec<String>,
     network: bool,
+    egress: Vec<String>,
+    proxy: Option<String>,
     enforcement: Enforcement,
     /// What a child may spend. Carried beside `roots` because it is the same
     /// kind of thing: part of what the child is held to, decided in the parent.
@@ -263,6 +267,8 @@ impl Sandbox {
             roots,
             commands: policy.commands.clone(),
             network: policy.network,
+            egress: policy.egress.clone(),
+            proxy: policy.proxy.clone(),
             enforcement: policy.enforcement,
             limits: policy.limits,
             authority: Authority::Policy,
@@ -311,6 +317,8 @@ impl Sandbox {
                 .collect(),
             commands: self.commands.clone(),
             network: self.network,
+            egress: self.egress.clone(),
+            proxy: self.proxy.clone(),
             enforcement: self.enforcement,
             limits: self.limits,
         }
@@ -342,6 +350,29 @@ impl Sandbox {
 
     pub fn network(&self) -> bool {
         self.network
+    }
+
+    pub fn egress(&self) -> &[String] {
+        &self.egress
+    }
+
+    pub fn proxy(&self) -> Option<&str> {
+        self.proxy.as_deref()
+    }
+
+    pub fn with_proxy(mut self, proxy: Option<String>) -> Self {
+        self.proxy = proxy;
+        self
+    }
+
+    pub fn allows_domain(&self, domain: &str) -> bool {
+        if !self.network {
+            return false;
+        }
+        if self.egress.is_empty() {
+            return true;
+        }
+        EgressFilter::new(self.egress.clone()).is_allowed(domain)
     }
 
     pub fn enforcement(&self) -> Enforcement {
@@ -716,7 +747,7 @@ mod tests {
                 .check_path(&fixture.root.join("nowhere"), Access::Read)
                 .verdict
                 .rule
-                .contains("the approved plan for task 7")
+                .contains("the approved plan for job 7")
         );
         // The implicit roots are *not* carried: the far side adds its own,
         // because the `/usr` a child needs is the one it is standing on.
@@ -766,6 +797,7 @@ mod tests {
                 cpu_seconds: Some(1),
                 ..Limits::NONE
             },
+            ..SandboxPolicy::default()
         }
     }
 

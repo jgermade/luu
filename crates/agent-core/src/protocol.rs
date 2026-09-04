@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
 use crate::context::{Counter, Eviction};
+use crate::job::{ClosedBy, JobId, Plan, PlanSource};
 use crate::sandbox::Verdict;
-use crate::task::{ClosedBy, Plan, PlanSource, TaskId};
 use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
 
@@ -39,7 +39,10 @@ use crate::turn::{EndReason, TurnEvent};
 /// it is here rather than on the trace channel — and a client that could not
 /// parse it would be watching a transcript whose turns are silently no longer
 /// in the prompt. See `RECORD/2026-08-31.eviction-tombstones.completed.md`.
-pub const VERSION: u32 = 3;
+///
+/// **4 uncrosses terminology**: the outer unit of work and approval is renamed to
+/// **Job**, reserving **Task** for the fine-grained checklist items emitted by models.
+pub const VERSION: u32 = 4;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -53,9 +56,10 @@ pub enum Refusal {
     Busy,
     /// A proposal is waiting on a person. Nothing runs behind the gate.
     Pending,
-    /// The task named is not in a state where the ask applies — approved
+    /// The job named is not in a state where the ask applies — approved
     /// twice, closed while nothing was open, reopened when it was never closed.
-    Task,
+    #[serde(alias = "task")]
+    Job,
     /// Part of what was asked for is not granted by the policy file, which is
     /// the outer bound nobody may widen past.
     NotGranted,
@@ -69,18 +73,13 @@ pub enum ClientMessage {
     /// Stop the turn in flight. Cancelling when nothing is running is not an
     /// error — a client that raced the end of a turn did nothing wrong.
     Cancel,
-    /// Approve a proposed task. Nothing has run under it until this arrives:
+    /// Approve a proposed job. Nothing has run under it until this arrives:
     /// the prompt that caused the proposal is held, unrun, until it does.
-    ///
-    /// `files` and `commands` are what the person adds to the plan before
-    /// approving it — the half that makes narrowing survivable, because a small
-    /// model's first act is a plan that forgets a file. They are checked against
-    /// the policy file like any other plan: the gate widens a plan up to the
-    /// file and not past it. Both default to empty, which is the approval that
-    /// widens nothing.
-    ApproveTask {
-        task: TaskId,
-        /// What the task may read, added to what the model declared.
+    #[serde(alias = "approve_task")]
+    ApproveJob {
+        #[serde(alias = "task")]
+        job: JobId,
+        /// What the job may read, added to what the model declared.
         #[serde(default)]
         files: Vec<String>,
         /// What it may also change. Separate from `files` for the same reason
@@ -90,28 +89,37 @@ pub enum ClientMessage {
         writes: Vec<String>,
         #[serde(default)]
         commands: Vec<String>,
-        /// What would close this task without anyone present: a command line
-        /// whose exit code of 0 folds it. The one part of a plan a model is
-        /// never asked for — "what would convince me this is finished" is the
-        /// judgement the person at the gate is there to make. Absent leaves the
-        /// person as the only authority, which is every task to date.
+        /// What would close this job without anyone present: a command line
+        /// whose exit code of 0 folds it.
         #[serde(default)]
         closes_on: Option<String>,
-        /// Whether to grant network access to this task. If `None`, preserves
+        /// Whether to grant network access to this job. If `None`, preserves
         /// whatever the model's plan requested (or `false` by default).
         #[serde(default)]
         network: Option<bool>,
+        /// Optional egress domain allowlist for this job.
+        #[serde(default)]
+        egress: Option<Vec<String>>,
     },
     /// Refuse it. The held prompt is dropped with it — a prompt whose plan was
     /// turned down is not a prompt that was approved on its own.
-    RejectTask { task: TaskId },
-    /// Close it: from here its turns are sent as their summary. A person is one
-    /// of two authorities that close a task now — the other is the task's own
-    /// `closes_on`, on an exit code of 0. The rung above both, a judge in
-    /// shadow mode, is still ahead.
-    CloseTask { task: TaskId },
+    #[serde(alias = "reject_task")]
+    RejectJob {
+        #[serde(alias = "task")]
+        job: JobId,
+    },
+    /// Close it: from here its turns are sent as their summary.
+    #[serde(alias = "close_task")]
+    CloseJob {
+        #[serde(alias = "task")]
+        job: JobId,
+    },
     /// Unfold it. Not an undo: nothing was deleted to recover.
-    ReopenTask { task: TaskId },
+    #[serde(alias = "reopen_task")]
+    ReopenJob {
+        #[serde(alias = "task")]
+        job: JobId,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,79 +138,59 @@ pub enum ServerMessage {
     TurnStarted {
         turn: TurnId,
         prompt: String,
-        /// The task it was asked inside, when there is one. Here rather than
-        /// only on the task messages so that a client can group a transcript
-        /// without replaying the whole lifecycle to work out what was open.
-        #[serde(default)]
-        task: Option<TaskId>,
+        /// The job it was asked inside, when there is one.
+        #[serde(default, alias = "task")]
+        job: Option<JobId>,
     },
     /// A piece of work, with the plan that is about to be approved or refused.
-    /// Nothing runs between this and `TaskApproved`.
-    TaskProposed {
-        task: TaskId,
+    /// Nothing runs between this and `JobApproved`.
+    #[serde(alias = "task_proposed")]
+    JobProposed {
+        #[serde(alias = "task")]
+        job: JobId,
         objective: String,
         plan: Plan,
-        /// Whether the planning call produced this plan, or answered in prose
-        /// and left the proposal to be the ask itself. `None` in a recording
-        /// made before the distinction existed — the alternative is to guess it
-        /// from an empty plan, which is the guess this field exists to remove.
-        ///
-        /// An added optional field, so an older reader skips it: it does not
-        /// move [`VERSION`], which is for a change that reader could not parse.
         #[serde(default)]
         source: Option<PlanSource>,
     },
     /// Approved, with the plan as approved rather than as proposed: it is what
-    /// the task's sandbox is built from, so a transcript that showed only the
-    /// proposal would be naming the wrong authority.
-    TaskApproved {
-        task: TaskId,
+    /// the job's sandbox is built from.
+    #[serde(alias = "task_approved")]
+    JobApproved {
+        #[serde(alias = "task")]
+        job: JobId,
         #[serde(default)]
         plan: Plan,
     },
     /// The one rewrite in an otherwise write-once session: from here on the
-    /// task's turns are sent as this summary. It travels on the wire because a
-    /// transcript has to be able to show what the model will see from now on.
-    TaskClosed {
-        task: TaskId,
+    /// job's turns are sent as this summary.
+    #[serde(alias = "task_closed")]
+    JobClosed {
+        #[serde(alias = "task")]
+        job: JobId,
         summary: String,
-        /// Which authority folded it. `None` in a recording made before there
-        /// was more than one, where it means a person: that is what every close
-        /// in every file to date was.
         #[serde(default)]
         by: Option<ClosedBy>,
     },
     /// What left the window, and stays out.
-    ///
-    /// The other way the history stops being sent, and on the protocol for the
-    /// same reason [`Self::TaskClosed`] is: a transcript has to be able to show
-    /// the difference between what happened and what the model is still shown.
-    /// A fold is visible without this message and an eviction is not — before
-    /// it, a recording could show the history bucket shrink and could not say
-    /// whether that was the policy or the arithmetic.
-    ///
-    /// Belongs to the turn whose selection cut, because eviction happens when
-    /// the *next* prompt no longer fits — the same tense as the budget, which
-    /// describes the call about to be made.
     Evicted {
         turn: TurnId,
-        /// The turns that left, oldest first.
         turns: Vec<TurnId>,
-        /// What they were worth in the prompt they are no longer in.
         tokens: u32,
-        /// Which counter produced `tokens`.
         counter: Counter,
-        /// Which cut this was: the minimum, or down to the low-water mark.
         policy: Eviction,
     },
     /// The fold stops applying. Not an undo — nothing was deleted.
-    TaskReopened {
-        task: TaskId,
+    #[serde(alias = "task_reopened")]
+    JobReopened {
+        #[serde(alias = "task")]
+        job: JobId,
     },
-    /// The plan was put up and turned down. The task stays in the session with
-    /// it: a refusal is a thing that happened.
-    TaskRejected {
-        task: TaskId,
+    /// The plan was put up and turned down.
+    #[serde(alias = "task_rejected")]
+    JobRejected {
+        #[serde(alias = "task")]
+        job: JobId,
     },
     Token {
         turn: TurnId,
@@ -331,11 +319,11 @@ impl ServerMessage {
             // A task spans turns and its lifecycle happens between them, and a
             // refusal is about the ask rather than about a turn — three of the
             // four happen when there is no turn to name.
-            Self::TaskProposed { .. }
-            | Self::TaskApproved { .. }
-            | Self::TaskClosed { .. }
-            | Self::TaskReopened { .. }
-            | Self::TaskRejected { .. }
+            Self::JobProposed { .. }
+            | Self::JobApproved { .. }
+            | Self::JobClosed { .. }
+            | Self::JobReopened { .. }
+            | Self::JobRejected { .. }
             | Self::Refused { .. } => None,
         }
     }
@@ -430,21 +418,22 @@ mod tests {
     }
 
     #[test]
-    fn a_task_message_is_about_a_task_rather_than_a_turn() {
-        let json = roundtrip(&ServerMessage::TaskProposed {
-            task: 2,
+    fn a_job_message_is_about_a_job_rather_than_a_turn() {
+        let json = roundtrip(&ServerMessage::JobProposed {
+            job: 2,
             objective: "add a --dry-run flag".into(),
             plan: Plan {
-                steps: vec!["read the CLI".into()],
+                tasks: vec!["read the CLI".into()],
                 files: vec!["crates/luu/src/lib.rs".into()],
                 writes: vec![],
                 commands: vec!["cargo".into()],
                 closes_on: None,
                 network: false,
+                ..Plan::default()
             },
             source: Some(PlanSource::Model),
         });
-        assert_eq!(json["type"], "task_proposed");
+        assert_eq!(json["type"], "job_proposed");
         assert_eq!(json["plan"]["files"][0], "crates/luu/src/lib.rs");
         assert_eq!(
             json["source"], "model",
@@ -458,26 +447,30 @@ mod tests {
                 .expect("an added optional field is not a parse error");
         assert!(matches!(
             older,
-            ServerMessage::TaskProposed { source: None, .. }
+            ServerMessage::JobProposed { source: None, .. }
         ));
         assert_eq!(
-            ServerMessage::TaskApproved {
-                task: 2,
+            ServerMessage::JobApproved {
+                job: 2,
                 plan: Plan::default(),
             }
             .turn(),
             None,
-            "a task spans turns; pinning it to one would be a guess",
+            "a job spans turns; pinning it to one would be a guess",
         );
     }
 
     #[test]
     fn the_client_half_of_the_lifecycle_parses_from_the_wire() {
         for (text, expected) in [
-            (r#"{"type":"approve_task","task":2}"#, "ApproveTask"),
-            (r#"{"type":"reject_task","task":2}"#, "RejectTask"),
-            (r#"{"type":"close_task","task":2}"#, "CloseTask"),
-            (r#"{"type":"reopen_task","task":2}"#, "ReopenTask"),
+            (r#"{"type":"approve_job","job":2}"#, "ApproveJob"),
+            (r#"{"type":"reject_job","job":2}"#, "RejectJob"),
+            (r#"{"type":"close_job","job":2}"#, "CloseJob"),
+            (r#"{"type":"reopen_job","job":2}"#, "ReopenJob"),
+            (r#"{"type":"approve_task","task":2}"#, "ApproveJob"),
+            (r#"{"type":"reject_task","task":2}"#, "RejectJob"),
+            (r#"{"type":"close_task","task":2}"#, "CloseJob"),
+            (r#"{"type":"reopen_task","task":2}"#, "ReopenJob"),
         ] {
             let parsed: ClientMessage = serde_json::from_str(text).unwrap();
             assert!(
@@ -493,7 +486,7 @@ mod tests {
             serde_json::from_str(r#"{"type":"turn_started","turn":1,"prompt":"hola"}"#).unwrap();
         assert!(matches!(
             parsed,
-            ServerMessage::TurnStarted { task: None, .. }
+            ServerMessage::TurnStarted { job: None, .. }
         ));
     }
 

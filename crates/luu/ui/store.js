@@ -37,9 +37,10 @@ export const state = $reactive({
   // The budget describes the first call only, while the backend's usage is
   // summed over all of them, so the two are comparable only with these added in.
   extraCalls: [],         // [{ step, prompt_tokens, shared_bytes, shared_tokens }]
-  // The session's tasks, in the order they were proposed. A proposed one is a
+  // The session's jobs, in the order they were proposed. A proposed one is a
   // gate: nothing runs behind it until someone answers.
-  tasks: [],              // [{ id, objective, plan, proposed, source, state, summary }]
+  jobs: [],               // [{ id, objective, plan, proposed, source, state, summary }]
+  tasks: [],              // alias for jobs
   error: null,
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
@@ -55,18 +56,16 @@ export const state = $reactive({
   replay: false,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
+  sessions: [],           // live server sessions list: [{ id, title, turns, ... }]
+  currentSessionId: "live",
 })
 
 let socket = null
 let traceSocket = null
-let nextId = 1
 let backoff = 250
-
-// Tokens are buffered and flushed once per frame. Assigning per token is the
-// one thing guaranteed to stall the UI during exactly the fast generation
-// worth watching — and jq79 has no effect batching to absorb it.
-let pending = ""
 let frame = null
+let pending = ""
+let nextId = 1
 
 // Messages are replaced, never mutated in place.
 //
@@ -77,39 +76,44 @@ let frame = null
 // per frame, and `:key` keeps the DOM.
 function replaceLast(patch) {
   const index = state.messages.length - 1
+  if (index < 0) return null
   const last = state.messages[index]
   if (!last) return null
   state.messages[index] = { ...last, ...patch }
   return last
 }
 
-function patchTask(id, patch) {
-  state.tasks = state.tasks.map(task => task.id === id ? { ...task, ...patch } : task)
+function patchJob(id, patch) {
+  state.jobs = state.jobs.map(job => job.id === id ? { ...job, ...patch } : job)
+  state.tasks = state.jobs
 }
+const patchTask = patchJob
 
-/// The transcript as the context sees it: a closed task is one entry, its turns
+/// The transcript as the context sees it: a closed job is one entry, its turns
 /// folded behind the summary the model will get from now on.
 ///
 /// Collapsed by default and expandable, which is the pair that matters — the
 /// default view is what the prompt now contains, and opening one shows what it
 /// no longer does. A debug client that could only show one of those would be
 /// hiding the thing this whole design is about.
-export function foldTranscript(messages, tasks, expanded) {
-  const closed = new Map(tasks.filter(task => task.state === "closed").map(task => [task.id, task]))
+export function foldTranscript(messages, jobs, expanded) {
+  const list = jobs || []
+  const closed = new Map(list.filter(j => j.state === "closed").map(j => [j.id, j]))
   const entries = []
   const seen = new Set()
 
   for (const message of messages) {
-    const task = closed.get(message.task)
-    if (!task) {
+    const id = message.job ?? message.task
+    const job = closed.get(id)
+    if (!job) {
       entries.push({ kind: "message", id: `m${message.id}`, message })
       continue
     }
-    if (!seen.has(task.id)) {
-      seen.add(task.id)
-      entries.push({ kind: "fold", id: `t${task.id}`, task })
+    if (!seen.has(job.id)) {
+      seen.add(job.id)
+      entries.push({ kind: "fold", id: `j${job.id}`, job, task: job })
     }
-    if (expanded.includes(task.id)) {
+    if (expanded.includes(job.id)) {
       entries.push({ kind: "message", id: `m${message.id}`, message })
     }
   }
@@ -157,28 +161,36 @@ function onProtocol(message) {
       state.protocol = message.protocol
       state.turn = message.turn
       state.status = message.turn === null ? idle() : "running"
+      if (!isReplay) {
+        refreshLiveSession()
+        refreshSessionsList()
+      }
       break
 
-    case "turn_started":
+    case "turn_started": {
       state.turn = message.turn
       state.status = "running"
       state.error = null
       // Whatever was refused, the answer to it is on screen now.
       state.refused = null
-      // The task it belongs to travels with the turn, so the transcript can
+      // The job it belongs to travels with the turn, so the transcript can
       // group without replaying the lifecycle to work out what was open.
-      state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, task: message.task, reason: null, usage: null, evicted: null })
-      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", task: message.task, reason: null, usage: null, evicted: null })
+      const turnJob = message.job ?? message.task ?? null
+      state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, job: turnJob, task: turnJob, reason: null, usage: null, evicted: null })
+      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", job: turnJob, task: turnJob, reason: null, usage: null, evicted: null })
       state.tools = []
       state.extraCalls = []
       break
+    }
 
-    // The lifecycle. Tasks are replaced rather than mutated, for the same
+    // The lifecycle. Jobs are replaced rather than mutated, for the same
     // reason messages are: jq79 does not wake an `:each` on a property assigned
     // inside an array element.
-    case "task_proposed":
-      state.tasks = [...state.tasks, {
-        id: message.task,
+    case "job_proposed":
+    case "task_proposed": {
+      const id = message.job ?? message.task
+      const newJob = {
+        id,
         objective: message.objective,
         plan: message.plan,
         // Kept beside the plan as approved: the difference between them is what
@@ -191,18 +203,24 @@ function onProtocol(message) {
         state: "proposed",
         summary: null,
         closedBy: null,
-      }]
+      }
+      state.jobs = [...state.jobs, newJob]
+      state.tasks = state.jobs
       break
+    }
 
-    case "task_approved":
-      // The plan as approved, which is what the task's sandbox is built from —
+    case "job_approved":
+    case "task_approved": {
+      // The plan as approved, which is what the job's sandbox is built from —
       // the person at the gate may have added what the model forgot. An older
       // recording carries none, and then the proposal is the best answer there
       // is.
-      patchTask(message.task, message.plan
+      const id = message.job ?? message.task
+      patchJob(id, message.plan
         ? { state: "approved", plan: message.plan }
         : { state: "approved" })
       break
+    }
 
     // The server declining to do something, which used to be an early return
     // and therefore indistinguishable from a message that never arrived.
@@ -210,26 +228,35 @@ function onProtocol(message) {
       state.refused = { request: message.request, reason: message.reason, detail: message.detail }
       break
 
-    case "task_rejected":
-      patchTask(message.task, { state: "rejected" })
+    case "job_rejected":
+    case "task_rejected": {
+      const id = message.job ?? message.task
+      patchJob(id, { state: "rejected" })
       break
+    }
 
-    case "task_closed":
+    case "job_closed":
+    case "task_closed": {
       // Who folded it. Absent in a recording made before there was more than
       // one authority, and then it was a person: nothing else could close a
-      // task when the file was written.
-      patchTask(message.task, {
+      // job when the file was written.
+      const id = message.job ?? message.task
+      patchJob(id, {
         state: "closed",
         summary: message.summary,
         closedBy: message.by ?? "user",
       })
       break
+    }
 
-    case "task_reopened":
+    case "job_reopened":
+    case "task_reopened": {
       // The summary goes with the fold: it is an account of work that is being
       // written again.
-      patchTask(message.task, { state: "approved", summary: null, closedBy: null })
+      const id = message.job ?? message.task
+      patchJob(id, { state: "approved", summary: null, closedBy: null })
       break
+    }
 
     // What left the window and stays out. The turns are kept and marked, never
     // removed: a transcript that agreed with the prompt could no longer show
@@ -441,6 +468,7 @@ function idle() {
 
 function reset() {
   state.messages = []
+  state.jobs = []
   state.tasks = []
   state.budget = null
   state.tools = []
@@ -514,25 +542,150 @@ export function cancel() {
 
 /// The other half of the gate. Approving runs the prompt the server has been
 /// holding since the proposal; refusing drops it with the plan.
-function act(type, task) {
+function act(type, id) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
-  socket.send(JSON.stringify({ type, task }))
+  socket.send(JSON.stringify({ type, job: id, task: id }))
 }
 
 /// Approving carries what the person added to the plan, which is the half that
-/// makes narrowing survivable: a task may touch what it was approved for, so a
+/// makes narrowing survivable: a job may touch what it was approved for, so a
 /// plan that forgot a file is widened here rather than rejected and retyped.
 /// `closesOn` is the one part of a plan the model is never asked for: a command
-/// line whose exit code of 0 folds the task without anyone present. Empty
-/// leaves the person as the only authority, which is what every task did before
+/// line whose exit code of 0 folds the job without anyone present. Empty
+/// leaves the person as the only authority, which is what every job did before
 /// the field existed.
-export function approveTask(task, files = [], writes = [], commands = [], closesOn = "") {
+export function approveJob(job, files = [], writes = [], commands = [], closesOn = "") {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify({
-    type: "approve_task", task, files, writes, commands,
+    type: "approve_job", job, task: job, files, writes, commands,
     closes_on: closesOn.trim() || null,
   }))
 }
-export const rejectTask = task => act("reject_task", task)
-export const closeTask = task => act("close_task", task)
-export const reopenTask = task => act("reopen_task", task)
+export const approveTask = approveJob
+export const rejectJob = job => act("reject_job", job)
+export const rejectTask = rejectJob
+export const closeJob = job => act("close_job", job)
+export const closeTask = closeJob
+export const reopenJob = job => act("reopen_job", job)
+export const reopenTask = reopenJob
+
+export async function refreshLiveSession() {
+  try {
+    const res = await fetch("./api/sessions/live", { headers: apiHeaders() })
+    if (!res.ok) return
+    const view = await res.json()
+    reset()
+    state.backend = view.backend
+    state.model = view.model
+    state.jobs = (view.jobs || []).map(j => ({
+      id: j.id,
+      objective: j.objective,
+      plan: j.plan,
+      proposed: j.proposed,
+      source: j.source,
+      state: j.state,
+      summary: j.summary,
+      closedBy: j.closed_by || null,
+    }))
+    state.tasks = state.jobs
+
+    const msgs = []
+    let id = 1
+    for (const t of (view.turns || [])) {
+      if (t.prompt) {
+        msgs.push({
+          id: id++,
+          turn: t.turn,
+          role: "user",
+          text: t.prompt,
+          job: t.job,
+          task: t.job,
+          reason: null,
+          usage: null,
+          evicted: null,
+        })
+      }
+      if (t.text || (t.tools && t.tools.length)) {
+        msgs.push({
+          id: id++,
+          turn: t.turn,
+          role: "assistant",
+          text: t.text || "",
+          job: t.job,
+          task: t.job,
+          reason: null,
+          usage: t.usage || null,
+          evicted: null,
+        })
+      }
+    }
+    state.messages = msgs
+    nextId = id
+  } catch {
+    // Ignore fetch failure
+  }
+}
+
+export async function refreshSessionsList() {
+  try {
+    const res = await fetch("./api/sessions", { headers: apiHeaders() })
+    if (!res.ok) return
+    state.sessions = await res.json()
+  } catch {
+    // Ignore fetch failure
+  }
+}
+
+export async function newSession() {
+  try {
+    const res = await fetch("./api/sessions", {
+      method: "POST",
+      headers: apiHeaders(),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      state.error = `Could not create session: ${err}`
+      return
+    }
+    state.currentSessionId = "live"
+    await refreshSessionsList()
+  } catch (e) {
+    state.error = `Could not create session: ${e}`
+  }
+}
+
+export async function resumeSession(id) {
+  try {
+    const res = await fetch(`./api/sessions/${encodeURIComponent(id)}/resume`, {
+      method: "POST",
+      headers: apiHeaders(),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      state.error = `Could not resume session: ${err}`
+      return
+    }
+    state.currentSessionId = "live"
+    await refreshSessionsList()
+  } catch (e) {
+    state.error = `Could not resume session: ${e}`
+  }
+}
+
+export async function deleteSession(id) {
+  try {
+    const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: apiHeaders(),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      state.error = `Could not delete session: ${err}`
+      return
+    }
+    await refreshSessionsList()
+  } catch (e) {
+    state.error = `Could not delete session: ${e}`
+  }
+}
+

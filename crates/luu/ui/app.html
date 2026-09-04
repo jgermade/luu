@@ -2,19 +2,21 @@
   // A setup script takes `await import(...)`; a static `import` statement is
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
-          approveTask, rejectTask, closeTask, reopenTask } = await import("./store.js")
+          approveJob, rejectJob, closeJob, reopenJob,
+          approveTask, rejectTask, closeTask, reopenTask,
+          newSession, resumeSession, deleteSession } = await import("./store.js")
 
   connect()
 
   let draft = ""
-  // Which closed tasks are open in the transcript. Reassigned, never mutated.
+  // Which closed jobs are open in the transcript. Reassigned, never mutated.
   let expanded = []
   // What the person is adding to the proposed plan before approving it. The
-  // task's sandbox is built from the plan, so this is the only moment a file
+  // job's sandbox is built from the plan, so this is the only moment a file
   // the model forgot can still get in. Reassigned, never mutated.
   let adding = { files: [], writes: [], commands: [] }
   let addition = ""
-  // What would close the task without anyone present. Typed rather than added
+  // What would close the job without anyone present. Typed rather than added
   // to a list: there is one closing condition, and the model never proposes it.
   let closesOn = ""
   const add = kind => {
@@ -24,13 +26,18 @@
     addition = ""
   }
   const approve = id => {
-    approveTask(id, adding.files, adding.writes, adding.commands, closesOn)
+    approveJob(id, adding.files, adding.writes, adding.commands, closesOn)
     adding = { files: [], writes: [], commands: [] }
     addition = ""
     closesOn = ""
   }
   const toggle = id => {
     expanded = expanded.includes(id) ? expanded.filter(open => open !== id) : [...expanded, id]
+  }
+
+  const onSwitchSession = id => {
+    if (!id || id === "live" || id === state.currentSessionId) return
+    resumeSession(id)
   }
 
   const submit = () => {
@@ -45,10 +52,11 @@
   // send into.
   $: replaying = state.replay
   // The gate. While this is set the server is holding a prompt, unrun.
-  $: proposed = state.tasks.find(task => task.state === "proposed") || null
-  $: live = state.tasks.find(task => task.state === "approved") || null
+  $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
+  $: live = (state.jobs || state.tasks).find(j => j.state === "approved") || null
+  $: planTasks = proposed ? (proposed.plan.tasks || proposed.plan.steps || []) : []
   $: declares = proposed
-    ? proposed.plan.steps.length + proposed.plan.files.length + proposed.plan.commands.length
+    ? planTasks.length + proposed.plan.files.length + proposed.plan.commands.length
     : 0
   // Whether the *planning call* produced this plan, which is not the same
   // question as whether the plan has anything in it: a model that answered in
@@ -58,7 +66,7 @@
   $: prose = proposed
     ? (proposed.source ? proposed.source === "prose" : !declares)
     : false
-  $: entries = foldTranscript(state.messages, state.tasks, expanded)
+  $: entries = foldTranscript(state.messages, state.jobs || state.tasks, expanded)
   $: budgetTotal = state.budget
     ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
     : 0
@@ -101,6 +109,17 @@
       {{ fixture.name }}
     </option>
   </select>
+  <div :if="!state.replay && state.sessions.length" class="session-ctrls">
+    <select
+      class="sessions"
+      :value="state.currentSessionId"
+      @change="onSwitchSession($event.target.value)">
+      <option :each="s in state.sessions" :key="s.id" :value="s.id">
+        {{ s.id === 'live' ? 'Live session' : (s.title || s.id) }} ({{ s.turns }}t)
+      </option>
+    </select>
+    <button class="new-btn" @click="newSession()" title="Start a new session">+ New</button>
+  </div>
   <span class="status" :class="state.status">{{ state.status }}</span>
 </header>
 
@@ -127,21 +146,21 @@
           </div>
         </article>
 
-        <!-- A closed task, as the model now sees it: one summary where its
+        <!-- A closed job, as the model now sees it: one summary where its
              turns were. Opening it shows what the prompt no longer carries. -->
         <div :if="entry.kind === 'fold'" class="fold">
           <div class="fold-head">
-            <button type="button" class="link" @click="toggle(entry.task.id)">
-              {{ expanded.includes(entry.task.id) ? "▾" : "▸" }}
-              task {{ entry.task.id }} · {{ entry.task.objective }}
+            <button type="button" class="link" @click="toggle((entry.job || entry.task).id)">
+              {{ expanded.includes((entry.job || entry.task).id) ? "▾" : "▸" }}
+              job {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
             </button>
             <!-- Which authority folded it. Shown rather than counted in
                  private: the ladder above the person is only worth climbing if
-                 a reader can see which rung took each task. -->
-            <span :if="entry.task.closedBy === 'exit_code'" class="dim">closed by exit code</span>
-            <button type="button" class="link" :disabled="replaying" @click="reopenTask(entry.task.id)">reopen</button>
+                 a reader can see which rung took each job. -->
+            <span :if="(entry.job || entry.task).closedBy === 'exit_code'" class="dim">closed by exit code</span>
+            <button type="button" class="link" :disabled="replaying" @click="reopenJob((entry.job || entry.task).id)">reopen</button>
           </div>
-          <pre class="summary">{{ entry.task.summary }}</pre>
+          <pre class="summary">{{ (entry.job || entry.task).summary }}</pre>
         </div>
       </div>
 
@@ -159,13 +178,13 @@
       <b>{{ state.refused?.request }}</b> refused — {{ state.refused?.detail }}
     </div>
 
-    <!-- Nothing has run under this task and nothing will until it is answered:
+    <!-- Nothing has run under this job and nothing will until it is answered:
          the prompt that caused it is held on the server, unrun. -->
     <div :if="proposed" class="gate">
-      <div class="who">proposed task {{ proposed?.id }}</div>
+      <div class="who">proposed job {{ proposed?.id }}</div>
       <div class="objective">{{ proposed?.objective }}</div>
-      <ul :if="proposed?.plan.steps.length" class="plan">
-        <li :each="step in proposed?.plan.steps || []" :key="step">{{ step }}</li>
+      <ul :if="planTasks.length" class="plan">
+        <li :each="task in planTasks" :key="task">{{ task }}</li>
       </ul>
       <p :if="proposed?.plan.files.length" class="dim">reads: {{ proposed?.plan.files.join(" · ") }}</p>
       <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
@@ -174,11 +193,11 @@
         <span :if="prose">The planning call answered in prose, so the model
         declared nothing.</span>
         <span :if="!prose">The model declared an empty plan.</span>
-        The plan is the sandbox for its task, so approving as it stands runs a
-        task that may touch nothing — add what it needs below, up to what the
+        The plan is the sandbox for its job, so approving as it stands runs a
+        job that may touch nothing — add what it needs below, up to what the
         policy file grants.
       </p>
-      <!-- The plan is the sandbox for this task, so what it forgot is denied
+      <!-- The plan is the sandbox for this job, so what it forgot is denied
            until someone adds it. Bounded by the policy file: an entry it does
            not grant comes back missing from the approved plan. -->
       <div class="amend" :if="!replaying">
@@ -204,19 +223,19 @@
           :attrs="{ placeholder: 'closes itself when this command exits 0 (optional)' }">
       </div>
       <p :if="closesOn.trim()" class="dim warn">
-        this task folds itself when <code>{{ closesOn.trim() }}</code> exits 0,
+        this job folds itself when <code>{{ closesOn.trim() }}</code> exits 0,
         with nobody watching — its summary is written either way
       </p>
 
       <div class="gate-buttons">
         <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>
-        <button type="button" class="cancel" :disabled="replaying" @click="rejectTask(proposed?.id)">Reject</button>
+        <button type="button" class="cancel" :disabled="replaying" @click="rejectJob(proposed?.id)">Reject</button>
       </div>
     </div>
 
-    <div :if="live" class="live-task">
-      <span>task {{ live?.id }} · {{ live?.objective }}</span>
-      <button type="button" class="link" :disabled="running || replaying" @click="closeTask(live?.id)">
+    <div :if="live" class="live-task live-job">
+      <span>job {{ live?.id }} · {{ live?.objective }}</span>
+      <button type="button" class="link" :disabled="running || replaying" @click="closeJob(live?.id)">
         close &amp; fold
       </button>
     </div>
@@ -225,7 +244,7 @@
       <input
         :value="draft"
         @input="draft = $event.target.value"
-        :attrs="{ placeholder: proposed ? 'Approve or reject the proposed task first' : (replaying ? 'Replaying a recorded session — read only' : 'Ask something…'), disabled: replaying || !!proposed }"
+        :attrs="{ placeholder: proposed ? 'Approve or reject the proposed job first' : (replaying ? 'Replaying a recorded session — read only' : 'Ask something…'), disabled: replaying || !!proposed }"
         autofocus>
       <button :if="!running" type="submit" :disabled="!draft.trim() || replaying || !!proposed">Send</button>
       <button :if="running" type="button" class="cancel" @click="cancel()">Cancel</button>
@@ -376,7 +395,7 @@
   .status.running { color: var(--accent); }
   .status.replay { color: var(--warn); }
   .status.closed { color: var(--bad); }
-  .fixtures {
+  .fixtures, .sessions {
     background: var(--bg);
     color: inherit;
     border: 1px solid var(--line);
@@ -384,6 +403,25 @@
     font: inherit;
     font-size: 12px;
     padding: .15rem .4rem;
+  }
+  .session-ctrls {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+  }
+  .new-btn {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    padding: .15rem .45rem;
+    cursor: pointer;
+  }
+  .new-btn:hover {
+    background: var(--accent);
+    color: #10131a;
   }
   input:disabled { opacity: .6; }
 
@@ -492,12 +530,12 @@
     background: var(--bg); color: var(--fg); font: inherit;
   }
 
-  .live-task {
+  .live-task, .live-job {
     display: flex; align-items: center; gap: .6rem;
     margin: 0 1rem .4rem; font-size: 13px; color: var(--dim);
   }
-  .live-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .live-task button { margin-left: auto; }
+  .live-task span, .live-job span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .live-task button, .live-job button { margin-left: auto; }
 
   /* A closed task: one entry, where its turns were. */
   .fold {

@@ -34,7 +34,11 @@ use crate::trace::TraceMessage;
 /// as 3 and 4, a new variant of a tagged enum. A format-4 file does not say what
 /// its session forgot, and nothing can work it out afterwards: the floor lived
 /// in memory. See `RECORD/2026-08-31.eviction-tombstones.completed.md`.
-pub const FORMAT: u32 = 5;
+///
+/// 6: `job_proposed`, `job_approved`, `job_closed`, `job_reopened`, `job_rejected`
+/// lines, and plans carrying model tasks checklists. See
+/// `RECORD/2026-09-04.from-tasks-to-jobs.completed.md`.
+pub const FORMAT: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]

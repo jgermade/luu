@@ -131,10 +131,7 @@ async fn a_plans_narrowing_survives_the_pipe() {
         .await;
     assert!(!outcome.verdict.allowed);
     assert!(
-        outcome
-            .verdict
-            .rule
-            .contains("the approved plan for task 7"),
+        outcome.verdict.rule.contains("the approved plan for job 7"),
         "{}",
         outcome.verdict.rule
     );

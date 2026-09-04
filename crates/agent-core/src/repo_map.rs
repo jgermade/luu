@@ -781,6 +781,7 @@ fn private_helper(x: u32) -> u32 {
             network: false,
             enforcement: Default::default(),
             limits: Default::default(),
+            ..SandboxPolicy::default()
         };
         let sandbox = Sandbox::new(&policy, dir.path()).expect("the sandbox");
 
@@ -910,6 +911,7 @@ fn private_helper(x: u32) -> u32 {
             network: false,
             enforcement: Default::default(),
             limits: Default::default(),
+            ..SandboxPolicy::default()
         };
         let narrow = Sandbox::new(&narrow, dir.path()).expect("the narrow sandbox");
         let map = RepoMap::build(&narrow, 4096, &ApproximateCounter, Order::Ranked);

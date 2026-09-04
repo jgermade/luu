@@ -8,12 +8,13 @@ pub mod api;
 pub mod backend;
 pub mod context;
 pub mod fragment;
+pub mod job;
 pub mod protocol;
 pub mod rank;
 pub mod record;
 pub mod repo_map;
 pub mod sandbox;
-pub mod task;
+pub use job as task; // Temporary alias for smooth migration
 pub mod tools;
 pub mod trace;
 pub mod turn;

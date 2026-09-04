@@ -12,10 +12,10 @@ use agent_core::agent::run_agent_turn;
 use agent_core::api::SessionView;
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
+use agent_core::job::{ClosedBy, JobId, Plan, PlanSource, Proposal, parse_plan};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
 use agent_core::repo_map::{Order, RepoMap};
 use agent_core::sandbox::Sandbox;
-use agent_core::task::{ClosedBy, Plan, PlanSource, Proposal, TaskId, parse_plan};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
@@ -32,7 +32,7 @@ use axum::extract::{Query, Request};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
@@ -60,17 +60,17 @@ struct Session {
     /// While this is set, nothing runs: not a turn, not a tool, not a model
     /// call. That is the gate.
     pending: Option<Pending>,
-    /// The live task's own sandbox: the approved plan, resolved against the
-    /// policy file. Every turn inside the task is checked against this rather
-    /// than against the session's, which is what makes the task boundary the
+    /// The live job's own sandbox: the approved plan, resolved against the
+    /// policy file. Every turn inside the job is checked against this rather
+    /// than against the session's, which is what makes the job boundary the
     /// scope permission is granted at instead of a comment saying it is.
-    /// `None` outside a task, where the policy file is the whole answer.
-    narrowed: Option<(TaskId, Arc<Sandbox>)>,
+    /// `None` outside a job, where the policy file is the whole answer.
+    narrowed: Option<(JobId, Arc<Sandbox>)>,
 }
 
 /// A prompt held between the proposal and the answer to it.
 struct Pending {
-    task: TaskId,
+    job: JobId,
     prompt: String,
 }
 
@@ -100,7 +100,8 @@ struct App {
     /// session should not have to learn its name first — but a store keyed on
     /// "live" would overwrite the previous session on every restart, which is a
     /// history that only ever holds one thing.
-    session_id: String,
+    session_id: Mutex<String>,
+    map_rendered: String,
     /// Where the fold is cached between restarts. `None` leaves the session in
     /// memory, which is what every run did before this existed.
     store: Option<Mutex<SessionStore>>,
@@ -189,6 +190,7 @@ impl App {
 
         let backend_name = backend.name().to_string();
         let model_name = model.clone();
+        let map_rendered = map.render();
         Ok(Arc::new(App {
             backend,
             model,
@@ -198,7 +200,7 @@ impl App {
                 cancel: None,
                 context: AgentContext::new(SYSTEM)
                     .with_tools(agency.definitions())
-                    .with_map(map.render()),
+                    .with_map(&map_rendered),
                 prefix: PrefixTracker::default(),
                 pending: None,
                 narrowed: None,
@@ -216,7 +218,8 @@ impl App {
                 view
             }),
             started_at,
-            session_id: session_id(started_at),
+            session_id: Mutex::new(session_id(started_at)),
+            map_rendered,
             store: sessions,
         }))
     }
@@ -255,14 +258,15 @@ impl App {
             return;
         };
         let stored = {
+            let session_id = self.session_id.lock().await.clone();
             let view = self.view.lock().await;
             let mut stored = view.clone();
             // The id is the session's *name* rather than part of the fold —
             // `SessionView::from_record` takes it as an argument for the same
             // reason, and `luu export` takes it from the file stem.
-            stored.id = self.session_id.clone();
+            stored.id = session_id.clone();
             if stored.title == LIVE_SESSION {
-                stored.title = self.session_id.clone();
+                stored.title = session_id;
             }
             stored
         };
@@ -295,11 +299,11 @@ fn is_checkpoint(event: &Event) -> bool {
             message,
             ServerMessage::Ended { .. }
                 | ServerMessage::Failed { .. }
-                | ServerMessage::TaskProposed { .. }
-                | ServerMessage::TaskApproved { .. }
-                | ServerMessage::TaskClosed { .. }
-                | ServerMessage::TaskRejected { .. }
-                | ServerMessage::TaskReopened { .. }
+                | ServerMessage::JobProposed { .. }
+                | ServerMessage::JobApproved { .. }
+                | ServerMessage::JobClosed { .. }
+                | ServerMessage::JobRejected { .. }
+                | ServerMessage::JobReopened { .. }
         ),
         Event::Trace(_) => false,
     }
@@ -413,9 +417,13 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // axum allows only one parameter per segment, so `{id}` captures
         // `completed-turn.json` whole and the handler strips it. Only the
         // literal segments get a second route.
-        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions.json", get(list_sessions))
-        .route("/api/sessions/{id}", get(get_session))
+        .route(
+            "/api/sessions/{id}",
+            get(get_session).delete(delete_session_handler),
+        )
+        .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/turns", get(get_turns))
         .route("/api/sessions/{id}/turns.json", get(get_turns))
         .route("/api/sessions/{id}/turns/{turn}", get(get_turn))
@@ -603,33 +611,35 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 let _ = cancel.send(true);
             }
         }
-        ClientMessage::ApproveTask {
-            task,
+        ClientMessage::ApproveJob {
+            job,
             files,
             writes,
             commands,
             closes_on,
             network,
+            egress,
         } => {
-            approve_task(
+            approve_job(
                 app.clone(),
-                task,
+                job,
                 files,
                 writes,
                 commands,
                 closes_on,
                 network,
+                egress,
             )
             .await;
         }
-        ClientMessage::RejectTask { task } => {
-            reject_task(app.clone(), task).await;
+        ClientMessage::RejectJob { job } => {
+            reject_job(app.clone(), job).await;
         }
-        ClientMessage::CloseTask { task } => {
-            close_task(app.clone(), task).await;
+        ClientMessage::CloseJob { job } => {
+            close_job(app.clone(), job).await;
         }
-        ClientMessage::ReopenTask { task } => {
-            reopen_task(app.clone(), task).await;
+        ClientMessage::ReopenJob { job } => {
+            reopen_job(app.clone(), job).await;
         }
     }
 }
@@ -737,9 +747,9 @@ async fn refuse(app: &Arc<App>, request: &str, reason: Refusal, detail: impl Int
     .await;
 }
 
-/// A prompt either starts a task or belongs to one.
+/// A prompt either starts a job or belongs to one.
 ///
-/// The gate is here and nowhere else: with no task open, the prompt buys a
+/// The gate is here and nowhere else: with no job open, the prompt buys a
 /// planning call and is then held until a person answers it. With one open, it
 /// is a turn inside work that was already approved — confirmation is per piece
 /// of work, not per message.
@@ -750,22 +760,22 @@ async fn on_prompt(app: Arc<App>, prompt: String) {
         // approved. The composer is disabled client-side; this is the half that
         // does not depend on the client behaving.
         if let Some(pending) = &session.pending {
-            let task = pending.task;
+            let job = pending.job;
             drop(session);
             refuse(
                 &app,
                 "prompt",
                 Refusal::Pending,
-                format!("task {task} is waiting to be approved or refused"),
+                format!("job {job} is waiting to be approved or refused"),
             )
             .await;
             return;
         }
-        session.context.live_task().is_none()
+        session.context.live_job().is_none()
     };
 
     match propose {
-        true => propose_task(app, prompt).await,
+        true => propose_job(app, prompt).await,
         false => start_turn(app, prompt).await,
     }
 }
@@ -775,12 +785,12 @@ async fn on_prompt(app: Arc<App>, prompt: String) {
 ///
 /// The planning call is a turn: a prompt goes in, tokens come out, it costs a
 /// window, and every panel that explains a turn explains this one too. It is
-/// the one turn that is **not** remembered — what survives it is the task, and
+/// the one turn that is **not** remembered — what survives it is the job, and
 /// a plan block in the history would be paid for on every later call.
 ///
 /// It runs through [`run_turn`] rather than the agent loop, so it has no tools:
 /// a planning call that could execute something would be the gate leaking.
-async fn propose_task(app: Arc<App>, prompt: String) {
+async fn propose_job(app: Arc<App>, prompt: String) {
     let Some((turn, cancel_rx, request)) = begin_turn(&app, &prompt, Some(PLANNING)).await else {
         return;
     };
@@ -831,16 +841,16 @@ async fn propose_task(app: Arc<App>, prompt: String) {
             ),
         };
 
-        let task = {
+        let job = {
             let mut session = app.session.lock().await;
-            let task = session
+            let job = session
                 .context
-                .propose_task(proposal.objective.clone(), proposal.plan.clone());
-            session.pending = Some(Pending { task, prompt });
-            task
+                .propose_job(proposal.objective.clone(), proposal.plan.clone());
+            session.pending = Some(Pending { job, prompt });
+            job
         };
-        app.publish(Event::Protocol(ServerMessage::TaskProposed {
-            task,
+        app.publish(Event::Protocol(ServerMessage::JobProposed {
+            job,
             objective: proposal.objective,
             plan: proposal.plan,
             source: Some(source),
@@ -854,17 +864,19 @@ async fn propose_task(app: Arc<App>, prompt: String) {
 ///
 /// The amendment is checked against the policy file exactly as the model's plan
 /// was: an entry the file does not grant is dropped rather than approved, and
-/// the plan that comes back on `task_approved` is what was actually approved.
+/// the plan that comes back on `job_approved` is what was actually approved.
 /// That is the whole feedback: a client that adds a path nobody may touch sees
 /// it missing from the plan it gets back, rather than being told nothing.
-async fn approve_task(
+#[allow(clippy::too_many_arguments)]
+async fn approve_job(
     app: Arc<App>,
-    task: TaskId,
+    job: JobId,
     files: Vec<String>,
     writes: Vec<String>,
     commands: Vec<String>,
     closes_on: Option<String>,
     network: Option<bool>,
+    egress: Option<Vec<String>>,
 ) {
     let approved = {
         let mut session = app.session.lock().await;
@@ -872,18 +884,23 @@ async fn approve_task(
         // the planning turn is the last one there was. Checked anyway, because
         // the alternative to being wrong about it is a held prompt taken out of
         // `pending` and then silently dropped by a turn that could not start.
-        match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.task == task)
-        {
+        match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.job == job) {
             true => {
-                let (granted, mut dropped) =
-                    permitted(&app.agency.sandbox, files, writes, commands, network);
+                let (granted, mut dropped) = permitted(
+                    &app.agency.sandbox,
+                    files,
+                    writes,
+                    commands,
+                    network,
+                    egress,
+                );
                 // Checked against the plan as it will *be* rather than against
                 // the amendment alone: the person types `closes_on` for a
                 // command the model already declared more often than for one
                 // they are adding in the same breath.
                 let (closes_on, refused) = closing_condition(
                     &app.agency.sandbox,
-                    session.context.task(task).map(|t| &t.plan),
+                    session.context.job(job).map(|t| &t.plan),
                     &granted,
                     closes_on,
                 );
@@ -891,15 +908,16 @@ async fn approve_task(
                 let plan = session
                     .context
                     .amend_plan(
-                        task,
+                        job,
                         &granted.files,
                         &granted.writes,
                         &granted.commands,
                         closes_on.as_deref(),
                         network.map(|_| granted.network),
+                        Some(&granted.egress),
                     )
                     .unwrap_or_default();
-                session.context.approve_task(task);
+                session.context.approve_job(job);
                 session
                     .pending
                     .take()
@@ -915,9 +933,9 @@ async fn approve_task(
     let Some((prompt, plan, dropped)) = approved else {
         refuse(
             &app,
-            "approve_task",
-            Refusal::Task,
-            format!("task {task} is not waiting to be approved"),
+            "approve_job",
+            Refusal::Job,
+            format!("job {job} is not waiting to be approved"),
         )
         .await;
         return;
@@ -929,7 +947,7 @@ async fn approve_task(
     if !dropped.is_empty() {
         refuse(
             &app,
-            "approve_task",
+            "approve_job",
             Refusal::NotGranted,
             format!(
                 "approved without what the sandbox policy does not grant: {}",
@@ -939,26 +957,26 @@ async fn approve_task(
         .await;
     }
 
-    // The task's own sandbox, from here until it closes. A plan that names
-    // nothing narrows to nothing, which is the point: a turn inside a task may
-    // touch what the task was approved for.
-    let narrowed = match plan.narrow(app.agency.sandbox.as_ref(), task) {
+    // The job's own sandbox, from here until it closes. A plan that names
+    // nothing narrows to nothing, which is the point: a turn inside a job may
+    // touch what the job was approved for.
+    let narrowed = match plan.narrow(app.agency.sandbox.as_ref(), job) {
         Ok(sandbox) => Some(Arc::new(sandbox)),
         // Only a path that stopped existing between the check and here can do
         // this. Falling back to the session's sandbox would silently un-narrow
-        // the task, so the task runs with nothing granted and the denials say
+        // the job, so the job runs with nothing granted and the denials say
         // which plan refused.
         Err(error) => {
-            eprintln!("task {task}: the approved plan could not be resolved: {error}");
+            eprintln!("job {job}: the approved plan could not be resolved: {error}");
             None
         }
     };
     {
         let mut session = app.session.lock().await;
-        session.narrowed = narrowed.map(|sandbox| (task, sandbox));
+        session.narrowed = narrowed.map(|sandbox| (job, sandbox));
     }
 
-    app.publish(Event::Protocol(ServerMessage::TaskApproved { task, plan }))
+    app.publish(Event::Protocol(ServerMessage::JobApproved { job, plan }))
         .await;
     start_turn(app, prompt).await;
 }
@@ -974,9 +992,10 @@ fn permitted(
     writes: Vec<String>,
     commands: Vec<String>,
     network: Option<bool>,
+    egress: Option<Vec<String>>,
 ) -> (Plan, Vec<String>) {
     let asked = Plan {
-        steps: Vec::new(),
+        tasks: Vec::new(),
         files,
         writes,
         commands,
@@ -984,6 +1003,7 @@ fn permitted(
         // which this function has never seen. See `closing_condition`.
         closes_on: None,
         network: network.unwrap_or(false),
+        egress: egress.unwrap_or_default(),
     };
     let refused = asked.unmet(sandbox);
     let keep = |item: &String, kind: &str| {
@@ -991,13 +1011,18 @@ fn permitted(
             .iter()
             .any(|line| line.starts_with(&format!("{kind} {item}:")))
     };
+    let keep_egress = |domain: &str| {
+        !refused
+            .iter()
+            .any(|line| line.starts_with(&format!("egress domain `{domain}`:")))
+    };
     let granted_network = match network {
         Some(true) => sandbox.network(),
         Some(false) => false,
         None => false,
     };
     let granted = Plan {
-        steps: Vec::new(),
+        tasks: Vec::new(),
         files: asked
             .files
             .iter()
@@ -1018,17 +1043,23 @@ fn permitted(
             .collect(),
         closes_on: None,
         network: granted_network,
+        egress: asked
+            .egress
+            .iter()
+            .filter(|e| keep_egress(e))
+            .cloned()
+            .collect(),
     };
     (granted, refused)
 }
 
-/// The closing condition the person typed, if the task will actually be able to
+/// The closing condition the person typed, if the job will actually be able to
 /// run it — and the one line that says why not, when it will not.
 ///
 /// Checked against the *merged* plan: what the model declared, plus what the
 /// gate is adding in the same approval, intersected with what the policy file
-/// allows. A condition naming a command the task may not run can never be met,
-/// and a task that can never close is worse than one closed by hand, because it
+/// allows. A condition naming a command the job may not run can never be met,
+/// and a job that can never close is worse than one closed by hand, because it
 /// looks like it will close itself.
 fn closing_condition(
     sandbox: &Sandbox,
@@ -1050,7 +1081,7 @@ fn closing_condition(
         }
     }
     let merged = Plan {
-        steps: Vec::new(),
+        tasks: Vec::new(),
         files: Vec::new(),
         writes: Vec::new(),
         // What the plan may really run: `narrow` drops a declared command the
@@ -1062,6 +1093,7 @@ fn closing_condition(
             .collect(),
         closes_on: Some(closes_on.clone()),
         network: false,
+        egress: Vec::new(),
     };
     match merged
         .unmet(sandbox)
@@ -1075,29 +1107,29 @@ fn closing_condition(
 
 /// Refuses it. The held prompt goes with it: a prompt whose plan was turned
 /// down is not a prompt that was approved on its own.
-async fn reject_task(app: Arc<App>, task: TaskId) {
+async fn reject_job(app: Arc<App>, job: JobId) {
     {
         let mut session = app.session.lock().await;
-        if session.pending.as_ref().is_none_or(|p| p.task != task) {
+        if session.pending.as_ref().is_none_or(|p| p.job != job) {
             drop(session);
             refuse(
                 &app,
-                "reject_task",
-                Refusal::Task,
-                format!("task {task} is not waiting to be approved"),
+                "reject_job",
+                Refusal::Job,
+                format!("job {job} is not waiting to be approved"),
             )
             .await;
             return;
         }
         session.pending = None;
-        session.context.reject_task(task);
+        session.context.reject_job(job);
     }
-    app.publish(Event::Protocol(ServerMessage::TaskRejected { task }))
+    app.publish(Event::Protocol(ServerMessage::JobRejected { job }))
         .await;
 }
 
 /// Closes it: from here its turns are sent as their summary.
-async fn close_task(app: Arc<App>, task: TaskId) {
+async fn close_job(app: Arc<App>, job: JobId) {
     let summary = {
         let mut session = app.session.lock().await;
         // Not while a turn is in flight: it would fold the history under the
@@ -1106,7 +1138,7 @@ async fn close_task(app: Arc<App>, task: TaskId) {
             drop(session);
             refuse(
                 &app,
-                "close_task",
+                "close_job",
                 Refusal::Busy,
                 format!("turn {running} is running; closing would fold the history under it"),
             )
@@ -1114,11 +1146,11 @@ async fn close_task(app: Arc<App>, task: TaskId) {
             return;
         }
         let counter = app.counter.clone();
-        let summary = session.context.close_task(task, counter.as_ref());
-        // The task's sandbox goes with the task. Outside one, the policy file
-        // is the whole answer again — and the next prompt proposes a new task
+        let summary = session.context.close_job(job, counter.as_ref());
+        // The job's sandbox goes with the job. Outside one, the policy file
+        // is the whole answer again — and the next prompt proposes a new job
         // before it runs anything.
-        if summary.is_some() && session.narrowed.as_ref().is_some_and(|(id, _)| *id == task) {
+        if summary.is_some() && session.narrowed.as_ref().is_some_and(|(id, _)| *id == job) {
             session.narrowed = None;
         }
         summary
@@ -1126,16 +1158,16 @@ async fn close_task(app: Arc<App>, task: TaskId) {
     let Some(summary) = summary else {
         refuse(
             &app,
-            "close_task",
-            Refusal::Task,
-            format!("task {task} is not open"),
+            "close_job",
+            Refusal::Job,
+            format!("job {job} is not open"),
         )
         .await;
         return;
     };
 
-    app.publish(Event::Protocol(ServerMessage::TaskClosed {
-        task,
+    app.publish(Event::Protocol(ServerMessage::JobClosed {
+        job,
         summary,
         by: Some(ClosedBy::User),
     }))
@@ -1143,27 +1175,27 @@ async fn close_task(app: Arc<App>, task: TaskId) {
 }
 
 /// Unfolds it. Nothing is recovered, because nothing was deleted.
-async fn reopen_task(app: Arc<App>, task: TaskId) {
+async fn reopen_job(app: Arc<App>, job: JobId) {
     {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
             drop(session);
             refuse(
                 &app,
-                "reopen_task",
+                "reopen_job",
                 Refusal::Busy,
                 format!("turn {running} is running"),
             )
             .await;
             return;
         }
-        if !session.context.reopen_task(task) {
+        if !session.context.reopen_job(job) {
             drop(session);
             refuse(
                 &app,
-                "reopen_task",
-                Refusal::Task,
-                format!("task {task} is not closed"),
+                "reopen_job",
+                Refusal::Job,
+                format!("job {job} is not closed"),
             )
             .await;
             return;
@@ -1171,12 +1203,12 @@ async fn reopen_task(app: Arc<App>, task: TaskId) {
         // Live again, so its plan is the authority again. Rebuilt rather than
         // remembered: the sandbox is a resolution of the plan, and the plan is
         // what the session keeps.
-        let plan = session.context.task(task).map(|task| task.plan.clone());
+        let plan = session.context.job(job).map(|job| job.plan.clone());
         session.narrowed = plan
-            .and_then(|plan| plan.narrow(app.agency.sandbox.as_ref(), task).ok())
-            .map(|sandbox| (task, Arc::new(sandbox)));
+            .and_then(|plan| plan.narrow(app.agency.sandbox.as_ref(), job).ok())
+            .map(|sandbox| (job, Arc::new(sandbox)));
     }
-    app.publish(Event::Protocol(ServerMessage::TaskReopened { task }))
+    app.publish(Event::Protocol(ServerMessage::JobReopened { job }))
         .await;
 }
 
@@ -1191,7 +1223,7 @@ async fn begin_turn(
     prompt: &str,
     instruction: Option<&str>,
 ) -> Option<(TurnId, watch::Receiver<bool>, CompletionRequest)> {
-    let (turn, task, cancel_rx, selection, prompt_sent, reuse) = {
+    let (turn, job, cancel_rx, selection, prompt_sent, reuse) = {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
             drop(session);
@@ -1225,8 +1257,8 @@ async fn begin_turn(
         let reuse = session
             .prefix
             .measure(turn, &prompt_sent, app.counter.as_ref());
-        let task = session.context.live_task();
-        (turn, task, rx, selection, prompt_sent, reuse)
+        let job = session.context.live_job();
+        (turn, job, rx, selection, prompt_sent, reuse)
     };
 
     // The user's ask, not the instruction fused in front of it: `prompt` is
@@ -1234,7 +1266,7 @@ async fn begin_turn(
     app.publish(Event::Protocol(ServerMessage::TurnStarted {
         turn,
         prompt: prompt.to_string(),
-        task,
+        job,
     }))
     .await;
     // Before the prompt it explains: this is what the turn no longer carries,
@@ -1382,19 +1414,19 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             // start a turn inside a task that is already folding.
             let counter = app.counter.clone();
             let closed = session.context.close_if_met(counter.as_ref());
-            if let Some((task, _)) = &closed
-                && session.narrowed.as_ref().is_some_and(|(id, _)| id == task)
+            if let Some((job, _)) = &closed
+                && session.narrowed.as_ref().is_some_and(|(id, _)| id == job)
             {
-                // The task's sandbox goes with the task, exactly as it does
+                // The job's sandbox goes with the job, exactly as it does
                 // when a person closes one.
                 session.narrowed = None;
             }
             closed
         };
 
-        if let Some((task, summary)) = closed {
-            app.publish(Event::Protocol(ServerMessage::TaskClosed {
-                task,
+        if let Some((job, summary)) = closed {
+            app.publish(Event::Protocol(ServerMessage::JobClosed {
+                job,
                 summary,
                 by: Some(ClosedBy::ExitCode),
             }))
@@ -1422,17 +1454,159 @@ fn not_found(what: &str) -> Response {
 async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     let live = state.app.view.lock().await.summary();
     let mut sessions = vec![live];
+    let active_id = state.app.session_id.lock().await.clone();
     if let Some(store) = &state.app.store {
         match store.lock().await.list() {
-            Ok(stored) => sessions.extend(
-                stored
-                    .into_iter()
-                    .filter(|row| row.id != state.app.session_id),
-            ),
+            Ok(stored) => sessions.extend(stored.into_iter().filter(|row| row.id != active_id)),
             Err(error) => eprintln!("warning: could not list the session store: {error:#}"),
         }
     }
     Json(sessions).into_response()
+}
+
+async fn create_session(State(state): State<AppRouterState>) -> Response {
+    let app = &state.app;
+    {
+        let session = app.session.lock().await;
+        if session.current.is_some() || session.pending.is_some() {
+            return (StatusCode::CONFLICT, "a turn is currently running").into_response();
+        }
+    }
+
+    app.checkpoint().await;
+
+    let started_at = now_ms();
+    let new_id = session_id(started_at);
+    *app.session_id.lock().await = new_id.clone();
+
+    {
+        let mut session = app.session.lock().await;
+        session.next_turn = 1;
+        session.current = None;
+        session.cancel = None;
+        session.context = AgentContext::new(SYSTEM)
+            .with_tools(app.agency.definitions())
+            .with_map(&app.map_rendered);
+        session.prefix = PrefixTracker::default();
+        session.pending = None;
+        session.narrowed = None;
+    }
+
+    let summary = {
+        let mut view = app.view.lock().await;
+        *view = SessionView::new(LIVE_SESSION, app.backend.name(), &app.model);
+        view.started_at = started_at;
+        let mut s = view.summary();
+        s.id = new_id;
+        s
+    };
+
+    let hello = ServerMessage::Hello {
+        protocol: protocol::VERSION,
+        backend: app.backend.name().to_string(),
+        model: app.model.clone(),
+        turn: None,
+    };
+    app.publish(Event::Protocol(hello)).await;
+
+    (StatusCode::CREATED, Json(summary)).into_response()
+}
+
+async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<String>) -> Response {
+    let app = &state.app;
+    let id = bare(&id);
+
+    {
+        let session = app.session.lock().await;
+        if session.current.is_some() || session.pending.is_some() {
+            return (StatusCode::CONFLICT, "a turn is currently running").into_response();
+        }
+    }
+
+    let Some(store_mutex) = &app.store else {
+        return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
+    };
+
+    app.checkpoint().await;
+
+    let (loaded_view, resumed_context) = {
+        let store = store_mutex.lock().await;
+        let Some(view) = (match store.load(id) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        }) else {
+            return not_found("session");
+        };
+
+        let Some(context) = (match store.resume(
+            id,
+            SYSTEM,
+            app.agency.definitions(),
+            &app.map_rendered,
+            app.counter.as_ref(),
+        ) {
+            Ok(c) => c,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        }) else {
+            return not_found("session");
+        };
+
+        (view, context)
+    };
+
+    *app.session_id.lock().await = id.to_string();
+
+    {
+        let mut session = app.session.lock().await;
+        session.next_turn = (loaded_view.turns.len() as u64) + 1;
+        session.current = None;
+        session.cancel = None;
+        session.context = resumed_context;
+        session.prefix = PrefixTracker::default();
+        session.pending = None;
+        session.narrowed = None;
+    }
+
+    let summary = {
+        let mut view = app.view.lock().await;
+        let mut live_view = loaded_view.clone();
+        live_view.id = LIVE_SESSION.to_string();
+        *view = live_view;
+        let mut s = view.summary();
+        s.id = id.to_string();
+        s
+    };
+
+    let hello = ServerMessage::Hello {
+        protocol: protocol::VERSION,
+        backend: app.backend.name().to_string(),
+        model: app.model.clone(),
+        turn: None,
+    };
+    app.publish(Event::Protocol(hello)).await;
+
+    Json(summary).into_response()
+}
+
+async fn delete_session_handler(
+    State(state): State<AppRouterState>,
+    Path(id): Path<String>,
+) -> Response {
+    let id = bare(&id);
+    let active_id = state.app.session_id.lock().await.clone();
+    if id == LIVE_SESSION || id == active_id {
+        return (StatusCode::BAD_REQUEST, "cannot delete active session").into_response();
+    }
+
+    let Some(store_mutex) = &state.app.store else {
+        return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
+    };
+
+    match store_mutex.lock().await.delete(id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("session"),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
 }
 
 /// The fold for one session: the live one under either of its names, and
@@ -1443,9 +1617,10 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
 /// fold never is.
 async fn view_for(state: &AppRouterState, id: &str) -> Option<SessionView> {
     let id = bare(id);
+    let active_id = state.app.session_id.lock().await.clone();
     {
         let view = state.app.view.lock().await;
-        if id == view.id || id == state.app.session_id {
+        if id == view.id || id == active_id {
             return Some(view.clone());
         }
     }
@@ -1532,12 +1707,12 @@ async fn get_context(Path(id): Path<String>, State(state): State<AppRouterState>
 mod tests {
     use agent_core::backend::mock::Mock;
     use agent_core::context::{ApproximateCounter, Eviction};
+    use agent_core::job::JobState;
     use agent_core::sandbox::SandboxPolicy;
-    use agent_core::task::TaskState;
 
     use super::*;
 
-    const PLAN: &str = "```plan\n{\"objective\":\"add a flag\",\"steps\":[\"read the CLI\"],\
+    const PLAN: &str = "```plan\n{\"objective\":\"add a flag\",\"tasks\":[\"read the CLI\"],\
                         \"files\":[\"Cargo.toml\"],\"commands\":[]}\n```";
 
     /// The server without a socket in front of it. The handlers are what the
@@ -1576,7 +1751,8 @@ mod tests {
             temperature: None,
             seed: None,
             view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
-            session_id: "session-test".into(),
+            session_id: Mutex::new("session-test".into()),
+            map_rendered: String::new(),
             // In memory, like everything else these handler tests touch: the
             // store's own behaviour is `tests/store_parity.rs`.
             store: None,
@@ -1602,9 +1778,9 @@ mod tests {
         assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
 
         let session = app.session.lock().await;
-        let task = session.context.task(1).unwrap();
-        assert_eq!(task.state, TaskState::Proposed);
-        assert_eq!(task.plan.files, ["Cargo.toml"]);
+        let job = session.context.job(1).unwrap();
+        assert_eq!(job.state, JobState::Proposed);
+        assert_eq!(job.plan.files, ["Cargo.toml"]);
         assert_eq!(
             session.context.turns().len(),
             0,
@@ -1618,7 +1794,7 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
 
-        approve_task(app.clone(), 1, vec![], vec![], vec![], None, None).await;
+        approve_job(app.clone(), 1, vec![], vec![], vec![], None, None, None).await;
         assert!(
             until(&app, |s| s.context.turns().len() == 1).await,
             "the held prompt never ran",
@@ -1626,12 +1802,12 @@ mod tests {
 
         let session = app.session.lock().await;
         assert!(session.pending.is_none());
-        assert_eq!(session.context.task(1).unwrap().state, TaskState::Approved);
+        assert_eq!(session.context.job(1).unwrap().state, JobState::Approved);
         assert_eq!(session.context.turns()[0].prompt, "add a flag");
         assert_eq!(
-            session.context.turns()[0].task,
+            session.context.turns()[0].job,
             Some(1),
-            "the turn belongs to the task it was approved under",
+            "the turn belongs to the job it was approved under",
         );
     }
 
@@ -1641,10 +1817,10 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
 
-        reject_task(app.clone(), 1).await;
+        reject_job(app.clone(), 1).await;
         let session = app.session.lock().await;
         assert!(session.pending.is_none());
-        assert_eq!(session.context.task(1).unwrap().state, TaskState::Rejected);
+        assert_eq!(session.context.job(1).unwrap().state, JobState::Rejected);
         assert!(
             session.context.turns().is_empty(),
             "a prompt whose plan was turned down is not a prompt that was approved on its own",
@@ -1664,7 +1840,7 @@ mod tests {
         assert_eq!(session.pending.as_ref().unwrap().prompt, "add a flag");
         assert!(session.context.turns().is_empty());
         assert_eq!(
-            session.context.tasks().len(),
+            session.context.jobs().len(),
             1,
             "a second prompt during a confirmation is a second thing nobody approved",
         );
@@ -1675,14 +1851,14 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![], vec![], None, None).await;
+        approve_job(app.clone(), 1, vec![], vec![], vec![], None, None, None).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         on_prompt(app.clone(), "now the tests".into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
         let session = app.session.lock().await;
-        assert_eq!(session.context.tasks().len(), 1, "no second proposal");
+        assert_eq!(session.context.jobs().len(), 1, "no second proposal");
         assert!(session.pending.is_none());
     }
 
@@ -1691,15 +1867,15 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![], vec![], None, None).await;
+        approve_job(app.clone(), 1, vec![], vec![], vec![], None, None, None).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
-        close_task(app.clone(), 1).await;
+        close_job(app.clone(), 1).await;
         {
             let session = app.session.lock().await;
-            let task = session.context.task(1).unwrap();
-            assert_eq!(task.state, TaskState::Closed);
-            assert!(task.summary.as_ref().unwrap().text.contains("add a flag"));
+            let job = session.context.job(1).unwrap();
+            assert_eq!(job.state, JobState::Closed);
+            assert!(job.summary.as_ref().unwrap().text.contains("add a flag"));
             assert_eq!(
                 session.context.turns().len(),
                 1,
@@ -1707,10 +1883,10 @@ mod tests {
             );
         }
 
-        reopen_task(app.clone(), 1).await;
+        reopen_job(app.clone(), 1).await;
         let session = app.session.lock().await;
-        assert_eq!(session.context.task(1).unwrap().state, TaskState::Approved);
-        assert!(session.context.task(1).unwrap().summary.is_none());
+        assert_eq!(session.context.job(1).unwrap().state, JobState::Approved);
+        assert!(session.context.job(1).unwrap().summary.is_none());
     }
 
     #[tokio::test]
@@ -1720,11 +1896,11 @@ mod tests {
         assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
 
         let session = app.session.lock().await;
-        let task = session.context.task(1).unwrap();
+        let job = session.context.job(1).unwrap();
         assert_eq!(
-            task.objective, "add a flag",
+            job.objective, "add a flag",
             "the ask itself becomes the objective when the model declares nothing",
         );
-        assert!(task.plan.files.is_empty());
+        assert!(job.plan.files.is_empty());
     }
 }

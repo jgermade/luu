@@ -37,7 +37,7 @@ Before anything runs, propose a plan for the work below. Reply with one fenced \
 block and nothing after it:
 
 ```plan
-{\"objective\": \"what this piece of work is\", \"steps\": [\"what you will do\"], \
+{\"objective\": \"what this piece of work is\", \"tasks\": [\"what you will do\"], \
 \"files\": [\"paths you will read\"], \"writes\": [\"paths you will change\"], \
 \"commands\": [\"programs you will run\"]}
 ```

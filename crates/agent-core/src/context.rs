@@ -17,8 +17,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
+use crate::job::{ClosedBy, Job, JobId, JobState, Plan, TaskId};
 use crate::protocol::TurnId;
-use crate::task::{ClosedBy, Plan, Task, TaskId, TaskState};
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
 
@@ -146,17 +146,22 @@ pub struct Turn {
     /// Rendered fused into the user message, stored apart so that pruning can
     /// reach it later without parsing back what we already wrote.
     pub code_context: Vec<Fragment>,
-    /// The task this turn was asked inside, if any. The whole coupling between
-    /// a task and the history: the context manager never needs to know what a
-    /// task was *for*, only which turns belong to one that has closed.
-    #[serde(default)]
-    pub task: Option<TaskId>,
+    /// The job this turn was asked inside, if any.
+    #[serde(default, alias = "task")]
+    pub job: Option<JobId>,
     /// Counted once, when the turn closed. A closed turn does not change, and
     /// re-counting every turn on every turn is quadratic over a session.
     pub tokens: u32,
     /// Which counter produced `tokens`. Without it, swapping tokenizers
     /// mid-session sums two different units into one bar.
     pub counted_by: Counter,
+}
+
+impl Turn {
+    /// Backwards compatibility accessor for callers that called `turn.task`.
+    pub fn task(&self) -> Option<JobId> {
+        self.job
+    }
 }
 
 /// How the history gives way when the next turn no longer fits.
@@ -247,7 +252,7 @@ pub struct Evicted {
     pub policy: Eviction,
 }
 
-/// One unit of rendered history: a live turn, or a closed task folded to its
+/// One unit of rendered history: a live turn, or a closed job folded to its
 /// summary. Eviction works over these rather than over turns, so the two ways
 /// history gives way — forgetting the oldest and folding the finished —
 /// compose instead of cutting each other in half.
@@ -256,8 +261,8 @@ enum Item {
     /// An index into `turns`.
     Turn(usize),
     Folded {
-        task: TaskId,
-        /// Index of the task's first turn still above the floor.
+        job: JobId,
+        /// Index of the job's first turn still above the floor.
         first: usize,
     },
 }
@@ -283,26 +288,14 @@ pub struct Context {
     /// The repository outline, rendered once. Last of the cached prefix, which
     /// is where blocks are ordered by how often they are *rewritten*: the
     /// system block is a constant, the tools change when the tool set does, and
-    /// the map changes when the repository does. Empty unless asked for — a map
-    /// that arrived switched on would change every number in every recording
-    /// made so far. See `crate::repo_map`.
+    /// the map changes when the repository does. Empty unless asked for.
     map: String,
     turns: Vec<Turn>,
     /// The oldest turn still in the window. It only ever moves forward.
-    ///
-    /// Without it, eviction is recomputed from scratch on every call and a turn
-    /// that left the window comes back the moment a shorter prompt leaves room
-    /// for it. Under [`Eviction::Turn`] that is a rare waste; under
-    /// [`Eviction::Block`] it is fatal — the fill would walk straight back past
-    /// the cut and move the front of the history every turn, which is the exact
-    /// thing block eviction exists to stop.
-    ///
-    /// So the window a conversation has already lost is not a view that gets
-    /// recomputed. It is something that happened.
     floor: usize,
-    /// The session's tasks, in order. Closed ones fold their turns at
+    /// The session's jobs, in order. Closed ones fold their turns at
     /// selection time; nothing here rewrites the history.
-    tasks: Vec<Task>,
+    jobs: Vec<Job>,
 }
 
 impl Context {
@@ -313,7 +306,7 @@ impl Context {
             map: String::new(),
             turns: Vec::new(),
             floor: 0,
-            tasks: Vec::new(),
+            jobs: Vec::new(),
         }
     }
 
@@ -344,7 +337,7 @@ impl Context {
 
     /// Reconstructs an active context from a stored session view — the inverse fold.
     ///
-    /// Rebuilds turns, tasks, summaries and eviction floor from the view,
+    /// Rebuilds turns, jobs, summaries and eviction floor from the view,
     /// counting tokens with the supplied counter so the resumed context
     /// budgets identically to the original session.
     pub fn from_view(
@@ -354,20 +347,20 @@ impl Context {
         map: impl Into<String>,
         counter: &dyn TokenCounter,
     ) -> Self {
-        let mut tasks = Vec::with_capacity(view.tasks.len());
-        for tv in &view.tasks {
-            let summary = tv.summary.as_ref().map(|text| crate::task::Summary {
+        let mut jobs = Vec::with_capacity(view.jobs.len());
+        for jv in &view.jobs {
+            let summary = jv.summary.as_ref().map(|text| crate::job::Summary {
                 text: text.clone(),
                 tokens: counter.count(text),
                 counted_by: counter.id(),
             });
-            tasks.push(Task {
-                id: tv.id,
-                objective: tv.objective.clone(),
-                plan: tv.plan.clone(),
-                state: tv.state,
+            jobs.push(Job {
+                id: jv.id,
+                objective: jv.objective.clone(),
+                plan: jv.plan.clone(),
+                state: jv.state,
                 summary,
-                closed_by: tv.closed_by,
+                closed_by: jv.closed_by,
             });
         }
 
@@ -411,7 +404,7 @@ impl Context {
                 answer,
                 steps,
                 code_context: Vec::new(),
-                task: tv.task,
+                job: tv.job,
                 tokens,
                 counted_by: counter.id(),
             });
@@ -429,7 +422,7 @@ impl Context {
             map: map.into(),
             turns,
             floor,
-            tasks,
+            jobs,
         }
     }
 
@@ -488,112 +481,131 @@ impl Context {
             answer,
             steps,
             code_context,
-            task: self.live_task(),
+            job: self.live_job(),
             tokens,
             counted_by: counter.id(),
         });
     }
 
-    /// Proposes a task. Nothing runs in this state — approval is a separate
+    /// Proposes a job. Nothing runs in this state — approval is a separate
     /// act, because that is the entire point of the boundary.
-    pub fn propose_task(&mut self, objective: impl Into<String>, plan: Plan) -> TaskId {
-        let id = self.tasks.len() as TaskId + 1;
-        self.tasks.push(Task::new(id, objective, plan));
+    pub fn propose_job(&mut self, objective: impl Into<String>, plan: Plan) -> JobId {
+        let id = self.jobs.len() as JobId + 1;
+        self.jobs.push(Job::new(id, objective, plan));
         id
     }
 
-    /// Adds to a proposed task's plan what a person put in at the gate, and
+    pub fn propose_task(&mut self, objective: impl Into<String>, plan: Plan) -> TaskId {
+        self.propose_job(objective, plan)
+    }
+
+    /// Adds to a proposed job's plan what a person put in at the gate, and
     /// answers with the plan as it now stands.
     ///
-    /// The amendment arrives with the approval, so this happens while the task
-    /// is still `Proposed`: the plan a task is approved with is the one it
+    /// The amendment arrives with the approval, so this happens while the job
+    /// is still `Proposed`: the plan a job is approved with is the one it
     /// keeps, and the one its sandbox is built from.
+    #[allow(clippy::too_many_arguments)]
     pub fn amend_plan(
         &mut self,
-        id: TaskId,
+        id: JobId,
         files: &[String],
         writes: &[String],
         commands: &[String],
         closes_on: Option<&str>,
         network: Option<bool>,
+        egress: Option<&[String]>,
     ) -> Option<Plan> {
-        let task = self.task_mut(id)?;
-        task.plan.amend(files, writes, commands, closes_on, network);
-        Some(task.plan.clone())
+        let job = self.job_mut(id)?;
+        job.plan
+            .amend(files, writes, commands, closes_on, network, egress);
+        Some(job.plan.clone())
     }
 
     /// Approves it. Turns pushed from here on belong to it.
     ///
     /// Only a proposal can be approved. The lifecycle is a state machine and
-    /// every one of these is a guard on it: without them `reopen_task` on a
-    /// *rejected* task sets it approved, which reinstates a plan a person
-    /// turned down and hands the next prompt a live task to run inside — the
+    /// every one of these is a guard on it: without them `reopen_job` on a
+    /// *rejected* job sets it approved, which reinstates a plan a person
+    /// turned down and hands the next prompt a live job to run inside — the
     /// gate leaking through the message meant for unfolding a fold.
-    pub fn approve_task(&mut self, id: TaskId) -> bool {
-        match self.task_mut(id) {
-            Some(task) if task.state == TaskState::Proposed => {
-                task.approve();
+    pub fn approve_job(&mut self, id: JobId) -> bool {
+        match self.job_mut(id) {
+            Some(job) if job.state == JobState::Proposed => {
+                job.approve();
                 true
             }
             _ => false,
         }
     }
 
-    /// Refuses a proposal. Nothing ran under it, so nothing folds; the task
+    pub fn approve_task(&mut self, id: TaskId) -> bool {
+        self.approve_job(id)
+    }
+
+    /// Refuses a proposal. Nothing ran under it, so nothing folds; the job
     /// stays in the session as the record of what was turned down.
-    pub fn reject_task(&mut self, id: TaskId) -> bool {
-        match self.task_mut(id) {
-            Some(task) if task.state == TaskState::Proposed => {
-                task.reject();
+    pub fn reject_job(&mut self, id: JobId) -> bool {
+        match self.job_mut(id) {
+            Some(job) if job.state == JobState::Proposed => {
+                job.reject();
                 true
             }
             _ => false,
         }
+    }
+
+    pub fn reject_task(&mut self, id: TaskId) -> bool {
+        self.reject_job(id)
     }
 
     /// Closes it because a person said so. The rung below
     /// [`Context::close_if_met`], and the only one there was until it existed.
-    pub fn close_task(&mut self, id: TaskId, counter: &dyn TokenCounter) -> Option<String> {
-        self.close_task_by(id, counter, ClosedBy::User)
+    pub fn close_job(&mut self, id: JobId, counter: &dyn TokenCounter) -> Option<String> {
+        self.close_job_by(id, counter, ClosedBy::User)
     }
 
-    /// Closes the live task if its plan's `closes_on` has been met by its own
+    pub fn close_task(&mut self, id: TaskId, counter: &dyn TokenCounter) -> Option<String> {
+        self.close_job(id, counter)
+    }
+
+    /// Closes the live job if its plan's `closes_on` has been met by its own
     /// steps, and returns what closed and what it folded to.
     ///
     /// Called after a turn is folded into the history, which is what makes the
-    /// close see that turn's steps. Nothing happens for a task whose plan
-    /// declares no closing condition, which is every task a model planned on
+    /// close see that turn's steps. Nothing happens for a job whose plan
+    /// declares no closing condition, which is every job a model planned on
     /// its own — see `RECORD/2026-09-02.closing-on-an-exit-code.completed.md` for why
     /// the field arrives at the gate and never from the planning call.
-    pub fn close_if_met(&mut self, counter: &dyn TokenCounter) -> Option<(TaskId, String)> {
-        let id = self.live_task()?;
-        let mine = |turn: &&Turn| turn.task == Some(id);
+    pub fn close_if_met(&mut self, counter: &dyn TokenCounter) -> Option<(JobId, String)> {
+        let id = self.live_job()?;
+        let mine = |turn: &&Turn| turn.job == Some(id);
         let steps: Vec<&ToolStep> = self
             .turns
             .iter()
             .filter(mine)
             .flat_map(|turn| turn.steps.iter())
             .collect();
-        let task = self.tasks.iter().find(|task| task.id == id)?;
-        if !task.plan.met_by(&steps) {
+        let job = self.jobs.iter().find(|job| job.id == id)?;
+        if !job.plan.met_by(&steps) {
             return None;
         }
-        let summary = self.close_task_by(id, counter, ClosedBy::ExitCode)?;
+        let summary = self.close_job_by(id, counter, ClosedBy::ExitCode)?;
         Some((id, summary))
     }
 
     /// Closes it: from the next selection on, its turns render as one summary.
     ///
-    /// The summary is written from the task's own tool steps and the fragments
+    /// The summary is written from the job's own tool steps and the fragments
     /// its turns were handed, so it is evidence rather than the model's account
-    /// of itself. Returns the summary text, or `None` if there is no such task.
-    pub fn close_task_by(
+    /// of itself. Returns the summary text, or `None` if there is no such job.
+    pub fn close_job_by(
         &mut self,
-        id: TaskId,
+        id: JobId,
         counter: &dyn TokenCounter,
         by: ClosedBy,
     ) -> Option<String> {
-        let mine = |turn: &&Turn| turn.task == Some(id);
+        let mine = |turn: &&Turn| turn.job == Some(id);
         let steps: Vec<&ToolStep> = self
             .turns
             .iter()
@@ -601,7 +613,7 @@ impl Context {
             .flat_map(|turn| turn.steps.iter())
             .collect();
         // The field beside the one above, and the reason the fold lost answers
-        // until now: what a task read was in hand at the close and was never
+        // until now: what a job read was in hand at the close and was never
         // asked for. See `RECORD/2026-08-30.the-fold-probe-run.completed.md`.
         let shown: Vec<&Fragment> = self
             .turns
@@ -610,73 +622,98 @@ impl Context {
             .flat_map(|turn| turn.code_context.iter())
             .collect();
         let turns = self.turns.iter().filter(mine).count();
-        let task = self.tasks.iter_mut().find(|task| task.id == id)?;
-        // Only an open task folds. A proposal has no turns to fold and nothing
+        let job = self.jobs.iter_mut().find(|job| job.id == id)?;
+        // Only an open job folds. A proposal has no turns to fold and nothing
         // has been approved to summarise; closing one would take the gate off
         // the screen with its prompt still held, and the session would be stuck
         // with no way to answer a proposal nobody can see.
-        if !task.is_open() {
+        if !job.is_open() {
             return None;
         }
-        task.close(&steps, &shown, turns, counter, by);
-        task.summary.as_ref().map(|summary| summary.text.clone())
+        job.close(&steps, &shown, turns, counter, by);
+        job.summary.as_ref().map(|summary| summary.text.clone())
+    }
+
+    pub fn close_task_by(
+        &mut self,
+        id: TaskId,
+        counter: &dyn TokenCounter,
+        by: ClosedBy,
+    ) -> Option<String> {
+        self.close_job_by(id, counter, by)
     }
 
     /// Reopens it: the fold stops applying and its turns are sent verbatim
     /// again. Nothing is recovered, because nothing was deleted.
-    pub fn reopen_task(&mut self, id: TaskId) -> bool {
-        match self.task_mut(id) {
-            Some(task) if task.is_closed() => {
-                task.reopen();
+    pub fn reopen_job(&mut self, id: JobId) -> bool {
+        match self.job_mut(id) {
+            Some(job) if job.is_closed() => {
+                job.reopen();
                 true
             }
             _ => false,
         }
     }
 
-    pub fn tasks(&self) -> &[Task] {
-        &self.tasks
+    pub fn reopen_task(&mut self, id: TaskId) -> bool {
+        self.reopen_job(id)
     }
 
-    pub fn task(&self, id: TaskId) -> Option<&Task> {
-        self.tasks.iter().find(|task| task.id == id)
+    pub fn jobs(&self) -> &[Job] {
+        &self.jobs
     }
 
-    fn task_mut(&mut self, id: TaskId) -> Option<&mut Task> {
-        self.tasks.iter_mut().find(|task| task.id == id)
+    pub fn tasks(&self) -> &[Job] {
+        &self.jobs
     }
 
-    /// The task turns are currently attributed to: the last one approved and
-    /// not closed. One level, deliberately — see the tasks record.
-    pub fn live_task(&self) -> Option<TaskId> {
-        self.tasks
+    pub fn job(&self, id: JobId) -> Option<&Job> {
+        self.jobs.iter().find(|job| job.id == id)
+    }
+
+    pub fn task(&self, id: TaskId) -> Option<&Job> {
+        self.job(id)
+    }
+
+    fn job_mut(&mut self, id: JobId) -> Option<&mut Job> {
+        self.jobs.iter_mut().find(|job| job.id == id)
+    }
+
+    /// The job turns are currently attributed to: the last one approved and
+    /// not closed. One level, deliberately — see the jobs record.
+    pub fn live_job(&self) -> Option<JobId> {
+        self.jobs
             .iter()
             .rev()
-            .find(|task| task.is_open())
-            .map(|task| task.id)
+            .find(|job| job.is_open())
+            .map(|job| job.id)
     }
 
-    /// The history as it renders: live turns one by one, and each closed task
+    pub fn live_task(&self) -> Option<TaskId> {
+        self.live_job()
+    }
+
+    /// The history as it renders: live turns one by one, and each closed job
     /// as a single folded item.
     ///
-    /// Built from the floor forward, so a task closed after part of it was
+    /// Built from the floor forward, so a job closed after part of it was
     /// evicted folds only from what the window still holds — except that the
-    /// summary it folds to is the whole task's. That is deliberate and it is a
+    /// summary it folds to is the whole job's. That is deliberate and it is a
     /// cost: see `RECORD/2026-08-30.tasks-in-code.completed.md`.
     fn items(&self) -> Vec<Item> {
         let mut items = Vec::new();
         let mut index = self.floor;
         while index < self.turns.len() {
             let folded = self.turns[index]
-                .task
-                .filter(|id| self.task(*id).is_some_and(Task::is_closed));
+                .job
+                .filter(|id| self.job(*id).is_some_and(Job::is_closed));
             match folded {
                 Some(id) => {
                     let first = index;
-                    while index < self.turns.len() && self.turns[index].task == Some(id) {
+                    while index < self.turns.len() && self.turns[index].job == Some(id) {
                         index += 1;
                     }
-                    items.push(Item::Folded { task: id, first });
+                    items.push(Item::Folded { job: id, first });
                 }
                 None => {
                     items.push(Item::Turn(index));
@@ -691,10 +728,10 @@ impl Context {
     fn item_tokens(&self, item: &Item, counter: &dyn TokenCounter) -> u32 {
         match item {
             Item::Turn(index) => self.tokens_of(&self.turns[*index], counter),
-            Item::Folded { task, .. } => self
-                .task(*task)
-                .and_then(|task| {
-                    task.summary.as_ref().map(|summary| {
+            Item::Folded { job, .. } => self
+                .job(*job)
+                .and_then(|job| {
+                    job.summary.as_ref().map(|summary| {
                         // Stored counts are stale under a changed counter, the
                         // same way a turn's are, and are redone rather than
                         // summed into a different unit.
@@ -811,20 +848,20 @@ impl Context {
                     }
                     messages.push(Message::assistant(turn.answer.clone()));
                 }
-                Item::Folded { task, .. } => {
+                Item::Folded { job, .. } => {
                     summary_tokens += tokens;
                     // One exchange, so the alternation a folded block sits in
                     // is the same one a turn would have left behind. The user
                     // half is the objective as it was approved: it is what was
                     // asked, and inventing a sentence for it would be prose in
                     // the one place this design keeps prose out of.
-                    let Some(task) = self.task(*task) else {
+                    let Some(job) = self.job(*job) else {
                         continue;
                     };
-                    let Some(summary) = &task.summary else {
+                    let Some(summary) = &job.summary else {
                         continue;
                     };
-                    messages.push(Message::user(task.objective.clone()));
+                    messages.push(Message::user(job.objective.clone()));
                     messages.push(Message::assistant(summary.text.clone()));
                 }
             }
@@ -1310,7 +1347,7 @@ mod tests {
             selection.messages[1].content, "explain the context manager",
             "the user half of a fold is the objective as approved, not a sentence about it",
         );
-        assert!(selection.messages[2].content.contains("[task closed]"));
+        assert!(selection.messages[2].content.contains("[job closed]"));
         assert_eq!(
             context.turns().len(),
             3,
@@ -1378,8 +1415,7 @@ mod tests {
         context.approve_task(task);
         context.push_turn(3, "inside the task", "c", vec![], &counter);
 
-        let attributed: Vec<Option<TaskId>> =
-            context.turns().iter().map(|turn| turn.task).collect();
+        let attributed: Vec<Option<JobId>> = context.turns().iter().map(|turn| turn.job).collect();
         assert_eq!(
             attributed,
             vec![None, None, Some(task)],
@@ -1879,7 +1915,7 @@ mod tool_turn_tests {
             "a proposal has nothing to fold: nothing was approved and no turn ran",
         );
         assert!(!context.reopen_task(task), "it was never closed");
-        assert_eq!(context.task(task).unwrap().state, TaskState::Proposed);
+        assert_eq!(context.task(task).unwrap().state, JobState::Proposed);
 
         assert!(context.approve_task(task));
         assert!(
@@ -1897,7 +1933,7 @@ mod tool_turn_tests {
             "closing a closed task would rewrite the summary the model already has",
         );
         assert!(context.reopen_task(task));
-        assert_eq!(context.task(task).unwrap().state, TaskState::Approved);
+        assert_eq!(context.task(task).unwrap().state, JobState::Approved);
     }
 
     /// The sharp one: a refused plan must not come back through the message
@@ -1911,7 +1947,7 @@ mod tool_turn_tests {
         assert!(context.reject_task(task));
 
         assert!(!context.reopen_task(task));
-        assert_eq!(context.task(task).unwrap().state, TaskState::Rejected);
+        assert_eq!(context.task(task).unwrap().state, JobState::Rejected);
         assert!(context.live_task().is_none(), "nothing is live");
     }
 }

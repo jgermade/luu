@@ -111,6 +111,14 @@ impl Tool for RunCommand {
                 .args(&args)
                 .current_dir(&cwd)
                 .stdin(std::process::Stdio::null());
+            if let Some(proxy) = sandbox.proxy() {
+                command.env("HTTP_PROXY", proxy);
+                command.env("HTTPS_PROXY", proxy);
+                command.env("ALL_PROXY", proxy);
+                command.env("http_proxy", proxy);
+                command.env("https_proxy", proxy);
+                command.env("all_proxy", proxy);
+            }
             restrictions.install(&mut command);
 
             let timeout = Duration::from_millis(
@@ -239,6 +247,7 @@ mod tests {
                 network: false,
                 enforcement: Enforcement::BestEffort,
                 limits,
+                ..SandboxPolicy::default()
             },
             dir,
         )
@@ -253,6 +262,7 @@ mod tests {
                 network: false,
                 enforcement,
                 limits: Default::default(),
+                ..SandboxPolicy::default()
             },
             dir,
         )

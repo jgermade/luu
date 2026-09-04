@@ -15,24 +15,25 @@ directory per revision; nothing there is an answer to what this file answers. Se
 - **CLI mode**: direct terminal usage.
 - **VSCode integration**: a chat tab similar to Copilot Chat.
 
-## Tasks
+## Jobs (and Model Tasks)
 
-A session is a sequence of **tasks**, not a mode the agent is in. One task:
+A session is a sequence of **jobs** (historically called tasks), not a mode the agent is in. To avoid confusion with model checklist items, what was previously called a task is now a **job** (the bounded operational container: objective, gated approval, sandbox boundary, and compaction fold), while **tasks** designates the checklist items / steps emitted by models inside a plan (`plan.tasks`). One job:
 
 ```
 the user asks for something
-  → the agent proposes a plan: steps, files it will touch, commands it will run
+  → the agent proposes a plan: tasks (checklist), files it will touch, commands it will run
   → CONFIRMATION                  ← nothing runs before this
   → loop: act · check · ask when unsure
   → closing question: "shall I call this done?"
-  → close: the task is summarised; its turns stop being sent verbatim
+  → close: the job is summarised; its turns stop being sent verbatim
 ```
 
-Every task is confirmed before anything runs, so there is no autonomy setting to
+Every job is confirmed before anything runs, so there is no autonomy setting to
 remember and no mode that can be left open. `plan`/`run`/`auto` used to live here;
 they were global where approval is per piece of work, and — the reason they went —
 a mode cannot tell the context manager what to compact. See
-[`RECORD/2026-08-27.tasks-instead-of-modes.completed.md`](RECORD/2026-08-27.tasks-instead-of-modes.completed.md).
+[`RECORD/2026-08-27.tasks-instead-of-modes.completed.md`](RECORD/2026-08-27.tasks-instead-of-modes.completed.md)
+and [`RECORD/2026-09-04.from-tasks-to-jobs.completed.md`](RECORD/2026-09-04.from-tasks-to-jobs.completed.md).
 
 One boundary does three jobs, which is the argument for it:
 
@@ -547,9 +548,14 @@ access = "execute"
   *task's* grant is scoped to exactly the task that declared it, with no startup
   cost and no window that outlives it. Connecting and disconnecting by hand would
   move what the kernel already decides per call.
-- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
-  egress through a host-side proxy so `network` can become
-  `network: ["crates.io"]` in a plan. That last one is proposed, not decided.
+- **Egress through a host-side proxy (`EgressProxy`)** filters outbound destinations when
+  `network: true`. A plan carries `egress: ["crates.io", "*.github.com"]` (or script directive
+  `## egress: ...`), and an in-process HTTP CONNECT proxy inspects target hostnames, tunneling
+  matching traffic via `copy_bidirectional` and returning 403 Forbidden for unapproved destinations.
+  Standard proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and lowercase)
+  are injected into `run_command` subprocesses. See
+  [`RECORD/2026-09-04.egress-through-the-host.completed.md`](RECORD/2026-09-04.egress-through-the-host.completed.md).
+- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`.
 
 ## VSCode integration
 
@@ -605,11 +611,11 @@ Live channel — `WS /ws`:
 
 | Direction | Messages |
 | --- | --- |
-| client → server | `prompt`, `approve_plan`, `edit_plan`, `close_task`, `reopen_task`, `cancel` |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `task_proposed`, `task_approved`, `task_rejected`, `task_closed`, `task_reopened`, `refused`, `evicted` — all built, protocol v3; `context_snapshot` is still ahead |
+| client → server | `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v4 (record format 6); `context_snapshot` is still ahead |
 
-Closing a task is an event, not a mutation: reopening one is folding the log
-differently, never undoing a deletion. Freezing v1 of these enums waits on the task
+Closing a job is an event, not a mutation: reopening one is folding the log
+differently, never undoing a deletion. Freezing v1 of these enums waits on the job
 lifecycle for that reason — it is the last cheap moment to add it.
 
 Read side — plain GETs, browsable and curl-able. Every path answers for the live
@@ -765,10 +771,15 @@ time DDL and `api.rs` are changed apart the store and the live server start
 disagreeing about a session. `GET /api/sessions` lists the live session and the
 stored ones; every read path answers for a stored id as well as for `live`.
 
-What it does **not** yet do is resume: the view is the read side and `Context` is
-the write side, and folding one back into the other is a second fold that has to
-be argued before it is written. See
-[`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md).
+**Resuming and multi-session switching are supported.** `SessionStore::resume`
+reconstructs the write-side `AgentContext` and turn counter from stored turns and
+jobs, validated in `store_parity.rs`. In `serve`, `POST /api/sessions` starts a
+clean session checkpointing the active one, `POST /api/sessions/:id/resume`
+restores a stored session into the live engine, and `DELETE /api/sessions/:id`
+removes past sessions. The web UI header displays stored sessions in a switcher
+dropdown alongside a `+ New` button. See
+[`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md) and
+[`RECORD/2026-09-04.multi-session-in-serve.completed.md`](RECORD/2026-09-04.multi-session-in-serve.completed.md).
 
 - **Whatever the store holds must be reproducible by folding the record.** The
   JSON-lines stream is the account of what happened, and `api::SessionView` already
@@ -829,12 +840,8 @@ not decided; the argument is
 
 ## Open questions / next steps
 
-- Narrowing `network` and `enforcement` with the rest of the plan, which needs a
-  plan that declares them. Today a task inherits both from the policy file.
-  Half-answered by the container: a *session* that denies the network gets a
-  container created `--network none`, and the per-spawn seccomp filter is what a
-  task's own grant would ride on. What is missing is a plan that has words for
-  it, and a destination allowlist the kernel cannot express at all.
+- Narrowing `enforcement` with the rest of the plan. `network` and `egress` are
+  now per-job and filtered by host-side proxy; enforcement level remains session-wide.
 - **A tool call has no timeout at the seam.** `run_command` has its own clock
   inside the worker, and a worker that dies mid-call surfaces as EOF — an error
   rather than a hang. A worker that is alive and stuck is not covered, and the

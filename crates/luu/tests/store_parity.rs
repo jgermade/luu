@@ -231,15 +231,12 @@ fn a_stored_fold_still_answers_the_read_side_questions() {
 
     let loaded = store.load(&id).expect("loading").expect("the session");
     assert!(!loaded.turns.is_empty(), "a session with no turns");
-    assert!(
-        !loaded.tasks.is_empty(),
-        "the task lifecycle is in the fold"
-    );
+    assert!(!loaded.jobs.is_empty(), "the job lifecycle is in the fold");
     let closed = loaded
-        .tasks
+        .jobs
         .iter()
-        .find(|task| task.summary.is_some())
-        .expect("a closed task");
+        .find(|job| job.summary.is_some())
+        .expect("a closed job");
     assert!(
         !closed.summary.as_deref().unwrap_or_default().is_empty(),
         "the summary is what its turns are sent as; an empty one is a fold that lost the work",
@@ -270,7 +267,7 @@ fn a_resumed_context_produces_matching_budget_and_prompt_selection() {
         .expect("session exists");
 
     assert_eq!(resumed.turns().len(), folded.turns.len());
-    assert_eq!(resumed.tasks().len(), folded.tasks.len());
+    assert_eq!(resumed.jobs().len(), folded.jobs.len());
 
     let summary_text = resumed
         .tasks()
