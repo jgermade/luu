@@ -20,6 +20,7 @@ use crate::context::{Counter, Eviction};
 use crate::job::{ApprovedBy, ClosedBy, JobId, Plan, PlanSource};
 use crate::sandbox::Verdict;
 use crate::tools::ToolStep;
+use crate::transfer::{ImportedJob, Origin};
 use crate::turn::{EndReason, TurnEvent};
 
 /// Bumped when a change would break an older client. `Hello` carries it so a
@@ -51,7 +52,16 @@ use crate::turn::{EndReason, TurnEvent};
 /// client learns about by failing to parse: from here a client says its version
 /// and is refused out loud. See
 /// `RECORD/2026-09-04.signed-approvals.completed.md`.
-pub const VERSION: u32 = 5;
+///
+/// **6 is a session arriving from another host**: [`ServerMessage::Imported`]
+/// is what the destination appends when a transfer lands — where it came from,
+/// and what returning to the gate did to each job. The same rule as 2, 3, 4 and
+/// 5, and the reason it is a message rather than an edit to the fold is that a
+/// border crossing is a thing that happened to the session: an importer that
+/// rewrote the view behind the stream would be the second truth the record
+/// format exists to prevent. See
+/// `RECORD/2026-09-04.the-border-and-the-gate.completed.md`.
+pub const VERSION: u32 = 6;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -233,6 +243,22 @@ pub enum ServerMessage {
         #[serde(alias = "task")]
         job: JobId,
     },
+    /// A session arrived from another host, and what the border did to it.
+    ///
+    /// Appended by the destination on top of the stream it imported, and folded
+    /// last, so the view it produces is the imported session *as this host
+    /// holds it*: jobs that were approved over there are proposals here, and a
+    /// plan this host does not grant is refused with the lines that refused it.
+    ///
+    /// It says nothing about turns. A turn that ran on the origin ran, and the
+    /// history is what the destination continues from — what does not cross a
+    /// border is authority.
+    Imported {
+        from: Origin,
+        /// One entry per job the border changed. `Closed` jobs are not in it:
+        /// they run nothing, so nothing was changed about them.
+        jobs: Vec<ImportedJob>,
+    },
     /// The plan was put up and turned down.
     #[serde(alias = "task_rejected")]
     JobRejected {
@@ -371,6 +397,10 @@ impl ServerMessage {
             | Self::JobClosed { .. }
             | Self::JobReopened { .. }
             | Self::JobRejected { .. }
+            // A session crossing a border is about the session, and it happens
+            // when no turn is running by construction: a transfer is written
+            // from a store and imported into one.
+            | Self::Imported { .. }
             | Self::Refused { .. } => None,
         }
     }

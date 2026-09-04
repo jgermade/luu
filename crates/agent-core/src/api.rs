@@ -15,6 +15,7 @@ use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
 use crate::trace::{Bucket, TraceMessage};
+use crate::transfer::Origin;
 use crate::turn::EndReason;
 
 /// How the context was spent on one turn, as we measured it before the call.
@@ -105,6 +106,19 @@ pub struct JobView {
     /// recording made before signatures existed.
     #[serde(default)]
     pub approved_by: Option<ApprovedBy>,
+    /// Who approved it on the host it came from, when it came from one.
+    ///
+    /// Moved here from `approved_by` at the border rather than dropped: the
+    /// destination's gate exists to make the difference between an approval
+    /// given here and one given elsewhere visible, and it cannot if the
+    /// elsewhere is erased on arrival.
+    #[serde(default)]
+    pub approved_at_origin: Option<ApprovedBy>,
+    /// What this host's policy file does not grant of the plan, in the words
+    /// `Plan::unmet` uses at the local gate. Filled at a border, where it is
+    /// the reason the job crossed refused; empty everywhere else.
+    #[serde(default)]
+    pub unmet: Vec<String>,
 }
 
 pub type TaskView = JobView;
@@ -210,6 +224,11 @@ pub struct SessionView {
     #[serde(default, alias = "tasks")]
     pub jobs: Vec<JobView>,
     pub record: Option<String>,
+    /// Where this session came from, when it did not start here. `None` for
+    /// every session that was born on this host, which is all of them until a
+    /// transfer lands.
+    #[serde(default)]
+    pub imported: Option<Origin>,
 }
 
 impl SessionView {
@@ -228,6 +247,7 @@ impl SessionView {
             turns: Vec::new(),
             jobs: Vec::new(),
             record: None,
+            imported: None,
         }
     }
 
@@ -304,6 +324,8 @@ impl SessionView {
                         summary: None,
                         closed_by: None,
                         approved_by: None,
+                        approved_at_origin: None,
+                        unmet: Vec::new(),
                     });
                 }
             }
@@ -356,6 +378,27 @@ impl SessionView {
                     view.state = JobState::Closed;
                     view.summary = Some(summary.clone());
                     view.closed_by = Some(by.unwrap_or(ClosedBy::User));
+                }
+            }
+            // A border crossing, folded last: what arrived is the stream above
+            // this line, and this is what this host did with it.
+            ServerMessage::Imported { from, jobs } => {
+                self.imported = Some(from.clone());
+                for entry in jobs {
+                    if let Some(view) = self.job_mut(entry.job) {
+                        // Moved, not dropped: who approved it over there is the
+                        // half of the difference a person at this gate is being
+                        // asked to judge.
+                        view.approved_at_origin = view.approved_by.take();
+                        view.state = entry.state;
+                        view.unmet = entry.unmet.clone();
+                        // A job that has to be approved again is not a job with
+                        // a summary of what it did: nothing has been folded on
+                        // this host.
+                        if entry.state != JobState::Closed {
+                            view.closed_by = None;
+                        }
+                    }
                 }
             }
             ServerMessage::JobRejected { job } => {
@@ -787,6 +830,108 @@ mod tests {
         assert_eq!(view.turns.len(), 1);
         let dropped = view.turn(7).unwrap().dropped.clone().expect("the cut");
         assert_eq!(dropped.turns, vec![1, 2]);
+    }
+
+    #[test]
+    fn a_border_returns_an_approved_job_to_the_gate_and_keeps_who_approved_it_over_there() {
+        use crate::job::{ApprovedBy, Plan};
+        use crate::transfer::{ImportedJob, Origin, ResolvedSandbox};
+
+        let mut view = SessionView::new("s", "mock", "mock");
+        for job in 1..=3 {
+            view.apply_protocol(
+                0,
+                &ServerMessage::JobProposed {
+                    job,
+                    objective: format!("job {job}"),
+                    plan: Plan::default(),
+                    source: None,
+                },
+            );
+        }
+        view.apply_protocol(
+            1,
+            &ServerMessage::JobApproved {
+                job: 1,
+                plan: Plan::default(),
+                approved_by: Some(ApprovedBy::Key {
+                    name: "jgermade".into(),
+                }),
+            },
+        );
+        view.apply_protocol(
+            2,
+            &ServerMessage::JobClosed {
+                job: 2,
+                summary: "what it did".into(),
+                by: None,
+            },
+        );
+
+        let from = Origin {
+            host: "m1-pro".into(),
+            session: "session-over-there".into(),
+            sandbox: ResolvedSandbox {
+                base: "/Users/x/luu".into(),
+                roots: Vec::new(),
+                commands: vec!["cargo".into()],
+                network: false,
+                egress: Vec::new(),
+                enforcement: crate::sandbox::Enforcement::default(),
+                limits: crate::sandbox::Limits::default(),
+            },
+        };
+        view.apply_protocol(
+            3,
+            &ServerMessage::Imported {
+                from: from.clone(),
+                jobs: vec![
+                    ImportedJob {
+                        job: 1,
+                        state: JobState::Proposed,
+                        unmet: Vec::new(),
+                    },
+                    ImportedJob {
+                        job: 3,
+                        state: JobState::Rejected,
+                        unmet: vec!["write /etc/hosts: outside the sandbox".into()],
+                    },
+                ],
+            },
+        );
+
+        assert_eq!(
+            view.imported.as_ref().map(|origin| origin.host.as_str()),
+            Some("m1-pro"),
+            "a session that came from somewhere says where",
+        );
+
+        let crossed = view.job(1).expect("the approved one");
+        assert_eq!(crossed.state, JobState::Proposed, "back at the gate");
+        assert!(
+            crossed.approved_by.is_none(),
+            "an approval given over there is not an approval here",
+        );
+        assert!(
+            matches!(&crossed.approved_at_origin, Some(ApprovedBy::Key { name }) if name == "jgermade"),
+            "and it is kept, because the difference is what this gate is for",
+        );
+
+        let closed = view.job(2).expect("the closed one");
+        assert_eq!(
+            closed.state,
+            JobState::Closed,
+            "a closed job runs nothing, so nothing was asked of it",
+        );
+        assert_eq!(closed.summary.as_deref(), Some("what it did"));
+
+        let refused = view.job(3).expect("the refused one");
+        assert_eq!(refused.state, JobState::Rejected);
+        assert_eq!(
+            refused.unmet,
+            vec!["write /etc/hosts: outside the sandbox".to_string()],
+            "a plan is refused at a border in the words the local gate uses",
+        );
     }
 
     #[test]

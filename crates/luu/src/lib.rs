@@ -31,6 +31,7 @@ pub mod export;
 pub mod serve;
 pub mod session;
 pub mod store;
+pub mod transfer;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::io::{AsyncWriteExt, stdout};
 use tokio::sync::{mpsc, watch};
@@ -93,6 +94,62 @@ enum Command {
     /// to look at the bytes is the difference between a cache miss you can see
     /// and one you cannot.
     Tools {
+        #[command(flatten)]
+        sandbox: SandboxArgs,
+    },
+
+    /// Write a session out as a transfer bundle: its record stream, and an
+    /// envelope naming where it came from.
+    ///
+    /// What crosses a border is the **stream**, never a snapshot of the fold —
+    /// the fold is a cache of the stream, and a transfer built on the stream
+    /// inherits the parity test that makes the fold trustworthy. See
+    /// `RECORD/2026-09-04.the-border-and-the-gate.completed.md`.
+    Transfer {
+        /// The session, as `GET /api/sessions` and `luu serve` name it. Leave
+        /// it out and pass `--record` instead to move a recording.
+        session: Option<String>,
+
+        /// Move a `.jsonl` recording rather than a stored session. The file
+        /// stem names the session, the way `luu export` names one.
+        #[arg(long, value_name = "FILE", conflicts_with = "session")]
+        record: Option<std::path::PathBuf>,
+
+        /// Where the store is. Defaults to the state directory's `sessions.db`.
+        #[arg(long, value_name = "PATH")]
+        store: Option<std::path::PathBuf>,
+
+        /// The directory to write — `manifest.json` and `record.jsonl`.
+        #[arg(long, short, value_name = "DIR")]
+        out: std::path::PathBuf,
+
+        /// The origin's own sandbox travels in the manifest, so the person
+        /// approving on the far side can see what this job could reach here.
+        #[command(flatten)]
+        sandbox: SandboxArgs,
+    },
+
+    /// Read a transfer bundle into this host's store.
+    ///
+    /// Every job that is not closed **returns to this host's gate**: an
+    /// approval is a statement about resolved paths on one tree, and the same
+    /// words name different files here. A plan this `luu.toml` does not grant
+    /// arrives refused, carrying the lines that refused it.
+    Import {
+        /// The bundle directory, as `luu transfer --out` wrote it.
+        bundle: std::path::PathBuf,
+
+        /// Where the store is. Defaults to the state directory's `sessions.db`.
+        #[arg(long, value_name = "PATH")]
+        store: Option<std::path::PathBuf>,
+
+        /// What to call it here. Defaults to the name it had on the origin,
+        /// and is refused if this host already has a session by that name.
+        #[arg(long = "as", value_name = "ID")]
+        rename: Option<String>,
+
+        /// The policy file every arriving plan is re-checked against. This
+        /// host's, which is the whole point.
         #[command(flatten)]
         sandbox: SandboxArgs,
     },
@@ -1115,6 +1172,19 @@ fn load_fragment(sandbox: &Sandbox, spec: &str) -> Result<Fragment> {
         .with_context(|| format!("fragment {spec}"))
 }
 
+/// The store a transfer reads from or writes into: the one named, or the state
+/// directory's. Undecidable without a home directory, and that is an error here
+/// rather than a warning — `serve` can carry on in memory and a transfer cannot.
+fn store_path(named: Option<std::path::PathBuf>) -> Result<std::path::PathBuf> {
+    match named {
+        Some(path) => Ok(path),
+        None => crate::store::default_path().context(
+            "no state directory (neither LUU_HOME nor HOME is set), so there is no default \
+             session store: pass --store <path>",
+        ),
+    }
+}
+
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
@@ -1171,6 +1241,91 @@ pub async fn run() -> Result<()> {
 
     if let Command::Key { action } = &command {
         return run_key(action);
+    }
+
+    if let Command::Transfer {
+        session,
+        record,
+        store,
+        out,
+        sandbox,
+    } = &command
+    {
+        let agency = sandbox.resolve().await?;
+        let source = match (session, record) {
+            (Some(id), _) => transfer::Source::Store {
+                path: store_path(store.clone())?,
+                id: id.clone(),
+            },
+            (None, Some(path)) => transfer::Source::Record(path.clone()),
+            (None, None) => anyhow::bail!(
+                "name a session to transfer, or --record the file to move.                  `luu serve` lists the sessions this host has."
+            ),
+        };
+        let (id, lines) = transfer::write(&source, agency.sandbox.as_ref(), out)?;
+        println!("{id} — {lines} line(s) written to {}", out.display());
+        println!(
+            "the origin's sandbox travels with it:\n{}",
+            agent_core::transfer::ResolvedSandbox::from(agency.sandbox.as_ref()).describe(),
+        );
+        println!(
+            "move the directory to the other host and run: luu import {}",
+            out.display(),
+        );
+        return Ok(());
+    }
+
+    if let Command::Import {
+        bundle,
+        store,
+        rename,
+        sandbox,
+    } = &command
+    {
+        let agency = sandbox.resolve().await?;
+        let store = store_path(store.clone())?;
+        let read = transfer::read(bundle)?;
+        let origin = read.manifest.origin.clone();
+        let imported = transfer::import(&read, agency.sandbox.as_ref(), &store, rename.as_deref())?;
+
+        println!(
+            "{} — {} turn(s) from {} ({}), stored in {}",
+            imported.id,
+            imported.view.turns.len(),
+            origin.session,
+            origin.host,
+            store.display(),
+        );
+        // The jobs first, because they are what somebody now has to answer.
+        for job in &imported.jobs {
+            let objective = imported
+                .view
+                .job(job.job)
+                .map(|view| view.objective.as_str())
+                .unwrap_or("");
+            match job.unmet.is_empty() {
+                true => println!("  job {} at the gate — {objective}", job.job),
+                false => {
+                    println!("  job {} refused — {objective}", job.job);
+                    for line in &job.unmet {
+                        println!("      {line}");
+                    }
+                }
+            }
+        }
+        if imported.jobs.is_empty() {
+            println!("  nothing to approve: every job arrived closed");
+        } else {
+            println!(
+                "\nwhat the difference is between the two hosts:\n{}",
+                transfer::difference(&origin.sandbox, agency.sandbox.as_ref()),
+            );
+            println!(
+                "resume it to answer the gate: luu serve --store {}",
+                store.display(),
+            );
+        }
+        return Ok(());
     }
 
     if let Command::Tools { sandbox } = &command {

@@ -13,6 +13,17 @@
 //! store and the live server start disagreeing about a session. That is exactly
 //! the drift the static mirror exists to avoid.
 //!
+//! **The stream is here too, and that is not the same claim.** A row per
+//! [`RecordLine`], in order, appended at the checkpoints the fold is written at
+//! and in the same transaction — see
+//! `RECORD/2026-09-04.the-border-and-the-gate.completed.md`. It is not the
+//! normalised schema this module rejects: those rows would be a second
+//! *definition* of a turn, competing with `api.rs`, while a record line is the
+//! account itself and SQL never looks inside it. What it buys is that the fold
+//! finally has, in the same file, the thing it is a cache *of* — which is what
+//! `luu transfer` ships, because a session moves as its own stream and never as
+//! a rendering of it.
+//!
 //! The listing columns beside it are duplicated *out of* the view at write
 //! time, so `GET /api/sessions` does not parse every blob to list them, and
 //! they come from [`SessionView::summary`] rather than from anywhere else.
@@ -25,13 +36,20 @@
 use std::path::{Path, PathBuf};
 
 use agent_core::api::{SessionSummary, SessionView};
+use agent_core::record::RecordLine;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 /// The shape of the schema. Stored in `PRAGMA user_version`, because a database
 /// that cannot say which shape it is is one that has to be deleted the first
 /// time the shape moves.
-const SCHEMA: i32 = 1;
+///
+/// **2 is the event stream.** Additive: the `sessions` table does not move, so
+/// a store written by an older `luu` keeps its sessions and gains the table.
+/// What those sessions cannot gain is a stream they never wrote, which is why
+/// [`SessionStore::stream`] answers with nothing rather than with something
+/// reconstructed.
+const SCHEMA: i32 = 2;
 
 /// Where the store lives when nobody says otherwise.
 ///
@@ -47,6 +65,16 @@ const SCHEMA: i32 = 1;
 pub fn default_path() -> Option<PathBuf> {
     Some(crate::config::dir()?.join("sessions.db"))
 }
+
+/// The stream's table, created by every path that creates or migrates a store.
+/// One `&str` because two spellings of a `CREATE TABLE` is how two builds end
+/// up with two shapes under one `user_version`.
+const EVENTS: &str = "CREATE TABLE IF NOT EXISTS events (
+    session TEXT NOT NULL,
+    seq     INTEGER NOT NULL,
+    line    TEXT NOT NULL,
+    PRIMARY KEY (session, seq)
+);";
 
 pub struct SessionStore {
     connection: Connection,
@@ -92,6 +120,15 @@ impl SessionStore {
                         saved_at    INTEGER NOT NULL
                     );",
                 )?;
+                connection.execute_batch(EVENTS)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            // A store from before the stream was kept. Its sessions stay
+            // exactly as they are — the migration adds a table and touches no
+            // row — and they carry no stream, which `stream` reports as the
+            // absence it is.
+            1 => {
+                connection.execute_batch(EVENTS)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -105,6 +142,70 @@ impl SessionStore {
             ),
         }
         Ok(Self { connection })
+    }
+
+    /// Appends record lines to a session's stream, in the order given.
+    ///
+    /// Sequence numbers are handed out here rather than by the caller: two
+    /// callers counting their own positions is how a stream ends up with two
+    /// line sevens, and the ordering is the only thing that makes it a stream
+    /// rather than a bag.
+    ///
+    /// One transaction, so a crash between two lines of one checkpoint leaves
+    /// the stream ending on a line boundary.
+    pub fn append(&mut self, id: &str, lines: &[RecordLine]) -> Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let transaction = self.connection.transaction()?;
+        let mut next: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM events WHERE session = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        {
+            let mut statement = transaction
+                .prepare("INSERT INTO events (session, seq, line) VALUES (?1, ?2, ?3)")?;
+            for line in lines {
+                statement.execute(rusqlite::params![id, next, serde_json::to_string(line)?])?;
+                next += 1;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The session's stream, in order. Empty for a session stored before the
+    /// stream was kept — which callers must not paper over: a fold is not a
+    /// stream, and folding one back into the other would invent line orders and
+    /// timings the session never had.
+    pub fn stream(&self, id: &str) -> Result<Vec<RecordLine>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT seq, line FROM events WHERE session = ?1 ORDER BY seq")?;
+        let rows = statement.query_map([id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut lines = Vec::new();
+        for row in rows {
+            let (seq, json) = row?;
+            lines.push(
+                serde_json::from_str(&json)
+                    .with_context(|| format!("line {seq} of the stored stream for {id}"))?,
+            );
+        }
+        Ok(lines)
+    }
+
+    /// How many lines the stream has, without parsing any of them — what the
+    /// server tracks to know where its next append starts.
+    pub fn stream_len(&self, id: &str) -> Result<usize> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM events WHERE session = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     /// Writes the fold, replacing whatever was there.
@@ -198,10 +299,14 @@ impl SessionStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn delete(&self, id: &str) -> Result<bool> {
-        let removed = self
-            .connection
-            .execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+    /// Removes the session and the stream it was folded from, together. Two
+    /// statements and one meaning: a stream with no session is a row nothing
+    /// can ever read back.
+    pub fn delete(&mut self, id: &str) -> Result<bool> {
+        let transaction = self.connection.transaction()?;
+        let removed = transaction.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+        transaction.execute("DELETE FROM events WHERE session = ?1", [id])?;
+        transaction.commit()?;
         Ok(removed > 0)
     }
 }
@@ -244,8 +349,80 @@ mod tests {
     }
 
     #[test]
+    fn the_stream_comes_back_in_the_order_it_was_appended() {
+        use agent_core::protocol::ServerMessage;
+
+        let mut store = SessionStore::in_memory().expect("a store");
+        let lines: Vec<RecordLine> = (1..=3)
+            .map(|turn| RecordLine::Protocol {
+                at_ms: turn,
+                message: ServerMessage::Token {
+                    turn,
+                    text: format!("{turn}"),
+                },
+            })
+            .collect();
+
+        // Two appends, because that is how a session is written: one checkpoint
+        // at a time, and the second must continue the first rather than restart
+        // its numbering.
+        store.append("one", &lines[..1]).expect("the first line");
+        store.append("one", &lines[1..]).expect("the rest");
+        store.append("two", &lines[..1]).expect("another session");
+
+        let stream = store.stream("one").expect("reading it back");
+        assert_eq!(stream.len(), 3);
+        assert_eq!(store.stream_len("one").expect("counting"), 3);
+        let texts: Vec<String> = stream
+            .iter()
+            .map(|line| match line {
+                RecordLine::Protocol {
+                    message: ServerMessage::Token { text, .. },
+                    ..
+                } => text.clone(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(texts, ["1", "2", "3"], "in order, and only this session's");
+
+        assert!(
+            store
+                .stream("never-recorded")
+                .expect("no stream")
+                .is_empty(),
+            "a session stored before the stream was kept has none, and says so",
+        );
+    }
+
+    #[test]
+    fn deleting_a_session_takes_the_stream_it_was_folded_from_with_it() {
+        use agent_core::protocol::ServerMessage;
+
+        let mut store = SessionStore::in_memory().expect("a store");
+        store.save(&view("one")).expect("saving");
+        store
+            .append(
+                "one",
+                &[RecordLine::Protocol {
+                    at_ms: 0,
+                    message: ServerMessage::Token {
+                        turn: 1,
+                        text: "x".into(),
+                    },
+                }],
+            )
+            .expect("appending");
+
+        assert!(store.delete("one").expect("deleting"));
+        assert!(
+            store.stream("one").expect("the stream").is_empty(),
+            "a stream with no session is a row nothing can read back",
+        );
+    }
+
+    #[test]
     fn a_session_that_was_never_saved_is_none_rather_than_an_error() {
-        let store = SessionStore::in_memory().expect("a store");
+        let mut store = SessionStore::in_memory().expect("a store");
         assert!(store.load("nothing").expect("loading").is_none());
         assert!(!store.delete("nothing").expect("deleting"));
     }

@@ -18,5 +18,6 @@ pub mod sandbox;
 pub use job as task; // Temporary alias for smooth migration
 pub mod tools;
 pub mod trace;
+pub mod transfer;
 pub mod turn;
 pub mod worker;

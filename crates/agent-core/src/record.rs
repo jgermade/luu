@@ -44,7 +44,14 @@ use crate::trace::TraceMessage;
 /// 4 and 5 — a new value of a tagged enum — and the second is additive: absent
 /// means the operator, because that is what every approval before it was. See
 /// `RECORD/2026-09-04.signed-approvals.completed.md`.
-pub const FORMAT: u32 = 7;
+///
+/// 8: `imported` lines — a session that arrived from another host, and what
+/// returning to the gate did to each of its jobs. Same rule as 3, 4, 5 and 6, a
+/// new variant of a tagged enum. It is in the stream rather than applied to the
+/// stored fold because the destination's account of a session has to be
+/// foldable from the destination's stream, or the store is a second truth
+/// again. See `RECORD/2026-09-04.the-border-and-the-gate.completed.md`.
+pub const FORMAT: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]

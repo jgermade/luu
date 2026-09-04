@@ -343,10 +343,10 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    // 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since `refused`: a new
-    // variant of a tagged enum is a change an older reader cannot parse, which is what this
-    // number is for.
-    assert_eq!(hello["protocol"], 5);
+    // 6 since `imported`, 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since
+    // `refused`: a new variant of a tagged enum is a change an older reader cannot parse,
+    // which is what this number is for.
+    assert_eq!(hello["protocol"], 6);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
     assert!(
@@ -1484,7 +1484,7 @@ async fn a_client_that_speaks_another_protocol_is_refused_out_loud() {
         refused["detail"]
             .as_str()
             .expect("a detail")
-            .contains("protocol 5"),
+            .contains("protocol 6"),
         "the refusal says what this host speaks: {refused}",
     );
     let closed = tokio::time::timeout(PATIENCE, socket.next())
@@ -1506,7 +1506,7 @@ async fn a_newer_client_is_refused_in_the_other_direction_too() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 6}),
+        serde_json::json!({"type": "hello", "protocol": 7}),
     )
     .await;
 
@@ -1527,7 +1527,7 @@ async fn a_matching_client_is_greeted_and_then_ignored() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 5, "format": 7}),
+        serde_json::json!({"type": "hello", "protocol": 6, "format": 8}),
     )
     .await;
     // Nothing comes back: a handshake that matches is not an event in the
