@@ -1,7 +1,7 @@
 import * as cp from 'child_process';
 import * as readline from 'readline';
 import { EventEmitter } from 'events';
-import { ClientMessage, ServerMessage, JobId } from './types';
+import { ClientMessage, ServerMessage, JobId, PROTOCOL, RECORD_FORMAT } from './types';
 
 export interface LuuClientOptions {
   executablePath?: string;
@@ -75,6 +75,8 @@ export class LuuClient extends EventEmitter {
         crlfDelay: Infinity,
       });
 
+      this.greet();
+
       this.rl.on('line', (line: string) => {
         const trimmed = line.trim();
         if (!trimmed) {
@@ -88,6 +90,14 @@ export class LuuClient extends EventEmitter {
         }
       });
     }
+  }
+
+  /// What this client speaks, before anything else it might say. Optional over
+  /// stdio — the peer is the process this one spawned — and sent anyway, so a
+  /// version mismatch is answered here rather than discovered as an
+  /// unparseable frame three messages later.
+  private greet(): void {
+    this.send({ type: 'hello', protocol: PROTOCOL, format: RECORD_FORMAT });
   }
 
   public send(msg: ClientMessage): void {

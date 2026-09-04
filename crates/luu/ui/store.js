@@ -14,11 +14,21 @@
 
 import { $reactive } from "./vendor/jq79.js"
 
+// What this client speaks, sent on connect so a host that speaks something else
+// refuses it out loud rather than by misreading the next message. Kept beside
+// `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
+// one number each, and this file is the other half of the pair.
+const PROTOCOL = 5
+const FORMAT = 7
+
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
   backend: "",
   model: "",
   protocol: 0,
+  // What the host calls this session. An approval is signed against it, so a
+  // signature made here does not replay against another host.
+  session: null,
   turn: null,
   // `turn` is the session's number for the exchange, which is what an eviction
   // names; `evicted` is the turn whose selection dropped this one, or null.
@@ -159,6 +169,7 @@ function onProtocol(message) {
       state.backend = message.backend
       state.model = message.model
       state.protocol = message.protocol
+      state.session = message.session ?? null
       state.turn = message.turn
       state.status = message.turn === null ? idle() : "running"
       if (!isReplay) {
@@ -365,7 +376,7 @@ let everConnected = false
 // Set once the page has given up on a server and taken the recordings instead.
 let fellBack = false
 
-function open(path, onMessage, assign) {
+function open(path, onMessage, assign, greet = false) {
   const ws = new WebSocket(url(path))
   ws.onmessage = event => {
     try {
@@ -375,7 +386,14 @@ function open(path, onMessage, assign) {
       console.error("unparseable frame", error)
     }
   }
-  ws.onopen = () => { backoff = 250; everConnected = true }
+  ws.onopen = () => {
+    backoff = 250
+    everConnected = true
+    // Before anything else, because on a port that requires a bearer token the
+    // host refuses everything until this arrives. Harmless on loopback, where
+    // it is optional.
+    if (greet) ws.send(JSON.stringify({ type: "hello", protocol: PROTOCOL, format: FORMAT }))
+  }
   ws.onclose = async () => {
     assign(null)
     state.status = "closed"
@@ -521,7 +539,7 @@ export async function connect() {
     return replay(asked)
   }
   if (socket) return
-  socket = open("/ws", onProtocol, s => { socket = s })
+  socket = open("/ws", onProtocol, s => { socket = s }, true)
   traceSocket = open("/ws/trace", onTrace, s => { traceSocket = s })
 }
 

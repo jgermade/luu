@@ -14,6 +14,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_core::approval::{Approval, ApproverKey, Approvers, Signer};
 use agent_core::backend::mock::Mock;
 use agent_core::context::{ApproximateCounter, Budget, Eviction, TokenCounter};
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
@@ -167,6 +168,7 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
         worker: None,
     };
     let serving = bind(ServeOptions {
+        approvers: Default::default(),
         address: "127.0.0.1:0".parse().expect("a loopback address"),
         backend: Arc::new(Mock::replies(replies).delay(Duration::ZERO)),
         model: "mock".into(),
@@ -189,12 +191,55 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
     address.to_string()
 }
 
+/// A server that will only take a signed approval, and the key that can make
+/// one. Loopback, so nothing here is testing the token — what is being asserted
+/// is that the signature is checked on its own account.
+async fn server_signing() -> (String, Signer) {
+    let signer = Signer::generate().expect("a key");
+    let approvers = Approvers {
+        required: true,
+        keys: vec![ApproverKey {
+            name: "jgermade".into(),
+            public: signer.public(),
+        }],
+    };
+    let address = server_everything(
+        vec![PLAN.into(), ANSWER.into()],
+        Duration::ZERO,
+        SandboxPolicy::default(),
+        Budget::new(0, 0, Eviction::Turn),
+        None,
+        approvers,
+    )
+    .await;
+    (address, signer)
+}
+
 async fn server_authed(
     replies: Vec<String>,
     delay: Duration,
     policy: SandboxPolicy,
     budget: Budget,
     auth_token_file: Option<std::path::PathBuf>,
+) -> String {
+    server_everything(
+        replies,
+        delay,
+        policy,
+        budget,
+        auth_token_file,
+        Approvers::default(),
+    )
+    .await
+}
+
+async fn server_everything(
+    replies: Vec<String>,
+    delay: Duration,
+    policy: SandboxPolicy,
+    budget: Budget,
+    auth_token_file: Option<std::path::PathBuf>,
+    approvers: Approvers,
 ) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
@@ -204,6 +249,7 @@ async fn server_authed(
         worker: None,
     };
     let serving = bind(ServeOptions {
+        approvers,
         address: "127.0.0.1:0".parse().expect("a loopback address"),
         backend: Arc::new(Mock::replies(replies).delay(delay)),
         model: "mock".into(),
@@ -297,11 +343,16 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    // 4 since `jobs`, 3 since `evicted`, 2 since `refused`: a new variant of a tagged enum is
-    // a change an older reader cannot parse, which is what this number is for.
-    assert_eq!(hello["protocol"], 4);
+    // 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since `refused`: a new
+    // variant of a tagged enum is a change an older reader cannot parse, which is what this
+    // number is for.
+    assert_eq!(hello["protocol"], 5);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
+    assert!(
+        hello["session"].is_string(),
+        "what an approval is signed against, so a signature does not replay elsewhere",
+    );
 
     // The gate: the prompt buys a planning call and is then held.
     send(
@@ -1409,4 +1460,244 @@ async fn multi_session_lifecycle_and_switching() {
     assert_eq!(check_del.status(), reqwest::StatusCode::NOT_FOUND);
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_client_that_speaks_another_protocol_is_refused_out_loud() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let hello = next_message(&mut socket).await;
+    assert_eq!(hello["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "hello", "protocol": 4, "format": 6}),
+    )
+    .await;
+
+    let refused = next_message(&mut socket).await;
+    assert_eq!(refused["type"], "refused");
+    assert_eq!(refused["reason"], "version");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .expect("a detail")
+            .contains("protocol 5"),
+        "the refusal says what this host speaks: {refused}",
+    );
+    let closed = tokio::time::timeout(PATIENCE, socket.next())
+        .await
+        .expect("the socket stayed open");
+    assert!(
+        matches!(closed, None | Some(Ok(WsMessage::Close(_)))),
+        "a client the host cannot parse is not left connected: {closed:?}",
+    );
+}
+
+#[tokio::test]
+async fn a_newer_client_is_refused_in_the_other_direction_too() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let _ = next_message(&mut socket).await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "hello", "protocol": 6}),
+    )
+    .await;
+
+    let refused = next_message(&mut socket).await;
+    assert_eq!(
+        refused["reason"], "version",
+        "a client this host cannot parse is the same answer as one that cannot parse it",
+    );
+}
+
+#[tokio::test]
+async fn a_matching_client_is_greeted_and_then_ignored() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let _ = next_message(&mut socket).await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "hello", "protocol": 5, "format": 7}),
+    )
+    .await;
+    // Nothing comes back: a handshake that matches is not an event in the
+    // session, and the next message is the one the prompt causes.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(started["turn"], 1);
+}
+
+#[tokio::test]
+async fn a_guarded_port_hears_the_handshake_before_anything_else() {
+    let (address, dir) = server_guarded("s3cret").await;
+    let request = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(format!("ws://{address}/ws"))
+        .header("Authorization", "Bearer s3cret")
+        .header("Host", address.clone())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(())
+        .expect("the request");
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("the websocket handshake");
+    let _ = next_message(&mut socket).await;
+
+    // The token got it through the door. It still may not drive the session
+    // until it says what it speaks: reachability and version are two questions.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+
+    let refused = next_message(&mut socket).await;
+    assert_eq!(refused["type"], "refused");
+    assert_eq!(refused["reason"], "version");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_signed_approval_runs_the_held_prompt_and_says_who_approved() {
+    let (address, signer) = server_signing().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let hello = next_message(&mut socket).await;
+    let session = hello["session"]
+        .as_str()
+        .expect("the session id")
+        .to_string();
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    let (proposed, _) = until(&mut socket, "job_proposed").await;
+    let job = proposed["job"].as_u64().expect("a job id");
+
+    // Unsigned first: this server was told approvals are signed, and the gate
+    // is where that is enforced rather than at the door.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_job", "job": job}),
+    )
+    .await;
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["reason"], "signature");
+
+    let files = vec!["Cargo.toml".to_string()];
+    let signature = signer
+        .sign(
+            &Approval {
+                session: &session,
+                job,
+                files: &files,
+                writes: &[],
+                commands: &[],
+                closes_on: None,
+                network: None,
+                egress: None,
+            },
+            "jgermade",
+        )
+        .expect("signing");
+
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_job",
+            "job": job,
+            "files": files,
+            "signature": {"by": signature.by, "sig": signature.sig},
+        }),
+    )
+    .await;
+
+    let (approved, _) = until(&mut socket, "job_approved").await;
+    assert_eq!(approved["approved_by"]["by"], "key");
+    assert_eq!(
+        approved["approved_by"]["name"], "jgermade",
+        "which key, so a recording can count one authority against another",
+    );
+
+    // And the read side, folded from the same events, agrees.
+    let view = get(&address, "/api/sessions/live").await;
+    assert_eq!(view["jobs"][0]["approved_by"]["name"], "jgermade");
+}
+
+#[tokio::test]
+async fn a_grant_widened_after_the_signature_is_refused() {
+    let (address, signer) = server_signing().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let hello = next_message(&mut socket).await;
+    let session = hello["session"]
+        .as_str()
+        .expect("the session id")
+        .to_string();
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    let (proposed, _) = until(&mut socket, "job_proposed").await;
+    let job = proposed["job"].as_u64().expect("a job id");
+
+    let signed = vec!["Cargo.toml".to_string()];
+    let signature = signer
+        .sign(
+            &Approval {
+                session: &session,
+                job,
+                files: &signed,
+                writes: &[],
+                commands: &[],
+                closes_on: None,
+                network: None,
+                egress: None,
+            },
+            "jgermade",
+        )
+        .expect("signing");
+
+    // What a relay between the person and the gate would do: the same
+    // signature, over one more tree.
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_job",
+            "job": job,
+            "files": ["Cargo.toml", "src"],
+            "signature": {"by": signature.by, "sig": signature.sig},
+        }),
+    )
+    .await;
+
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["reason"], "signature");
+    let view = get(&address, "/api/sessions/live").await;
+    assert_eq!(
+        view["jobs"][0]["state"], "proposed",
+        "a refused approval leaves the job exactly as it was",
+    );
 }

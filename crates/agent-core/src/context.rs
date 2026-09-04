@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
-use crate::job::{ClosedBy, Job, JobId, JobState, Plan, TaskId};
+use crate::job::{ApprovedBy, ClosedBy, Job, JobId, JobState, Plan, TaskId};
 use crate::protocol::TurnId;
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
@@ -361,6 +361,7 @@ impl Context {
                 state: jv.state,
                 summary,
                 closed_by: jv.closed_by,
+                approved_by: jv.approved_by.clone(),
             });
         }
 
@@ -529,18 +530,18 @@ impl Context {
     /// *rejected* job sets it approved, which reinstates a plan a person
     /// turned down and hands the next prompt a live job to run inside — the
     /// gate leaking through the message meant for unfolding a fold.
-    pub fn approve_job(&mut self, id: JobId) -> bool {
+    pub fn approve_job(&mut self, id: JobId, by: ApprovedBy) -> bool {
         match self.job_mut(id) {
             Some(job) if job.state == JobState::Proposed => {
-                job.approve();
+                job.approve(by);
                 true
             }
             _ => false,
         }
     }
 
-    pub fn approve_task(&mut self, id: TaskId) -> bool {
-        self.approve_job(id)
+    pub fn approve_task(&mut self, id: TaskId, by: ApprovedBy) -> bool {
+        self.approve_job(id, by)
     }
 
     /// Refuses a proposal. Nothing ran under it, so nothing folds; the job
@@ -1265,7 +1266,7 @@ mod tests {
     fn context_with_closed_task(live: usize, counter: &dyn TokenCounter) -> (Context, TaskId) {
         let mut context = Context::new("system prompt here");
         let task = context.propose_task("explain the context manager", Plan::default());
-        context.approve_task(task);
+        context.approve_task(task, ApprovedBy::Operator);
         for n in 0..3 {
             context.push_turn(
                 n as TurnId + 1,
@@ -1297,7 +1298,7 @@ mod tests {
         let counter = WordCounter::default();
         let mut context = Context::new("system prompt here");
         let task = context.propose_task("work out what the policy grants", Plan::default());
-        context.approve_task(task);
+        context.approve_task(task, ApprovedBy::Operator);
         context.push_turn(
             1,
             "which programs does this policy allow?",
@@ -1412,7 +1413,7 @@ mod tests {
         context.push_turn(1, "before any task", "a", vec![], &counter);
         let task = context.propose_task("do the thing", Plan::default());
         context.push_turn(2, "proposed, not approved", "b", vec![], &counter);
-        context.approve_task(task);
+        context.approve_task(task, ApprovedBy::Operator);
         context.push_turn(3, "inside the task", "c", vec![], &counter);
 
         let attributed: Vec<Option<JobId>> = context.turns().iter().map(|turn| turn.job).collect();
@@ -1719,7 +1720,7 @@ mod tool_turn_tests {
                 ..Plan::default()
             },
         );
-        context.approve_task(task);
+        context.approve_task(task, ApprovedBy::Operator);
         context.push_turn_with_steps(
             1,
             "fix the failing test",
@@ -1775,7 +1776,7 @@ mod tool_turn_tests {
                 ..Plan::default()
             },
         );
-        context.approve_task(second);
+        context.approve_task(second, ApprovedBy::Operator);
         context.push_turn(2, "and now this", "Looking.", vec![], &counter);
 
         assert!(
@@ -1917,9 +1918,9 @@ mod tool_turn_tests {
         assert!(!context.reopen_task(task), "it was never closed");
         assert_eq!(context.task(task).unwrap().state, JobState::Proposed);
 
-        assert!(context.approve_task(task));
+        assert!(context.approve_task(task, ApprovedBy::Operator));
         assert!(
-            !context.approve_task(task),
+            !context.approve_task(task, ApprovedBy::Operator),
             "approving twice is not a state"
         );
         assert!(

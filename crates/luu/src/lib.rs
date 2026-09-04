@@ -6,13 +6,14 @@
 use std::time::Duration;
 
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
+use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
 use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
 use agent_core::fragment;
-use agent_core::protocol::ServerMessage;
+use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
-use agent_core::task::{ClosedBy, Plan, PlanSource};
+use agent_core::task::{ApprovedBy, ClosedBy, Plan, PlanSource};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
@@ -92,6 +93,17 @@ enum Command {
     Tools {
         #[command(flatten)]
         sandbox: SandboxArgs,
+    },
+
+    /// Approval keys: make one, or sign an approval with it.
+    ///
+    /// A verification path with no way to produce a signature is a feature
+    /// nobody can run, and the signing half belongs where a remote operator's
+    /// `luu` can call it rather than inside one surface's UI. See
+    /// `RECORD/2026-09-04.signed-approvals.completed.md`.
+    Key {
+        #[command(subcommand)]
+        action: KeyAction,
     },
 
     /// Print the repository map that a budget resolves to, and what it cost.
@@ -534,6 +546,120 @@ fn fill_of(non_greedy: bool) -> agent_core::repo_map::Fill {
     }
 }
 
+#[derive(Subcommand)]
+enum KeyAction {
+    /// Make a key, write the private half, and print the block to paste into
+    /// `luu.toml`.
+    New {
+        /// Where the private half goes. Written `0600`, for the reason
+        /// `crate::auth` reads its token out of a file: a flag is greppable in
+        /// `ps` and an environment variable is inherited by every child.
+        #[arg(long, short, value_name = "FILE")]
+        out: std::path::PathBuf,
+
+        /// What the host's `luu.toml` will call this key. Names are per host.
+        #[arg(long, default_value = "operator")]
+        name: String,
+    },
+
+    /// Sign an `approve_job` message read on stdin, and write it back out with
+    /// its signature attached.
+    Sign {
+        /// The private half, as `luu key new --out` wrote it.
+        #[arg(long, short, value_name = "FILE")]
+        key: std::path::PathBuf,
+
+        /// The session the approval belongs to, as the host's `hello` names
+        /// it. In the signed bytes, so a signature captured here does not
+        /// replay against another host that numbers its jobs the same way.
+        #[arg(long, value_name = "ID")]
+        session: String,
+
+        /// The name the host's `luu.toml` calls this key.
+        #[arg(long = "as", default_value = "operator")]
+        signer: String,
+    },
+}
+
+/// `luu key`: the half of signed approvals that produces a signature.
+fn run_key(action: &KeyAction) -> Result<()> {
+    match action {
+        KeyAction::New { out, name } => {
+            let signer = Signer::generate()?;
+            write_private(out, &signer.secret())?;
+            eprintln!("wrote {} (mode 0600)", out.display());
+            println!("[[approvals.key]]");
+            println!("name = \"{name}\"");
+            println!("public = \"{}\"", signer.public());
+            Ok(())
+        }
+        KeyAction::Sign {
+            key,
+            session,
+            signer,
+        } => {
+            let signing = Signer::from_file(key)?;
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)
+                .context("reading the approval on stdin")?;
+            let message: ServerBoundMessage =
+                serde_json::from_str(input.trim()).context("parsing the approval on stdin")?;
+            let ServerBoundMessage::ApproveJob {
+                job,
+                files,
+                writes,
+                commands,
+                closes_on,
+                network,
+                egress,
+                ..
+            } = message
+            else {
+                anyhow::bail!("only an approve_job message can be signed");
+            };
+            let signature = signing.sign(
+                &Approval {
+                    session,
+                    job,
+                    files: &files,
+                    writes: &writes,
+                    commands: &commands,
+                    closes_on: closes_on.as_ref(),
+                    network,
+                    egress: egress.as_ref(),
+                },
+                signer.clone(),
+            )?;
+            let signed = ServerBoundMessage::ApproveJob {
+                job,
+                files,
+                writes,
+                commands,
+                closes_on,
+                network,
+                egress,
+                signature: Some(signature),
+            };
+            println!("{}", serde_json::to_string(&signed)?);
+            Ok(())
+        }
+    }
+}
+
+/// The private half, written where only its owner can read it — the same rule
+/// `crate::auth` holds the bearer token to, and for the same reason.
+fn write_private(path: &std::path::Path, text: &str) -> Result<()> {
+    std::fs::write(path, format!("{text}\n"))
+        .with_context(|| format!("writing {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("setting the mode of {}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// The sandbox flags, shared by every subcommand that can act.
 ///
 /// They *add* to whatever the policy file said rather than replacing it, so
@@ -614,14 +740,35 @@ impl SandboxArgs {
     /// not started until its handshake has come back: a session that announced
     /// a container and then could not reach one would be a session whose
     /// verdicts lie.
+    /// The file `[sandbox]`, `[worker]` and `[approvals]` are all read from —
+    /// three readers of one file, which is why the path is resolved in one
+    /// place rather than three.
+    fn policy_path(&self) -> Result<std::path::PathBuf> {
+        let base = std::env::current_dir().context("the working directory")?;
+        Ok(self
+            .sandbox
+            .clone()
+            .unwrap_or_else(|| base.join("luu.toml")))
+    }
+
+    /// `[approvals]`: who may approve, and whether anyone must sign to. A file
+    /// without the block is not an error — it is a `luu.toml` from before
+    /// signatures existed, and its approvals are the operator's own.
+    fn approvers(&self) -> Result<Approvers> {
+        let path = self.policy_path()?;
+        match path.exists() {
+            true => {
+                Approvers::from_file(&path).with_context(|| format!("reading {}", path.display()))
+            }
+            false => Ok(Approvers::default()),
+        }
+    }
+
     async fn resolve(&self) -> Result<Agency> {
         let base = std::env::current_dir().context("the working directory")?;
 
         let explicit = self.sandbox.is_some();
-        let path = self
-            .sandbox
-            .clone()
-            .unwrap_or_else(|| base.join("luu.toml"));
+        let path = self.policy_path()?;
         let mut policy = match (explicit, path.exists()) {
             // An explicit --sandbox that is not there is an error: it was asked
             // for, and falling back to the default would be a wider sandbox
@@ -1016,6 +1163,10 @@ pub async fn run() -> Result<()> {
         .context("the worker");
     }
 
+    if let Command::Key { action } = &command {
+        return run_key(action);
+    }
+
     if let Command::Tools { sandbox } = &command {
         let agency = sandbox.resolve().await?;
         print!("{}", agency.describe());
@@ -1139,8 +1290,15 @@ pub async fn run() -> Result<()> {
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
+        let approvers = sandbox_args.approvers()?;
         let agency = sandbox_args.resolve().await?;
         eprint!("{}", agency.describe());
+        if approvers.required {
+            eprintln!(
+                "approvals — signed, {} key(s) named in the policy file",
+                approvers.keys.len()
+            );
+        }
         // Named, or the default, or nothing at all. A missing `HOME` leaves
         // the default undecidable, and the run says so rather than picking a
         // directory of its own and writing history into it.
@@ -1172,6 +1330,7 @@ pub async fn run() -> Result<()> {
             map_order: order_of(map_rank, map_in_degree),
             map_fill: fill_of(map_non_greedy),
             auth_token_file,
+            approvers,
         })
         .await;
     }
@@ -1215,6 +1374,7 @@ pub async fn run() -> Result<()> {
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
+        let approvers = sandbox_args.approvers()?;
         let agency = sandbox_args.resolve().await?;
         eprint!("{}", agency.describe());
         let store = match (no_store, store) {
@@ -1243,6 +1403,7 @@ pub async fn run() -> Result<()> {
             map_tokens,
             map_order: order_of(map_rank, map_in_degree),
             map_fill: fill_of(map_non_greedy),
+            approvers,
         })
         .await;
     }
@@ -1393,7 +1554,11 @@ pub async fn run() -> Result<()> {
                     );
                 }
                 let id = context.propose_job(objective.clone(), plan.clone());
-                context.approve_job(id);
+                // `luu chat` has no gate, so it has no approver either: the
+                // policy file is its standing approval and the operator who
+                // ran the command is who that was. See the open question in
+                // `RECORD/2026-09-04.signed-approvals.completed.md`.
+                context.approve_job(id, ApprovedBy::Operator);
                 narrowed = Some(std::sync::Arc::new(
                     plan.narrow(agency.sandbox.as_ref(), id)
                         .with_context(|| format!("resolving the plan of job `{objective}`"))?,
@@ -1410,6 +1575,7 @@ pub async fn run() -> Result<()> {
                     recorder.write(&Event::Protocol(ServerMessage::JobApproved {
                         job: id,
                         plan: plan.clone(),
+                        approved_by: Some(ApprovedBy::Operator),
                     }));
                 }
                 println!("\n== job {id} approved: {objective}");

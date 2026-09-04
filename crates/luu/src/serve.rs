@@ -10,10 +10,12 @@ use std::sync::Arc;
 
 use agent_core::agent::run_agent_turn;
 use agent_core::api::SessionView;
+use agent_core::approval::{Approval, Approvers, Signature};
 use agent_core::backend::{Backend, CompletionRequest};
 use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
 use agent_core::job::{ClosedBy, JobId, Plan, PlanSource, Proposal, parse_plan};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
+use agent_core::record;
 use agent_core::repo_map::{Order, RepoMap};
 use agent_core::sandbox::Sandbox;
 use agent_core::trace::TraceMessage;
@@ -105,6 +107,10 @@ struct App {
     /// Where the fold is cached between restarts. `None` leaves the session in
     /// memory, which is what every run did before this existed.
     store: Option<Mutex<SessionStore>>,
+    /// Who may approve, and whether anyone must sign to. Empty and not
+    /// required is the local operator with a keyboard, which is every session
+    /// before `RECORD/2026-09-04.signed-approvals.completed.md`.
+    approvers: Approvers,
 }
 
 pub struct StdioOptions {
@@ -114,6 +120,9 @@ pub struct StdioOptions {
     pub budget: Budget,
     pub counter: Arc<dyn TokenCounter>,
     pub agency: Agency,
+    /// `[approvals]` from the same file the sandbox came from: who may approve,
+    /// and whether anyone must sign to.
+    pub approvers: Approvers,
     pub temperature: Option<f32>,
     pub seed: Option<u32>,
     /// Tokens of repository outline for the prefix. 0 is off — see
@@ -143,6 +152,7 @@ impl App {
             map_order,
             map_fill,
             store,
+            approvers,
         } = options;
         let started_at = now_ms();
 
@@ -198,6 +208,7 @@ impl App {
         Ok(Arc::new(App {
             backend,
             model,
+            approvers,
             session: Mutex::new(Session {
                 next_turn: 1,
                 current: None,
@@ -321,6 +332,9 @@ pub struct ServeOptions {
     pub budget: Budget,
     pub counter: Arc<dyn TokenCounter>,
     pub agency: Agency,
+    /// `[approvals]` from the same file the sandbox came from: who may approve,
+    /// and whether anyone must sign to.
+    pub approvers: Approvers,
     pub temperature: Option<f32>,
     pub seed: Option<u32>,
     /// Tokens of repository outline for the prefix. 0 is off — see
@@ -387,6 +401,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         map_fill,
         auth_token_file,
         store,
+        approvers,
     } = options;
     // Before anything else, and before the listener exists: a port that would
     // publish task approval to the network is not a port this binds and then
@@ -406,6 +421,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         map_order,
         map_fill,
         store,
+        approvers,
     })
     .await?;
 
@@ -447,7 +463,10 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     let router = guarded
         .route("/", get(|| serve_asset("index.html")))
         .route("/{*path}", get(asset_handler))
-        .with_state(AppRouterState { app: app.clone() });
+        .with_state(AppRouterState {
+            app: app.clone(),
+            auth: auth.clone(),
+        });
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -465,6 +484,10 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
 #[derive(Clone)]
 struct AppRouterState {
     app: Arc<App>,
+    /// What the port requires. `/ws` reads it for the same reason the
+    /// middleware does: a port a network can reach is held to more than one a
+    /// person's own browser can.
+    auth: Arc<Auth>,
 }
 
 async fn asset_handler(uri: Uri) -> Response {
@@ -556,9 +579,18 @@ async fn run_trace_socket(socket: WebSocket, app: Arc<App>) {
 }
 
 async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
-    let AppRouterState { app } = state;
+    let AppRouterState { app, auth } = state;
     let (mut sink, mut stream) = socket.split();
     let mut events = app.events.subscribe();
+
+    // A port that asks for a bearer token is a port a network can reach, and
+    // there the client says what it speaks before it is allowed to say anything
+    // else. On loopback the peer is this machine's own browser — the same
+    // artifact as this binary — and requiring it would break every client
+    // written before the handshake existed for a property the operating system
+    // already gives.
+    let must_greet = auth.is_token();
+    let mut greeted = false;
 
     let hello = {
         let session = app.session.lock().await;
@@ -567,6 +599,7 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
             backend: app.backend.name().to_string(),
             model: app.model.clone(),
             turn: session.current,
+            session: Some(app.session_id.lock().await.clone()),
         }
     };
     let Ok(json) = serde_json::to_string(&hello) else {
@@ -597,12 +630,36 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                     }
                     continue;
                 };
-                match serde_json::from_str::<ClientMessage>(&text) {
-                    Ok(message) => handle_client_message(&app, message).await,
+                let message = match serde_json::from_str::<ClientMessage>(&text) {
+                    Ok(message) => message,
                     // Unparseable input from one client must not take the
                     // server down for the others.
                     Err(_) => continue,
+                };
+                match &message {
+                    ClientMessage::Hello { protocol, format } => {
+                        if let Err(detail) = handshake(*protocol, *format) {
+                            close_with(&mut sink, version_refusal(detail)).await;
+                            return;
+                        }
+                        greeted = true;
+                        continue;
+                    }
+                    _ if must_greet && !greeted => {
+                        close_with(
+                            &mut sink,
+                            version_refusal(
+                                "this port requires a hello saying what the client speaks, \
+                                 before anything else"
+                                    .to_string(),
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                    _ => {}
                 }
+                handle_client_message(&app, message).await;
             }
         }
     }
@@ -610,6 +667,9 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
 
 async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
     match message {
+        // Answered by the transport, which is the only half that knows whether
+        // this connection had to greet at all.
+        ClientMessage::Hello { .. } => {}
         ClientMessage::Prompt { text } => {
             on_prompt(app.clone(), text).await;
         }
@@ -627,6 +687,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             closes_on,
             network,
             egress,
+            signature,
         } => {
             approve_job(
                 app.clone(),
@@ -637,6 +698,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 closes_on,
                 network,
                 egress,
+                signature,
             )
             .await;
         }
@@ -691,6 +753,7 @@ where
             backend: app.backend.name().to_string(),
             model: app.model.clone(),
             turn: session.current,
+            session: Some(app.session_id.lock().await.clone()),
         }
     };
     let json = serde_json::to_string(&hello).context("serializing hello")?;
@@ -727,10 +790,28 @@ where
                         if text.is_empty() {
                             continue;
                         }
-                        match serde_json::from_str::<ClientMessage>(text) {
-                            Ok(message) => handle_client_message(&app, message).await,
+                        let message = match serde_json::from_str::<ClientMessage>(text) {
+                            Ok(message) => message,
                             Err(_) => continue,
+                        };
+                        // Checked when it comes and never required: the peer
+                        // here is the process that spawned this one, and a
+                        // subprocess bridge has no port for anyone else to
+                        // reach. A mismatch still ends the conversation, in the
+                        // one direction stdio has to say so.
+                        if let ClientMessage::Hello { protocol, format } = &message {
+                            if let Err(detail) = handshake(*protocol, *format) {
+                                let refusal = version_refusal(detail);
+                                if let Ok(json) = serde_json::to_string(&refusal) {
+                                    let _ = output.write_all(json.as_bytes()).await;
+                                    let _ = output.write_all(b"\n").await;
+                                    let _ = output.flush().await;
+                                }
+                                return Ok(());
+                            }
+                            continue;
                         }
+                        handle_client_message(&app, message).await;
                     }
                     Ok(None) | Err(_) => {
                         return Ok(());
@@ -746,6 +827,56 @@ where
 /// Every early return in this file that a client could not otherwise
 /// distinguish from a dropped message goes through here. See
 /// `RECORD/2026-08-30.a-refusal-is-a-message.completed.md`.
+/// Whether a client that says what it speaks may be spoken to.
+///
+/// A mismatch in either direction: `VERSION` is bumped when a change would
+/// break an older client, so a newer client is the case this host cannot parse
+/// and an older one is the case it cannot. Neither side can repair it, so
+/// neither side guesses.
+fn handshake(protocol: u32, format: u32) -> Result<(), String> {
+    if protocol != protocol::VERSION {
+        return Err(format!(
+            "this host speaks protocol {} and the client speaks {protocol}",
+            protocol::VERSION
+        ));
+    }
+    // 0 is a client that did not say, which is every client that only reads the
+    // wire and never a recording.
+    if format != 0 && format != record::FORMAT {
+        return Err(format!(
+            "this host writes record format {} and the client reads {format}",
+            record::FORMAT
+        ));
+    }
+    Ok(())
+}
+
+/// Says it, then closes — with the handshake a close has, rather than by
+/// dropping the socket: a client that is told *why* over a connection that then
+/// resets has to guess whether the reset was the answer.
+async fn close_with(
+    sink: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
+    refusal: ServerMessage,
+) {
+    if let Ok(json) = serde_json::to_string(&refusal) {
+        let _ = sink.send(WsMessage::Text(json.into())).await;
+    }
+    let _ = sink.send(WsMessage::Close(None)).await;
+}
+
+/// The refusal that closes a connection, sent to the one client it is about.
+///
+/// Not `refuse`: a version mismatch is a property of this socket and not of the
+/// session, and broadcasting it would tell every other client that something
+/// they cannot act on happened.
+fn version_refusal(detail: String) -> ServerMessage {
+    ServerMessage::Refused {
+        request: "hello".to_string(),
+        reason: Refusal::Version,
+        detail,
+    }
+}
+
 async fn refuse(app: &Arc<App>, request: &str, reason: Refusal, detail: impl Into<String>) {
     app.publish(Event::Protocol(ServerMessage::Refused {
         request: request.to_string(),
@@ -885,7 +1016,39 @@ async fn approve_job(
     closes_on: Option<String>,
     network: Option<bool>,
     egress: Option<Vec<String>>,
+    signature: Option<Signature>,
 ) {
+    // Before the state machine, and before anything is held or dropped: an
+    // approval nobody can prove the authorship of is not an approval, and the
+    // job stays exactly as it was.
+    let approved_by = {
+        let session = app.session_id.lock().await;
+        let approval = Approval {
+            session: &session,
+            job,
+            files: &files,
+            writes: &writes,
+            commands: &commands,
+            closes_on: closes_on.as_ref(),
+            network,
+            egress: egress.as_ref(),
+        };
+        app.approvers.admits(&approval, signature.as_ref())
+    };
+    let approved_by = match approved_by {
+        Ok(by) => by,
+        Err(error) => {
+            refuse(
+                &app,
+                "approve_job",
+                Refusal::Signature,
+                format!("job {job}: {error}"),
+            )
+            .await;
+            return;
+        }
+    };
+
     let approved = {
         let mut session = app.session.lock().await;
         // Nothing can be running here — a prompt behind the gate is refused, so
@@ -925,7 +1088,7 @@ async fn approve_job(
                         Some(&granted.egress),
                     )
                     .unwrap_or_default();
-                session.context.approve_job(job);
+                session.context.approve_job(job, approved_by.clone());
                 session
                     .pending
                     .take()
@@ -984,8 +1147,12 @@ async fn approve_job(
         session.narrowed = narrowed.map(|sandbox| (job, sandbox));
     }
 
-    app.publish(Event::Protocol(ServerMessage::JobApproved { job, plan }))
-        .await;
+    app.publish(Event::Protocol(ServerMessage::JobApproved {
+        job,
+        plan,
+        approved_by: Some(approved_by),
+    }))
+    .await;
     start_turn(app, prompt).await;
 }
 
@@ -1505,7 +1672,7 @@ async fn create_session(State(state): State<AppRouterState>) -> Response {
         *view = SessionView::new(LIVE_SESSION, app.backend.name(), &app.model);
         view.started_at = started_at;
         let mut s = view.summary();
-        s.id = new_id;
+        s.id = new_id.clone();
         s
     };
 
@@ -1514,6 +1681,9 @@ async fn create_session(State(state): State<AppRouterState>) -> Response {
         backend: app.backend.name().to_string(),
         model: app.model.clone(),
         turn: None,
+        // The new name, not the old one: a client that signs an approval after
+        // a switch signs it against the session it is now watching.
+        session: Some(new_id),
     };
     app.publish(Event::Protocol(hello)).await;
 
@@ -1590,6 +1760,7 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         backend: app.backend.name().to_string(),
         model: app.model.clone(),
         turn: None,
+        session: Some(id.to_string()),
     };
     app.publish(Event::Protocol(hello)).await;
 
@@ -1737,6 +1908,7 @@ mod tests {
             worker: None,
         };
         Arc::new(App {
+            approvers: Approvers::default(),
             backend: Arc::new(
                 Mock::replies(replies.iter().map(|r| (*r).to_string()).collect())
                     .delay(std::time::Duration::ZERO),
@@ -1802,7 +1974,18 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
 
-        approve_job(app.clone(), 1, vec![], vec![], vec![], None, None, None).await;
+        approve_job(
+            app.clone(),
+            1,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
         assert!(
             until(&app, |s| s.context.turns().len() == 1).await,
             "the held prompt never ran",
@@ -1859,7 +2042,18 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_job(app.clone(), 1, vec![], vec![], vec![], None, None, None).await;
+        approve_job(
+            app.clone(),
+            1,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         on_prompt(app.clone(), "now the tests".into()).await;
@@ -1875,7 +2069,18 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_job(app.clone(), 1, vec![], vec![], vec![], None, None, None).await;
+        approve_job(
+            app.clone(),
+            1,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         close_job(app.clone(), 1).await;

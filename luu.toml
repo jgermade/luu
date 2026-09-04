@@ -67,3 +67,22 @@ access = "read-write"
 #
 # One informed line beats a prompt per call, which is what trains people to click
 # yes without reading.
+
+# Who may approve a job, and whether anyone must prove it.
+#
+# `approve_job` is the authority this design is built around — nothing runs
+# behind the gate until it arrives — and off loopback the bearer token only
+# answers *who may reach the port*, never *who approved*. A signature answers
+# the second question with a key no relay holds. Off here, because a loopback
+# session with a person at the keyboard is what every measurement in this
+# repository was made under. See RECORD/2026-09-04.signed-approvals.completed.md.
+#
+#   [approvals]
+#   required = true
+#
+#   [[approvals.key]]
+#   name = "jgermade"
+#   public = "ed25519:…"        # `luu key new --out ~/.loude/approval.key`
+#
+# A *wrong* signature is refused whether or not one is required: `required`
+# decides what an absent signature means and nothing else.

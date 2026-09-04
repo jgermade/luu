@@ -14,9 +14,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::approval::Signature;
 use crate::backend::Usage;
 use crate::context::{Counter, Eviction};
-use crate::job::{ClosedBy, JobId, Plan, PlanSource};
+use crate::job::{ApprovedBy, ClosedBy, JobId, Plan, PlanSource};
 use crate::sandbox::Verdict;
 use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
@@ -42,7 +43,15 @@ use crate::turn::{EndReason, TurnEvent};
 ///
 /// **4 uncrosses terminology**: the outer unit of work and approval is renamed to
 /// **Job**, reserving **Task** for the fine-grained checklist items emitted by models.
-pub const VERSION: u32 = 4;
+///
+/// **5 is the wire learning to say what it speaks**, which is federation's first
+/// prerequisite: [`ClientMessage::Hello`] is a new client variant, and
+/// [`Refusal`] gains `version` and `signature` — new values of a tagged enum,
+/// which is the same rule as 2, 3 and 4. This is also the last bump an older
+/// client learns about by failing to parse: from here a client says its version
+/// and is refused out loud. See
+/// `RECORD/2026-09-04.signed-approvals.completed.md`.
+pub const VERSION: u32 = 5;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -63,11 +72,34 @@ pub enum Refusal {
     /// Part of what was asked for is not granted by the policy file, which is
     /// the outer bound nobody may widen past.
     NotGranted,
+    /// The client speaks a protocol or record format this host does not. Sent
+    /// in answer to [`ClientMessage::Hello`], in either direction of mismatch:
+    /// a newer client is the case this host cannot parse and an older one is
+    /// the case it cannot, and neither side can repair it by guessing.
+    Version,
+    /// The approval carries no signature where one is required, names a key
+    /// this host does not know, or does not verify against the grant it
+    /// carries. One variant and not three: a client branches on this and shows
+    /// `detail` to a person.
+    Signature,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    /// What the client speaks. Optional on loopback and over stdio, where the
+    /// peer is this machine's own browser or the process that spawned us;
+    /// **required as the first message** on a port that asks for a bearer
+    /// token, which is every port off loopback. A mismatch is answered with
+    /// [`Refusal::Version`] and the connection closed, rather than by
+    /// misreading the next message.
+    Hello {
+        protocol: u32,
+        /// The record format the client can read, so a client that mirrors or
+        /// replays a session is refused for the same reason at the same point.
+        #[serde(default)]
+        format: u32,
+    },
     /// Start a turn.
     Prompt { text: String },
     /// Stop the turn in flight. Cancelling when nothing is running is not an
@@ -100,6 +132,11 @@ pub enum ClientMessage {
         /// Optional egress domain allowlist for this job.
         #[serde(default)]
         egress: Option<Vec<String>>,
+        /// Ed25519 over the grant above, bound to the session it belongs to.
+        /// Required when `[approvals] required` says so, verified whenever it
+        /// is present. See [`crate::approval`].
+        #[serde(default)]
+        signature: Option<Signature>,
     },
     /// Refuse it. The held prompt is dropped with it — a prompt whose plan was
     /// turned down is not a prompt that was approved on its own.
@@ -132,6 +169,12 @@ pub enum ServerMessage {
         backend: String,
         model: String,
         turn: Option<TurnId>,
+        /// What this session is called, so an approval can be signed against
+        /// it. Without it a signature captured here replays against any other
+        /// host that numbers its jobs the same way. `None` in a recording made
+        /// before signatures existed.
+        #[serde(default)]
+        session: Option<String>,
     },
     /// Carries the prompt, because a second client (and the record file) never
     /// saw the `ClientMessage` that started the turn.
@@ -161,6 +204,10 @@ pub enum ServerMessage {
         job: JobId,
         #[serde(default)]
         plan: Plan,
+        /// Which authority approved it. Absent in a recording written before
+        /// signatures existed, which reads as [`ApprovedBy::Operator`].
+        #[serde(default)]
+        approved_by: Option<ApprovedBy>,
     },
     /// The one rewrite in an otherwise write-once session: from here on the
     /// job's turns are sent as this summary.
@@ -453,6 +500,7 @@ mod tests {
             ServerMessage::JobApproved {
                 job: 2,
                 plan: Plan::default(),
+                approved_by: None,
             }
             .turn(),
             None,
@@ -478,6 +526,60 @@ mod tests {
                 "{text} parsed as {parsed:?}",
             );
         }
+    }
+
+    #[test]
+    fn the_client_says_what_it_speaks_and_an_approval_can_carry_a_signature() {
+        let hello: ClientMessage =
+            serde_json::from_str(r#"{"type":"hello","protocol":5,"format":7}"#).unwrap();
+        assert!(matches!(
+            hello,
+            ClientMessage::Hello {
+                protocol: 5,
+                format: 7
+            }
+        ));
+
+        // A client that only drives the wire and never reads a recording says
+        // nothing about the format, and that is not a mismatch.
+        let bare: ClientMessage = serde_json::from_str(r#"{"type":"hello","protocol":5}"#).unwrap();
+        assert!(matches!(bare, ClientMessage::Hello { format: 0, .. }));
+
+        let signed: ClientMessage = serde_json::from_str(
+            r#"{"type":"approve_job","job":2,"signature":{"by":"jgermade","sig":"ab"}}"#,
+        )
+        .unwrap();
+        let ClientMessage::ApproveJob { signature, .. } = signed else {
+            panic!("an approval");
+        };
+        assert_eq!(signature.expect("the signature").by, "jgermade");
+
+        // And an approval from before signatures existed is still an approval.
+        let unsigned: ClientMessage =
+            serde_json::from_str(r#"{"type":"approve_job","job":2}"#).unwrap();
+        assert!(matches!(
+            unsigned,
+            ClientMessage::ApproveJob {
+                signature: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_approval_recorded_before_signatures_existed_still_parses() {
+        let parsed: ServerMessage =
+            serde_json::from_str(r#"{"type":"task_approved","task":1,"plan":{}}"#).unwrap();
+        assert!(
+            matches!(
+                parsed,
+                ServerMessage::JobApproved {
+                    approved_by: None,
+                    ..
+                }
+            ),
+            "absent is not a claim about who approved; the reader decides it was the operator",
+        );
     }
 
     #[test]
