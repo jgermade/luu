@@ -38,7 +38,13 @@ use crate::trace::TraceMessage;
 /// 6: `job_proposed`, `job_approved`, `job_closed`, `job_reopened`, `job_rejected`
 /// lines, and plans carrying model tasks checklists. See
 /// `RECORD/2026-09-04.from-tasks-to-jobs.completed.md`.
-pub const FORMAT: u32 = 6;
+///
+/// 7: `refused` lines can carry `version` and `signature` refusals, and
+/// `job_approved` carries who approved. The first half is the same rule as 3,
+/// 4 and 5 — a new value of a tagged enum — and the second is additive: absent
+/// means the operator, because that is what every approval before it was. See
+/// `RECORD/2026-09-04.signed-approvals.completed.md`.
+pub const FORMAT: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]

@@ -1,12 +1,24 @@
-// Protocol v4 types for luu stdio bridge
+// Protocol v5 types for luu stdio bridge
+
+/// What this client speaks. Sent as the first message so a host that speaks
+/// something else refuses it out loud, rather than by misreading the next one.
+export const PROTOCOL = 5;
+export const RECORD_FORMAT = 7;
 
 export type TurnId = number;
 export type JobId = number;
 
-export type RefusalReason = 'busy' | 'pending' | 'job' | 'not_granted';
+export type RefusalReason = 'busy' | 'pending' | 'job' | 'not_granted' | 'version' | 'signature';
 
 export type PlanSource = 'model' | 'prose' | 'written';
 export type ClosedBy = 'user' | 'exit_code';
+export type ApprovedBy = { by: 'operator' } | { by: 'key'; name: string };
+
+/// Ed25519 over the canonical rendering of the grant, made by `luu key sign`.
+export interface Signature {
+  by: string;
+  sig: string;
+}
 
 export interface Plan {
   tasks?: string[];
@@ -35,6 +47,7 @@ export type EndReason = 'complete' | 'length' | 'tool_use' | 'stop' | 'cancel' |
 
 // Client -> Server messages (NDJSON)
 export type ClientMessage =
+  | { type: 'hello'; protocol: number; format?: number }
   | { type: 'prompt'; text: string }
   | { type: 'cancel' }
   | {
@@ -46,6 +59,7 @@ export type ClientMessage =
       closes_on?: string | null;
       network?: boolean | null;
       egress?: string[] | null;
+      signature?: Signature | null;
     }
   | { type: 'reject_job'; job: JobId }
   | { type: 'close_job'; job: JobId }
@@ -59,6 +73,8 @@ export type ServerMessage =
       backend: string;
       model: string;
       turn: TurnId | null;
+      /// What the host calls this session. An approval is signed against it.
+      session?: string | null;
     }
   | {
       type: 'turn_started';
@@ -77,6 +93,9 @@ export type ServerMessage =
       type: 'job_approved';
       job: JobId;
       plan: Plan;
+      /// Which authority approved it. Absent means the operator, which is what
+      /// every approval before signatures existed was.
+      approved_by?: ApprovedBy | null;
     }
   | {
       type: 'job_closed';

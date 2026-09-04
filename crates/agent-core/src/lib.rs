@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod approval;
 pub mod backend;
 pub mod context;
 pub mod fragment;

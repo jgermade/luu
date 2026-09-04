@@ -14,6 +14,11 @@ anyhow = "1"
 async-stream = "0.3"
 axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4", features = ["derive"] }
+# Signed approvals. The one thing here not to hand-roll: the randomness for a new
+# key is read from /dev/urandom and the hex is written by hand, because those two
+# are small enough that a dependency costs more than the code. See
+# RECORD/2026-09-04.signed-approvals.completed.md.
+ed25519-dalek = "3"
 futures-util = "0.3"
 landlock = "0.4"
 libc = "0.2"

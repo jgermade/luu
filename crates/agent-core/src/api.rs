@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
 use crate::context::{Counter, Evicted};
-use crate::job::{ClosedBy, JobId, JobState, Plan, PlanSource};
+use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
@@ -100,6 +100,11 @@ pub struct JobView {
     /// Which authority closed it, beside what the close produced.
     #[serde(default)]
     pub closed_by: Option<ClosedBy>,
+    /// Which authority approved it: the operator at the gate, or a key that
+    /// signed. Absent until it is approved, and in a view folded from a
+    /// recording made before signatures existed.
+    #[serde(default)]
+    pub approved_by: Option<ApprovedBy>,
 }
 
 pub type TaskView = JobView;
@@ -298,6 +303,7 @@ impl SessionView {
                         state: JobState::Proposed,
                         summary: None,
                         closed_by: None,
+                        approved_by: None,
                     });
                 }
             }
@@ -330,12 +336,19 @@ impl SessionView {
             // nothing about the session afterwards that is different for it.
             // It stays out of the view until something wants to count them.
             ServerMessage::Refused { .. } => {}
-            ServerMessage::JobApproved { job, plan } => {
+            ServerMessage::JobApproved {
+                job,
+                plan,
+                approved_by,
+            } => {
                 if let Some(view) = self.job_mut(*job) {
                     view.state = JobState::Approved;
                     if plan != &Plan::default() {
                         view.plan = plan.clone();
                     }
+                    // Absent means the operator: every approval recorded before
+                    // signatures existed was one.
+                    view.approved_by = Some(approved_by.clone().unwrap_or(ApprovedBy::Operator));
                 }
             }
             ServerMessage::JobClosed { job, summary, by } => {

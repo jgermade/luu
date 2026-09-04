@@ -433,6 +433,23 @@ pub enum ClosedBy {
     ExitCode,
 }
 
+/// Which authority approved a job.
+///
+/// Beside [`ClosedBy`] and for the same reason: a rung above the person is only
+/// worth climbing if each rung can be *counted*, and a recording where a
+/// signed approval and an operator's look the same cannot say how often either
+/// happened. See `RECORD/2026-09-04.signed-approvals.completed.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum ApprovedBy {
+    /// A person at the gate, unsigned. What every approval before signatures
+    /// existed was, which is why an absent value reads as this one.
+    #[default]
+    Operator,
+    /// A signature that verified against a key `luu.toml` names.
+    Key { name: String },
+}
+
 /// What a closed job leaves behind, counted once at the close.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
@@ -459,6 +476,11 @@ pub struct Job {
     /// has not been closed by anyone.
     #[serde(default)]
     pub closed_by: Option<ClosedBy>,
+    /// Who approved it, from the approval onwards. Absent while it is still a
+    /// proposal, and absent in a record written before signatures existed —
+    /// which reads as [`ApprovedBy::Operator`], because that is what it was.
+    #[serde(default)]
+    pub approved_by: Option<ApprovedBy>,
 }
 
 pub type Task = Job;
@@ -472,11 +494,15 @@ impl Job {
             state: JobState::Proposed,
             summary: None,
             closed_by: None,
+            approved_by: None,
         }
     }
 
-    pub fn approve(&mut self) {
+    /// Approves it, recording which authority did — the same way a close
+    /// records who folded it.
+    pub fn approve(&mut self, by: ApprovedBy) {
         self.state = JobState::Approved;
+        self.approved_by = Some(by);
     }
 
     /// Refuses it. Nothing ran, so there is nothing to fold and nothing to
@@ -842,7 +868,7 @@ mod tests {
                 ..Plan::default()
             },
         );
-        task.approve();
+        task.approve(ApprovedBy::Operator);
         let steps = [
             step("read_file", serde_json::json!({"path": "src/lib.rs"}), None),
             step(

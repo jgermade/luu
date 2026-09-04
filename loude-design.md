@@ -452,6 +452,13 @@ without saying by what: a run whose subprocesses the kernel held and a run whose
 subprocesses nothing held are not the same run, and afterwards the recording is
 the only thing that could tell them apart.
 
+The same rule now runs one step earlier, at the gate rather than at the call: a
+job records **who approved it** — `operator` for a person at the surface,
+`key { name }` for a signature that verified — beside who enforced it. An
+approval nobody can prove the authorship of was, until signatures existed, the
+one authority in the system taken on trust because it arrived on the right
+socket.
+
 What level 2 does *not* claim: it is not a network namespace (blocking the
 internet address families stops a program opening a connection, not one that
 inherited a socket), and canonicalize-then-open still has a TOCTOU window for the
@@ -611,8 +618,43 @@ Live channel — `WS /ws`:
 
 | Direction | Messages |
 | --- | --- |
-| client → server | `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v4 (record format 6); `context_snapshot` is still ahead |
+| client → server | `hello`, `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 7); `context_snapshot` is still ahead |
+
+**The wire says what it speaks, in both directions.** The server's `hello` has always
+carried `protocol`; the client's now answers with its own, and with the record format it
+can read. A mismatch in *either* direction is a `refused` with reason `version` and then a
+close — a newer client is the case the host cannot parse and an older one is the case the
+client cannot, and neither side guesses. It is **required as the first message on a port
+that asks for a bearer token** (which is every port off loopback, since binding one
+without a token is refused) and optional on loopback and over stdio, where the peer is
+this machine's own browser or the process that spawned us. The server's `hello` also
+carries the `session` id, because an approval is signed against it.
+
+**An approval can be signed.** `approve_job` carries an optional
+`signature: { by, sig }` — Ed25519 over a canonical rendering of *the grant* (session, job,
+`files`, `writes`, `commands`, `closes_on`, `network`, `egress`), so a relay that widens
+the grant between the person and the gate invalidates what it is relaying. The verifying
+keys are named in `luu.toml`:
+
+```toml
+[approvals]
+required = true          # an *unsigned* approval is refused; a *wrong* one always is
+
+[[approvals.key]]
+name = "jgermade"
+public = "ed25519:…"     # luu key new --out ~/.loude/approval.key
+```
+
+`luu key new` makes a key (private half written `0600`) and `luu key sign` signs an
+`approve_job` read on stdin, so the signing half lives where a remote operator's `luu` can
+call it rather than inside one surface. `job_approved` then carries `approved_by`:
+`operator` for the local unsigned case, `key { name }` for a verified signature — beside
+`closed_by` and for the same reason. Three failures are one `refused` with reason
+`signature` and a `detail` that says which: unsigned where a signature is required, a name
+no key answers to, and bytes that do not verify. A bearer token answers *who may reach the
+port*; this is the first thing that answers *who approved*. See
+[`RECORD/2026-09-04.signed-approvals.completed.md`](RECORD/2026-09-04.signed-approvals.completed.md).
 
 Closing a job is an event, not a mutation: reopening one is folding the log
 differently, never undoing a deletion. Freezing v1 of these enums waits on the job
@@ -861,4 +903,10 @@ not decided; the argument is
   that canonicalize-then-open leaves.
 - The CLI has no gate: `luu chat "prompt"` runs one turn with the policy file as
   the standing approval, because a one-shot has no human loop to gate. Whether it
-  should grow one, or stay the scripted/one-shot surface it is, is open.
+  should grow one, or stay the scripted/one-shot surface it is, is open. It has
+  no approver either, for the same reason: its jobs are `approved_by: operator`.
+- **Nothing rotates or revokes an approval key.** A compromised one is removed by
+  editing `luu.toml` and restarting — the same shape as everything else that file
+  decides, and not enough once the fleet is more than the boxes in one room.
+- **Nothing signs a *recording*.** A signed approval can be re-verified out of the
+  record stream, but a relay that drops lines is not detected by that.

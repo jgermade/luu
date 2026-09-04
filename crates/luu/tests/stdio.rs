@@ -35,6 +35,7 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
     let counter = Arc::new(ApproximateCounter);
     let budget = Budget::new(0, 512, Eviction::Turn);
     StdioOptions {
+        approvers: Default::default(),
         backend,
         model: "mock".to_string(),
         record: None,
@@ -108,6 +109,7 @@ async fn stdio_greets_with_hello_and_answers_prompts() {
 
     // 3. Approve job.
     let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+        signature: None,
         job,
         files: vec![],
         writes: vec![],
@@ -282,6 +284,7 @@ async fn close_and_reopen_task_over_stdio() {
 
     // 2. Approve job.
     let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+        signature: None,
         job,
         files: vec![],
         writes: vec![],

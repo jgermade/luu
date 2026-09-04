@@ -108,6 +108,13 @@ cargo run --bin luu -- map --map-tokens 1024          # the repository outline t
 # `--map-rank` makes the map obey it — off by default, and the record says why.
 cargo run --bin luu -- map --map-tokens 1024 --explain
 
+# signed approvals: a key, and the signature over one `approve_job`. The public
+# half goes in `[[approvals.key]]`; `[approvals] required = true` then refuses an
+# unsigned approval. A wrong one is refused either way.
+cargo run --bin luu -- key new --out ~/.loude/approval.key --name jgermade
+echo '{"type":"approve_job","job":1,"files":["Cargo.toml"]}' \
+  | cargo run --bin luu -- key sign --key ~/.loude/approval.key --session <id> --as jgermade
+
 # level 3: the same run, with every tool call executed inside a container.
 # `--worker direct` is the same seam with no container at all, which is how the
 # IPC gets tested where no runtime is installed.
