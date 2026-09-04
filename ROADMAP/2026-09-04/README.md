@@ -31,10 +31,10 @@ operational container is a **job** (Protocol v4, Record format 6).
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 1 | **VSCode extension (Surface #3)** — TypeScript extension spawning `luu stdio`, rendering chat, job gate approval/amendment, and tool stream | nothing | [`how-a-surface-reaches-the-engine`](../../RECORD/2026-09-01.how-a-surface-reaches-the-engine.completed.md), [`protocol-over-stdio`](../../RECORD/2026-09-04.protocol-over-stdio.completed.md) |
+| 1 | ~**VSCode extension (Surface #3)** — TypeScript extension spawning `luu stdio`, rendering chat, job gate approval/amendment, and tool stream~ | nothing | [`vscode-extension`](../../RECORD/2026-09-04.vscode-extension.completed.md) |
 | 2 | ~**Narrowing phase 2: Egress through the host** — proxy/filter outbound traffic when `network: true`, restricting destinations~ | nothing | [`egress-through-the-host`](../../RECORD/2026-09-04.egress-through-the-host.completed.md) |
 | 3 | ~**Multi-session in `serve` & UI** — session switching, creation, and resume of stored sessions in the web UI~ | nothing | [`multi-session-in-serve`](../../RECORD/2026-09-04.multi-session-in-serve.completed.md) |
-| 4 | **Relevance selection: In-degree and non-greedy fill** — alternative ranking avoiding PageRank's entry-point penalty and oversized file traps | nothing | [`the-map-order-probe`](../../RECORD/2026-09-03.the-map-order-probe.completed.md) |
+| 4 | ~**Relevance selection: In-degree and non-greedy fill** — alternative ranking avoiding PageRank's entry-point penalty and oversized file traps~ | nothing | [`in-degree-and-fill`](../../RECORD/2026-09-04.in-degree-and-fill.completed.md) |
 | 5 | **Fleet measurement across target machines** — benchmark matrix against local hardware platforms | 1, 3 | [`machines.md`](machines.md) |
 | 6 | **Federation and signed approvals** — multi-operator LAN delegation and cryptographically signed authority | 3 | [`federation.md`](../2026-08-31/federation.md) |
 
@@ -46,11 +46,11 @@ gantt
     section Landed today
     Multi-session UI in serve              :done, multi, 2026-09-04, 1d
     Egress through the host (narrowing)    :done, egress, 2026-09-04, 1d
+    VSCode extension (stdio)               :done, vsc, 2026-09-04, 1d
+    Relevance selection (in-degree/fill)   :done, rel, 2026-09-04, 1d
     section Unblocked today
-    VSCode extension (stdio)               :crit, vsc, 2026-09-04, 14d
-    Relevance selection (in-degree/fill)   :rel, 2026-09-04, 14d
+    Fleet measurements across machines     :crit, bench, 2026-09-04, 10d
     section Waiting on those
-    Fleet measurements across machines     :bench, after vsc, 10d
     Signed approvals and federation        :fed, after multi, 21d
 ```
 

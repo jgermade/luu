@@ -116,12 +116,7 @@ pub struct Ranked {
 /// Ties break on the index, so a caller that hands files over in path order
 /// gets the alphabet as the *tie-breaker* it should always have been rather
 /// than the ranking it was.
-pub fn rank(files: &[FileTags]) -> Vec<Ranked> {
-    let count = files.len();
-    if count == 0 {
-        return Vec::new();
-    }
-
+fn build_edges(files: &[FileTags]) -> HashMap<(usize, usize), f64> {
     // Where each name is defined. A name nobody defines is not an edge to
     // anywhere: `println!` and every trait method the standard library owns
     // land here, and dropping them is what keeps the graph about this tree.
@@ -179,6 +174,21 @@ pub fn rank(files: &[FileTags]) -> Vec<Ranked> {
             }
         }
     }
+    edges
+}
+
+/// Ranks files by what depends on them, most depended-on first (PageRank).
+///
+/// Ties break on the index, so a caller that hands files over in path order
+/// gets the alphabet as the *tie-breaker* it should always have been rather
+/// than the ranking it was.
+pub fn rank(files: &[FileTags]) -> Vec<Ranked> {
+    let count = files.len();
+    if count == 0 {
+        return Vec::new();
+    }
+
+    let edges = build_edges(files);
 
     let mut outgoing = vec![0.0f64; count];
     for ((from, _), weight) in &edges {
@@ -228,6 +238,40 @@ pub fn rank(files: &[FileTags]) -> Vec<Ranked> {
             file,
             score: score[file],
             referrers: std::mem::take(&mut referrers[file]),
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.file.cmp(&b.file)));
+    ranked
+}
+
+/// Ranks files by direct weighted in-degree: total inbound reference weight multiplied
+/// by the square root of distinct referring files (breadth).
+pub fn rank_in_degree(files: &[FileTags]) -> Vec<Ranked> {
+    let count = files.len();
+    if count == 0 {
+        return Vec::new();
+    }
+
+    let edges = build_edges(files);
+
+    let mut referrers: Vec<Vec<(usize, f64)>> = vec![Vec::new(); count];
+    for ((from, to), weight) in &edges {
+        referrers[*to].push((*from, *weight));
+    }
+    for list in referrers.iter_mut() {
+        list.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    }
+
+    let mut ranked: Vec<Ranked> = (0..count)
+        .map(|file| {
+            let total_inbound: f64 = referrers[file].iter().map(|(_, w)| *w).sum();
+            let distinct_referrers = referrers[file].len() as f64;
+            let score = total_inbound * (1.0 + distinct_referrers).sqrt();
+            Ranked {
+                file,
+                score,
+                referrers: std::mem::take(&mut referrers[file]),
+            }
         })
         .collect();
     ranked.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.file.cmp(&b.file)));
@@ -344,5 +388,39 @@ mod tests {
         ];
         let total: f64 = rank(&files).iter().map(|entry| entry.score).sum();
         assert!((total - 1.0).abs() < 1e-6, "{total}");
+    }
+
+    #[test]
+    fn in_degree_ranks_shared_dependencies_first() {
+        let files = vec![
+            tags(&["fold"], &[]),
+            tags(&["serve"], &["fold"]),
+            tags(&["chat"], &["fold"]),
+        ];
+        let ranked = rank_in_degree(&files);
+        assert_eq!(ranked[0].file, 0, "fold has highest in-degree");
+        assert!(ranked[0].score > 0.0);
+    }
+
+    #[test]
+    fn in_degree_rewards_breadth_over_single_caller_volume() {
+        // file 0 is called by 2 distinct callers (1 and 2).
+        // file 3 is called only by 1 caller (4), though referenced multiple times.
+        let files = vec![
+            tags(&["broad"], &[]),
+            tags(&["caller1"], &["broad"]),
+            tags(&["caller2"], &["broad"]),
+            tags(&["narrow"], &[]),
+            tags(&["heavy_caller"], &["narrow", "narrow", "narrow"]),
+        ];
+        let ranked = rank_in_degree(&files);
+        let broad = ranked.iter().find(|r| r.file == 0).unwrap();
+        let narrow = ranked.iter().find(|r| r.file == 3).unwrap();
+        assert!(
+            broad.score > narrow.score,
+            "breadth ({}) should beat narrow volume ({})",
+            broad.score,
+            narrow.score
+        );
     }
 }

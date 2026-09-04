@@ -1,0 +1,268 @@
+:root {
+  --font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
+  --bg-color: var(--vscode-sideBar-background, #1e1e1e);
+  --text-color: var(--vscode-editor-foreground, #cccccc);
+  --input-bg: var(--vscode-input-background, #252526);
+  --input-border: var(--vscode-input-border, #3c3c3c);
+  --btn-bg: var(--vscode-button-background, #0e639c);
+  --btn-fg: var(--vscode-button-foreground, #ffffff);
+  --btn-hover: var(--vscode-button-hoverBackground, #1177bb);
+  --btn-secondary-bg: var(--vscode-button-secondaryBackground, #3a3d41);
+  --btn-secondary-fg: var(--vscode-button-secondaryForeground, #ffffff);
+  --btn-danger-bg: var(--vscode-errorForeground, #f48771);
+  --card-bg: var(--vscode-editorWidget-background, #252526);
+  --card-border: var(--vscode-widget-border, #454545);
+  --badge-bg: var(--vscode-badge-background, #4d4d4d);
+  --badge-fg: var(--vscode-badge-foreground, #ffffff);
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+#header {
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--card-border);
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+#transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  line-height: 1.45;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.msg.user {
+  background-color: var(--card-bg);
+  align-self: flex-end;
+  max-width: 85%;
+  border-left: 3px solid var(--btn-bg);
+}
+
+.msg.assistant {
+  align-self: flex-start;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.msg-header {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.7;
+  text-transform: uppercase;
+}
+
+/* Tool execution card */
+.tool-card {
+  margin: 6px 0;
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.tool-header {
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tool-name {
+  font-family: monospace;
+  font-weight: bold;
+}
+
+.tool-verdict {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.verdict-allowed {
+  background-color: rgba(78, 201, 176, 0.2);
+  color: #4ec9b0;
+}
+
+.verdict-denied {
+  background-color: rgba(244, 135, 113, 0.2);
+  color: #f48771;
+}
+
+.tool-body {
+  padding: 6px 8px;
+  border-top: 1px solid var(--card-border);
+  font-family: monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Job Gate card */
+.gate-card {
+  background-color: var(--card-bg);
+  border: 1px solid var(--btn-bg);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+.gate-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: bold;
+  font-size: 13px;
+  color: #4ec9b0;
+}
+
+.gate-source {
+  font-size: 10px;
+  padding: 2px 6px;
+  background-color: var(--badge-bg);
+  color: var(--badge-fg);
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.gate-section {
+  font-size: 12px;
+}
+
+.gate-section-title {
+  font-weight: 600;
+  opacity: 0.8;
+  margin-bottom: 2px;
+}
+
+.gate-list {
+  margin: 2px 0 0 16px;
+  padding: 0;
+}
+
+.gate-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+button {
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 3px;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.primary {
+  background-color: var(--btn-bg);
+  color: var(--btn-fg);
+}
+
+button.primary:hover {
+  background-color: var(--btn-hover);
+}
+
+button.secondary {
+  background-color: var(--btn-secondary-bg);
+  color: var(--btn-secondary-fg);
+}
+
+button.danger {
+  background-color: transparent;
+  color: var(--btn-danger-bg);
+  border: 1px solid var(--btn-danger-bg);
+}
+
+/* Refused notice */
+.refused-banner {
+  background-color: rgba(244, 135, 113, 0.15);
+  border-left: 3px solid #f48771;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* Evicted notice */
+.evicted-banner {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-left: 3px solid #cca700;
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+/* Composer */
+#composer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--card-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--input-bg);
+  color: var(--text-color);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 48px;
+}
+
+#prompt-input:focus {
+  outline: 1px solid var(--btn-bg);
+}
+
+.composer-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status-indicator {
+  font-size: 11px;
+  opacity: 0.7;
+}

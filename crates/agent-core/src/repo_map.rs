@@ -105,6 +105,18 @@ pub enum Order {
     Path,
     /// Most depended-on first, by [`crate::rank`].
     Ranked,
+    /// Direct inward references, weighted by breadth (`rank_in_degree`).
+    InDegree,
+}
+
+/// How the token budget is filled from candidate outlines.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Fill {
+    /// Stops at the first file that does not fit (preserves nesting monotonicity).
+    #[default]
+    Greedy,
+    /// Skips files that exceed the remaining budget and continues inspecting subsequent candidate files.
+    NonGreedy,
 }
 
 /// One file's place in the ranking, kept whether or not it fitted.
@@ -135,6 +147,7 @@ pub struct RepoMap {
     /// ranking can be looked at without being obeyed.
     pub ranked: Vec<RankedFile>,
     pub order: Order,
+    pub fill: Fill,
     /// Files the walk found, could read and could parse, that did not fit.
     /// Reported in the map itself: a block that silently ends is a block nobody
     /// can account for afterwards.
@@ -147,17 +160,29 @@ pub struct RepoMap {
 }
 
 impl RepoMap {
-    /// Walks the sandbox's readable roots and outlines what fits.
+    /// Walks the sandbox's readable roots and outlines what fits using greedy fill.
+    pub fn build(sandbox: &Sandbox, budget: u32, counter: &dyn TokenCounter, order: Order) -> Self {
+        Self::build_with(sandbox, budget, counter, order, Fill::Greedy)
+    }
+
+    /// Walks the sandbox's readable roots and outlines what fits using the chosen fill strategy.
     ///
     /// Everything is read **through the sandbox**, for the same reason a
     /// fragment is: the sandbox is this program's answer to what it may read,
     /// and a path `read_file` would refuse must not become readable by being
     /// reached a different way.
-    pub fn build(sandbox: &Sandbox, budget: u32, counter: &dyn TokenCounter, order: Order) -> Self {
+    pub fn build_with(
+        sandbox: &Sandbox,
+        budget: u32,
+        counter: &dyn TokenCounter,
+        order: Order,
+        fill: Fill,
+    ) -> Self {
         let mut map = Self {
             files: Vec::new(),
             ranked: Vec::new(),
             order,
+            fill,
             left_out: 0,
             budget,
             tokens: 0,
@@ -187,12 +212,15 @@ impl RepoMap {
         // and not obeyed, which is what lets `luu map --explain` show the order
         // the map did *not* take — the cheapest way to argue with a ranking is
         // to read it beside the thing it would have replaced.
-        let mut scored: Vec<rank::Ranked> = rank::rank(&tags)
-            .into_iter()
-            // A file with no definitions is a node in the graph and never a
-            // line in the map: there is nothing to outline.
-            .filter(|ranked| !read[ranked.file].0.entries.is_empty())
-            .collect();
+        let mut scored: Vec<rank::Ranked> = match order {
+            Order::InDegree => rank::rank_in_degree(&tags),
+            _ => rank::rank(&tags),
+        }
+        .into_iter()
+        // A file with no definitions is a node in the graph and never a
+        // line in the map: there is nothing to outline.
+        .filter(|ranked| !read[ranked.file].0.entries.is_empty())
+        .collect();
         if order == Order::Path {
             scored.sort_by(|a, b| read[a.file].0.path.cmp(&read[b.file].0.path));
         }
@@ -209,14 +237,14 @@ impl RepoMap {
             // Whole files: half an outline is a list of methods whose type has
             // gone, which reads as a different file.
             //
-            // And the first file that does not fit **stops** the map rather
-            // than being skipped over. Skipping fills the budget better and is
-            // not monotone: one large outline displaces several small ones, so
-            // a *tighter* budget could show more files than a wider one — 13 at
-            // 1500 tokens against 12 at 2048, measured on this repository. A
-            // map whose contents do not nest as the budget grows cannot be
-            // compared against itself, and comparing is what it is for.
-            let fitted = !left_out && spent + cost <= budget;
+            // And under greedy fill, the first file that does not fit **stops**
+            // the map rather than being skipped over. Under non-greedy fill, it
+            // skips over files that do not fit to see if smaller files fit.
+            let fits = spent + cost <= budget;
+            let fitted = match fill {
+                Fill::Greedy => !left_out && fits,
+                Fill::NonGreedy => fits,
+            };
             if fitted {
                 spent += cost;
                 map.files.push(outline.clone());
@@ -1012,7 +1040,6 @@ fn private_helper(x: u32) -> u32 {
         let (_dir, sandbox) = referring_fixture();
         let map = RepoMap::build(&sandbox, 4096, &ApproximateCounter, Order::Path);
         let paths: Vec<&str> = map.files.iter().map(|file| file.path.as_str()).collect();
-
         assert_eq!(paths, vec!["src/aaa.rs", "src/zzz.rs"], "the alphabet");
         assert!(
             map.ranked[1].score > map.ranked[0].score,
@@ -1020,6 +1047,59 @@ fn private_helper(x: u32) -> u32 {
              order the map did not take: {:?}",
             map.ranked,
         );
+    }
+
+    #[test]
+    fn in_degree_order_ranks_most_depended_on_first() {
+        let (_dir, sandbox) = referring_fixture();
+        let map = RepoMap::build(&sandbox, 4096, &ApproximateCounter, Order::InDegree);
+        let paths: Vec<&str> = map.files.iter().map(|file| file.path.as_str()).collect();
+
+        // `zzz.rs` is referenced by `caller.rs`, while `aaa.rs` is not.
+        assert_eq!(
+            paths[0], "src/zzz.rs",
+            "most depended on comes first under InDegree"
+        );
+    }
+
+    #[test]
+    fn non_greedy_fill_skips_large_file_and_fits_smaller_file() {
+        let dir = tempdir::Dir::new("repo-map-non-greedy");
+        std::fs::create_dir_all(dir.path().join("src")).expect("the source directory");
+
+        // Large file: many definitions
+        let mut large = String::new();
+        for i in 0..20 {
+            large.push_str(&format!("pub fn fn_{i}() {{}}\n"));
+        }
+        std::fs::write(dir.path().join("src/aaa_large.rs"), large).expect("large file");
+        // Small file: single definition
+        std::fs::write(dir.path().join("src/zzz_small.rs"), "pub fn tiny() {}\n")
+            .expect("small file");
+
+        let mut policy = SandboxPolicy::default();
+        policy.allow(dir.path(), Access::Read);
+        let sandbox = Sandbox::new(&policy, dir.path()).expect("the sandbox");
+
+        let counter = ApproximateCounter;
+        let small_outline_cost = counter.count("src/zzz_small.rs\n     1  pub fn tiny() {}\n");
+        let header_cost = counter.count(&header(2));
+        // Budget enough for header + small outline, but NOT enough for large outline
+        let budget = header_cost + small_outline_cost + 5;
+
+        // Greedy fill stops at aaa_large and includes nothing
+        let greedy = RepoMap::build_with(&sandbox, budget, &counter, Order::Path, Fill::Greedy);
+        assert!(greedy.files.is_empty(), "greedy fill stops at large file");
+
+        // NonGreedy fill skips aaa_large and fits zzz_small
+        let non_greedy =
+            RepoMap::build_with(&sandbox, budget, &counter, Order::Path, Fill::NonGreedy);
+        assert_eq!(
+            non_greedy.files.len(),
+            1,
+            "non-greedy fill fits the smaller file"
+        );
+        assert_eq!(non_greedy.files[0].path, "src/zzz_small.rs");
     }
 
     /// A directory that removes itself, so a failing test does not leave one

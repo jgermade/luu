@@ -118,6 +118,14 @@ enum Command {
         #[arg(long)]
         map_rank: bool,
 
+        /// Order the map by direct weighted in-degree (breadth of inbound references).
+        #[arg(long)]
+        map_in_degree: bool,
+
+        /// Pack the token budget non-greedily (skip oversized files to fit smaller ones).
+        #[arg(long)]
+        map_non_greedy: bool,
+
         /// The model's `tokenizer.json`. Without it the count is `chars/4` and
         /// says so, which is a different number from what a run would spend.
         #[arg(long)]
@@ -253,6 +261,14 @@ enum Command {
         /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
         #[arg(long)]
         map_rank: bool,
+
+        /// Order the map by direct weighted in-degree.
+        #[arg(long)]
+        map_in_degree: bool,
+
+        /// Pack the token budget non-greedily.
+        #[arg(long)]
+        map_non_greedy: bool,
     },
 
     /// Serve the agent protocol over stdin/stdout as NDJSON.
@@ -361,6 +377,14 @@ enum Command {
         /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
         #[arg(long)]
         map_rank: bool,
+
+        /// Order the map by direct weighted in-degree.
+        #[arg(long)]
+        map_in_degree: bool,
+
+        /// Pack the token budget non-greedily.
+        #[arg(long)]
+        map_non_greedy: bool,
     },
 
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
@@ -480,18 +504,33 @@ enum Command {
         /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
         #[arg(long)]
         map_rank: bool,
+
+        /// Order the map by direct weighted in-degree.
+        #[arg(long)]
+        map_in_degree: bool,
+
+        /// Pack the token budget non-greedily.
+        #[arg(long)]
+        map_non_greedy: bool,
     },
 }
 
 /// The flag, as the map's own type.
-///
-/// A `bool` at the edge and an [`Order`] inside: the CLI is where a preference
-/// is spelled, and everything below it should be told what to do rather than
-/// asked to interpret a flag.
-fn order_of(rank: bool) -> Order {
-    match rank {
-        true => Order::Ranked,
-        false => Order::Path,
+fn order_of(rank: bool, in_degree: bool) -> Order {
+    if in_degree {
+        Order::InDegree
+    } else if rank {
+        Order::Ranked
+    } else {
+        Order::Path
+    }
+}
+
+fn fill_of(non_greedy: bool) -> agent_core::repo_map::Fill {
+    if non_greedy {
+        agent_core::repo_map::Fill::NonGreedy
+    } else {
+        agent_core::repo_map::Fill::Greedy
     }
 }
 
@@ -991,6 +1030,8 @@ pub async fn run() -> Result<()> {
         sandbox,
         map_tokens,
         map_rank,
+        map_in_degree,
+        map_non_greedy,
         tokenizer,
         explain,
     } = &command
@@ -1003,11 +1044,18 @@ pub async fn run() -> Result<()> {
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
-        let map = RepoMap::build(
+        let order = order_of(*map_rank, *map_in_degree);
+        let fill = if *map_non_greedy {
+            agent_core::repo_map::Fill::NonGreedy
+        } else {
+            agent_core::repo_map::Fill::Greedy
+        };
+        let map = RepoMap::build_with(
             agency.sandbox.as_ref(),
             *map_tokens,
             counter.as_ref(),
-            order_of(*map_rank),
+            order,
+            fill,
         );
         print!("{}", map.render());
         if *explain {
@@ -1073,6 +1121,8 @@ pub async fn run() -> Result<()> {
         seed,
         map_tokens,
         map_rank,
+        map_in_degree,
+        map_non_greedy,
     } = command
     {
         let backend = build_backend(BackendArgs {
@@ -1119,7 +1169,8 @@ pub async fn run() -> Result<()> {
             seed,
             store,
             map_tokens,
-            map_order: order_of(map_rank),
+            map_order: order_of(map_rank, map_in_degree),
+            map_fill: fill_of(map_non_greedy),
             auth_token_file,
         })
         .await;
@@ -1146,6 +1197,8 @@ pub async fn run() -> Result<()> {
         seed,
         map_tokens,
         map_rank,
+        map_in_degree,
+        map_non_greedy,
     } = command
     {
         let backend = build_backend(BackendArgs {
@@ -1188,7 +1241,8 @@ pub async fn run() -> Result<()> {
             seed,
             store,
             map_tokens,
-            map_order: order_of(map_rank),
+            map_order: order_of(map_rank, map_in_degree),
+            map_fill: fill_of(map_non_greedy),
         })
         .await;
     }
@@ -1216,6 +1270,8 @@ pub async fn run() -> Result<()> {
         seed,
         map_tokens,
         map_rank,
+        map_in_degree,
+        map_non_greedy,
     } = command
     else {
         unreachable!("serve and tools are handled above");
@@ -1275,11 +1331,12 @@ pub async fn run() -> Result<()> {
     // cached prefix, and a block that is rebuilt mid-session is not a prefix.
     // What that costs — an agent that edits a file then carries the outline it
     // had — is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
-    let map = RepoMap::build(
+    let map = RepoMap::build_with(
         agency.sandbox.as_ref(),
         map_tokens,
         counter.as_ref(),
-        order_of(map_rank),
+        order_of(map_rank, map_in_degree),
+        fill_of(map_non_greedy),
     );
     if !map.is_empty() {
         println!(

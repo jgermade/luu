@@ -1,0 +1,81 @@
+{
+  "name": "luu-vscode",
+  "displayName": "Luu",
+  "description": "Local-first AI agent with prompt budget management and containment gates",
+  "version": "0.1.0",
+  "publisher": "jgermade",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:luu.chatView"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "luu-sidebar",
+          "title": "Luu",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "luu-sidebar": [
+        {
+          "type": "webview",
+          "id": "luu.chatView",
+          "name": "Luu Chat & Gate"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "luu.focusChat",
+        "title": "Luu: Open Chat"
+      },
+      {
+        "command": "luu.restartSession",
+        "title": "Luu: Restart Session"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Luu Configuration",
+      "properties": {
+        "luu.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the luu executable. If empty, searches target/debug/luu or PATH."
+        },
+        "luu.backend": {
+          "type": "string",
+          "default": "",
+          "description": "Backend to pass to luu stdio (e.g. ollama, openai, mock)."
+        },
+        "luu.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model identifier to use."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node test-client.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}

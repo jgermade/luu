@@ -122,6 +122,8 @@ pub struct StdioOptions {
     /// Which files that budget buys. Path order unless asked otherwise — see
     /// [`Order`], which carries the measurement that keeps it the default.
     pub map_order: Order,
+    /// How the budget is packed from candidate outlines.
+    pub map_fill: agent_core::repo_map::Fill,
     /// Where sessions are cached between restarts.
     pub store: Option<PathBuf>,
 }
@@ -139,6 +141,7 @@ impl App {
             seed,
             map_tokens,
             map_order,
+            map_fill,
             store,
         } = options;
         let started_at = now_ms();
@@ -146,11 +149,12 @@ impl App {
         // Built once, before the socket is up: the map is the last block of the
         // cached prefix, and a block rebuilt mid-session is not a prefix. What that
         // costs is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
-        let map = RepoMap::build(
+        let map = RepoMap::build_with(
             agency.sandbox.as_ref(),
             map_tokens,
             counter.as_ref(),
             map_order,
+            map_fill,
         );
         if !map.is_empty() {
             eprintln!(
@@ -325,6 +329,8 @@ pub struct ServeOptions {
     /// Which files that budget buys. Path order unless asked otherwise — see
     /// [`Order`], which carries the measurement that keeps it the default.
     pub map_order: Order,
+    /// How the budget is packed from candidate outlines.
+    pub map_fill: agent_core::repo_map::Fill,
     /// The file holding the bearer token this server requires, if any.
     /// `None` on a loopback address means no auth; `None` on any other
     /// address means [`bind`] refuses.
@@ -378,6 +384,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         seed,
         map_tokens,
         map_order,
+        map_fill,
         auth_token_file,
         store,
     } = options;
@@ -397,6 +404,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         seed,
         map_tokens,
         map_order,
+        map_fill,
         store,
     })
     .await?;
