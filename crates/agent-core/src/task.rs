@@ -68,6 +68,8 @@ pub struct Plan {
     /// `RECORD/2026-09-02.closing-on-an-exit-code.completed.md`.
     #[serde(default)]
     pub closes_on: Option<String>,
+    #[serde(default)]
+    pub network: bool,
 }
 
 impl Plan {
@@ -116,6 +118,12 @@ impl Plan {
                 )),
                 None => unmet.push("closes_on: empty".to_string()),
             }
+        }
+        if self.network && !sandbox.network() {
+            unmet.push(format!(
+                "network: not allowed by the policy ({})",
+                sandbox.authority()
+            ));
         }
         unmet
     }
@@ -171,7 +179,7 @@ impl Plan {
         let mut policy = SandboxPolicy {
             paths: Vec::new(),
             commands: Vec::new(),
-            network: session.network(),
+            network: session.network() && self.network,
             enforcement: session.enforcement(),
             // The session's, like `network` and `enforcement`: a plan declares
             // paths and commands, and what a child may *spend* is not something
@@ -221,6 +229,7 @@ impl Plan {
         writes: &[String],
         commands: &[String],
         closes_on: Option<&str>,
+        network: Option<bool>,
     ) {
         for file in files {
             if !self.files.contains(file) {
@@ -242,6 +251,9 @@ impl Plan {
         if let Some(closes_on) = closes_on.map(str::trim).filter(|it| !it.is_empty()) {
             self.closes_on = Some(closes_on.to_string());
         }
+        if let Some(net) = network {
+            self.network = net;
+        }
     }
 
     /// One line per part it has, for a human reading a run go by.
@@ -256,6 +268,9 @@ impl Plan {
             if !items.is_empty() {
                 text.push_str(&format!("  {part:<9}{}\n", items.join(" · ")));
             }
+        }
+        if self.network {
+            text.push_str("  network  allowed\n");
         }
         // Last, and named for what it does rather than for what it is: this is
         // the line that says the task may close without anyone present.
@@ -750,13 +765,13 @@ mod tests {
             ..Plan::default()
         };
         assert!(plan.closes_on.is_none(), "the model was never asked");
-        plan.amend(&[], &[], &[], Some("  cargo test  "));
+        plan.amend(&[], &[], &[], Some("  cargo test  "), None);
         assert_eq!(plan.closes_on.as_deref(), Some("cargo test"));
         // One condition, and a person who types a second is correcting the
         // first — unlike the lists beside it, which accumulate.
-        plan.amend(&[], &[], &[], Some("cargo clippy"));
+        plan.amend(&[], &[], &[], Some("cargo clippy"), None);
         assert_eq!(plan.closes_on.as_deref(), Some("cargo clippy"));
-        plan.amend(&[], &[], &[], Some("   "));
+        plan.amend(&[], &[], &[], Some("   "), None);
         assert_eq!(
             plan.closes_on.as_deref(),
             Some("cargo clippy"),
@@ -775,6 +790,7 @@ mod tests {
                 writes: vec![],
                 commands: vec!["cargo".into()],
                 closes_on: None,
+                network: false,
             },
         );
         task.approve();
@@ -989,6 +1005,7 @@ mod tests {
             writes: vec![],
             commands: vec!["cargo".into(), "curl".into()],
             closes_on: None,
+            network: false,
         };
         let unmet = plan.unmet(&sandbox);
 
@@ -1026,6 +1043,7 @@ mod tests {
             writes: vec![],
             commands: vec!["cargo".into()],
             closes_on: None,
+            network: false,
         };
         let narrowed = plan.narrow(&session, 1).unwrap();
 
@@ -1215,6 +1233,7 @@ mod tests {
             &[],
             &["git".into()],
             None,
+            None,
         );
 
         assert_eq!(plan.files, ["Cargo.toml", "src/task.rs"], "no duplicate");
@@ -1230,11 +1249,88 @@ mod tests {
         );
 
         let mut past_the_file = Plan::default();
-        past_the_file.amend(&["/etc/passwd".into()], &[], &["curl".into()], None);
+        past_the_file.amend(&["/etc/passwd".into()], &[], &["curl".into()], None, None);
         assert_eq!(
             past_the_file.unmet(&session).len(),
             2,
             "the human at the gate widens up to the policy file and not past it",
+        );
+    }
+
+    #[test]
+    fn a_plan_without_network_narrows_to_no_network() {
+        let session = Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: vec!["cargo".into()],
+                network: true,
+                enforcement: Enforcement::BestEffort,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
+
+        assert!(session.network(), "session allows network");
+
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            network: false,
+            ..Plan::default()
+        };
+        let narrowed = plan.narrow(&session, 1).unwrap();
+        assert!(!narrowed.network(), "plan without network gets no network");
+    }
+
+    #[test]
+    fn a_plan_with_network_grants_network_if_session_allows() {
+        let session = Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: vec!["cargo".into()],
+                network: true,
+                enforcement: Enforcement::BestEffort,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
+
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            network: true,
+            ..Plan::default()
+        };
+        assert!(plan.unmet(&session).is_empty());
+        let narrowed = plan.narrow(&session, 1).unwrap();
+        assert!(narrowed.network(), "plan with network gets network");
+    }
+
+    #[test]
+    fn a_plan_with_network_is_unmet_if_session_forbids_it() {
+        let session = Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: vec!["cargo".into()],
+                network: false,
+                enforcement: Enforcement::BestEffort,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
+
+        let mut plan = Plan {
+            commands: vec!["cargo".into()],
+            ..Plan::default()
+        };
+        plan.amend(&[], &[], &[], None, Some(true));
+        assert!(plan.network);
+
+        let unmet = plan.unmet(&session);
+        assert!(
+            unmet.iter().any(|line| line.starts_with("network:")),
+            "unmet should report network refusal: {unmet:?}",
         );
     }
 }

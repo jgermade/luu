@@ -420,9 +420,10 @@ impl Context {
         writes: &[String],
         commands: &[String],
         closes_on: Option<&str>,
+        network: Option<bool>,
     ) -> Option<Plan> {
         let task = self.task_mut(id)?;
-        task.plan.amend(files, writes, commands, closes_on);
+        task.plan.amend(files, writes, commands, closes_on, network);
         Some(task.plan.clone())
     }
 

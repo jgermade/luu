@@ -719,7 +719,7 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             // The plan belongs to the task being opened and has to be the last
             // thing pushed: it is approved before its turns run, so it cannot
             // grow after one of them has.
-            "step" | "file" | "write" | "command" => {
+            "step" | "file" | "write" | "command" | "network" => {
                 let Some(Step::OpenTask { plan, .. }) = steps.last_mut() else {
                     anyhow::bail!(
                         "line {number}: `{line}` must follow a `## task:`, before its first prompt"
@@ -732,7 +732,17 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
                     // may also change. A plan that declares no writes may not
                     // write — the check is worth having only if it can say no.
                     "write" => plan.writes.push(value.to_string()),
-                    _ => plan.commands.push(value.to_string()),
+                    "command" => plan.commands.push(value.to_string()),
+                    "network" => {
+                        plan.network = match value {
+                            "" | "true" | "yes" | "on" => true,
+                            "false" | "no" | "off" => false,
+                            other => anyhow::bail!(
+                                "line {number}: `## network:` expects true or false, got `{other}`"
+                            ),
+                        };
+                    }
+                    _ => unreachable!(),
                 }
             }
             // Attached to the next prompt, wherever it appears — inside a task
@@ -753,7 +763,7 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             _ => anyhow::bail!(
                 "line {number}: `{line}` is not a directive \
                  (`## task:`, `## step:`, `## file:`, `## write:`, \
-                 `## command:`, `## fragment:`, `## close`)"
+                 `## command:`, `## network:`, `## fragment:`, `## close`)"
             ),
         }
     }

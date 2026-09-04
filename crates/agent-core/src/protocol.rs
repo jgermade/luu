@@ -97,6 +97,10 @@ pub enum ClientMessage {
         /// person as the only authority, which is every task to date.
         #[serde(default)]
         closes_on: Option<String>,
+        /// Whether to grant network access to this task. If `None`, preserves
+        /// whatever the model's plan requested (or `false` by default).
+        #[serde(default)]
+        network: Option<bool>,
     },
     /// Refuse it. The held prompt is dropped with it — a prompt whose plan was
     /// turned down is not a prompt that was approved on its own.
@@ -436,6 +440,7 @@ mod tests {
                 writes: vec![],
                 commands: vec!["cargo".into()],
                 closes_on: None,
+                network: false,
             },
             source: Some(PlanSource::Model),
         });

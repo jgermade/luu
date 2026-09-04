@@ -240,3 +240,27 @@ async fn a_contained_runtime_with_no_image_says_which_line_is_missing() {
         .expect_err("a container runtime needs an image");
     assert!(error.to_string().contains("needs an image"), "{error}");
 }
+
+#[tokio::test]
+async fn a_plans_network_narrowing_crosses_the_seam() {
+    let fixture = Fixture::new("network-seam");
+    let session_policy = SandboxPolicy {
+        paths: vec![PathRule::new(&fixture.root, Access::ReadWrite)],
+        network: true,
+        ..SandboxPolicy::default()
+    };
+    let session = Sandbox::new(&session_policy, &fixture.root).unwrap();
+    assert!(session.network());
+
+    let plan = agent_core::task::Plan {
+        network: false,
+        ..Default::default()
+    };
+    let narrowed = plan.narrow(&session, 1).unwrap();
+    assert!(!narrowed.network());
+
+    let wire = agent_core::worker::WireSandbox::of(&narrowed, &[]);
+    assert!(!wire.policy.network, "wire policy has network disabled");
+    let resolved = wire.resolve().unwrap();
+    assert!(!resolved.network(), "resolved sandbox on far side has network disabled");
+}

@@ -547,8 +547,9 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                         writes,
                         commands,
                         closes_on,
+                        network,
                     }) => {
-                        approve_task(app.clone(), task, files, writes, commands, closes_on).await;
+                        approve_task(app.clone(), task, files, writes, commands, closes_on, network).await;
                     }
                     Ok(ClientMessage::RejectTask { task }) => {
                         reject_task(app.clone(), task).await;
@@ -709,6 +710,7 @@ async fn approve_task(
     writes: Vec<String>,
     commands: Vec<String>,
     closes_on: Option<String>,
+    network: Option<bool>,
 ) {
     let approved = {
         let mut session = app.session.lock().await;
@@ -720,7 +722,7 @@ async fn approve_task(
         {
             true => {
                 let (granted, mut dropped) =
-                    permitted(&app.agency.sandbox, files, writes, commands);
+                    permitted(&app.agency.sandbox, files, writes, commands, network);
                 // Checked against the plan as it will *be* rather than against
                 // the amendment alone: the person types `closes_on` for a
                 // command the model already declared more often than for one
@@ -740,6 +742,7 @@ async fn approve_task(
                         &granted.writes,
                         &granted.commands,
                         closes_on.as_deref(),
+                        network.map(|_| granted.network),
                     )
                     .unwrap_or_default();
                 session.context.approve_task(task);
@@ -816,6 +819,7 @@ fn permitted(
     files: Vec<String>,
     writes: Vec<String>,
     commands: Vec<String>,
+    network: Option<bool>,
 ) -> (Plan, Vec<String>) {
     let asked = Plan {
         steps: Vec::new(),
@@ -825,12 +829,18 @@ fn permitted(
         // Not here: a closing condition is checked against the merged plan,
         // which this function has never seen. See `closing_condition`.
         closes_on: None,
+        network: network.unwrap_or(false),
     };
     let refused = asked.unmet(sandbox);
     let keep = |item: &String, kind: &str| {
         !refused
             .iter()
             .any(|line| line.starts_with(&format!("{kind} {item}:")))
+    };
+    let granted_network = match network {
+        Some(true) => sandbox.network(),
+        Some(false) => false,
+        None => false,
     };
     let granted = Plan {
         steps: Vec::new(),
@@ -853,6 +863,7 @@ fn permitted(
             .cloned()
             .collect(),
         closes_on: None,
+        network: granted_network,
     };
     (granted, refused)
 }
@@ -896,6 +907,7 @@ fn closing_condition(
             .filter(|c| sandbox.commands().iter().any(|allowed| allowed == c))
             .collect(),
         closes_on: Some(closes_on.clone()),
+        network: false,
     };
     match merged
         .unmet(sandbox)
@@ -1452,7 +1464,7 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
 
-        approve_task(app.clone(), 1, vec![], vec![], vec![], None).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![], None, None).await;
         assert!(
             until(&app, |s| s.context.turns().len() == 1).await,
             "the held prompt never ran",
@@ -1509,7 +1521,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![], vec![], None).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![], None, None).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         on_prompt(app.clone(), "now the tests".into()).await;
@@ -1525,7 +1537,7 @@ mod tests {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_task(app.clone(), 1, vec![], vec![], vec![], None).await;
+        approve_task(app.clone(), 1, vec![], vec![], vec![], None, None).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
 
         close_task(app.clone(), 1).await;
