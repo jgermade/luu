@@ -106,7 +106,121 @@ struct App {
     store: Option<Mutex<SessionStore>>,
 }
 
+pub struct StdioOptions {
+    pub backend: Arc<dyn Backend>,
+    pub model: String,
+    pub record: Option<PathBuf>,
+    pub budget: Budget,
+    pub counter: Arc<dyn TokenCounter>,
+    pub agency: Agency,
+    pub temperature: Option<f32>,
+    pub seed: Option<u32>,
+    /// Tokens of repository outline for the prefix. 0 is off — see
+    /// `agent_core::repo_map`.
+    pub map_tokens: u32,
+    /// Which files that budget buys. Path order unless asked otherwise — see
+    /// [`Order`], which carries the measurement that keeps it the default.
+    pub map_order: Order,
+    /// Where sessions are cached between restarts.
+    pub store: Option<PathBuf>,
+}
+
 impl App {
+    async fn create(options: StdioOptions) -> Result<Arc<Self>> {
+        let StdioOptions {
+            backend,
+            model,
+            record,
+            budget,
+            counter,
+            agency,
+            temperature,
+            seed,
+            map_tokens,
+            map_order,
+            store,
+        } = options;
+        let started_at = now_ms();
+
+        // Built once, before the socket is up: the map is the last block of the
+        // cached prefix, and a block rebuilt mid-session is not a prefix. What that
+        // costs is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
+        let map = RepoMap::build(
+            agency.sandbox.as_ref(),
+            map_tokens,
+            counter.as_ref(),
+            map_order,
+        );
+        if !map.is_empty() {
+            eprintln!(
+                "repository map — {} file(s), {} left out, {} of {map_tokens} tokens",
+                map.files.len(),
+                map.left_out,
+                map.tokens,
+            );
+        }
+
+        let recorder = match record {
+            Some(path) => Some(
+                Recorder::create(
+                    &path,
+                    backend.name(),
+                    &model,
+                    budget,
+                    counter.id(),
+                    started_at,
+                )
+                .await?,
+            ),
+            None => None,
+        };
+
+        // Opened before answering, like the token: a store that cannot be
+        // opened is a configuration error, and finding out four turns in means
+        // four turns nobody can resume.
+        let sessions = match &store {
+            Some(path) => {
+                let store = SessionStore::open(path)?;
+                eprintln!("sessions — {}", path.display());
+                Some(Mutex::new(store))
+            }
+            None => None,
+        };
+
+        let backend_name = backend.name().to_string();
+        let model_name = model.clone();
+        Ok(Arc::new(App {
+            backend,
+            model,
+            session: Mutex::new(Session {
+                next_turn: 1,
+                current: None,
+                cancel: None,
+                context: AgentContext::new(SYSTEM)
+                    .with_tools(agency.definitions())
+                    .with_map(map.render()),
+                prefix: PrefixTracker::default(),
+                pending: None,
+                narrowed: None,
+            }),
+            events: broadcast::channel(1024).0,
+            recorder,
+            counter,
+            budget,
+            agency,
+            temperature,
+            seed,
+            view: Mutex::new({
+                let mut view = SessionView::new(LIVE_SESSION, backend_name, &model_name);
+                view.started_at = started_at;
+                view
+            }),
+            started_at,
+            session_id: session_id(started_at),
+            store: sessions,
+        }))
+    }
+
     /// Publishes one event to every client and to the record, in that order.
     async fn publish(&self, event: Event) {
         if let Some(recorder) = &self.recorder {
@@ -267,85 +381,21 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     // publish task approval to the network is not a port this binds and then
     // warns about.
     let auth = Arc::new(crate::auth::resolve(&address, auth_token_file.as_deref())?);
-    let started_at = now_ms();
 
-    // Built once, before the socket is up: the map is the last block of the
-    // cached prefix, and a block rebuilt mid-session is not a prefix. What that
-    // costs is named in `RECORD/2026-08-31.the-repo-map.completed.md`.
-    let map = RepoMap::build(
-        agency.sandbox.as_ref(),
-        map_tokens,
-        counter.as_ref(),
-        map_order,
-    );
-    if !map.is_empty() {
-        eprintln!(
-            "repository map — {} file(s), {} left out, {} of {map_tokens} tokens",
-            map.files.len(),
-            map.left_out,
-            map.tokens,
-        );
-    }
-
-    let recorder = match record {
-        Some(path) => Some(
-            Recorder::create(
-                &path,
-                backend.name(),
-                &model,
-                budget,
-                counter.id(),
-                started_at,
-            )
-            .await?,
-        ),
-        None => None,
-    };
-
-    // Opened before the listener, like the token: a store that cannot be
-    // opened is a configuration error, and finding out four turns in means
-    // four turns nobody can resume.
-    let sessions = match &store {
-        Some(path) => {
-            let store = SessionStore::open(path)?;
-            eprintln!("sessions — {}", path.display());
-            Some(Mutex::new(store))
-        }
-        None => None,
-    };
-
-    let backend_name = backend.name().to_string();
-    let model_name = model.clone();
-    let app = Arc::new(App {
+    let app = App::create(StdioOptions {
         backend,
         model,
-        session: Mutex::new(Session {
-            next_turn: 1,
-            current: None,
-            cancel: None,
-            context: AgentContext::new(SYSTEM)
-                .with_tools(agency.definitions())
-                .with_map(map.render()),
-            prefix: PrefixTracker::default(),
-            pending: None,
-            narrowed: None,
-        }),
-        events: broadcast::channel(1024).0,
-        recorder,
-        counter,
+        record,
         budget,
+        counter,
         agency,
         temperature,
         seed,
-        view: Mutex::new({
-            let mut view = SessionView::new(LIVE_SESSION, backend_name, &model_name);
-            view.started_at = started_at;
-            view
-        }),
-        started_at,
-        session_id: session_id(started_at),
-        store: sessions,
-    });
+        map_tokens,
+        map_order,
+        store,
+    })
+    .await?;
 
     // Two halves, because they are two surfaces. `/ws` is authority and
     // `/api/*` is this session's prompts and source — both behind the token
@@ -532,37 +582,141 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                     continue;
                 };
                 match serde_json::from_str::<ClientMessage>(&text) {
-                    Ok(ClientMessage::Prompt { text }) => {
-                        on_prompt(app.clone(), text).await;
-                    }
-                    Ok(ClientMessage::Cancel) => {
-                        let session = app.session.lock().await;
-                        if let Some(cancel) = &session.cancel {
-                            let _ = cancel.send(true);
-                        }
-                    }
-                    Ok(ClientMessage::ApproveTask {
-                        task,
-                        files,
-                        writes,
-                        commands,
-                        closes_on,
-                        network,
-                    }) => {
-                        approve_task(app.clone(), task, files, writes, commands, closes_on, network).await;
-                    }
-                    Ok(ClientMessage::RejectTask { task }) => {
-                        reject_task(app.clone(), task).await;
-                    }
-                    Ok(ClientMessage::CloseTask { task }) => {
-                        close_task(app.clone(), task).await;
-                    }
-                    Ok(ClientMessage::ReopenTask { task }) => {
-                        reopen_task(app.clone(), task).await;
-                    }
+                    Ok(message) => handle_client_message(&app, message).await,
                     // Unparseable input from one client must not take the
                     // server down for the others.
                     Err(_) => continue,
+                }
+            }
+        }
+    }
+}
+
+async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
+    match message {
+        ClientMessage::Prompt { text } => {
+            on_prompt(app.clone(), text).await;
+        }
+        ClientMessage::Cancel => {
+            let session = app.session.lock().await;
+            if let Some(cancel) = &session.cancel {
+                let _ = cancel.send(true);
+            }
+        }
+        ClientMessage::ApproveTask {
+            task,
+            files,
+            writes,
+            commands,
+            closes_on,
+            network,
+        } => {
+            approve_task(
+                app.clone(),
+                task,
+                files,
+                writes,
+                commands,
+                closes_on,
+                network,
+            )
+            .await;
+        }
+        ClientMessage::RejectTask { task } => {
+            reject_task(app.clone(), task).await;
+        }
+        ClientMessage::CloseTask { task } => {
+            close_task(app.clone(), task).await;
+        }
+        ClientMessage::ReopenTask { task } => {
+            reopen_task(app.clone(), task).await;
+        }
+    }
+}
+
+/// Runs the agent protocol over standard input and standard output.
+///
+/// NDJSON lines of [`ClientMessage`] are read from `stdin`, and NDJSON lines
+/// of [`ServerMessage`] are emitted to `stdout`. Logs and diagnostics are
+/// printed to `stderr` so they do not corrupt the protocol stream.
+pub async fn stdio(options: StdioOptions) -> Result<()> {
+    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let stdout = tokio::io::stdout();
+    serve_stdio_stream(options, stdin, stdout).await
+}
+
+/// Serves the agent protocol over any asynchronous reader and writer.
+pub async fn serve_stdio_stream<R, W>(options: StdioOptions, input: R, output: W) -> Result<()>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let app = App::create(options).await?;
+    serve_stdio(app, input, output).await
+}
+
+/// Speaks the protocol over `input` and `output` for an existing [`App`].
+async fn serve_stdio<R, W>(app: Arc<App>, input: R, mut output: W) -> Result<()>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let mut lines = input.lines();
+    let mut events = app.events.subscribe();
+
+    let hello = {
+        let session = app.session.lock().await;
+        ServerMessage::Hello {
+            protocol: protocol::VERSION,
+            backend: app.backend.name().to_string(),
+            model: app.model.clone(),
+            turn: session.current,
+        }
+    };
+    let json = serde_json::to_string(&hello).context("serializing hello")?;
+    output
+        .write_all(json.as_bytes())
+        .await
+        .context("writing hello")?;
+    output.write_all(b"\n").await.context("writing newline")?;
+    output.flush().await.context("flushing hello")?;
+
+    loop {
+        tokio::select! {
+            event = events.recv() => match event {
+                Ok(Event::Protocol(message)) => {
+                    let Ok(json) = serde_json::to_string(&message) else { continue };
+                    if output.write_all(json.as_bytes()).await.is_err() {
+                        return Ok(());
+                    }
+                    if output.write_all(b"\n").await.is_err() {
+                        return Ok(());
+                    }
+                    if output.flush().await.is_err() {
+                        return Ok(());
+                    }
+                }
+                Ok(Event::Trace(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            },
+            incoming = lines.next_line() => {
+                match incoming {
+                    Ok(Some(line)) => {
+                        let text = line.trim();
+                        if text.is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str::<ClientMessage>(text) {
+                            Ok(message) => handle_client_message(&app, message).await,
+                            Err(_) => continue,
+                        }
+                    }
+                    Ok(None) | Err(_) => {
+                        return Ok(());
+                    }
                 }
             }
         }

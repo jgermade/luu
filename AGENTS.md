@@ -95,6 +95,7 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 # sessions are cached in ~/.loude/sessions.db by default, so a restart does not
 # lose the conversation: `--store <path>` moves it, `--no-store` turns it off.
 cargo run --bin luu -- serve --no-store
+cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
 # the gate, without a model: the planning call answers with a plan block, then
 # the turn answers. Type a prompt and the UI holds it until you approve it.

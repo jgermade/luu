@@ -255,6 +255,114 @@ enum Command {
         map_rank: bool,
     },
 
+    /// Serve the agent protocol over stdin/stdout as NDJSON.
+    ///
+    /// The editor surface: an IDE (VSCode, Neovim, Emacs) or language server
+    /// spawns `luu stdio` as a subprocess and speaks the protocol directly over
+    /// standard input and output. The gate, tasks, tools, and store behave
+    /// identically to `luu serve` without needing a network port or authentication token.
+    Stdio {
+        #[command(flatten)]
+        sandbox_args: SandboxArgs,
+
+        /// Where sessions are cached between restarts, as SQLite. Defaults to
+        /// `~/.loude/sessions.db`; `--no-store` keeps the session in memory,
+        /// which is what `serve` did before the store existed.
+        #[arg(long, value_name = "PATH")]
+        store: Option<std::path::PathBuf>,
+
+        /// Keep the session in memory only.
+        #[arg(long, conflicts_with = "store")]
+        no_store: bool,
+
+        #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
+        backend: BackendKind,
+
+        #[arg(long, default_value = "qwen2.5-coder:7b")]
+        model: String,
+
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
+
+        /// Where the OpenAI-compatible server is. `llama-server`, vLLM, LM
+        /// Studio and the hosted endpoints all answer here — and none of them
+        /// takes the window on a request, so start the server with the window
+        /// this run budgets against.
+        #[arg(long, default_value = agent_core::backend::openai::DEFAULT_BASE_URL)]
+        openai_url: String,
+
+        /// A file holding the bearer token for `--backend openai`. Omitted
+        /// means no `Authorization` header at all, which is what a local
+        /// server wants.
+        #[arg(long, value_name = "PATH")]
+        api_key_file: Option<std::path::PathBuf>,
+
+        #[arg(long, default_value_t = 25)]
+        mock_delay_ms: u64,
+
+        /// What the mock backend answers, one per model call, the last
+        /// repeating. The gate needs two to be seen working without a model:
+        /// the plan block the planning call returns, then the answer.
+        #[arg(long = "mock-reply", value_name = "TEXT")]
+        mock_replies: Vec<String>,
+
+        /// Write every protocol and trace message to a replayable JSON-lines file.
+        #[arg(long)]
+        record: Option<std::path::PathBuf>,
+
+        /// The model's context window. 0 means unknown: no budget, no eviction.
+        #[arg(long, default_value_t = 0)]
+        context_limit: u32,
+
+        /// The model's `tokenizer.json`. Without it, tokens are counted
+        /// approximately and every number says so.
+        #[arg(long)]
+        tokenizer: Option<std::path::PathBuf>,
+
+        /// Tokens held back for the answer before history is considered.
+        #[arg(long, default_value_t = DEFAULT_RESERVE)]
+        reserve: u32,
+
+        /// How the history gives way when a turn no longer fits. `turn` drops
+        /// the minimum and rewrites the history on every call once the window
+        /// is full; `block` cuts down to --low-water and then holds still.
+        #[arg(long, value_enum, default_value_t = EvictionKind::Turn)]
+        evict: EvictionKind,
+
+        /// The fraction of the history budget `--evict block` cuts down to.
+        /// Ignored by `--evict turn`. A guess, and a flag so that it can stop
+        /// being one.
+        #[arg(long, default_value_t = 0.5)]
+        low_water: f32,
+
+        /// Pin the sampler's temperature. Unset leaves it to the server's own
+        /// default, which is not fixed across calls.
+        #[arg(long)]
+        temperature: Option<f32>,
+
+        /// Pin the sampler's seed. Unset leaves it to the server's own choice.
+        #[arg(long)]
+        seed: Option<u32>,
+
+        /// Tokens of repository outline to put in the prefix — definitions
+        /// with their signatures, bodies elided, from tree-sitter. 0 is off,
+        /// which is the default: a map that arrived switched on would change
+        /// every number in every recording made so far. `luu map` prints what
+        /// a budget resolves to.
+        #[arg(long, default_value_t = 0)]
+        map_tokens: u32,
+
+        /// Order the map by what the rest of the tree depends on, instead of
+        /// by path. Off, and the reason is a measurement rather than caution:
+        /// at 1024 tokens the alphabet holds five files and the ranking holds
+        /// two, because rank order puts the big central files first and the
+        /// fill rule stops at the first that does not fit. `luu map --explain`
+        /// prints the ranking either way. See
+        /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
+        #[arg(long)]
+        map_rank: bool,
+    },
+
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
     Chat {
         /// The prompt. Reads stdin when omitted, and ignored with --script.
@@ -987,6 +1095,74 @@ pub async fn run() -> Result<()> {
             map_tokens,
             map_order: order_of(map_rank),
             auth_token_file,
+        })
+        .await;
+    }
+
+    if let Command::Stdio {
+        store,
+        no_store,
+        sandbox_args,
+        backend,
+        model,
+        ollama_url,
+        openai_url,
+        api_key_file,
+        mock_delay_ms,
+        mock_replies,
+        record,
+        context_limit,
+        tokenizer,
+        reserve,
+        evict,
+        low_water,
+        temperature,
+        seed,
+        map_tokens,
+        map_rank,
+    } = command
+    {
+        let backend = build_backend(BackendArgs {
+            kind: backend,
+            ollama_url: &ollama_url,
+            openai_url: &openai_url,
+            api_key_file: api_key_file.as_deref(),
+            mock_delay_ms,
+            mock_replies,
+            context_limit,
+        })?;
+        let model = model_for(backend.as_ref(), model);
+        let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
+        if let Some(warning) = &warning {
+            eprintln!("warning: {warning}");
+        }
+        let agency = sandbox_args.resolve().await?;
+        eprint!("{}", agency.describe());
+        let store = match (no_store, store) {
+            (true, _) => None,
+            (false, Some(path)) => Some(path),
+            (false, None) => {
+                let path = crate::store::default_path();
+                if path.is_none() {
+                    eprintln!(
+                        "warning: no HOME, so no default session store:                          this session stays in memory. Pass --store <path> to keep it."
+                    );
+                }
+                path
+            }
+        };
+        return serve::stdio(serve::StdioOptions {
+            backend: backend.into(),
+            model,
+            record,
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
+            counter,
+            agency,
+            temperature,
+            seed,
+            store,
+            map_tokens,
+            map_order: order_of(map_rank),
         })
         .await;
     }
