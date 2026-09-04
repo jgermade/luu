@@ -29,7 +29,7 @@ is worth more than a reordering.
 | 1 | ~~**An OpenAI-compatible backend**~~ — built, and never yet pointed at a real server | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md), closed by [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
 | 2 | ~~**Sessions in SQLite, derived from the record**~~ — the store and the parity; **not** the resume | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md), closed by [`sessions-in-sqlite`](../../RECORD/2026-09-02.sessions-in-sqlite.completed.md) |
 | 3 | ~~**Level 3 in its development posture**~~ — `loude-worker` in a long-lived container, wide open; the image is **declared, not generated**, and verified live with Landlock ABI v8 | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) and [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
-| 4 | **The gate probe against a real model** | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) — written, unrun |
+| 4 | ~~**The gate probe against a real model**~~ | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) — completed |
 | 5 | **Relevance selection** — the reference graph and the ranking | nothing | [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md), scored by [`the-map-against-a-7b`](../../RECORD/2026-09-01.the-map-against-a-7b.completed.md) |
 | 6 | **Narrowing: `network` per plan, then egress through the host** | 3 | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) §Network, §Egress |
 | 7 | **The protocol over stdio**, then the extension | 2 | [`how-a-surface-reaches-the-engine`](../../RECORD/2026-09-01.how-a-surface-reaches-the-engine.completed.md) |
@@ -304,7 +304,7 @@ What was not asked for: each size fails the rest of the corpus a different way.
 14b's first instinct off the map is `run_command`, refused every time on macOS
 (`the kernel cannot hold this child`) — a live, unarranged sighting of exactly
 the wall [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md)
-and [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) have been waiting
+and [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) have been waiting
 to observe with a model in the loop. 32b reaches for `read_file`/`list_dir`
 instead — not blocked — and with the map's directory names to start from,
 genuinely explores and honestly declines on the two files that do not exist;

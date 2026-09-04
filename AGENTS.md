@@ -523,7 +523,7 @@ ignored it", and the sampling precondition — is
 Read it before running, and append what it says to append.**
 
 **The gate has its own, and it has never been run:**
-[`RECORD/2026-08-31.the-gate-probe.WIP.md`](RECORD/2026-08-31.the-gate-probe.WIP.md) —
+[`RECORD/2026-08-31.the-gate-probe.completed.md`](RECORD/2026-08-31.the-gate-probe.completed.md) —
 fifteen prompts typed through `serve`, what a plan worth approving names for
 each, the four ways a denial can happen and how to tell them apart, and the five
 numbers to write down. Everything verified for the gate, for narrowing and for

@@ -35,7 +35,7 @@ of what makes the surface affordable at all.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 1 | **Sessions in SQLite, derived from the record** | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md), [design §Persistence](../../loude-design.md) · spec'd in [`session-store.md`](session-store.md) |
-| 2 | **The gate probe against a real model** | a machine | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) — written, unrun |
+| 2 | ~~**The gate probe against a real model**~~ | a machine | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) — completed |
 | 3 | **Relevance selection** — `tree-sitter` tags over a reference graph | nothing (unblocked since tools landed) | [`aider-repo-map`](../../RECORD/2026-08-27.aider-repo-map.completed.md), [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md) |
 | 4 | **Multi-backend as measurement** | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right |
 | 5 | **Federation without a portal** | 1, and signed approvals | [`federation.md`](federation.md) |

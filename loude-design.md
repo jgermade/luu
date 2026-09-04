@@ -120,7 +120,7 @@ that ignored the format and one that declared empty lists arrive as the same
 empty plan, and the two want different fixes (a grammar, or a sentence). The read
 side keeps the plan as proposed beside the plan as approved, because the
 difference between them is what a person had to add — the cost of the gate. How
-to measure it is [`RECORD/2026-08-31.the-gate-probe.WIP.md`](RECORD/2026-08-31.the-gate-probe.WIP.md).
+to measure it is [`RECORD/2026-08-31.the-gate-probe.completed.md`](RECORD/2026-08-31.the-gate-probe.completed.md).
 
 **And the server says no out loud.** A `refused` message carries the request it
 answers, a reason (`busy`, `pending`, `task`, `not_granted`) and a sentence for

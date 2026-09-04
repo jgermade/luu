@@ -42,7 +42,7 @@ is the grounded pair and the map probe, both at two budgets, on that box.
 | Machine | The question only it answers | Specified in |
 | --- | --- | --- |
 | ~~**3 · M4 Pro 48 GB**~~ | ~~Does the map's 0/6 → 6/6 survive at 14b and 32b?~~ Yes, at both — and each size fails the rest of the corpus in its own way, one of them a live sighting of `run_command` refusing on macOS. Closed by [`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md) | [`the-map-against-a-7b`](../../RECORD/2026-09-01.the-map-against-a-7b.completed.md) §The map probe |
-| **1 · M1 Pro** | **`run_command` with a model in the loop.** Landlock is active in its Docker VM, so the gate probe's command prompts become observable for the first time anywhere | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md) |
+| **1 · M1 Pro** | **`run_command` with a model in the loop.** Landlock is active in its Docker VM, so the gate probe's command prompts become observable for the first time anywhere | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) |
 | **5 · 1660 Super, 6 GB** | **Where the stated target breaks.** The project claims 7B–32B at 8K–32K; 6 GB is the bottom of that claim and the only box that can falsify it | — needs a record |
 | **6 · BC-250** | **A third serving stack.** Neither Metal nor CUDA — llama.cpp over Vulkan, which is the only non-vendor path in the inventory | — needs a record |
 | **4 · Ryzen + 5060 Ti** | **Native Linux without a VM**, and the fastest box for anything that fits in 16 GB | — |
@@ -105,7 +105,7 @@ gantt
   what the corpus was built to ask.
 - **Not a hosted model against a local one as an A/B.** Different quantisation and
   serving stack: it is a ceiling or a floor, never one flag apart.
-- **Not 14b or 32b before 7b answers.** [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.WIP.md)
+- **Not 14b or 32b before 7b answers.** [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md)
   already defers the size sweep for the gate, and the reasoning holds for the map:
   if a 7B can be planned with, the larger models are not the question.
 - **Not anything on machines 4, 5 or 6 through Ollama** just because it is
