@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 /// The fixed head of every prompt. Kept as one `&'static str` because the
 /// prompt cache reuses it byte for byte — a formatting change here is a cache
 /// miss on every call, and nothing fails to tell you.
-pub const SYSTEM: &str = "You are Loude, a concise local coding agent.";
+pub const SYSTEM: &str = "You are luu, a concise local coding agent.";
 
 /// What the agent is asked before a task starts, fused into the current user
 /// message and never into the system block.

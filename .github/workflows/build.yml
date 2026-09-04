@@ -61,8 +61,6 @@ jobs:
           key: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
 
-      # Both names ship: the design calls for `loude` and `luu` to be the same
-      # binary under two names.
       - name: Package
         shell: bash
         run: |
@@ -70,7 +68,6 @@ jobs:
           out="dist/luu-${{ matrix.target }}"
           mkdir -p "$out"
           cp "target/${{ matrix.target }}/release/luu" "$out/"
-          cp "target/${{ matrix.target }}/release/loude" "$out/"
           cp README.md "$out/" 2>/dev/null || true
           tar -czf "dist/luu-${{ matrix.target }}.tar.gz" -C dist "luu-${{ matrix.target }}"
 

@@ -327,7 +327,7 @@ mod tests {
 
     fn spec(runtime: Runtime) -> WorkerSpec {
         WorkerSpec::new(runtime, "/home/you/project")
-            .with_image(Some("loude-worker:dev".into()))
+            .with_image(Some("luu-worker:dev".into()))
             .with_user(Some((501, 20)))
     }
 
@@ -350,7 +350,7 @@ mod tests {
                 "none",
                 "--user",
                 "501:20",
-                "loude-worker:dev",
+                "luu-worker:dev",
                 "luu",
                 "worker",
                 "--command",
@@ -468,7 +468,7 @@ mod tests {
                 "none",
                 "--user",
                 "501:20",
-                "loude-worker:dev",
+                "luu-worker:dev",
                 "luu",
                 "worker",
                 "--command",
@@ -575,12 +575,11 @@ mod config_tests {
 
     #[test]
     fn a_worker_block_reads_as_it_looks() {
-        let config = WorkerConfig::from_toml(
-            "[worker]\nruntime = \"docker\"\nimage = \"loude-worker:dev\"\n",
-        )
-        .unwrap();
+        let config =
+            WorkerConfig::from_toml("[worker]\nruntime = \"docker\"\nimage = \"luu-worker:dev\"\n")
+                .unwrap();
         assert_eq!(config.runtime, Runtime::Docker);
-        assert_eq!(config.image.as_deref(), Some("loude-worker:dev"));
+        assert_eq!(config.image.as_deref(), Some("luu-worker:dev"));
     }
 
     #[test]

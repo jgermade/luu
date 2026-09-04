@@ -24,7 +24,7 @@ use crate::sandbox::PolicyError;
 
 /// The first line of every canonical rendering. It is in the signed bytes so a
 /// signature made for one shape of approval cannot be replayed against another.
-const CANONICAL: &str = "loude-approval v1";
+const CANONICAL: &str = "luu-approval v1";
 
 /// How a key is written wherever a person reads or types one.
 const PREFIX: &str = "ed25519:";
@@ -341,7 +341,7 @@ mod tests {
         let approval = grant("s1", &writes);
         assert_eq!(
             approval.canonical().unwrap(),
-            "loude-approval v1\nsession s1\njob 3\nwrites src/main.rs\n"
+            "luu-approval v1\nsession s1\njob 3\nwrites src/main.rs\n"
         );
     }
 

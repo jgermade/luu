@@ -1,4 +1,4 @@
-# `loude-worker`: level 3 of the sandbox ladder, in its development posture.
+# `luu-worker`: level 3 of the sandbox ladder, in its development posture.
 #
 # The container's only process is `luu worker`, which is what the host talks to
 # over stdio. Its lifetime is therefore the session's, `--rm` and a closed stdin
@@ -8,7 +8,7 @@
 #
 # Build it, and point a session at it:
 #
-#   docker build -t loude-worker:dev -f Containerfile .
+#   docker build -t luu-worker:dev -f Containerfile .
 #   cargo run --bin luu -- tools --sandbox luu.container.toml
 #
 # Named `Containerfile` rather than `Dockerfile` for the same reason the runtime

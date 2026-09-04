@@ -1,7 +1,8 @@
-//! `luu` — the Loude CLI.
+//! `luu` — the CLI.
 //!
-//! The binary is installed under two names (`luu` and `loude`); both are thin
-//! wrappers over [`run`].
+//! One name, one binary: `src/bin/luu.rs` is a thin wrapper over [`run`]. The
+//! second name the design used to install alongside it is gone; see
+//! `RECORD/2026-09-04.the-name-and-the-config-dir.completed.md`.
 
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ use crate::session::{
 use anyhow::{Context, Result};
 
 pub mod auth;
+pub mod config;
 pub mod export;
 pub mod serve;
 pub mod session;
@@ -171,7 +173,9 @@ enum Command {
         auth_token_file: Option<std::path::PathBuf>,
 
         /// Where sessions are cached between restarts, as SQLite. Defaults to
-        /// `~/.loude/sessions.db`; `--no-store` keeps the session in memory,
+        /// `sessions.db` in the state directory the first run chose
+        /// (`~/.luu` or `~/.config/luu`, or wherever `LUU_HOME` names);
+        /// `--no-store` keeps the session in memory,
         /// which is what `serve` did before the store existed.
         ///
         /// Deliberately not beside `luu.toml`: the policy file describes *this
@@ -294,7 +298,9 @@ enum Command {
         sandbox_args: SandboxArgs,
 
         /// Where sessions are cached between restarts, as SQLite. Defaults to
-        /// `~/.loude/sessions.db`; `--no-store` keeps the session in memory,
+        /// `sessions.db` in the state directory the first run chose
+        /// (`~/.luu` or `~/.config/luu`, or wherever `LUU_HOME` names);
+        /// `--no-store` keeps the session in memory,
         /// which is what `serve` did before the store existed.
         #[arg(long, value_name = "PATH")]
         store: Option<std::path::PathBuf>,
@@ -961,9 +967,9 @@ enum Step {
 /// ```text
 /// ## job: explain the context manager
 /// ## task: read the design
-/// ## file: loude-design.md
-/// ## write: loude-design.md
-/// ## fragment: loude-design.md:1-40
+/// ## file: luu-design.md
+/// ## write: luu-design.md
+/// ## fragment: luu-design.md:1-40
 /// what does the context manager do?
 /// ## close
 /// ```
@@ -1309,7 +1315,9 @@ pub async fn run() -> Result<()> {
                 let path = crate::store::default_path();
                 if path.is_none() {
                     eprintln!(
-                        "warning: no HOME, so no default session store:                          this session stays in memory. Pass --store <path> to keep it."
+                        "warning: no state directory (neither LUU_HOME nor HOME is set), so no \
+                         default session store: this session stays in memory. \
+                         Pass --store <path> to keep it."
                     );
                 }
                 path
@@ -1384,7 +1392,9 @@ pub async fn run() -> Result<()> {
                 let path = crate::store::default_path();
                 if path.is_none() {
                     eprintln!(
-                        "warning: no HOME, so no default session store:                          this session stays in memory. Pass --store <path> to keep it."
+                        "warning: no state directory (neither LUU_HOME nor HOME is set), so no \
+                         default session store: this session stays in memory. \
+                         Pass --store <path> to keep it."
                     );
                 }
                 path
@@ -1902,7 +1912,7 @@ mod tests {
         let steps = parse_script(
             "## task: explain the context manager\n\
              ## step: read the design\n\
-             ## file: loude-design.md\n\
+             ## file: luu-design.md\n\
              ## command: cargo\n\
              what does it do?\n\
              ## close\n",
@@ -1915,7 +1925,7 @@ mod tests {
         };
         assert_eq!(objective, "explain the context manager");
         assert_eq!(plan.tasks, ["read the design"]);
-        assert_eq!(plan.files, ["loude-design.md"]);
+        assert_eq!(plan.files, ["luu-design.md"]);
         assert_eq!(plan.commands, ["cargo"]);
         assert_eq!(steps[2], Step::CloseJob);
     }

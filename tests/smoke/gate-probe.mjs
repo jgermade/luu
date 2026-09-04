@@ -120,8 +120,8 @@ async function run() {
 
   try {
     await page.goto(BASE_URL);
-    await expect(page.locator("header strong")).toHaveText("loude");
-    console.log("Connected to Loude UI successfully.\n");
+    await expect(page.locator("header strong")).toHaveText("luu");
+    console.log("Connected to luu UI successfully.\n");
 
     for (const item of PROMPTS) {
       console.log(`═══════════════════════════════════════════════════════════════`);

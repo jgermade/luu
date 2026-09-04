@@ -70,7 +70,7 @@ const html = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Loude roadmap ${esc(revision)} — Gantt</title>
+<title>luu roadmap ${esc(revision)} — Gantt</title>
 <style>
   :root { color-scheme: light; }
   body {
@@ -96,7 +96,7 @@ const html = `<!doctype html>
   a { color: #1d1d1b; }
 </style>
 <main>
-  <h1>Loude roadmap — revision ${esc(revision)}</h1>
+  <h1>luu roadmap — revision ${esc(revision)}</h1>
   <p class="lede">
     The bars are <strong>sizes, not commitments</strong>: one person working
     evenings, an arbitrary start date, and the only thing worth trusting is the

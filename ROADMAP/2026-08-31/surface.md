@@ -5,7 +5,7 @@ cover: the places a person actually uses this. The engine track asks *does the
 context strategy help*; this one asks *can anyone reach it*.
 
 **This item has no record behind it**, which is worth saying out loud rather than
-leaving as a missing link. `loude-design.md` §Suggested work order has the
+leaving as a missing link. `luu-design.md` §Suggested work order has the
 container at step 5 and the VSCode extension at step 6 and nothing else about a
 user-facing surface; the four environments below have never been argued anywhere.
 Read this as ordering, not as a decision that was reached — and if one of the
@@ -35,7 +35,7 @@ OpenAI-compatible endpoint, so no LM Studio, `llama-server` or vLLM. Model, URL
 and window are flags. `luu.toml` is `[sandbox]` and nothing else — no provider
 profiles, no user config. `--record` writes a session and nothing reads one back,
 so there is no resume. Whether the CLI should grow a gate at all is open in
-[`loude-design.md`](../../loude-design.md) §Open questions.
+[`luu-design.md`](../../luu-design.md) §Open questions.
 
 **VSCode extension.** Not started, deliberately last. The half that is done is
 elsewhere: protocol v3 is a versioned, transport-agnostic JSON enum and
@@ -59,7 +59,7 @@ half is at least staged: version handshake, signed approvals, transfer over the
 record stream. What is still unwritten is the other half — TLS, users, a session
 per user, and how an authenticated user composes with an approved plan, which are
 two different permissions that nothing has yet described together.
-[`loude-design.md:427`](../../loude-design.md#L427) is the whole of it today:
+[`luu-design.md:427`](../../luu-design.md#L427) is the whole of it today:
 loopback by default, no auth, a bearer token when bound elsewhere.
 
 ## The order

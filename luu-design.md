@@ -1,4 +1,4 @@
-# Loude (CLI alias: `luu`)
+# luu
 
 Local-first AI agent written in Rust that orchestrates calls to models: optimized for local inference (limited context, tight token budget), and free to reach a remote model when the user names one — never as a fallback. See [`RECORD/2026-09-01.local-first.completed.md`](RECORD/2026-09-01.local-first.completed.md) for what "local-first" obligates and what it costs.
 
@@ -466,7 +466,7 @@ in-process tools — `openat2(RESOLVE_BENEATH)` is the answer there and is not b
 
 ## Container mode
 
-Level 3. **The development posture is built**: `loude-worker` in a long-lived
+Level 3. **The development posture is built**: `luu-worker` in a long-lived
 container, wide open, with the narrowing kept as a separate item whose trigger is
 a fact rather than a date. Level 2 stays applied inside it — inside a Linux
 container Landlock works, is free, and is the one part of the sandbox the whole
@@ -511,7 +511,7 @@ Mac.
 ```toml
 [worker]
 runtime = "docker"          # host | direct | docker | podman | nerdctl | container
-image = "loude-worker:dev"
+image = "luu-worker:dev"
 
 [[worker.paths]]            # the image's toolchain, resolved only on its side
 path = "/usr/local/cargo"
@@ -643,7 +643,7 @@ required = true          # an *unsigned* approval is refused; a *wrong* one alwa
 
 [[approvals.key]]
 name = "jgermade"
-public = "ed25519:…"     # luu key new --out ~/.loude/approval.key
+public = "ed25519:…"     # luu key new --out ~/.luu/approval.key
 ```
 
 `luu key new` makes a key (private half written `0600`) and `luu key sign` signs an
@@ -709,7 +709,7 @@ Two consequences worth designing around rather than discovering:
 ### What this needs from jq79
 
 Two gaps, neither expressible from userland, both general enough to belong upstream rather than in a
-patched copy. Listed in the order loude hits them:
+patched copy. Listed in the order luu hits them:
 
 1. **A teardown hook** (`$onDestroy`, or a cleanup function returned from `$effect`). Effects, stores
    and injected styles are disposed with the component, but a resource the component itself owns has
@@ -799,11 +799,24 @@ an empty prompt, in exactly the number the budget panel plots against ours. See
 
 **Sessions are stored**, as SQLite (`rusqlite`, with SQLite compiled in so the
 store does not depend on the host's system packages). `luu serve` caches its fold
-into `~/.loude/sessions.db` by default — `--store <path>` names another,
-`--no-store` keeps the session in memory the way every run did before. The store
-is deliberately not beside `luu.toml`: the policy file describes *this project*
-and is committed with it, and a session store that travelled with a checkout
-would put one project's conversation into every clone of it.
+into `sessions.db` in **the state directory** by default — `--store <path>` names
+another, `--no-store` keeps the session in memory the way every run did before.
+The store is deliberately not beside `luu.toml`: the policy file describes *this
+project* and is committed with it, and a session store that travelled with a
+checkout would put one project's conversation into every clone of it.
+
+**Where the state directory is, the user decides — once.** `~/.luu` is what a
+dotfile-shaped tool does and `~/.config/luu` is what the XDG basedir spec asks
+for; which one is right is a fact about somebody's home directory and not about
+us, so the first run asks and every run after it finds what that answer created.
+Resolved in order: `LUU_HOME` if set, then `~/.luu` if it exists, then
+`$XDG_CONFIG_HOME/luu` (default `~/.config/luu`) if it exists, then the question.
+**The directory's own existence is the record of the choice** — a setting saying
+where the settings live would have to live somewhere, and that somewhere is the
+question. Off a terminal it does not ask: it takes the XDG path, says so, and
+names `LUU_HOME`, because a prompt nobody can answer is a hang and a hang in
+`luu stdio` is a parent process waiting on a pipe. See
+[`RECORD/2026-09-04.the-name-and-the-config-dir.completed.md`](RECORD/2026-09-04.the-name-and-the-config-dir.completed.md).
 
 **A row is the fold, whole, and nothing else.** `SessionView` serialised into one
 column, with the listing columns derived from `SessionView::summary()` beside it
@@ -876,9 +889,19 @@ not decided; the argument is
 
 ## Naming
 
-- Project name: **Loude** (echoes "Claude", free on npm).
-- CLI command alias: **`luu`** — shorter and nicer to type daily.
-- In Rust: define two `[[bin]]` entries in `Cargo.toml` pointing to the same `main.rs`, or a symlink/alias in the install script (`loude` ↔ `luu`).
+- Project name: **luu**. One name — the crate, the binary, the policy files
+  (`luu.toml`, `luu.container.toml`), the container image (`luu-worker`) and the
+  repository all say it, so there is nothing to keep in sync.
+- It used to be **Loude** with `luu` as a CLI alias, installed as two `[[bin]]`
+  entries over one `main`. The alias won: everything a person typed was already
+  `luu`, and the old name survived only in the places nobody types — a title, a
+  second binary, an image tag, a string inside a signature. A second name that
+  appears only where you do not type it is drift, not an alias, so it is gone.
+  See [`RECORD/2026-09-04.the-name-and-the-config-dir.completed.md`](RECORD/2026-09-04.the-name-and-the-config-dir.completed.md).
+- `RECORD/` still says *Loude* wherever it was written before that date, and its
+  links to this file still point at `loude-design.md`. It is append-only: a
+  record is what was believed on the day it was written, and repairing the links
+  would erase the only evidence that the name ever moved.
 
 ## Open questions / next steps
 

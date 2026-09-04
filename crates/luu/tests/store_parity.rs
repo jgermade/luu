@@ -5,7 +5,7 @@
 //! ```
 //!
 //! The store is a **cache of a fold, not a second log** — that is the whole of
-//! `loude-design.md` §Persistence, and this is what stops it becoming one. A
+//! `luu-design.md` §Persistence, and this is what stops it becoming one. A
 //! store that can drift is a store that will, and without this the drift is a
 //! support question years later instead of a red test now.
 //!

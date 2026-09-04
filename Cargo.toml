@@ -6,7 +6,7 @@ members = ["crates/agent-core", "crates/luu"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/jgermade/loude-ai"
+repository = "https://github.com/jgermade/luu"
 
 [workspace.dependencies]
 agent-core = { path = "crates/agent-core" }

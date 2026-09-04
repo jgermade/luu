@@ -11,7 +11,7 @@
 
 ## task: explain what the context manager does
 ## step: describe the buckets and the budget
-## file: loude-design.md
+## file: luu-design.md
 what does the context manager do?
 how is the token budget split into buckets?
 why does the system block never change?

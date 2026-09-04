@@ -1,4 +1,4 @@
-# Loude's own sandbox, for running the agent on this repository.
+# luu's own sandbox, for running the agent on this repository.
 #
 # The whole policy is here: an allowlist of trees and an allowlist of programs.
 # There is no deny list, deliberately — Landlock is allow-only, so a subtraction
@@ -82,7 +82,7 @@ access = "read-write"
 #
 #   [[approvals.key]]
 #   name = "jgermade"
-#   public = "ed25519:…"        # `luu key new --out ~/.loude/approval.key`
+#   public = "ed25519:…"        # `luu key new --out ~/.luu/approval.key`
 #
 # A *wrong* signature is refused whether or not one is required: `required`
 # decides what an absent signature means and nothing else.
