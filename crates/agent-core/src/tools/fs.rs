@@ -3,12 +3,21 @@
 //! Every one of them asks [`Sandbox::check_path`] first and works on the path
 //! it hands back — the canonical one, not the argument. Comparing the argument
 //! and then opening the argument is how a symlink walks out.
+//!
+//! And the check is no longer the whole of it. Between an answer about a path
+//! and the `open` that follows, the path is a *string*, and a string is not a
+//! file — so the ones that open a file do it with `openat2(RESOLVE_BENEATH)`
+//! relative to the root that granted it, which makes the kernel refuse the
+//! escape during resolution rather than us refuse it beforehand. The verdict
+//! then says the kernel held it. See
+//! `RECORD/2026-09-05.beneath-the-root.completed.md`.
 
+use std::io::{Read, Write};
 use std::path::Path;
 
 use serde_json::json;
 
-use crate::sandbox::{Access, Sandbox};
+use crate::sandbox::{Access, Sandbox, beneath};
 
 use super::{Tool, ToolFuture, ToolOutcome};
 
@@ -62,6 +71,36 @@ async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
     }
 }
 
+/// Opens a checked path the way the kernel will keep inside its tree, on a
+/// thread the loop can abandon.
+///
+/// Two rules meeting: the open must be `openat2` beneath the granting root, and
+/// it must not block the poll thread
+/// (`RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`). Both are
+/// about the same syscall, so they are one helper.
+async fn open_beneath(
+    check: &crate::sandbox::PathCheck,
+    mode: beneath::Mode,
+) -> std::io::Result<beneath::Opened> {
+    let Some((root, relative)) = check.beneath() else {
+        return Err(std::io::Error::other("no rule granted this path"));
+    };
+    off_thread(move || beneath::open(&root, &relative, mode)).await
+}
+
+/// What a failed open says to the model.
+///
+/// A resolution refusal is a **denial** and reads as one: `EXDEV` from
+/// `RESOLVE_BENEATH` means the path left the tree, and reporting it as "no such
+/// file" would send a model hunting for a typo instead of telling it the
+/// sandbox said no.
+fn open_failed(path: &str, error: &std::io::Error) -> String {
+    match beneath::is_escape(error) {
+        true => format!("{path}: resolves outside the tree that granted it, and was refused"),
+        false => format!("{path}: {error}"),
+    }
+}
+
 pub struct ReadFile;
 
 impl Tool for ReadFile {
@@ -102,13 +141,28 @@ impl Tool for ReadFile {
                 return ToolOutcome::denied(check.verdict);
             }
 
-            let path_on_disk = check.path.clone();
-            match off_thread(move || std::fs::read_to_string(&path_on_disk)).await {
+            let opened = match open_beneath(&check, beneath::Mode::Read).await {
+                Ok(opened) => opened,
+                Err(error) => {
+                    return ToolOutcome::failed(check.verdict, open_failed(path, &error));
+                }
+            };
+            // The verdict said `in-process check` because it was written before
+            // the open. Now the open has happened and, on Linux, something
+            // better than our own check is what kept it inside the tree.
+            let verdict = check.verdict.held_by(opened.applied);
+            let mut file = opened.file;
+            let read = off_thread(move || {
+                let mut text = String::new();
+                file.read_to_string(&mut text).map(|_| text)
+            })
+            .await;
+            match read {
                 Ok(text) => {
                     let lines: Vec<&str> = text.lines().skip(start - 1).take(count).collect();
-                    ToolOutcome::ok(check.verdict, lines.join("\n"))
+                    ToolOutcome::ok(verdict, lines.join("\n"))
                 }
-                Err(error) => ToolOutcome::failed(check.verdict, format!("{path}: {error}")),
+                Err(error) => ToolOutcome::failed(verdict, format!("{path}: {error}")),
             }
         })
     }
@@ -150,6 +204,14 @@ impl Tool for ListDir {
             // The whole listing off the thread, not only `read_dir`: every
             // entry's `file_type` is another syscall, and a directory of ten
             // thousand of them is ten thousand chances to block.
+            //
+            // **This one is still the old two-step**, and deliberately: there is
+            // no stable way to read a directory from a file descriptor, so
+            // `openat2` cannot be used here without `fdopendir` and a hand-
+            // written iterator. What leaks through the window is a list of
+            // names rather than the contents of anything, which is a smaller
+            // exposure than the ones just closed and not a closed one — see
+            // `RECORD/2026-09-05.beneath-the-root.completed.md` §Still open.
             let path_on_disk = check.path.clone();
             let listed = off_thread(move || {
                 std::fs::read_dir(&path_on_disk).map(|entries| {
@@ -227,11 +289,26 @@ impl Tool for EditFile {
                 return ToolOutcome::denied(check.verdict);
             }
 
-            let path_on_disk = check.path.clone();
-            let text = match off_thread(move || std::fs::read_to_string(&path_on_disk)).await {
+            let opened = match open_beneath(&check, beneath::Mode::Read).await {
+                Ok(opened) => opened,
+                Err(error) => {
+                    return ToolOutcome::failed(check.verdict, open_failed(path, &error));
+                }
+            };
+            // The read and the write are two opens, and both are resolved
+            // beneath the root: an edit is not one file handle held across a
+            // decision, it is two decisions the kernel makes separately.
+            let verdict = check.verdict.clone().held_by(opened.applied);
+            let mut file = opened.file;
+            let text = match off_thread(move || {
+                let mut text = String::new();
+                file.read_to_string(&mut text).map(|_| text)
+            })
+            .await
+            {
                 Ok(text) => text,
                 Err(error) => {
-                    return ToolOutcome::failed(check.verdict, format!("{path}: {error}"));
+                    return ToolOutcome::failed(verdict, format!("{path}: {error}"));
                 }
             };
 
@@ -242,23 +319,31 @@ impl Tool for EditFile {
                 1 => {}
                 0 => {
                     return ToolOutcome::failed(
-                        check.verdict,
+                        verdict,
                         format!("{path}: `old_string` is not in the file"),
                     );
                 }
                 n => {
                     return ToolOutcome::failed(
-                        check.verdict,
+                        verdict,
                         format!("{path}: `old_string` appears {n} times; include more context"),
                     );
                 }
             }
 
-            let path_on_disk = check.path.clone();
             let replaced = text.replacen(old, new, 1);
-            match off_thread(move || std::fs::write(&path_on_disk, replaced)).await {
-                Ok(()) => ToolOutcome::ok(check.verdict, format!("{path}: replaced 1 occurrence")),
-                Err(error) => ToolOutcome::failed(check.verdict, format!("{path}: {error}")),
+            match open_beneath(&check, beneath::Mode::Write).await {
+                Ok(opened) => {
+                    let verdict = verdict.held_by(opened.applied);
+                    let mut file = opened.file;
+                    match off_thread(move || file.write_all(replaced.as_bytes())).await {
+                        Ok(()) => {
+                            ToolOutcome::ok(verdict, format!("{path}: replaced 1 occurrence"))
+                        }
+                        Err(error) => ToolOutcome::failed(verdict, format!("{path}: {error}")),
+                    }
+                }
+                Err(error) => ToolOutcome::failed(verdict, open_failed(path, &error)),
             }
         })
     }
@@ -324,14 +409,20 @@ impl Tool for WriteFile {
                 }
             }
 
-            let path_on_disk = check.path.clone();
             let bytes = content.to_string();
-            match off_thread(move || std::fs::write(&path_on_disk, bytes)).await {
-                Ok(()) => ToolOutcome::ok(
-                    check.verdict,
-                    format!("{path}: wrote {} bytes", content.len()),
-                ),
-                Err(error) => ToolOutcome::failed(check.verdict, format!("{path}: {error}")),
+            match open_beneath(&check, beneath::Mode::Write).await {
+                Ok(opened) => {
+                    let verdict = check.verdict.held_by(opened.applied);
+                    let mut file = opened.file;
+                    match off_thread(move || file.write_all(bytes.as_bytes())).await {
+                        Ok(()) => ToolOutcome::ok(
+                            verdict,
+                            format!("{path}: wrote {} bytes", content.len()),
+                        ),
+                        Err(error) => ToolOutcome::failed(verdict, format!("{path}: {error}")),
+                    }
+                }
+                Err(error) => ToolOutcome::failed(check.verdict, open_failed(path, &error)),
             }
         })
     }
@@ -409,6 +500,76 @@ mod tests {
             )
             .await;
         assert_eq!(ranged.output, "    todo!()");
+    }
+
+    /// A symlink out of the tree, standing still.
+    ///
+    /// **Level one catches this one**, and the assertion says so: `check_path`
+    /// canonicalizes, sees where the link lands, and denies before anything is
+    /// opened. What it cannot catch is the same link appearing *after* that
+    /// answer and before the open — the window `openat2` closes, tested where
+    /// it is closed (`sandbox::beneath`), because a race cannot be staged from
+    /// up here without a hook in the middle of the tool.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_out_of_the_tree_reads_nothing_whichever_layer_refuses() {
+        let fixture = Fixture::new("beneath");
+        // The sandbox grants `proj` and nothing else; `secret` is its sibling,
+        // and the link lives inside the tree and points at it.
+        std::os::unix::fs::symlink(
+            fixture.root.join("secret"),
+            fixture.root.join("proj/way-out"),
+        )
+        .unwrap();
+
+        let outcome = fixture.call("read_file", json!({"path": "way-out"})).await;
+
+        assert!(!outcome.verdict.allowed, "{outcome:?}");
+        assert!(
+            !outcome.output.contains("shh"),
+            "the file outside the tree was read: {outcome:?}",
+        );
+    }
+
+    /// And the other half of the same rule: a symlink that stays *inside* the
+    /// tree is ordinary and still works. `RESOLVE_BENEATH` is about where a
+    /// path lands, not about how it got there — `RESOLVE_NO_SYMLINKS` would
+    /// have broken every checkout that has one.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_symlink_that_stays_inside_the_tree_still_reads() {
+        let fixture = Fixture::new("beneath-ok");
+        std::os::unix::fs::symlink("main.rs", fixture.root.join("proj/src/alias.rs")).unwrap();
+
+        let outcome = fixture
+            .call("read_file", json!({"path": "src/alias.rs"}))
+            .await;
+        assert!(outcome.verdict.allowed, "{outcome:?}");
+        assert!(outcome.output.contains("fn main"), "{outcome:?}");
+    }
+
+    /// Who held it, said rather than assumed.
+    ///
+    /// An in-process read was `Applied::Process` — *our own check, before the
+    /// fact, all an in-process tool can have* — since the sandbox existed. On a
+    /// kernel with `openat2` that sentence is no longer true, and the verdict is
+    /// where that has to show up: two machines running one policy get two
+    /// guarantees, and a recording has to say which one this was.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_verdict_says_the_kernel_held_the_read() {
+        let fixture = Fixture::new("beneath-verdict");
+        let outcome = fixture
+            .call("read_file", json!({"path": "src/main.rs"}))
+            .await;
+        assert!(outcome.verdict.allowed);
+        assert_eq!(
+            outcome.verdict.enforced_by,
+            crate::sandbox::Applied::Kernel {
+                how: crate::sandbox::beneath::HOW.to_string(),
+            },
+            "an in-process read is held by the kernel now, and says so",
+        );
     }
 
     #[tokio::test]

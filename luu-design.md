@@ -364,10 +364,26 @@ Three rungs, and the middle one is what makes the first worth having. Built: 1
 and 2, and 3 in its development posture. See
 [`RECORD/2026-08-27.tools-and-sandbox.completed.md`](RECORD/2026-08-27.tools-and-sandbox.completed.md).
 
-1. **In-process checks.** Canonicalize (`std::fs::canonicalize`) before comparing,
-   or a symlink walks straight out. Everything an in-process tool can have — and
-   nothing a subprocess gets: the check happens before the syscall, in a program
-   that then makes the syscall itself. A child makes its own.
+1. **In-process checks, and then the kernel again at the open.** Canonicalize
+   (`std::fs::canonicalize`) before comparing, or a symlink walks straight out.
+   That check answers *may this be opened*; between it and the `open` the path is
+   a string, and a string is not a file — so the tools that open one do it with
+   **`openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS)` relative to the root that
+   granted it**, which makes the kernel refuse an escape *during* resolution
+   instead of us refusing it beforehand. Who can exploit the window is not
+   hypothetical: `write_file` is granted inside the tree by design, so the model
+   can make the symlink itself. The verdict is written before the open and
+   **upgraded after it** — `Applied::Kernel { how: "openat2(…)" }` where the
+   syscall ran, `Applied::Process` where it is missing (pre-5.6, a seccomp
+   profile that blocks it, macOS) and the old two-step is what happened. `..`,
+   absolute paths and links out are refused; a link that stays inside the tree is
+   ordinary and still works, which is why `RESOLVE_NO_SYMLINKS` was rejected.
+   `list_dir` is still the old two-step, because a directory cannot be read from
+   a descriptor through any stable API — it leaks names rather than contents, and
+   it is named rather than quietly excepted. See
+   [`RECORD/2026-09-05.beneath-the-root.completed.md`](RECORD/2026-09-05.beneath-the-root.completed.md).
+   A subprocess gets none of this: it makes its own syscalls, which is what
+   level 2 is for.
 2. **The kernel, same process tree, no image and no daemon.** Landlock for the
    filesystem and seccomp for sockets, applied to the child between `fork` and
    `exec`. `run_command("cargo", …)` otherwise hands a build script the same
@@ -992,6 +1008,11 @@ the argument they were measured against is
 
 - Narrowing `enforcement` with the rest of the plan. `network` and `egress` are
   now per-job and filtered by host-side proxy; enforcement level remains session-wide.
+- **`Sandbox::new` canonicalizes its roots once, at startup**, before any model
+  has said anything — so a granted root that is itself a symlink is resolved
+  once and trusted afterwards. And `run_command`'s `cwd` is checked and then
+  handed to a child as a path; the child is held by Landlock where Landlock
+  exists, and where it does not this is the same window one process out.
 - **`Sandbox::check_path` still canonicalizes inline**, which is the last
   filesystem call in a turn that a deadline cannot abandon. One bounded syscall
   on a path rather than a read of unknown length, so it is a much smaller window
