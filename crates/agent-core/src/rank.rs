@@ -111,12 +111,15 @@ pub struct Ranked {
     pub referrers: Vec<(usize, f64)>,
 }
 
-/// Ranks files by what depends on them, most depended-on first.
+/// The graph itself: `(from, to) -> weight`, an edge meaning *`from`
+/// references a name `to` defines*.
 ///
-/// Ties break on the index, so a caller that hands files over in path order
-/// gets the alphabet as the *tie-breaker* it should always have been rather
-/// than the ranking it was.
-fn build_edges(files: &[FileTags]) -> HashMap<(usize, usize), f64> {
+/// Public because it has two readers now. The ranking walks it to say what the
+/// tree is built on; [`crate::select`] takes **one hop** along it to say what a
+/// turn's question is next to — the same edges, asked a different question, and
+/// the reason the second one is worth asking is that the first one measurably
+/// answers with the wrong end of the tree for a question about a leaf.
+pub fn edges(files: &[FileTags]) -> HashMap<(usize, usize), f64> {
     // Where each name is defined. A name nobody defines is not an edge to
     // anywhere: `println!` and every trait method the standard library owns
     // land here, and dropping them is what keeps the graph about this tree.
@@ -188,7 +191,7 @@ pub fn rank(files: &[FileTags]) -> Vec<Ranked> {
         return Vec::new();
     }
 
-    let edges = build_edges(files);
+    let edges = edges(files);
 
     let mut outgoing = vec![0.0f64; count];
     for ((from, _), weight) in &edges {
@@ -252,7 +255,7 @@ pub fn rank_in_degree(files: &[FileTags]) -> Vec<Ranked> {
         return Vec::new();
     }
 
-    let edges = build_edges(files);
+    let edges = edges(files);
 
     let mut referrers: Vec<Vec<(usize, f64)>> = vec![Vec::new(); count];
     for ((from, to), weight) in &edges {

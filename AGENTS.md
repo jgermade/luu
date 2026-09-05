@@ -80,6 +80,11 @@ useful thing in the file.
 
 ## Commands
 
+There is a `Makefile` for the four a person types most — `make install`,
+`make test`, `make build`, `make up` (the debug UI on 127.0.0.1:7878), plus
+`make lint` for what CI runs. Everything below is what those wrap and what
+nothing wraps.
+
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets     # CI runs this with RUSTFLAGS=-D warnings
@@ -110,6 +115,18 @@ cargo run --bin luu -- map --map-tokens 1024          # the repository outline t
 # and the order it did not take: scores, who references what, and what dropped.
 # `--map-rank` makes the map obey it — off by default, and the record says why.
 cargo run --bin luu -- map --map-tokens 1024 --explain
+
+# and the other block, the one that is different every turn: the definitions a
+# prompt points at, chosen from the same parse and read through the sandbox.
+# `--explain` prints every file that scored, not only the ones that fitted.
+cargo run --bin luu -- select "which file applies Landlock between fork and exec?" \
+  --select-tokens 1024 --explain
+# in a turn, off by default — it fills the `code` bucket, which was zero in every
+# recording made before it, and is not part of the cached prefix.
+cargo run --bin luu -- chat "where is the seam's clock?" --select-tokens 512
+# the coverage probe, which needs no model: 38 questions, one per file, scored
+# against scripts/tasks/map-order-probe.key
+cargo test -p luu --test select_probe -- --nocapture
 
 # signed approvals: a key, and the signature over one `approve_job`. The public
 # half goes in `[[approvals.key]]`; `[approvals] required = true` then refuses an

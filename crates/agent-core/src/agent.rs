@@ -17,6 +17,8 @@
 //!
 //! See `RECORD/2026-08-27.tools-and-sandbox.completed.md`.
 
+use std::time::Duration;
+
 use tokio::sync::{mpsc, watch};
 
 use crate::backend::{Backend, CompletionRequest, Message, Usage};
@@ -30,6 +32,52 @@ use crate::worker::Executor;
 /// A default, not a law. Too low and the agent cannot finish an investigation;
 /// too high and a model that has decided to `list_dir` forever costs a session.
 pub const DEFAULT_MAX_STEPS: u32 = 8;
+
+/// What bounds a turn: how many calls it may make, and how long any one of them
+/// may take.
+///
+/// Two numbers in one struct because they answer the same question — *what
+/// stops this turn from running forever* — and because a loop that took one and
+/// not the other could still be stopped by neither.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Limits {
+    pub max_steps: u32,
+    /// Added to whatever clock the call carries of its own
+    /// ([`crate::tools::command::clock_of`]), which is zero for every tool
+    /// except `run_command`. **The loop holds this, not the seam**: a container
+    /// is one place tools can run and `Runtime::Host` is another, and only the
+    /// loop is above both. See
+    /// `RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`.
+    pub tool_timeout: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_steps: DEFAULT_MAX_STEPS,
+            tool_timeout: Duration::from_millis(crate::worker::runtime::DEFAULT_TIMEOUT_MS),
+        }
+    }
+}
+
+impl Limits {
+    pub fn with_max_steps(mut self, max_steps: u32) -> Self {
+        self.max_steps = max_steps;
+        self
+    }
+
+    pub fn with_tool_timeout(mut self, timeout: Duration) -> Self {
+        self.tool_timeout = timeout;
+        self
+    }
+
+    /// How long this particular call may take. Never less than what the tool
+    /// was itself told it could have: a deadline that pre-empted `run_command`'s
+    /// own timeout would kill a command still inside the budget it was given.
+    fn deadline(&self, call: &crate::tools::ToolCall) -> Duration {
+        crate::tools::command::clock_of(call) + self.tool_timeout
+    }
+}
 
 /// What a turn with tools produced.
 #[derive(Debug, Clone)]
@@ -80,7 +128,7 @@ pub async fn run_agent_turn(
     request: CompletionRequest,
     tools: &dyn Executor,
     sandbox: &Sandbox,
-    max_steps: u32,
+    limits: Limits,
     events: mpsc::Sender<TurnEvent>,
     cancel: watch::Receiver<bool>,
 ) -> AgentOutcome {
@@ -94,7 +142,7 @@ pub async fn run_agent_turn(
     let mut steps: Vec<ToolStep> = Vec::new();
     let mut usage: Option<Usage> = None;
 
-    for step in 1..=max_steps.max(1) {
+    for step in 1..=limits.max_steps.max(1) {
         // Tokens are forwarded as they arrive; the intermediate `Ended` is not,
         // because a turn ends once and a client that saw three would draw three.
         let (inner, mut inbox) = mpsc::channel::<TurnEvent>(256);
@@ -174,7 +222,26 @@ pub async fn run_agent_turn(
             .await;
 
         let started = std::time::Instant::now();
-        let result = tools.call(&call, sandbox).await;
+        // The one clock over every tool call, wherever the call runs. A tool
+        // that never answers used to hang the turn, the job and the session —
+        // in a container it hung on a pipe, and under `Runtime::Host` it hung
+        // on a syscall, which is the half that had nothing watching it at all.
+        let deadline = limits.deadline(&call);
+        let result = match tokio::time::timeout(deadline, tools.call(&call, sandbox)).await {
+            Ok(result) => result,
+            Err(_) => {
+                // Dropping the future is what abandons the call; this is what
+                // tells the executor to deal with what it left behind — a
+                // worker process to kill, or nothing at all in this process.
+                tools.abandon().await;
+                let said = format!(
+                    "`{}` did not answer in {} ms and was abandoned",
+                    call.name,
+                    deadline.as_millis(),
+                );
+                crate::tools::ToolOutcome::failed(crate::sandbox::Verdict::deny(said.clone()), said)
+            }
+        };
         let taken = ToolStep {
             text: outcome.text.clone(),
             call,
@@ -337,12 +404,115 @@ mod tests {
             },
             &tools,
             &fixture.sandbox,
-            max_steps,
+            Limits::default().with_max_steps(max_steps),
             tx,
             cancel,
         )
         .await;
         (drain.await.unwrap(), outcome)
+    }
+
+    /// A path that is open, readable and never answers: a FIFO with nobody at
+    /// the other end. It is how a wedged network mount behaves, without needing
+    /// one.
+    #[cfg(unix)]
+    fn fifo(at: &std::path::Path) {
+        let name = std::ffi::CString::new(at.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a mode; `mkfifo` touches no
+        // memory of ours and returns -1 rather than trapping.
+        let made = unsafe { libc::mkfifo(name.as_ptr(), 0o644) };
+        assert_eq!(made, 0, "mkfifo: {}", std::io::Error::last_os_error());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tool_that_never_answers_is_abandoned_rather_than_waited_on() {
+        // The half that had nothing watching it. `Runtime::Host` runs tools in
+        // this process, where there is no seam to hold a clock and no worker to
+        // kill — and a `read_file` on something that never answers used to hang
+        // the turn, the job and the session in silence.
+        //
+        // The test is also the proof that the blocking read had to move off the
+        // poll thread: with `std::fs::read_to_string` inline in the future, the
+        // task never yields, the timer is never polled, and this hangs forever
+        // instead of failing.
+        let fixture = Fixture::new("wedged");
+        fifo(&fixture.root.join("wedged.fifo"));
+
+        let backend = Scripted::new(&[
+            "```tool\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"wedged.fifo\"}}\n```",
+            "I could not read it.",
+        ]);
+        let tools = crate::tools::Tools::standard();
+        let (tx, mut rx) = mpsc::channel(256);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let (_stop, cancel) = watch::channel(false);
+
+        let started = std::time::Instant::now();
+        let outcome = run_agent_turn(
+            &backend,
+            CompletionRequest {
+                model: "scripted".into(),
+                messages: vec![Message::user("read the fifo")],
+                context_limit: None,
+                temperature: None,
+                seed: None,
+            },
+            &tools,
+            &fixture.sandbox,
+            Limits::default().with_tool_timeout(Duration::from_millis(300)),
+            tx,
+            cancel,
+        )
+        .await;
+        let _ = drain.await;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the turn has to end without the read ever answering",
+        );
+        let step = outcome.steps.first().expect("the call was made");
+        let said = step.outcome.error.clone().unwrap_or_default();
+        assert!(said.contains("did not answer in 300 ms"), "{said}");
+        assert!(said.contains("abandoned"), "{said}");
+        assert!(
+            !step.outcome.verdict.allowed,
+            "a call nobody answered is not an allowed one",
+        );
+        // And the turn carries on: the model gets the failure and answers.
+        assert_eq!(outcome.text, "I could not read it.");
+
+        // The abandoned read is still parked in the kernel, and dropping a
+        // runtime waits for every blocking thread it started — so a test that
+        // just ended here would hang on the way out. That is not an artefact of
+        // testing: it is the same fact `bin/luu.rs` bounds with
+        // `shutdown_timeout`, and unblocking the reader is how this test says
+        // so out loud.
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(fixture.root.join("wedged.fifo"))
+                .expect("a reader is parked on it, so opening to write returns"),
+        );
+    }
+
+    #[tokio::test]
+    async fn the_deadline_never_fires_before_the_tools_own_clock() {
+        // The property that makes the clock safe to have on by default, and it
+        // is the loop's version of the one the seam already held: a
+        // `run_command` that asked for five minutes gets five minutes *plus*
+        // the patience, and a tool with no clock of its own gets the patience.
+        let limits = Limits::default().with_tool_timeout(Duration::from_millis(1_000));
+        let read = crate::tools::ToolCall {
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "x"}),
+        };
+        let long = crate::tools::ToolCall {
+            name: "run_command".into(),
+            arguments: serde_json::json!({"command": "sleep", "timeout_ms": 300_000}),
+        };
+        assert_eq!(limits.deadline(&read), Duration::from_millis(1_000));
+        assert_eq!(limits.deadline(&long), Duration::from_millis(301_000));
     }
 
     #[tokio::test]

@@ -29,7 +29,7 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
     let agency = Agency {
         tools: Arc::new(Tools::standard()),
         sandbox,
-        max_steps: 4,
+        limits: agent_core::agent::Limits::default().with_max_steps(4),
         worker: None,
     };
     let counter = Arc::new(ApproximateCounter);

@@ -21,6 +21,15 @@
 runtime = "docker"
 image = "luu-worker:dev"
 
+# The seam's own clock: how long the host waits for a tool call that has **no
+# timeout of its own** before it decides the worker is stuck, kills it, and
+# starts another on the next call. A `run_command` gets this *on top of* the
+# `timeout_ms` it asked for, so the seam can never fire before the tool's own
+# clock has had its chance. Wider than the 30 s default because this is the
+# posture where a person is debugging an image and a call crosses a VM boundary
+# to get anywhere. See RECORD/2026-09-05.a-clock-at-the-seam.completed.md.
+timeout-ms = 60000
+
 # The toolchain, at the path the *image* keeps it.
 #
 # These are `[[worker.paths]]` and not `[[sandbox.paths]]`, and the difference

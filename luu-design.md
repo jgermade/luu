@@ -297,7 +297,7 @@ nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.completed.md`](RECORD/
 - **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold *loses* is the conversation itself — the turns' own prose — and, until it quoted them, the files the turns were shown: that second loss was measured against a real model (two of three closed-task questions came back wrong, one of them a refusal) and closed by quoting the fragments verbatim into the summary. On the mock pair that quote costs 16 927 → 24 356 tokens over the twenty prompts, against 30 682 unfolded, and leaves reuse where it was (89.6% → 89.3%). On the real model (`qwen2.5-coder:7b`, sampling pinned) both closed-task questions that broke before the fix now answer correctly, matching the unfolded run almost word for word, and the fold still wins on tokens but by less than estimated: 29 135 tokens against 36 288 unfolded, a 19.7% win rather than the ~50% win before the fix paid for the quote — see [`RECORD/2026-08-30.the-fold-fix-verified.completed.md`](RECORD/2026-08-30.the-fold-fix-verified.completed.md). Model prose in the summary stays rejected — it would enter the write-once region every later turn is built on, which is exactly why the quote is the file's bytes and not a digest of them.
 - **Grounding a turn with a real file**: built. `--fragment PATH[:START-END]`, and `## fragment:` in a script, read a file **through the sandbox** and fuse it into one turn's user message — the `code` bucket, which existed from the start and until now was always zero. A path the sandbox would refuse to `read_file` is refused here too, and a denial is an error rather than a warning: a run that quietly dropped its grounding answers out of the model's training and looks like it worked, which is exactly what a real 7B did to twenty ungrounded turns. It is attached to one turn and then gone, because which turns a file belongs in is the next item's question and attaching it to all of them answers it wrongly, at every turn's expense. `scripts/tasks/grounded{,-tasks}.txt` are the pair this makes possible: the same twenty prompts, one grouped into tasks, with a last group that attaches nothing and asks the first fifteen again — the first corpus in which *does the fold lose what the task needed* is a question with an answer. The protocol for asking it is [`RECORD/2026-08-27.grounded-fold-probe.completed.md`](RECORD/2026-08-27.grounded-fold-probe.completed.md).
 - **The repository map**: built, and ranked **behind a flag that is off**. Every `.rs` file's definitions with their signatures, bodies elided, from `tree-sitter`'s own `TAGS_QUERY`, in the cached prefix under the tool definitions — where blocks are ordered by how often they are rewritten, and the map changes only when the repository does. `--map-tokens N`, off by default so that every recording made before it stays comparable, and `luu map` prints the exact bytes. Files are outlined in path order until one does not fit; the map then says how many it left out. **`--map-rank` orders them by what the rest of the tree depends on instead** — a reference graph over the same query's `@reference.*` captures, PageRank with a *uniform* teleport, which is what keeps the map a prefix: Aider seeds its ranking with the files in the conversation, and that is the half that would rewrite the block every turn. It is off because it was measured and lost, twice, on two differently-built corpora: at 1024 tokens path order holds five files and the ranking holds two, because rank order puts the big central files first and the fill rule stops at the first file that does not fit — and on a corpus of 38 questions chosen one per file before either order was checked (so the loss cannot be the corpus favouring path order's own holdings), path order named the right file for **100%** of the questions it covered against rank order's **12.5%**, and rank order's denser, more self-referential files pushed a 7B into paragraphs of fabricated Rust that evicted the session's own history 24 times in 38 turns, where path order evicted nothing. `luu map --explain` prints the ranking under either order — each file's score and who references it — so the order the map did not take can be read beside the one it did. To address the oversized file trap and leaf-sink penalty, **`--map-in-degree`** weights inbound references by caller diversity rather than random-walk damping, and **`--map-non-greedy`** skips over files that exceed the remaining token budget to continue packing smaller ones (packing 5 files and 1026/1024 tokens at 1024 tokens, vs 2 files and 664 tokens under greedy fill). This repository is still the argument for doing this properly: its whole outline is **6 327 tokens, 77% of an 8K window**, so at any affordable budget most of it is missing and the alphabet chose which part. What it costs on the grounded script: 870 tokens a turn at `--map-tokens 1024`, +56% on the run's total prompt tokens — and a prefix-reuse number that rises from 93.9% to 96.3% for purely arithmetic reasons, which is why a map-on run is not comparable on reuse to a map-off one. See [`RECORD/2026-08-31.the-repo-map.completed.md`](RECORD/2026-08-31.the-repo-map.completed.md), [`RECORD/2026-09-02.ranking-the-map.completed.md`](RECORD/2026-09-02.ranking-the-map.completed.md), [`RECORD/2026-09-03.the-map-order-probe.completed.md`](RECORD/2026-09-03.the-map-order-probe.completed.md) and [`RECORD/2026-09-04.in-degree-and-fill.completed.md`](RECORD/2026-09-04.in-degree-and-fill.completed.md).
-- **Relevance over recency**: inject only the fragments the current turn points at, instead of the full history. **The mechanism is `tree-sitter` tags plus a reference graph, not embeddings** — a graph can say *why* a file was included, staleness is `mtime`, and there is no second copy of the user's code to ship or govern. Decided against Aider's implementation; see [`RECORD/2026-08-27.aider-repo-map.completed.md`](RECORD/2026-08-27.aider-repo-map.completed.md). The graph now exists and ranks the map's files; what it does **not** yet do is choose fragments, which is this item.
+- **Relevance over recency**: built, measured, and **on this repository's own corpus it is the largest single win the context manager has**. `--select-tokens N` fills the `code` bucket with the definitions *this turn's text points at*, chosen by `agent_core::select` and read through the sandbox by the same loader `--fragment` uses — so a selected fragment enters a turn by the door that already existed, and is gone when the turn is. **The mechanism is `tree-sitter` tags plus what the file says it is for, and the reference graph is off**: on the 38-question corpus, at 1024 tokens, a path-ordered map holds the answer to **3** of the questions and a selection holds **32**, with the right file first 19 times and in the top three 31. The graph hop — one step from a file that matched, which is what this module was expected to be *about* — was implemented, measured, and **lost a third time**: it moves the right file out of first place five times in 38, holds no more targets, and costs 13% more tokens, because on a tree this connected a neighbour is most of the tree. It ships off, switchable, exactly as `--map-rank` did. The doc signal is doing much of the work and the corpus was written from module docs, so the ablation is the honest row: tags and path alone hold **19** of 38 at 1024, still six times the map. What is *not* measured is precision — whether a model uses what it was handed — and that needs a box. Off by default, because it changes every number in every recording made before it, and unlike the map it is **not** cached: a run with selection on is not comparable on prefix reuse to one without. Decided against Aider's implementation and against embeddings; see [`RECORD/2026-08-27.aider-repo-map.completed.md`](RECORD/2026-08-27.aider-repo-map.completed.md) and [`RECORD/2026-09-05.choosing-fragments.completed.md`](RECORD/2026-09-05.choosing-fragments.completed.md).
 - **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
 
 ## Tool calling: how actions actually get executed
@@ -364,10 +364,26 @@ Three rungs, and the middle one is what makes the first worth having. Built: 1
 and 2, and 3 in its development posture. See
 [`RECORD/2026-08-27.tools-and-sandbox.completed.md`](RECORD/2026-08-27.tools-and-sandbox.completed.md).
 
-1. **In-process checks.** Canonicalize (`std::fs::canonicalize`) before comparing,
-   or a symlink walks straight out. Everything an in-process tool can have — and
-   nothing a subprocess gets: the check happens before the syscall, in a program
-   that then makes the syscall itself. A child makes its own.
+1. **In-process checks, and then the kernel again at the open.** Canonicalize
+   (`std::fs::canonicalize`) before comparing, or a symlink walks straight out.
+   That check answers *may this be opened*; between it and the `open` the path is
+   a string, and a string is not a file — so the tools that open one do it with
+   **`openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS)` relative to the root that
+   granted it**, which makes the kernel refuse an escape *during* resolution
+   instead of us refusing it beforehand. Who can exploit the window is not
+   hypothetical: `write_file` is granted inside the tree by design, so the model
+   can make the symlink itself. The verdict is written before the open and
+   **upgraded after it** — `Applied::Kernel { how: "openat2(…)" }` where the
+   syscall ran, `Applied::Process` where it is missing (pre-5.6, a seccomp
+   profile that blocks it, macOS) and the old two-step is what happened. `..`,
+   absolute paths and links out are refused; a link that stays inside the tree is
+   ordinary and still works, which is why `RESOLVE_NO_SYMLINKS` was rejected.
+   `list_dir` is still the old two-step, because a directory cannot be read from
+   a descriptor through any stable API — it leaks names rather than contents, and
+   it is named rather than quietly excepted. See
+   [`RECORD/2026-09-05.beneath-the-root.completed.md`](RECORD/2026-09-05.beneath-the-root.completed.md).
+   A subprocess gets none of this: it makes its own syscalls, which is what
+   level 2 is for.
 2. **The kernel, same process tree, no image and no daemon.** Landlock for the
    filesystem and seccomp for sockets, applied to the child between `fork` and
    `exec`. `run_command("cargo", …)` otherwise hands a build script the same
@@ -512,6 +528,7 @@ Mac.
 [worker]
 runtime = "docker"          # host | direct | docker | podman | nerdctl | container
 image = "luu-worker:dev"
+timeout-ms = 30000          # the seam's patience for a call with no clock of its own
 
 [[worker.paths]]            # the image's toolchain, resolved only on its side
 path = "/usr/local/cargo"
@@ -562,6 +579,37 @@ access = "execute"
   Standard proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and lowercase)
   are injected into `run_command` subprocesses. See
   [`RECORD/2026-09-04.egress-through-the-host.completed.md`](RECORD/2026-09-04.egress-through-the-host.completed.md).
+- **The loop holds one clock over every tool call, because a clock inside the
+  thing being timed cannot time it.** `run_command`'s own timeout covers its child and nothing else — not
+  a wedged tool, not the worker's loop, not the runtime between them — so a
+  worker that was *alive and stuck* used to hang the turn, the job and the
+  session with nothing anywhere saying why. The host's deadline for a call is
+  **the call's own clock plus `[worker] timeout-ms`** (default 30 000, the same
+  number `run_command` defaults to), where every tool without a timeout of its
+  own contributes zero: so the seam can never fire before the tool's own clock
+  has had its chance, which is what makes it safe to have on by default. When it
+  fires the loop drops the call and tells the executor to deal with what is left
+  (`Executor::abandon`): the worker is **killed** rather than merely abandoned —
+  a late answer on a reused pipe would pair the previous call's outcome with the
+  next call's request, two well-formed lines and nothing to say they were swapped
+  — and the next call starts a new one, which is sound only because a worker
+  holds no state between calls. The same replacement now covers a worker that
+  exited, which previously took the rest of the session's tools with it, and
+  `luu tools` prints how many workers a session has had to replace. **The clock
+  is the loop's and not the seam's** because `runtime = "host"` is the default
+  and has no seam: the loop is the only thing above both places a tool can run.
+  For that deadline to be real the in-process tools had to stop blocking inside
+  their own future — `std::fs` inline in an `async` block never yields, so the
+  timer beside it is never polled and the timeout never fires — so every
+  filesystem syscall now runs on a blocking thread it can be dropped from. The
+  thread itself is not cancellable, which is why `bin/luu.rs` bounds runtime
+  shutdown: otherwise a wedged read the turn survived comes back as a process
+  that will not exit. See
+  [`RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`](RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md). And `timeout_ms` is
+  itself capped at ten minutes, because it is the *model's* number: everything
+  else in a call is checked against the sandbox, and this one was checked against
+  nothing. See
+  [`RECORD/2026-09-05.a-clock-at-the-seam.completed.md`](RECORD/2026-09-05.a-clock-at-the-seam.completed.md).
 - Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`.
 
 ## VSCode integration
@@ -960,10 +1008,18 @@ the argument they were measured against is
 
 - Narrowing `enforcement` with the rest of the plan. `network` and `egress` are
   now per-job and filtered by host-side proxy; enforcement level remains session-wide.
-- **A tool call has no timeout at the seam.** `run_command` has its own clock
-  inside the worker, and a worker that dies mid-call surfaces as EOF — an error
-  rather than a hang. A worker that is alive and stuck is not covered, and the
-  honest place for that clock is the seam rather than each tool.
+- **`Sandbox::new` canonicalizes its roots once, at startup**, before any model
+  has said anything — so a granted root that is itself a symlink is resolved
+  once and trusted afterwards. And `run_command`'s `cwd` is checked and then
+  handed to a child as a path; the child is held by Landlock where Landlock
+  exists, and where it does not this is the same window one process out.
+- **`Sandbox::check_path` still canonicalizes inline**, which is the last
+  filesystem call in a turn that a deadline cannot abandon. One bounded syscall
+  on a path rather than a read of unknown length, so it is a much smaller window
+  than the one the loop's clock closed — and it is the same kind of window.
+  `openat2(RESOLVE_BENEATH)` touches that code anyway. Nor does anything bound
+  the blocking pool: enough abandoned reads in one session and there are no
+  slots left for the ones that would answer.
 - Whether `writes` should also bound `run_command`: a child can write whatever
   the task's roots allow, and a plan's `commands` list says nothing about paths.
   Narrower than it was — the child is held to the *task's* roots now — but a

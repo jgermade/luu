@@ -160,6 +160,17 @@ impl WireSandbox {
 pub trait Executor: Send + Sync {
     fn call<'a>(&'a self, call: &'a ToolCall, sandbox: &'a Sandbox) -> ToolFuture<'a>;
 
+    /// The loop gave up on a call and dropped it. Deal with what is left.
+    ///
+    /// Dropping the future is what abandons the work; this is the part dropping
+    /// cannot do — a worker process is still holding the other end of a pipe
+    /// with a half-finished exchange on it, and the only sound thing to do with
+    /// it is end it. In this process there is nothing to end, which is why the
+    /// default does nothing rather than every executor having to say so.
+    fn abandon(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+
     /// What a session says about where its tools run. `None` for the in-process
     /// executor: there is nothing to say that the rest of `luu tools` does not
     /// already say.
@@ -208,10 +219,22 @@ pub struct Worker {
     /// [`WireSandbox::of`].
     image_paths: Vec<PathRule>,
     hello: Hello,
+    /// How this one was started, kept because a worker that had to be killed is
+    /// replaced by starting it again. Nothing else needs it: a worker holds no
+    /// state between calls, which is what makes a restart sound rather than a
+    /// recovery.
+    spec: WorkerSpec,
+    /// What the policy allows, as the handshake asks it. Kept for the same
+    /// reason as the spec.
+    commands: Vec<String>,
+    /// How many times this session has had to replace its worker. Counted
+    /// because a silent restart is indistinguishable from a slow command, and
+    /// those two have different fixes.
+    restarts: std::sync::atomic::AtomicU32,
     /// One call at a time. The agent loop is sequential and this makes that a
     /// fact rather than an assumption — two interleaved calls on one pipe would
     /// pair the wrong outcome with the wrong call.
-    pipe: Mutex<Pipe>,
+    pipe: Mutex<Option<Pipe>>,
 }
 
 impl std::fmt::Debug for Worker {
@@ -240,8 +263,26 @@ impl Worker {
     /// the whole value of the answer is having it *before* a model finds the
     /// gap.
     pub async fn start(spec: &WorkerSpec, commands: &[String]) -> Result<Self, WorkerError> {
-        let argv = spec.argv(commands)?;
         let label = spec.label();
+        let (pipe, hello) = Self::open(spec, commands).await?;
+
+        Ok(Self {
+            label,
+            image_paths: spec.paths.clone(),
+            hello,
+            spec: spec.clone(),
+            commands: commands.to_vec(),
+            restarts: std::sync::atomic::AtomicU32::new(0),
+            pipe: Mutex::new(Some(pipe)),
+        })
+    }
+
+    /// Spawns one worker and completes its handshake. The whole of what
+    /// [`Worker::start`] does before it has a `Worker`, and the whole of what a
+    /// restart repeats — the same three checks, so a worker started an hour into
+    /// a session is held to what the one at the start was.
+    async fn open(spec: &WorkerSpec, commands: &[String]) -> Result<(Pipe, Hello), WorkerError> {
+        let argv = spec.argv(commands)?;
 
         let mut command = tokio::process::Command::new(&argv[0]);
         command
@@ -278,13 +319,33 @@ impl Worker {
                 theirs: hello.protocol,
             });
         }
+        Ok((pipe, hello))
+    }
 
-        Ok(Self {
-            label,
-            image_paths: spec.paths.clone(),
-            hello,
-            pipe: Mutex::new(pipe),
-        })
+    /// One call that did not happen, said in the worker's own name.
+    ///
+    /// A failed call rather than a panic: the turn is allowed to see this and
+    /// carry on, which is the same courtesy a denial gets.
+    fn gave_up(&self, reason: impl std::fmt::Display) -> ToolOutcome {
+        let said = format!("{}: {reason}", self.label);
+        ToolOutcome::failed(Verdict::deny(said.clone()), said)
+    }
+
+    /// How many workers this session has had to replace.
+    ///
+    /// Zero on a healthy session, and the number that says *your image is
+    /// broken* rather than *your command was slow* — which is the difference
+    /// nobody could see while a restart was silent.
+    pub fn restarts(&self) -> u32 {
+        self.restarts.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Ends the current worker, if there is one, and leaves the next call to
+    /// start another. What [`Executor::abandon`] does here.
+    async fn replace(&self) {
+        if let Some(mut pipe) = self.pipe.lock().await.take() {
+            pipe.kill().await;
+        }
     }
 
     pub fn hello(&self) -> &Hello {
@@ -303,10 +364,36 @@ impl Executor for Worker {
                 call: call.clone(),
                 sandbox: WireSandbox::of(sandbox, &self.image_paths),
             };
-            let mut pipe = self.pipe.lock().await;
-            // A worker that died is reported as a failed call and not as a
-            // panic: it is one tool call that did not happen, and the turn is
-            // allowed to say so and carry on.
+            let mut slot = self.pipe.lock().await;
+            // A worker that is gone — killed for being stuck, or exited on its
+            // own — is replaced here rather than at the moment it died. It holds
+            // no state between calls, so the new one is not a recovery: it is
+            // the same worker, started again.
+            if slot.is_none() {
+                // The restart is inside the call, so it is inside the loop's
+                // deadline: a runtime that hangs while creating a container is
+                // one more thing the one clock above already covers, which is
+                // the argument for having put it there.
+                match Worker::open(&self.spec, &self.commands).await {
+                    Ok((pipe, _)) => {
+                        *slot = Some(pipe);
+                        self.restarts
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Err(error) => {
+                        return self.gave_up(format!("could not be restarted: {error}"));
+                    }
+                }
+            }
+            let pipe = slot.as_mut().expect("a pipe was just put back");
+
+            // No clock here: the loop above holds the one deadline over every
+            // tool call, because it is the only thing above *both* places a
+            // tool can run. What this side owns is the corpse — see
+            // [`Executor::abandon`]. Being dropped mid-exchange is why the pipe
+            // must never be reused afterwards: the answer may still arrive, and
+            // the next call would be paired with this call's outcome, two
+            // well-formed lines and nothing to say they were swapped.
             match pipe.round_trip(&request).await {
                 Ok(Response::Outcome(outcome)) => *outcome,
                 Ok(Response::Error { message }) => ToolOutcome::failed(
@@ -317,12 +404,20 @@ impl Executor for Worker {
                     Verdict::deny("the worker greeted twice"),
                     "the worker greeted twice",
                 ),
-                Err(error) => ToolOutcome::failed(
-                    Verdict::deny(format!("{}: {error}", self.label)),
-                    format!("{}: {error}", self.label),
-                ),
+                Err(error) => {
+                    // A broken pipe is a dead worker, and until now it stayed
+                    // dead for the rest of the session: every later call in the
+                    // turn failed on the same corpse. It is dropped here so the
+                    // next call starts one.
+                    *slot = None;
+                    self.gave_up(error)
+                }
             }
         })
+    }
+
+    fn abandon(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(self.replace())
     }
 
     fn describe(&self) -> Option<String> {
@@ -330,6 +425,15 @@ impl Executor for Worker {
             "  worker     {} — luu {}, protocol {}\n",
             self.label, self.hello.version, self.hello.protocol,
         );
+        // Zero on a healthy session, and worth printing anyway: a session that
+        // has replaced its worker four times is a broken image wearing the
+        // costume of a slow one.
+        if self.restarts() > 0 {
+            text.push_str(&format!(
+                "  restarts   {}   (workers this session had to replace)\n",
+                self.restarts(),
+            ));
+        }
         if !self.hello.commands.is_empty() {
             text.push_str(&format!(
                 "  on PATH    {}\n",
@@ -382,6 +486,16 @@ impl Pipe {
                 .map_err(|error| format!("unreadable answer ({error}): {}", line.trim())),
             Err(error) => Err(error.to_string()),
         }
+    }
+
+    /// Ends the worker, for a worker that will not end itself.
+    ///
+    /// `kill_on_drop` would do it eventually, and "eventually" is not a property
+    /// worth having where the thing being ended is a container: the wait is what
+    /// makes the next line in the log true.
+    async fn kill(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
     }
 
     /// Why the pipe closed, in the words of the thing that closed it. A worker

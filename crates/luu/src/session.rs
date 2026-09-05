@@ -57,7 +57,12 @@ The work:
 pub struct Agency {
     pub tools: Arc<Tools>,
     pub sandbox: Arc<Sandbox>,
-    pub max_steps: u32,
+    /// What bounds a turn: how many tool calls, and how long any one of them
+    /// may take. The timeout is the *loop's*, so it holds under
+    /// `runtime = "host"` as much as behind a container — which is the whole
+    /// point of it living up here. See
+    /// `RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`.
+    pub limits: agent_core::agent::Limits,
     /// Where a tool call actually runs, when that is not this process.
     ///
     /// `None` is `runtime = "host"`, which is every run this repository has
@@ -126,6 +131,13 @@ impl Agency {
                 .limits()
                 .describe()
                 .unwrap_or_else(|| "(none: the clock alone)".to_string()),
+        ));
+        // The loop's clock, printed whether or not there is a worker: under
+        // `runtime = "host"` there is nothing else that would mention it, and
+        // that is exactly the mode where it used to be missing.
+        text.push_str(&format!(
+            "  deadline   {} ms per tool call, plus whatever the call asked for\n",
+            self.limits.tool_timeout.as_millis(),
         ));
         if let Some(worker) = self.worker.as_ref().and_then(|worker| worker.describe()) {
             text.push_str(&worker);

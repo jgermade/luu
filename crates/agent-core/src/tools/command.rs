@@ -22,7 +22,41 @@ use super::{CommandResult, Tool, ToolFuture, ToolOutcome, clamp};
 
 /// Long enough for a test run, short enough that a hung command does not hold a
 /// session open forever. A default, not a law — `timeout_ms` overrides it.
-const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// The longest `timeout_ms` may ask for, because it is **the model's number**.
+///
+/// Everything else a tool call carries is checked against the sandbox before it
+/// runs; this one was checked against nothing, so `timeout_ms: 36000000` was a
+/// ten-hour hang the gate never saw — the gate approves commands, and this is an
+/// argument. Ten minutes is measured against the longest thing this repository
+/// actually runs (`cargo test --workspace` on the slowest box in
+/// `ROADMAP/*/machines.md`), and it is clamped rather than refused so that the
+/// command still runs and the verdict still says who did the killing.
+///
+/// See `RECORD/2026-09-05.a-clock-at-the-seam.completed.md`.
+pub const MAX_TIMEOUT_MS: u64 = 600_000;
+
+/// What the far side was told this call may take, in the host's own words.
+///
+/// The seam derives its deadline from this rather than from a second knob: it is
+/// the same number, read from the same request, so the seam cannot fire before
+/// the tool's own clock has had its chance. A tool with no clock answers zero,
+/// which is the honest answer — `read_file` has no timeout to inherit.
+pub fn clock_of(call: &crate::tools::ToolCall) -> Duration {
+    match call.name.as_str() {
+        "run_command" => requested_timeout(&call.arguments),
+        _ => Duration::ZERO,
+    }
+}
+
+fn requested_timeout(arguments: &serde_json::Value) -> Duration {
+    let asked = arguments
+        .get("timeout_ms")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(DEFAULT_TIMEOUT_MS);
+    Duration::from_millis(asked.min(MAX_TIMEOUT_MS))
+}
 
 pub struct RunCommand;
 
@@ -42,7 +76,7 @@ impl Tool for RunCommand {
                 "command": {"type": "string", "description": "Program name, which must be in the sandbox's allowed commands."},
                 "args": {"type": "array", "items": {"type": "string"}},
                 "cwd": {"type": "string", "description": "Working directory. Default: the project root."},
-                "timeout_ms": {"type": "integer", "description": "Default 30000."},
+                "timeout_ms": {"type": "integer", "description": "Default 30000, capped at 600000."},
             },
             "required": ["command"],
         })
@@ -121,12 +155,7 @@ impl Tool for RunCommand {
             }
             restrictions.install(&mut command);
 
-            let timeout = Duration::from_millis(
-                arguments
-                    .get("timeout_ms")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(DEFAULT_TIMEOUT_MS),
-            );
+            let timeout = requested_timeout(arguments);
 
             let mut command = tokio::process::Command::from(command);
             command.kill_on_drop(true);
@@ -384,6 +413,46 @@ mod tests {
         assert!(error.contains("SIGXCPU"), "{error}");
         assert!(error.contains("cpu-seconds limit"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_models_timeout_is_clamped_rather_than_believed() {
+        // Everything else in a call is checked against the sandbox before it
+        // runs. This one was checked against nothing, so `timeout_ms` was a
+        // ten-hour hang the gate never saw — the gate approves commands, and
+        // this is an argument.
+        assert_eq!(
+            requested_timeout(&json!({"timeout_ms": 36_000_000u64})),
+            Duration::from_millis(MAX_TIMEOUT_MS),
+        );
+        assert_eq!(
+            requested_timeout(&json!({})),
+            Duration::from_millis(DEFAULT_TIMEOUT_MS),
+            "a call that asks for nothing gets the default, as it always did",
+        );
+        assert_eq!(
+            requested_timeout(&json!({"timeout_ms": 200})),
+            Duration::from_millis(200)
+        );
+    }
+
+    #[test]
+    fn only_the_tool_with_a_clock_of_its_own_answers_with_one() {
+        // What the seam reads to build its deadline. `read_file` has no timeout
+        // to inherit, and zero is the honest answer rather than a borrowed
+        // default.
+        use crate::tools::ToolCall;
+        let clock = |name: &str, arguments| {
+            clock_of(&ToolCall {
+                name: name.to_string(),
+                arguments,
+            })
+        };
+        assert_eq!(clock("read_file", json!({"path": "x"})), Duration::ZERO);
+        assert_eq!(
+            clock("run_command", json!({"command": "ls"})),
+            Duration::from_millis(DEFAULT_TIMEOUT_MS),
+        );
     }
 
     #[tokio::test]

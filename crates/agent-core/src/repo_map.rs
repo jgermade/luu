@@ -137,6 +137,46 @@ pub struct RankedFile {
     pub in_map: bool,
 }
 
+/// One file, as one pass over it leaves it.
+///
+/// Two readers, one parse: the map renders `outline` and ranks `tags`, and
+/// [`crate::select`] scores all four. A selector that walked the tree itself
+/// would be a second parse of the same bytes with a second chance to disagree
+/// about what is in them.
+#[derive(Debug, Clone)]
+pub struct Walked {
+    pub outline: FileOutline,
+    pub tags: FileTags,
+    /// The leading `//!` block — what the file says it is for.
+    pub doc: String,
+    /// How many lines it has, so the last definition has an end.
+    pub lines: usize,
+}
+
+impl Walked {
+    /// The same file as the selector's input.
+    pub fn candidate(&self) -> crate::select::Candidate {
+        crate::select::Candidate {
+            path: self.outline.path.clone(),
+            entries: self.outline.entries.clone(),
+            tags: self.tags.clone(),
+            doc: self.doc.clone(),
+            lines: self.lines,
+        }
+    }
+}
+
+/// Every readable `.rs` file under the sandbox's roots, parsed once.
+///
+/// The map and the selector both start here, and both are handed the same list
+/// in the same order.
+pub fn walk_sources(sandbox: &Sandbox) -> Vec<Walked> {
+    sources(sandbox)
+        .iter()
+        .filter_map(|path| read_tags(sandbox, path))
+        .collect()
+}
+
 /// The map, built once and rendered as one block.
 #[derive(Debug, Clone)]
 pub struct RepoMap {
@@ -192,16 +232,12 @@ impl RepoMap {
             return map;
         }
 
-        let paths = sources(sandbox);
         // Every file the walk could read and parse, whether or not it holds a
         // definition. A file that defines nothing still *references* things,
         // and those references are evidence about somebody else — dropping it
         // here would be dropping an edge, not a node.
-        let read: Vec<(FileOutline, FileTags)> = paths
-            .iter()
-            .filter_map(|path| read_tags(sandbox, path))
-            .collect();
-        let tags: Vec<FileTags> = read.iter().map(|(_, tags)| tags.clone()).collect();
+        let read = walk_sources(sandbox);
+        let tags: Vec<FileTags> = read.iter().map(|file| file.tags.clone()).collect();
 
         // The order, and it is decided before a single token is counted: the
         // budget says how much of it fits, never what it is. That separation is
@@ -219,10 +255,10 @@ impl RepoMap {
         .into_iter()
         // A file with no definitions is a node in the graph and never a
         // line in the map: there is nothing to outline.
-        .filter(|ranked| !read[ranked.file].0.entries.is_empty())
+        .filter(|ranked| !read[ranked.file].outline.entries.is_empty())
         .collect();
         if order == Order::Path {
-            scored.sort_by(|a, b| read[a.file].0.path.cmp(&read[b.file].0.path));
+            scored.sort_by(|a, b| read[a.file].outline.path.cmp(&read[b.file].outline.path));
         }
         let order = scored;
 
@@ -232,7 +268,7 @@ impl RepoMap {
         let mut spent = counter.count(&header(order.len()));
         let mut left_out = false;
         for ranked in &order {
-            let outline = &read[ranked.file].0;
+            let outline = &read[ranked.file].outline;
             let cost = counter.count(&outline.render());
             // Whole files: half an outline is a list of methods whose type has
             // gone, which reads as a different file.
@@ -258,7 +294,7 @@ impl RepoMap {
                 referrers: ranked
                     .referrers
                     .iter()
-                    .map(|(from, weight)| (read[*from].0.path.clone(), *weight))
+                    .map(|(from, weight)| (read[*from].outline.path.clone(), *weight))
                     .collect(),
                 in_map: fitted,
             });
@@ -371,23 +407,40 @@ fn walk(dir: &Path, found: &mut Vec<PathBuf>, seen: &mut usize) {
 
 /// Reads one file through the sandbox and tags it. `None` when the sandbox
 /// refuses it or when it cannot be read.
-fn read_tags(sandbox: &Sandbox, path: &Path) -> Option<(FileOutline, FileTags)> {
+fn read_tags(sandbox: &Sandbox, path: &Path) -> Option<Walked> {
     let check = sandbox.check_path(path, Access::Read);
     if !check.verdict.allowed {
         return None;
     }
     let source = std::fs::read_to_string(&check.path).ok()?;
     let tags = tags(&source);
-    Some((
-        FileOutline {
+    Some(Walked {
+        outline: FileOutline {
             path: display_path(sandbox, path),
             entries: tags.entries,
         },
-        FileTags {
+        tags: FileTags {
             defines: tags.defines,
             references: tags.references,
         },
-    ))
+        doc: module_doc(&source),
+        lines: source.lines().count(),
+    })
+}
+
+/// The file's leading `//!` block: what it says it is for, before it says
+/// anything else.
+///
+/// Stops at the first line that is not one, so a doc comment is what it is and
+/// not "the top of the file" — a `use` block is not a description of anything.
+fn module_doc(source: &str) -> String {
+    source
+        .lines()
+        .skip_while(|line| line.trim().is_empty())
+        .take_while(|line| line.trim_start().starts_with("//!"))
+        .map(|line| line.trim_start().trim_start_matches("//!").trim())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Relative to the base when it is under it: an absolute path is noise in a

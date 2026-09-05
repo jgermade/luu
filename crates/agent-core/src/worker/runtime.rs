@@ -12,6 +12,7 @@
 //! cannot express it.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -162,6 +163,10 @@ pub struct WorkerSpec {
     /// Trees that exist only inside the image, from `[[worker.paths]]`. Never
     /// resolved on this side; added to every sandbox that crosses the pipe.
     pub paths: Vec<PathRule>,
+    /// How long the seam waits for a call that has **no clock of its own**,
+    /// before the worker is treated as stuck and killed. See
+    /// [`WorkerSpec::patience`].
+    pub timeout_ms: u64,
     /// The uid and gid the worker runs as, for the runtimes that take them.
     ///
     /// Not cosmetic. The base is bind-mounted, so a worker running as root
@@ -181,8 +186,25 @@ impl WorkerSpec {
             network: false,
             binary: None,
             paths: Vec::new(),
+            timeout_ms: DEFAULT_TIMEOUT_MS,
             user: current_user(),
         }
+    }
+
+    /// What the seam adds to a call's own clock before it gives up on it.
+    ///
+    /// One number for "a tool with no clock of its own", answered once: a
+    /// `read_file` gets this and nothing else, and a `run_command` gets this on
+    /// top of the `timeout_ms` it asked for — so the seam cannot fire before the
+    /// tool's own timeout has had its chance. See
+    /// `RECORD/2026-09-05.a-clock-at-the-seam.completed.md`.
+    pub fn patience(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms)
+    }
+
+    pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
     }
 
     pub fn with_image(mut self, image: Option<String>) -> Self {
@@ -504,7 +526,7 @@ mod tests {
 /// side of the pipe resolves it — which is the property the whole seam rests
 /// on — so folding this into `[sandbox]` would have made the two look like one
 /// decision.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct WorkerConfig {
     /// `host` by default: no worker, and the run every one of this
@@ -530,6 +552,33 @@ pub struct WorkerConfig {
     /// what they say to every tool, on the far side only.
     #[serde(default)]
     pub paths: Vec<PathRule>,
+    /// `[worker] timeout-ms`: how long the seam waits for a call that has no
+    /// clock of its own. Default 30 000 — deliberately the same number
+    /// `run_command` defaults to, because it is an answer to the same question.
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+/// The seam's patience, and `run_command`'s default, are one number: "how long
+/// may a thing with no clock take before it is stuck".
+pub const DEFAULT_TIMEOUT_MS: u64 = crate::tools::command::DEFAULT_TIMEOUT_MS;
+
+fn default_timeout_ms() -> u64 {
+    DEFAULT_TIMEOUT_MS
+}
+
+/// Derived `Default` would put a **zero** in `timeout_ms`, which is a seam that
+/// kills every worker on its first call. The one field that cannot take the
+/// language's default is the reason this is written out.
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            runtime: Runtime::default(),
+            image: None,
+            paths: Vec::new(),
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+        }
+    }
 }
 
 /// The file `luu.toml` is, read for its `[worker]` block. The `[sandbox]` half
@@ -580,6 +629,25 @@ mod config_tests {
                 .unwrap();
         assert_eq!(config.runtime, Runtime::Docker);
         assert_eq!(config.image.as_deref(), Some("luu-worker:dev"));
+    }
+
+    #[test]
+    fn a_worker_block_from_before_the_seam_had_a_clock_gets_the_default_one() {
+        // The field's absence must not read as zero: a zero patience is a seam
+        // that kills every worker on its first call, which is worse than the
+        // hang it replaced.
+        let config = WorkerConfig::from_toml("[worker]\nruntime = \"direct\"\n").unwrap();
+        assert_eq!(config.timeout_ms, DEFAULT_TIMEOUT_MS);
+        assert_eq!(
+            WorkerConfig::from_toml("[worker]\ntimeout-ms = 90000\n")
+                .unwrap()
+                .timeout_ms,
+            90_000,
+        );
+        assert_eq!(
+            WorkerSpec::new(Runtime::Direct, "/tmp").patience(),
+            Duration::from_millis(DEFAULT_TIMEOUT_MS),
+        );
     }
 
     #[test]

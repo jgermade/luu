@@ -264,3 +264,95 @@ async fn a_plans_network_narrowing_crosses_the_seam() {
         "resolved sandbox on far side has network disabled"
     );
 }
+
+/// A worker that greets, then hangs on the first call and answers every one
+/// after it — the third failure mode, which no real `luu worker` can be asked
+/// to perform on demand.
+///
+/// Under `Runtime::Direct` the "binary" is whatever the spec names, so a shell
+/// script is a worker as far as the seam is concerned. That is the point of the
+/// mode: the seam is exercised without a container, and here without even a
+/// `luu` on the far side.
+#[cfg(unix)]
+fn stuck_once(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = root.join("stuck-worker.sh");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' '{{"kind":"hello","protocol":{PROTOCOL},"version":"stuck","commands":[]}}'
+while IFS= read -r line; do
+  if [ ! -f "{root}/wedged" ]; then
+    : > "{root}/wedged"
+    sleep 60
+  fi
+  printf '%s\n' '{{"kind":"error","message":"a second worker answered"}}'
+done
+"#,
+            root = root.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_worker_that_is_alive_and_stuck_is_abandoned_and_replaced() {
+    // The clock is the agent loop's, not the seam's
+    // (`RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`): the
+    // loop is the only thing above *both* places a tool can run, so it holds
+    // one deadline and tells the executor what to do with what it dropped.
+    // This test is that loop, in three lines, against a worker that greets and
+    // then never answers.
+    let fixture = Fixture::new("stuck");
+    let worker = Worker::start(
+        &spec(&fixture.root).with_binary(Some(stuck_once(&fixture.root))),
+        &[],
+    )
+    .await
+    .expect("the worker greeted");
+
+    let sandbox = fixture.sandbox(&[]);
+    let read = call("read_file", serde_json::json!({"path": "src/main.rs"}));
+
+    let gave_up = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        worker.call(&read, &sandbox),
+    )
+    .await;
+    assert!(gave_up.is_err(), "a stuck worker does not answer");
+    assert_eq!(worker.restarts(), 0, "nothing has been replaced yet");
+
+    // What dropping the future cannot do: the child is still there, holding
+    // half an exchange on a pipe that must never be reused.
+    worker.abandon().await;
+
+    // A worker holds no state between calls — every request carries its own
+    // WireSandbox — so the replacement is not a recovery. It is the same
+    // worker, started again, and the session's remaining calls are not owed to
+    // a corpse.
+    let second = worker.call(&read, &sandbox).await;
+    assert!(
+        second
+            .error
+            .unwrap_or_default()
+            .contains("a second worker answered"),
+        "the second call reached a worker the first one did not have",
+    );
+    assert_eq!(
+        worker.restarts(),
+        1,
+        "and it is counted: a silent restart reads exactly like a slow command",
+    );
+    assert!(
+        worker
+            .describe()
+            .expect("a worker says where it is")
+            .contains("restarts   1"),
+        "a number nobody can read is one nobody can act on",
+    );
+}

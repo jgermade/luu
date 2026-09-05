@@ -15,6 +15,7 @@ pub mod rank;
 pub mod record;
 pub mod repo_map;
 pub mod sandbox;
+pub mod select;
 pub use job as task; // Temporary alias for smooth migration
 pub mod tools;
 pub mod trace;

@@ -27,6 +27,7 @@ use crate::job::JobId;
 
 use serde::{Deserialize, Serialize};
 
+pub mod beneath;
 pub mod policy;
 pub mod proxy;
 
@@ -99,6 +100,18 @@ impl Verdict {
             rule: rule.into(),
             enforced_by,
         }
+    }
+
+    /// The same verdict, said again once the open has happened and something
+    /// better than our own check turned out to be holding it.
+    ///
+    /// A verdict is written *before* the call it describes, so who enforced it
+    /// is a guess until the call is made. On Linux the guess is upgraded here
+    /// from `in-process check` to the syscall that actually refused to leave
+    /// the tree.
+    pub fn held_by(mut self, enforced_by: Applied) -> Self {
+        self.enforced_by = enforced_by;
+        self
     }
 
     pub fn deny(rule: impl Into<String>) -> Self {
@@ -198,6 +211,36 @@ pub struct Sandbox {
 pub struct PathCheck {
     pub verdict: Verdict,
     pub path: PathBuf,
+    /// The granted tree that answered, when one did.
+    ///
+    /// It was always known — [`Sandbox::root_for`] picked it — and was thrown
+    /// away. [`Sandbox::open_beneath`] needs it, because the kernel's answer to
+    /// *is this path inside the sandbox* is spelled "resolve it relative to this
+    /// directory and refuse to leave".
+    pub root: Option<PathBuf>,
+}
+
+impl PathCheck {
+    /// The root that granted this path, and the path relative to it — which is
+    /// what `openat2` resolves.
+    ///
+    /// Owned rather than borrowed, because the open happens on a blocking
+    /// thread (`RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`)
+    /// and a borrow cannot go there.
+    pub fn beneath(&self) -> Option<(PathBuf, PathBuf)> {
+        let root = self.root.clone()?;
+        let relative = self
+            .path
+            .strip_prefix(&root)
+            .unwrap_or(&self.path)
+            .to_path_buf();
+        // The root asked for by its own name resolves to itself.
+        let relative = match relative.as_os_str().is_empty() {
+            true => PathBuf::from("."),
+            false => relative,
+        };
+        Some((root, relative))
+    }
 }
 
 impl Sandbox {
@@ -407,7 +450,11 @@ impl Sandbox {
 
     fn check(&self, path: &Path, needed: Access, implicit: bool) -> PathCheck {
         let resolved = resolve(&self.base, path);
-        let verdict = match self.root_for(&resolved, implicit) {
+        let matched = self.root_for(&resolved, implicit);
+        let root = matched
+            .filter(|root| root.access >= needed)
+            .map(|root| root.path.clone());
+        let verdict = match matched {
             Some(root) if root.access >= needed => {
                 Verdict::allow(root.to_string(), Applied::Process)
             }
@@ -425,7 +472,37 @@ impl Sandbox {
         PathCheck {
             verdict,
             path: resolved,
+            root,
         }
+    }
+
+    /// Opens a checked path in a way the kernel keeps inside the tree that
+    /// granted it.
+    ///
+    /// The check above answers *may this be opened*; this answers it again,
+    /// atomically with the open, because between the two the path is a string
+    /// and a string is not a file. On Linux that is `openat2(RESOLVE_BENEATH)`
+    /// and the verdict it returns says the kernel held it; everywhere else it
+    /// is the same open by path it always was, and the verdict says that
+    /// instead. See `RECORD/2026-09-05.beneath-the-root.completed.md`.
+    ///
+    /// `Err` is an ordinary failed call — a missing file, or the resolution
+    /// rules refusing, which [`beneath::is_escape`] tells apart so a denial does
+    /// not reach a model dressed as a typo.
+    pub fn open_beneath(
+        &self,
+        check: &PathCheck,
+        mode: beneath::Mode,
+    ) -> std::io::Result<beneath::Opened> {
+        let Some((root, relative)) = check.beneath() else {
+            // Nothing granted it, so there is nothing to resolve beneath. A
+            // caller that reaches here skipped the verdict, which is a bug
+            // rather than a denial to report.
+            return Err(std::io::Error::other(
+                "open_beneath on a path no rule granted",
+            ));
+        };
+        beneath::open(&root, &relative, mode)
     }
 
     /// The most specific rule covering a resolved path, if any. `roots` is

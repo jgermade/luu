@@ -1614,7 +1614,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             request,
             app.agency.executor(),
             sandbox.as_ref(),
-            app.agency.max_steps,
+            app.agency.limits,
             tx,
             cancel_rx,
         )
@@ -1992,7 +1992,7 @@ mod tests {
             sandbox: Arc::new(
                 agent_core::sandbox::Sandbox::new(&SandboxPolicy::default(), &base).unwrap(),
             ),
-            max_steps: 4,
+            limits: agent_core::agent::Limits::default().with_max_steps(4),
             worker: None,
         };
         Arc::new(App {
