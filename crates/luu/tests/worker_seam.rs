@@ -264,3 +264,137 @@ async fn a_plans_network_narrowing_crosses_the_seam() {
         "resolved sandbox on far side has network disabled"
     );
 }
+
+/// A worker that greets, then hangs on the first call and answers every one
+/// after it — the third failure mode, which no real `luu worker` can be asked
+/// to perform on demand.
+///
+/// Under `Runtime::Direct` the "binary" is whatever the spec names, so a shell
+/// script is a worker as far as the seam is concerned. That is the point of the
+/// mode: the seam is exercised without a container, and here without even a
+/// `luu` on the far side.
+#[cfg(unix)]
+fn stuck_once(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = root.join("stuck-worker.sh");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' '{{"kind":"hello","protocol":{PROTOCOL},"version":"stuck","commands":[]}}'
+while IFS= read -r line; do
+  if [ ! -f "{root}/wedged" ]; then
+    : > "{root}/wedged"
+    sleep 60
+  fi
+  printf '%s\n' '{{"kind":"error","message":"a second worker answered"}}'
+done
+"#,
+            root = root.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_worker_that_is_alive_and_stuck_is_killed_rather_than_waited_on() {
+    // The hole `RECORD/2026-09-05.a-clock-at-the-seam.completed.md` closes. A
+    // worker that dies mid-call surfaces as EOF and always did; a worker that is
+    // alive and never answers used to hang the turn, the job and the session,
+    // with nothing in any of them saying why.
+    let fixture = Fixture::new("stuck");
+    let worker = Worker::start(
+        &spec(&fixture.root)
+            .with_binary(Some(stuck_once(&fixture.root)))
+            .with_timeout_ms(300),
+        &[],
+    )
+    .await
+    .expect("the worker greeted");
+
+    let sandbox = fixture.sandbox(&[]);
+    let outcome = worker
+        .call(
+            &call("read_file", serde_json::json!({"path": "src/main.rs"})),
+            &sandbox,
+        )
+        .await;
+
+    assert!(
+        !outcome.verdict.allowed,
+        "a call nobody answered is not an allowed one"
+    );
+    let said = outcome.error.unwrap_or_default();
+    assert!(said.contains("no answer to `read_file`"), "{said}");
+    assert!(said.contains("300 ms"), "the deadline is named: {said}");
+    assert!(said.contains("killed"), "{said}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_call_after_a_killed_worker_starts_another_one() {
+    // A worker holds no state between calls — every request carries its own
+    // WireSandbox — so the replacement is not a recovery. It is the same worker,
+    // started again, and the session's remaining calls are not owed to a corpse.
+    let fixture = Fixture::new("restart");
+    let worker = Worker::start(
+        &spec(&fixture.root)
+            .with_binary(Some(stuck_once(&fixture.root)))
+            .with_timeout_ms(300),
+        &[],
+    )
+    .await
+    .expect("the worker greeted");
+
+    let sandbox = fixture.sandbox(&[]);
+    let read = call("read_file", serde_json::json!({"path": "src/main.rs"}));
+    let first = worker.call(&read, &sandbox).await;
+    assert!(first.error.unwrap_or_default().contains("killed"));
+
+    let second = worker.call(&read, &sandbox).await;
+    assert!(
+        second
+            .error
+            .unwrap_or_default()
+            .contains("a second worker answered"),
+        "the second call reached a worker that the first one did not have",
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_seam_never_fires_before_the_call_it_is_timing() {
+    // The property that makes the clock safe to turn on by default: a
+    // `run_command` that asked for five minutes is given five minutes *and* the
+    // patience, so the seam cannot kill a worker for a command still inside the
+    // budget the tool granted it. A tool with no clock of its own gets the
+    // patience alone.
+    let fixture = Fixture::new("deadline");
+    let worker = Worker::start(
+        &spec(&fixture.root)
+            .with_binary(Some(stuck_once(&fixture.root)))
+            .with_timeout_ms(200),
+        &["sleep".into()],
+    )
+    .await
+    .expect("the worker greeted");
+
+    let sandbox = fixture.sandbox(&["sleep"]);
+    let long = call(
+        "run_command",
+        serde_json::json!({"command": "sleep", "args": ["1"], "timeout_ms": 5_000}),
+    );
+    let started = std::time::Instant::now();
+    let outcome = worker.call(&long, &sandbox).await;
+    let waited = started.elapsed();
+
+    assert!(outcome.error.unwrap_or_default().contains("killed"));
+    assert!(
+        waited >= std::time::Duration::from_millis(5_000),
+        "the seam waited {waited:?}: it must add the call's own clock to its patience",
+    );
+}

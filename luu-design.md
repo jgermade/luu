@@ -512,6 +512,7 @@ Mac.
 [worker]
 runtime = "docker"          # host | direct | docker | podman | nerdctl | container
 image = "luu-worker:dev"
+timeout-ms = 30000          # the seam's patience for a call with no clock of its own
 
 [[worker.paths]]            # the image's toolchain, resolved only on its side
 path = "/usr/local/cargo"
@@ -562,6 +563,25 @@ access = "execute"
   Standard proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and lowercase)
   are injected into `run_command` subprocesses. See
   [`RECORD/2026-09-04.egress-through-the-host.completed.md`](RECORD/2026-09-04.egress-through-the-host.completed.md).
+- **The seam holds a clock, because a clock inside the thing being timed cannot
+  time it.** `run_command`'s own timeout covers its child and nothing else — not
+  a wedged tool, not the worker's loop, not the runtime between them — so a
+  worker that was *alive and stuck* used to hang the turn, the job and the
+  session with nothing anywhere saying why. The host's deadline for a call is
+  **the call's own clock plus `[worker] timeout-ms`** (default 30 000, the same
+  number `run_command` defaults to), where every tool without a timeout of its
+  own contributes zero: so the seam can never fire before the tool's own clock
+  has had its chance, which is what makes it safe to have on by default. When it
+  fires the worker is **killed** rather than merely abandoned — a late answer on
+  a reused pipe would pair the previous call's outcome with the next call's
+  request, two well-formed lines and nothing to say they were swapped — and the
+  next call starts a new one, which is sound only because a worker holds no state
+  between calls. The same replacement now covers a worker that exited, which
+  previously took the rest of the session's tools with it. And `timeout_ms` is
+  itself capped at ten minutes, because it is the *model's* number: everything
+  else in a call is checked against the sandbox, and this one was checked against
+  nothing. See
+  [`RECORD/2026-09-05.a-clock-at-the-seam.completed.md`](RECORD/2026-09-05.a-clock-at-the-seam.completed.md).
 - Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`.
 
 ## VSCode integration
@@ -960,10 +980,13 @@ the argument they were measured against is
 
 - Narrowing `enforcement` with the rest of the plan. `network` and `egress` are
   now per-job and filtered by host-side proxy; enforcement level remains session-wide.
-- **A tool call has no timeout at the seam.** `run_command` has its own clock
-  inside the worker, and a worker that dies mid-call surfaces as EOF — an error
-  rather than a hang. A worker that is alive and stuck is not covered, and the
-  honest place for that clock is the seam rather than each tool.
+- **Host mode has no seam, and therefore no clock.** The seam holds one now, and
+  `run_command`'s `timeout_ms` is capped at what a model may ask for — but under
+  `runtime = "host"` the tools run in this process, where a wedged `read_file`
+  still hangs the turn. The honest place for that one is the agent loop rather
+  than a seam that does not exist. Nothing counts worker restarts either, which
+  is the number that would say *your image is broken* rather than *your command
+  was slow*.
 - Whether `writes` should also bound `run_command`: a child can write whatever
   the task's roots allow, and a plan's `commands` list says nothing about paths.
   Narrower than it was — the child is held to the *task's* roots now — but a

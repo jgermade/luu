@@ -730,6 +730,13 @@ struct SandboxArgs {
     /// Where `luu` is, for `--worker direct`. Defaults to this binary.
     #[arg(long = "worker-binary", value_name = "PATH")]
     worker_binary: Option<std::path::PathBuf>,
+
+    /// How long the seam waits for a tool call that has no clock of its own
+    /// before it kills the worker and starts another. A `run_command` gets this
+    /// *plus* the `timeout_ms` it asked for, so the seam never fires first.
+    /// Overrides `[worker] timeout-ms`.
+    #[arg(long = "worker-timeout-ms", value_name = "MS")]
+    worker_timeout_ms: Option<u64>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -820,6 +827,9 @@ impl SandboxArgs {
         if self.worker_image.is_some() {
             worker_config.image = self.worker_image.clone();
         }
+        if let Some(timeout_ms) = self.worker_timeout_ms {
+            worker_config.timeout_ms = timeout_ms;
+        }
 
         let sandbox = Sandbox::new(&policy, &base)?;
         let worker = match worker_config.runtime.is_worker() {
@@ -835,7 +845,11 @@ impl SandboxArgs {
                     // The image's own trees, which the host must not try to
                     // resolve: `/usr/local/cargo` is the image's toolchain and
                     // is not a directory here.
-                    .with_paths(worker_config.paths.clone());
+                    .with_paths(worker_config.paths.clone())
+                    // The seam's clock: how long a call with no clock of its
+                    // own may take before the worker is treated as stuck. See
+                    // `RECORD/2026-09-05.a-clock-at-the-seam.completed.md`.
+                    .with_timeout_ms(worker_config.timeout_ms);
                 // What the runtime cannot express, said once, where a person
                 // reads it — rather than silently dropped from the argv. Before
                 // the start rather than after it, so a run that fails for an

@@ -22,6 +22,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -208,10 +209,21 @@ pub struct Worker {
     /// [`WireSandbox::of`].
     image_paths: Vec<PathRule>,
     hello: Hello,
+    /// How this one was started, kept because a worker that had to be killed is
+    /// replaced by starting it again. Nothing else needs it: a worker holds no
+    /// state between calls, which is what makes a restart sound rather than a
+    /// recovery.
+    spec: WorkerSpec,
+    /// What the policy allows, as the handshake asks it. Kept for the same
+    /// reason as the spec.
+    commands: Vec<String>,
+    /// How long a call with no clock of its own may take before the worker is
+    /// treated as stuck. See [`WorkerSpec::patience`].
+    patience: Duration,
     /// One call at a time. The agent loop is sequential and this makes that a
     /// fact rather than an assumption — two interleaved calls on one pipe would
     /// pair the wrong outcome with the wrong call.
-    pipe: Mutex<Pipe>,
+    pipe: Mutex<Option<Pipe>>,
 }
 
 impl std::fmt::Debug for Worker {
@@ -240,8 +252,26 @@ impl Worker {
     /// the whole value of the answer is having it *before* a model finds the
     /// gap.
     pub async fn start(spec: &WorkerSpec, commands: &[String]) -> Result<Self, WorkerError> {
-        let argv = spec.argv(commands)?;
         let label = spec.label();
+        let (pipe, hello) = Self::open(spec, commands).await?;
+
+        Ok(Self {
+            label,
+            image_paths: spec.paths.clone(),
+            hello,
+            spec: spec.clone(),
+            commands: commands.to_vec(),
+            patience: spec.patience(),
+            pipe: Mutex::new(Some(pipe)),
+        })
+    }
+
+    /// Spawns one worker and completes its handshake. The whole of what
+    /// [`Worker::start`] does before it has a `Worker`, and the whole of what a
+    /// restart repeats — the same three checks, so a worker started an hour into
+    /// a session is held to what the one at the start was.
+    async fn open(spec: &WorkerSpec, commands: &[String]) -> Result<(Pipe, Hello), WorkerError> {
+        let argv = spec.argv(commands)?;
 
         let mut command = tokio::process::Command::new(&argv[0]);
         command
@@ -278,13 +308,27 @@ impl Worker {
                 theirs: hello.protocol,
             });
         }
+        Ok((pipe, hello))
+    }
 
-        Ok(Self {
-            label,
-            image_paths: spec.paths.clone(),
-            hello,
-            pipe: Mutex::new(pipe),
-        })
+    /// One call that did not happen, said in the worker's own name.
+    ///
+    /// A failed call rather than a panic: the turn is allowed to see this and
+    /// carry on, which is the same courtesy a denial gets.
+    fn gave_up(&self, reason: impl std::fmt::Display) -> ToolOutcome {
+        let said = format!("{}: {reason}", self.label);
+        ToolOutcome::failed(Verdict::deny(said.clone()), said)
+    }
+
+    /// How long this call may take before the worker is stuck.
+    ///
+    /// **The tool's own clock plus the seam's patience**, never less: a seam
+    /// that fired before `run_command`'s timeout would kill the worker for a
+    /// command that was still inside the budget it was given, and the person
+    /// reading that verdict would learn the wrong thing about their command.
+    /// Every tool that has no clock answers zero and gets the patience alone.
+    fn deadline(&self, call: &ToolCall) -> Duration {
+        crate::tools::command::clock_of(call) + self.patience
     }
 
     pub fn hello(&self) -> &Hello {
@@ -303,11 +347,54 @@ impl Executor for Worker {
                 call: call.clone(),
                 sandbox: WireSandbox::of(sandbox, &self.image_paths),
             };
-            let mut pipe = self.pipe.lock().await;
-            // A worker that died is reported as a failed call and not as a
-            // panic: it is one tool call that did not happen, and the turn is
-            // allowed to say so and carry on.
-            match pipe.round_trip(&request).await {
+            let mut slot = self.pipe.lock().await;
+            // A worker that is gone — killed for being stuck, or exited on its
+            // own — is replaced here rather than at the moment it died. It holds
+            // no state between calls, so the new one is not a recovery: it is
+            // the same worker, started again.
+            if slot.is_none() {
+                // Bounded by the same patience, because a restart is on the
+                // call's path: a runtime that hangs while starting a container
+                // would otherwise reintroduce, one layer up, exactly the hang
+                // this clock exists to end. The session's *first* start is not
+                // bounded — there is a person watching a terminal, and a first
+                // `docker run` that pulls an image is legitimately slow.
+                match tokio::time::timeout(self.patience, Worker::open(&self.spec, &self.commands))
+                    .await
+                {
+                    Ok(Ok((pipe, _))) => *slot = Some(pipe),
+                    Ok(Err(error)) => {
+                        return self.gave_up(format!("could not be restarted: {error}"));
+                    }
+                    Err(_) => {
+                        return self.gave_up(format!(
+                            "did not restart in {} ms",
+                            self.patience.as_millis(),
+                        ));
+                    }
+                }
+            }
+            let pipe = slot.as_mut().expect("a pipe was just put back");
+
+            let deadline = self.deadline(call);
+            let answer = match tokio::time::timeout(deadline, pipe.round_trip(&request)).await {
+                Ok(answer) => answer,
+                Err(_) => {
+                    // The one failure mode that must not leave the pipe usable:
+                    // the answer may still arrive, and the next call would then
+                    // be paired with this call's outcome — two well-formed lines
+                    // and nothing to say they were swapped.
+                    if let Some(mut pipe) = slot.take() {
+                        pipe.kill().await;
+                    }
+                    return self.gave_up(format!(
+                        "no answer to `{}` in {} ms, so the worker was killed",
+                        call.name,
+                        deadline.as_millis(),
+                    ));
+                }
+            };
+            match answer {
                 Ok(Response::Outcome(outcome)) => *outcome,
                 Ok(Response::Error { message }) => ToolOutcome::failed(
                     Verdict::deny(format!("the worker refused: {message}")),
@@ -317,10 +404,14 @@ impl Executor for Worker {
                     Verdict::deny("the worker greeted twice"),
                     "the worker greeted twice",
                 ),
-                Err(error) => ToolOutcome::failed(
-                    Verdict::deny(format!("{}: {error}", self.label)),
-                    format!("{}: {error}", self.label),
-                ),
+                Err(error) => {
+                    // A broken pipe is a dead worker, and until now it stayed
+                    // dead for the rest of the session: every later call in the
+                    // turn failed on the same corpse. It is dropped here so the
+                    // next call starts one.
+                    *slot = None;
+                    self.gave_up(error)
+                }
             }
         })
     }
@@ -330,6 +421,13 @@ impl Executor for Worker {
             "  worker     {} — luu {}, protocol {}\n",
             self.label, self.hello.version, self.hello.protocol,
         );
+        // The seam's clock, said where the rest of the session's numbers are
+        // said. A deadline nobody can read is one nobody can argue with when it
+        // fires.
+        text.push_str(&format!(
+            "  patience   {} ms, plus whatever the call itself asked for\n",
+            self.patience.as_millis(),
+        ));
         if !self.hello.commands.is_empty() {
             text.push_str(&format!(
                 "  on PATH    {}\n",
@@ -382,6 +480,16 @@ impl Pipe {
                 .map_err(|error| format!("unreadable answer ({error}): {}", line.trim())),
             Err(error) => Err(error.to_string()),
         }
+    }
+
+    /// Ends the worker, for a worker that will not end itself.
+    ///
+    /// `kill_on_drop` would do it eventually, and "eventually" is not a property
+    /// worth having where the thing being ended is a container: the wait is what
+    /// makes the next line in the log true.
+    async fn kill(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
     }
 
     /// Why the pipe closed, in the words of the thing that closed it. A worker
