@@ -114,6 +114,43 @@ enum Command {
     /// the bytes is the same difference `luu tools` exists for — and it is the
     /// only place the walk's two rules (no dot-directories, no `target`) are
     /// visible rather than inferred from a number that looks wrong.
+    /// What one prompt points at: the fragments a turn would be given, and why.
+    ///
+    /// The map's counterpart, and the opposite kind of block — the map is the
+    /// same for every turn and is cached; a selection is this turn's alone. See
+    /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
+    Select {
+        /// The prompt to select against.
+        query: String,
+
+        #[command(flatten)]
+        sandbox: SandboxArgs,
+
+        /// Tokens to spend on fragments.
+        #[arg(long, default_value_t = 1024)]
+        select_tokens: u32,
+
+        /// Score a file by what its own module doc says, as well as by what it
+        /// defines. On: measured at 32 of 38 targets held against 19 without
+        /// it, on a tree that writes its `//!` blocks.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        select_docs: bool,
+
+        /// Also score a file for being one hop from a file that matched. Off,
+        /// and the reason is a measurement: the hop moves the right file out of
+        /// first place 5 times in 38 and holds no more targets.
+        #[arg(long)]
+        select_graph: bool,
+
+        /// The model's `tokenizer.json`. Without it the count is `chars/4`.
+        #[arg(long)]
+        tokenizer: Option<std::path::PathBuf>,
+
+        /// Print every file that scored and why, not only the ones that fitted.
+        #[arg(long)]
+        explain: bool,
+    },
+
     Map {
         #[command(flatten)]
         sandbox: SandboxArgs,
@@ -530,6 +567,26 @@ enum Command {
         /// Pack the token budget non-greedily.
         #[arg(long)]
         map_non_greedy: bool,
+
+        /// Tokens of *selected fragments* to fuse into each prompt — the
+        /// definitions this turn's own text points at, chosen by
+        /// `agent_core::select`. 0 is off, which is the default and for the
+        /// same reason the map's is: it changes every number in every recording
+        /// made before it. Unlike the map it is **not** part of the cached
+        /// prefix, so a run with it on is not comparable on prefix reuse to one
+        /// without. `luu select` prints what a budget resolves to.
+        #[arg(long, default_value_t = 0)]
+        select_tokens: u32,
+
+        /// Score a file by its own module doc as well as by what it defines.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        select_docs: bool,
+
+        /// Also score a file for being one hop from a file that matched. Off:
+        /// measured worse than without it. See
+        /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
+        #[arg(long)]
+        select_graph: bool,
     },
 }
 
@@ -541,6 +598,23 @@ fn order_of(rank: bool, in_degree: bool) -> Order {
         Order::Ranked
     } else {
         Order::Path
+    }
+}
+
+/// The selector's weights, from the two flags that switch a signal on or off.
+///
+/// Two flags and not five: the individual weights are numbers measured against
+/// the corpus and are not the command line's business, while *which signals are
+/// in play at all* is exactly what a person comparing two runs needs to say.
+fn weights_of(docs: bool, graph: bool) -> agent_core::select::Weights {
+    let weights = agent_core::select::Weights::default();
+    let weights = match docs {
+        true => weights,
+        false => weights.without_docs(),
+    };
+    match graph {
+        true => weights.with_graph(),
+        false => weights,
     }
 }
 
@@ -1197,6 +1271,34 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    if let Command::Select {
+        query,
+        sandbox,
+        select_tokens,
+        select_docs,
+        select_graph,
+        tokenizer,
+        explain,
+    } = &command
+    {
+        let agency = sandbox.resolve().await?;
+        let (counter, warning) = counter_for("the selection", tokenizer.as_deref())?;
+        if let Some(warning) = &warning {
+            eprintln!("warning: {warning}");
+        }
+        let walked = agent_core::repo_map::walk_sources(agency.sandbox.as_ref());
+        let selection = agent_core::select::select(
+            &walked,
+            agency.sandbox.as_ref(),
+            query,
+            *select_tokens,
+            counter.as_ref(),
+            &weights_of(*select_docs, *select_graph),
+        );
+        print!("{}", selection.render(*explain));
+        return Ok(());
+    }
+
     if let Command::Map {
         sandbox,
         map_tokens,
@@ -1457,6 +1559,9 @@ pub async fn run() -> Result<()> {
         map_rank,
         map_in_degree,
         map_non_greedy,
+        select_tokens,
+        select_docs,
+        select_graph,
     } = command
     else {
         unreachable!("serve and tools are handled above");
@@ -1556,6 +1661,14 @@ pub async fn run() -> Result<()> {
         .map(|spec| load_fragment(agency.sandbox.as_ref(), spec))
         .collect::<Result<_>>()?;
 
+    // One walk of the tree, reused by every turn. A selector that re-parsed the
+    // repository per turn would pay `luu map`'s cost on every prompt of a long
+    // session, and the tree does not change between two turns of one run.
+    let walked = match select_tokens > 0 {
+        true => Some(agent_core::repo_map::walk_sources(agency.sandbox.as_ref())),
+        false => None,
+    };
+
     // The live task's own sandbox, from `## task:` to `## close`. A script's
     // written plan is its approval, so it narrows exactly as a plan approved at
     // the gate does: what the task may touch is what the plan named.
@@ -1650,7 +1763,34 @@ pub async fn run() -> Result<()> {
         let job = context.live_job();
         // Taken, not copied: these fragments are this turn's, and the next turn
         // starts with none.
-        let code = std::mem::take(&mut attached);
+        let mut code = std::mem::take(&mut attached);
+        // And the ones nobody typed: what this turn's own text points at, on
+        // top of what was attached by hand. The person's `--fragment` goes
+        // first and keeps its whole budget — a selector that could crowd out an
+        // explicit ask would be answering a question it was not asked.
+        if let Some(walked) = &walked {
+            // The live job's sandbox when there is one: a selection is read
+            // through whatever the turn itself may read, so an approved plan
+            // narrows what can be chosen exactly as it narrows what can be
+            // opened.
+            let sandbox = narrowed.clone().unwrap_or_else(|| agency.sandbox.clone());
+            let selected = agent_core::select::select(
+                walked,
+                sandbox.as_ref(),
+                prompt,
+                select_tokens,
+                counter.as_ref(),
+                &weights_of(select_docs, select_graph),
+            );
+            // A selected path the sandbox refuses is a file that is not
+            // selected, not a failed run: nobody asked for it by name.
+            code.extend(
+                selected
+                    .specs()
+                    .iter()
+                    .filter_map(|spec| fragment::load(sandbox.as_ref(), spec).ok()),
+            );
+        }
         let selection = context.select(prompt, &code, budget, counter.as_ref());
 
         // Said out loud, not only into the recording: a run that quietly
