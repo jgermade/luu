@@ -84,6 +84,29 @@ impl Enforcement {
             Self::BestEffort => "best-effort",
         }
     }
+
+    /// The one that refuses more.
+    ///
+    /// The lattice in one function, because *narrower* means something
+    /// different here than it does for every other field of a policy. A path
+    /// or a command narrows by being **less**; this narrows by refusing more,
+    /// and the value that refuses more is `kernel` — it declines to run a child
+    /// the kernel cannot hold, where `best-effort` runs it and reports the gap.
+    ///
+    /// Nothing else in the tree should have to remember which way round that
+    /// is. See `RECORD/2026-09-05.enforcement-per-job.completed.md`.
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Kernel, _) | (_, Self::Kernel) => Self::Kernel,
+            _ => Self::BestEffort,
+        }
+    }
+
+    /// Whether moving from `self` to `other` would refuse *less* — which is
+    /// what a plan may not do to its session.
+    pub fn loosens_to(self, other: Self) -> bool {
+        self == Self::Kernel && other == Self::BestEffort
+    }
 }
 
 /// What a child may spend, beyond what it may reach.

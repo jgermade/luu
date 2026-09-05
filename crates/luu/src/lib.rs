@@ -1125,7 +1125,7 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             // The plan belongs to the job being opened and has to be the last
             // thing pushed: it is approved before its turns run, so it cannot
             // grow after one of them has.
-            "step" | "file" | "write" | "command" | "network" | "egress" => {
+            "step" | "file" | "write" | "command" | "network" | "egress" | "enforcement" => {
                 let Some(Step::OpenJob { plan, .. }) = steps.last_mut() else {
                     anyhow::bail!(
                         "line {number}: `{line}` must follow a `## job:` (or `## task:`), before its first prompt"
@@ -1147,6 +1147,19 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
                                 "line {number}: `## network:` expects true or false, got `{other}`"
                             ),
                         };
+                    }
+                    // A script's written plan is its approval, so it can say
+                    // everything a plan can — and this one only ever narrows:
+                    // `Plan::unmet` refuses a script asking for less
+                    // enforcement than its policy file was given.
+                    "enforcement" => {
+                        plan.enforcement = Some(match value {
+                            "kernel" => agent_core::sandbox::Enforcement::Kernel,
+                            "best-effort" => agent_core::sandbox::Enforcement::BestEffort,
+                            other => anyhow::bail!(
+                                "line {number}: `## enforcement:` expects kernel or best-effort, got `{other}`"
+                            ),
+                        });
                     }
                     "egress" => {
                         for domain in value
@@ -1179,7 +1192,8 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             _ => anyhow::bail!(
                 "line {number}: `{line}` is not a directive \
                  (`## job:`, `## task:`, `## step:`, `## file:`, `## write:`, \
-                 `## command:`, `## network:`, `## egress:`, `## fragment:`, `## close`)"
+                 `## command:`, `## network:`, `## egress:`, `## enforcement:`, \
+                 `## fragment:`, `## close`)"
             ),
         }
     }
@@ -2102,6 +2116,38 @@ mod tests {
         };
         assert!(plan.network);
         assert_eq!(plan.egress, ["crates.io", "*.github.com"]);
+    }
+
+    #[test]
+    fn a_job_can_ask_for_more_enforcement_than_its_session() {
+        // A script's written plan is its approval, so it can say everything a
+        // plan can — and this field only ever narrows: `Plan::unmet` refuses a
+        // script asking for *less* than its policy file was given.
+        let steps = parse_script(
+            "## job: build it properly\n\
+             ## command: cargo\n\
+             ## enforcement: kernel\n\
+             build\n\
+             ## close\n",
+        )
+        .unwrap();
+
+        let Step::OpenJob { plan, .. } = &steps[0] else {
+            panic!("{steps:?}")
+        };
+        assert_eq!(
+            plan.enforcement,
+            Some(agent_core::sandbox::Enforcement::Kernel),
+        );
+
+        // And a value that is neither is a script that does not run, rather
+        // than a job quietly taking the session's.
+        let error = parse_script("## job: x\n## enforcement: sort-of\nq\n## close\n")
+            .expect_err("an unknown enforcement is not a default");
+        assert!(
+            error.to_string().contains("kernel or best-effort"),
+            "{error}"
+        );
     }
 
     #[test]

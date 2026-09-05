@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::{Counter, Fragment, TokenCounter};
-use crate::sandbox::{Access, Authority, Sandbox, SandboxError, SandboxPolicy};
+use crate::sandbox::{Access, Authority, Enforcement, Sandbox, SandboxError, SandboxPolicy};
 use crate::tools::{ToolCall, ToolStep};
 
 /// Jobs are numbered per session, in order, starting at 1.
@@ -74,6 +74,22 @@ pub struct Plan {
     pub network: bool,
     #[serde(default)]
     pub egress: Vec<String>,
+    /// What this job wants done when the kernel cannot hold a child.
+    ///
+    /// **`Option`, and not a defaulted [`Enforcement`].** `Enforcement::default()`
+    /// is `Kernel`, so a `#[serde(default)] enforcement: Enforcement` would make
+    /// every plan ever written — every recording, every script, every plan block
+    /// a model has emitted — start *demanding* the kernel, and begin being
+    /// refused on a `best-effort` session. Absent has to mean absent.
+    ///
+    /// A job may ask for `kernel` where the session says `best-effort`: that is
+    /// asking to run *less*, and needs no approval. It may not ask for
+    /// `best-effort` where the session says `kernel` — that is an approved plan
+    /// running a command the policy file said must never run unheld, which is
+    /// the gate overruling `luu.toml`. [`Plan::unmet`] refuses it.
+    /// See `RECORD/2026-09-05.enforcement-per-job.completed.md`.
+    #[serde(default)]
+    pub enforcement: Option<Enforcement>,
 }
 
 impl Plan {
@@ -142,6 +158,19 @@ impl Plan {
                 ));
             }
         }
+        // The one field where narrowing means *refusing more*, so the refusal
+        // is the other way round from every check above it: what a plan may not
+        // do is ask for less enforcement than the session was given.
+        if let Some(asked) = self.enforcement
+            && sandbox.enforcement().loosens_to(asked)
+        {
+            unmet.push(format!(
+                "enforcement {}: the policy says {} ({}), and a plan may only ask for more",
+                asked.as_str(),
+                sandbox.enforcement().as_str(),
+                sandbox.authority(),
+            ));
+        }
         unmet
     }
 
@@ -182,8 +211,9 @@ impl Plan {
     /// **It narrows the level too.** `files` are granted `Read` and `writes`
     /// `ReadWrite`, so a task that declared a file and did not declare a write
     /// may read it and cannot touch it, even where the policy file allows both.
-    /// `network` and `enforcement` are still the session's: a plan declares
-    /// neither.
+    /// `network` and `enforcement` are the plan's where it declares them and
+    /// the session's where it does not — and `enforcement` may only move one
+    /// way, toward refusing more.
     ///
     /// A path that does not exist yet cannot be a root — Landlock takes a file
     /// descriptor per root, so [`Sandbox::new`] requires it to be there. A read
@@ -210,7 +240,14 @@ impl Plan {
             network: session.network() && (self.network || !self.egress.is_empty()),
             egress: narrowed_egress,
             proxy: session.proxy().map(String::from),
-            enforcement: session.enforcement(),
+            // The stricter of the two, never the plan's alone: `unmet` has
+            // already refused a plan that asked for less, and taking the
+            // stricter here is the same rule applied a second time where it
+            // bites — the shape `narrow` uses for every other field.
+            enforcement: match self.enforcement {
+                Some(asked) => session.enforcement().strictest(asked),
+                None => session.enforcement(),
+            },
             // The session's, like `network` and `enforcement`: a plan declares
             // paths and commands, and what a child may *spend* is not something
             // it has words for. Whether it should is in
@@ -1333,6 +1370,93 @@ mod tests {
             past_the_file.unmet(&session).len(),
             2,
             "the human at the gate widens up to the policy file and not past it",
+        );
+    }
+
+    #[test]
+    fn a_plan_may_ask_for_more_enforcement_than_its_session_was_given() {
+        // The direction that is allowed, and the reason it needs no approval:
+        // it can only make fewer commands run. `session()` is best-effort.
+        let session = session();
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            enforcement: Some(Enforcement::Kernel),
+            ..Plan::default()
+        };
+        assert!(
+            plan.unmet(&session).is_empty(),
+            "{:?}",
+            plan.unmet(&session)
+        );
+
+        let narrowed = plan.narrow(&session, 1).unwrap();
+        assert_eq!(
+            narrowed.enforcement(),
+            Enforcement::Kernel,
+            "the job runs under what it asked for, not what the session settled for",
+        );
+        assert_eq!(
+            session.enforcement(),
+            Enforcement::BestEffort,
+            "and the session is untouched: this narrowed one job",
+        );
+    }
+
+    #[test]
+    fn a_plan_may_not_ask_for_less_enforcement_than_its_policy_file() {
+        // The direction that is refused, and it is refused *before anything
+        // runs*: an approved plan running a command the policy file said must
+        // never run unheld is the gate overruling `luu.toml`.
+        let strict = Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: vec!["cargo".into()],
+                enforcement: Enforcement::Kernel,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
+
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            enforcement: Some(Enforcement::BestEffort),
+            ..Plan::default()
+        };
+        let unmet = plan.unmet(&strict);
+        assert_eq!(unmet.len(), 1, "{unmet:?}");
+        assert!(unmet[0].contains("enforcement best-effort"), "{unmet:?}");
+        assert!(
+            unmet[0].contains("a plan may only ask for more"),
+            "the refusal has to say which way the field narrows: {unmet:?}",
+        );
+
+        // And `narrow` is the same rule applied a second time, where it bites:
+        // even reached directly, the stricter of the two is what runs.
+        let narrowed = plan.narrow(&strict, 1).unwrap();
+        assert_eq!(narrowed.enforcement(), Enforcement::Kernel);
+    }
+
+    #[test]
+    fn a_plan_from_before_this_existed_keeps_the_sessions_enforcement() {
+        // Every recording, every script and every plan block a model has
+        // emitted has no `enforcement`. Absent means absent — a defaulted
+        // `Enforcement` would have made all of them start demanding the kernel.
+        let session = session();
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            ..Plan::default()
+        };
+        assert_eq!(plan.enforcement, None);
+        assert_eq!(
+            plan.narrow(&session, 1).unwrap().enforcement(),
+            Enforcement::BestEffort,
+        );
+
+        let from_json: Plan = serde_json::from_str(r#"{"tasks":[],"files":[]}"#).unwrap();
+        assert_eq!(
+            from_json.enforcement, None,
+            "a plan block that says nothing"
         );
     }
 

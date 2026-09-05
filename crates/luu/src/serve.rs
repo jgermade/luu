@@ -1237,6 +1237,12 @@ fn permitted(
         closes_on: None,
         network: network.unwrap_or(false),
         egress: egress.unwrap_or_default(),
+        // The amendment cannot carry it yet: the approve message has no field
+        // for it, and adding one is a protocol change rather than part of
+        // narrowing. `None` is "the session's", which is what an amendment that
+        // says nothing about enforcement means. See
+        // `RECORD/2026-09-05.enforcement-per-job.completed.md` §Still open.
+        enforcement: None,
     };
     let refused = asked.unmet(sandbox);
     let keep = |item: &String, kind: &str| {
@@ -1282,6 +1288,7 @@ fn permitted(
             .filter(|e| keep_egress(e))
             .cloned()
             .collect(),
+        enforcement: None,
     };
     (granted, refused)
 }
@@ -1327,6 +1334,10 @@ fn closing_condition(
         closes_on: Some(closes_on.clone()),
         network: false,
         egress: Vec::new(),
+        // This plan exists only to ask `unmet` about `closes_on`; carrying an
+        // enforcement here would add a second refusal to a check that is
+        // looking for one line.
+        enforcement: None,
     };
     match merged
         .unmet(sandbox)

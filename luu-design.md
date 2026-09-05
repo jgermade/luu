@@ -1006,8 +1006,17 @@ the argument they were measured against is
 
 ## Open questions / next steps
 
-- Narrowing `enforcement` with the rest of the plan. `network` and `egress` are
-  now per-job and filtered by host-side proxy; enforcement level remains session-wide.
+- ~~Narrowing `enforcement` with the rest of the plan.~~ **Done**, and the field
+  narrows in the direction that is not obvious: `enforcement` is not a permission
+  but a *failure mode* — what happens when the kernel cannot hold a child — so
+  narrower means **refusing more**, and the value that refuses more is `kernel`.
+  A plan may ask for `kernel` where the session says `best-effort` (that is
+  asking to run less, and needs nobody's approval); it may **not** ask for
+  `best-effort` where the policy file says `kernel`, and `Plan::unmet` refuses
+  that before anything runs, because it would be the gate overruling `luu.toml`.
+  `## enforcement:` says it in a script. What is still session-wide is `limits`,
+  and the gate's amendment cannot carry enforcement yet. See
+  [`RECORD/2026-09-05.enforcement-per-job.completed.md`](RECORD/2026-09-05.enforcement-per-job.completed.md).
 - **`Sandbox::new` canonicalizes its roots once, at startup**, before any model
   has said anything — so a granted root that is itself a symlink is resolved
   once and trusted afterwards. And `run_command`'s `cwd` is checked and then

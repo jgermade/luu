@@ -18,6 +18,7 @@ struck through at the top of it.
 | --- | --- |
 | **A clock at the seam** | A worker that is *alive and stuck* used to hang the turn, the job and the session in silence. The host's deadline for a call is now the call's own clock plus `[worker] timeout-ms`, firing kills the worker, and the next call starts another — plus a ceiling on `timeout_ms`, which was the model's number and was checked against nothing — [`a-clock-at-the-seam`](../../RECORD/2026-09-05.a-clock-at-the-seam.completed.md) |
 | **A clock where there is no seam** | The morning's clock was at the seam, and `runtime = "host"` — the default — has none. It moved up into the agent loop, which is the only thing above both places a tool can run. Underneath it: `std::fs` inline in an `async` block never yields, so the timeout beside it never fired; and a runtime will not shut down while a blocking thread is parked, so the hang came back at process exit — [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
+| **Enforcement per job** | The last field of the policy a plan could not narrow, and the one whose lattice runs the other way: `enforcement` is a failure mode rather than a permission, so *narrower* means refusing more. A job may ask for `kernel` where its session says `best-effort`; the reverse is the gate overruling `luu.toml` and is refused — [`enforcement-per-job`](../../RECORD/2026-09-05.enforcement-per-job.completed.md) |
 | **Beneath the root** | The in-process TOCTOU, open since `tools-and-sandbox` and admitted in a doc comment ever since: a check answers about a path, and between it and the open the path is a string. The file tools now open with `openat2(RESOLVE_BENEATH)` relative to the granting root, and an in-process read is held by the kernel for the first time — which the verdict says, because where the syscall is missing it is still not — [`beneath-the-root`](../../RECORD/2026-09-05.beneath-the-root.completed.md) |
 | **Choosing fragments** | The `code` bucket, zero in every recording this repository has ever made, now fills itself with what the turn's own text points at. At 1024 tokens a path-ordered map holds the answer to 3 of the corpus's 38 questions and a selection holds 32. The reference graph's one-hop expansion was measured and **lost a third time**, so it ships off — [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
 
@@ -32,7 +33,7 @@ struck through at the top of it.
 | 5 | ~**A clock where there is no seam** — the deadline moved up into the agent loop, the in-process tools stopped blocking inside their own future, and a worker restart is counted~ | nothing | [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
 | 6 | **Active pruning of tool results** — a `cat` of 2 000 lines is capped at 8 KiB and then never shortened. The cap is not the strategy | nothing — closed jobs exist in quantity now that the store keeps them | `luu-design.md` §Still ahead — **needs its own record** |
 | 7 | ~**`openat2(RESOLVE_BENEATH)` for the in-process tools** — the kernel refuses the escape during resolution, and the verdict says so it was the kernel~ | nothing | [`beneath-the-root`](../../RECORD/2026-09-05.beneath-the-root.completed.md) |
-| 8 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide | nothing | `luu-design.md` §Open questions |
+| 8 | ~**Enforcement per job** — a plan may ask for more enforcement than its session and never less, and `unmet` refuses the loosening before anything runs~ | nothing | [`enforcement-per-job`](../../RECORD/2026-09-05.enforcement-per-job.completed.md) |
 | 10 | **Precision, with a model in the loop** — coverage says the right file was in the prompt; nothing says the model used it. The same 38 questions, one flag apart, scored against a 7B | a box from [`machines.md`](machines.md), which is item 3 | [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) §What this run does not say |
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 
@@ -46,16 +47,17 @@ gantt
     Choosing fragments                     :done, frag, 2026-09-05, 1d
     A clock where there is no seam         :done, hostclock, 2026-09-05, 1d
     Beneath the root (openat2)             :done, toctou2, 2026-09-05, 1d
+    Enforcement per job                    :done, enf, 2026-09-05, 1d
     section Next, and code-shaped
     A GBNF grammar for tool calls          :gbnf, 2026-09-06, 4d
     Active pruning of tool results         :prune, after gbnf, 4d
     openat2(RESOLVE_BENEATH)               :done, toctou, 2026-09-05, 1d
-    Enforcement per job                    :enf, 2026-09-06, 2d
+
     section Waiting on hardware
     Fleet measurements across machines     :crit, bench, 2026-09-05, 10d
     Precision, with a model in the loop    :crit, prec, after bench, 3d
     section Waiting on a fleet
-    Rotating and revoking an approval key  :keys, after enf, 3d
+    Rotating and revoking an approval key  :keys, 2026-09-08, 3d
 ```
 
 ## What actually blocks what
@@ -86,6 +88,12 @@ gantt
   turn survived comes back as a process that will not exit. Both are now closed
   and both are the kind of thing that only shows up when the test hangs *after*
   passing.
+- **Item 8 was the last field a plan could not narrow, apart from `limits`.**
+  The part worth keeping is the direction: three of this roadmap's items have
+  now narrowed something per job, and `enforcement` is the only one where
+  narrowing means the job runs *less* rather than reaches less — so the refusal
+  in `unmet` runs the opposite way from every other line in that function, and
+  says so where it is written.
 - **Item 7 closed a hole this repository had been admitting in a doc comment
   since August.** The interesting part is not the syscall, it is that an
   in-process read now reports `Applied::Kernel`: the line in `luu-design.md`
