@@ -944,7 +944,9 @@ impl SandboxArgs {
                 false => Tools::standard(),
             }),
             sandbox: std::sync::Arc::new(sandbox),
-            max_steps: self.max_tool_steps,
+            limits: agent_core::agent::Limits::default()
+                .with_max_steps(self.max_tool_steps)
+                .with_tool_timeout(std::time::Duration::from_millis(worker_config.timeout_ms)),
             worker,
         })
     }
@@ -2007,7 +2009,7 @@ pub async fn run() -> Result<()> {
             request,
             agency.executor(),
             sandbox.as_ref(),
-            agency.max_steps,
+            agency.limits,
             tx,
             cancel,
         )

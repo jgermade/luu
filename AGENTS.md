@@ -80,6 +80,11 @@ useful thing in the file.
 
 ## Commands
 
+There is a `Makefile` for the four a person types most — `make install`,
+`make test`, `make build`, `make up` (the debug UI on 127.0.0.1:7878), plus
+`make lint` for what CI runs. Everything below is what those wrap and what
+nothing wraps.
+
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets     # CI runs this with RUSTFLAGS=-D warnings

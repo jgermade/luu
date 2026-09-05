@@ -563,8 +563,8 @@ access = "execute"
   Standard proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and lowercase)
   are injected into `run_command` subprocesses. See
   [`RECORD/2026-09-04.egress-through-the-host.completed.md`](RECORD/2026-09-04.egress-through-the-host.completed.md).
-- **The seam holds a clock, because a clock inside the thing being timed cannot
-  time it.** `run_command`'s own timeout covers its child and nothing else — not
+- **The loop holds one clock over every tool call, because a clock inside the
+  thing being timed cannot time it.** `run_command`'s own timeout covers its child and nothing else — not
   a wedged tool, not the worker's loop, not the runtime between them — so a
   worker that was *alive and stuck* used to hang the turn, the job and the
   session with nothing anywhere saying why. The host's deadline for a call is
@@ -572,12 +572,24 @@ access = "execute"
   number `run_command` defaults to), where every tool without a timeout of its
   own contributes zero: so the seam can never fire before the tool's own clock
   has had its chance, which is what makes it safe to have on by default. When it
-  fires the worker is **killed** rather than merely abandoned — a late answer on
-  a reused pipe would pair the previous call's outcome with the next call's
-  request, two well-formed lines and nothing to say they were swapped — and the
-  next call starts a new one, which is sound only because a worker holds no state
-  between calls. The same replacement now covers a worker that exited, which
-  previously took the rest of the session's tools with it. And `timeout_ms` is
+  fires the loop drops the call and tells the executor to deal with what is left
+  (`Executor::abandon`): the worker is **killed** rather than merely abandoned —
+  a late answer on a reused pipe would pair the previous call's outcome with the
+  next call's request, two well-formed lines and nothing to say they were swapped
+  — and the next call starts a new one, which is sound only because a worker
+  holds no state between calls. The same replacement now covers a worker that
+  exited, which previously took the rest of the session's tools with it, and
+  `luu tools` prints how many workers a session has had to replace. **The clock
+  is the loop's and not the seam's** because `runtime = "host"` is the default
+  and has no seam: the loop is the only thing above both places a tool can run.
+  For that deadline to be real the in-process tools had to stop blocking inside
+  their own future — `std::fs` inline in an `async` block never yields, so the
+  timer beside it is never polled and the timeout never fires — so every
+  filesystem syscall now runs on a blocking thread it can be dropped from. The
+  thread itself is not cancellable, which is why `bin/luu.rs` bounds runtime
+  shutdown: otherwise a wedged read the turn survived comes back as a process
+  that will not exit. See
+  [`RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`](RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md). And `timeout_ms` is
   itself capped at ten minutes, because it is the *model's* number: everything
   else in a call is checked against the sandbox, and this one was checked against
   nothing. See
@@ -980,13 +992,13 @@ the argument they were measured against is
 
 - Narrowing `enforcement` with the rest of the plan. `network` and `egress` are
   now per-job and filtered by host-side proxy; enforcement level remains session-wide.
-- **Host mode has no seam, and therefore no clock.** The seam holds one now, and
-  `run_command`'s `timeout_ms` is capped at what a model may ask for — but under
-  `runtime = "host"` the tools run in this process, where a wedged `read_file`
-  still hangs the turn. The honest place for that one is the agent loop rather
-  than a seam that does not exist. Nothing counts worker restarts either, which
-  is the number that would say *your image is broken* rather than *your command
-  was slow*.
+- **`Sandbox::check_path` still canonicalizes inline**, which is the last
+  filesystem call in a turn that a deadline cannot abandon. One bounded syscall
+  on a path rather than a read of unknown length, so it is a much smaller window
+  than the one the loop's clock closed — and it is the same kind of window.
+  `openat2(RESOLVE_BENEATH)` touches that code anyway. Nor does anything bound
+  the blocking pool: enough abandoned reads in one session and there are no
+  slots left for the ones that would answer.
 - Whether `writes` should also bound `run_command`: a child can write whatever
   the task's roots allow, and a plan's `commands` list says nothing about paths.
   Narrower than it was — the child is held to the *task's* roots now — but a

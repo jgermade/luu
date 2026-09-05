@@ -41,6 +41,27 @@ fn bad_arguments(tool: &str, message: String) -> ToolOutcome {
     )
 }
 
+/// Runs one blocking filesystem call somewhere it can be abandoned.
+///
+/// **Without this the deadline above it is a lie.** `std::fs::read_to_string`
+/// on a path that never answers — a FIFO with no writer, a dead network mount —
+/// blocks inside `poll`, so the task never yields and the timer that is meant to
+/// give up on it is never polled either. Moving the syscall to a blocking thread
+/// is what lets the loop drop the call and carry on.
+///
+/// The honest cost: the thread is not cancelled, because a blocking syscall
+/// cannot be. It stays there until the kernel answers, holding one slot of
+/// tokio's blocking pool. That is a leak with a bound, against a hang without
+/// one.
+async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(done) => done,
+        // The only way this fails is a panic inside the closure, which is a bug
+        // in a `std::fs` call rather than something a turn can act on.
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
 pub struct ReadFile;
 
 impl Tool for ReadFile {
@@ -81,7 +102,8 @@ impl Tool for ReadFile {
                 return ToolOutcome::denied(check.verdict);
             }
 
-            match std::fs::read_to_string(&check.path) {
+            let path_on_disk = check.path.clone();
+            match off_thread(move || std::fs::read_to_string(&path_on_disk)).await {
                 Ok(text) => {
                     let lines: Vec<&str> = text.lines().skip(start - 1).take(count).collect();
                     ToolOutcome::ok(check.verdict, lines.join("\n"))
@@ -125,23 +147,31 @@ impl Tool for ListDir {
                 return ToolOutcome::denied(check.verdict);
             }
 
-            let entries = match std::fs::read_dir(&check.path) {
-                Ok(entries) => entries,
+            // The whole listing off the thread, not only `read_dir`: every
+            // entry's `file_type` is another syscall, and a directory of ten
+            // thousand of them is ten thousand chances to block.
+            let path_on_disk = check.path.clone();
+            let listed = off_thread(move || {
+                std::fs::read_dir(&path_on_disk).map(|entries| {
+                    entries
+                        .filter_map(Result::ok)
+                        .map(|entry| {
+                            let name = entry.file_name().to_string_lossy().into_owned();
+                            match entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                                true => format!("{name}/"),
+                                false => name,
+                            }
+                        })
+                        .collect::<Vec<String>>()
+                })
+            })
+            .await;
+            let mut names = match listed {
+                Ok(names) => names,
                 Err(error) => {
                     return ToolOutcome::failed(check.verdict, format!("{path}: {error}"));
                 }
             };
-
-            let mut names: Vec<String> = entries
-                .filter_map(Result::ok)
-                .map(|entry| {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    match entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                        true => format!("{name}/"),
-                        false => name,
-                    }
-                })
-                .collect();
             // Sorted, because `read_dir` returns whatever order the filesystem
             // felt like and a listing that reshuffles between turns is a diff
             // the model has to read as a change.
@@ -197,7 +227,8 @@ impl Tool for EditFile {
                 return ToolOutcome::denied(check.verdict);
             }
 
-            let text = match std::fs::read_to_string(&check.path) {
+            let path_on_disk = check.path.clone();
+            let text = match off_thread(move || std::fs::read_to_string(&path_on_disk)).await {
                 Ok(text) => text,
                 Err(error) => {
                     return ToolOutcome::failed(check.verdict, format!("{path}: {error}"));
@@ -223,7 +254,9 @@ impl Tool for EditFile {
                 }
             }
 
-            match std::fs::write(&check.path, text.replacen(old, new, 1)) {
+            let path_on_disk = check.path.clone();
+            let replaced = text.replacen(old, new, 1);
+            match off_thread(move || std::fs::write(&path_on_disk, replaced)).await {
                 Ok(()) => ToolOutcome::ok(check.verdict, format!("{path}: replaced 1 occurrence")),
                 Err(error) => ToolOutcome::failed(check.verdict, format!("{path}: {error}")),
             }
@@ -285,12 +318,15 @@ impl Tool for WriteFile {
                 if !parent_check.verdict.allowed {
                     return ToolOutcome::denied(parent_check.verdict);
                 }
-                if let Err(error) = std::fs::create_dir_all(parent) {
+                let parent = parent.to_path_buf();
+                if let Err(error) = off_thread(move || std::fs::create_dir_all(parent)).await {
                     return ToolOutcome::failed(check.verdict, format!("{path}: {error}"));
                 }
             }
 
-            match std::fs::write(&check.path, content) {
+            let path_on_disk = check.path.clone();
+            let bytes = content.to_string();
+            match off_thread(move || std::fs::write(&path_on_disk, bytes)).await {
                 Ok(()) => ToolOutcome::ok(
                     check.verdict,
                     format!("{path}: wrote {} bytes", content.len()),

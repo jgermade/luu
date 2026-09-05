@@ -164,7 +164,7 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
     let agency = Agency {
         tools: Arc::new(Tools::standard()),
         sandbox: Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("the sandbox")),
-        max_steps: 4,
+        limits: agent_core::agent::Limits::default().with_max_steps(4),
         worker: None,
     };
     let serving = bind(ServeOptions {
@@ -245,7 +245,7 @@ async fn server_everything(
     let agency = Agency {
         tools: Arc::new(Tools::standard()),
         sandbox: Arc::new(Sandbox::new(&policy, &base).expect("the sandbox")),
-        max_steps: 4,
+        limits: agent_core::agent::Limits::default().with_max_steps(4),
         worker: None,
     };
     let serving = bind(ServeOptions {

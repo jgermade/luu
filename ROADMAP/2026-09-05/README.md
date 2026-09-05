@@ -17,6 +17,7 @@ struck through at the top of it.
 | | |
 | --- | --- |
 | **A clock at the seam** | A worker that is *alive and stuck* used to hang the turn, the job and the session in silence. The host's deadline for a call is now the call's own clock plus `[worker] timeout-ms`, firing kills the worker, and the next call starts another — plus a ceiling on `timeout_ms`, which was the model's number and was checked against nothing — [`a-clock-at-the-seam`](../../RECORD/2026-09-05.a-clock-at-the-seam.completed.md) |
+| **A clock where there is no seam** | The morning's clock was at the seam, and `runtime = "host"` — the default — has none. It moved up into the agent loop, which is the only thing above both places a tool can run. Underneath it: `std::fs` inline in an `async` block never yields, so the timeout beside it never fired; and a runtime will not shut down while a blocking thread is parked, so the hang came back at process exit — [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
 | **Choosing fragments** | The `code` bucket, zero in every recording this repository has ever made, now fills itself with what the turn's own text points at. At 1024 tokens a path-ordered map holds the answer to 3 of the corpus's 38 questions and a selection holds 32. The reference graph's one-hop expansion was measured and **lost a third time**, so it ships off — [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
 
 ## The order
@@ -27,7 +28,7 @@ struck through at the top of it.
 | 2 | ~**Relevance over recency: choosing fragments** — inject the fragments the turn points at, not the whole history~ **coverage measured and won; precision unmeasured and now item 10** | nothing | [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
 | 3 | **Fleet measurement across target machines** — the hardware floor (6 GB card), native Linux confinement without a VM, and the BC-250's 14B ceiling | hardware and a hand on it, nothing else | [`machines.md`](machines.md) |
 | 4 | **A GBNF grammar for tool calls** — replace the text parse with a grammar the server enforces, against Qwen2.5-Coder | nothing — `llama-server` is reachable through the OpenAI backend | [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) — **needs its own record** |
-| 5 | **A clock where there is no seam** — `runtime = "host"` runs tools in-process, where a wedged tool still hangs the turn. The deadline belongs in the agent loop, and a worker restart wants counting | item 1, which named it | [`a-clock-at-the-seam`](../../RECORD/2026-09-05.a-clock-at-the-seam.completed.md) §Still open |
+| 5 | ~**A clock where there is no seam** — the deadline moved up into the agent loop, the in-process tools stopped blocking inside their own future, and a worker restart is counted~ | nothing | [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
 | 6 | **Active pruning of tool results** — a `cat` of 2 000 lines is capped at 8 KiB and then never shortened. The cap is not the strategy | nothing — closed jobs exist in quantity now that the store keeps them | `luu-design.md` §Still ahead — **needs its own record** |
 | 7 | **`openat2(RESOLVE_BENEATH)` for the in-process tools** — closing the TOCTOU window canonicalize-then-open leaves | nothing (Linux only, which is where it matters) | `luu-design.md` §Open questions |
 | 8 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide | nothing | `luu-design.md` §Open questions |
@@ -42,11 +43,11 @@ gantt
     section Landed today
     A clock at the seam                    :done, clock, 2026-09-05, 1d
     Choosing fragments                     :done, frag, 2026-09-05, 1d
+    A clock where there is no seam         :done, hostclock, 2026-09-05, 1d
     section Next, and code-shaped
     A GBNF grammar for tool calls          :gbnf, 2026-09-06, 4d
-    A clock where there is no seam         :hostclock, 2026-09-06, 2d
     Active pruning of tool results         :prune, after gbnf, 4d
-    openat2(RESOLVE_BENEATH)               :toctou, after hostclock, 2d
+    openat2(RESOLVE_BENEATH)               :toctou, 2026-09-06, 2d
     Enforcement per job                    :enf, after toctou, 2d
     section Waiting on hardware
     Fleet measurements across machines     :crit, bench, 2026-09-05, 10d
@@ -74,9 +75,15 @@ gantt
   remaining measurements need a box that is not this one; see
   [`machines.md`](machines.md) for which one answers which question. Nothing in
   the tree is waiting on them, which is why they are no longer at the top.
-- **Item 5 exists because item 1 named it.** Today's clock covers the seam, and
-  `runtime = "host"` — the default, and the mode every measurement in this
-  repository was made under — has no seam to put a clock at.
+- **Item 5 landed, and it moved item 1's clock rather than adding a second
+  one.** A deadline at the seam covers the mode almost nobody runs; the loop is
+  above both. Two findings under it that are worth more than the item was: a
+  `tokio::time::timeout` around a blocking `std::fs` call **never fires**,
+  because the future never yields and the timer is never polled; and a tokio
+  runtime waits for its blocking threads at drop, so an abandoned read that the
+  turn survived comes back as a process that will not exit. Both are now closed
+  and both are the kind of thing that only shows up when the test hangs *after*
+  passing.
 - **Items 2, 4 and 6 have no record yet, and that is the next thing each of them
   needs.** A roadmap entry is a link to an argument; three of these link to the
   design's open questions instead, which is the honest way to say *this is

@@ -301,50 +301,16 @@ done
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_worker_that_is_alive_and_stuck_is_killed_rather_than_waited_on() {
-    // The hole `RECORD/2026-09-05.a-clock-at-the-seam.completed.md` closes. A
-    // worker that dies mid-call surfaces as EOF and always did; a worker that is
-    // alive and never answers used to hang the turn, the job and the session,
-    // with nothing in any of them saying why.
+async fn a_worker_that_is_alive_and_stuck_is_abandoned_and_replaced() {
+    // The clock is the agent loop's, not the seam's
+    // (`RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md`): the
+    // loop is the only thing above *both* places a tool can run, so it holds
+    // one deadline and tells the executor what to do with what it dropped.
+    // This test is that loop, in three lines, against a worker that greets and
+    // then never answers.
     let fixture = Fixture::new("stuck");
     let worker = Worker::start(
-        &spec(&fixture.root)
-            .with_binary(Some(stuck_once(&fixture.root)))
-            .with_timeout_ms(300),
-        &[],
-    )
-    .await
-    .expect("the worker greeted");
-
-    let sandbox = fixture.sandbox(&[]);
-    let outcome = worker
-        .call(
-            &call("read_file", serde_json::json!({"path": "src/main.rs"})),
-            &sandbox,
-        )
-        .await;
-
-    assert!(
-        !outcome.verdict.allowed,
-        "a call nobody answered is not an allowed one"
-    );
-    let said = outcome.error.unwrap_or_default();
-    assert!(said.contains("no answer to `read_file`"), "{said}");
-    assert!(said.contains("300 ms"), "the deadline is named: {said}");
-    assert!(said.contains("killed"), "{said}");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn the_call_after_a_killed_worker_starts_another_one() {
-    // A worker holds no state between calls — every request carries its own
-    // WireSandbox — so the replacement is not a recovery. It is the same worker,
-    // started again, and the session's remaining calls are not owed to a corpse.
-    let fixture = Fixture::new("restart");
-    let worker = Worker::start(
-        &spec(&fixture.root)
-            .with_binary(Some(stuck_once(&fixture.root)))
-            .with_timeout_ms(300),
+        &spec(&fixture.root).with_binary(Some(stuck_once(&fixture.root))),
         &[],
     )
     .await
@@ -352,49 +318,41 @@ async fn the_call_after_a_killed_worker_starts_another_one() {
 
     let sandbox = fixture.sandbox(&[]);
     let read = call("read_file", serde_json::json!({"path": "src/main.rs"}));
-    let first = worker.call(&read, &sandbox).await;
-    assert!(first.error.unwrap_or_default().contains("killed"));
 
+    let gave_up = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        worker.call(&read, &sandbox),
+    )
+    .await;
+    assert!(gave_up.is_err(), "a stuck worker does not answer");
+    assert_eq!(worker.restarts(), 0, "nothing has been replaced yet");
+
+    // What dropping the future cannot do: the child is still there, holding
+    // half an exchange on a pipe that must never be reused.
+    worker.abandon().await;
+
+    // A worker holds no state between calls — every request carries its own
+    // WireSandbox — so the replacement is not a recovery. It is the same
+    // worker, started again, and the session's remaining calls are not owed to
+    // a corpse.
     let second = worker.call(&read, &sandbox).await;
     assert!(
         second
             .error
             .unwrap_or_default()
             .contains("a second worker answered"),
-        "the second call reached a worker that the first one did not have",
+        "the second call reached a worker the first one did not have",
     );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn the_seam_never_fires_before_the_call_it_is_timing() {
-    // The property that makes the clock safe to turn on by default: a
-    // `run_command` that asked for five minutes is given five minutes *and* the
-    // patience, so the seam cannot kill a worker for a command still inside the
-    // budget the tool granted it. A tool with no clock of its own gets the
-    // patience alone.
-    let fixture = Fixture::new("deadline");
-    let worker = Worker::start(
-        &spec(&fixture.root)
-            .with_binary(Some(stuck_once(&fixture.root)))
-            .with_timeout_ms(200),
-        &["sleep".into()],
-    )
-    .await
-    .expect("the worker greeted");
-
-    let sandbox = fixture.sandbox(&["sleep"]);
-    let long = call(
-        "run_command",
-        serde_json::json!({"command": "sleep", "args": ["1"], "timeout_ms": 5_000}),
+    assert_eq!(
+        worker.restarts(),
+        1,
+        "and it is counted: a silent restart reads exactly like a slow command",
     );
-    let started = std::time::Instant::now();
-    let outcome = worker.call(&long, &sandbox).await;
-    let waited = started.elapsed();
-
-    assert!(outcome.error.unwrap_or_default().contains("killed"));
     assert!(
-        waited >= std::time::Duration::from_millis(5_000),
-        "the seam waited {waited:?}: it must add the call's own clock to its patience",
+        worker
+            .describe()
+            .expect("a worker says where it is")
+            .contains("restarts   1"),
+        "a number nobody can read is one nobody can act on",
     );
 }

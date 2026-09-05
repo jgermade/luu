@@ -22,7 +22,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -161,6 +160,17 @@ impl WireSandbox {
 pub trait Executor: Send + Sync {
     fn call<'a>(&'a self, call: &'a ToolCall, sandbox: &'a Sandbox) -> ToolFuture<'a>;
 
+    /// The loop gave up on a call and dropped it. Deal with what is left.
+    ///
+    /// Dropping the future is what abandons the work; this is the part dropping
+    /// cannot do — a worker process is still holding the other end of a pipe
+    /// with a half-finished exchange on it, and the only sound thing to do with
+    /// it is end it. In this process there is nothing to end, which is why the
+    /// default does nothing rather than every executor having to say so.
+    fn abandon(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+
     /// What a session says about where its tools run. `None` for the in-process
     /// executor: there is nothing to say that the rest of `luu tools` does not
     /// already say.
@@ -217,9 +227,10 @@ pub struct Worker {
     /// What the policy allows, as the handshake asks it. Kept for the same
     /// reason as the spec.
     commands: Vec<String>,
-    /// How long a call with no clock of its own may take before the worker is
-    /// treated as stuck. See [`WorkerSpec::patience`].
-    patience: Duration,
+    /// How many times this session has had to replace its worker. Counted
+    /// because a silent restart is indistinguishable from a slow command, and
+    /// those two have different fixes.
+    restarts: std::sync::atomic::AtomicU32,
     /// One call at a time. The agent loop is sequential and this makes that a
     /// fact rather than an assumption — two interleaved calls on one pipe would
     /// pair the wrong outcome with the wrong call.
@@ -261,7 +272,7 @@ impl Worker {
             hello,
             spec: spec.clone(),
             commands: commands.to_vec(),
-            patience: spec.patience(),
+            restarts: std::sync::atomic::AtomicU32::new(0),
             pipe: Mutex::new(Some(pipe)),
         })
     }
@@ -320,15 +331,21 @@ impl Worker {
         ToolOutcome::failed(Verdict::deny(said.clone()), said)
     }
 
-    /// How long this call may take before the worker is stuck.
+    /// How many workers this session has had to replace.
     ///
-    /// **The tool's own clock plus the seam's patience**, never less: a seam
-    /// that fired before `run_command`'s timeout would kill the worker for a
-    /// command that was still inside the budget it was given, and the person
-    /// reading that verdict would learn the wrong thing about their command.
-    /// Every tool that has no clock answers zero and gets the patience alone.
-    fn deadline(&self, call: &ToolCall) -> Duration {
-        crate::tools::command::clock_of(call) + self.patience
+    /// Zero on a healthy session, and the number that says *your image is
+    /// broken* rather than *your command was slow* — which is the difference
+    /// nobody could see while a restart was silent.
+    pub fn restarts(&self) -> u32 {
+        self.restarts.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Ends the current worker, if there is one, and leaves the next call to
+    /// start another. What [`Executor::abandon`] does here.
+    async fn replace(&self) {
+        if let Some(mut pipe) = self.pipe.lock().await.take() {
+            pipe.kill().await;
+        }
     }
 
     pub fn hello(&self) -> &Hello {
@@ -353,48 +370,31 @@ impl Executor for Worker {
             // no state between calls, so the new one is not a recovery: it is
             // the same worker, started again.
             if slot.is_none() {
-                // Bounded by the same patience, because a restart is on the
-                // call's path: a runtime that hangs while starting a container
-                // would otherwise reintroduce, one layer up, exactly the hang
-                // this clock exists to end. The session's *first* start is not
-                // bounded — there is a person watching a terminal, and a first
-                // `docker run` that pulls an image is legitimately slow.
-                match tokio::time::timeout(self.patience, Worker::open(&self.spec, &self.commands))
-                    .await
-                {
-                    Ok(Ok((pipe, _))) => *slot = Some(pipe),
-                    Ok(Err(error)) => {
-                        return self.gave_up(format!("could not be restarted: {error}"));
+                // The restart is inside the call, so it is inside the loop's
+                // deadline: a runtime that hangs while creating a container is
+                // one more thing the one clock above already covers, which is
+                // the argument for having put it there.
+                match Worker::open(&self.spec, &self.commands).await {
+                    Ok((pipe, _)) => {
+                        *slot = Some(pipe);
+                        self.restarts
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
-                    Err(_) => {
-                        return self.gave_up(format!(
-                            "did not restart in {} ms",
-                            self.patience.as_millis(),
-                        ));
+                    Err(error) => {
+                        return self.gave_up(format!("could not be restarted: {error}"));
                     }
                 }
             }
             let pipe = slot.as_mut().expect("a pipe was just put back");
 
-            let deadline = self.deadline(call);
-            let answer = match tokio::time::timeout(deadline, pipe.round_trip(&request)).await {
-                Ok(answer) => answer,
-                Err(_) => {
-                    // The one failure mode that must not leave the pipe usable:
-                    // the answer may still arrive, and the next call would then
-                    // be paired with this call's outcome — two well-formed lines
-                    // and nothing to say they were swapped.
-                    if let Some(mut pipe) = slot.take() {
-                        pipe.kill().await;
-                    }
-                    return self.gave_up(format!(
-                        "no answer to `{}` in {} ms, so the worker was killed",
-                        call.name,
-                        deadline.as_millis(),
-                    ));
-                }
-            };
-            match answer {
+            // No clock here: the loop above holds the one deadline over every
+            // tool call, because it is the only thing above *both* places a
+            // tool can run. What this side owns is the corpse — see
+            // [`Executor::abandon`]. Being dropped mid-exchange is why the pipe
+            // must never be reused afterwards: the answer may still arrive, and
+            // the next call would be paired with this call's outcome, two
+            // well-formed lines and nothing to say they were swapped.
+            match pipe.round_trip(&request).await {
                 Ok(Response::Outcome(outcome)) => *outcome,
                 Ok(Response::Error { message }) => ToolOutcome::failed(
                     Verdict::deny(format!("the worker refused: {message}")),
@@ -416,18 +416,24 @@ impl Executor for Worker {
         })
     }
 
+    fn abandon(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(self.replace())
+    }
+
     fn describe(&self) -> Option<String> {
         let mut text = format!(
             "  worker     {} — luu {}, protocol {}\n",
             self.label, self.hello.version, self.hello.protocol,
         );
-        // The seam's clock, said where the rest of the session's numbers are
-        // said. A deadline nobody can read is one nobody can argue with when it
-        // fires.
-        text.push_str(&format!(
-            "  patience   {} ms, plus whatever the call itself asked for\n",
-            self.patience.as_millis(),
-        ));
+        // Zero on a healthy session, and worth printing anyway: a session that
+        // has replaced its worker four times is a broken image wearing the
+        // costume of a slow one.
+        if self.restarts() > 0 {
+            text.push_str(&format!(
+                "  restarts   {}   (workers this session had to replace)\n",
+                self.restarts(),
+            ));
+        }
         if !self.hello.commands.is_empty() {
             text.push_str(&format!(
                 "  on PATH    {}\n",
