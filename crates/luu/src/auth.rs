@@ -13,7 +13,7 @@
 use std::net::SocketAddr;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 /// What a bound port requires of a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,44 +61,15 @@ pub fn resolve(address: &SocketAddr, token_file: Option<&Path>) -> Result<Auth> 
 
 /// The token, from a file whose mode says only its owner can read it.
 ///
-/// A flag is greppable in `ps` and an env var is inherited by every child this
-/// process spawns — `run_command`'s included, which is the one place this
-/// repository deliberately runs code it did not write. A file is the only one
-/// of the three whose exposure is a property the program can check, so it
-/// checks it.
+/// The reading and the mode check are [`crate::secret`]'s, shared with the API
+/// key a provider carries: same class of secret, and one of them used to be
+/// checked while the other was not.
 fn read_token(path: &Path) -> Result<String> {
-    let token = std::fs::read_to_string(path)
-        .with_context(|| format!("reading the auth token from {}", path.display()))?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        bail!("the auth token file {} is empty", path.display());
-    }
-    check_mode(path)?;
-    Ok(token)
-}
-
-#[cfg(unix)]
-fn check_mode(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mode = std::fs::metadata(path)
-        .with_context(|| format!("the mode of {}", path.display()))?
-        .permissions()
-        .mode()
-        & 0o777;
-    if mode & 0o077 != 0 {
-        bail!(
-            "the auth token file {} is mode {mode:04o}: readable beyond its owner, which makes \
-             the token as public as the port it guards. `chmod 600` it.",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn check_mode(_path: &Path) -> Result<()> {
-    Ok(())
+    crate::secret::read(
+        path,
+        "the auth token file",
+        "makes the token as public as the port it guards",
+    )
 }
 
 /// Compares without leaking where the two differ.

@@ -15,7 +15,7 @@ order.
 | | |
 | --- | --- |
 | **The premise** | "built for local inference" became "built for **local-first** inference" — [`local-first`](../../RECORD/2026-09-01.local-first.completed.md) |
-| **A fact, measured** | Landlock is active in Docker Desktop's VM on an M1 Pro. Level 3 is reachable on a Mac today — [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) |
+| **A fact, measured** | Landlock is active in Docker Desktop's VM on an M1 Pro. Level 3 is reachable on a Mac today — [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.completed.md) |
 | **A fact, measured** | The repository map moves a 7B from 0/6 to 6/6 on files it holds, and leaves the placebo group flat — [`the-map-against-a-7b`](../../RECORD/2026-09-01.the-map-against-a-7b.completed.md) |
 
 The first two reorder this revision. The third does not reorder anything; it
@@ -28,10 +28,10 @@ is worth more than a reordering.
 | --- | --- | --- | --- |
 | 1 | ~~**An OpenAI-compatible backend**~~ — built, and never yet pointed at a real server | nothing | [`the-portal-and-the-gate`](../../RECORD/2026-08-31.the-portal-and-the-gate.completed.md) §Where it is right, [`local-first`](../../RECORD/2026-09-01.local-first.completed.md), closed by [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) |
 | 2 | ~~**Sessions in SQLite, derived from the record**~~ — the store, parity, and the resume | nothing | [`state-of-play`](../../RECORD/2026-08-30.state-of-play.completed.md) · spec'd in [`session-store.md`](../2026-08-31/session-store.md), closed by [`sessions-in-sqlite`](../../RECORD/2026-09-02.sessions-in-sqlite.completed.md) and [`session-resume`](../../RECORD/2026-09-04.session-resume.completed.md) |
-| 3 | ~~**Level 3 in its development posture**~~ — `luu-worker` in a long-lived container, wide open; the image is **declared, not generated**, and verified live with Landlock ABI v8 | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) and [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
+| 3 | ~~**Level 3 in its development posture**~~ — `luu-worker` in a long-lived container, wide open; the image is **declared, not generated**, and verified live with Landlock ABI v8 | nothing | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.completed.md), closed by [`the-worker-and-the-seam`](../../RECORD/2026-09-02.the-worker-and-the-seam.completed.md) and [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) |
 | 4 | ~~**The gate probe against a real model**~~ | a person at the gate | [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) — completed |
 | 5 | ~~**Relevance selection** — the reference graph and the ranking~~ | nothing | [`the-repo-map`](../../RECORD/2026-08-31.the-repo-map.completed.md), closed on a negative result by [`the-map-order-probe`](../../RECORD/2026-09-03.the-map-order-probe.completed.md) |
-| 6 | **Narrowing: ~~`network` per plan~~, then egress through the host** | 3 | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md) §Network, §Egress, closed by [`network-per-plan`](../../RECORD/2026-09-04.network-per-plan.completed.md) |
+| 6 | **Narrowing: ~~`network` per plan~~, then egress through the host** | 3 | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.completed.md) §Network, §Egress, closed by [`network-per-plan`](../../RECORD/2026-09-04.network-per-plan.completed.md) |
 | 7 | ~~**The protocol over stdio**~~, then the extension | 2 | [`how-a-surface-reaches-the-engine`](../../RECORD/2026-09-01.how-a-surface-reaches-the-engine.completed.md), closed by [`protocol-over-stdio`](../../RECORD/2026-09-04.protocol-over-stdio.completed.md) |
 | — | **Measurement across eight platforms** | per row; most of it on 1 | [`machines.md`](machines.md) — allocation and order |
 | — | Federation | 2, and signed approvals | [`federation.md`](../2026-08-31/federation.md), unchanged |
@@ -303,7 +303,7 @@ group A at 1024 tokens too.
 What was not asked for: each size fails the rest of the corpus a different way.
 14b's first instinct off the map is `run_command`, refused every time on macOS
 (`the kernel cannot hold this child`) — a live, unarranged sighting of exactly
-the wall [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.WIP.md)
+the wall [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.completed.md)
 and [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) have been waiting
 to observe with a model in the loop. 32b reaches for `read_file`/`list_dir`
 instead — not blocked — and with the map's directory names to start from,

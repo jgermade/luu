@@ -37,7 +37,8 @@ struck through at the top of it.
 | 8 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide | nothing | `luu-design.md` §Open questions |
 | 10 | ~**Precision, with a model in the loop** — coverage says the right file was in the prompt; nothing says the model used it. The same 38 questions, one flag apart, scored against a 7B~ **33 of 38 against the baseline's 0; 91% precision on what the selector held. The block was wrong: machine 1 of `machines.md` is the M1 Pro this ran on** | nothing — it never needed the hardware it was ordered behind | [`does-the-model-read-it`](../../RECORD/2026-09-06.does-the-model-read-it.completed.md) |
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
-| 11 | **Naming a provider** — where a model lives, written down once: `[provider.<name>]` in the state directory's `config.toml`, `-p <name>` and `-m <model>`, and a `default` profile that will not load pointing off the machine without `remote = true`. **Answers `local-first`'s first open question with *not `luu.toml`*** | nothing | [`naming-a-provider`](../../RECORD/2026-09-07.naming-a-provider.WIP.md) |
+| 11 | ~**Naming a provider** — where a model lives, written down once: `[provider.<name>]` in the state directory's `config.toml`, `-p <name>` and `-m <model>`, and a `default` profile that will not load pointing off the machine without `remote = true`~ **answered `local-first`'s first open question with *not `luu.toml`*, and narrowed the declaration to the default profile alone the same day it was written: `-p` is the destination being typed** | nothing | [`naming-a-provider`](../../RECORD/2026-09-07.naming-a-provider.completed.md) |
+| 12 | ~**Configuring from the browser** — a modal with what this server resolved (read-only, including the window caveat nobody in a browser ever saw) and the providers (editable, **loopback only**). ~ **corrected item 11's closing sentence — editing the file is not a picker — and inverted its own: the browser never classifies a URL, the loader refuses the write and names the host to type back, so the rule has one implementation** | nothing | [`configuring-from-the-browser`](../../RECORD/2026-09-07.configuring-from-the-browser.completed.md) |
 
 ```mermaid
 gantt
@@ -52,7 +53,8 @@ gantt
     section Next, and code-shaped
     A GBNF grammar for tool calls          :gbnf, 2026-09-06, 4d
     Active pruning of tool results         :prune, after gbnf, 4d
-    Naming a provider (config.toml)        :prov, 2026-09-07, 2d
+    Naming a provider (config.toml)        :done, prov, 2026-09-07, 1d
+    Configuring from the browser (modal)   :done, modal, 2026-09-07, 1d
     openat2(RESOLVE_BENEATH)               :done, toctou, 2026-09-05, 1d
     Enforcement per job                    :enf, 2026-09-06, 2d
     section Waiting on hardware

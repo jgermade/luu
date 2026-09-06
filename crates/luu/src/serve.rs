@@ -122,6 +122,8 @@ struct App {
     /// Empty when selection is off, and it is the walk rather than the choosing
     /// that is expensive — the choosing is a scan of what this already holds.
     walked: Vec<agent_core::repo_map::Walked>,
+    /// What this server resolved, rendered once for `GET /api/settings`.
+    settings: Settings,
     /// Tokens of selected fragments per turn. 0 is off.
     select_tokens: u32,
     /// Which signals score a file.
@@ -144,8 +146,47 @@ struct App {
     approvers: Approvers,
 }
 
+/// What this server resolved at startup, for the surface a person works in.
+///
+/// **Nothing here is new information.** Every field was decided before the
+/// listener existed and printed to stderr, where a browser was never standing —
+/// which is the whole reason the modal's first section exists and is read-only.
+/// See `RECORD/2026-09-07.configuring-from-the-browser.completed.md`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Settings {
+    /// The profile that named this destination, when one did.
+    profile: Option<String>,
+    /// The backend's own name, which is what a record header carries.
+    backend: String,
+    /// Where it sends. Empty for the mock, which is nowhere.
+    destination: String,
+    remote: bool,
+    model: String,
+    window: Option<u32>,
+    window_from: crate::provider::WindowFrom,
+    /// Why the window may not be what the server is serving. Present only where
+    /// the API has no field to send it in, which is the only place it can
+    /// silently differ.
+    window_caveat: Option<String>,
+    reserve: u32,
+    counter: agent_core::context::Counter,
+    counter_warning: Option<String>,
+    select_tokens: u32,
+    map_tokens: u32,
+    sandbox: String,
+    store: Option<String>,
+}
+
 pub struct StdioOptions {
     pub backend: Arc<dyn Backend>,
+    /// The destination as `crate::provider` resolved it — the profile, the URL
+    /// and whether it left this machine. `stdio` carries it for the same reason
+    /// `serve` does: both build the same `App`, and only one of them serves a
+    /// page that reads it.
+    pub provider: crate::provider::Resolved,
+    /// The sentence a run prints when it has no tokenizer, so the page can say
+    /// what the terminal said.
+    pub counter_warning: Option<String>,
     pub model: String,
     pub record: Option<PathBuf>,
     pub budget: Budget,
@@ -179,6 +220,8 @@ impl App {
     async fn create(options: StdioOptions) -> Result<Arc<Self>> {
         let StdioOptions {
             backend,
+            provider,
+            counter_warning,
             model,
             record,
             budget,
@@ -264,7 +307,34 @@ impl App {
         let model_name = model.clone();
         let counter_id = counter.id();
         let map_rendered = map.render();
+        let settings = Settings {
+            profile: provider.profile.clone(),
+            backend: backend_name.clone(),
+            destination: provider.url.clone(),
+            // Read from the URL rather than from the profile's own word: the
+            // declaration in the file answers *was this deliberate*, and this
+            // field answers *where is it going*, which is a different question
+            // and the one a person reading a page is asking.
+            remote: !provider.url.is_empty() && !crate::provider::is_this_machine(&provider.url),
+            model: model_name.clone(),
+            window: budget.limit,
+            window_from: provider.window_from,
+            window_caveat: match provider.kind {
+                crate::provider::BackendKind::Openai => {
+                    agent_core::backend::openai::OpenAi::window_caveat(budget.limit)
+                }
+                _ => None,
+            },
+            reserve: budget.reserve,
+            counter: counter_id.clone(),
+            counter_warning,
+            select_tokens,
+            map_tokens,
+            sandbox: agency.describe(),
+            store: store.as_ref().map(|path| path.display().to_string()),
+        };
         Ok(Arc::new(App {
+            settings,
             backend,
             model,
             approvers,
@@ -415,6 +485,11 @@ fn is_checkpoint(event: &Event) -> bool {
 pub struct ServeOptions {
     pub address: SocketAddr,
     pub backend: Arc<dyn Backend>,
+    /// The destination as `crate::provider` resolved it, for the page that
+    /// shows where this server is sending.
+    pub provider: crate::provider::Resolved,
+    /// The tokenizer warning, if the run had one to print.
+    pub counter_warning: Option<String>,
     pub model: String,
     pub record: Option<PathBuf>,
     pub budget: Budget,
@@ -481,6 +556,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     let ServeOptions {
         address,
         backend,
+        provider,
+        counter_warning,
         model,
         record,
         budget,
@@ -504,6 +581,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
 
     let app = App::create(StdioOptions {
         backend,
+        provider,
+        counter_warning,
         model,
         record,
         budget,
@@ -537,6 +616,14 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // axum allows only one parameter per segment, so `{id}` captures
         // `completed-turn.json` whole and the handler strips it. Only the
         // literal segments get a second route.
+        // What this server resolved, and the file that named it. The first is
+        // read-only always; the second is writable only from this machine —
+        // `PUT` outlives the session and the gate, and a bearer token answers
+        // who may reach the port rather than who may decide that.
+        .route("/api/settings", get(get_settings))
+        .route("/api/settings.json", get(get_settings))
+        .route("/api/providers", get(get_providers).put(put_providers))
+        .route("/api/providers.json", get(get_providers))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions.json", get(list_sessions))
         .route(
@@ -562,6 +649,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .with_state(AppRouterState {
             app: app.clone(),
             auth: auth.clone(),
+            // Loopback only, and decided here because this is where the bound
+            // address is known. Writing a `default` provider redirects every
+            // future run on this machine, outside the gate and after the
+            // session ends — a larger authority than approving one job, and
+            // not one a bearer token should carry.
+            providers_editable: address.ip().is_loopback(),
         });
 
     let listener = tokio::net::TcpListener::bind(address)
@@ -580,6 +673,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
 #[derive(Clone)]
 struct AppRouterState {
     app: Arc<App>,
+    /// Whether this surface may rewrite `config.toml`. See where it is set.
+    providers_editable: bool,
     /// What the port requires. `/ws` reads it for the same reason the
     /// middleware does: a port a network can reach is held to more than one a
     /// person's own browser can.
@@ -675,7 +770,7 @@ async fn run_trace_socket(socket: WebSocket, app: Arc<App>) {
 }
 
 async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
-    let AppRouterState { app, auth } = state;
+    let AppRouterState { app, auth, .. } = state;
     let (mut sink, mut stream) = socket.split();
     let mut events = app.events.subscribe();
 
@@ -1778,6 +1873,141 @@ fn not_found(what: &str) -> Response {
 /// store is a cache of this very fold, and a listing that showed both would be
 /// showing one session under two names, the older of them by however long ago
 /// the last checkpoint was.
+/// What this server resolved at startup.
+///
+/// Everything here was already decided before the listener existed and printed
+/// once to stderr. The page is where a person actually is.
+async fn get_settings(State(state): State<AppRouterState>) -> Response {
+    Json(state.app.settings.clone()).into_response()
+}
+
+/// The providers file, as the editor sees it.
+#[derive(serde::Serialize)]
+struct ProvidersView {
+    /// Where the file is, or would be written. `None` is a machine that has
+    /// chosen no state directory, where there is nowhere to put one.
+    path: Option<String>,
+    /// Whether this surface may write. False renders the section disabled
+    /// rather than hiding it: a control that is absent looks like a feature
+    /// that does not exist.
+    editable: bool,
+    /// Why not, when it is not.
+    refused: Option<String>,
+    default: Option<String>,
+    providers: std::collections::BTreeMap<String, crate::provider::Profile>,
+    /// The profile *this* server is running, which the file's default may no
+    /// longer be: the file can be edited while a server that resolved hours ago
+    /// keeps sending where it was pointed.
+    running: Option<String>,
+}
+
+fn providers_view(state: &AppRouterState) -> Result<ProvidersView, crate::provider::ConfigError> {
+    let (config, path) = crate::provider::Config::load()?;
+    Ok(ProvidersView {
+        path: path
+            .or_else(crate::provider::Config::path_for_writing)
+            .map(|path| path.display().to_string()),
+        editable: state.providers_editable,
+        refused: match state.providers_editable {
+            true => None,
+            false => Some(
+                "this server is bound off loopback. A provider outlives the session and the \
+                 gate, and the bearer token says who may reach the port rather than who may \
+                 decide where this machine sends. Edit config.toml on the machine itself."
+                    .to_string(),
+            ),
+        },
+        default: config.default_name().map(str::to_string),
+        providers: config.profiles().clone(),
+        running: state.app.settings.profile.clone(),
+    })
+}
+
+async fn get_providers(State(state): State<AppRouterState>) -> Response {
+    match providers_view(&state) {
+        Ok(view) => Json(view).into_response(),
+        // A file that does not load is the one a person most needs to see, so
+        // the message goes to the page rather than only to the terminal that
+        // started this.
+        Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    }
+}
+
+/// Why a write was refused, in a shape an editor can act on.
+///
+/// **The rule lives in one place and it is not this one.** The browser never
+/// decides whether a URL is off the machine; it writes what it was given, is
+/// refused by the loader, and is told which host to have somebody type back.
+/// A second implementation of `is_this_machine` in JavaScript is how the two
+/// drift until the page cheerfully saves a file the next run cannot load.
+#[derive(serde::Serialize)]
+struct WriteRefused {
+    message: String,
+    /// Set only for the one refusal a person can answer: a default that leaves
+    /// this machine and has not said so. The host is what they type.
+    declaration: Option<Declaration>,
+}
+
+#[derive(serde::Serialize)]
+struct Declaration {
+    profile: String,
+    host: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ProvidersEdit {
+    default: Option<String>,
+    #[serde(default)]
+    providers: std::collections::BTreeMap<String, crate::provider::Profile>,
+}
+
+async fn put_providers(
+    State(state): State<AppRouterState>,
+    Json(edit): Json<ProvidersEdit>,
+) -> Response {
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "providers are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(path) = crate::provider::Config::path_for_writing() else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml. \
+             Run luu once on a terminal, or set LUU_HOME.",
+        )
+            .into_response();
+    };
+    let config = crate::provider::Config::from_parts(edit.default, edit.providers);
+    // Checked by the loader that will read it back, so the rule a remote
+    // default has to declare itself is enforced here by being the same rule.
+    if let Err(error) = config.write(&path) {
+        let declaration = match &error {
+            crate::provider::ConfigError::UndeclaredRemoteDefault { name, url, .. } => {
+                Some(Declaration {
+                    profile: name.clone(),
+                    host: crate::provider::authority_of(url).to_string(),
+                })
+            }
+            _ => None,
+        };
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(WriteRefused {
+                message: error.to_string(),
+                declaration,
+            }),
+        )
+            .into_response();
+    }
+    match providers_view(&state) {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    }
+}
+
 async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     let live = state.app.view.lock().await.summary();
     let mut sessions = vec![live];
@@ -2098,6 +2328,23 @@ mod tests {
                     .delay(std::time::Duration::ZERO),
             ),
             model: "mock".into(),
+            settings: Settings {
+                profile: None,
+                backend: "mock".into(),
+                destination: String::new(),
+                remote: false,
+                model: "mock".into(),
+                window: None,
+                window_from: crate::provider::WindowFrom::Unset,
+                window_caveat: None,
+                reserve: 0,
+                counter: agent_core::context::Counter::Approximate,
+                counter_warning: None,
+                select_tokens,
+                map_tokens: 0,
+                sandbox: String::new(),
+                store: None,
+            },
             session: Mutex::new(Session {
                 next_turn: 1,
                 current: None,

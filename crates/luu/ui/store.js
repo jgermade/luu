@@ -52,6 +52,14 @@ export const state = $reactive({
   jobs: [],               // [{ id, objective, plan, proposed, source, state, summary }]
   tasks: [],              // alias for jobs
   error: null,
+  // The configuration modal: what this server resolved (read-only) and the
+  // providers file behind it. Both are fetched when it opens rather than kept
+  // live — the settings cannot change under a running server, and the file can
+  // be edited by hand while one runs, so a stale copy would be the lie.
+  settingsOpen: false,
+  settings: null,         // GET /api/settings — see serve::Settings
+  providers: null,        // GET /api/providers — { path, editable, refused, default, providers, running }
+  providersError: null,   // a config.toml that does not load, said where it can be fixed
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
   refused: null,          // { request, reason, detail }
@@ -586,6 +594,63 @@ export const closeJob = job => act("close_job", job)
 export const closeTask = closeJob
 export const reopenJob = job => act("reopen_job", job)
 export const reopenTask = reopenJob
+
+/// Opens the modal, reading both halves fresh.
+///
+/// A `config.toml` that does not load is not a reason to show nothing: it is
+/// the moment a person most needs to see the file and the message about it, so
+/// the error is state rather than a thrown exception.
+export async function openSettings() {
+  state.settingsOpen = true
+  state.providersError = null
+  try {
+    const settings = await fetch("./api/settings", { headers: apiHeaders() })
+    if (settings.ok) state.settings = await settings.json()
+    const providers = await fetch("./api/providers", { headers: apiHeaders() })
+    if (providers.ok) {
+      state.providers = await providers.json()
+    } else {
+      state.providers = null
+      state.providersError = await providers.text()
+    }
+  } catch (e) {
+    state.providersError = `${e}`
+  }
+}
+
+export function closeSettings() {
+  state.settingsOpen = false
+}
+
+/// Writes the file, and takes the server's answer as the new truth.
+///
+/// The server re-parses what it would write before replacing anything, so a
+/// rejection here is the same message a hand-edited file gets — including the
+/// one that says a remote default has to declare itself.
+export async function saveProviders(body) {
+  state.providersError = null
+  try {
+    const res = await fetch("./api/providers", {
+      method: "PUT",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      // One refusal is answerable rather than only reportable: a default that
+      // leaves this machine and has not said so. The server names the host and
+      // the caller asks for it to be typed — the declaration is produced by a
+      // person, which is the whole content of the rule.
+      const refused = await res.json().catch(() => null)
+      state.providersError = refused?.message || "the write was refused"
+      return { ok: false, declaration: refused?.declaration || null }
+    }
+    state.providers = await res.json()
+    return { ok: true, declaration: null }
+  } catch (e) {
+    state.providersError = `${e}`
+    return false
+  }
+}
 
 export async function refreshLiveSession() {
   try {

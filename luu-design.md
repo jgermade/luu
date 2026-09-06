@@ -182,7 +182,7 @@ container is what makes it real.
                   └─────────────────────┘
 ```
 
-The core knows nothing about CLI, VSCode or the browser — it exposes an internal API (Rust) plus a local server speaking a single JSON message schema over swappable transports. This is also what makes container isolation a packaging question: the container wraps tool execution, not the whole core — see [Container mode](#container-mode) and [`RECORD/2026-09-01.the-container-decided.WIP.md`](RECORD/2026-09-01.the-container-decided.WIP.md).
+The core knows nothing about CLI, VSCode or the browser — it exposes an internal API (Rust) plus a local server speaking a single JSON message schema over swappable transports. This is also what makes container isolation a packaging question: the container wraps tool execution, not the whole core — see [Container mode](#container-mode) and [`RECORD/2026-09-01.the-container-decided.completed.md`](RECORD/2026-09-01.the-container-decided.completed.md).
 
 ## Context management (the differentiating piece)
 
@@ -492,7 +492,7 @@ a fact rather than a date. Level 2 stays applied inside it — inside a Linux
 container Landlock works, is free, and is the one part of the sandbox the whole
 exercise exists to reach, so the loosening widens `commands` and `network` and
 leaves `enforcement` alone. See
-[`RECORD/2026-09-01.the-container-decided.WIP.md`](RECORD/2026-09-01.the-container-decided.WIP.md)
+[`RECORD/2026-09-01.the-container-decided.completed.md`](RECORD/2026-09-01.the-container-decided.completed.md)
 for the decision and
 [`RECORD/2026-09-02.the-worker-and-the-seam.completed.md`](RECORD/2026-09-02.the-worker-and-the-seam.completed.md)
 for where it cuts in the code.
@@ -802,6 +802,39 @@ Chat and session list are table stakes. The ones that justify building this at a
    *before/after pruning* waits on pruning existing.
 4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
 
+### The configuration modal
+
+**Two sections, and they are not the same kind of thing.** The first is *what
+this server resolved* — the provider and its URL, whether it left the machine,
+the model, the window and which of the three said so (a flag, a profile's
+`context-limit`, or nothing), the counter and its warning, the map and selection
+budgets, the sandbox, the store. None of it is new: all of it was decided before
+the listener existed and printed once to stderr, where nobody working in a
+browser was standing. That includes **the window caveat**, which is the sentence
+explaining why the count in the budget panel can disagree with the server's.
+
+The second section edits `config.toml`. **On loopback only** — a bearer token
+answers who may reach the port and never who may decide where this machine
+sends, and a `default` provider outlives the session and the gate, which makes
+it a larger authority than approving one job. Off loopback the section renders
+disabled and says why.
+
+**The browser never decides whether a URL is off the machine.** It writes what it
+was given; the loader — the same one every run reads the file with — refuses a
+default that leaves the machine without `remote = true`, and the refusal names
+the profile and the host. The page then asks for that host to be *typed* and
+retries with the declaration in place. So the rule has one implementation, and
+the word is produced by a person answering the machine's objection rather than
+by a checkbox the program pre-ticked. Keys are paths and never values, for the
+reason the provider section gives.
+
+**Nothing in the modal changes the running server**, which resolved its
+destination at startup and keeps it; the file it writes is what the *next* run
+reads, and the modal says so. Choosing a provider for a new session is a
+different question — `AppState` holds one backend for every session — and is not
+this. See
+[`RECORD/2026-09-07.configuring-from-the-browser.completed.md`](RECORD/2026-09-07.configuring-from-the-browser.completed.md).
+
 ### Record and replay
 
 `luu serve --record <file>` dumps the JSON-lines stream to disk, and the UI can load such a file
@@ -847,7 +880,61 @@ report none even then. `None` is *not reported*; zero would claim the server saw
 an empty prompt, in exactly the number the budget panel plots against ours. See
 [`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
 
+### Where a model lives
+
+**A provider is a named destination**, kept in `config.toml` in the state
+directory: which backend, at which URL, with which model, which key file and
+which window the server was started with. `luu chat -p workstation`, and the
+flags override it field by field — `-m` moves the model and nothing else, so a
+model flag over a local profile asks *that server*, and the answer is its own
+404 rather than a redirect.
+
+```toml
+default = "local"
+
+[provider.local]
+backend = "ollama"
+url = "http://127.0.0.1:11434"
+model = "qwen2.5-coder:7b"
+
+[provider.workstation]
+backend = "openai"
+url = "http://192.168.1.40:8080/v1"
+model = "qwen2.5-coder-14b"
+context-limit = 16384
+```
+
+**Not in `luu.toml`, for the reason the session store is not**: the policy file
+describes *this project* and is committed with it, while a LAN address, a path
+to a key and a model somebody pulled are facts about one machine. `context-limit`
+is in the profile because on the OpenAI API the window is a fact about the
+*server* — there is no field on a request to send it in — so the number belongs
+beside the URL rather than in a flag that gets retyped.
+
+**A remote default has to say `remote = true`, and a local one may not.**
+Local-first promises that nothing leaves the machine without the destination
+having been typed, and a profile is a destination typed once, weeks ago —
+except that `-p workstation` *is* typing it, at the moment of use. The default
+is the only shape where nothing was typed, so it is the only one that must have
+been written down; a `config.toml` that arrived from elsewhere fails to load if
+its default points off the machine. **A box on the LAN counts as off the
+machine** — the commitment says *the machine*, not *the building* — and a host
+that cannot be parsed counts as off it too. Every run that has somewhere to send
+prints where, before it sends: `provider: workstation → openai@192.168.1.40:8080
+(remote)`.
+
+**The key is a path, never a value, and its mode is checked.** A key in a config
+file is a key in every backup and every `cat` in a bug report; an environment
+variable is inherited by every child `run_command` spawns, which is the one place
+this repository deliberately runs code it did not write. A file is the only one
+of the three whose exposure the program can check, so both secrets — the API key
+and `/ws`'s bearer token — are read and checked in the same place. See
+[`RECORD/2026-09-07.naming-a-provider.completed.md`](RECORD/2026-09-07.naming-a-provider.completed.md).
+
 ## Persistence
+
+The state directory holds two things: `sessions.db`, and the `config.toml` the
+providers above are named in.
 
 **Sessions are stored**, as SQLite (`rusqlite`, with SQLite compiled in so the
 store does not depend on the host's system packages). `luu serve` caches its fold

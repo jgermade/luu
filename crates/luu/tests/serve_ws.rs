@@ -168,6 +168,8 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
         worker: None,
     };
     let serving = bind(ServeOptions {
+        provider: luu::provider::Resolved::mock(),
+        counter_warning: None,
         approvers: Default::default(),
         address: "127.0.0.1:0".parse().expect("a loopback address"),
         backend: Arc::new(Mock::replies(replies).delay(Duration::ZERO)),
@@ -251,6 +253,8 @@ async fn server_everything(
         worker: None,
     };
     let serving = bind(ServeOptions {
+        provider: luu::provider::Resolved::mock(),
+        counter_warning: None,
         approvers,
         address: "127.0.0.1:0".parse().expect("a loopback address"),
         backend: Arc::new(Mock::replies(replies).delay(delay)),
@@ -1794,4 +1798,56 @@ async fn a_grant_widened_after_the_signature_is_refused() {
         view["jobs"][0]["state"], "proposed",
         "a refused approval leaves the job exactly as it was",
     );
+}
+
+/// The read half of the configuration modal: what a browser is told this server
+/// resolved.
+///
+/// It asserts the *shape*, not a URL — the point of the route is that the page
+/// stops having to read a terminal for facts the run already decided. The write
+/// half is not here: it would write a `config.toml` on the machine running the
+/// tests, and the rule it has to obey is unit-tested in `provider` against a
+/// scratch path instead.
+#[tokio::test]
+async fn the_settings_route_reports_what_the_run_resolved() {
+    let address = server().await;
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+
+    assert_eq!(settings["backend"], "mock");
+    assert_eq!(settings["model"], "mock");
+    // The mock is nowhere, so there is nothing to say left the machine.
+    assert_eq!(settings["destination"], "");
+    assert_eq!(settings["remote"], false);
+    assert_eq!(settings["window_from"], "unset");
+    assert!(
+        settings["sandbox"]
+            .as_str()
+            .is_some_and(|text| text.contains("read-write")),
+        "the sandbox this run resolved is on the page, not only on stderr"
+    );
+}
+
+/// The providers file as the editor reads it, on a loopback server.
+#[tokio::test]
+async fn the_providers_route_says_whether_this_surface_may_write() {
+    let address = server().await;
+    let response = reqwest::get(format!("http://{address}/api/providers"))
+        .await
+        .expect("asking for the providers");
+    // A machine with a `config.toml` that does not load answers 422 with the
+    // message, which is a real answer and not a failure of this route.
+    if response.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        return;
+    }
+    let view: serde_json::Value = response.json().await.expect("the view is JSON");
+    assert_eq!(
+        view["editable"], true,
+        "bound on loopback, so this surface may write the file"
+    );
+    assert!(view["refused"].is_null());
 }

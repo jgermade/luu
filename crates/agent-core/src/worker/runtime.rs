@@ -7,7 +7,7 @@
 //! choice, which is local-first applied to runtimes instead of to models.
 //!
 //! Two things this layer must do rather than assume, because the flags are
-//! **not** uniform (`RECORD/2026-09-01.the-container-decided.WIP.md` found the
+//! **not** uniform (`RECORD/2026-09-01.the-container-decided.completed.md` found the
 //! gap): declare what it requires, and say what is missing when a runtime
 //! cannot express it.
 

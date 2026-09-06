@@ -20,6 +20,7 @@ use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
 use agent_core::worker::{Runtime, Worker, WorkerConfig, WorkerSpec, serve_stdio};
 
+use crate::provider::BackendKind;
 use crate::session::{
     Agency, DEFAULT_RESERVE, Event, PrefixTracker, Recorder, SYSTEM, counter_for, now_ms, rendered,
 };
@@ -28,6 +29,8 @@ use anyhow::{Context, Result};
 pub mod auth;
 pub mod config;
 pub mod export;
+pub mod provider;
+pub mod secret;
 pub mod serve;
 pub mod session;
 pub mod store;
@@ -227,26 +230,43 @@ enum Command {
         #[arg(long, conflicts_with = "store")]
         no_store: bool,
 
-        #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
-        backend: BackendKind,
+        /// A destination named in the state directory's `config.toml`, as
+        /// `[provider.<name>]`: the backend, the URL, the model and the key
+        /// written down once instead of retyped per run. The flags below
+        /// override it field by field. See
+        /// `RECORD/2026-09-07.naming-a-provider.completed.md`.
+        #[arg(long, short, value_name = "NAME")]
+        provider: Option<String>,
 
-        #[arg(long, default_value = "qwen2.5-coder:7b")]
-        model: String,
+        /// The profile's backend, or `mock` when nothing named one.
+        #[arg(long, value_enum)]
+        backend: Option<BackendKind>,
 
-        #[arg(long, default_value = "http://127.0.0.1:11434")]
-        ollama_url: String,
+        /// The profile's model, or `qwen2.5-coder:7b`. **One field of a
+        /// destination, not a destination**: `-m` over a profile that names a
+        /// local server asks *that server* for the model, and the answer is its
+        /// own 404 rather than a redirect.
+        #[arg(long, short)]
+        model: Option<String>,
+
+        /// The profile's URL under `--backend ollama`, or
+        /// `http://127.0.0.1:11434`.
+        #[arg(long)]
+        ollama_url: Option<String>,
 
         /// Where the OpenAI-compatible server is. `llama-server`, vLLM, LM
         /// Studio and the hosted endpoints all answer here — and none of them
         /// takes the window on a request, so start the server with the window
-        /// this run budgets against.
-        #[arg(long, default_value = agent_core::backend::openai::DEFAULT_BASE_URL)]
-        openai_url: String,
+        /// this run budgets against. Defaults to the profile's URL, then to
+        /// `http://127.0.0.1:8080/v1`.
+        #[arg(long)]
+        openai_url: Option<String>,
 
         /// A file holding the bearer token for `--backend openai`. Omitted
         /// means no `Authorization` header at all, which is what a local
         /// server wants. A file rather than a flag or an env var, for the
-        /// reason `--auth-token-file` gives.
+        /// reason `crate::secret` gives — and its mode is checked there, as the
+        /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
         api_key_file: Option<std::path::PathBuf>,
 
@@ -366,21 +386,37 @@ enum Command {
         #[arg(long, conflicts_with = "store")]
         no_store: bool,
 
-        #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
-        backend: BackendKind,
+        /// A destination named in the state directory's `config.toml`, as
+        /// `[provider.<name>]`: the backend, the URL, the model and the key
+        /// written down once instead of retyped per run. The flags below
+        /// override it field by field. See
+        /// `RECORD/2026-09-07.naming-a-provider.completed.md`.
+        #[arg(long, short, value_name = "NAME")]
+        provider: Option<String>,
 
-        #[arg(long, default_value = "qwen2.5-coder:7b")]
-        model: String,
+        /// The profile's backend, or `mock` when nothing named one.
+        #[arg(long, value_enum)]
+        backend: Option<BackendKind>,
 
-        #[arg(long, default_value = "http://127.0.0.1:11434")]
-        ollama_url: String,
+        /// The profile's model, or `qwen2.5-coder:7b`. **One field of a
+        /// destination, not a destination**: `-m` over a profile that names a
+        /// local server asks *that server* for the model, and the answer is its
+        /// own 404 rather than a redirect.
+        #[arg(long, short)]
+        model: Option<String>,
+
+        /// The profile's URL under `--backend ollama`, or
+        /// `http://127.0.0.1:11434`.
+        #[arg(long)]
+        ollama_url: Option<String>,
 
         /// Where the OpenAI-compatible server is. `llama-server`, vLLM, LM
         /// Studio and the hosted endpoints all answer here — and none of them
         /// takes the window on a request, so start the server with the window
-        /// this run budgets against.
-        #[arg(long, default_value = agent_core::backend::openai::DEFAULT_BASE_URL)]
-        openai_url: String,
+        /// this run budgets against. Defaults to the profile's URL, then to
+        /// `http://127.0.0.1:8080/v1`.
+        #[arg(long)]
+        openai_url: Option<String>,
 
         /// A file holding the bearer token for `--backend openai`. Omitted
         /// means no `Authorization` header at all, which is what a local
@@ -504,26 +540,43 @@ enum Command {
         #[arg(long = "fragment", value_name = "PATH[:START-END]")]
         fragments: Vec<String>,
 
-        #[arg(long, value_enum, default_value_t = BackendKind::Mock)]
-        backend: BackendKind,
+        /// A destination named in the state directory's `config.toml`, as
+        /// `[provider.<name>]`: the backend, the URL, the model and the key
+        /// written down once instead of retyped per run. The flags below
+        /// override it field by field. See
+        /// `RECORD/2026-09-07.naming-a-provider.completed.md`.
+        #[arg(long, short, value_name = "NAME")]
+        provider: Option<String>,
 
-        #[arg(long, default_value = "qwen2.5-coder:7b")]
-        model: String,
+        /// The profile's backend, or `mock` when nothing named one.
+        #[arg(long, value_enum)]
+        backend: Option<BackendKind>,
 
-        #[arg(long, default_value = "http://127.0.0.1:11434")]
-        ollama_url: String,
+        /// The profile's model, or `qwen2.5-coder:7b`. **One field of a
+        /// destination, not a destination**: `-m` over a profile that names a
+        /// local server asks *that server* for the model, and the answer is its
+        /// own 404 rather than a redirect.
+        #[arg(long, short)]
+        model: Option<String>,
+
+        /// The profile's URL under `--backend ollama`, or
+        /// `http://127.0.0.1:11434`.
+        #[arg(long)]
+        ollama_url: Option<String>,
 
         /// Where the OpenAI-compatible server is. `llama-server`, vLLM, LM
         /// Studio and the hosted endpoints all answer here — and none of them
         /// takes the window on a request, so start the server with the window
-        /// this run budgets against.
-        #[arg(long, default_value = agent_core::backend::openai::DEFAULT_BASE_URL)]
-        openai_url: String,
+        /// this run budgets against. Defaults to the profile's URL, then to
+        /// `http://127.0.0.1:8080/v1`.
+        #[arg(long)]
+        openai_url: Option<String>,
 
         /// A file holding the bearer token for `--backend openai`. Omitted
         /// means no `Authorization` header at all, which is what a local
         /// server wants. A file rather than a flag or an env var, for the
-        /// reason `--auth-token-file` gives.
+        /// reason `crate::secret` gives — and its mode is checked there, as the
+        /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
         api_key_file: Option<std::path::PathBuf>,
 
@@ -1007,32 +1060,52 @@ impl EvictionKind {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
-enum BackendKind {
-    Mock,
-    Ollama,
-    /// Any OpenAI-compatible server: `llama-server`, vLLM, LM Studio, a hosted
-    /// endpoint, or Ollama's own `/v1`.
-    Openai,
-}
-
-/// Where a backend is, and what it needs to be reached. Grouped because two
-/// subcommands build the same thing from the same flags, and a seventh
-/// positional argument is how they drift apart.
-struct BackendArgs<'a> {
-    kind: BackendKind,
-    ollama_url: &'a str,
-    openai_url: &'a str,
+/// Everything a run needs to reach a model: what the flags said, and what the
+/// mock needs when they said nothing.
+struct ModelArgs<'a> {
+    provider: Option<&'a str>,
+    backend: Option<BackendKind>,
+    model: Option<&'a str>,
+    ollama_url: Option<&'a str>,
+    openai_url: Option<&'a str>,
     api_key_file: Option<&'a std::path::Path>,
+    /// What this run budgets against, and 0 for "nothing said" — in which case
+    /// the profile's own `context-limit` answers, because on the OpenAI API the
+    /// window is a fact about the server and nowhere else.
+    context_limit: u32,
     mock_delay_ms: u64,
     mock_replies: Vec<String>,
-    /// What this run budgets against, only so the OpenAI backend can say that
-    /// it cannot send it. Nothing else here reads it.
-    context_limit: u32,
 }
 
-fn build_backend(args: BackendArgs<'_>) -> Result<Box<dyn Backend>> {
-    Ok(match args.kind {
+/// The destination, resolved, announced, and built.
+///
+/// One function for `serve`, `stdio` and `chat`, which is the point: three
+/// callers assembling a backend out of the same flags is how the three drift
+/// apart, and the file they now all read can only move them together. It hands
+/// back the window as well, because a profile may have supplied it.
+fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resolved)> {
+    let (config, path) = provider::Config::load()?;
+    let resolved = provider::resolve(
+        &config,
+        path.as_deref(),
+        provider::Flags {
+            provider: args.provider,
+            backend: args.backend,
+            model: args.model,
+            ollama_url: args.ollama_url,
+            openai_url: args.openai_url,
+            api_key_file: args.api_key_file,
+            context_limit: args.context_limit,
+        },
+    )?;
+    // Before anything is sent, and on every run that has somewhere to send to.
+    // A profile is a destination typed once and used for months, so this line is
+    // what is left of *the destination having been typed*.
+    if let Some(line) = resolved.line() {
+        eprintln!("{line}");
+    }
+
+    let backend: Box<dyn Backend> = match resolved.kind {
         BackendKind::Mock => Box::new(
             match args.mock_replies.is_empty() {
                 true => Mock::default(),
@@ -1040,28 +1113,33 @@ fn build_backend(args: BackendArgs<'_>) -> Result<Box<dyn Backend>> {
             }
             .delay(Duration::from_millis(args.mock_delay_ms)),
         ),
-        BackendKind::Ollama => Box::new(Ollama::new(args.ollama_url)),
+        BackendKind::Ollama => Box::new(Ollama::new(&resolved.url)),
         BackendKind::Openai => {
             // Once, before anything is measured: this API has no field for the
             // window, so a run that budgets 8192 against a server started with
             // 4096 can only be told apart afterwards, by the prompt_tokens each
             // turn reports. Saying nothing here is how that becomes invisible.
-            if let Some(caveat) = OpenAi::window_caveat(Some(args.context_limit)) {
+            if let Some(caveat) = OpenAi::window_caveat(Some(resolved.context_limit)) {
                 eprintln!("note: {caveat}");
             }
-            let mut backend = OpenAi::new(args.openai_url);
-            if let Some(path) = args.api_key_file {
-                let key = std::fs::read_to_string(path)
-                    .with_context(|| format!("reading the API key from {}", path.display()))?;
-                let key = key.trim();
-                if key.is_empty() {
-                    anyhow::bail!("the API key file {} is empty", path.display());
-                }
+            let mut backend = OpenAi::new(&resolved.url);
+            if let Some(path) = &resolved.key_file {
+                let key = crate::secret::read(
+                    path,
+                    "the API key file",
+                    "hands the key to anyone who can read it here",
+                )?;
                 backend = backend.with_api_key(key);
             }
             Box::new(backend)
         }
-    })
+    };
+    // The mock's model name is the mock's, and it is written back here so
+    // every reader of the resolution — the record header, the page — sees the
+    // same string the turn will use.
+    let mut resolved = resolved;
+    resolved.model = model_for(backend.as_ref(), resolved.model);
+    Ok((backend, resolved))
 }
 
 /// The mock ignores the model name; passing the Ollama default through would
@@ -1419,6 +1497,7 @@ pub async fn run() -> Result<()> {
         store,
         no_store,
         sandbox_args,
+        provider,
         backend,
         model,
         ollama_url,
@@ -1443,16 +1522,19 @@ pub async fn run() -> Result<()> {
         select_graph,
     } = command
     {
-        let backend = build_backend(BackendArgs {
-            kind: backend,
-            ollama_url: &ollama_url,
-            openai_url: &openai_url,
+        let (backend, resolved) = destination(ModelArgs {
+            provider: provider.as_deref(),
+            backend,
+            model: model.as_deref(),
+            ollama_url: ollama_url.as_deref(),
+            openai_url: openai_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
+            context_limit,
             mock_delay_ms,
             mock_replies,
-            context_limit,
         })?;
-        let model = model_for(backend.as_ref(), model);
+        let model = resolved.model.clone();
+        let context_limit = resolved.context_limit;
         let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
@@ -1485,6 +1567,8 @@ pub async fn run() -> Result<()> {
             }
         };
         return serve::serve(serve::ServeOptions {
+            provider: resolved,
+            counter_warning: warning,
             address: bind,
             backend: backend.into(),
             model,
@@ -1510,6 +1594,7 @@ pub async fn run() -> Result<()> {
         store,
         no_store,
         sandbox_args,
+        provider,
         backend,
         model,
         ollama_url,
@@ -1534,16 +1619,19 @@ pub async fn run() -> Result<()> {
         select_graph,
     } = command
     {
-        let backend = build_backend(BackendArgs {
-            kind: backend,
-            ollama_url: &ollama_url,
-            openai_url: &openai_url,
+        let (backend, resolved) = destination(ModelArgs {
+            provider: provider.as_deref(),
+            backend,
+            model: model.as_deref(),
+            ollama_url: ollama_url.as_deref(),
+            openai_url: openai_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
+            context_limit,
             mock_delay_ms,
             mock_replies,
-            context_limit,
         })?;
-        let model = model_for(backend.as_ref(), model);
+        let model = resolved.model.clone();
+        let context_limit = resolved.context_limit;
         let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
@@ -1567,6 +1655,8 @@ pub async fn run() -> Result<()> {
             }
         };
         return serve::stdio(serve::StdioOptions {
+            provider: resolved,
+            counter_warning: warning,
             backend: backend.into(),
             model,
             record,
@@ -1591,6 +1681,7 @@ pub async fn run() -> Result<()> {
         sandbox_args,
         script,
         fragments,
+        provider,
         backend,
         model,
         ollama_url,
@@ -1633,16 +1724,19 @@ pub async fn run() -> Result<()> {
         (None, None) => vec![Step::Prompt(std::io::read_to_string(std::io::stdin())?)],
     };
 
-    let backend = build_backend(BackendArgs {
-        kind: backend,
-        ollama_url: &ollama_url,
-        openai_url: &openai_url,
+    let (backend, resolved) = destination(ModelArgs {
+        provider: provider.as_deref(),
+        backend,
+        model: model.as_deref(),
+        ollama_url: ollama_url.as_deref(),
+        openai_url: openai_url.as_deref(),
         api_key_file: api_key_file.as_deref(),
+        context_limit,
         mock_delay_ms,
         mock_replies,
-        context_limit,
     })?;
-    let model = model_for(backend.as_ref(), model);
+    let model = resolved.model.clone();
+    let context_limit = resolved.context_limit;
     let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
     if let Some(warning) = &warning {
         eprintln!("warning: {warning}");

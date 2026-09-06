@@ -4,7 +4,7 @@
 # "we'll tighten it later" is the thing that does not happen. In three weeks
 # nobody has to do archaeology to tell a default from a leftover: the file's
 # name is what it is for. See
-# RECORD/2026-09-01.the-container-decided.WIP.md §The development posture.
+# RECORD/2026-09-01.the-container-decided.completed.md §The development posture.
 #
 #   docker build -t luu-worker:dev -f Containerfile .
 #   cargo run --bin luu -- tools --sandbox luu.container.toml

@@ -1167,8 +1167,10 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "toml",
 ]
 
 [[package]]

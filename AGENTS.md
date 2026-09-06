@@ -96,6 +96,16 @@ cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 # hosted endpoint, or Ollama's own /v1. The window is the server's — see below.
 cargo run --bin luu -- chat "hola" --backend openai \
   --openai-url http://127.0.0.1:8080/v1 --model qwen2.5-coder-7b
+# and the same destination written down once, in `config.toml` in the state
+# directory: `[provider.<name>]` carries the backend, the URL, the model, the
+# key file and the server's window. `-p` names one, `-m` overrides its model,
+# and the run says where it is sending before it sends.
+cargo run --bin luu -- chat "hola" -p workstation
+cargo run --bin luu -- chat "hola" -p workstation -m qwen2.5-coder:14b
+# The profile `default` names must carry `remote = true` when its URL is not
+# this machine — a LAN box included — or the file does not load: with no `-p`,
+# nobody typed the destination. Naming it is typing it, so every other profile
+# is free of the word.
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 # sessions are cached in the state directory's sessions.db by default, so a
 # restart does not lose the conversation: `--store <path>` moves it,

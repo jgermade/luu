@@ -4,7 +4,8 @@
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approveJob, rejectJob, closeJob, reopenJob,
           approveTask, rejectTask, closeTask, reopenTask,
-          newSession, resumeSession, deleteSession } = await import("./store.js")
+          newSession, resumeSession, deleteSession,
+          openSettings, closeSettings, saveProviders } = await import("./store.js")
 
   connect()
 
@@ -44,6 +45,107 @@
     send(draft)
     draft = ""
   }
+
+
+  // ---- the configuration modal -------------------------------------------
+  //
+  // `config` is a *copy* of the providers file: typing into the server's own
+  // answer would make an unsaved change look saved. Rows carry an id because a
+  // row's name is editable and a new one has none, so neither is a key.
+  let config = null
+  let rowId = 0
+  // What the server asked to have typed back, when it refused a write: the one
+  // refusal a person can answer rather than only read. `{ profile, host }`.
+  let declaration = null
+  let typed = ""
+  let saving = false
+
+  const toDraft = view => ({
+    default: view?.default || "",
+    profiles: Object.entries(view?.providers || {}).map(([name, p]) => ({
+      id: ++rowId,
+      name,
+      backend: p.backend || "ollama",
+      url: p.url || "",
+      model: p.model || "",
+      contextLimit: p["context-limit"] ?? "",
+      keyFile: p["key-file"] || "",
+      // Carried through untouched. The editor never *invents* this word — the
+      // server asks for the host to be typed and only then does it go in.
+      remote: !!p.remote,
+    })),
+  })
+
+  const fromDraft = it => ({
+    default: it.default || null,
+    providers: Object.fromEntries(
+      it.profiles.filter(p => p.name.trim()).map(p => [p.name.trim(), {
+        ...(p.backend ? { backend: p.backend } : {}),
+        ...(p.url.trim() ? { url: p.url.trim() } : {}),
+        ...(p.model.trim() ? { model: p.model.trim() } : {}),
+        ...(String(p.contextLimit).trim() ? { "context-limit": Number(p.contextLimit) } : {}),
+        ...(p.keyFile.trim() ? { "key-file": p.keyFile.trim() } : {}),
+        ...(p.remote ? { remote: true } : {}),
+      }]),
+    ),
+  })
+
+  const openConfig = async () => {
+    await openSettings()
+    config = toDraft(state.providers)
+    declaration = null
+    typed = ""
+  }
+  const closeConfig = () => { closeSettings(); config = null; declaration = null; typed = "" }
+  const edit = (id, field, value) => {
+    config = { ...config, profiles: config.profiles.map(p => p.id === id ? { ...p, [field]: value } : p) }
+  }
+  const addProfile = () => {
+    config = { ...config, profiles: [...config.profiles, {
+      id: ++rowId, name: "", backend: "ollama", url: "", model: "",
+      contextLimit: "", keyFile: "", remote: false,
+    }] }
+  }
+  const removeProfile = id => {
+    const gone = config.profiles.find(p => p.id === id)
+    config = {
+      ...config,
+      profiles: config.profiles.filter(p => p.id !== id),
+      default: gone && gone.name === config.default ? "" : config.default,
+    }
+  }
+  const chooseDefault = name => {
+    config = { ...config, default: name }
+    declaration = null
+    typed = ""
+  }
+  // `declaring` retries the same write with the word the person just typed the
+  // host to earn. Nothing else adds it.
+  const saveConfig = async declaring => {
+    saving = true
+    const body = fromDraft(declaring
+      ? { ...config, profiles: config.profiles.map(p =>
+          p.name.trim() === declaration.profile ? { ...p, remote: true } : p) }
+      : config)
+    const result = await saveProviders(body)
+    saving = false
+    if (result.ok) {
+      config = toDraft(state.providers)
+      declaration = null
+      typed = ""
+    } else {
+      declaration = result.declaration
+      typed = ""
+    }
+  }
+
+  $: editable = !!state.providers?.editable
+  $: canDeclare = !!declaration && typed.trim() === declaration.host
+  $: windowSource = ({
+    flag: "--context-limit",
+    profile: "the profile's context-limit",
+    unset: "nothing said, so nothing is budgeted",
+  })[state.settings?.window_from] || ""
 
   $: running = state.status === "running"
   // Whether this is a recording, which is not the same question as what the
@@ -98,8 +200,14 @@
 
 <header>
   <strong>luu</strong>
-  <span class="tag">{{ state.backend || "—" }}</span>
-  <span class="tag">{{ state.model || "—" }}</span>
+  <!-- The thing you click is the thing it is about: these two tags are what
+       the modal's first section explains at length. -->
+  <button type="button" class="tag tag-btn" @click="openConfig()" title="Configuration">
+    {{ state.backend || "—" }}
+  </button>
+  <button type="button" class="tag tag-btn" @click="openConfig()" title="Configuration">
+    {{ state.model || "—" }}
+  </button>
   <select
     :if="state.fixtures.length"
     class="fixtures"
@@ -122,6 +230,156 @@
   </div>
   <span class="status" :class="state.status">{{ state.status }}</span>
 </header>
+
+
+<!-- Configuration. Two sections and they are not the same kind of thing: the
+     first is what this server already resolved and cannot be changed while it
+     runs; the second is a file the next run reads. Saying so is the whole
+     difference between a form that works and one that looks like it did. -->
+<div :if="state.settingsOpen" class="modal-backdrop" @click="closeConfig()">
+  <div class="modal" @click="$event.stopPropagation()">
+    <header class="modal-head">
+      <strong>Configuration</strong>
+      <button type="button" class="link" @click="closeConfig()">close</button>
+    </header>
+
+    <section class="modal-body">
+      <h3>What this server is running</h3>
+      <p class="dim small">
+        Resolved when it started and fixed for its lifetime. Editing the
+        providers below changes what the <em>next</em> run reads, not this one.
+      </p>
+
+      <dl class="settings" :if="state.settings">
+        <dt>Destination</dt>
+        <dd>
+          <span :if="state.settings.profile" class="tag">{{ state.settings.profile }}</span>
+          <span>{{ state.settings.backend }}</span>
+          <span :if="state.settings.destination" class="dim">{{ state.settings.destination }}</span>
+          <span :if="state.settings.remote" class="warn">remote — this leaves the machine</span>
+          <span :if="!state.settings.destination" class="dim">nowhere: the mock backend</span>
+        </dd>
+
+        <dt>Model</dt>
+        <dd>{{ state.settings.model }}</dd>
+
+        <dt>Window</dt>
+        <dd>
+          <span :if="state.settings.window">{{ state.settings.window }} tokens</span>
+          <span :if="!state.settings.window" class="dim">unknown</span>
+          <span class="dim">· {{ windowSource }}</span>
+          <span class="dim">· {{ state.settings.reserve }} reserved for the answer</span>
+        </dd>
+        <dd :if="state.settings.window_caveat" class="caveat">{{ state.settings.window_caveat }}</dd>
+
+        <dt>Counting</dt>
+        <dd>
+          <span>{{ state.settings.counter.kind === "model" ? state.settings.counter.id : "approximate" }}</span>
+          <span :if="state.settings.counter_warning" class="warn">{{ state.settings.counter_warning }}</span>
+        </dd>
+
+        <dt>Context</dt>
+        <dd>
+          <span>map {{ state.settings.map_tokens || 0 }}</span>
+          <span>· selection {{ state.settings.select_tokens || 0 }}</span>
+          <span :if="!state.settings.select_tokens" class="dim">· selection off</span>
+        </dd>
+
+        <dt>Sessions</dt>
+        <dd>
+          <span :if="state.settings.store">{{ state.settings.store }}</span>
+          <span :if="!state.settings.store" class="dim">in memory only</span>
+        </dd>
+
+        <dt>Sandbox</dt>
+        <dd><pre class="sandbox">{{ state.settings.sandbox }}</pre></dd>
+      </dl>
+
+      <h3>Providers</h3>
+      <p class="dim small" :if="state.providers?.path">
+        {{ state.providers.path }}
+        <span :if="state.providers.running">· this server is running <strong>{{ state.providers.running }}</strong></span>
+      </p>
+      <p :if="state.providers && !state.providers.editable" class="refused">
+        {{ state.providers.refused }}
+      </p>
+      <p :if="state.providersError" class="error">{{ state.providersError }}</p>
+
+      <table class="providers" :if="config">
+        <thead>
+          <tr>
+            <th>Default</th><th>Name</th><th>Backend</th><th>URL</th>
+            <th>Model</th><th>Window</th><th>Key file</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :each="row in config.profiles" :key="row.id">
+            <td>
+              <input type="radio" name="default" :disabled="!editable || !row.name"
+                     :checked="config.default === row.name"
+                     @change="chooseDefault(row.name)">
+            </td>
+            <td><input class="w-name" :value="row.name" :disabled="!editable"
+                       @input="edit(row.id, 'name', $event.target.value)"></td>
+            <td>
+              <select :value="row.backend" :disabled="!editable"
+                      @change="edit(row.id, 'backend', $event.target.value)">
+                <option value="ollama">ollama</option>
+                <option value="openai">openai</option>
+                <option value="mock">mock</option>
+              </select>
+            </td>
+            <td><input class="w-url" :value="row.url" :disabled="!editable"
+                       placeholder="http://127.0.0.1:11434"
+                       @input="edit(row.id, 'url', $event.target.value)"></td>
+            <td><input class="w-model" :value="row.model" :disabled="!editable"
+                       @input="edit(row.id, 'model', $event.target.value)"></td>
+            <td><input class="w-num" :value="row.contextLimit" :disabled="!editable"
+                       placeholder="—" title="The window the server was started with"
+                       @input="edit(row.id, 'contextLimit', $event.target.value)"></td>
+            <td>
+              <input class="w-key" :value="row.keyFile" :disabled="!editable"
+                     placeholder="~/.luu/that.key"
+                     title="A path. Never the key itself: a key in this file is a key in every backup."
+                     @input="edit(row.id, 'keyFile', $event.target.value)">
+            </td>
+            <td>
+              <span :if="row.remote" class="tag warn" title="Declared as off this machine">remote</span>
+              <button type="button" class="link" :disabled="!editable"
+                      @click="removeProfile(row.id)">remove</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="modal-foot">
+        <!-- The one refusal a person can answer. The browser never decides that a
+             URL is off the machine — the server refuses the write and names the
+             host, and typing it is the declaration, exactly as `-p` is on the
+             command line. -->
+        <div :if="declaration" class="declare">
+          <p>
+            <strong>{{ declaration.profile }}</strong> sends to
+            <strong>{{ declaration.host }}</strong>, which is not this machine, and
+            it is about to become the default — so every run that names no provider
+            goes there. Type the host to confirm.
+          </p>
+          <input :value="typed" placeholder="{{ declaration.host }}"
+                 @input="typed = $event.target.value">
+          <button type="button" :disabled="!canDeclare || saving"
+                  @click="saveConfig(true)">Confirm and save</button>
+        </div>
+
+        <div class="modal-actions" :if="config">
+          <button type="button" class="add" :disabled="!editable" @click="addProfile()">+ profile</button>
+          <button type="button" class="save" :disabled="!editable || saving"
+                  @click="saveConfig(false)">{{ saving ? "Saving…" : "Save" }}</button>
+        </div>
+      </div>
+
+    </section>
+  </div>
+</div>
 
 <div class="split">
   <section class="chat">

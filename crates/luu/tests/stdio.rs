@@ -35,6 +35,8 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
     let counter = Arc::new(ApproximateCounter);
     let budget = Budget::new(0, 512, Eviction::Turn);
     StdioOptions {
+        provider: luu::provider::Resolved::mock(),
+        counter_warning: None,
         approvers: Default::default(),
         backend,
         model: "mock".to_string(),
