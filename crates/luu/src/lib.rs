@@ -757,6 +757,7 @@ fn run_key(action: &KeyAction) -> Result<()> {
                 commands,
                 closes_on,
                 network,
+                enforcement,
                 egress,
                 ..
             } = message
@@ -773,6 +774,7 @@ fn run_key(action: &KeyAction) -> Result<()> {
                     closes_on: closes_on.as_ref(),
                     network,
                     egress: egress.as_ref(),
+                    enforcement,
                 },
                 signer.clone(),
             )?;
@@ -783,6 +785,7 @@ fn run_key(action: &KeyAction) -> Result<()> {
                 commands,
                 closes_on,
                 network,
+                enforcement,
                 egress,
                 signature: Some(signature),
             };
@@ -1208,7 +1211,7 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             // The plan belongs to the job being opened and has to be the last
             // thing pushed: it is approved before its turns run, so it cannot
             // grow after one of them has.
-            "step" | "file" | "write" | "command" | "network" | "egress" => {
+            "step" | "file" | "write" | "command" | "network" | "egress" | "enforcement" => {
                 let Some(Step::OpenJob { plan, .. }) = steps.last_mut() else {
                     anyhow::bail!(
                         "line {number}: `{line}` must follow a `## job:` (or `## task:`), before its first prompt"
@@ -1230,6 +1233,20 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
                                 "line {number}: `## network:` expects true or false, got `{other}`"
                             ),
                         };
+                    }
+                    // A plan may ask for *more* than the session here and
+                    // not for less, which is the opposite of every other
+                    // directive above — `unmet` is where that is refused, when
+                    // the script is read and before any turn runs.
+                    "enforcement" => {
+                        plan.enforcement = Some(match value {
+                            "kernel" => agent_core::sandbox::Enforcement::Kernel,
+                            "best-effort" => agent_core::sandbox::Enforcement::BestEffort,
+                            other => anyhow::bail!(
+                                "line {number}: `## enforcement:` expects kernel or \
+                                 best-effort, got `{other}`"
+                            ),
+                        });
                     }
                     "egress" => {
                         for domain in value
@@ -1262,7 +1279,8 @@ fn parse_script(text: &str) -> Result<Vec<Step>> {
             _ => anyhow::bail!(
                 "line {number}: `{line}` is not a directive \
                  (`## job:`, `## task:`, `## step:`, `## file:`, `## write:`, \
-                 `## command:`, `## network:`, `## egress:`, `## fragment:`, `## close`)"
+                 `## command:`, `## network:`, `## egress:`, `## enforcement:`, \
+                 `## fragment:`, `## close`)"
             ),
         }
     }
@@ -2257,6 +2275,23 @@ mod tests {
 
     #[test]
     fn a_mistyped_directive_is_refused_rather_than_asked_as_a_question() {
+        // The one directive whose value is a strictness rather than a grant:
+        // the parser takes both spellings and refuses a third.
+        let steps = parse_script("## job: build\n## enforcement: kernel\nq\n").unwrap();
+        let Step::OpenJob { plan, .. } = &steps[0] else {
+            panic!("a job opens the script");
+        };
+        assert_eq!(
+            plan.enforcement,
+            Some(agent_core::sandbox::Enforcement::Kernel),
+        );
+        assert!(
+            parse_script("## job: b\n## enforcement: sort-of\nq\n")
+                .unwrap_err()
+                .to_string()
+                .contains("expects kernel or best-effort"),
+        );
+
         let error = parse_script("## task: x\n## fille: y\nq\n").unwrap_err();
         assert!(
             error.to_string().contains("is not a directive"),

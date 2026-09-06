@@ -736,6 +736,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             commands,
             closes_on,
             network,
+            enforcement,
             egress,
             signature,
         } => {
@@ -747,6 +748,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 commands,
                 closes_on,
                 network,
+                enforcement,
                 egress,
                 signature,
             )
@@ -1068,6 +1070,7 @@ async fn approve_job(
     commands: Vec<String>,
     closes_on: Option<String>,
     network: Option<bool>,
+    enforcement: Option<agent_core::sandbox::Enforcement>,
     egress: Option<Vec<String>>,
     signature: Option<Signature>,
 ) {
@@ -1085,6 +1088,7 @@ async fn approve_job(
             closes_on: closes_on.as_ref(),
             network,
             egress: egress.as_ref(),
+            enforcement,
         };
         app.approvers.admits(&approval, signature.as_ref())
     };
@@ -1117,6 +1121,7 @@ async fn approve_job(
                     commands,
                     network,
                     egress,
+                    enforcement,
                 );
                 // Checked against the plan as it will *be* rather than against
                 // the amendment alone: the person types `closes_on` for a
@@ -1139,6 +1144,7 @@ async fn approve_job(
                         closes_on.as_deref(),
                         network.map(|_| granted.network),
                         Some(&granted.egress),
+                        granted.enforcement,
                     )
                     .unwrap_or_default();
                 session.context.approve_job(job, approved_by.clone());
@@ -1226,6 +1232,7 @@ fn permitted(
     commands: Vec<String>,
     network: Option<bool>,
     egress: Option<Vec<String>>,
+    enforcement: Option<agent_core::sandbox::Enforcement>,
 ) -> (Plan, Vec<String>) {
     let asked = Plan {
         tasks: Vec::new(),
@@ -1237,6 +1244,7 @@ fn permitted(
         closes_on: None,
         network: network.unwrap_or(false),
         egress: egress.unwrap_or_default(),
+        enforcement,
     };
     let refused = asked.unmet(sandbox);
     let keep = |item: &String, kind: &str| {
@@ -1276,6 +1284,11 @@ fn permitted(
             .collect(),
         closes_on: None,
         network: granted_network,
+        // Dropped rather than downgraded when it was refused: a person who
+        // asked to loosen enforcement and got the strict value anyway has been
+        // told, in `dropped`, and the plan keeps the answer it already had.
+        enforcement: enforcement
+            .filter(|_| !refused.iter().any(|line| line.starts_with("enforcement "))),
         egress: asked
             .egress
             .iter()
@@ -1327,6 +1340,9 @@ fn closing_condition(
         closes_on: Some(closes_on.clone()),
         network: false,
         egress: Vec::new(),
+        // This plan exists only to check one closing condition against the
+        // commands, so it declares nothing else — including this.
+        enforcement: None,
     };
     match merged
         .unmet(sandbox)
@@ -2083,6 +2099,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
         assert!(
@@ -2154,6 +2171,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
@@ -2177,6 +2195,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            None,
             None,
             None,
             None,

@@ -143,6 +143,15 @@ pub enum ClientMessage {
         /// whatever the model's plan requested (or `false` by default).
         #[serde(default)]
         network: Option<bool>,
+        /// How hard the kernel is asked to hold this job's children. `None`
+        /// leaves the plan's own answer, which is usually the session's.
+        ///
+        /// Additive and `Option`, so this is a new *field* rather than a new
+        /// variant and neither the protocol nor the record format moves. A
+        /// person may tighten here and is refused if they try to loosen, which
+        /// is [`crate::job::Plan::unmet`]'s business and not this type's.
+        #[serde(default)]
+        enforcement: Option<crate::sandbox::Enforcement>,
         /// Optional egress domain allowlist for this job.
         #[serde(default)]
         egress: Option<Vec<String>>,

@@ -616,10 +616,18 @@ impl Context {
         closes_on: Option<&str>,
         network: Option<bool>,
         egress: Option<&[String]>,
+        enforcement: Option<crate::sandbox::Enforcement>,
     ) -> Option<Plan> {
         let job = self.job_mut(id)?;
-        job.plan
-            .amend(files, writes, commands, closes_on, network, egress);
+        job.plan.amend(
+            files,
+            writes,
+            commands,
+            closes_on,
+            network,
+            egress,
+            enforcement,
+        );
         Some(job.plan.clone())
     }
 

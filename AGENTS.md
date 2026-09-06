@@ -227,7 +227,14 @@ lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## write:`
 `## command:` for its plan, and `## close`. `## file:` is what the task may
 **read** and `## write:` what it may also **change**; a plan that declares no
 writes may not write, and a write into a read-only root is refused before the
-first turn. `## fragment: <path>[:start-end]` is the other
+first turn. `## network:` and `## egress:` say what it may talk to, and
+`## enforcement: kernel` is the one directive that narrows **backwards**: a plan
+may ask for *more* kernel than the session has and never for less, because the
+permissive value here is `best-effort` — so `## enforcement: best-effort` inside
+a `kernel` session is refused before the first turn, like a file the policy does
+not grant, and the denial that follows a tightened plan names the *job* rather
+than telling a person to change a policy file that already says `best-effort`.
+`## fragment: <path>[:start-end]` is the other
 directive, and it is **not** `## file:`: the plan's files are what the task is
 allowed to touch, a fragment is text put into the next prompt.
 

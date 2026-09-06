@@ -101,6 +101,21 @@ which is what stops an under-specified plan from being a dead run. It carries on
 more thing the plan never had: `closes_on`, below, checked against the plan as it
 will *be* rather than against the amendment alone, since the command it names is
 usually one the model already declared.
+
+**A plan also decides how hard the kernel is asked to hold its children, and it
+is the one field that narrows backwards.** `enforcement` (`## enforcement:` in a
+script, `enforcement` on `approve_job`, `None` by default and meaning *the
+session's*) may be **tightened** by a plan and never loosened: everything else a
+plan declares is a grant, where less is narrower and a plan that names nothing
+gets nothing, while this is a strictness whose permissive value is
+`best-effort` — the value a person types to get `run_command` at all where
+Landlock is missing. So a plan asking for `kernel` needs no permission and a plan
+asking for `best-effort` inside a `kernel` session is refused at the gate, like
+any other thing the policy file does not grant. `Plan::narrow` takes the
+strictest of the two, and the denial that follows names *which* authority is
+holding the child, because "grant it anyway with enforcement = best-effort" sends
+a person to edit a file that already says that. See
+[`RECORD/2026-09-06.enforcement-per-job.completed.md`](RECORD/2026-09-06.enforcement-per-job.completed.md).
 See [`RECORD/2026-08-30.the-gate.completed.md`](RECORD/2026-08-30.the-gate.completed.md) and
 [`RECORD/2026-08-30.narrowing.completed.md`](RECORD/2026-08-30.narrowing.completed.md).
 
@@ -1010,8 +1025,20 @@ the argument they were measured against is
 
 ## Open questions / next steps
 
-- Narrowing `enforcement` with the rest of the plan. `network` and `egress` are
-  now per-job and filtered by host-side proxy; enforcement level remains session-wide.
+- **`limits` is the last thing in the sandbox a plan cannot narrow.** `files`,
+  `writes`, `commands`, `network`, `egress` and now `enforcement` are all
+  per-job; what a child may *spend* is still decided once, in `luu.toml`, and a
+  plan has no words for a number of seconds or megabytes. Whether it should is
+  the open half of
+  [`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
+- **The debug UI's gate exposes none of the three narrowing fields.** `network`,
+  `egress` and `enforcement` are on the protocol and reachable from a script and
+  from any client; the approve button sends files, writes, commands and
+  `closes_on`. A UI gap rather than a protocol one, and the same gap for all
+  three.
+- **A sandbox does not remember which authority *set* its enforcement**, only
+  which one is holding the child. A denial inside a job says the job, which is
+  true and is not the same as saying the plan is where the value came from.
 - **`Sandbox::new` canonicalizes its roots once, at startup**, before any model
   has said anything — so a granted root that is itself a symlink is resolved
   once and trusted afterwards. And `run_command`'s `cwd` is checked and then

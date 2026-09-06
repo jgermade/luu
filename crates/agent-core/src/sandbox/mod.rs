@@ -562,10 +562,23 @@ impl Sandbox {
         if self.enforcement == Enforcement::Kernel
             && let Applied::Partial { missing, .. } = &enforced_by
         {
-            return Err(Verdict::deny(format!(
-                "the kernel cannot hold this child ({missing}); \
-                 grant it anyway with enforcement = \"best-effort\""
-            )));
+            // Which authority is holding this child is now a real question: a
+            // plan may tighten enforcement, so the answer is no longer always
+            // the policy file, and a denial that named the wrong one sends a
+            // person to edit the wrong thing. What it cannot say is which of
+            // the two *set* the value — see
+            // `RECORD/2026-09-06.enforcement-per-job.completed.md`.
+            return Err(Verdict::deny(match self.authority {
+                Authority::Policy => format!(
+                    "the kernel cannot hold this child ({missing}); \
+                     grant it anyway with enforcement = \"best-effort\""
+                ),
+                Authority::Plan(job) => format!(
+                    "the kernel cannot hold this child ({missing}); \
+                     job {job} runs under kernel enforcement — loosen it in the \
+                     plan if the policy allows it, in the policy otherwise"
+                ),
+            }));
         }
 
         Ok(Restrictions {
@@ -1141,6 +1154,51 @@ mod tests {
             Err(verdict) => {
                 assert!(!verdict.allowed);
                 assert!(verdict.rule.contains("best-effort"), "{verdict:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_denial_under_a_plan_sends_the_person_to_the_plan() {
+        // The case the field exists for: a session that does its best, and one
+        // job inside it held to the kernel. Where the kernel cannot hold the
+        // child, the denial has to name the job — the session is `best-effort`,
+        // so "grant it anyway with enforcement = best-effort" would send a
+        // person to change a file that already says that.
+        let fixture = Fixture::new("under-a-plan");
+        let session = fixture.sandbox(&SandboxPolicy {
+            commands: vec!["ls".into()],
+            enforcement: Enforcement::BestEffort,
+            ..read_write_here()
+        });
+        let job = Sandbox::new(
+            &SandboxPolicy {
+                commands: vec!["ls".into()],
+                enforcement: Enforcement::Kernel,
+                ..read_write_here()
+            },
+            session.base(),
+        )
+        .unwrap()
+        .under(Authority::Plan(7));
+
+        // The session itself runs it either way; that is what `best-effort` is.
+        assert!(session.prepare_command("ls").is_ok());
+
+        match job.prepare_command("ls") {
+            // A kernel with both mechanisms holds it, and the plan asked for
+            // exactly that.
+            Ok(restrictions) => assert!(matches!(
+                restrictions.verdict.enforced_by,
+                Applied::Kernel { .. }
+            )),
+            Err(verdict) => {
+                assert!(!verdict.allowed);
+                assert!(verdict.rule.contains("job 7"), "{verdict:?}");
+                assert!(
+                    !verdict.rule.contains("grant it anyway"),
+                    "the policy file is not where this one is loosened: {verdict:?}",
+                );
             }
         }
     }

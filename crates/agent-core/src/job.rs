@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::{Counter, Fragment, TokenCounter};
-use crate::sandbox::{Access, Authority, Sandbox, SandboxError, SandboxPolicy};
+use crate::sandbox::{Access, Authority, Enforcement, Sandbox, SandboxError, SandboxPolicy};
 use crate::tools::{ToolCall, ToolStep};
 
 /// Jobs are numbered per session, in order, starting at 1.
@@ -74,6 +74,19 @@ pub struct Plan {
     pub network: bool,
     #[serde(default)]
     pub egress: Vec<String>,
+    /// How hard the kernel is asked to hold this job's children, when the job
+    /// asks at all. `None` — what every plan written before this meant — is the
+    /// session's.
+    ///
+    /// The one field here that narrows *backwards*. Everything else a plan
+    /// declares is a grant, where less is narrower and a plan that names
+    /// nothing gets nothing; this is a strictness whose permissive value is
+    /// [`Enforcement::BestEffort`], so a plan asking for `kernel` is narrowing
+    /// and needs no permission, and a plan asking for `best-effort` is asking
+    /// the policy file to relax, which [`Plan::unmet`] refuses. See
+    /// `RECORD/2026-09-06.enforcement-per-job.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforcement: Option<Enforcement>,
 }
 
 impl Plan {
@@ -127,6 +140,18 @@ impl Plan {
                 )),
                 None => unmet.push("closes_on: empty".to_string()),
             }
+        }
+        // Backwards from every other check here, and deliberately: the value
+        // being refused is the *lenient* one. A plan may tighten this and may
+        // not loosen it, or the gate becomes the policy and `luu.toml` is a
+        // suggestion.
+        if self.enforcement == Some(Enforcement::BestEffort)
+            && sandbox.enforcement() == Enforcement::Kernel
+        {
+            unmet.push(format!(
+                "enforcement best-effort: the policy requires kernel enforcement ({})",
+                sandbox.authority()
+            ));
         }
         if self.network && !sandbox.network() {
             unmet.push(format!(
@@ -210,7 +235,15 @@ impl Plan {
             network: session.network() && (self.network || !self.egress.is_empty()),
             egress: narrowed_egress,
             proxy: session.proxy().map(String::from),
-            enforcement: session.enforcement(),
+            // The strictest of the two, which for this field is the session's
+            // unless the plan asked for more. `unmet` has already refused a
+            // plan asking for less, so this cannot widen even if it is reached
+            // with one.
+            enforcement: match (session.enforcement(), self.enforcement) {
+                (Enforcement::Kernel, _) => Enforcement::Kernel,
+                (_, Some(asked)) => asked,
+                (session, None) => session,
+            },
             // The session's, like `network` and `enforcement`: a plan declares
             // paths and commands, and what a child may *spend* is not something
             // it has words for. Whether it should is in
@@ -253,6 +286,7 @@ impl Plan {
     /// the human at the gate can widen the plan up to the policy file and not
     /// past it — otherwise the gate is the policy and `luu.toml` is a
     /// suggestion.
+    #[allow(clippy::too_many_arguments)]
     pub fn amend(
         &mut self,
         files: &[String],
@@ -261,6 +295,7 @@ impl Plan {
         closes_on: Option<&str>,
         network: Option<bool>,
         egress: Option<&[String]>,
+        enforcement: Option<Enforcement>,
     ) {
         for file in files {
             if !self.files.contains(file) {
@@ -281,6 +316,13 @@ impl Plan {
         // person who types a second one is correcting the first.
         if let Some(closes_on) = closes_on.map(str::trim).filter(|it| !it.is_empty()) {
             self.closes_on = Some(closes_on.to_string());
+        }
+        // Replaced rather than merged, like `closes_on`: there is one answer,
+        // and `unmet` runs over the amended plan, so a person who types the
+        // lenient value at the gate is refused there exactly as a model would
+        // have been.
+        if enforcement.is_some() {
+            self.enforcement = enforcement;
         }
         if let Some(net) = network {
             self.network = net;
@@ -315,6 +357,13 @@ impl Plan {
         }
         if !self.egress.is_empty() {
             text.push_str(&format!("  egress   {}\n", self.egress.join(" · ")));
+        }
+        // Shown whenever the plan asked, including when it asked for what the
+        // session already does: a plan the person is approving has to show
+        // everything it decides, and "the same as the session" is a decision
+        // once the field exists.
+        if let Some(enforcement) = self.enforcement {
+            text.push_str(&format!("  enforce  {}\n", enforcement.as_str()));
         }
         // Last, and named for what it does rather than for what it is: this is
         // the line that says the task may close without anyone present.
@@ -839,13 +888,13 @@ mod tests {
             ..Plan::default()
         };
         assert!(plan.closes_on.is_none(), "the model was never asked");
-        plan.amend(&[], &[], &[], Some("  cargo test  "), None, None);
+        plan.amend(&[], &[], &[], Some("  cargo test  "), None, None, None);
         assert_eq!(plan.closes_on.as_deref(), Some("cargo test"));
         // One condition, and a person who types a second is correcting the
         // first — unlike the lists beside it, which accumulate.
-        plan.amend(&[], &[], &[], Some("cargo clippy"), None, None);
+        plan.amend(&[], &[], &[], Some("cargo clippy"), None, None, None);
         assert_eq!(plan.closes_on.as_deref(), Some("cargo clippy"));
-        plan.amend(&[], &[], &[], Some("   "), None, None);
+        plan.amend(&[], &[], &[], Some("   "), None, None, None);
         assert_eq!(
             plan.closes_on.as_deref(),
             Some("cargo clippy"),
@@ -1110,6 +1159,110 @@ mod tests {
         .unwrap()
     }
 
+    /// The same session, held to the kernel rather than doing its best.
+    fn strict_session() -> Sandbox {
+        Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new(".", Access::ReadWrite)],
+                commands: vec!["cargo".into(), "git".into()],
+                enforcement: Enforcement::Kernel,
+                ..SandboxPolicy::default()
+            },
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_plan_that_asks_for_nothing_is_held_the_way_the_session_is() {
+        for session in [session(), strict_session()] {
+            let plan = Plan {
+                commands: vec!["cargo".into()],
+                ..Plan::default()
+            };
+            assert!(plan.unmet(&session).is_empty());
+            assert_eq!(
+                plan.narrow(&session, 1).unwrap().enforcement(),
+                session.enforcement(),
+                "`None` is what every plan written before the field meant",
+            );
+        }
+    }
+
+    #[test]
+    fn a_plan_may_tighten_enforcement_without_asking_anyone() {
+        let session = session();
+        assert_eq!(session.enforcement(), Enforcement::BestEffort);
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            enforcement: Some(Enforcement::Kernel),
+            ..Plan::default()
+        };
+
+        assert!(
+            plan.unmet(&session).is_empty(),
+            "asking for more is narrowing, and narrowing needs no permission",
+        );
+        assert_eq!(
+            plan.narrow(&session, 1).unwrap().enforcement(),
+            Enforcement::Kernel,
+            "one job held by the kernel inside a session that does its best",
+        );
+    }
+
+    #[test]
+    fn a_plan_may_not_loosen_enforcement_and_the_gate_says_so() {
+        let session = strict_session();
+        let plan = Plan {
+            commands: vec!["cargo".into()],
+            enforcement: Some(Enforcement::BestEffort),
+            ..Plan::default()
+        };
+
+        let unmet = plan.unmet(&session);
+        assert_eq!(unmet.len(), 1, "{unmet:?}");
+        assert!(
+            unmet[0].starts_with("enforcement best-effort:"),
+            "{unmet:?}"
+        );
+        assert!(
+            unmet[0].contains("the sandbox policy"),
+            "a denial says which of the two refused: {unmet:?}",
+        );
+        // And it cannot be reached past the gate either: `narrow` takes the
+        // strictest of the two, so a plan that was never checked still does not
+        // widen the policy file.
+        assert_eq!(
+            plan.narrow(&session, 1).unwrap().enforcement(),
+            Enforcement::Kernel,
+        );
+    }
+
+    #[test]
+    fn the_gate_can_tighten_a_plan_the_model_wrote() {
+        let mut plan = Plan {
+            commands: vec!["cargo".into()],
+            ..Plan::default()
+        };
+        plan.amend(&[], &[], &[], None, None, None, Some(Enforcement::Kernel));
+        assert_eq!(plan.enforcement, Some(Enforcement::Kernel));
+        assert!(plan.describe().contains("enforce  kernel"));
+
+        // And the other direction is refused at the gate exactly as it is in a
+        // script: the amendment is checked like any other plan.
+        let mut loosened = Plan::default();
+        loosened.amend(
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            Some(Enforcement::BestEffort),
+        );
+        assert_eq!(loosened.unmet(&strict_session()).len(), 1);
+    }
+
     #[test]
     fn an_approved_plan_grants_what_it_named_and_nothing_else() {
         let session = session();
@@ -1306,6 +1459,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(plan.files, ["Cargo.toml", "src/job.rs"], "no duplicate");
@@ -1325,6 +1479,7 @@ mod tests {
             &["/etc/passwd".into()],
             &[],
             &["curl".into()],
+            None,
             None,
             None,
             None,
@@ -1403,7 +1558,7 @@ mod tests {
             commands: vec!["cargo".into()],
             ..Plan::default()
         };
-        plan.amend(&[], &[], &[], None, Some(true), None);
+        plan.amend(&[], &[], &[], None, Some(true), None, None);
         assert!(plan.network);
 
         let unmet = plan.unmet(&session);

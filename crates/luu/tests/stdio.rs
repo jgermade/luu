@@ -109,6 +109,7 @@ async fn stdio_greets_with_hello_and_answers_prompts() {
 
     // 3. Approve job.
     let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+        enforcement: None,
         signature: None,
         job,
         files: vec![],
@@ -284,6 +285,7 @@ async fn close_and_reopen_task_over_stdio() {
 
     // 2. Approve job.
     let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+        enforcement: None,
         signature: None,
         job,
         files: vec![],

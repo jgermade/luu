@@ -63,6 +63,11 @@ pub struct Approval<'a> {
     pub closes_on: Option<&'a String>,
     pub network: Option<bool>,
     pub egress: Option<&'a Vec<String>>,
+    /// The strictness the approval asks for, when it asks. Last in the
+    /// canonical form and written only when present, so every signature made
+    /// before this field existed still verifies byte for byte: an approval that
+    /// does not mention enforcement produces exactly the bytes it used to.
+    pub enforcement: Option<crate::sandbox::Enforcement>,
 }
 
 impl Approval<'_> {
@@ -94,6 +99,9 @@ impl Approval<'_> {
         }
         for domain in self.egress.into_iter().flatten() {
             line(&mut out, "egress", domain, "egress")?;
+        }
+        if let Some(enforcement) = self.enforcement {
+            out.push_str(&format!("enforcement {}\n", enforcement.as_str()));
         }
         Ok(out)
     }
@@ -332,7 +340,31 @@ mod tests {
             closes_on: None,
             network: None,
             egress: None,
+            enforcement: None,
         }
+    }
+
+    #[test]
+    fn an_approval_that_asks_for_no_enforcement_signs_the_bytes_it_always_did() {
+        // The field is last and is written only when present, so every
+        // signature made before it existed still verifies: this string is the
+        // one the test below has asserted since the format was frozen.
+        let writes = vec!["src/main.rs".to_string()];
+        assert_eq!(
+            grant("s1", &writes).canonical().unwrap(),
+            "luu-approval v1\nsession s1\njob 3\nwrites src/main.rs\n",
+        );
+
+        let tightened = Approval {
+            enforcement: Some(crate::sandbox::Enforcement::Kernel),
+            ..grant("s1", &writes)
+        };
+        assert_eq!(
+            tightened.canonical().unwrap(),
+            "luu-approval v1\nsession s1\njob 3\nwrites src/main.rs\nenforcement kernel\n",
+            "and an approval that does ask covers it, so a signature cannot be \
+             replayed against a looser one",
+        );
     }
 
     #[test]

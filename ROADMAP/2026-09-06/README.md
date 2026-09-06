@@ -17,6 +17,7 @@ rewritten.
 
 | | |
 | --- | --- |
+| **Enforcement per job** | The last narrowing field that was not one. A session that typed `best-effort` to get `run_command` at all ran *every* job under it, the one reading files and the one running the thing nobody has read. A plan may now tighten it and may not loosen it — the one field here whose permissive value is the reassuring one, so `unmet` reads backwards from every other check in it, and the denial names the job rather than sending a person to a policy file that already says `best-effort` — [`enforcement-per-job`](../../RECORD/2026-09-06.enforcement-per-job.completed.md) |
 | **Pruning tool results** | A tool result was written once and paid for on every call until its turn left the window — capped at 8 KiB per result, unbounded in their sum. A second floor now sends an old result's *call* verbatim and its *output* as a digest built from the structured fields. It runs before eviction, so the trade is bytes for turns: on twelve turns that each read a real file at 8K, `--prune off` **evicted six of its twelve turns** and pruning evicted none, at 39% fewer prompt tokens. The two policies split exactly as `--evict turn` and `--evict block` do — [`pruning-tool-results`](../../RECORD/2026-09-05.pruning-tool-results.completed.md) |
 
 ## The order
@@ -26,7 +27,7 @@ rewritten.
 | 3 | **Fleet measurement across target machines** — the hardware floor (6 GB card), native Linux confinement without a VM, and the BC-250's 14B ceiling | hardware and a hand on it, nothing else | [`machines.md`](machines.md) |
 | 4 | **A GBNF grammar for tool calls** — replace the text parse with a grammar the server enforces, against Qwen2.5-Coder | nothing — `llama-server` is reachable through the OpenAI backend | [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) — **needs its own record** |
 | 6 | ~**Active pruning of tool results** — a `cat` of 2 000 lines is capped at 8 KiB and then never shortened. The cap is not the strategy~ **shipped off, measured on the mock; whether a model still answers from a digest is item 10's run** | nothing | [`pruning-tool-results`](../../RECORD/2026-09-05.pruning-tool-results.completed.md) |
-| 8 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide | nothing | `luu-design.md` §Open questions — **needs its own record** |
+| 8 | ~**Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide~ **a plan may tighten and may not loosen; `limits` is now the last field a plan cannot narrow** | nothing | [`enforcement-per-job`](../../RECORD/2026-09-06.enforcement-per-job.completed.md) |
 | 10 | **Precision, with a model in the loop** — coverage says the right file was in the prompt; nothing says the model used it. Now also: nothing says a model reads `[read_file] ok` as *I already read this* rather than as *the file was empty* | a box from [`machines.md`](machines.md), which is item 3 | [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) §What this run does not say, and [`pruning-tool-results`](../../RECORD/2026-09-05.pruning-tool-results.completed.md) §What this run does not say |
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 
@@ -41,14 +42,14 @@ gantt
     axisFormat %b %d
     section Landed
     Pruning tool results                   :done, prune, 2026-09-05, 1d
+    Enforcement per job                    :done, enf, 2026-09-06, 1d
     section Next, and code-shaped
-    A GBNF grammar for tool calls          :gbnf, 2026-09-06, 4d
-    Enforcement per job                    :enf, 2026-09-06, 2d
+    A GBNF grammar for tool calls          :gbnf, 2026-09-07, 4d
     section Waiting on hardware
     Fleet measurements across machines     :crit, bench, 2026-09-06, 10d
     Precision, with a model in the loop    :crit, prec, after bench, 3d
     section Waiting on a fleet
-    Rotating and revoking an approval key  :keys, after enf, 3d
+    Rotating and revoking an approval key  :keys, after gbnf, 3d
 ```
 
 ## What actually blocks what
@@ -71,9 +72,18 @@ gantt
   a model reads a digest as *this was read and elided* rather than as *this file
   was empty*. Both are precision, both need the same run, and neither is worth
   guessing at from here.
-- **Items 4 and 8 are what is left that a keyboard can finish**, and both still
-  link to the design doc rather than to an argument. That is the next thing each
-  of them needs — a record, before any code.
+- **Item 8 landed, and item 4 is now the only thing left that a keyboard can
+  finish.** It is also the last of the three entries that link to the design doc
+  rather than to an argument, and that is the next thing it needs — a record,
+  before any code. It is the one item on this list that cannot be finished
+  against the mock: a grammar that has never constrained a real decode is a
+  grammar nobody has tested, and the plumbing being testable at the wire (as
+  `ollama_wire.rs` and `openai_wire.rs` test theirs) is not the same claim.
+- **What item 8 changed about the shape of narrowing** is that `limits` is now
+  alone: `files`, `writes`, `commands`, `network`, `egress` and `enforcement` are
+  all per-job, and what a child may *spend* is still decided once in `luu.toml`.
+  That is deliberate and argued — a plan has no words for a number of seconds —
+  and it is now the whole of the gap rather than half of it.
 - **Item 3 is unblocked by everything and blocked by geography**, unchanged from
   the last two revisions. See [`machines.md`](machines.md), which is unchanged for
   the same reason: no machine was reached, and a status line that moved without a
