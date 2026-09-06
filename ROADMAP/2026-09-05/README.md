@@ -19,6 +19,7 @@ struck through at the top of it.
 | **A clock at the seam** | A worker that is *alive and stuck* used to hang the turn, the job and the session in silence. The host's deadline for a call is now the call's own clock plus `[worker] timeout-ms`, firing kills the worker, and the next call starts another — plus a ceiling on `timeout_ms`, which was the model's number and was checked against nothing — [`a-clock-at-the-seam`](../../RECORD/2026-09-05.a-clock-at-the-seam.completed.md) |
 | **A clock where there is no seam** | The morning's clock was at the seam, and `runtime = "host"` — the default — has none. It moved up into the agent loop, which is the only thing above both places a tool can run. Underneath it: `std::fs` inline in an `async` block never yields, so the timeout beside it never fired; and a runtime will not shut down while a blocking thread is parked, so the hang came back at process exit — [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
 | **Beneath the root** | The in-process TOCTOU, open since `tools-and-sandbox` and admitted in a doc comment ever since: a check answers about a path, and between it and the open the path is a string. The file tools now open with `openat2(RESOLVE_BENEATH)` relative to the granting root, and an in-process read is held by the kernel for the first time — which the verdict says, because where the syscall is missing it is still not — [`beneath-the-root`](../../RECORD/2026-09-05.beneath-the-root.completed.md) |
+| **Does the model read it?** (2026-09-06) | Item 10, which this revision ordered behind hardware it never needed. The same 38 questions one flag apart against `qwen2.5-coder:7b`: **0 of 38 with nothing in the prompt, 8 with the map, 33 with the selection**, and 91% precision on the 33 targets the selector held. All three predictions the protocol filed were falsified, the useful one being that position inside the bucket does not matter — held-but-not-first scores 13/14 against first place's 17/19. The cost is the finding nobody was looking for: fragments stay in history, so the arm evicted 31 times, prefix reuse fell from 93% to 17.7%, and it took 11.6× the wall clock — [`does-the-model-read-it`](../../RECORD/2026-09-06.does-the-model-read-it.completed.md) |
 | **Choosing fragments** | The `code` bucket, zero in every recording this repository has ever made, now fills itself with what the turn's own text points at. At 1024 tokens a path-ordered map holds the answer to 3 of the corpus's 38 questions and a selection holds 32. The reference graph's one-hop expansion was measured and **lost a third time**, so it ships off — [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
 
 ## The order
@@ -26,14 +27,14 @@ struck through at the top of it.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 1 | ~**A tool call has no timeout at the seam** — the host holds the clock, a stuck worker is killed and replaced, and `timeout_ms` gets a ceiling~ | nothing | [`a-clock-at-the-seam`](../../RECORD/2026-09-05.a-clock-at-the-seam.completed.md) |
-| 2 | ~**Relevance over recency: choosing fragments** — inject the fragments the turn points at, not the whole history~ **coverage measured and won; precision unmeasured and now item 10** | nothing | [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
+| 2 | ~**Relevance over recency: choosing fragments** — inject the fragments the turn points at, not the whole history~ **coverage measured and won; precision measured and won too — item 10** | nothing | [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
 | 3 | **Fleet measurement across target machines** — the hardware floor (6 GB card), native Linux confinement without a VM, and the BC-250's 14B ceiling | hardware and a hand on it, nothing else | [`machines.md`](machines.md) |
 | 4 | **A GBNF grammar for tool calls** — replace the text parse with a grammar the server enforces, against Qwen2.5-Coder | nothing — `llama-server` is reachable through the OpenAI backend | [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) — **needs its own record** |
 | 5 | ~**A clock where there is no seam** — the deadline moved up into the agent loop, the in-process tools stopped blocking inside their own future, and a worker restart is counted~ | nothing | [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
 | 6 | **Active pruning of tool results** — a `cat` of 2 000 lines is capped at 8 KiB and then never shortened. The cap is not the strategy | nothing — closed jobs exist in quantity now that the store keeps them | `luu-design.md` §Still ahead — **needs its own record** |
 | 7 | ~**`openat2(RESOLVE_BENEATH)` for the in-process tools** — the kernel refuses the escape during resolution, and the verdict says so it was the kernel~ | nothing | [`beneath-the-root`](../../RECORD/2026-09-05.beneath-the-root.completed.md) |
 | 8 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide | nothing | `luu-design.md` §Open questions |
-| 10 | **Precision, with a model in the loop** — coverage says the right file was in the prompt; nothing says the model used it. The same 38 questions, one flag apart, scored against a 7B | a box from [`machines.md`](machines.md), which is item 3 | [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) §What this run does not say |
+| 10 | ~**Precision, with a model in the loop** — coverage says the right file was in the prompt; nothing says the model used it. The same 38 questions, one flag apart, scored against a 7B~ **33 of 38 against the baseline's 0; 91% precision on what the selector held. The block was wrong: machine 1 of `machines.md` is the M1 Pro this ran on** | nothing — it never needed the hardware it was ordered behind | [`does-the-model-read-it`](../../RECORD/2026-09-06.does-the-model-read-it.completed.md) |
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 
 ```mermaid
@@ -53,26 +54,31 @@ gantt
     Enforcement per job                    :enf, 2026-09-06, 2d
     section Waiting on hardware
     Fleet measurements across machines     :crit, bench, 2026-09-05, 10d
-    Precision, with a model in the loop    :crit, prec, after bench, 3d
+    Precision, with a model in the loop    :done, prec, 2026-09-06, 1d
     section Waiting on a fleet
     Rotating and revoking an approval key  :keys, after enf, 3d
 ```
 
 ## What actually blocks what
 
-- **Item 2 landed, and its second half is now item 10.** Selection beat the
-  baseline it had to beat — 32 of 38 against 3 at 1024 tokens — on a corpus that
+- **Item 2 landed, and item 10 closed it the next day.** Selection beat the
+  baseline it had to beat — 33 of 38 against 3 at 1024 tokens — on a corpus that
   can now be scored **with no model at all**, because
   [`map-order-probe.key`](../../scripts/tasks/map-order-probe.key) puts the
   answers on disk and `cargo test -p luu --test select_probe` computes coverage
   on every commit. What that cannot say is whether a model *uses* what it was
-  handed, which is precision, which needs a box, and which is why item 10 exists
-  rather than being folded into a line that reads as finished.
+  handed, which is precision. That needed a model rather than the *fleet* box
+  this revision assumed, and the model was already on the machine: 33 of 38, at
+  91% precision on what it held, against a baseline that scored **zero**.
 - **The reference graph has now lost three times**, the last one on the question
   it was built for. It is still in the tree and still switchable, and nothing
   defaults to it. A fourth attempt needs to argue against the table in
   [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md),
-  not around it.
+  not around it — but **one of the three reasons for rejecting it is now known to
+  be wrong**. It was rejected partly for moving the right file out of first place
+  five times in 38, and the precision run shows first place is not what pays:
+  held-but-not-first answers correctly 13 times in 14. Coverage and tokens are
+  what a fourth attempt has to beat; ranking position is not.
 - **Item 3 is unblocked by everything and blocked by geography.** All three
   remaining measurements need a box that is not this one; see
   [`machines.md`](machines.md) for which one answers which question. Nothing in

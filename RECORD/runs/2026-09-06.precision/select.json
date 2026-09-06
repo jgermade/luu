@@ -1,0 +1,455 @@
+[
+ {
+  "n": 1,
+  "question": "which file runs the loop that turns a prompt into tool calls and back into an answer?",
+  "target": "crates/agent-core/src/agent.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/agent.rs"
+  ],
+  "code_tokens": 1026,
+  "answer": "The loop that turns a prompt into tool calls and back into an answer is run in the `agent-core/src/agent.rs` file. Specifically, the `run_turn` function handles this process."
+ },
+ {
+  "n": 2,
+  "question": "which file defines the read-side structure that both the live server and `luu export` fold into?",
+  "target": "crates/agent-core/src/api.rs",
+  "held": false,
+  "verdict": "wrong",
+  "named": [
+   "crates/luu/src/export.rs"
+  ],
+  "code_tokens": 1086,
+  "answer": "The file that defines the read-side structure that both the live server and `luu export` fold into is `crates/luu/src/export.rs`. Specifically, the `read_record` function in this file reads and parses the records, and the `SessionView` structure is likely defined elsewhere in the codebase to represent the read-side structure."
+ },
+ {
+  "n": 3,
+  "question": "which file implements the backend that streams canned replies without a real model on the machine?",
+  "target": "crates/agent-core/src/backend/mock.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/backend/mock.rs"
+  ],
+  "code_tokens": 1099,
+  "answer": "The file that implements the backend that streams canned replies without a real model on the machine is `crates/agent-core/src/backend/mock.rs`. Specifically, the `MockBackend` struct and its `replies` method are defined in this file to provide canned responses for testing purposes."
+ },
+ {
+  "n": 4,
+  "question": "which file defines the Backend trait every inference backend implements?",
+  "target": "crates/agent-core/src/backend/mod.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/backend/mod.rs"
+  ],
+  "code_tokens": 1007,
+  "answer": "The file that defines the `Backend` trait, which every inference backend implements, is `crates/agent-core/src/backend/mod.rs`. Specifically, the `Backend` trait is defined in this file, and it specifies the methods that any backend must implement, such as `name` and `stream`."
+ },
+ {
+  "n": 5,
+  "question": "which file talks to Ollama's chat endpoint over HTTP?",
+  "target": "crates/agent-core/src/backend/ollama.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/backend/ollama.rs"
+  ],
+  "code_tokens": 1020,
+  "answer": "The file that talks to Ollama's chat endpoint over HTTP is `crates/agent-core/src/backend/ollama.rs`. Specifically, the `Ollama` struct and its `stream` method are defined in this file to handle the HTTP communication with Ollama's chat endpoint."
+ },
+ {
+  "n": 6,
+  "question": "which file implements the OpenAI-compatible backend that also covers llama-server and vLLM?",
+  "target": "crates/agent-core/src/backend/openai.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/backend/openai.rs"
+  ],
+  "code_tokens": 1081,
+  "answer": "The file that implements the OpenAI-compatible backend that also covers llama-server and vLLM is `crates/agent-core/src/backend/openai.rs`. Specifically, the `OpenAi` struct and its `stream` method are defined in this file to handle the HTTP communication with OpenAI's chat endpoint and other compatible servers."
+ },
+ {
+  "n": 7,
+  "question": "which file decides what earns its place in the prompt and what gets evicted when it is full?",
+  "target": "crates/agent-core/src/context.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/context.rs"
+  ],
+  "code_tokens": 1061,
+  "answer": "The file that decides what earns its place in the prompt and what gets evicted when it is full is `crates/agent-core/src/context.rs`. Specifically, the `Evicted` struct and its associated methods are defined in this file to manage the eviction of turns from the prompt when it reaches its capacity."
+ },
+ {
+  "n": 8,
+  "question": "which file fuses a real file into a single turn as a fragment?",
+  "target": "crates/agent-core/src/fragment.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/fragment.rs"
+  ],
+  "code_tokens": 1123,
+  "answer": "The file that fuses a real file into a single turn as a fragment is `crates/luu/src/fragment.rs`. Specifically, the `load` function in this file is responsible for reading a file and creating a `Fragment` object that represents the contents of the file."
+ },
+ {
+  "n": 9,
+  "question": "which file is agent-core's crate root, with no knowledge of the CLI, VSCode or the browser?",
+  "target": "crates/agent-core/src/lib.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/lib.rs"
+  ],
+  "code_tokens": 1092,
+  "answer": "The file that is the crate root for `agent-core` and contains no knowledge of the CLI, VSCode, or the browser is `crates/agent-core/src/lib.rs`. This file serves as the entry point for the crate and defines the public API and modules that are exposed to other crates or applications that depend on `agent-core`."
+ },
+ {
+  "n": 10,
+  "question": "which file defines the one message schema carried over stdio, the WebSocket and the record format?",
+  "target": "crates/agent-core/src/protocol.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/protocol.rs"
+  ],
+  "code_tokens": 1093,
+  "answer": "The file that defines the one message schema carried over stdio, WebSocket, and the record format is `crates/agent-core/src/protocol.rs`. This file contains the `ServerMessage` and `ClientMessage` structs, which represent the messages exchanged between the agent and the client. These structs are serialized and deserialized using the `serde` crate, and they are used to communicate the state of the agent, the progress of a job, and the results of a request."
+ },
+ {
+  "n": 11,
+  "question": "which file builds the reference graph and ranks the repository's files by what depends on what?",
+  "target": "crates/agent-core/src/rank.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/rank.rs"
+  ],
+  "code_tokens": 962,
+  "answer": "The file that builds the reference graph and ranks the repository's files by what depends on what is `crates/agent-core/src/rank.rs`. This file contains the `Reference` struct, which represents a reference to a definition in a file, and the `rank` function, which ranks the repository's files based on their dependencies. The ranking is used to determine the order in which files are included in the prompt."
+ },
+ {
+  "n": 12,
+  "question": "which file defines the JSON-lines format a session is recorded to?",
+  "target": "crates/agent-core/src/record.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/record.rs"
+  ],
+  "code_tokens": 974,
+  "answer": "The file that defines the JSON-lines format a session is recorded to is `crates/agent-core/src/record.rs`. This file contains the `RecordLine` enum, which represents a line in the record file, and the `RecordSource` struct, which represents the source of the record file. The record format is used to store the history of a session, including the prompts, responses, and any other relevant information."
+ },
+ {
+  "n": 13,
+  "question": "which file turns the repository into an outline of definitions with their bodies elided?",
+  "target": "crates/agent-core/src/repo_map.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/repo_map.rs"
+  ],
+  "code_tokens": 1103,
+  "answer": "The file that turns the repository into an outline of definitions with their bodies elided is `crates/agent-core/src/repo_map.rs`. This file contains the `outline` function, which takes a string representing the source code of a Rust file and returns a vector of `Entry` structs, each representing a definition or reference in the file. The `Entry` struct contains information about the definition or reference, such as its name, kind, and location in the file."
+ },
+ {
+  "n": 14,
+  "question": "which file is the sandbox's implementation for platforms that are not Linux?",
+  "target": "crates/agent-core/src/sandbox/fallback.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/sandbox/fallback.rs"
+  ],
+  "code_tokens": 1086,
+  "answer": "The file that is the sandbox's implementation for platforms that are not Linux is `crates/agent-core/src/sandbox/fallback.rs`. This file contains the `prepare` function, which is called when the sandbox is initialized on a platform that does not support Linux's landlock and seccomp features. The `prepare` function returns a `Prepared` struct, which contains information about the platform and any missing features that would prevent the sandbox from functioning properly."
+ },
+ {
+  "n": 15,
+  "question": "which file applies Landlock and seccomp to a child process between fork and exec?",
+  "target": "crates/agent-core/src/sandbox/linux.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/sandbox/linux.rs"
+  ],
+  "code_tokens": 1109,
+  "answer": "The file that applies Landlock and seccomp to a child process between fork and exec is `crates/agent-core/src/sandbox/linux.rs`. This file contains the `install` function, which takes a `Sandbox` struct and a mutable `Command` struct, and applies the sandbox's restrictions to the child process that will be created by the command. The restrictions include applying a Landlock ruleset and a seccomp filter to the child process."
+ },
+ {
+  "n": 16,
+  "question": "which file defines the sandbox's rungs \u2014 what the agent may reach, checked in-process?",
+  "target": "crates/agent-core/src/sandbox/mod.rs",
+  "held": true,
+  "verdict": "wrong",
+  "named": [
+   "crates/agent-core/src/sandbox/policy.rs"
+  ],
+  "code_tokens": 1123,
+  "answer": "The file that defines the sandbox's rungs \u2014 what the agent may reach, checked in-process \u2014 is `crates/agent-core/src/sandbox/policy.rs`. This file contains the `Policy` struct, which represents the set of permissions that the agent is allowed to have. The `Policy` struct contains a list of `Access` rules, which specify what the agent is allowed to do. The `Policy` struct is used to check whether the agent is allowed to perform a particular action before the action is executed."
+ },
+ {
+  "n": 17,
+  "question": "which file defines what a project declares the agent may reach, before any path is resolved?",
+  "target": "crates/agent-core/src/sandbox/policy.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/sandbox/policy.rs"
+  ],
+  "code_tokens": 1117,
+  "answer": "The file that defines what a project declares the agent may reach, before any path is resolved, is `crates/agent-core/src/sandbox/policy.rs`. This file contains the `SandboxPolicy` struct, which represents the set of permissions that the agent is allowed to have. The `SandboxPolicy` struct contains a list of `Policy` rules, which specify what the agent is allowed to do. The `SandboxPolicy` struct is used to define the set of permissions that the agent is allowed to have before any paths are resolved."
+ },
+ {
+  "n": 18,
+  "question": "which file defines the task type \u2014 the unit of work, of approval and of forgetting?",
+  "target": "crates/agent-core/src/job.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/job.rs"
+  ],
+  "code_tokens": 1096,
+  "answer": "The file that defines the task type \u2014 the unit of work, of approval and of forgetting \u2014 is `crates/agent-core/src/job.rs`. This file contains the `Job` struct, which represents a unit of work that the agent is expected to perform. The `Job` struct contains information about the task, such as the files that need to be read or written, the commands that need to be executed, and the network access that is allowed. The `Job` struct is used to define the task type and to track the progress of the task."
+ },
+ {
+  "n": 19,
+  "question": "which file implements run_command, the one tool whose verdict is about the kernel rather than this process?",
+  "target": "crates/agent-core/src/tools/command.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/tools/command.rs"
+  ],
+  "code_tokens": 1114,
+  "answer": "The file that implements `run_command`, the one tool whose verdict is about the kernel rather than this process, is `crates/agent-core/src/tools/command.rs`. This file contains the `run_command` function, which takes a `CommandResult` and returns a `ToolOutcome`. The `run_command` function is responsible for running a command and returning the result. The function takes a `CommandResult` as an argument, which contains the result of running a command. The function then returns a `ToolOutcome`, which contains the result of the command and any errors that occurred."
+ },
+ {
+  "n": 20,
+  "question": "which file implements the filesystem tools that check a path before touching it?",
+  "target": "crates/agent-core/src/tools/fs.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/tools/fs.rs"
+  ],
+  "code_tokens": 1191,
+  "answer": "The file that implements the filesystem tools that check a path before touching it is `crates/agent-core/src/tools/fs.rs`. This file contains the `check_path` function, which takes a `Path` and an `Access` and returns a `PathCheck`. The `check_path` function is responsible for checking whether a path is allowed to be accessed with a given level of access. The function takes a `Path` and an `Access` as arguments, which represent the path to be checked and the level of access that is needed. The function then returns a `PathCheck`, which contains the result of the check and any errors that occurred."
+ },
+ {
+  "n": 21,
+  "question": "which file parses a model's structured tool request and validates it against the sandbox?",
+  "target": "crates/agent-core/src/tools/mod.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/tools/mod.rs"
+  ],
+  "code_tokens": 1146,
+  "answer": "The file that parses a model's structured tool request and validates it against the sandbox is `crates/agent-core/src/tools/mod.rs`. This file contains the `ToolCall` struct, which represents a tool call made by a model. The `ToolCall` struct contains the name of the tool, the arguments to the tool, and the sandbox in which the tool should be run. The `ToolCall` struct is used to parse a model's structured tool request and validate it against the sandbox. The `ToolCall` struct is also used to run the tool and return the result."
+ },
+ {
+  "n": 22,
+  "question": "which file carries the trace channel that explains the context manager's choices?",
+  "target": "crates/agent-core/src/trace.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/trace.rs"
+  ],
+  "code_tokens": 1113,
+  "answer": "The file that carries the trace channel that explains the context manager's choices is `crates/agent-core/src/trace.rs`. This file contains the `Trace` struct, which represents the trace channel. The `Trace` struct contains the messages that are sent on the trace channel. The `Trace` struct is used to carry the trace channel that explains the context manager's choices. The `Trace` struct is also used to send the trace messages to the stdio consumer driving the agent."
+ },
+ {
+  "n": 23,
+  "question": "which file runs one turn \u2014 prompt in, tokens out \u2014 with no tools involved?",
+  "target": "crates/agent-core/src/turn.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/turn.rs"
+  ],
+  "code_tokens": 1104,
+  "answer": "The file that runs one turn \u2014 prompt in, tokens out \u2014 with no tools involved is `crates/agent-core/src/turn.rs`. This file contains the `run_turn` function, which takes a `Backend`, a `CompletionRequest`, an `mpsc::Sender<TurnEvent>`, and a `watch::Receiver<bool>` as arguments. The `run_turn` function is responsible for running one turn of the agent, which involves taking a prompt as input and generating tokens as output. The function takes a `Backend` as an argument, which is responsible for generating tokens based on the prompt. The function also takes a `CompletionRequest` as an argument, which contains the prompt and other information about the request. The function also takes an `mpsc::Sender<TurnEvent>` as an argument, which is used to send events related to the turn to the client. The function also takes a `watch::Receiver<bool>` as an argument, which is used to cancel the turn if the client requests it."
+ },
+ {
+  "n": 24,
+  "question": "which file is level 3 of the sandbox, where tools run in a container rather than this process?",
+  "target": "crates/agent-core/src/worker/mod.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 1164,
+  "answer": "The file that is level 3 of the sandbox, where tools run in a container rather than this process, is `crates/agent-core/src/sandbox/container.rs`. This file contains the `ContainerSandbox` struct, which represents a sandbox that runs tools in a container. The `ContainerSandbox` struct contains the `Sandbox` struct, which represents the sandbox that runs tools in this process. The `ContainerSandbox` struct also contains the `Container` struct, which represents the container in which the tools are run. The `ContainerSandbox` struct is used to create a sandbox that runs tools in a container, rather than in this process."
+ },
+ {
+  "n": 25,
+  "question": "which file builds the argv for whichever container runtime is in use?",
+  "target": "crates/agent-core/src/worker/runtime.rs",
+  "held": true,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 938,
+  "answer": "The file that builds the argv for whichever container runtime is in use is `crates/agent-core/src/sandbox/container.rs`. This file contains the `build_argv` function, which takes a `Runtime` and a `Vec<String>` as arguments. The `build_argv` function is responsible for building the argv for the container runtime that is in use. The function takes a `Runtime` as an argument, which specifies the container runtime that is in use. The function also takes a `Vec<String>` as an argument, which contains the arguments that should be passed to the container runtime. The function returns a `Vec<String>` that contains the argv for the container runtime."
+ },
+ {
+  "n": 26,
+  "question": "which test file asserts what the Ollama backend actually puts on the socket?",
+  "target": "crates/agent-core/tests/ollama_wire.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/tests/ollama_wire.rs"
+  ],
+  "code_tokens": 1100,
+  "answer": "The test file that asserts what the Ollama backend actually puts on the socket is `crates/agent-core/tests/ollama_wire.rs`. This file contains the `ollama_wire` test, which asserts that the Ollama backend actually puts the expected bytes on the socket. The test uses a stub HTTP server to simulate the Ollama backend and asserts that the bytes sent by the backend match the expected bytes. The test is located in the `crates/agent-core/tests` directory."
+ },
+ {
+  "n": 27,
+  "question": "which test file asserts what the OpenAI-compatible backend puts on the wire and reads back?",
+  "target": "crates/agent-core/tests/openai_wire.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/tests/openai_wire.rs"
+  ],
+  "code_tokens": 1074,
+  "answer": "The test file that asserts what the OpenAI-compatible backend puts on the wire and reads back is `crates/agent-core/tests/openai_wire.rs`. This file contains the `openai_wire` test, which asserts that the OpenAI-compatible backend actually puts the expected bytes on the socket and reads back the expected bytes. The test uses a stub HTTP server to simulate the OpenAI backend and asserts that the bytes sent by the backend match the expected bytes. The test is located in the `crates/agent-core/tests` directory."
+ },
+ {
+  "n": 28,
+  "question": "which file decides who may reach the control surface?",
+  "target": "crates/luu/src/auth.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/auth.rs"
+  ],
+  "code_tokens": 1027,
+  "answer": "The file that decides who may reach the control surface is `crates/luu/src/auth.rs`. This file contains the `Auth` enum, which defines the different authentication methods that may be used to reach the control surface. The `Auth` enum has two variants: `Loopback`, which allows access from the loopback interface without a token, and `Token`, which requires a bearer token for access. The `Auth` enum is used by the `auth` function in the same file to check the authentication method for incoming requests."
+ },
+ {
+  "n": 29,
+  "question": "which file is the `main` function for the `luu` binary?",
+  "target": "crates/luu/src/bin/luu.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/bin/luu.rs"
+  ],
+  "code_tokens": 1032,
+  "answer": "The file that contains the `main` function for the `luu` binary is `crates/luu/src/bin/luu.rs`. This file contains the `main` function, which is the entry point for the `luu` binary. The `main` function sets up a Tokio runtime and then calls the `run` function from the `luu` module."
+ },
+ {
+  "n": 30,
+  "question": "which file defines every subcommand the CLI takes and dispatches them?",
+  "target": "crates/luu/src/lib.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/lib.rs"
+  ],
+  "code_tokens": 817,
+  "answer": "The file that defines every subcommand the CLI takes and dispatches them is `crates/luu/src/lib.rs`. This file contains the `Cli` struct, which defines the subcommands that the CLI can take. The `Cli` struct uses the `#[command(subcommand)]` attribute to define the subcommands. The `Cli` struct also contains a `command` field, which is of type `Command`, and is used to dispatch the subcommands."
+ },
+ {
+  "n": 31,
+  "question": "which file turns a recording into the static twin of the read API, for a host with no server behind it?",
+  "target": "crates/luu/src/export.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/export.rs"
+  ],
+  "code_tokens": 1116,
+  "answer": "The file that turns a recording into the static twin of the read API, for a host with no server behind it, is `crates/luu/src/export.rs`. This file contains the `read_record` function, which reads a recording from a file and returns it as a vector of `RecordLine` structs. The `read_record` function is used by the `export` command to read a recording and generate a static mirror of the read API."
+ },
+ {
+  "n": 32,
+  "question": "which file decides where this machine's state directory lives?",
+  "target": "crates/luu/src/config.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/config.rs"
+  ],
+  "code_tokens": 993,
+  "answer": "The file that decides where this machine's state directory lives is `crates/luu/src/config.rs`. This file contains the `config` function, which determines the location of the state directory. The `config` function first checks if the `LUU_HOME` environment variable is set, and if it is, it uses that as the location of the state directory. If `LUU_HOME` is not set, the function checks for the existence of `~/.luu` and `$XDG_CONFIG_HOME/luu`, and uses the first one that exists. If neither of these directories exist, the function asks the user for a location and creates the directory there."
+ },
+ {
+  "n": 33,
+  "question": "which file is the local HTTP server behind the debug UI?",
+  "target": "crates/luu/src/serve.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/serve.rs"
+  ],
+  "code_tokens": 984,
+  "answer": "The file that is the local HTTP server behind the debug UI is `crates/luu/src/serve.rs`. This file contains the `serve` function, which starts the HTTP server. The `serve` function sets up the server to listen on a loopback address and handles incoming requests. The server is used to serve the debug UI for the `luu` CLI."
+ },
+ {
+  "n": 34,
+  "question": "which file makes sure chat and serve assemble the same prompt the same way?",
+  "target": "crates/luu/src/session.rs",
+  "held": true,
+  "verdict": "wrong",
+  "named": [
+   "crates/agent-core/src/agent.rs"
+  ],
+  "code_tokens": 1090,
+  "answer": "The file that makes sure chat and serve assemble the same prompt the same way is `crates/luu/src/agent.rs`. This file contains the `run_turn` function, which is responsible for running a turn of the agent. The `run_turn` function takes a prompt and a model as input and returns the answer to the prompt. The function ensures that the prompt is assembled the same way in both chat and serve by using the same code to generate the prompt."
+ },
+ {
+  "n": 35,
+  "question": "which file caches sessions on disk as a cache of the fold, never a second log?",
+  "target": "crates/luu/src/store.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/api.rs",
+   "crates/luu/src/store.rs"
+  ],
+  "code_tokens": 1059,
+  "answer": "The file that caches sessions on disk as a cache of the fold, never a second log, is `crates/luu/src/store.rs`. This file contains the `SessionStore` struct, which is responsible for caching sessions on disk. The `SessionStore` struct uses a single file to store the cache, and it ensures that the cache is always reproducible by folding the record. This is done by serializing the `SessionView` structure, which is the structure that `api.rs` already computes from a recording and `luu export` already writes out, and storing it in the file."
+ },
+ {
+  "n": 36,
+  "question": "which test file drives one turn over the WebSocket against a running server?",
+  "target": "crates/luu/tests/serve_ws.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/tests/serve_ws.rs"
+  ],
+  "code_tokens": 1121,
+  "answer": "The test file that drives one turn over the WebSocket against a running server is `crates/luu/tests/serve_ws.rs`. This file contains the `a_prompt_is_planned_approved_and_answered_over_the_socket` test function, which tests the WebSocket server by sending a prompt to it and verifying that the server responds with the expected answer."
+ },
+ {
+  "n": 37,
+  "question": "which test file asserts that folding a record equals saving it to the store and loading it back?",
+  "target": "crates/luu/tests/store_parity.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/tests/store_parity.rs"
+  ],
+  "code_tokens": 1068,
+  "answer": "The test file that asserts that folding a record equals saving it to the store and loading it back is `crates/luu/tests/store_parity.rs`. This file contains the `what_the_store_gives_back_is_what_folding_the_record_produces` test function, which tests the `SessionStore` by folding a record, saving it to the store, and then loading it back to verify that the stored value is equal to the folded record."
+ },
+ {
+  "n": 38,
+  "question": "which test file drives a real worker end to end through a real pipe, outside a container?",
+  "target": "crates/luu/tests/worker_seam.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/luu/tests/worker_seam.rs"
+  ],
+  "code_tokens": 1096,
+  "answer": "The test file that drives a real worker end to end through a real pipe, outside a container, is `crates/luu/tests/worker_seam.rs`. This file contains the `the_worker_greets_before_it_is_asked_anything` test function, which tests the `Worker` by starting it and verifying that it greets before it is asked anything."
+ }
+]

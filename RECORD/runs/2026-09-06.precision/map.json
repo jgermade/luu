@@ -1,0 +1,402 @@
+[
+ {
+  "n": 1,
+  "question": "which file runs the loop that turns a prompt into tool calls and back into an answer?",
+  "target": "crates/agent-core/src/agent.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/agent.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The loop that turns a prompt into tool calls and back into an answer is typically found in the `run_agent_turn` function. This function is responsible for processing the agent's turn, executing tools as needed, and generating the final response. To find the exact implementation, you can look at the `crates/agent-core/src/agent.rs` file, specifically around line 126. This function is where the agent's main loop begins, handling the prompt, executing tools, and generating the outcome. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/agent.rs\"}} ```The `run_agent_turn` function is where the loop that turns a prompt into tool calls and back into an answer is implemented. This function handles the main logic of the agent's turn, including executing tools and generating the final response. Here is the continuation of the `run_agent_turn` function: ```rust let started = std::time::Instant::now(); let deadline = limits.deadline(&call); let result = sandbox.execute_tool( call, limits.tool_timeout, cancel.clone(), ).await; let elapsed = started.elapsed(); if elapsed > deadline { let _ = events .send(TurnEvent::Failed(format!(\"Tool call exceeded timeout: {:?}\", elapsed))) .await; return AgentOutcome::from_final(outcome.text.clone(), steps, outcome, usage); } match result { Ok(result) => { steps.push(ToolStep::new(call, result)); messages.push(Message::assistant(result)); } Err(error) => { let _ = events .send(TurnEvent::Failed(error.clone())) .await; return AgentOutcome::from_final(outcome.text.clone(), steps, outcome, usage); } } // The model is asked to respond to the new context, which may include // the result of the tool call. let outcome = run_turn( backend, CompletionRequest { model: model.clone(), messages: messages.clone(), context_limit, temperature, seed, }, inner, cancel.clone(), ) .await; let _ = forward.await; usage = sum(usage, outcome.usage); if outcome.error.is_some() || outcome.reason == EndReason::Cancelled { let _ = events .send(match &outcome.error { Some(error) => TurnEvent::Failed(error.clone()), None => TurnEvent::Ended { reason: EndReason::Cancelled, usage: None, }, }) .await; return AgentOutcome::from_final(outcome.text.clone(), steps, outcome, usage); } } let _ = events .send(TurnEvent::Ended { reason: EndReason::Completed, usage, }) .await; AgentOutcome::from_final(outcome.text.clone(), steps, outcome, usage) } ``` This function handles the loop by repeatedly calling `run_turn` and checking for tool calls within the prompt. It executes the tools, updates the context, and continues the loop until the turn is completed or cancelled."
+ },
+ {
+  "n": 2,
+  "question": "which file defines the read-side structure that both the live server and `luu export` fold into?",
+  "target": "crates/agent-core/src/api.rs",
+  "held": true,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/api.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The file that defines the read-side structure that both the live server and `luu export` fold into is `crates/agent-core/src/api.rs`. This file contains various structs and implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```The `crates/agent-core/src/api.rs` file defines the read-side structure that both the live server and `luu export` fold into. This file contains various structs and their implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```The `crates/agent-core/src/api.rs` file defines the read-side structure that both the live server and `luu export` fold into. This file contains various structs and their implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```The `crates/agent-core/src/api.rs` file defines the read-side structure that both the live server and `luu export` fold into. This file contains various structs and their implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```The `crates/agent-core/src/api.rs` file defines the read-side structure that both the live server and `luu export` fold into. This file contains various structs and their implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```The `crates/agent-core/src/api.rs` file defines the read-side structure that both the live server and `luu export` fold into. This file contains various structs and their implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```The `crates/agent-core/src/api.rs` file defines the read-side structure that both the live server and `luu export` fold into. This file contains various structs and their implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```The `crates/agent-core/src/api.rs` file defines the read-side structure that both the live server and `luu export` fold into. This file contains various structs and their implementations that are used to manage and interact with the agent's state and data. Here is a brief overview of some of the key structures and their purposes: 1. **Budget**: Represents the budget constraints for the agent. 2. **PrefixReuse**: Manages the reuse of prefixes in the agent's responses. 3. **ExtraCall**: Represents additional calls that can be made during the agent's execution. 4. **ToolCallView**: Provides a view of a tool call. 5. **JobView**: Represents a job or task that the agent is working on. 6. **TaskView**: Alias for `JobView`. 7. **TurnView**: Represents a turn or iteration of the agent's execution. 8. **SessionSummary**: Provides a summary of a session. 9. **SessionView**: Represents a session and provides methods to interact with it. These structures and their implementations are essential for managing the agent's state and ensuring that both the live server and `luu export` can correctly process and display the agent's data. ```tool {\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/api.rs\"}} ```"
+ },
+ {
+  "n": 3,
+  "question": "which file implements the backend that streams canned replies without a real model on the machine?",
+  "target": "crates/agent-core/src/backend/mock.rs",
+  "held": true,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The backend that streams canned replies without a real model on the machine is implemented in the `crates/agent-core/src/mock_backend.rs` file."
+ },
+ {
+  "n": 4,
+  "question": "which file defines the Backend trait every inference backend implements?",
+  "target": "crates/agent-core/src/backend/mod.rs",
+  "held": false,
+  "verdict": "wrong",
+  "named": [
+   "crates/agent-core/src/api.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The `Backend` trait is defined in the `crates/agent-core/src/api.rs` file."
+ },
+ {
+  "n": 5,
+  "question": "which file talks to Ollama's chat endpoint over HTTP?",
+  "target": "crates/agent-core/src/backend/ollama.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that talks to Ollama's chat endpoint over HTTP is `crates/agent-core/src/ollama_backend.rs`."
+ },
+ {
+  "n": 6,
+  "question": "which file implements the OpenAI-compatible backend that also covers llama-server and vLLM?",
+  "target": "crates/agent-core/src/backend/openai.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements the OpenAI-compatible backend, which also covers llama-server and vLLM, is `crates/agent-core/src/openai_backend.rs`."
+ },
+ {
+  "n": 7,
+  "question": "which file decides what earns its place in the prompt and what gets evicted when it is full?",
+  "target": "crates/agent-core/src/context.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that decides what earns its place in the prompt and what gets evicted when it is full is `crates/agent-core/src/prompt_manager.rs`."
+ },
+ {
+  "n": 8,
+  "question": "which file fuses a real file into a single turn as a fragment?",
+  "target": "crates/agent-core/src/fragment.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that fuses a real file into a single turn as a fragment is `crates/agent-core/src/file_fusion.rs`."
+ },
+ {
+  "n": 9,
+  "question": "which file is agent-core's crate root, with no knowledge of the CLI, VSCode or the browser?",
+  "target": "crates/agent-core/src/lib.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/lib.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The file that serves as the crate root for `agent-core`, with no knowledge of the CLI, VSCode, or the browser, is `crates/agent-core/src/lib.rs`."
+ },
+ {
+  "n": 10,
+  "question": "which file defines the one message schema carried over stdio, the WebSocket and the record format?",
+  "target": "crates/agent-core/src/protocol.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the one message schema carried over stdio, the WebSocket, and the record format is `crates/agent-core/src/message.rs`."
+ },
+ {
+  "n": 11,
+  "question": "which file builds the reference graph and ranks the repository's files by what depends on what?",
+  "target": "crates/agent-core/src/rank.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that builds the reference graph and ranks the repository's files by what depends on what is `crates/agent-core/src/graph_builder.rs`."
+ },
+ {
+  "n": 12,
+  "question": "which file defines the JSON-lines format a session is recorded to?",
+  "target": "crates/agent-core/src/record.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/record.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The file that defines the JSON-lines format a session is recorded to is `crates/agent-core/src/record.rs`."
+ },
+ {
+  "n": 13,
+  "question": "which file turns the repository into an outline of definitions with their bodies elided?",
+  "target": "crates/agent-core/src/repo_map.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that turns the repository into an outline of definitions with their bodies elided is `crates/agent-core/src/outline.rs`."
+ },
+ {
+  "n": 14,
+  "question": "which file is the sandbox's implementation for platforms that are not Linux?",
+  "target": "crates/agent-core/src/sandbox/fallback.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that provides the sandbox's implementation for platforms that are not Linux is `crates/agent-core/src/sandbox.rs`."
+ },
+ {
+  "n": 15,
+  "question": "which file applies Landlock and seccomp to a child process between fork and exec?",
+  "target": "crates/agent-core/src/sandbox/linux.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that applies Landlock and seccomp to a child process between fork and exec is `crates/agent-core/src/sandbox.rs`."
+ },
+ {
+  "n": 16,
+  "question": "which file defines the sandbox's rungs \u2014 what the agent may reach, checked in-process?",
+  "target": "crates/agent-core/src/sandbox/mod.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the sandbox's rungs \u2014 what the agent may reach, checked in-process \u2014 is `crates/agent-core/src/sandbox.rs`."
+ },
+ {
+  "n": 17,
+  "question": "which file defines what a project declares the agent may reach, before any path is resolved?",
+  "target": "crates/agent-core/src/sandbox/policy.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines what a project declares the agent may reach, before any path is resolved, is `crates/agent-core/src/project.rs`."
+ },
+ {
+  "n": 18,
+  "question": "which file defines the task type \u2014 the unit of work, of approval and of forgetting?",
+  "target": "crates/agent-core/src/job.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the task type \u2014 the unit of work, of approval, and of forgetting \u2014 is `crates/agent-core/src/task.rs`."
+ },
+ {
+  "n": 19,
+  "question": "which file implements run_command, the one tool whose verdict is about the kernel rather than this process?",
+  "target": "crates/agent-core/src/tools/command.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements `run_command`, the one tool whose verdict is about the kernel rather than this process, is `crates/agent-core/src/tools.rs`."
+ },
+ {
+  "n": 20,
+  "question": "which file implements the filesystem tools that check a path before touching it?",
+  "target": "crates/agent-core/src/tools/fs.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements the filesystem tools that check a path before touching it is `crates/agent-core/src/tools.rs`."
+ },
+ {
+  "n": 21,
+  "question": "which file parses a model's structured tool request and validates it against the sandbox?",
+  "target": "crates/agent-core/src/tools/mod.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that parses a model's structured tool request and validates it against the sandbox is `crates/agent-core/src/tools.rs`."
+ },
+ {
+  "n": 22,
+  "question": "which file carries the trace channel that explains the context manager's choices?",
+  "target": "crates/agent-core/src/trace.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/trace.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The file that carries the trace channel that explains the context manager's choices is `crates/agent-core/src/trace.rs`."
+ },
+ {
+  "n": 23,
+  "question": "which file runs one turn \u2014 prompt in, tokens out \u2014 with no tools involved?",
+  "target": "crates/agent-core/src/turn.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/agent-core/src/turn.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The file that runs one turn \u2014 prompt in, tokens out \u2014 with no tools involved is `crates/agent-core/src/turn.rs`."
+ },
+ {
+  "n": 24,
+  "question": "which file is level 3 of the sandbox, where tools run in a container rather than this process?",
+  "target": "crates/agent-core/src/worker/mod.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that is level 3 of the sandbox, where tools run in a container rather than this process, is `crates/agent-core/src/container.rs`."
+ },
+ {
+  "n": 25,
+  "question": "which file builds the argv for whichever container runtime is in use?",
+  "target": "crates/agent-core/src/worker/runtime.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that builds the argv for whichever container runtime is in use is `crates/agent-core/src/container.rs`."
+ },
+ {
+  "n": 26,
+  "question": "which test file asserts what the Ollama backend actually puts on the socket?",
+  "target": "crates/agent-core/tests/ollama_wire.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that asserts what the Ollama backend actually puts on the socket is `crates/agent-core/tests/ollama_backend.rs`."
+ },
+ {
+  "n": 27,
+  "question": "which test file asserts what the OpenAI-compatible backend puts on the wire and reads back?",
+  "target": "crates/agent-core/tests/openai_wire.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that asserts what the OpenAI-compatible backend puts on the wire and reads back is `crates/agent-core/tests/openai_backend.rs`."
+ },
+ {
+  "n": 28,
+  "question": "which file decides who may reach the control surface?",
+  "target": "crates/luu/src/auth.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/auth.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The file that decides who may reach the control surface is `crates/agent-core/src/auth.rs`."
+ },
+ {
+  "n": 29,
+  "question": "which file is the `main` function for the `luu` binary?",
+  "target": "crates/luu/src/bin/luu.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that is the `main` function for the `luu` binary is `crates/agent-core/src/main.rs`."
+ },
+ {
+  "n": 30,
+  "question": "which file defines every subcommand the CLI takes and dispatches them?",
+  "target": "crates/luu/src/lib.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines every subcommand the CLI takes and dispatches them is `crates/agent-core/src/cli.rs`."
+ },
+ {
+  "n": 31,
+  "question": "which file turns a recording into the static twin of the read API, for a host with no server behind it?",
+  "target": "crates/luu/src/export.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that turns a recording into the static twin of the read API, for a host with no server behind it, is `crates/agent-core/src/recorder.rs`."
+ },
+ {
+  "n": 32,
+  "question": "which file decides where this machine's state directory lives?",
+  "target": "crates/luu/src/config.rs",
+  "held": false,
+  "verdict": "right",
+  "named": [
+   "crates/luu/src/config.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The file that decides where this machine's state directory lives is `crates/agent-core/src/config.rs`."
+ },
+ {
+  "n": 33,
+  "question": "which file is the local HTTP server behind the debug UI?",
+  "target": "crates/luu/src/serve.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that is the local HTTP server behind the debug UI is `crates/agent-core/src/debug_server.rs`."
+ },
+ {
+  "n": 34,
+  "question": "which file makes sure chat and serve assemble the same prompt the same way?",
+  "target": "crates/luu/src/session.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that makes sure chat and serve assemble the same prompt the same way is `crates/agent-core/src/prompt.rs`."
+ },
+ {
+  "n": 35,
+  "question": "which file caches sessions on disk as a cache of the fold, never a second log?",
+  "target": "crates/luu/src/store.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that caches sessions on disk as a cache of the fold, never a second log, is `crates/agent-core/src/session_cache.rs`."
+ },
+ {
+  "n": 36,
+  "question": "which test file drives one turn over the WebSocket against a running server?",
+  "target": "crates/luu/tests/serve_ws.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that drives one turn over the WebSocket against a running server is `crates/agent-core/tests/websocket.rs`."
+ },
+ {
+  "n": 37,
+  "question": "which test file asserts that folding a record equals saving it to the store and loading it back?",
+  "target": "crates/luu/tests/store_parity.rs",
+  "held": false,
+  "verdict": "wrong",
+  "named": [
+   "crates/luu/src/store.rs"
+  ],
+  "code_tokens": 0,
+  "answer": "The test file that asserts that folding a record equals saving it to the store and loading it back is `crates/agent-core/tests/store.rs`."
+ },
+ {
+  "n": 38,
+  "question": "which test file drives a real worker end to end through a real pipe, outside a container?",
+  "target": "crates/luu/tests/worker_seam.rs",
+  "held": false,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that drives a real worker end to end through a real pipe, outside a container, is `crates/agent-core/tests/worker.rs`."
+ }
+]
