@@ -47,6 +47,8 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
         map_tokens: 0,
         map_order: Order::Path,
         map_fill: agent_core::repo_map::Fill::Greedy,
+        select_tokens: 0,
+        select_weights: Default::default(),
         store: None,
     }
 }

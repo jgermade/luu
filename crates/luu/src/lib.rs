@@ -322,6 +322,26 @@ enum Command {
         /// Pack the token budget non-greedily.
         #[arg(long)]
         map_non_greedy: bool,
+
+        /// Tokens of *selected fragments* to fuse into each prompt — the
+        /// definitions this turn's own text points at, chosen by
+        /// `agent_core::select` and read through the **live job's** sandbox, so
+        /// an approved plan narrows what may be chosen exactly as it narrows
+        /// what may be opened. 0 is off, which is the default and for the same
+        /// reason the map's is. Unlike the map it is not part of the cached
+        /// prefix. See `RECORD/2026-09-06.selection-at-the-gate.completed.md`.
+        #[arg(long, default_value_t = 0)]
+        select_tokens: u32,
+
+        /// Score a file by its own module doc as well as by what it defines.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        select_docs: bool,
+
+        /// Also score a file for being one hop from a file that matched. Off:
+        /// measured worse than without it. See
+        /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
+        #[arg(long)]
+        select_graph: bool,
     },
 
     /// Serve the agent protocol over stdin/stdout as NDJSON.
@@ -440,6 +460,26 @@ enum Command {
         /// Pack the token budget non-greedily.
         #[arg(long)]
         map_non_greedy: bool,
+
+        /// Tokens of *selected fragments* to fuse into each prompt — the
+        /// definitions this turn's own text points at, chosen by
+        /// `agent_core::select` and read through the **live job's** sandbox, so
+        /// an approved plan narrows what may be chosen exactly as it narrows
+        /// what may be opened. 0 is off, which is the default and for the same
+        /// reason the map's is. Unlike the map it is not part of the cached
+        /// prefix. See `RECORD/2026-09-06.selection-at-the-gate.completed.md`.
+        #[arg(long, default_value_t = 0)]
+        select_tokens: u32,
+
+        /// Score a file by its own module doc as well as by what it defines.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        select_docs: bool,
+
+        /// Also score a file for being one hop from a file that matched. Off:
+        /// measured worse than without it. See
+        /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
+        #[arg(long)]
+        select_graph: bool,
     },
 
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
@@ -1398,6 +1438,9 @@ pub async fn run() -> Result<()> {
         map_rank,
         map_in_degree,
         map_non_greedy,
+        select_tokens,
+        select_docs,
+        select_graph,
     } = command
     {
         let backend = build_backend(BackendArgs {
@@ -1455,6 +1498,8 @@ pub async fn run() -> Result<()> {
             map_tokens,
             map_order: order_of(map_rank, map_in_degree),
             map_fill: fill_of(map_non_greedy),
+            select_tokens,
+            select_weights: weights_of(select_docs, select_graph),
             auth_token_file,
             approvers,
         })
@@ -1484,6 +1529,9 @@ pub async fn run() -> Result<()> {
         map_rank,
         map_in_degree,
         map_non_greedy,
+        select_tokens,
+        select_docs,
+        select_graph,
     } = command
     {
         let backend = build_backend(BackendArgs {
@@ -1531,6 +1579,8 @@ pub async fn run() -> Result<()> {
             map_tokens,
             map_order: order_of(map_rank, map_in_degree),
             map_fill: fill_of(map_non_greedy),
+            select_tokens,
+            select_weights: weights_of(select_docs, select_graph),
             approvers,
         })
         .await;

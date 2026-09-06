@@ -124,6 +124,11 @@ cargo run --bin luu -- select "which file applies Landlock between fork and exec
 # in a turn, off by default — it fills the `code` bucket, which was zero in every
 # recording made before it, and is not part of the cached prefix.
 cargo run --bin luu -- chat "where is the seam's clock?" --select-tokens 512
+# and in the surfaces a person works in, where it is read through the *live
+# job's* sandbox: an approved plan narrows what may be chosen exactly as it
+# narrows what may be opened, so a narrow plan is a narrow selection.
+cargo run --bin luu -- serve --context-limit 32768 --select-tokens 2048
+cargo run --bin luu -- stdio --select-tokens 2048
 # the coverage probe, which needs no model: 38 questions, one per file, scored
 # against scripts/tasks/map-order-probe.key
 cargo test -p luu --test select_probe -- --nocapture

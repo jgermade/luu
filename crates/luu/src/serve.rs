@@ -12,7 +12,7 @@ use agent_core::agent::run_agent_turn;
 use agent_core::api::SessionView;
 use agent_core::approval::{Approval, Approvers, Signature};
 use agent_core::backend::{Backend, CompletionRequest};
-use agent_core::context::{Budget, Context as AgentContext, TokenCounter};
+use agent_core::context::{Budget, Context as AgentContext, Fragment, TokenCounter};
 use agent_core::job::{ClosedBy, JobId, Plan, PlanSource, Proposal, parse_plan};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
 use agent_core::record;
@@ -118,6 +118,14 @@ struct App {
     /// history that only ever holds one thing.
     session_id: Mutex<String>,
     map_rendered: String,
+    /// The tree, tagged once at startup, that a selection is chosen from.
+    /// Empty when selection is off, and it is the walk rather than the choosing
+    /// that is expensive — the choosing is a scan of what this already holds.
+    walked: Vec<agent_core::repo_map::Walked>,
+    /// Tokens of selected fragments per turn. 0 is off.
+    select_tokens: u32,
+    /// Which signals score a file.
+    select_weights: agent_core::select::Weights,
     /// Where the fold is cached between restarts. `None` leaves the session in
     /// memory, which is what every run did before this existed.
     store: Option<Mutex<SessionStore>>,
@@ -156,6 +164,13 @@ pub struct StdioOptions {
     pub map_order: Order,
     /// How the budget is packed from candidate outlines.
     pub map_fill: agent_core::repo_map::Fill,
+    /// Tokens of selected fragments to fuse into each prompt. 0 is off. The
+    /// map's opposite number: that block is the same every turn and is cached,
+    /// this one is chosen from the turn's own text and is gone with it. See
+    /// `RECORD/2026-09-06.selection-at-the-gate.completed.md`.
+    pub select_tokens: u32,
+    /// Which signals score a file, from the flags that switch them.
+    pub select_weights: agent_core::select::Weights,
     /// Where sessions are cached between restarts.
     pub store: Option<PathBuf>,
 }
@@ -174,6 +189,8 @@ impl App {
             map_tokens,
             map_order,
             map_fill,
+            select_tokens,
+            select_weights,
             store,
             approvers,
         } = options;
@@ -197,6 +214,24 @@ impl App {
                 map.tokens,
             );
         }
+
+        // Beside the map and not for the map's reason. The map is built once
+        // because it is a *prefix* and a prefix rebuilt mid-session is not one;
+        // this is built once because walking and tagging the tree is the
+        // expensive half of selection and it depends on the tree rather than on
+        // the turn. A file written mid-session is therefore not selectable
+        // until a restart, which is the same staleness the map already accepts.
+        let walked = match select_tokens > 0 {
+            true => {
+                let walked = agent_core::repo_map::walk_sources(agency.sandbox.as_ref());
+                eprintln!(
+                    "selection — {} file(s) tagged, {select_tokens} tokens a turn",
+                    walked.len()
+                );
+                walked
+            }
+            false => Vec::new(),
+        };
 
         let recorder = match record {
             Some(path) => Some(
@@ -233,6 +268,9 @@ impl App {
             backend,
             model,
             approvers,
+            walked,
+            select_tokens,
+            select_weights,
             session: Mutex::new(Session {
                 next_turn: 1,
                 current: None,
@@ -395,6 +433,10 @@ pub struct ServeOptions {
     pub map_order: Order,
     /// How the budget is packed from candidate outlines.
     pub map_fill: agent_core::repo_map::Fill,
+    /// Tokens of selected fragments to fuse into each prompt. 0 is off.
+    pub select_tokens: u32,
+    /// Which signals score a file, from the flags that switch them.
+    pub select_weights: agent_core::select::Weights,
     /// The file holding the bearer token this server requires, if any.
     /// `None` on a loopback address means no auth; `None` on any other
     /// address means [`bind`] refuses.
@@ -449,6 +491,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         map_tokens,
         map_order,
         map_fill,
+        select_tokens,
+        select_weights,
         auth_token_file,
         store,
         approvers,
@@ -470,6 +514,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         map_tokens,
         map_order,
         map_fill,
+        select_tokens,
+        select_weights,
         store,
         approvers,
     })
@@ -980,7 +1026,8 @@ async fn on_prompt(app: Arc<App>, prompt: String) {
 /// It runs through [`run_turn`] rather than the agent loop, so it has no tools:
 /// a planning call that could execute something would be the gate leaking.
 async fn propose_job(app: Arc<App>, prompt: String) {
-    let Some((turn, cancel_rx, request)) = begin_turn(&app, &prompt, Some(PLANNING)).await else {
+    let Some((turn, cancel_rx, request, _code)) = begin_turn(&app, &prompt, Some(PLANNING)).await
+    else {
         return;
     };
 
@@ -1455,8 +1502,13 @@ async fn begin_turn(
     app: &Arc<App>,
     prompt: &str,
     instruction: Option<&str>,
-) -> Option<(TurnId, watch::Receiver<bool>, CompletionRequest)> {
-    let (turn, job, cancel_rx, selection, prompt_sent, reuse) = {
+) -> Option<(
+    TurnId,
+    watch::Receiver<bool>,
+    CompletionRequest,
+    Vec<Fragment>,
+)> {
+    let (turn, job, cancel_rx, selection, prompt_sent, reuse, code) = {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
             drop(session);
@@ -1479,11 +1531,40 @@ async fn begin_turn(
             Some(instruction) => format!("{instruction}{prompt}"),
             None => prompt.to_string(),
         };
+        // The fragments this turn's own text points at, read through the
+        // sandbox the *live job* was granted — `session.narrowed` when a plan
+        // is open, the policy file otherwise. That is not a detail: the gate
+        // exists so a person decides what a job may touch, and a selector
+        // reading outside the approved plan would put files into the prompt
+        // that the person refused.
+        let code: Vec<Fragment> = match app.select_tokens {
+            0 => Vec::new(),
+            tokens => {
+                let sandbox = match &session.narrowed {
+                    Some((_, sandbox)) => sandbox.clone(),
+                    None => app.agency.sandbox.clone(),
+                };
+                agent_core::select::select(
+                    &app.walked,
+                    sandbox.as_ref(),
+                    &text,
+                    tokens,
+                    app.counter.as_ref(),
+                    &app.select_weights,
+                )
+                .specs()
+                .iter()
+                // A selected path the sandbox refuses is a file that is not
+                // selected, not a failed turn: nobody asked for it by name.
+                .filter_map(|spec| agent_core::fragment::load(sandbox.as_ref(), spec).ok())
+                .collect()
+            }
+        };
         // Selected under the same lock that hands out the turn number, so the
         // history a turn is built from is the history at the moment it started.
         let selection = session
             .context
-            .select(&text, &[], app.budget, app.counter.as_ref());
+            .select(&text, &code, app.budget, app.counter.as_ref());
         // Measured under the same lock, so two turns cannot interleave and
         // measure themselves against each other's prompt.
         let prompt_sent = rendered(&selection.messages);
@@ -1491,7 +1572,7 @@ async fn begin_turn(
             .prefix
             .measure(turn, &prompt_sent, app.counter.as_ref());
         let job = session.context.live_job();
-        (turn, job, rx, selection, prompt_sent, reuse)
+        (turn, job, rx, selection, prompt_sent, reuse, code)
     };
 
     // The user's ask, not the instruction fused in front of it: `prompt` is
@@ -1546,11 +1627,12 @@ async fn begin_turn(
             temperature: app.temperature,
             seed: app.seed,
         },
+        code,
     ))
 }
 
 async fn start_turn(app: Arc<App>, prompt: String) {
-    let Some((turn, cancel_rx, request)) = begin_turn(&app, &prompt, None).await else {
+    let Some((turn, cancel_rx, request, code)) = begin_turn(&app, &prompt, None).await else {
         return;
     };
 
@@ -1633,7 +1715,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                     turn,
                     prompt,
                     outcome.text,
-                    vec![],
+                    code,
                     outcome.steps,
                     app.counter.as_ref(),
                 );
@@ -1986,6 +2068,13 @@ mod tests {
     /// socket calls, one line each, so driving them directly tests the gate
     /// rather than axum.
     fn app(replies: &[&str]) -> Arc<App> {
+        app_selecting(replies, 0)
+    }
+
+    /// The same server with the selector switched on, which is the only thing
+    /// these two builders differ by — a test that changed more than the flag
+    /// would not be measuring the flag.
+    fn app_selecting(replies: &[&str], select_tokens: u32) -> Arc<App> {
         let base = std::env::current_dir().unwrap();
         let agency = Agency {
             tools: Arc::new(agent_core::tools::Tools::standard()),
@@ -1995,8 +2084,15 @@ mod tests {
             limits: agent_core::agent::Limits::default().with_max_steps(4),
             worker: None,
         };
+        let agency_walk = agency.sandbox.clone();
         Arc::new(App {
             approvers: Approvers::default(),
+            walked: match select_tokens {
+                0 => Vec::new(),
+                _ => agent_core::repo_map::walk_sources(agency_walk.as_ref()),
+            },
+            select_tokens,
+            select_weights: Default::default(),
             backend: Arc::new(
                 Mock::replies(replies.iter().map(|r| (*r).to_string()).collect())
                     .delay(std::time::Duration::ZERO),
@@ -2192,6 +2288,80 @@ mod tests {
         let session = app.session.lock().await;
         assert_eq!(session.context.job(1).unwrap().state, JobState::Approved);
         assert!(session.context.job(1).unwrap().summary.is_none());
+    }
+
+    /// The reason selection is allowed in `serve` at all.
+    ///
+    /// The gate exists so a person decides what a job may touch. A selector
+    /// that read outside the approved plan would put files into the prompt
+    /// that the person refused — quietly, because nobody typed their names.
+    /// So the selection is read through `session.narrowed`, and this is the
+    /// test that says the narrowing is the one doing the holding.
+    #[tokio::test]
+    async fn a_selection_cannot_reach_outside_the_approved_plan() {
+        const ONE_FILE: &str = "```plan\n{\"objective\":\"read one file\",\
+                                \"tasks\":[\"read it\"],\"files\":[\"src/serve.rs\"],\
+                                \"commands\":[]}\n```";
+        let app = app_selecting(&[ONE_FILE, "the answer"], 2048);
+        assert!(
+            !app.walked.is_empty(),
+            "the walk found nothing, so this test would pass by holding zero files",
+        );
+
+        // Without the plan this query reaches several files, which is what
+        // makes the assertion below about the narrowing rather than about a
+        // query that was only ever going to pick one thing.
+        const ASK: &str = "the session store, the http server and the exporter";
+        let unnarrowed = agent_core::select::select(
+            &app.walked,
+            app.agency.sandbox.as_ref(),
+            ASK,
+            2048,
+            app.counter.as_ref(),
+            &app.select_weights,
+        );
+        let reach: std::collections::HashSet<_> = unnarrowed
+            .specs()
+            .iter()
+            .map(|spec| spec.path.clone())
+            .collect();
+        assert!(
+            reach.len() > 1,
+            "the unnarrowed selection reached only {reach:?}, so confining it proves nothing",
+        );
+
+        on_prompt(app.clone(), ASK.into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve_job(
+            app.clone(),
+            1,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+
+        let session = app.session.lock().await;
+        let code = &session.context.turns()[0].code_context;
+        assert!(
+            !code.is_empty(),
+            "the selector chose nothing, so the confinement below is vacuous",
+        );
+        for fragment in code {
+            // The path carries its span — `src/serve.rs:1-25` — and the grant
+            // is about the file.
+            let file = fragment.path.split(':').next().unwrap_or(&fragment.path);
+            assert!(
+                file.ends_with("src/serve.rs"),
+                "the plan granted src/serve.rs and the selection reached {} anyway",
+                fragment.path,
+            );
+        }
     }
 
     #[tokio::test]
