@@ -174,6 +174,11 @@ for script in grounded grounded-tasks; do
     --context-limit 8192 --reserve 512 --record $script.jsonl
 done
 
+# twelve turns that each read a real file, under each pruning policy — one flag
+# apart, so the runs are comparable. Prints the table it writes.
+./scripts/prune-probe.sh ./target/debug/luu /tmp/prune
+./scripts/record-summary.py /tmp/prune/*.jsonl   # what any set of recordings cost
+
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
 
@@ -188,7 +193,9 @@ why: a turn is running, a proposal is pending, the task is not in that state, or
 the policy file does not grant part of what was asked. That message is what took
 the protocol to v2 (and the record format to 4) — a new variant of a tagged enum
 is a change an older reader cannot parse; `evicted` took it to **v3** and the
-format to **5** under the same rule. A proposal says **who wrote it**: `source` is
+format to **5** under the same rule, and `pruned` — what is still in the window
+and is no longer sent as its bytes — took it to **v7** and the format to **9**,
+which is the fifth time that rule has been used. A proposal says **who wrote it**: `source` is
 `model` when the planning call emitted a parseable plan block, `prose` when it
 answered without one (the ordinary case for a 7B — the proposal is then the ask
 itself, declaring nothing), and `written` for a script's `## task:`, where no
@@ -403,6 +410,24 @@ the tasks run — the fold kept it under the limit. See
 [`RECORD/2026-08-31.eviction-tombstones.completed.md`](RECORD/2026-08-31.eviction-tombstones.completed.md). **Without `--tokenizer` the counts are
 `chars/4`**, labelled approximate everywhere they appear — fine for a smoke run,
 useless for a comparison, and the numbers say so themselves.
+
+**A tool result is written once and paid for on every call until its turn leaves
+the window**, and `--prune` is what bounds that. `age` sends the results of every
+turn outside the newest `--prune-keep` as a digest — the call verbatim, then
+`[read_file] ok` and the bytes that left, built from the structured fields and
+never from prose. `watermark` waits until the unpruned results are worth more
+than `--prune-above` of the history budget and then cuts all but `--prune-keep`
+at once. Both only move **forward**, both are decided *before* eviction (a turn
+pruning shrank may fit where it would have been dropped whole), and neither
+touches `Turn::steps`: pruning is a rendering decision, so the store, the record
+and the transcript all keep what the prompt lost. Off by default. On twelve turns
+that each read a real file at 8K, `off` evicted six of its twelve turns and
+pruning evicted none at 39% fewer tokens — and the two policies split exactly as
+`--evict turn` and `--evict block` do: `age`'s prefix reuse collapses from turn 4
+and never recovers, the watermark holds 8 of 11 calls at 99–100% and pays on the
+3 that cut. `--prune-above` is **0.8** because at 0.35 two results exceed the
+share on their own and the watermark becomes `age`, byte for byte. See
+[`RECORD/2026-09-05.pruning-tool-results.completed.md`](RECORD/2026-09-05.pruning-tool-results.completed.md).
 
 Two of the tests are not unit tests and are the only ones that run the thing:
 `crates/agent-core/tests/ollama_wire.rs` puts a stub HTTP server on an ephemeral

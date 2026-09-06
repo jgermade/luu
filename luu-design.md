@@ -298,7 +298,7 @@ nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.completed.md`](RECORD/
 - **Grounding a turn with a real file**: built. `--fragment PATH[:START-END]`, and `## fragment:` in a script, read a file **through the sandbox** and fuse it into one turn's user message — the `code` bucket, which existed from the start and until now was always zero. A path the sandbox would refuse to `read_file` is refused here too, and a denial is an error rather than a warning: a run that quietly dropped its grounding answers out of the model's training and looks like it worked, which is exactly what a real 7B did to twenty ungrounded turns. It is attached to one turn and then gone, because which turns a file belongs in is the next item's question and attaching it to all of them answers it wrongly, at every turn's expense. `scripts/tasks/grounded{,-tasks}.txt` are the pair this makes possible: the same twenty prompts, one grouped into tasks, with a last group that attaches nothing and asks the first fifteen again — the first corpus in which *does the fold lose what the task needed* is a question with an answer. The protocol for asking it is [`RECORD/2026-08-27.grounded-fold-probe.completed.md`](RECORD/2026-08-27.grounded-fold-probe.completed.md).
 - **The repository map**: built, and ranked **behind a flag that is off**. Every `.rs` file's definitions with their signatures, bodies elided, from `tree-sitter`'s own `TAGS_QUERY`, in the cached prefix under the tool definitions — where blocks are ordered by how often they are rewritten, and the map changes only when the repository does. `--map-tokens N`, off by default so that every recording made before it stays comparable, and `luu map` prints the exact bytes. Files are outlined in path order until one does not fit; the map then says how many it left out. **`--map-rank` orders them by what the rest of the tree depends on instead** — a reference graph over the same query's `@reference.*` captures, PageRank with a *uniform* teleport, which is what keeps the map a prefix: Aider seeds its ranking with the files in the conversation, and that is the half that would rewrite the block every turn. It is off because it was measured and lost, twice, on two differently-built corpora: at 1024 tokens path order holds five files and the ranking holds two, because rank order puts the big central files first and the fill rule stops at the first file that does not fit — and on a corpus of 38 questions chosen one per file before either order was checked (so the loss cannot be the corpus favouring path order's own holdings), path order named the right file for **100%** of the questions it covered against rank order's **12.5%**, and rank order's denser, more self-referential files pushed a 7B into paragraphs of fabricated Rust that evicted the session's own history 24 times in 38 turns, where path order evicted nothing. `luu map --explain` prints the ranking under either order — each file's score and who references it — so the order the map did not take can be read beside the one it did. To address the oversized file trap and leaf-sink penalty, **`--map-in-degree`** weights inbound references by caller diversity rather than random-walk damping, and **`--map-non-greedy`** skips over files that exceed the remaining token budget to continue packing smaller ones (packing 5 files and 1026/1024 tokens at 1024 tokens, vs 2 files and 664 tokens under greedy fill). This repository is still the argument for doing this properly: its whole outline is **6 327 tokens, 77% of an 8K window**, so at any affordable budget most of it is missing and the alphabet chose which part. What it costs on the grounded script: 870 tokens a turn at `--map-tokens 1024`, +56% on the run's total prompt tokens — and a prefix-reuse number that rises from 93.9% to 96.3% for purely arithmetic reasons, which is why a map-on run is not comparable on reuse to a map-off one. See [`RECORD/2026-08-31.the-repo-map.completed.md`](RECORD/2026-08-31.the-repo-map.completed.md), [`RECORD/2026-09-02.ranking-the-map.completed.md`](RECORD/2026-09-02.ranking-the-map.completed.md), [`RECORD/2026-09-03.the-map-order-probe.completed.md`](RECORD/2026-09-03.the-map-order-probe.completed.md) and [`RECORD/2026-09-04.in-degree-and-fill.completed.md`](RECORD/2026-09-04.in-degree-and-fill.completed.md).
 - **Relevance over recency**: built, measured, and **on this repository's own corpus it is the largest single win the context manager has**. `--select-tokens N` fills the `code` bucket with the definitions *this turn's text points at*, chosen by `agent_core::select` and read through the sandbox by the same loader `--fragment` uses — so a selected fragment enters a turn by the door that already existed, and is gone when the turn is. **The mechanism is `tree-sitter` tags plus what the file says it is for, and the reference graph is off**: on the 38-question corpus, at 1024 tokens, a path-ordered map holds the answer to **3** of the questions and a selection holds **32**, with the right file first 19 times and in the top three 31. The graph hop — one step from a file that matched, which is what this module was expected to be *about* — was implemented, measured, and **lost a third time**: it moves the right file out of first place five times in 38, holds no more targets, and costs 13% more tokens, because on a tree this connected a neighbour is most of the tree. It ships off, switchable, exactly as `--map-rank` did. The doc signal is doing much of the work and the corpus was written from module docs, so the ablation is the honest row: tags and path alone hold **19** of 38 at 1024, still six times the map. What is *not* measured is precision — whether a model uses what it was handed — and that needs a box. Off by default, because it changes every number in every recording made before it, and unlike the map it is **not** cached: a run with selection on is not comparable on prefix reuse to one without. Decided against Aider's implementation and against embeddings; see [`RECORD/2026-08-27.aider-repo-map.completed.md`](RECORD/2026-08-27.aider-repo-map.completed.md) and [`RECORD/2026-09-05.choosing-fragments.completed.md`](RECORD/2026-09-05.choosing-fragments.completed.md).
-- **Active pruning of tool results**: summarize or drop old tool outputs (e.g. a `cat` of 2000 lines shouldn't stick around in context turns later). Now has results to prune and a bucket to watch shrink: a turn stores its steps, and each result is capped at 8 KiB but never shortened afterwards. The cap is not the strategy — it is what stops one `cat` blowing the window open while the strategy is still unmeasured.
+- **Active pruning of tool results**: built, measured, and **off by default**. A second floor: `Context::prune_floor` is the turn below which a step's *call* is still sent verbatim and its *output* is sent as a digest — `[read_file] ok` plus the bytes that left — built from the structured fields and never from prose, which is the rule the fold already lives under. Like the eviction floor it only moves forward, and like the fold it is a **rendering** decision: `Turn::steps` keeps the full text, so `fold(record) == load(store, id)` still holds and the transcript can still show what the model no longer sees. It runs **before** eviction, because a turn it shrank may fit where it would have been dropped whole — giving up the bytes to keep the turns is the trade, and it is measurable: on twelve turns that each read a real file at an 8K window, `--prune off` **evicted six of its twelve turns** and pruning evicted none, at 39% fewer prompt tokens (144 401 → 87 759). Two policies, and they are the eviction argument on a different axis: `--prune age` moves the boundary every turn and its prefix reuse collapses from turn 4 and never recovers (99, 99, 17, 18, 19, …), while `--prune watermark` waits until the unpruned results are worth more than `--prune-above` of the history budget and then cuts all but `--prune-keep` at once, holding 8 of 11 calls at 99–100% and paying only on the 3 that cut. `--prune-above` defaults to **0.8** because at the 0.35 it was written with, two results exceed the share on their own and the watermark degenerates into `age` — the same run, byte for byte. What is *not* measured is whether a model still answers from a digest, which is precision and needs a box. `pruned` is on the wire (protocol 7, record format 9) for the reason `evicted` is: the prune floor lived in memory and nothing could work out afterwards which results the model had stopped seeing. See [`RECORD/2026-09-05.pruning-tool-results.completed.md`](RECORD/2026-09-05.pruning-tool-results.completed.md).
 
 ## Tool calling: how actions actually get executed
 
@@ -338,8 +338,9 @@ The model never executes anything directly — it only emits a structured reques
   call still being generated, and half a call is not a call.
 
 The set: `read_file`, `list_dir`, `edit_file`, `write_file`, `run_command`.
-Output is capped at 8 KiB with a `truncated` flag — pruning old results out of
-the history is a later, measured change; a cap is the part that is not a strategy.
+Output is capped at 8 KiB with a `truncated` flag. The cap bounds **one** result
+and is not the strategy for their sum; what bounds the sum is pruning, above —
+the cap acts once, at write time, and pruning acts on every selection after it.
 
 **The outcome is structured and the rendering is not.** A `run_command` outcome
 carries `exit_code`, `signal`, `stdout`, `stderr` and `duration_ms` as *fields*,
@@ -795,7 +796,8 @@ Chat and session list are table stakes. The ones that justify building this at a
    rule matched), **who enforced it**, duration, and result size. Built. A call is
    listed when it is made and filled in when it returns, so one that is running or
    was denied reads as itself rather than as nothing happening. Result size
-   *before/after pruning* waits on pruning existing.
+   *before/after pruning* is now answerable — a `pruned` message names the turns
+   and what came off — and is not yet a column in the panel.
 4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
 
 ### Record and replay
@@ -908,8 +910,10 @@ dropdown alongside a `+ New` button. See
   [`RECORD/2026-08-27.cline-openhands.completed.md`](RECORD/2026-08-27.cline-openhands.completed.md);
   the reasoning is in
   [`RECORD/2026-08-31.eviction-tombstones.completed.md`](RECORD/2026-08-31.eviction-tombstones.completed.md).
-  Compaction's own tombstone already exists as `task_closed`; pruning tool results
-  out of a live turn would need a third, and deliberately has none until it does.
+  Compaction's own tombstone already exists as `task_closed`, and pruning tool
+  results out of a live turn is the third: `pruned` names the turns whose output
+  is now a digest and what came off, and the transcript marks them the same way
+  — they are still in the prompt, and only what they printed is gone.
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums
@@ -1031,12 +1035,18 @@ the argument they were measured against is
   quantity and therefore the store.
 - Design the concrete GBNF grammar to force valid tool calls with the target model
   (Qwen2.5-Coder), replacing the text parse.
-- `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window
-  that canonicalize-then-open leaves.
 - The CLI has no gate: `luu chat "prompt"` runs one turn with the policy file as
   the standing approval, because a one-shot has no human loop to gate. Whether it
   should grow one, or stay the scripted/one-shot surface it is, is open. It has
   no approver either, for the same reason: its jobs are `approved_by: operator`.
+- **A pruned tool result cannot be un-pruned, and nothing tells the model it may
+  re-read.** The digest says how many bytes left; it does not say that
+  `read_file` would bring them back, and whether a 7B works that out unprompted
+  is a question for a box. The same run has to ask whether a digest reading
+  `[read_file] ok` is taken for *the file was empty*.
+- **Pruning is by age, and relevance is by file.** The watermark prunes a result
+  the current prompt points at exactly as it prunes one nothing points at.
+  `select.rs` decides relevance over files and the two have not been introduced.
 - **Nothing rotates or revokes an approval key.** A compromised one is removed by
   editing `luu.toml` and restarting — the same shape as everything else that file
   decides, and not enough once the fleet is more than the boxes in one room.
