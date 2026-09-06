@@ -29,6 +29,10 @@ for arm in "off:" "select:--select-tokens 1024" "map:--map-tokens 1024"; do
 done
 ```
 
+`fragments` (selection arm) is the exact spans the selector chose for that
+question — `crates/luu/src/serve.rs:50-79` — recomputed from the same commit, so
+what the model was handed can be read without the recording it was handed in.
+
 `verdict` is `right` when the answer names the target, `wrong` when it names some
 other file in the tree, `declines` when it names none. A file is "named" by the
 shortest path suffix unique in the tree — `agent.rs`, but `backend/mod.rs` —

@@ -4,6 +4,13 @@
   "question": "which file runs the loop that turns a prompt into tool calls and back into an answer?",
   "target": "crates/agent-core/src/agent.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/tests/serve_ws.rs:716-751",
+   "crates/agent-core/src/tools/mod.rs:231-242",
+   "crates/agent-core/src/agent.rs:69-76",
+   "crates/agent-core/src/context.rs:453-464",
+   "crates/luu/src/serve.rs:945-981"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/agent.rs"
@@ -16,6 +23,13 @@
   "question": "which file defines the read-side structure that both the live server and `luu export` fold into?",
   "target": "crates/agent-core/src/api.rs",
   "held": false,
+  "fragments": [
+   "crates/luu/tests/serve_ws.rs:528-574",
+   "crates/luu/src/export.rs:46-60",
+   "crates/luu/src/store.rs:1-25",
+   "crates/luu/src/lib.rs:30-30",
+   "crates/agent-core/src/sandbox/beneath.rs:179-187"
+  ],
   "verdict": "wrong",
   "named": [
    "crates/luu/src/export.rs"
@@ -28,6 +42,16 @@
   "question": "which file implements the backend that streams canned replies without a real model on the machine?",
   "target": "crates/agent-core/src/backend/mock.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/backend/mock.rs:28-35",
+   "crates/agent-core/src/backend/mod.rs:133-136",
+   "crates/agent-core/src/lib.rs:9-9",
+   "crates/luu/src/lib.rs:1029-1043",
+   "crates/agent-core/src/select.rs:110-115",
+   "crates/agent-core/src/agent.rs:126-185",
+   "crates/agent-core/tests/openai_wire.rs:105-122",
+   "crates/luu/tests/serve_ws.rs:61-64"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/backend/mock.rs"
@@ -40,6 +64,12 @@
   "question": "which file defines the Backend trait every inference backend implements?",
   "target": "crates/agent-core/src/backend/mod.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/backend/mod.rs:133-136",
+   "crates/agent-core/src/lib.rs:9-9",
+   "crates/agent-core/src/backend/mock.rs:58-102",
+   "crates/agent-core/src/agent.rs:126-185"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/backend/mod.rs"
@@ -52,6 +82,13 @@
   "question": "which file talks to Ollama's chat endpoint over HTTP?",
   "target": "crates/agent-core/src/backend/ollama.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/backend/ollama.rs:10-14",
+   "crates/agent-core/src/backend/mod.rs:14-14",
+   "crates/agent-core/tests/ollama_wire.rs:1-25",
+   "crates/agent-core/src/backend/openai.rs:1-25",
+   "crates/agent-core/tests/openai_wire.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/backend/ollama.rs"
@@ -64,6 +101,14 @@
   "question": "which file implements the OpenAI-compatible backend that also covers llama-server and vLLM?",
   "target": "crates/agent-core/src/backend/openai.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/tests/serve_ws.rs:55-60",
+   "crates/agent-core/src/backend/openai.rs:236-295",
+   "crates/agent-core/src/backend/mod.rs:15-18",
+   "crates/agent-core/tests/openai_wire.rs:105-122",
+   "crates/agent-core/src/lib.rs:9-9",
+   "crates/agent-core/tests/ollama_wire.rs:112-126"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/backend/openai.rs"
@@ -76,6 +121,12 @@
   "question": "which file decides what earns its place in the prompt and what gets evicted when it is full?",
   "target": "crates/agent-core/src/context.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/context.rs:238-259",
+   "crates/luu/tests/serve_ws.rs:151-161",
+   "crates/agent-core/src/tools/mod.rs:1-25",
+   "crates/luu/src/serve.rs:945-981"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/context.rs"
@@ -88,6 +139,13 @@
   "question": "which file fuses a real file into a single turn as a fragment?",
   "target": "crates/agent-core/src/fragment.rs",
   "held": false,
+  "fragments": [
+   "crates/agent-core/src/context.rs:120-127",
+   "crates/agent-core/src/lib.rs:11-11",
+   "crates/agent-core/src/protocol.rs:322-360",
+   "crates/luu/tests/serve_ws.rs:575-628",
+   "crates/agent-core/src/api.rs:155-176"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/fragment.rs"
@@ -100,6 +158,12 @@
   "question": "which file is agent-core's crate root, with no knowledge of the CLI, VSCode or the browser?",
   "target": "crates/agent-core/src/lib.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/lib.rs:6-6",
+   "crates/agent-core/src/sandbox/mod.rs:128-138",
+   "crates/agent-core/src/sandbox/beneath.rs:56-115",
+   "crates/agent-core/src/protocol.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/lib.rs"
@@ -112,6 +176,11 @@
   "question": "which file defines the one message schema carried over stdio, the WebSocket and the record format?",
   "target": "crates/agent-core/src/protocol.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/serve.rs:608-630",
+   "crates/agent-core/src/protocol.rs:1-25",
+   "crates/luu/tests/stdio.rs:55-114"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/protocol.rs"
@@ -124,6 +193,12 @@
   "question": "which file builds the reference graph and ranks the repository's files by what depends on what?",
   "target": "crates/agent-core/src/rank.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/rank.rs:87-93",
+   "crates/agent-core/src/select.rs:116-135",
+   "crates/agent-core/src/repo_map.rs:1-25",
+   "crates/agent-core/src/agent.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/rank.rs"
@@ -136,6 +211,13 @@
   "question": "which file defines the JSON-lines format a session is recorded to?",
   "target": "crates/agent-core/src/record.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/serve.rs:50-79",
+   "crates/luu/src/export.rs:20-26",
+   "crates/luu/src/lib.rs:32-32",
+   "crates/agent-core/src/record.rs:1-25",
+   "crates/agent-core/src/tools/mod.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/record.rs"
@@ -148,6 +230,14 @@
   "question": "which file turns the repository into an outline of definitions with their bodies elided?",
   "target": "crates/agent-core/src/repo_map.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/repo_map.rs:495-507",
+   "crates/agent-core/src/tools/mod.rs:288-306",
+   "crates/agent-core/src/context.rs:443-446",
+   "crates/luu/src/session.rs:83-88",
+   "crates/agent-core/src/rank.rs:1-25",
+   "crates/agent-core/src/api.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/repo_map.rs"
@@ -160,6 +250,13 @@
   "question": "which file is the sandbox's implementation for platforms that are not Linux?",
   "target": "crates/agent-core/src/sandbox/fallback.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/sandbox/mod.rs:193-210",
+   "crates/agent-core/src/sandbox/linux.rs:1-25",
+   "crates/agent-core/src/sandbox/beneath.rs:1-25",
+   "crates/agent-core/src/sandbox/fallback.rs:1-25",
+   "crates/agent-core/src/lib.rs:17-17"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/sandbox/fallback.rs"
@@ -172,6 +269,13 @@
   "question": "which file applies Landlock and seccomp to a child process between fork and exec?",
   "target": "crates/agent-core/src/sandbox/linux.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/sandbox/linux.rs:99-141",
+   "crates/agent-core/src/sandbox/mod.rs:603-612",
+   "crates/agent-core/src/sandbox/beneath.rs:1-25",
+   "crates/agent-core/src/tools/command.rs:227-232",
+   "crates/luu/src/config.rs:47-60"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/sandbox/linux.rs"
@@ -184,6 +288,14 @@
   "question": "which file defines the sandbox's rungs \u2014 what the agent may reach, checked in-process?",
   "target": "crates/agent-core/src/sandbox/mod.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/sandbox/mod.rs:193-210",
+   "crates/agent-core/src/lib.rs:6-6",
+   "crates/agent-core/src/sandbox/policy.rs:1-25",
+   "crates/agent-core/src/sandbox/beneath.rs:1-25",
+   "crates/agent-core/src/approval.rs:1-25",
+   "crates/agent-core/src/sandbox/fallback.rs:28-29"
+  ],
   "verdict": "wrong",
   "named": [
    "crates/agent-core/src/sandbox/policy.rs"
@@ -196,6 +308,13 @@
   "question": "which file defines what a project declares the agent may reach, before any path is resolved?",
   "target": "crates/agent-core/src/sandbox/policy.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/sandbox/policy.rs:56-69",
+   "crates/agent-core/src/sandbox/mod.rs:252-311",
+   "crates/agent-core/src/lib.rs:6-6",
+   "crates/agent-core/src/repo_map.rs:375-409",
+   "crates/agent-core/src/approval.rs:153-159"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/sandbox/policy.rs"
@@ -208,6 +327,15 @@
   "question": "which file defines the task type \u2014 the unit of work, of approval and of forgetting?",
   "target": "crates/agent-core/src/job.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/context.rs:162-173",
+   "crates/agent-core/src/job.rs:486-487",
+   "crates/luu/tests/serve_ws.rs:37-54",
+   "crates/agent-core/src/approval.rs:57-67",
+   "crates/luu/tests/stdio.rs:189-248",
+   "crates/agent-core/src/api.rs:110-112",
+   "crates/agent-core/src/lib.rs:8-8"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/job.rs"
@@ -220,6 +348,13 @@
   "question": "which file implements run_command, the one tool whose verdict is about the kernel rather than this process?",
   "target": "crates/agent-core/src/tools/command.rs",
   "held": false,
+  "fragments": [
+   "crates/agent-core/src/sandbox/mod.rs:523-579",
+   "crates/agent-core/src/tools/mod.rs:137-147",
+   "crates/luu/src/serve.rs:425-431",
+   "crates/agent-core/src/tools/fs.rs:46-64",
+   "crates/agent-core/src/sandbox/fallback.rs:28-29"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/tools/command.rs"
@@ -232,6 +367,18 @@
   "question": "which file implements the filesystem tools that check a path before touching it?",
   "target": "crates/agent-core/src/tools/fs.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/sandbox/mod.rs:437-446",
+   "crates/agent-core/src/tools/mod.rs:243-246",
+   "crates/agent-core/src/tools/command.rs:46-52",
+   "crates/agent-core/src/tools/fs.rs:81-96",
+   "crates/agent-core/src/context.rs:82-96",
+   "crates/agent-core/src/lib.rs:20-20",
+   "crates/agent-core/src/repo_map.rs:375-409",
+   "crates/agent-core/src/select.rs:284-295",
+   "crates/luu/src/auth.rs:81-99",
+   "crates/luu/tests/worker_seam.rs:51-54"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/tools/fs.rs"
@@ -244,6 +391,17 @@
   "question": "which file parses a model's structured tool request and validates it against the sandbox?",
   "target": "crates/agent-core/src/tools/mod.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/tools/mod.rs:231-242",
+   "crates/agent-core/src/sandbox/mod.rs:193-210",
+   "crates/agent-core/tests/openai_wire.rs:105-122",
+   "crates/agent-core/src/worker/mod.rs:49-59",
+   "crates/agent-core/tests/ollama_wire.rs:88-100",
+   "crates/luu/tests/select_probe.rs:52-61",
+   "crates/agent-core/src/lib.rs:17-17",
+   "crates/luu/tests/worker_seam.rs:35-44",
+   "crates/agent-core/src/sandbox/fallback.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/tools/mod.rs"
@@ -256,6 +414,13 @@
   "question": "which file carries the trace channel that explains the context manager's choices?",
   "target": "crates/agent-core/src/trace.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/lib.rs:10-10",
+   "crates/agent-core/src/context.rs:282-300",
+   "crates/agent-core/src/trace.rs:1-25",
+   "crates/luu/src/serve.rs:603-607",
+   "crates/agent-core/src/fragment.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/trace.rs"
@@ -268,6 +433,13 @@
   "question": "which file runs one turn \u2014 prompt in, tokens out \u2014 with no tools involved?",
   "target": "crates/agent-core/src/turn.rs",
   "held": false,
+  "fragments": [
+   "crates/agent-core/src/context.rs:453-464",
+   "crates/luu/tests/serve_ws.rs:716-751",
+   "crates/luu/src/serve.rs:1454-1513",
+   "crates/agent-core/src/tools/mod.rs:243-246",
+   "crates/agent-core/src/lib.rs:20-20"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/turn.rs"
@@ -280,6 +452,14 @@
   "question": "which file is level 3 of the sandbox, where tools run in a container rather than this process?",
   "target": "crates/agent-core/src/worker/mod.rs",
   "held": false,
+  "fragments": [
+   "crates/agent-core/src/sandbox/mod.rs:193-210",
+   "crates/luu/tests/select_probe.rs:52-61",
+   "crates/agent-core/src/tools/command.rs:85-144",
+   "crates/agent-core/src/lib.rs:17-17",
+   "crates/agent-core/src/sandbox/fallback.rs:28-29",
+   "crates/agent-core/src/tools/mod.rs:243-246"
+  ],
   "verdict": "declines",
   "named": [],
   "code_tokens": 1164,
@@ -290,6 +470,12 @@
   "question": "which file builds the argv for whichever container runtime is in use?",
   "target": "crates/agent-core/src/worker/runtime.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/worker/runtime.rs:24-44",
+   "crates/agent-core/src/worker/mod.rs:33-48",
+   "crates/luu/tests/worker_seam.rs:211-232",
+   "crates/agent-core/src/sandbox/mod.rs:1-25"
+  ],
   "verdict": "declines",
   "named": [],
   "code_tokens": 938,
@@ -300,6 +486,15 @@
   "question": "which test file asserts what the Ollama backend actually puts on the socket?",
   "target": "crates/agent-core/tests/ollama_wire.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/tests/serve_ws.rs:37-54",
+   "crates/agent-core/src/backend/mod.rs:14-14",
+   "crates/agent-core/tests/ollama_wire.rs:1-25",
+   "crates/agent-core/tests/openai_wire.rs:105-122",
+   "crates/luu/src/serve.rs:599-602",
+   "crates/agent-core/src/lib.rs:9-9",
+   "crates/agent-core/src/tools/command.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/tests/ollama_wire.rs"
@@ -312,6 +507,12 @@
   "question": "which test file asserts what the OpenAI-compatible backend puts on the wire and reads back?",
   "target": "crates/agent-core/tests/openai_wire.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/backend/mod.rs:15-18",
+   "crates/agent-core/src/backend/openai.rs:236-295",
+   "crates/agent-core/tests/openai_wire.rs:105-122",
+   "crates/agent-core/tests/ollama_wire.rs:150-175"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/tests/openai_wire.rs"
@@ -324,6 +525,12 @@
   "question": "which file decides who may reach the control surface?",
   "target": "crates/luu/src/auth.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/auth.rs:1-25",
+   "crates/agent-core/src/approval.rs:1-25",
+   "crates/agent-core/src/sandbox/mod.rs:1-25",
+   "crates/agent-core/src/backend/mod.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/src/auth.rs"
@@ -336,6 +543,13 @@
   "question": "which file is the `main` function for the `luu` binary?",
   "target": "crates/luu/src/bin/luu.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/bin/luu.rs:11-21",
+   "crates/luu/src/lib.rs:1-25",
+   "crates/luu/tests/store_parity.rs:1-25",
+   "crates/luu/src/export.rs:1-25",
+   "crates/agent-core/src/worker/runtime.rs:220-224"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/src/bin/luu.rs"
@@ -348,6 +562,12 @@
   "question": "which file defines every subcommand the CLI takes and dispatches them?",
   "target": "crates/luu/src/lib.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/lib.rs:44-49",
+   "crates/agent-core/src/rank.rs:1-25",
+   "crates/agent-core/src/job.rs:1-25",
+   "crates/agent-core/src/lib.rs:1-23"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/src/lib.rs"
@@ -360,6 +580,17 @@
   "question": "which file turns a recording into the static twin of the read API, for a host with no server behind it?",
   "target": "crates/luu/src/export.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/tests/serve_ws.rs:55-60",
+   "crates/luu/src/export.rs:46-60",
+   "crates/agent-core/src/fragment.rs:131-138",
+   "crates/agent-core/src/api.rs:1-25",
+   "crates/agent-core/src/backend/openai.rs:62-72",
+   "crates/agent-core/src/lib.rs:7-7",
+   "crates/agent-core/src/sandbox/beneath.rs:179-187",
+   "crates/agent-core/src/worker/mod.rs:480-495",
+   "crates/luu/src/serve.rs:1911-1919"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/src/export.rs"
@@ -372,6 +603,11 @@
   "question": "which file decides where this machine's state directory lives?",
   "target": "crates/luu/src/config.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/config.rs:1-25",
+   "crates/agent-core/src/backend/mock.rs:1-25",
+   "crates/agent-core/src/sandbox/beneath.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/src/config.rs"
@@ -384,6 +620,14 @@
   "question": "which file is the local HTTP server behind the debug UI?",
   "target": "crates/luu/src/serve.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/tests/serve_ws.rs:55-60",
+   "crates/luu/src/serve.rs:1-25",
+   "crates/agent-core/tests/openai_wire.rs:176-194",
+   "crates/agent-core/tests/ollama_wire.rs:112-126",
+   "crates/agent-core/src/protocol.rs:1-25",
+   "crates/agent-core/src/backend/ollama.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/src/serve.rs"
@@ -396,6 +640,13 @@
   "question": "which file makes sure chat and serve assemble the same prompt the same way?",
   "target": "crates/luu/src/session.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/serve.rs:432-437",
+   "crates/luu/tests/serve_ws.rs:338-397",
+   "crates/luu/src/session.rs:215-231",
+   "crates/luu/src/lib.rs:31-31",
+   "crates/agent-core/src/agent.rs:1-25"
+  ],
   "verdict": "wrong",
   "named": [
    "crates/agent-core/src/agent.rs"
@@ -408,6 +659,11 @@
   "question": "which file caches sessions on disk as a cache of the fold, never a second log?",
   "target": "crates/luu/src/store.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/src/store.rs:1-25",
+   "crates/luu/tests/store_parity.rs:223-251",
+   "crates/agent-core/src/tools/mod.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/agent-core/src/api.rs",
@@ -421,6 +677,14 @@
   "question": "which test file drives one turn over the WebSocket against a running server?",
   "target": "crates/luu/tests/serve_ws.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/tests/serve_ws.rs:84-95",
+   "crates/agent-core/src/context.rs:128-159",
+   "crates/agent-core/src/api.rs:155-176",
+   "crates/luu/src/serve.rs:608-630",
+   "crates/agent-core/src/lib.rs:22-22",
+   "crates/agent-core/src/turn.rs:98-106"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/tests/serve_ws.rs"
@@ -433,6 +697,12 @@
   "question": "which test file asserts that folding a record equals saving it to the store and loading it back?",
   "target": "crates/luu/tests/store_parity.rs",
   "held": true,
+  "fragments": [
+   "crates/luu/tests/store_parity.rs:178-222",
+   "crates/agent-core/src/lib.rs:15-15",
+   "crates/luu/src/lib.rs:33-43",
+   "crates/luu/src/store.rs:1-25"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/tests/store_parity.rs"
@@ -445,6 +715,13 @@
   "question": "which test file drives a real worker end to end through a real pipe, outside a container?",
   "target": "crates/luu/tests/worker_seam.rs",
   "held": true,
+  "fragments": [
+   "crates/agent-core/src/worker/mod.rs:213-239",
+   "crates/luu/tests/worker_seam.rs:63-84",
+   "crates/agent-core/src/lib.rs:23-23",
+   "crates/agent-core/src/worker/runtime.rs:73-79",
+   "crates/agent-core/src/repo_map.rs:461-483"
+  ],
   "verdict": "right",
   "named": [
    "crates/luu/tests/worker_seam.rs"
