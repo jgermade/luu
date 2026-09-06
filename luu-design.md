@@ -477,8 +477,12 @@ socket.
 
 What level 2 does *not* claim: it is not a network namespace (blocking the
 internet address families stops a program opening a connection, not one that
-inherited a socket), and canonicalize-then-open still has a TOCTOU window for the
-in-process tools — `openat2(RESOLVE_BENEATH)` is the answer there and is not built.
+inherited a socket). Canonicalize-then-open **no longer** leaves a TOCTOU window
+for the in-process tools: they open with `openat2(RESOLVE_BENEATH)` relative to
+the granting root, so the kernel refuses an escape during resolution and the
+verdict reads `Applied::Kernel`. Where the syscall is missing — pre-5.6, a seccomp
+profile that blocks it, macOS — the old two-step is what happens and the verdict
+says so.
 
 ## Container mode
 
@@ -1031,8 +1035,6 @@ the argument they were measured against is
   quantity and therefore the store.
 - Design the concrete GBNF grammar to force valid tool calls with the target model
   (Qwen2.5-Coder), replacing the text parse.
-- `openat2(RESOLVE_BENEATH)` for the in-process tools, closing the TOCTOU window
-  that canonicalize-then-open leaves.
 - The CLI has no gate: `luu chat "prompt"` runs one turn with the policy file as
   the standing approval, because a one-shot has no human loop to gate. Whether it
   should grow one, or stay the scripted/one-shot surface it is, is open. It has
