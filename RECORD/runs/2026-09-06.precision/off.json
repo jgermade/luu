@@ -1,0 +1,382 @@
+[
+ {
+  "n": 1,
+  "question": "which file runs the loop that turns a prompt into tool calls and back into an answer?",
+  "target": "crates/agent-core/src/agent.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The loop that turns a prompt into tool calls and back into an answer is typically found in the main application or script that interacts with the user. This script handles the user input, determines which tool to call based on the input, executes the tool, and then processes the tool's output to generate a response. In a typical setup, this might be a file like `main.py`, `app.py`, or `server.py`, depending on the architecture of the application. If you're using a framework like Flask or Django, the loop might be part of a view function or a route handler. If you need to find the exact file, you can search for the main entry point of your application, which is often the file that contains the `if __name__ == \"__main__\":` block. This block is where the application starts running. If you provide more details about the project or the specific application you're working with, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 2,
+  "question": "which file defines the read-side structure that both the live server and `luu export` fold into?",
+  "target": "crates/agent-core/src/api.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the read-side structure, which both the live server and `luu export` fold into, is typically part of the application's data model or schema definition. This file specifies how data is structured and how it is persisted and retrieved. In many modern web applications, this is often defined using a framework-specific ORM (Object-Relational Mapping) or a schema language like GraphQL. For example, if you're using a framework like Django, the read-side structure might be defined in the `models.py` file. If you're using a framework like Express with a GraphQL schema, the read-side structure might be defined in the `schema.js` or `schema.ts` file. If you provide more details about the framework or technology you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 3,
+  "question": "which file implements the backend that streams canned replies without a real model on the machine?",
+  "target": "crates/agent-core/src/backend/mock.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements the backend for streaming canned replies without a real model on the machine is typically part of the application's API or server code. This file handles the logic for generating and returning pre-defined responses to user requests. In a typical web application, this might be implemented in a file like `api.py`, `server.py`, or `backend.py`. If you're using a framework like Flask, the implementation might be part of a route handler function. If you're using a framework like Express, the implementation might be part of a controller or middleware function. If you provide more details about the framework or technology you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 4,
+  "question": "which file defines the Backend trait every inference backend implements?",
+  "target": "crates/agent-core/src/backend/mod.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the `Backend` trait, which every inference backend implements, is typically part of the application's core or shared codebase. This trait defines the common interface that all inference backends must adhere to, ensuring consistency and interoperability. In a typical web application, this might be defined in a file like `backend.rs` or `inference.rs`. If you're using a framework or library that provides a trait for inference backends, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 5,
+  "question": "which file talks to Ollama's chat endpoint over HTTP?",
+  "target": "crates/agent-core/src/backend/ollama.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that talks to Ollama's chat endpoint over HTTP is typically part of the application's API or client code. This file handles the logic for making HTTP requests to the Ollama chat endpoint and processing the responses. In a typical web application, this might be implemented in a file like `ollama_client.py`, `ollama_api.py`, or `ollama_http.py`. If you're using a framework like Flask or Express, the implementation might be part of a route handler function or a controller. If you provide more details about the framework or technology you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 6,
+  "question": "which file implements the OpenAI-compatible backend that also covers llama-server and vLLM?",
+  "target": "crates/agent-core/src/backend/openai.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements the OpenAI-compatible backend, which also covers llama-server and vLLM, is typically part of the application's core or shared codebase. This backend provides a unified interface for interacting with different inference servers, including OpenAI, llama-server, and vLLM. In a typical web application, this might be defined in a file like `openai_backend.py`, `inference_backend.py`, or `openai_compatible_backend.py`. If you're using a framework or library that provides a backend for OpenAI-compatible servers, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 7,
+  "question": "which file decides what earns its place in the prompt and what gets evicted when it is full?",
+  "target": "crates/agent-core/src/context.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that decides what earns its place in the prompt and what gets evicted when it is full is typically part of the application's natural language processing (NLP) or text generation code. This file handles the logic for managing the context window, which is the maximum length of text that can be processed in a single request. In a typical web application, this might be implemented in a file like `prompt_manager.py`, `context_manager.py`, or `text_generation_manager.py`. If you're using a framework or library that provides text generation capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 8,
+  "question": "which file fuses a real file into a single turn as a fragment?",
+  "target": "crates/agent-core/src/fragment.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that fuses a real file into a single turn as a fragment is typically part of the application's text processing or document handling code. This file handles the logic for reading a file and converting its contents into a format that can be integrated into a larger prompt or conversation. In a typical web application, this might be implemented in a file like `file_fuser.py`, `document_fuser.py`, or `text_fuser.py`. If you're using a framework or library that provides document processing capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 9,
+  "question": "which file is agent-core's crate root, with no knowledge of the CLI, VSCode or the browser?",
+  "target": "crates/agent-core/src/lib.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that serves as the crate root for `agent-core` is typically named `Cargo.toml` and is located at the root of the project directory. This file contains metadata about the crate, such as its name, version, dependencies, and other configuration settings. If you need to find the exact file, you can navigate to the root directory of your `agent-core` project and look for the `Cargo.toml` file. This file is the entry point for the crate and is essential for building and managing the project. If you provide more details about the project or the specific crate you're working with, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 10,
+  "question": "which file defines the one message schema carried over stdio, the WebSocket and the record format?",
+  "target": "crates/agent-core/src/protocol.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the one message schema carried over stdio, WebSocket, and the record format is typically part of the application's core or shared codebase. This schema defines the structure of the messages that are exchanged between different components of the application, ensuring consistency and interoperability. In a typical web application, this might be defined in a file like `message_schema.py`, `communication_schema.py`, or `message_format.py`. If you're using a framework or library that provides a message schema for communication, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 11,
+  "question": "which file builds the reference graph and ranks the repository's files by what depends on what?",
+  "target": "crates/agent-core/src/rank.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that builds the reference graph and ranks the repository's files by what depends on what is typically part of the application's code analysis or dependency management code. This file handles the logic for parsing the codebase, identifying dependencies between files, and constructing a graph that represents these dependencies. In a typical web application, this might be implemented in a file like `dependency_analyzer.py`, `code_graph_builder.py`, or `file_dependency_ranker.py`. If you're using a framework or library that provides dependency analysis capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 12,
+  "question": "which file defines the JSON-lines format a session is recorded to?",
+  "target": "crates/agent-core/src/record.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the JSON-lines format a session is recorded to is typically part of the application's logging or session recording code. This file specifies the structure of the JSON objects that are written to the log file, ensuring that the recorded sessions are consistent and can be easily parsed. In a typical web application, this might be defined in a file like `session_recorder.py`, `log_format.py`, or `json_lines_format.py`. If you're using a framework or library that provides logging capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 13,
+  "question": "which file turns the repository into an outline of definitions with their bodies elided?",
+  "target": "crates/agent-core/src/repo_map.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that turns the repository into an outline of definitions with their bodies elided is typically part of the application's code analysis or documentation generation code. This file handles the logic for parsing the codebase, identifying definitions (such as functions, classes, and modules), and constructing an outline that shows the structure of the code without including the detailed implementation. In a typical web application, this might be implemented in a file like `code_outline_generator.py`, `documentation_builder.py`, or `outline_generator.py`. If you're using a framework or library that provides documentation generation capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 14,
+  "question": "which file is the sandbox's implementation for platforms that are not Linux?",
+  "target": "crates/agent-core/src/sandbox/fallback.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements the sandbox for platforms that are not Linux is typically part of the application's platform-specific code. This file provides the necessary functionality to create and manage a sandbox environment on non-Linux platforms, ensuring that the application runs securely and isolated from the host system. In a typical web application, this might be implemented in a file like `sandbox_impl.py`, `platform_specific_sandbox.py`, or `non_linux_sandbox.py`. If you're using a framework or library that provides sandboxing capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 15,
+  "question": "which file applies Landlock and seccomp to a child process between fork and exec?",
+  "target": "crates/agent-core/src/sandbox/linux.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that applies Landlock and seccomp to a child process between fork and exec is typically part of the application's security or sandboxing code. This file handles the logic for setting up the security policies and applying them to the child process, ensuring that it operates within the constraints defined by Landlock and seccomp. In a typical web application, this might be implemented in a file like `security_policy_applier.py`, `sandbox_policy_enforcer.py`, or `landlock_seccomp_applier.py`. If you're using a framework or library that provides security policies, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 16,
+  "question": "which file defines the sandbox's rungs \u2014 what the agent may reach, checked in-process?",
+  "target": "crates/agent-core/src/sandbox/mod.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the sandbox's rungs, which are the permissions and capabilities that the agent may reach, checked in-process, is typically part of the application's security or sandboxing code. This file specifies the security policies and permissions that are enforced within the sandbox, ensuring that the agent operates within the defined boundaries. In a typical web application, this might be implemented in a file like `sandbox_rungs.py`, `security_policy_manager.py`, or `agent_permissions.py`. If you're using a framework or library that provides sandboxing capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 17,
+  "question": "which file defines what a project declares the agent may reach, before any path is resolved?",
+  "target": "crates/agent-core/src/sandbox/policy.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines what a project declares the agent may reach, before any path is resolved, is typically part of the application's configuration or manifest file. This file specifies the permissions and capabilities that the agent is allowed to access, providing a high-level declaration of the agent's reach. In a typical web application, this might be implemented in a file like `project_config.py`, `manifest.json`, or `agent_permissions.yaml`. If you're using a framework or library that provides configuration capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 18,
+  "question": "which file defines the task type \u2014 the unit of work, of approval and of forgetting?",
+  "target": "crates/agent-core/src/job.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines the task type, which is the unit of work, approval, and forgetting, is typically part of the application's task management or workflow code. This file specifies the structure and behavior of tasks, including how they are created, executed, approved, and forgotten. In a typical web application, this might be implemented in a file like `task_manager.py`, `workflow_definition.py`, or `task_types.py`. If you're using a framework or library that provides task management capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 19,
+  "question": "which file implements run_command, the one tool whose verdict is about the kernel rather than this process?",
+  "target": "crates/agent-core/src/tools/command.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements `run_command`, the tool whose verdict is about the kernel rather than this process, is typically part of the application's system or kernel interaction code. This file handles the logic for executing system commands and verifying their execution, ensuring that the commands are run with the appropriate permissions and that their outcomes are correctly reported. In a typical web application, this might be implemented in a file like `system_command_executor.py`, `kernel_interaction.py`, or `command_runner.py`. If you're using a framework or library that provides system command execution capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 20,
+  "question": "which file implements the filesystem tools that check a path before touching it?",
+  "target": "crates/agent-core/src/tools/fs.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements the filesystem tools that check a path before touching it is typically part of the application's file handling or security code. This file handles the logic for verifying the existence and permissions of a path before performing any file operations, ensuring that the operations are safe and secure. In a typical web application, this might be implemented in a file like `file_system_tools.py`, `path_validator.py`, or `security_checker.py`. If you're using a framework or library that provides file handling capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 21,
+  "question": "which file parses a model's structured tool request and validates it against the sandbox?",
+  "target": "crates/agent-core/src/tools/mod.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that parses a model's structured tool request and validates it against the sandbox is typically part of the application's tool handling or security code. This file handles the logic for interpreting the tool request, checking its validity, and ensuring that it complies with the sandbox's policies and constraints. In a typical web application, this might be implemented in a file like `tool_request_parser.py`, `tool_validator.py`, or `sandbox_compliance_checker.py`. If you're using a framework or library that provides tool handling capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 22,
+  "question": "which file carries the trace channel that explains the context manager's choices?",
+  "target": "crates/agent-core/src/trace.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that carries the trace channel that explains the context manager's choices is typically part of the application's logging or tracing code. This file handles the logic for recording and storing the trace information, which can be used to understand the decisions made by the context manager. In a typical web application, this might be implemented in a file like `trace_logger.py`, `context_manager_trace.py`, or `trace_channel.py`. If you're using a framework or library that provides tracing capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 23,
+  "question": "which file runs one turn \u2014 prompt in, tokens out \u2014 with no tools involved?",
+  "target": "crates/agent-core/src/turn.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that runs one turn, which involves processing a prompt and generating tokens without using any tools, is typically part of the application's core or text processing code. This file handles the logic for handling the input prompt, applying any necessary transformations, and generating the output tokens. In a typical web application, this might be implemented in a file like `turn_processor.py`, `prompt_handler.py`, or `text_processor.py`. If you're using a framework or library that provides text processing capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 24,
+  "question": "which file is level 3 of the sandbox, where tools run in a container rather than this process?",
+  "target": "crates/agent-core/src/worker/mod.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that implements level 3 of the sandbox, where tools run in a container rather than this process, is typically part of the application's containerization or sandboxing code. This file handles the logic for setting up and managing the container environment, ensuring that the tools run within a controlled and isolated space. In a typical web application, this might be implemented in a file like `container_sandbox.py`, `level3_sandbox.py`, or `container_manager.py`. If you're using a framework or library that provides containerization capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 25,
+  "question": "which file builds the argv for whichever container runtime is in use?",
+  "target": "crates/agent-core/src/worker/runtime.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that builds the `argv` for whichever container runtime is in use is typically part of the application's containerization or sandboxing code. This file handles the logic for constructing the command-line arguments that are passed to the container runtime, ensuring that the container is started with the correct parameters. In a typical web application, this might be implemented in a file like `container_runtime.py`, `container_args_builder.py`, or `runtime_configurator.py`. If you're using a framework or library that provides containerization capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 26,
+  "question": "which test file asserts what the Ollama backend actually puts on the socket?",
+  "target": "crates/agent-core/tests/ollama_wire.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that asserts what the Ollama backend actually puts on the socket is typically part of the application's test suite, specifically focused on the Ollama backend. This file contains test cases that verify the behavior of the Ollama backend, ensuring that it correctly sends and receives data over the socket. In a typical web application, this might be implemented in a file like `ollama_backend_test.py`, `test_ollama_backend.py`, or `ollama_socket_test.py`. If you're using a testing framework like pytest or unittest, the implementation might be part of that framework's test discovery mechanism. If you provide more details about the testing framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 27,
+  "question": "which test file asserts what the OpenAI-compatible backend puts on the wire and reads back?",
+  "target": "crates/agent-core/tests/openai_wire.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that asserts what the OpenAI-compatible backend puts on the wire and reads back is typically part of the application's test suite, specifically focused on the OpenAI-compatible backend. This file contains test cases that verify the behavior of the backend, ensuring that it correctly sends and receives data over the network. In a typical web application, this might be implemented in a file like `openai_backend_test.py`, `test_openai_backend.py`, or `openai_network_test.py`. If you're using a testing framework like pytest or unittest, the implementation might be part of that framework's test discovery mechanism. If you provide more details about the testing framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 28,
+  "question": "which file decides who may reach the control surface?",
+  "target": "crates/luu/src/auth.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that decides who may reach the control surface is typically part of the application's access control or authentication code. This file handles the logic for verifying user credentials, permissions, and other authentication factors, ensuring that only authorized users can access the control surface. In a typical web application, this might be implemented in a file like `access_control.py`, `authentication_manager.py`, or `control_surface_access.py`. If you're using a framework or library that provides access control capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 29,
+  "question": "which file is the `main` function for the `luu` binary?",
+  "target": "crates/luu/src/bin/luu.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that contains the `main` function for the `luu` binary is typically named `main.rs` and is located at the root of the project directory. This file is the entry point for the application, where the execution begins, and it handles the initialization and execution of the application. If you need to find the exact file, you can navigate to the root directory of your `luu` project and look for the `main.rs` file. This file is the starting point for the application and is essential for running the `luu` binary. If you provide more details about the project or the specific binary you're working with, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 30,
+  "question": "which file defines every subcommand the CLI takes and dispatches them?",
+  "target": "crates/luu/src/lib.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that defines every subcommand the CLI takes and dispatches them is typically part of the application's command-line interface (CLI) code. This file handles the logic for parsing user input, identifying the subcommand, and invoking the appropriate handler function. In a typical web application, this might be implemented in a file like `cli.py`, `command_dispatcher.py`, or `cli_handler.py`. If you're using a framework or library that provides CLI capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 31,
+  "question": "which file turns a recording into the static twin of the read API, for a host with no server behind it?",
+  "target": "crates/luu/src/export.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that turns a recording into the static twin of the read API, for a host with no server behind it, is typically part of the application's recording or simulation code. This file handles the logic for replaying the recorded data and providing a static, offline version of the read API. In a typical web application, this might be implemented in a file like `recording_replayer.py`, `static_api_simulator.py`, or `offline_read_api.py`. If you're using a framework or library that provides recording or simulation capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 32,
+  "question": "which file decides where this machine's state directory lives?",
+  "target": "crates/luu/src/config.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that decides where this machine's state directory lives is typically part of the application's configuration or environment setup code. This file specifies the location of the state directory, which is used to store persistent data and configuration files. In a typical web application, this might be implemented in a file like `config.py`, `environment_setup.py`, or `state_directory_manager.py`. If you're using a framework or library that provides configuration capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 33,
+  "question": "which file is the local HTTP server behind the debug UI?",
+  "target": "crates/luu/src/serve.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that is the local HTTP server behind the debug UI is typically part of the application's user interface (UI) or debugging code. This file handles the logic for setting up and running the HTTP server, serving the debug UI, and handling incoming requests. In a typical web application, this might be implemented in a file like `debug_server.py`, `ui_server.py`, or `debug_http_server.py`. If you're using a framework or library that provides UI or debugging capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 34,
+  "question": "which file makes sure chat and serve assemble the same prompt the same way?",
+  "target": "crates/luu/src/session.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that ensures that chat and serve assemble the same prompt the same way is typically part of the application's text processing or prompt assembly code. This file handles the logic for constructing the prompt in a consistent manner, ensuring that both the chat and serve components generate the same prompt for a given input. In a typical web application, this might be implemented in a file like `prompt_assembler.py`, `prompt_builder.py`, or `prompt_consistency_manager.py`. If you're using a framework or library that provides prompt assembly capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 35,
+  "question": "which file caches sessions on disk as a cache of the fold, never a second log?",
+  "target": "crates/luu/src/store.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The file that caches sessions on disk as a cache of the fold, never a second log, is typically part of the application's session management or caching code. This file handles the logic for storing and retrieving session data, ensuring that it is persisted on disk for later use. In a typical web application, this might be implemented in a file like `session_cache.py`, `cache_manager.py`, or `session_storage.py`. If you're using a framework or library that provides caching capabilities, the implementation might be part of that framework's source code. If you provide more details about the framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 36,
+  "question": "which test file drives one turn over the WebSocket against a running server?",
+  "target": "crates/luu/tests/serve_ws.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that drives one turn over the WebSocket against a running server is typically part of the application's test suite, specifically focused on the WebSocket communication. This file contains test cases that simulate a single turn of the application over a WebSocket connection, ensuring that the server handles the communication correctly. In a typical web application, this might be implemented in a file like `websocket_test.py`, `test_websocket_communication.py`, or `websocket_turn_driver.py`. If you're using a testing framework like pytest or unittest, the implementation might be part of that framework's test discovery mechanism. If you provide more details about the testing framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 37,
+  "question": "which test file asserts that folding a record equals saving it to the store and loading it back?",
+  "target": "crates/luu/tests/store_parity.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that asserts that folding a record equals saving it to the store and loading it back is typically part of the application's test suite, specifically focused on the data persistence and retrieval code. This file contains test cases that verify the behavior of the folding process, ensuring that the record is correctly saved and then loaded back from the store. In a typical web application, this might be implemented in a file like `record_folding_test.py`, `test_record_persistence.py`, or `record_storage_test.py`. If you're using a testing framework like pytest or unittest, the implementation might be part of that framework's test discovery mechanism. If you provide more details about the testing framework or library you're using, I can help you locate the exact file more precisely."
+ },
+ {
+  "n": 38,
+  "question": "which test file drives a real worker end to end through a real pipe, outside a container?",
+  "target": "crates/luu/tests/worker_seam.rs",
+  "held": null,
+  "verdict": "declines",
+  "named": [],
+  "code_tokens": 0,
+  "answer": "The test file that drives a real worker end-to-end through a real pipe, outside a container, is typically part of the application's test suite, specifically focused on the worker and communication code. This file contains test cases that simulate the end-to-end behavior of the worker, ensuring that it correctly processes tasks and communicates with other components. In a typical web application, this might be implemented in a file like `worker_test.py`, `test_worker_end_to_end.py`, or `worker_communication_test.py`. If you're using a testing framework like pytest or unittest, the implementation might be part of that framework's test discovery mechanism. If you provide more details about the testing framework or library you're using, I can help you locate the exact file more precisely."
+ }
+]
