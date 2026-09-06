@@ -152,6 +152,14 @@ pub struct Turn {
     /// Counted once, when the turn closed. A closed turn does not change, and
     /// re-counting every turn on every turn is quadratic over a session.
     pub tokens: u32,
+    /// The steps' share of `tokens`, kept apart so that pruning can subtract it
+    /// without re-counting the whole turn on every later turn. A pruned turn
+    /// costs `tokens - steps_tokens + digest`, and the digest is small.
+    ///
+    /// Additive: absent in a turn stored before pruning existed, where it reads
+    /// as zero and the turn re-counts once on resume.
+    #[serde(default)]
+    pub steps_tokens: u32,
     /// Which counter produced `tokens`. Without it, swapping tokenizers
     /// mid-session sums two different units into one bar.
     pub counted_by: Counter,
@@ -187,6 +195,68 @@ pub enum Eviction {
     Block { low_water: f32 },
 }
 
+/// When an old tool result stops being sent as its bytes.
+///
+/// The third mechanism that acts on the history, and the only one that acts
+/// *inside* a turn that is still in the window: eviction drops the oldest turns
+/// whole, the fold replaces a closed job with its summary, and this keeps the
+/// exchange's shape while dropping what it printed. See
+/// `RECORD/2026-09-05.pruning-tool-results.completed.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "policy", rename_all = "snake_case")]
+pub enum Pruning {
+    /// Nothing is pruned. The default, because pruning changes every number in
+    /// every recording made before it existed.
+    Off,
+    /// Prune every step outside the newest `keep` turns. The boundary moves on
+    /// every turn, so the history block is rewritten from the middle on every
+    /// call — which is exactly the failure [`Eviction::Turn`] has, on a
+    /// different axis. Here to be the baseline, not the answer.
+    Age { keep: usize },
+    /// Prune nothing until the unpruned steps in the window are worth more than
+    /// `above` of the history budget, and then prune all but the newest `keep`
+    /// in one cut. Deep and infrequent: the block is rewritten once every N
+    /// turns and is byte-identical in between, which is what a prefix cache
+    /// pays for.
+    ///
+    /// `above` is ours and invented, exactly as `low_water` is, and is a flag
+    /// for the same reason: so that it can stop being a guess.
+    Watermark { keep: usize, above: f32 },
+}
+
+impl Pruning {
+    /// How many of the newest turns keep their bytes.
+    fn keep(&self) -> Option<usize> {
+        match self {
+            Self::Off => None,
+            Self::Age { keep } | Self::Watermark { keep, .. } => Some(*keep),
+        }
+    }
+}
+
+/// What one selection pruned — and it stays pruned: the prune floor, like the
+/// eviction floor, only ever moves forward.
+///
+/// A result that came back would rewrite the history block on both edges, and
+/// would show the model a file's contents reappearing after it had been told
+/// they were gone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Pruned {
+    /// The turns whose results were sent as bytes before this selection and as
+    /// a digest after it, oldest first. Named rather than counted, for the
+    /// reason [`Evicted::turns`] is.
+    pub turns: Vec<TurnId>,
+    /// What came off: the steps as they were, less the digest that replaced
+    /// them. The net number, because the gross one is not what the window got
+    /// back.
+    pub tokens: u32,
+    /// Which counter produced `tokens`.
+    pub counter: Counter,
+    /// Which policy did it, for the reason [`Evicted::policy`] is carried: the
+    /// whole difference between the two is when and how deep.
+    pub policy: Pruning,
+}
+
 /// The window, what is held back from it, and how it gives way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -196,6 +266,9 @@ pub struct Budget {
     /// Room for the answer, set aside before any history is considered.
     pub reserve: u32,
     pub eviction: Eviction,
+    /// When an old tool result stops being sent as its bytes. Off unless a flag
+    /// asks for it.
+    pub pruning: Pruning,
 }
 
 impl Budget {
@@ -205,7 +278,15 @@ impl Budget {
             limit: (limit > 0).then_some(limit),
             reserve,
             eviction,
+            pruning: Pruning::Off,
         }
+    }
+
+    /// Added rather than taken by [`Budget::new`], so that every call site that
+    /// predates pruning keeps meaning what it meant.
+    pub fn with_pruning(mut self, pruning: Pruning) -> Self {
+        self.pruning = pruning;
+        self
     }
 }
 
@@ -226,6 +307,9 @@ pub struct Selection {
     /// selection that cut nothing, which is every one in a session that never
     /// fills its window.
     pub eviction: Option<Evicted>,
+    /// What *this* selection pruned, when it pruned anything. `None` under
+    /// [`Pruning::Off`], and under either policy until the boundary moves.
+    pub pruning: Option<Pruned>,
 }
 
 /// What one selection dropped from the window — and it stays dropped: the
@@ -293,6 +377,10 @@ pub struct Context {
     turns: Vec<Turn>,
     /// The oldest turn still in the window. It only ever moves forward.
     floor: usize,
+    /// The oldest turn whose tool results are still sent as their bytes. Below
+    /// it the steps exist and render as a digest; the exchange keeps its shape.
+    /// Like [`Context::floor`], it only ever moves forward.
+    prune_floor: usize,
     /// The session's jobs, in order. Closed ones fold their turns at
     /// selection time; nothing here rewrites the history.
     jobs: Vec<Job>,
@@ -306,6 +394,7 @@ impl Context {
             map: String::new(),
             turns: Vec::new(),
             floor: 0,
+            prune_floor: 0,
             jobs: Vec::new(),
         }
     }
@@ -333,6 +422,10 @@ impl Context {
 
     pub fn floor(&self) -> usize {
         self.floor
+    }
+
+    pub fn prune_floor(&self) -> usize {
+        self.prune_floor
     }
 
     /// Reconstructs an active context from a stored session view — the inverse fold.
@@ -396,8 +489,8 @@ impl Context {
 
             let prompt = tv.prompt.clone();
             let answer = tv.text.clone();
-            let tokens =
-                counter.count(&prompt) + steps_tokens(&steps, counter) + counter.count(&answer);
+            let step_tokens = steps_tokens(&steps, counter);
+            let tokens = counter.count(&prompt) + step_tokens + counter.count(&answer);
 
             turns.push(Turn {
                 id: tv.turn,
@@ -407,6 +500,7 @@ impl Context {
                 code_context: Vec::new(),
                 job: tv.job,
                 tokens,
+                steps_tokens: step_tokens,
                 counted_by: counter.id(),
             });
         }
@@ -423,6 +517,10 @@ impl Context {
             map: map.into(),
             turns,
             floor,
+            // A resumed session prunes from scratch: the view says what a turn
+            // was, never what it was last rendered as, and inventing a prune
+            // floor from that would be a claim the record never made.
+            prune_floor: 0,
             jobs,
         }
     }
@@ -473,8 +571,9 @@ impl Context {
     ) {
         let prompt = prompt.into();
         let answer = answer.into();
+        let step_tokens = steps_tokens(&steps, counter);
         let tokens = counter.count(&user_text(&code_context, &prompt))
-            + steps_tokens(&steps, counter)
+            + step_tokens
             + counter.count(&answer);
         self.turns.push(Turn {
             id,
@@ -484,6 +583,7 @@ impl Context {
             code_context,
             job: self.live_job(),
             tokens,
+            steps_tokens: step_tokens,
             counted_by: counter.id(),
         });
     }
@@ -728,7 +828,7 @@ impl Context {
     /// What an item costs in the prompt it renders into.
     fn item_tokens(&self, item: &Item, counter: &dyn TokenCounter) -> u32 {
         match item {
-            Item::Turn(index) => self.tokens_of(&self.turns[*index], counter),
+            Item::Turn(index) => self.turn_tokens(*index, counter),
             Item::Folded { job, .. } => self
                 .job(*job)
                 .and_then(|job| {
@@ -775,6 +875,7 @@ impl Context {
         let prompt_tokens = counter.count(prompt);
 
         let mut eviction = None;
+        let mut pruning = None;
         if let Some(limit) = budget.limit {
             // The current turn and the reserve are not negotiable: nothing here
             // may trim the prompt the user just typed. If they alone exceed the
@@ -788,6 +889,12 @@ impl Context {
                 + prompt_tokens
                 + budget.reserve;
             let available = limit.saturating_sub(fixed);
+
+            // Pruning first, because it changes what an item costs: a turn
+            // whose results were just elided may now fit where it would have
+            // been evicted whole. Giving up the bytes to keep the turns is the
+            // trade this exists to make, and it only happens in this order.
+            pruning = self.prune(available, budget.pruning, counter);
 
             if self.fits_from(available, counter) > self.floor {
                 // Taken before the floor moves: these are the items the cut
@@ -843,9 +950,16 @@ impl Context {
                     // Each step is a real exchange, so the alternation holds and
                     // no chat template has to decide what two user messages in a
                     // row mean.
+                    let pruned = *index < self.prune_floor;
                     for step in &turn.steps {
+                        // The call is never pruned — it is short, and a result
+                        // whose call has gone is one the model cannot
+                        // attribute. Only the bytes it printed give way.
                         messages.push(Message::assistant(step.text.clone()));
-                        messages.push(Message::user(step.result_text()));
+                        messages.push(Message::user(match pruned {
+                            true => step.pruned_result_text(),
+                            false => step.result_text(),
+                        }));
                     }
                     messages.push(Message::assistant(turn.answer.clone()));
                 }
@@ -895,7 +1009,70 @@ impl Context {
             counter: counter.id(),
             evicted: self.floor,
             eviction,
+            pruning,
         }
+    }
+
+    /// Moves the prune floor under `policy` and says what came off.
+    ///
+    /// Returns `None` when nothing moved, and also when the floor moved over
+    /// turns that had no steps to prune: a tombstone for nothing is noise in
+    /// the one file that has to be readable months later.
+    fn prune(
+        &mut self,
+        available: u32,
+        policy: Pruning,
+        counter: &dyn TokenCounter,
+    ) -> Option<Pruned> {
+        let keep = policy.keep()?;
+        // The newest `keep` turns keep their bytes. Counted over turns rather
+        // than items: a closed job's turns are folded to a summary and have no
+        // steps in the prompt to prune.
+        let target = self.turns.len().saturating_sub(keep);
+        if target <= self.prune_floor {
+            return None;
+        }
+
+        if let Pruning::Watermark { above, .. } = policy {
+            // What the steps still sent as bytes are worth right now, against
+            // the share of the history budget the policy lets them have. The
+            // already-pruned ones are not in it: they no longer cost that.
+            let live: u32 = (self.prune_floor.max(self.floor)..self.turns.len())
+                .map(|index| self.steps_cost(&self.turns[index], counter))
+                .sum();
+            if (live as f32) <= available as f32 * above.clamp(0.0, 1.0) {
+                return None;
+            }
+        }
+
+        let before = self.prune_floor;
+        self.prune_floor = target;
+
+        // From the eviction floor, not from zero: a turn already out of the
+        // window is gone, and reporting that its results were pruned would be a
+        // tombstone for something nobody can see.
+        let pruned: Vec<usize> = (before.max(self.floor)..target)
+            .filter(|index| !self.turns[*index].steps.is_empty())
+            .collect();
+        if pruned.is_empty() {
+            return None;
+        }
+
+        let tokens = pruned
+            .iter()
+            .map(|index| {
+                let turn = &self.turns[*index];
+                self.steps_cost(turn, counter)
+                    .saturating_sub(pruned_steps_tokens(&turn.steps, counter))
+            })
+            .sum();
+
+        Some(Pruned {
+            turns: pruned.iter().map(|index| self.turns[*index].id).collect(),
+            tokens,
+            counter: counter.id(),
+            policy,
+        })
     }
 
     /// The oldest turn that still fits, taking items newest first and never
@@ -918,6 +1095,34 @@ impl Context {
         start
     }
 
+    /// What the turn at `index` costs in the prompt *as it is rendered now*,
+    /// which below the prune floor is not what it was stored as.
+    fn turn_tokens(&self, index: usize, counter: &dyn TokenCounter) -> u32 {
+        let turn = &self.turns[index];
+        let full = self.tokens_of(turn, counter);
+        match index < self.prune_floor {
+            false => full,
+            // Subtracted rather than re-counted: the digest is small and the
+            // rest of the turn has not changed. Re-counting the whole turn on
+            // every later turn is the quadratic `Turn::tokens` exists to avoid.
+            true => full
+                .saturating_sub(self.steps_cost(turn, counter))
+                .saturating_add(pruned_steps_tokens(&turn.steps, counter)),
+        }
+    }
+
+    /// The steps' share of a turn's stored count, redone when the count was
+    /// produced by another counter — or when it predates the field, which a
+    /// turn with steps and a zero share is.
+    fn steps_cost(&self, turn: &Turn, counter: &dyn TokenCounter) -> u32 {
+        let stored =
+            turn.counted_by == counter.id() && (turn.steps_tokens > 0 || turn.steps.is_empty());
+        match stored {
+            true => turn.steps_tokens,
+            false => steps_tokens(&turn.steps, counter),
+        }
+    }
+
     /// The stored count, unless it was produced by a different counter — in
     /// which case it is not a count of the same thing and gets redone.
     fn tokens_of(&self, turn: &Turn, counter: &dyn TokenCounter) -> u32 {
@@ -937,6 +1142,15 @@ fn steps_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
     steps
         .iter()
         .map(|step| counter.count(&step.text) + counter.count(&step.result_text()))
+        .sum()
+}
+
+/// The same, once they are below the prune floor: the calls in full and the
+/// results as their digest.
+fn pruned_steps_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
+    steps
+        .iter()
+        .map(|step| counter.count(&step.text) + counter.count(&step.pruned_result_text()))
         .sum()
 }
 
@@ -1847,6 +2061,268 @@ mod tool_turn_tests {
              decide what two user messages in a row mean",
         );
         assert!(selection.messages[3].content.contains("fn main() {}"));
+    }
+
+    /// A context of `turns` turns, each of which read a file of `bytes`.
+    fn context_that_read(turns: usize, bytes: usize, counter: &dyn TokenCounter) -> Context {
+        let mut context = Context::new("sys");
+        for n in 0..turns {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n}"),
+                format!("answer number {n}"),
+                vec![],
+                vec![step(
+                    "read_file",
+                    "looking\n```tool\n{\"name\":\"read_file\"}\n```",
+                    &"x".repeat(bytes),
+                )],
+                counter,
+            );
+        }
+        context
+    }
+
+    fn user_messages(selection: &Selection) -> Vec<String> {
+        selection
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::User)
+            .map(|message| message.content.clone())
+            .collect()
+    }
+
+    #[test]
+    fn nothing_is_pruned_by_default_whatever_the_history_costs() {
+        let mut context = context_that_read(6, 400, &ApproximateCounter);
+        let selection = context.select(
+            "and now?",
+            &[],
+            Budget::new(4096, 0, Eviction::Turn),
+            &ApproximateCounter,
+        );
+
+        assert!(selection.pruning.is_none());
+        assert_eq!(context.prune_floor(), 0);
+        assert!(
+            user_messages(&selection)
+                .iter()
+                .any(|text| text.contains(&"x".repeat(400))),
+            "pruning changes every number in every earlier recording, so it is off \
+             until a flag asks for it",
+        );
+    }
+
+    #[test]
+    fn a_pruned_step_keeps_its_call_and_loses_its_bytes() {
+        let mut context = context_that_read(4, 400, &ApproximateCounter);
+        let selection = context.select(
+            "and now?",
+            &[],
+            Budget::new(4096, 0, Eviction::Turn).with_pruning(Pruning::Age { keep: 1 }),
+            &ApproximateCounter,
+        );
+
+        let calls: Vec<&Message> = selection
+            .messages
+            .iter()
+            .filter(|message| {
+                message.role == Role::Assistant && message.content.contains("```tool")
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            4,
+            "the call is never pruned: a result whose call has gone cannot be attributed"
+        );
+
+        let results: Vec<String> = user_messages(&selection)
+            .into_iter()
+            .filter(|text| text.starts_with("[read_file]"))
+            .collect();
+        assert_eq!(results.len(), 4);
+        for digest in &results[..3] {
+            assert!(digest.contains("400 bytes elided (pruned)"), "{digest}");
+            assert!(
+                !digest.contains("xxxx"),
+                "the bytes are what left: {digest}"
+            );
+            assert!(
+                digest.starts_with("[read_file] ok"),
+                "the facts stay: {digest}"
+            );
+        }
+        assert!(
+            results[3].contains(&"x".repeat(400)),
+            "the newest `keep` turns are sent as they were",
+        );
+    }
+
+    #[test]
+    fn pruning_says_which_turns_lost_their_output_and_what_came_off() {
+        let mut context = context_that_read(4, 400, &ApproximateCounter);
+        let selection = context.select(
+            "and now?",
+            &[],
+            Budget::new(4096, 0, Eviction::Turn).with_pruning(Pruning::Age { keep: 2 }),
+            &ApproximateCounter,
+        );
+
+        let pruned = selection
+            .pruning
+            .expect("two turns fell below the boundary");
+        assert_eq!(pruned.turns, [1, 2], "named rather than counted");
+        assert_eq!(pruned.policy, Pruning::Age { keep: 2 });
+        assert!(
+            pruned.counter.is_approximate(),
+            "every count says who produced it"
+        );
+        // Net: what the steps were worth, less the digest that replaced them.
+        assert!(
+            (150..=210).contains(&pruned.tokens),
+            "two 400-byte results at chars/4, less two short digests: {}",
+            pruned.tokens,
+        );
+    }
+
+    #[test]
+    fn the_prune_floor_only_moves_forward_and_a_result_never_comes_back() {
+        let mut context = context_that_read(3, 400, &ApproximateCounter);
+        let budget = Budget::new(4096, 0, Eviction::Turn).with_pruning(Pruning::Age { keep: 1 });
+        let first = context.select("one", &[], budget, &ApproximateCounter);
+        assert!(first.pruning.is_some());
+        assert_eq!(context.prune_floor(), 2);
+
+        // The same selection again: the boundary is where it was, so nothing
+        // moved and nothing is reported a second time.
+        let again = context.select("two", &[], budget, &ApproximateCounter);
+        assert!(
+            again.pruning.is_none(),
+            "a floor that only moves forward reports once"
+        );
+        assert_eq!(context.prune_floor(), 2);
+
+        // And with pruning switched off mid-session, what was pruned stays
+        // pruned: putting the bytes back would rewrite the block on both edges.
+        let off = context.select(
+            "three",
+            &[],
+            Budget::new(4096, 0, Eviction::Turn),
+            &ApproximateCounter,
+        );
+        assert!(
+            user_messages(&off)
+                .iter()
+                .any(|text| text.contains("400 bytes elided (pruned)")),
+        );
+    }
+
+    #[test]
+    fn the_watermark_holds_still_until_the_results_are_worth_its_share() {
+        // Small results against a wide window: under the watermark nothing is
+        // worth pruning, where `age` would have pruned on the first selection.
+        let mut context = context_that_read(4, 40, &ApproximateCounter);
+        let watermark = Budget::new(4096, 0, Eviction::Turn).with_pruning(Pruning::Watermark {
+            keep: 1,
+            above: 0.35,
+        });
+        assert!(
+            context
+                .select("q", &[], watermark, &ApproximateCounter)
+                .pruning
+                .is_none()
+        );
+        assert_eq!(
+            context.prune_floor(),
+            0,
+            "the boundary does not move on a turn that did not need it"
+        );
+
+        // The same policy against results that fill it: one deep cut.
+        let mut fat = context_that_read(4, 2_000, &ApproximateCounter);
+        let cut = fat.select("q", &[], watermark, &ApproximateCounter);
+        let pruned = cut
+            .pruning
+            .expect("the results are worth more than a third of the budget");
+        assert_eq!(
+            pruned.turns,
+            [1, 2, 3],
+            "all but the newest `keep`, in one cut"
+        );
+    }
+
+    #[test]
+    fn pruning_pays_for_itself_in_turns_the_window_keeps() {
+        // A window that holds the conversation and not the file listings. The
+        // trade this exists to make: give up the bytes, keep the turns.
+        const WINDOW: u32 = 640;
+        let mut unpruned = context_that_read(6, 800, &ApproximateCounter);
+        let plain = unpruned.select(
+            "and now?",
+            &[],
+            Budget::new(WINDOW, 0, Eviction::Turn),
+            &ApproximateCounter,
+        );
+
+        let mut pruned = context_that_read(6, 800, &ApproximateCounter);
+        let with = pruned.select(
+            "and now?",
+            &[],
+            Budget::new(WINDOW, 0, Eviction::Turn).with_pruning(Pruning::Age { keep: 1 }),
+            &ApproximateCounter,
+        );
+
+        assert!(
+            pruned.floor() < unpruned.floor(),
+            "the pruned run keeps turns the unpruned one had to drop: {} against {}",
+            pruned.floor(),
+            unpruned.floor(),
+        );
+        assert!(with.messages.len() > plain.messages.len());
+    }
+
+    #[test]
+    fn a_turn_with_nothing_to_prune_is_not_a_tombstone() {
+        let mut context = Context::new("sys");
+        for n in 0..4 {
+            context.push_turn(
+                n + 1,
+                format!("question {n}"),
+                format!("answer {n}"),
+                vec![],
+                &ApproximateCounter,
+            );
+        }
+        let selection = context.select(
+            "and now?",
+            &[],
+            Budget::new(4096, 0, Eviction::Turn).with_pruning(Pruning::Age { keep: 1 }),
+            &ApproximateCounter,
+        );
+        assert!(
+            selection.pruning.is_none(),
+            "a tombstone for nothing is noise in the one file that has to be readable later",
+        );
+        assert_eq!(
+            context.prune_floor(),
+            3,
+            "the boundary still moved; there was simply nothing under it"
+        );
+    }
+
+    #[test]
+    fn an_unknown_window_prunes_nothing() {
+        let mut context = context_that_read(4, 400, &ApproximateCounter);
+        let selection = context.select(
+            "and now?",
+            &[],
+            Budget::new(0, 0, Eviction::Turn).with_pruning(Pruning::Age { keep: 1 }),
+            &ApproximateCounter,
+        );
+        assert!(
+            selection.pruning.is_none(),
+            "no window, no budget to fit — the same rule that selects nothing and evicts nothing",
+        );
     }
 
     #[test]

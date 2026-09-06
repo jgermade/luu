@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::{Counter, Evicted};
+use crate::context::{Counter, Evicted, Pruned};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
@@ -147,6 +147,16 @@ pub struct TurnView {
     /// a debug client is for.
     #[serde(default)]
     pub evicted_by: Option<TurnId>,
+    /// What this turn's selection pruned, when it pruned anything: the turns
+    /// whose tool results stopped being sent as their bytes.
+    #[serde(default)]
+    pub pruned: Option<Pruned>,
+    /// The turn whose selection pruned *this* one's results. The transcript
+    /// keeps the output and marks it, for the same reason it keeps an evicted
+    /// turn: the difference between what happened and what the model still
+    /// sees is the whole subject.
+    #[serde(default)]
+    pub pruned_by: Option<TurnId>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -168,6 +178,8 @@ impl TurnView {
             tools: Vec::new(),
             dropped: None,
             evicted_by: None,
+            pruned: None,
+            pruned_by: None,
             started_at_ms,
             ended_at_ms: None,
         }
@@ -328,6 +340,30 @@ impl SessionView {
                 for dropped in turns {
                     if let Some(view) = self.turn_mut(*dropped) {
                         view.evicted_by = Some(*turn);
+                    }
+                }
+            }
+            ServerMessage::Pruned {
+                turn,
+                turns,
+                tokens,
+                counter,
+                policy,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.pruned = Some(Pruned {
+                        turns: turns.clone(),
+                        tokens: *tokens,
+                        counter: counter.clone(),
+                        policy: *policy,
+                    });
+                }
+                // Both halves, exactly as eviction keeps both: what did this
+                // turn take off the history, and is that turn's output still
+                // in the prompt.
+                for pruned in turns {
+                    if let Some(view) = self.turn_mut(*pruned) {
+                        view.pruned_by = Some(*turn);
                     }
                 }
             }
@@ -533,6 +569,7 @@ mod tests {
                 context_limit: Some(8192),
                 counter: Some(Counter::Model { id: "mock".into() }),
                 eviction: Some(crate::context::Eviction::Turn),
+                pruning: Some(crate::context::Pruning::Off),
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {

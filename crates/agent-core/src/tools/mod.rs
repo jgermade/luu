@@ -24,9 +24,13 @@ pub mod fs;
 pub use command::RunCommand;
 pub use fs::{EditFile, ListDir, ReadFile, WriteFile};
 
-/// Tool output is capped rather than pruned. Pruning old results out of the
-/// history is a later, measured change; a cap now is the part that is not a
-/// strategy — a `cat` of a 2 MB file must not be able to blow the window open.
+/// The cap on one result, which is not the strategy for their sum: a `cat` of a
+/// 2 MB file must not be able to blow the window open, and eight capped results
+/// still outweigh the window of the machines this is built for.
+///
+/// What bounds the sum is [`crate::context::Pruning`], which replaces an old
+/// result with [`ToolOutcome::render_pruned`] and is off by default. The cap
+/// acts once, at write time; pruning acts on every selection afterwards.
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 
 /// What the model asked for, whatever syntax it used to ask.
@@ -171,10 +175,7 @@ impl ToolOutcome {
     /// Plain text and not JSON: a 7B pays for every token of a wrapper it did
     /// not need, and this one is read, never parsed.
     pub fn render(&self, name: &str) -> String {
-        let mut text = match &self.error {
-            Some(error) => format!("[{name}] {error}"),
-            None => format!("[{name}] ok"),
-        };
+        let mut text = self.header(name);
         if !self.output.is_empty() {
             text.push('\n');
             text.push_str(&self.output);
@@ -185,6 +186,38 @@ impl ToolOutcome {
             ));
         }
         text
+    }
+
+    /// The same rendering with the bytes replaced by a statement about them —
+    /// what an old result is sent as once the history has been pruned.
+    ///
+    /// Built from the structured fields and never from prose, which is the rule
+    /// the fold already lives under: what enters the write-once region every
+    /// later turn is built on has to be derivable from what happened. The header
+    /// is where the facts are — `ok`, or the error, which for a `run_command`
+    /// that failed is already `"{program} exited with {code}"` — so pruning
+    /// keeps *that it ran and how it went* and drops *what it printed*.
+    ///
+    /// A result that printed nothing is already its own digest and is left
+    /// alone: a line saying zero bytes left would be longer than what it
+    /// replaced. See `RECORD/2026-09-05.pruning-tool-results.completed.md`.
+    pub fn render_pruned(&self, name: &str) -> String {
+        let mut text = self.header(name);
+        if !self.output.is_empty() {
+            text.push_str(&format!(
+                "\n[{name}] {} bytes elided (pruned)",
+                self.output.len()
+            ));
+        }
+        text
+    }
+
+    /// The first line of either rendering: the facts, without the bytes.
+    fn header(&self, name: &str) -> String {
+        match &self.error {
+            Some(error) => format!("[{name}] {error}"),
+            None => format!("[{name}] ok"),
+        }
     }
 }
 
@@ -218,6 +251,13 @@ impl ToolStep {
     /// The user-side message the result is fused into.
     pub fn result_text(&self) -> String {
         self.outcome.render(&self.call.name)
+    }
+
+    /// The same message once this step has fallen below the prune floor. The
+    /// call itself — the assistant half — is never pruned: it is short, and a
+    /// result whose call has gone is a result the model cannot attribute.
+    pub fn pruned_result_text(&self) -> String {
+        self.outcome.render_pruned(&self.call.name)
     }
 }
 

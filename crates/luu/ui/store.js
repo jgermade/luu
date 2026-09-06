@@ -18,8 +18,8 @@ import { $reactive } from "./vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 5
-const FORMAT = 7
+const PROTOCOL = 7
+const FORMAT = 9
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -32,7 +32,7 @@ export const state = $reactive({
   turn: null,
   // `turn` is the session's number for the exchange, which is what an eviction
   // names; `evicted` is the turn whose selection dropped this one, or null.
-  messages: [],           // { id, turn, role, text, task, reason, usage, evicted }
+  messages: [],           // { id, turn, role, text, task, reason, usage, evicted, pruned }
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
@@ -59,6 +59,10 @@ export const state = $reactive({
   // the buckets say what the prompt is worth, this says what stopped being in
   // it. Null in a session that never filled its window.
   evicted: null,          // { turn, turns, tokens, counter, policy }
+  // The last time the window stopped sending tool output as its bytes. Beside
+  // `evicted` rather than inside it: those turns are still in the prompt, and
+  // only what they printed is gone.
+  pruned: null,           // { turn, turns, tokens, counter, policy }
   // Whether this session is a recording rather than a server. The status word
   // is not the same question: it says "running" while a recorded turn plays,
   // and a composer that reads the status is enabled over a recording nobody can
@@ -187,8 +191,8 @@ function onProtocol(message) {
       // The job it belongs to travels with the turn, so the transcript can
       // group without replaying the lifecycle to work out what was open.
       const turnJob = message.job ?? message.task ?? null
-      state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, job: turnJob, task: turnJob, reason: null, usage: null, evicted: null })
-      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", job: turnJob, task: turnJob, reason: null, usage: null, evicted: null })
+      state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, job: turnJob, task: turnJob, reason: null, usage: null, evicted: null, pruned: null })
+      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", job: turnJob, task: turnJob, reason: null, usage: null, evicted: null, pruned: null })
       state.tools = []
       state.extraCalls = []
       break
@@ -276,6 +280,23 @@ function onProtocol(message) {
       const gone = new Set(message.turns)
       state.messages = state.messages.map(m => gone.has(m.turn) ? { ...m, evicted: message.turn } : m)
       state.evicted = {
+        turn: message.turn,
+        turns: message.turns,
+        tokens: message.tokens,
+        counter: message.counter,
+        policy: message.policy,
+      }
+      break
+    }
+
+    // What is still in the window and is no longer sent as its bytes. The
+    // output is kept and marked for the same reason an evicted turn is: the
+    // difference between what happened and what the model still sees is the
+    // subject.
+    case "pruned": {
+      const elided = new Set(message.turns)
+      state.messages = state.messages.map(m => elided.has(m.turn) ? { ...m, pruned: message.turn } : m)
+      state.pruned = {
         turn: message.turn,
         turns: message.turns,
         tokens: message.tokens,
@@ -496,6 +517,7 @@ function reset() {
   state.error = null
   state.refused = null
   state.evicted = null
+  state.pruned = null
   state.turn = null
   pending = ""
 }
@@ -621,6 +643,7 @@ export async function refreshLiveSession() {
           reason: null,
           usage: null,
           evicted: null,
+          pruned: null,
         })
       }
       if (t.text || (t.tools && t.tools.length)) {
@@ -634,6 +657,7 @@ export async function refreshLiveSession() {
           reason: null,
           usage: t.usage || null,
           evicted: null,
+          pruned: null,
         })
       }
     }

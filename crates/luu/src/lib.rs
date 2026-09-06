@@ -9,7 +9,7 @@ use std::time::Duration;
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
-use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
+use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Pruning};
 use agent_core::fragment;
 use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
@@ -288,6 +288,28 @@ enum Command {
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
 
+        /// When an old tool result stops being sent as its bytes and starts
+        /// being sent as a digest. `age` prunes everything outside the newest
+        /// --prune-keep turns and moves the boundary every turn; `watermark`
+        /// waits until the results in the window are worth more than
+        /// --prune-above of the history budget and then cuts once. Off by
+        /// default: pruning changes every number in every earlier recording.
+        #[arg(long, value_enum, default_value_t = PruningKind::Off)]
+        prune: PruningKind,
+
+        /// How many of the newest turns keep their tool results in full.
+        /// Ignored by `--prune off`.
+        #[arg(long, default_value_t = 2)]
+        prune_keep: usize,
+
+        /// The share of the history budget the unpruned results may hold before
+        /// `--prune watermark` cuts. Ignored by the other two. A share two
+        /// results can exceed on their own makes the watermark fire every turn,
+        /// which is `age` with more flags — measured, which is why this is 0.8
+        /// and not the 0.35 it was written as.
+        #[arg(long, default_value_t = 0.8)]
+        prune_above: f32,
+
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
         #[arg(long)]
@@ -405,6 +427,28 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// When an old tool result stops being sent as its bytes and starts
+        /// being sent as a digest. `age` prunes everything outside the newest
+        /// --prune-keep turns and moves the boundary every turn; `watermark`
+        /// waits until the results in the window are worth more than
+        /// --prune-above of the history budget and then cuts once. Off by
+        /// default: pruning changes every number in every earlier recording.
+        #[arg(long, value_enum, default_value_t = PruningKind::Off)]
+        prune: PruningKind,
+
+        /// How many of the newest turns keep their tool results in full.
+        /// Ignored by `--prune off`.
+        #[arg(long, default_value_t = 2)]
+        prune_keep: usize,
+
+        /// The share of the history budget the unpruned results may hold before
+        /// `--prune watermark` cuts. Ignored by the other two. A share two
+        /// results can exceed on their own makes the watermark fire every turn,
+        /// which is `age` with more flags — measured, which is why this is 0.8
+        /// and not the 0.35 it was written as.
+        #[arg(long, default_value_t = 0.8)]
+        prune_above: f32,
 
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
@@ -531,6 +575,28 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// When an old tool result stops being sent as its bytes and starts
+        /// being sent as a digest. `age` prunes everything outside the newest
+        /// --prune-keep turns and moves the boundary every turn; `watermark`
+        /// waits until the results in the window are worth more than
+        /// --prune-above of the history budget and then cuts once. Off by
+        /// default: pruning changes every number in every earlier recording.
+        #[arg(long, value_enum, default_value_t = PruningKind::Off)]
+        prune: PruningKind,
+
+        /// How many of the newest turns keep their tool results in full.
+        /// Ignored by `--prune off`.
+        #[arg(long, default_value_t = 2)]
+        prune_keep: usize,
+
+        /// The share of the history budget the unpruned results may hold before
+        /// `--prune watermark` cuts. Ignored by the other two. A share two
+        /// results can exceed on their own makes the watermark fire every turn,
+        /// which is `age` with more flags — measured, which is why this is 0.8
+        /// and not the 0.35 it was written as.
+        #[arg(long, default_value_t = 0.8)]
+        prune_above: f32,
 
         /// Pin the sampler's temperature, so two runs meant to be compared
         /// differ only by what they're testing. Unset leaves it to the
@@ -968,6 +1034,23 @@ impl EvictionKind {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum PruningKind {
+    Off,
+    Age,
+    Watermark,
+}
+
+impl PruningKind {
+    fn policy(self, keep: usize, above: f32) -> Pruning {
+        match self {
+            Self::Off => Pruning::Off,
+            Self::Age => Pruning::Age { keep },
+            Self::Watermark => Pruning::Watermark { keep, above },
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum BackendKind {
     Mock,
     Ollama,
@@ -1392,6 +1475,9 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        prune,
+        prune_keep,
+        prune_above,
         temperature,
         seed,
         map_tokens,
@@ -1446,7 +1532,8 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
+                .with_pruning(prune.policy(prune_keep, prune_above)),
             counter,
             agency,
             temperature,
@@ -1478,6 +1565,9 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        prune,
+        prune_keep,
+        prune_above,
         temperature,
         seed,
         map_tokens,
@@ -1522,7 +1612,8 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
+                .with_pruning(prune.policy(prune_keep, prune_above)),
             counter,
             agency,
             temperature,
@@ -1555,6 +1646,9 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        prune,
+        prune_keep,
+        prune_above,
         temperature,
         seed,
         map_tokens,
@@ -1598,7 +1692,8 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
-    let budget = Budget::new(context_limit, reserve, evict.policy(low_water));
+    let budget = Budget::new(context_limit, reserve, evict.policy(low_water))
+        .with_pruning(prune.policy(prune_keep, prune_above));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -1819,6 +1914,30 @@ pub async fn run() -> Result<()> {
             );
         }
 
+        // The same, for the results that stopped being sent as their bytes: a
+        // run whose history quietly turned into digests looks exactly like one
+        // answering from the files themselves.
+        if let Some(pruned) = &selection.pruning {
+            let turns = pruned
+                .turns
+                .iter()
+                .map(|turn| turn.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "\n== pruned turn{} {turns} — {} tokens{} of tool output, now a digest",
+                match pruned.turns.len() {
+                    1 => "",
+                    _ => "s",
+                },
+                pruned.tokens,
+                match pruned.counter.is_approximate() {
+                    true => " (approximate)",
+                    false => "",
+                },
+            );
+        }
+
         if let Some(recorder) = &recorder {
             recorder.write(&Event::Protocol(ServerMessage::TurnStarted {
                 turn,
@@ -1835,6 +1954,15 @@ pub async fn run() -> Result<()> {
                     tokens: evicted.tokens,
                     counter: evicted.counter,
                     policy: evicted.policy,
+                }));
+            }
+            if let Some(pruned) = selection.pruning.clone() {
+                recorder.write(&Event::Protocol(ServerMessage::Pruned {
+                    turn,
+                    turns: pruned.turns,
+                    tokens: pruned.tokens,
+                    counter: pruned.counter,
+                    policy: pruned.policy,
                 }));
             }
             let text = rendered(&selection.messages);

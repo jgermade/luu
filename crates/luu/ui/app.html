@@ -135,6 +135,10 @@
             <span :if="entry.message.evicted" class="gone">
               · out of the window since turn {{ entry.message.evicted }}
             </span>
+            <!-- Still in the prompt; what its tools printed is not. -->
+            <span :if="entry.message.pruned && !entry.message.evicted" class="gone">
+              · tool output pruned since turn {{ entry.message.pruned }}
+            </span>
           </div>
           <div class="text">{{ entry.message.text }}</div>
           <div :if="entry.message.reason" class="meta">
@@ -292,6 +296,14 @@
         {{ state.evicted?.turns.join(", ") }} — {{ state.evicted?.tokens }}
         tokens out of the window, for good, under the
         <b>{{ state.evicted?.policy.policy }}</b> policy.
+      </p>
+      <!-- And the other way the history gives way: the turns stay, their tool
+           output becomes a digest. -->
+      <p :if="state.pruned" class="dim">
+        Turn {{ state.pruned?.turn }} pruned the tool output of turn(s)
+        {{ state.pruned?.turns.join(", ") }} — {{ state.pruned?.tokens }}
+        tokens now sent as a digest, under the
+        <b>{{ state.pruned?.policy.policy }}</b> policy.
       </p>
     </div>
     <p :if="!state.budget" class="dim">

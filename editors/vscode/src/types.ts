@@ -2,8 +2,8 @@
 
 /// What this client speaks. Sent as the first message so a host that speaks
 /// something else refuses it out loud, rather than by misreading the next one.
-export const PROTOCOL = 5;
-export const RECORD_FORMAT = 7;
+export const PROTOCOL = 7;
+export const RECORD_FORMAT = 9;
 
 export type TurnId = number;
 export type JobId = number;
@@ -135,6 +135,16 @@ export type ServerMessage =
     }
   | {
       type: 'evicted';
+      turn: TurnId;
+      turns: TurnId[];
+      tokens: number;
+      counter: string;
+      policy: string;
+    }
+  | {
+      // Those turns are still in the prompt; what their tool calls printed is
+      // now sent as a digest instead of as its bytes.
+      type: 'pruned';
       turn: TurnId;
       turns: TurnId[];
       tokens: number;

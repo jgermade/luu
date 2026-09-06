@@ -262,6 +262,7 @@ pub fn header(
         context_limit: budget.limit,
         counter: Some(counter),
         eviction: Some(budget.eviction),
+        pruning: Some(budget.pruning),
         started_at,
     }
 }

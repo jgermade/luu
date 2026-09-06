@@ -86,6 +86,31 @@ done
   --sandbox "$(dirname "$0")/../luu.toml" \
   --record "$out/grounded-turn.jsonl" >/dev/null
 
+# The other way the history gives way: the turns stay and their tool output
+# becomes a digest. Twelve turns that each read a real file, under the watermark
+# — the only recording in which `pruned` lines appear, and the one where the
+# transcript has to show output the model can no longer see. Off is not recorded
+# beside it here because the pair is a measurement rather than a demo, and
+# `scripts/prune-probe.sh` is where it lives.
+prune_replies=()
+for file in crates/agent-core/src/tools/mod.rs crates/agent-core/src/sandbox/policy.rs \
+            crates/agent-core/src/repo_map.rs crates/agent-core/src/select.rs \
+            crates/agent-core/src/job.rs crates/agent-core/src/agent.rs \
+            crates/agent-core/src/turn.rs crates/agent-core/src/protocol.rs \
+            crates/agent-core/src/backend/ollama.rs crates/agent-core/src/tools/fs.rs \
+            crates/agent-core/src/tools/command.rs crates/agent-core/src/worker/mod.rs; do
+  prune_replies+=(--mock-reply "let me look
+\`\`\`tool
+{\"name\":\"read_file\",\"arguments\":{\"path\":\"$file\",\"max_lines\":120}}
+\`\`\`" --mock-reply "That file answers it.")
+done
+"$luu" chat --script "$(dirname "$0")/tasks/tool-heavy.txt" \
+  --mock-delay-ms 8 --context-limit 8192 --reserve 512 \
+  --prune watermark --prune-keep 2 \
+  --sandbox "$(dirname "$0")/../luu.toml" \
+  "${prune_replies[@]}" \
+  --record "$out/pruning.jsonl" >/dev/null
+
 # A backend that is not there: the failure path, without depending on one.
 "$luu" chat "Anything" --backend ollama --ollama-url http://127.0.0.1:1 \
   --record "$out/backend-failure.jsonl" >/dev/null 2>&1 || true
@@ -106,6 +131,7 @@ done
   "$out/one-task.jsonl" \
   "$out/grounded-turn.jsonl" \
   "$out/repo-map.jsonl" \
+  "$out/pruning.jsonl" \
   "$out/completed-turn.jsonl" \
   "$out/cancelled-turn.jsonl" \
   "$out/backend-failure.jsonl" \

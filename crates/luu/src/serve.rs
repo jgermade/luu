@@ -1515,6 +1515,16 @@ async fn begin_turn(
         }))
         .await;
     }
+    if let Some(pruned) = selection.pruning.clone() {
+        app.publish(Event::Protocol(ServerMessage::Pruned {
+            turn,
+            turns: pruned.turns,
+            tokens: pruned.tokens,
+            counter: pruned.counter,
+            policy: pruned.policy,
+        }))
+        .await;
+    }
     app.publish(Event::Trace(TraceMessage::Prompt {
         turn,
         text: prompt_sent,

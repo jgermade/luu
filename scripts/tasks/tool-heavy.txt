@@ -1,0 +1,19 @@
+# Twelve turns, each of which reads a real file of this repository before it
+# answers. The corpus pruning is measured on, and the only script here whose
+# history is mostly *tool output* rather than prose — which is the case the cap
+# bounds one result of and nothing bounds the sum of.
+#
+# Driven by scripts/prune-probe.sh, which supplies one scripted call and one
+# scripted answer per turn. See RECORD/2026-09-05.pruning-tool-results.completed.md.
+where is the tool call parsed out of the model's text?
+what does the sandbox check before a file is opened?
+how is the repository map ordered when nothing asks for a ranking?
+which files does the selector consider for a turn?
+what does a plan narrow, and what refuses first?
+how does a job get closed on an exit code?
+what does the agent loop do between a call and its result?
+which messages did the protocol freeze at v1?
+what does the Ollama backend send as the window?
+how does write_file refuse a path outside its root?
+what does run_command report beyond what it printed?
+what crosses the pipe to the worker, and what never does?

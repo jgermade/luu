@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::approval::Signature;
 use crate::backend::Usage;
-use crate::context::{Counter, Eviction};
+use crate::context::{Counter, Eviction, Pruning};
 use crate::job::{ApprovedBy, ClosedBy, JobId, Plan, PlanSource};
 use crate::sandbox::Verdict;
 use crate::tools::ToolStep;
@@ -58,7 +58,14 @@ use crate::turn::{EndReason, TurnEvent};
 /// bump was un-made rather than left standing — a number whose whole job is to
 /// tell two peers what they can parse must not carry a variant that no longer
 /// exists. See `RECORD/2026-09-04.sessions-stay-home.completed.md`.
-pub const VERSION: u32 = 5;
+///
+/// **7 is the rule of 2, 3, 4 and 5 for the fifth time**, for
+/// [`ServerMessage::Pruned`]: a tool result that is no longer sent as its bytes
+/// is a thing that happened to the conversation, not a debug reading, and a
+/// client that could not parse it would be showing output the model has stopped
+/// seeing. That is the eviction-tombstone argument verbatim, and it was right
+/// then. See `RECORD/2026-09-05.pruning-tool-results.completed.md`.
+pub const VERSION: u32 = 7;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -234,6 +241,20 @@ pub enum ServerMessage {
         counter: Counter,
         policy: Eviction,
     },
+    /// What is still in the window and is no longer sent as its bytes: the
+    /// tool results of these turns now render as their digest, and stay that
+    /// way. Beside [`Self::Evicted`] rather than inside it — the turns are
+    /// still there, and a client that showed them as gone would be as wrong as
+    /// one that showed the bytes as still sent.
+    Pruned {
+        turn: TurnId,
+        turns: Vec<TurnId>,
+        /// What came off: the steps as they were, less the digest that
+        /// replaced them.
+        tokens: u32,
+        counter: Counter,
+        policy: Pruning,
+    },
     /// The fold stops applying. Not an undo — nothing was deleted.
     #[serde(alias = "task_reopened")]
     JobReopened {
@@ -369,7 +390,8 @@ impl ServerMessage {
             | Self::ToolResult { turn, .. }
             // The turn that cut, not the turns that left: this is a thing the
             // selection for `turn` did.
-            | Self::Evicted { turn, .. } => Some(*turn),
+            | Self::Evicted { turn, .. }
+            | Self::Pruned { turn, .. } => Some(*turn),
             // A task spans turns and its lifecycle happens between them, and a
             // refusal is about the ask rather than about a turn — three of the
             // four happen when there is no turn to name.

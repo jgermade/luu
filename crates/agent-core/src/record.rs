@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::{Counter, Eviction};
+use crate::context::{Counter, Eviction, Pruning};
 use crate::protocol::ServerMessage;
 use crate::trace::TraceMessage;
 
@@ -49,7 +49,14 @@ use crate::trace::TraceMessage;
 /// belongs to the host that made it, so no stream ever arrives from elsewhere.
 /// Un-made with the protocol bump beside it, for the same reason. See
 /// `RECORD/2026-09-04.sessions-stay-home.completed.md`.
-pub const FORMAT: u32 = 7;
+///
+/// 9: `pruned` lines — what is still in the window and is no longer sent as its
+/// bytes. Same rule as 3, 4 and 5, a new variant of a tagged enum, and the same
+/// argument: the prune floor lives in memory, so a format-7 file cannot say
+/// which of its results the model had stopped seeing, and nothing can work it
+/// out afterwards. The header also gains `pruning`, additively. See
+/// `RECORD/2026-09-05.pruning-tool-results.completed.md`.
+pub const FORMAT: u32 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]
@@ -80,6 +87,14 @@ pub enum RecordLine {
         /// the record never made.
         #[serde(default)]
         eviction: Option<Eviction>,
+        /// When an old tool result stopped being sent as its bytes. Beside
+        /// `eviction` for the same reason it is here: two runs under different
+        /// policies are not comparable. `None` in a file recorded before
+        /// pruning was a choice — every one of those ran with none, and saying
+        /// so on the reader's behalf would put a claim in a record the record
+        /// never made.
+        #[serde(default)]
+        pruning: Option<Pruning>,
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
@@ -108,6 +123,7 @@ mod tests {
             context_limit: Some(8192),
             counter: Some(Counter::Approximate),
             eviction: Some(Eviction::Turn),
+            pruning: Some(Pruning::Off),
             started_at: 1_700_000_000_000,
         };
         let token = RecordLine::Protocol {

@@ -158,6 +158,43 @@ fn recordings() -> Vec<(String, Vec<agent_core::record::RecordLine>)> {
             ),
         ),
         (
+            // The other way the history gives way: the turns stay and their
+            // tool output becomes a digest, so the recording carries `pruned`
+            // lines — the prune floor lives in memory and nothing can work out
+            // afterwards which results the model had stopped seeing.
+            "pruning".into(),
+            record(
+                "pruning",
+                &[
+                    "--script",
+                    root()
+                        .join("scripts/tasks/tool-heavy.txt")
+                        .to_str()
+                        .expect("a utf-8 path"),
+                    "--context-limit",
+                    "8192",
+                    "--reserve",
+                    "512",
+                    "--prune",
+                    "age",
+                    "--prune-keep",
+                    "1",
+                    "--sandbox",
+                    policy,
+                    "--mock-reply",
+                    "let me look\n```tool\n{\"name\":\"read_file\",\
+                     \"arguments\":{\"path\":\"AGENTS.md\",\"max_lines\":80}}\n```",
+                    "--mock-reply",
+                    "That file answers it.",
+                    "--mock-reply",
+                    "and the other\n```tool\n{\"name\":\"read_file\",\
+                     \"arguments\":{\"path\":\"luu-design.md\",\"max_lines\":80}}\n```",
+                    "--mock-reply",
+                    "So does that one.",
+                ],
+            ),
+        ),
+        (
             // The failure path, without depending on a backend being there.
             "backend-failure".into(),
             record(
