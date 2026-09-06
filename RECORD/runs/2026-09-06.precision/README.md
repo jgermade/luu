@@ -16,6 +16,12 @@ had gone stale unnoticed. So the answers stay and the recordings do not: the thr
 `.jsonl` files were 4.0 MB, of which 98% is the tool prefix repeated 38 times and
 one JSON object per streamed token. What is here is the 96 KB that is evidence.
 
+`cost.json` is the other half, and it is what makes the record's cost table
+falsifiable rather than quoted: per arm and per turn, the budget's buckets, the
+usage the backend reported, the shared-prefix trace, every eviction with the
+turns it threw away, and the totals the record prints. Without it "reuse fell to
+17.7%" is a sentence; with it, it is a division anyone can redo.
+
 Produced by, on `b55b6c9` against `qwen2.5-coder:7b` on an M1 Pro:
 
 ```sh
