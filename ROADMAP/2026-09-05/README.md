@@ -30,13 +30,14 @@ struck through at the top of it.
 | 1 | ~**A tool call has no timeout at the seam** — the host holds the clock, a stuck worker is killed and replaced, and `timeout_ms` gets a ceiling~ | nothing | [`a-clock-at-the-seam`](../../RECORD/2026-09-05.a-clock-at-the-seam.completed.md) |
 | 2 | ~**Relevance over recency: choosing fragments** — inject the fragments the turn points at, not the whole history~ **coverage measured and won; precision measured and won too — item 10** | nothing | [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
 | 3 | **Fleet measurement across target machines** — the hardware floor (6 GB card), native Linux confinement without a VM, and the BC-250's 14B ceiling | hardware and a hand on it, nothing else | [`machines.md`](machines.md) |
-| 4 | **A GBNF grammar for tool calls** — replace the text parse with a grammar the server enforces, against Qwen2.5-Coder | nothing — `llama-server` is reachable through the OpenAI backend | [`an-openai-compatible-backend`](../../RECORD/2026-09-01.an-openai-compatible-backend.completed.md) — **needs its own record** |
+| 4 | **A grammar for tool calls** — the text parse reads the block correctly; what fails is that generation does not stop. **Narrowed on 2026-09-06: tool calls only, the plan block stays as it is** | nothing — `llama-server` is reachable through the OpenAI backend | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
 | 5 | ~**A clock where there is no seam** — the deadline moved up into the agent loop, the in-process tools stopped blocking inside their own future, and a worker restart is counted~ | nothing | [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
-| 6 | **Active pruning of tool results** — a `cat` of 2 000 lines is capped at 8 KiB and then never shortened. The cap is not the strategy | nothing — closed jobs exist in quantity now that the store keeps them | `luu-design.md` §Still ahead — **needs its own record** |
+| 6 | **What leaves the history** — a `cat` capped at 8 KiB and a selected fragment are the same object to the window, so this now covers both. **By turn 20 of the precision run, ~90% of the history block is quoted code** | nothing — the run that measures it is already on disk | [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.WIP.md) |
 | 7 | ~**`openat2(RESOLVE_BENEATH)` for the in-process tools** — the kernel refuses the escape during resolution, and the verdict says so it was the kernel~ | nothing | [`beneath-the-root`](../../RECORD/2026-09-05.beneath-the-root.completed.md) |
 | 8 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide | nothing | `luu-design.md` §Open questions |
 | 10 | ~**Precision, with a model in the loop** — coverage says the right file was in the prompt; nothing says the model used it. The same 38 questions, one flag apart, scored against a 7B~ **33 of 38 against the baseline's 0; 91% precision on what the selector held. The block was wrong: machine 1 of `machines.md` is the M1 Pro this ran on** | nothing — it never needed the hardware it was ordered behind | [`does-the-model-read-it`](../../RECORD/2026-09-06.does-the-model-read-it.completed.md) |
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
+| 11 | **Naming a provider** — where a model lives, written down once: `[provider.<name>]` in the state directory's `config.toml`, `-p <name>` and `-m <model>`, and a `default` profile that will not load pointing off the machine without `remote = true`. **Answers `local-first`'s first open question with *not `luu.toml`*** | nothing | [`naming-a-provider`](../../RECORD/2026-09-07.naming-a-provider.WIP.md) |
 
 ```mermaid
 gantt
@@ -51,6 +52,7 @@ gantt
     section Next, and code-shaped
     A GBNF grammar for tool calls          :gbnf, 2026-09-06, 4d
     Active pruning of tool results         :prune, after gbnf, 4d
+    Naming a provider (config.toml)        :prov, 2026-09-07, 2d
     openat2(RESOLVE_BENEATH)               :done, toctou, 2026-09-05, 1d
     Enforcement per job                    :enf, 2026-09-06, 2d
     section Waiting on hardware
@@ -100,7 +102,20 @@ gantt
   since the sandbox existed and is not any more. Where `openat2` is missing the
   old sentence is still the true one, which is why the mechanism is in the
   verdict rather than in a comment.
-- **Items 2, 4 and 6 have no record yet, and that is the next thing each of them
-  needs.** A roadmap entry is a link to an argument; three of these link to the
-  design's open questions instead, which is the honest way to say *this is
-  ordered but not yet argued*.
+- **Item 11 is the first entry this revision did not order.** It came from a
+  *Still open* line rather than from the table — `local-first` asked whether
+  `luu.toml` grows provider profiles, and nothing was scheduled to answer it
+  because retyping four flags is an irritation rather than a defect. What makes
+  it code-shaped is the second half: a named destination is commitment 3
+  (*nothing leaves the machine without the destination having been typed*)
+  weakened, and the file has to be built to hold what is left of it.
+- **Items 4 and 6 were argued on 2026-09-06, and both came back changed.** A
+  roadmap entry is a link to an argument, and until that day these two linked to
+  the design's open questions instead — the honest way to say *ordered but not
+  yet argued*. Writing the arguments moved both items: **4 lost the plan block**
+  (the gate probe's own numbers say the plan format is not what is broken, and a
+  grammar there would make `PlanSource::Prose` unreachable), and **6 grew the
+  fragment half** of `selection-at-the-gate`'s open threads, because an 8 KiB
+  `cat` and a 1 000-token fragment are the same object to the window. Neither
+  change is visible from the row it started as, which is the argument for writing
+  the record before the code rather than after it.
