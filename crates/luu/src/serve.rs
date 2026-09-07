@@ -2339,7 +2339,13 @@ mod tests {
     /// these two builders differ by — a test that changed more than the flag
     /// would not be measuring the flag.
     fn app_selecting(replies: &[&str], select_tokens: u32) -> Arc<App> {
-        let base = std::env::current_dir().unwrap();
+        app_selecting_in(replies, select_tokens, std::env::current_dir().unwrap())
+    }
+
+    /// The same, over a tree the test owns and may edit. Nothing here writes
+    /// into the checkout: a test that edited this repository to prove a point
+    /// about staleness would be the worst possible way to prove it.
+    fn app_selecting_in(replies: &[&str], select_tokens: u32, base: PathBuf) -> Arc<App> {
         let agency = Agency {
             tools: Arc::new(agent_core::tools::Tools::standard()),
             sandbox: Arc::new(
@@ -2404,6 +2410,35 @@ mod tests {
             session_started_at: Mutex::new(0),
             stream: Mutex::new(Vec::new()),
         })
+    }
+
+    /// A directory that removes itself, so a failing test does not leave one
+    /// behind and the next run does not read it.
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "luu-{name}-{}-{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("a clock after 1970")
+                    .as_nanos(),
+            ));
+            std::fs::create_dir_all(&path).expect("the temporary directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     /// The handlers spawn, so the assertions wait for the state they are about.
@@ -2569,6 +2604,102 @@ mod tests {
         let session = app.session.lock().await;
         assert_eq!(session.context.job(1).unwrap().state, JobState::Approved);
         assert!(session.context.job(1).unwrap().summary.is_none());
+    }
+
+    /// The test that would have caught the stale walk, at the seam it was on.
+    ///
+    /// `repo_map`'s own tests cover `rewalk_sources`; this one covers the thing
+    /// that was actually broken, which is that nothing in `serve` called
+    /// anything like it. Two turns of one session with the file changing in
+    /// between: turn one sees the definition, the file moves under the session,
+    /// turn two must still see the definition and not the bytes that are now at
+    /// its old line numbers.
+    ///
+    /// The edit is made by the test rather than by a tool call, and that is the
+    /// honest shape: what is under test is the seam between the walk and the
+    /// filesystem, not `edit_file`. A turn that wrote the file through the tool
+    /// would exercise more and prove the same thing less directly.
+    #[tokio::test]
+    async fn a_second_turn_selects_the_file_as_it_is_now() {
+        // Two definitions, so the first one's span *ends* before the second
+        // rather than running to the end of the file. A span that ran to EOF
+        // would still contain the definition after everything shifted down,
+        // and the test would pass against the bug it exists to catch.
+        const BEACON: &str = "//! The beacon, which exists to be found.\n\
+                              \n\
+                              pub fn find_the_beacon() {\n\
+                                  let beacon = 1;\n\
+                              }\n\
+                              \n\
+                              pub fn something_else() {\n\
+                                  let other = 2;\n\
+                              }\n";
+        const PLAN_FOR_BEACON: &str = "```plan\n{\"objective\":\"find it\",\
+                                       \"tasks\":[\"read it\"],\
+                                       \"files\":[\"src/beacon.rs\"],\
+                                       \"commands\":[]}\n```";
+        const ASK: &str = "find_the_beacon";
+
+        let dir = TempRepo::new("serve-rewalk");
+        std::fs::create_dir_all(dir.path().join("src")).expect("the source directory");
+        std::fs::write(dir.path().join("src/beacon.rs"), BEACON).expect("beacon.rs");
+
+        let app = app_selecting_in(
+            &[PLAN_FOR_BEACON, "the answer", "the answer again"],
+            2048,
+            dir.path().to_path_buf(),
+        );
+
+        on_prompt(app.clone(), ASK.into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve_job(
+            app.clone(),
+            1,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+
+        let held = |session: &Session, turn: usize| -> String {
+            session.context.turns()[turn]
+                .code_context
+                .iter()
+                .map(|fragment| fragment.text.clone())
+                .collect()
+        };
+        assert!(
+            held(&*app.session.lock().await, 0).contains("pub fn find_the_beacon"),
+            "the first turn has to hold it, or the second turn proves nothing",
+        );
+
+        // Thirty lines above everything — more than the definition's own span,
+        // so the old range cannot overlap the new position by accident.
+        std::fs::write(
+            dir.path().join("src/beacon.rs"),
+            format!("{}{BEACON}", "// pushed down\n".repeat(30)),
+        )
+        .expect("the edit");
+
+        on_prompt(app.clone(), ASK.into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
+
+        let session = app.session.lock().await;
+        let second = held(&session, 1);
+        assert!(
+            second.contains("pub fn find_the_beacon"),
+            "the second turn was handed the file's old line numbers: {second:?}",
+        );
+        assert!(
+            !second.contains("// pushed down\n// pushed down"),
+            "and it was handed the definition rather than the padding that took \
+             its place: {second:?}",
+        );
     }
 
     /// The reason selection is allowed in `serve` at all.
