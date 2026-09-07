@@ -1807,10 +1807,13 @@ pub async fn run() -> Result<()> {
         .map(|spec| load_fragment(agency.sandbox.as_ref(), spec))
         .collect::<Result<_>>()?;
 
-    // One walk of the tree, reused by every turn. A selector that re-parsed the
-    // repository per turn would pay `luu map`'s cost on every prompt of a long
-    // session, and the tree does not change between two turns of one run.
-    let walked = match select_tokens > 0 {
+    // One walk of the tree, re-stamped by every turn. The sentence that used to
+    // be here — "the tree does not change between two turns of one run" — is
+    // false the moment a turn calls `edit_file`, and the cost of it being false
+    // is not a missing file: the walk's line numbers go stale while the paths
+    // stay valid, so the selector hands the next turn the *wrong lines* of the
+    // right file. `rewalk_sources` re-parses only what moved.
+    let mut walked = match select_tokens > 0 {
         true => Some(agent_core::repo_map::walk_sources(agency.sandbox.as_ref())),
         false => None,
     };
@@ -1914,7 +1917,22 @@ pub async fn run() -> Result<()> {
         // top of what was attached by hand. The person's `--fragment` goes
         // first and keeps its whole budget — a selector that could crowd out an
         // explicit ask would be answering a question it was not asked.
-        if let Some(walked) = &walked {
+        if let Some(walked) = &mut walked {
+            // Re-stamped first, and through the **agency's** sandbox rather
+            // than the live job's: the walk is the run's cache, and refreshing
+            // it through a narrow plan would shrink it for every turn after.
+            // Off the async thread, like every other filesystem call in a turn,
+            // so the deadline above it can still fire.
+            let previous = std::mem::take(walked);
+            let agency_sandbox = agency.sandbox.clone();
+            *walked = match tokio::task::spawn_blocking(move || {
+                agent_core::repo_map::rewalk_sources(agency_sandbox.as_ref(), &previous)
+            })
+            .await
+            {
+                Ok(rewalked) => rewalked.walked,
+                Err(error) => std::panic::resume_unwind(error.into_panic()),
+            };
             // The live job's sandbox when there is one: a selection is read
             // through whatever the turn itself may read, so an approved plan
             // narrows what can be chosen exactly as it narrows what can be

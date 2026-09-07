@@ -118,10 +118,11 @@ struct App {
     /// history that only ever holds one thing.
     session_id: Mutex<String>,
     map_rendered: String,
-    /// The tree, tagged once at startup, that a selection is chosen from.
-    /// Empty when selection is off, and it is the walk rather than the choosing
-    /// that is expensive — the choosing is a scan of what this already holds.
-    walked: Vec<agent_core::repo_map::Walked>,
+    /// The tree a selection is chosen from, tagged at startup and **re-stamped
+    /// before every turn** — `rewalk_sources` re-parses only the files whose
+    /// mtime or length moved, because it is the parse rather than the choosing
+    /// that is expensive. Empty when selection is off.
+    walked: Mutex<Vec<agent_core::repo_map::Walked>>,
     /// What this server resolved, rendered once for `GET /api/settings`.
     settings: Settings,
     /// Tokens of selected fragments per turn. 0 is off.
@@ -260,10 +261,14 @@ impl App {
 
         // Beside the map and not for the map's reason. The map is built once
         // because it is a *prefix* and a prefix rebuilt mid-session is not one;
-        // this is built once because walking and tagging the tree is the
-        // expensive half of selection and it depends on the tree rather than on
-        // the turn. A file written mid-session is therefore not selectable
-        // until a restart, which is the same staleness the map already accepts.
+        // this is the seed of a cache that is re-stamped every turn.
+        //
+        // It used to be built once and kept, and the comment here said a file
+        // written mid-session was "not selectable until a restart". That was
+        // the benign reading of the wrong behaviour: a file edited mid-session
+        // stayed selectable at its *startup line numbers*, and the fragment
+        // loader reads the current file at them — so the turn got the wrong
+        // lines under the right path. See `rewalk_sources`.
         let walked = match select_tokens > 0 {
             true => {
                 let walked = agent_core::repo_map::walk_sources(agency.sandbox.as_ref());
@@ -338,7 +343,7 @@ impl App {
             backend,
             model,
             approvers,
-            walked,
+            walked: Mutex::new(walked),
             select_tokens,
             select_weights,
             session: Mutex::new(Session {
@@ -1639,8 +1644,37 @@ async fn begin_turn(
                     Some((_, sandbox)) => sandbox.clone(),
                     None => app.agency.sandbox.clone(),
                 };
+                // Re-stamped before it is scored, because the walk is a cache
+                // of line numbers and this turn may be answering after an edit
+                // the last turn made. Through the **agency's** sandbox: the
+                // cache belongs to the session, and refreshing it through a
+                // narrow plan would shrink it for every turn after. The
+                // narrowing is applied at the read, below and inside `select`.
+                //
+                // On a blocking thread, for the reason every other filesystem
+                // call in a turn is: a `std::fs` call inline in an `async`
+                // block never yields, so the loop's deadline above it never
+                // fires.
+                let mut walked = app.walked.lock().await;
+                let previous = std::mem::take(&mut *walked);
+                let agency = app.agency.sandbox.clone();
+                let rewalked = match tokio::task::spawn_blocking(move || {
+                    agent_core::repo_map::rewalk_sources(agency.as_ref(), &previous)
+                })
+                .await
+                {
+                    Ok(rewalked) => rewalked,
+                    Err(error) => std::panic::resume_unwind(error.into_panic()),
+                };
+                if rewalked.changed() {
+                    eprintln!(
+                        "selection — re-walked: {} changed, {} added, {} dropped",
+                        rewalked.reparsed, rewalked.added, rewalked.dropped,
+                    );
+                }
+                *walked = rewalked.walked;
                 agent_core::select::select(
-                    &app.walked,
+                    &walked,
                     sandbox.as_ref(),
                     &text,
                     tokens,
@@ -2317,10 +2351,10 @@ mod tests {
         let agency_walk = agency.sandbox.clone();
         Arc::new(App {
             approvers: Approvers::default(),
-            walked: match select_tokens {
+            walked: Mutex::new(match select_tokens {
                 0 => Vec::new(),
                 _ => agent_core::repo_map::walk_sources(agency_walk.as_ref()),
-            },
+            }),
             select_tokens,
             select_weights: Default::default(),
             backend: Arc::new(
@@ -2550,8 +2584,9 @@ mod tests {
                                 \"tasks\":[\"read it\"],\"files\":[\"src/serve.rs\"],\
                                 \"commands\":[]}\n```";
         let app = app_selecting(&[ONE_FILE, "the answer"], 2048);
+        let walked = app.walked.lock().await.clone();
         assert!(
-            !app.walked.is_empty(),
+            !walked.is_empty(),
             "the walk found nothing, so this test would pass by holding zero files",
         );
 
@@ -2560,7 +2595,7 @@ mod tests {
         // query that was only ever going to pick one thing.
         const ASK: &str = "the session store, the http server and the exporter";
         let unnarrowed = agent_core::select::select(
-            &app.walked,
+            &walked,
             app.agency.sandbox.as_ref(),
             ASK,
             2048,
