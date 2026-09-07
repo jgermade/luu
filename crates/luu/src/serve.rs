@@ -2256,6 +2256,48 @@ struct NewSession {
     model: Option<String>,
 }
 
+/// The body both session routes take, which is allowed to be absent.
+///
+/// Not `Json<NewSession>`: a client that posts no body at all — which is every
+/// client written before this parameter existed — would be answered with a 415
+/// about a missing content type rather than with the session it asked for.
+fn asked_for(body: &axum::body::Bytes) -> Result<NewSession, (StatusCode, String)> {
+    match body.is_empty() {
+        true => Ok(NewSession::default()),
+        false => serde_json::from_slice(body)
+            .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error}"))),
+    }
+}
+
+/// The line that says the rest of this stream was produced somewhere else.
+///
+/// `None` when it would say nothing new. The comparison is against the **fold**
+/// — which is what the stream's last header folded to — and not against the
+/// destination the server happens to be pointed at, so a plain resume that
+/// inherits a different destination records that too. It was doing it silently
+/// before this existed.
+///
+/// `started_at` is the session's own, never the moment of the resume: every
+/// `at_ms` in a stream is relative to the first header's, which is what the
+/// field means.
+fn retarget_header(
+    view: &SessionView,
+    sending: &Destination,
+    counter: agent_core::context::Counter,
+) -> Option<record::RecordLine> {
+    let same = view.backend == sending.backend.name() && view.model == sending.model;
+    match same {
+        true => None,
+        false => Some(crate::session::header(
+            sending.backend.name(),
+            &sending.model,
+            sending.budget,
+            counter,
+            view.started_at,
+        )),
+    }
+}
+
 /// The destination a new session asked for, built out of the providers file.
 ///
 /// Everything a destination decides is rebuilt together — see [`Destination`] —
@@ -2336,17 +2378,9 @@ async fn destination_for(
 
 async fn create_session(State(state): State<AppRouterState>, body: axum::body::Bytes) -> Response {
     let app = &state.app;
-    // Not `Json<NewSession>`: a client that posts no body at all — which is
-    // every client written before this parameter existed — would be answered
-    // with a 415 about a missing content type.
-    let asked: NewSession = match body.is_empty() {
-        true => NewSession::default(),
-        false => match serde_json::from_slice(&body) {
-            Ok(asked) => asked,
-            Err(error) => {
-                return (StatusCode::BAD_REQUEST, format!("{error}")).into_response();
-            }
-        },
+    let asked = match asked_for(&body) {
+        Ok(asked) => asked,
+        Err((status, message)) => return (status, message).into_response(),
     };
 
     {
@@ -2423,9 +2457,23 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     (StatusCode::CREATED, Json(summary)).into_response()
 }
 
-async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<String>) -> Response {
+/// Picks a stored session back up — optionally somewhere else.
+///
+/// The body is `POST /api/sessions`', and means the same thing: a profile out
+/// of the file and a model there. What differs is what comes with it — the
+/// history — and that the stream gains a `Header` saying where it changed. See
+/// `RECORD/2026-09-07.a-second-header.completed.md`.
+async fn resume_session(
+    State(state): State<AppRouterState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
     let app = &state.app;
     let id = bare(&id);
+    let asked = match asked_for(&body) {
+        Ok(asked) => asked,
+        Err((status, message)) => return (status, message).into_response(),
+    };
 
     {
         let session = app.session.lock().await;
@@ -2438,12 +2486,21 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
     };
 
-    app.checkpoint().await;
+    // Before the checkpoint and before anything is loaded: a body naming a
+    // profile the file does not have leaves the session that is running exactly
+    // as it was.
+    let sending = match (asked.provider.is_some(), asked.model.is_some()) {
+        (false, false) => app.destination().await,
+        _ => {
+            let current = app.destination().await;
+            match destination_for(app, &current, &asked, state.providers_editable).await {
+                Ok(next) => Arc::new(next),
+                Err((status, message)) => return (status, message).into_response(),
+            }
+        }
+    };
 
-    // A resumed session runs on the destination this server is pointed at,
-    // which is not necessarily the one its own header names. That was true
-    // before a session could choose one and is louder now — see the record.
-    let sending = app.destination().await;
+    app.checkpoint().await;
 
     let (loaded_view, resumed_context) = {
         let store = store_mutex.lock().await;
@@ -2470,11 +2527,22 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         (view, context)
     };
 
+    // After the fold is rebuilt and before anything runs on it.
+    *app.destination.write().await = sending.clone();
+
     *app.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store
     // already holds rather than starting a second one under the same name.
     *app.session_started_at.lock().await = loaded_view.started_at;
-    app.stream.lock().await.clear();
+    {
+        let mut stream = app.stream.lock().await;
+        stream.clear();
+        // The one line this route writes. It says the rest of these turns were
+        // produced somewhere else, and it is absent when they were not.
+        if let Some(header) = retarget_header(&loaded_view, &sending, sending.counter.id()) {
+            stream.push(header);
+        }
+    }
 
     {
         let mut session = app.session.lock().await;
@@ -2495,11 +2563,23 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         let mut view = app.view.lock().await;
         let mut live_view = loaded_view.clone();
         live_view.id = LIVE_SESSION.to_string();
+        // The fold has one backend and one model, so after a switch it names
+        // the one the next turn will use. The *stream* keeps both, in order,
+        // which is where "what produced turn 4" is answered.
+        live_view.backend = sending.backend.name().to_string();
+        live_view.model = sending.model.clone();
         *view = live_view;
         let mut s = view.summary();
         s.id = id.to_string();
         s
     };
+
+    // Written down now rather than at the next turn's checkpoint. A stream
+    // line saying *the rest of this was produced somewhere else* is worth
+    // nothing if a session that was moved and then left alone loses it — and
+    // unlike a new session, this one already has a row, so the checkpoint
+    // updates rather than inventing one.
+    app.checkpoint().await;
 
     let hello = ServerMessage::Hello {
         protocol: protocol::VERSION,
@@ -2726,6 +2806,76 @@ mod tests {
             session_started_at: Mutex::new(0),
             stream: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The one line a resume writes, and the two cases it is about.
+    ///
+    /// The comparison is against the **fold**, which is what the stream's last
+    /// header folded to — so a resume that inherits a destination the session
+    /// never ran on records that too, which it was doing silently before this
+    /// line existed.
+    #[test]
+    fn a_resume_records_a_header_only_where_the_destination_moved() {
+        let sending = |backend: &str, model: &str| Destination {
+            backend: Arc::new(Mock::default()),
+            model: model.to_string(),
+            budget: Budget::new(8192, 512, Eviction::Turn),
+            counter: Arc::new(ApproximateCounter),
+            settings: Settings {
+                profile: None,
+                backend: backend.to_string(),
+                destination: String::new(),
+                remote: false,
+                model: model.to_string(),
+                window: Some(8192),
+                window_from: crate::provider::WindowFrom::Unset,
+                window_caveat: None,
+                reserve: 512,
+                counter: agent_core::context::Counter::Approximate,
+                counter_warning: None,
+                select_tokens: 0,
+                map_tokens: 0,
+                sandbox: String::new(),
+                store: None,
+                unconfigured: false,
+            },
+        };
+
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.started_at = 1_700_000_000_000;
+
+        // The same destination the stream already names: nothing to say.
+        assert!(
+            retarget_header(
+                &view,
+                &sending("mock", "mock"),
+                agent_core::context::Counter::Approximate
+            )
+            .is_none(),
+            "a resume that changed nothing must not write a line saying it did",
+        );
+
+        // A different model on the same backend is a different destination —
+        // the numbers a header exists to make comparable are the model's.
+        let moved = retarget_header(
+            &view,
+            &sending("mock", "other"),
+            agent_core::context::Counter::Approximate,
+        )
+        .expect("the destination moved, so the stream has to say so");
+        match moved {
+            record::RecordLine::Header {
+                model, started_at, ..
+            } => {
+                assert_eq!(model, "other");
+                assert_eq!(
+                    started_at, view.started_at,
+                    "every at_ms in the stream is relative to the session's own start, \
+                     so a second header carries it rather than the moment of the resume",
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A directory that removes itself, so a failing test does not leave one

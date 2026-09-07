@@ -568,9 +568,14 @@ export function cancel() {
 
 /// The other half of the gate. Approving runs the prompt the server has been
 /// holding since the proposal; refusing drops it with the plan.
+/// **One spelling per frame.** The server accepts `task` as an alias for `job`,
+/// so a client written before the rename still works — and a frame carrying
+/// *both* is the same field twice, which is a `duplicate field` parse error and
+/// a message the server drops on the floor. Sending both was how every approval
+/// from this page was silently discarded.
 function act(type, id) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
-  socket.send(JSON.stringify({ type, job: id, task: id }))
+  socket.send(JSON.stringify({ type, job: id }))
 }
 
 /// Approving carries what the person added to the plan, which is the half that
@@ -583,7 +588,8 @@ function act(type, id) {
 export function approveJob(job, files = [], writes = [], commands = [], closesOn = "") {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify({
-    type: "approve_job", job, task: job, files, writes, commands,
+    // `job` alone — see `act` for what naming it twice costs.
+    type: "approve_job", job, files, writes, commands,
     closes_on: closesOn.trim() || null,
   }))
 }
@@ -807,21 +813,37 @@ export async function providerModels(name) {
   }
 }
 
-export async function resumeSession(id) {
+/// Picks a stored session back up, optionally somewhere else.
+///
+/// `choice` is `POST /api/sessions`', and means the same thing — a profile out
+/// of the file and a model there. What differs is that the history comes along,
+/// and that the session's stream gains a header saying where it changed.
+export async function resumeSession(id, choice) {
+  const asked = choice && (choice.provider || choice.model) ? choice : null
   try {
     const res = await fetch(`./api/sessions/${encodeURIComponent(id)}/resume`, {
       method: "POST",
-      headers: apiHeaders(),
+      headers: asked
+        ? { ...apiHeaders(), "content-type": "application/json" }
+        : apiHeaders(),
+      body: asked ? JSON.stringify(asked) : undefined,
     })
     if (!res.ok) {
       const err = await res.text()
       state.error = `Could not resume session: ${err}`
-      return
+      return false
     }
     state.currentSessionId = "live"
     await refreshSessionsList()
+    // The turns come back from the server rather than from what this client
+    // happened to have: a session resumed elsewhere is the same history, and
+    // the page should be reading the one the server just re-folded.
+    await refreshLiveSession()
+    await refreshSettings()
+    return true
   } catch (e) {
     state.error = `Could not resume session: ${e}`
+    return false
   }
 }
 

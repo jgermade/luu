@@ -148,9 +148,13 @@
   // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
   let starter = null
   let starting = false
+  // Which of the two things the dialog is doing, so the one that is running
+  // says so on its own button rather than on both.
+  let continuing = false
 
   const openStarter = async provider => {
     if (!state.providers) await loadProviders()
+    continuing = false
     const names = Object.keys(state.providers?.providers || {})
     const chosen = provider
       || state.providers?.running
@@ -176,11 +180,29 @@
       model: answer.suggested || "",
     }
   }
-  const closeStarter = () => { starter = null }
+  const closeStarter = () => { starter = null; continuing = false }
   const startSession = async () => {
     starting = true
     const ok = await newSession({ provider: starter.provider, model: starter.model })
     starting = false
+    if (ok) {
+      starter = null
+      closeConfig()
+    }
+  }
+  // The same two answers, against the session already on screen. Its history
+  // comes along, and the server writes a header into its stream saying where
+  // it changed — so turn 8 on another model is not silently comparable with
+  // turn 7 on this one.
+  const continueHere = async () => {
+    starting = true
+    continuing = true
+    const ok = await resumeSession(state.session, {
+      provider: starter.provider,
+      model: starter.model,
+    })
+    starting = false
+    continuing = false
     if (ok) {
       starter = null
       closeConfig()
@@ -204,6 +226,27 @@
   })()
 
   $: profileNames = Object.keys(state.providers?.providers || {})
+  // What stands in the way of continuing the session on screen, or "" when
+  // nothing does. A control that cannot work says why rather than failing when
+  // it is pressed.
+  // What stands in the way of *either* action: the server refuses both while a
+  // turn is in flight or a proposal is unanswered, and a button that fails when
+  // pressed is worse than one that says why it will not.
+  $: busy = state.status === "running"
+    ? "a turn is running"
+    : proposed
+      ? "a proposal is waiting at the gate"
+      : ""
+  $: cannotContinue = busy
+    || (state.replay
+      ? "this is a recording"
+      : !state.session
+        ? "no session is open"
+        : !state.messages.length
+          ? "this session has no turns yet — start one instead"
+          : !state.settings?.store
+            ? "this server keeps no session store, so nothing can be resumed"
+            : "")
   $: editable = !!state.providers?.editable
   $: canDeclare = !!declaration && typed.trim() === declaration.host
   $: windowSource = ({
@@ -472,7 +515,7 @@
 <div :if="starter" class="modal-backdrop" @click="closeStarter()">
   <div class="modal narrow" @click="$event.stopPropagation()">
     <header class="modal-head">
-      <strong>New session</strong>
+      <strong>Where a session sends</strong>
       <button type="button" class="link" @click="closeStarter()">close</button>
     </header>
     <section class="modal-body">
@@ -511,15 +554,26 @@
       </dl>
 
       <p class="dim small" :if="profileNames.length">
-        The destination becomes this session's, and the header it starts with
-        says so. It does not change the file, and it does not change a session
-        that is already running.
+        <strong>Start session</strong> opens an empty one there.
+        <strong>Continue here</strong> keeps the history on screen and moves it —
+        the session's stream gains a header saying where it changed, so the turns
+        before it are not read as comparable with the ones after.
+        Neither changes the file, and neither touches a turn that is running.
+      </p>
+      <p class="dim small" :if="profileNames.length && cannotContinue">
+        Cannot continue: {{ cannotContinue }}.
+      </p>
+      <p class="dim small" :if="profileNames.length && busy">
+        Cannot start one either: {{ busy }}.
       </p>
 
       <div class="modal-foot">
         <div class="modal-actions">
-          <button type="button" class="save" :disabled="!profileNames.length || starting"
-                  @click="startSession()">{{ starting ? "Starting…" : "Start session" }}</button>
+          <button type="button" :disabled="!profileNames.length || starting || !!cannotContinue"
+                  title="Keep this session's history and move it to the chosen destination"
+                  @click="continueHere()">{{ starting && continuing ? "Moving…" : "Continue here" }}</button>
+          <button type="button" class="save" :disabled="!profileNames.length || starting || !!busy"
+                  @click="startSession()">{{ starting && !continuing ? "Starting…" : "Start session" }}</button>
         </div>
       </div>
     </section>

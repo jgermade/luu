@@ -869,6 +869,23 @@ machine's prompts leaving it to a destination whoever holds the token picked.
 See
 [`RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`](RECORD/2026-09-07.the-first-run-has-no-provider.completed.md).
 
+**A session can be picked back up somewhere else, and the stream says where.**
+`POST /api/sessions/{id}/resume` takes the same `{ provider, model }` body, and
+the history comes with it — which is the difference between it and starting a
+new one. Where the destination differs from what the session's stream already
+names, the stream gains a **second `Header` line**: no new variant and no format
+bump, because a header is already *the terms these lines were produced under*,
+and both readers that fold a stream apply one by overwriting backend and model.
+It carries **the session's own `started_at`**, never the moment of the resume,
+since every `at_ms` in a stream is relative to the first one. The context is
+re-folded with the new destination's counter, so a history counted with one
+tokenizer is not budgeted with another. The line is checkpointed where it is
+written rather than at the next turn, so a session moved and then left alone
+keeps the fact. This also closes a hole that predates the choice: a plain resume
+inheriting a destination the session never ran on now records that too, instead
+of running under a header that names another. See
+[`RECORD/2026-09-07.a-second-header.completed.md`](RECORD/2026-09-07.a-second-header.completed.md).
+
 ### Record and replay
 
 `luu serve --record <file>` dumps the JSON-lines stream to disk, and the UI can load such a file

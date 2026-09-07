@@ -1895,6 +1895,50 @@ async fn a_session_may_not_name_a_provider_that_is_not_in_the_file() {
     assert_eq!(created.status(), reqwest::StatusCode::CREATED);
 }
 
+/// Resuming somewhere else is refused the same way starting somewhere else is,
+/// and refuses *before* it touches the session that is running.
+#[tokio::test]
+async fn resuming_on_a_provider_that_is_not_in_the_file_changes_nothing() {
+    let dir = std::env::temp_dir().join(format!("luu-resume-refusal-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let db = dir.join("sessions.db");
+    let address = server_storing(vec![PLAN.into(), ANSWER.into()], &db).await;
+    let client = reqwest::Client::new();
+
+    // The live session's own id, which is what a page continuing the session it
+    // is watching sends.
+    let live: serde_json::Value = reqwest::get(format!("http://{address}/api/sessions"))
+        .await
+        .expect("listing the sessions")
+        .json()
+        .await
+        .expect("the listing is JSON");
+    let id = live[0]["id"]
+        .as_str()
+        .expect("the live session")
+        .to_string();
+
+    let refused = client
+        .post(format!("http://{address}/api/sessions/{id}/resume"))
+        .json(&serde_json::json!({ "provider": "no-such-profile-in-any-file" }))
+        .send()
+        .await
+        .expect("asking to resume on a profile that does not exist");
+    assert_eq!(refused.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
+
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+    assert_eq!(
+        settings["backend"], "mock",
+        "the refusal happens before the checkpoint, so nothing moved",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The providers file as the editor reads it, on a loopback server.
 #[tokio::test]
 async fn the_providers_route_says_whether_this_surface_may_write() {
