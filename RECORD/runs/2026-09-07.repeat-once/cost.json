@@ -1,0 +1,750 @@
+{
+ "off": {
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 1202,
+     "code": 1098,
+     "prompt": 18,
+     "reserve": 512
+    },
+    "shared_tokens": 1687,
+    "prompt_tokens_seen": 2810
+   },
+   {
+    "n": 3,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2319,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    },
+    "shared_tokens": 2810,
+    "prompt_tokens_seen": 3889
+   },
+   {
+    "n": 4,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3393,
+     "code": 1046,
+     "prompt": 12,
+     "reserve": 512
+    },
+    "shared_tokens": 3889,
+    "prompt_tokens_seen": 4955
+   },
+   {
+    "n": 5,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4452,
+     "code": 1124,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 4955,
+    "prompt_tokens_seen": 6100
+   },
+   {
+    "n": 6,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5592,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    },
+    "shared_tokens": 6100,
+    "prompt_tokens_seen": 7307
+   },
+   {
+    "n": 7,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5591,
+     "code": 1048,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 495,
+    "prompt_tokens_seen": 7168,
+    "evicted": {
+     "turns": [
+      1
+     ],
+     "tokens": 1202
+    }
+   },
+   {
+    "n": 8,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5538,
+     "code": 996,
+     "prompt": 13,
+     "reserve": 512
+    },
+    "shared_tokens": 495,
+    "prompt_tokens_seen": 7061,
+    "evicted": {
+     "turns": [
+      2
+     ],
+     "tokens": 1117
+    }
+   },
+   {
+    "n": 9,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6548,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    },
+    "shared_tokens": 7061,
+    "prompt_tokens_seen": 7080
+   },
+   {
+    "n": 10,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5487,
+     "code": 1052,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 489,
+    "prompt_tokens_seen": 7074,
+    "evicted": {
+     "turns": [
+      3
+     ],
+     "tokens": 1074
+    }
+   },
+   {
+    "n": 11,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5496,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    },
+    "shared_tokens": 489,
+    "prompt_tokens_seen": 7408,
+    "evicted": {
+     "turns": [
+      4
+     ],
+     "tokens": 1059
+    }
+   },
+   {
+    "n": 12,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5749,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    },
+    "shared_tokens": 492,
+    "prompt_tokens_seen": 7326,
+    "evicted": {
+     "turns": [
+      5
+     ],
+     "tokens": 1140
+    }
+   },
+   {
+    "n": 13,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5606,
+     "code": 1061,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 495,
+    "prompt_tokens_seen": 7201,
+    "evicted": {
+     "turns": [
+      6
+     ],
+     "tokens": 1201
+    }
+   },
+   {
+    "n": 14,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5618,
+     "code": 898,
+     "prompt": 10,
+     "reserve": 512
+    },
+    "shared_tokens": 492,
+    "prompt_tokens_seen": 7046,
+    "evicted": {
+     "turns": [
+      7
+     ],
+     "tokens": 1064
+    }
+   },
+   {
+    "n": 15,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5517,
+     "code": 1016,
+     "prompt": 17,
+     "reserve": 512
+    },
+    "shared_tokens": 486,
+    "prompt_tokens_seen": 7069,
+    "evicted": {
+     "turns": [
+      8
+     ],
+     "tokens": 1010
+    }
+   },
+   {
+    "n": 16,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5469,
+     "code": 1065,
+     "prompt": 24,
+     "reserve": 512
+    },
+    "shared_tokens": 486,
+    "prompt_tokens_seen": 7073,
+    "evicted": {
+     "turns": [
+      9,
+      10
+     ],
+     "tokens": 1081
+    }
+   },
+   {
+    "n": 17,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5166,
+     "code": 996,
+     "prompt": 11,
+     "reserve": 512
+    },
+    "shared_tokens": 487,
+    "prompt_tokens_seen": 6688,
+    "evicted": {
+     "turns": [
+      11
+     ],
+     "tokens": 1393
+    }
+   },
+   {
+    "n": 18,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5116,
+     "code": 1045,
+     "prompt": 12,
+     "reserve": 512
+    },
+    "shared_tokens": 492,
+    "prompt_tokens_seen": 6687,
+    "evicted": {
+     "turns": [
+      12
+     ],
+     "tokens": 1058
+    }
+   },
+   {
+    "n": 19,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5097,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    },
+    "shared_tokens": 492,
+    "prompt_tokens_seen": 6669,
+    "evicted": {
+     "turns": [
+      13
+     ],
+     "tokens": 1076
+    }
+   },
+   {
+    "n": 20,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6155,
+     "code": 930,
+     "prompt": 23,
+     "reserve": 512
+    },
+    "shared_tokens": 6669,
+    "prompt_tokens_seen": 7628
+   }
+  ],
+  "totals": {
+   "prompt_tokens": 125300,
+   "history": 95111,
+   "code": 20274,
+   "cuts": 12,
+   "turns_dropped": 13,
+   "tokens_freed": 13475,
+   "mean_prefix_reuse": 0.3402
+  }
+ },
+ "on": {
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 1202,
+     "code": 1098,
+     "prompt": 18,
+     "reserve": 512
+    },
+    "shared_tokens": 1687,
+    "prompt_tokens_seen": 2810
+   },
+   {
+    "n": 3,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2319,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    },
+    "shared_tokens": 2810,
+    "prompt_tokens_seen": 3889
+   },
+   {
+    "n": 4,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3393,
+     "code": 1046,
+     "prompt": 12,
+     "reserve": 512
+    },
+    "shared_tokens": 3889,
+    "prompt_tokens_seen": 4955
+   },
+   {
+    "n": 5,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4452,
+     "code": 616,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 4955,
+    "prompt_tokens_seen": 5592
+   },
+   {
+    "n": 6,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5083,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    },
+    "shared_tokens": 5592,
+    "prompt_tokens_seen": 6799
+   },
+   {
+    "n": 7,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5082,
+     "code": 754,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 495,
+    "prompt_tokens_seen": 6366,
+    "evicted": {
+     "turns": [
+      1
+     ],
+     "tokens": 1202
+    }
+   },
+   {
+    "n": 8,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5852,
+     "code": 0,
+     "prompt": 13,
+     "reserve": 512
+    },
+    "shared_tokens": 6366,
+    "prompt_tokens_seen": 6386
+   },
+   {
+    "n": 9,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5865,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    },
+    "shared_tokens": 6386,
+    "prompt_tokens_seen": 6405
+   },
+   {
+    "n": 10,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5878,
+     "code": 1052,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 6405,
+    "prompt_tokens_seen": 7478
+   },
+   {
+    "n": 11,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5264,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    },
+    "shared_tokens": 489,
+    "prompt_tokens_seen": 7183,
+    "evicted": {
+     "turns": [
+      2,
+      3
+     ],
+     "tokens": 1682
+    }
+   },
+   {
+    "n": 12,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5892,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    },
+    "shared_tokens": 489,
+    "prompt_tokens_seen": 7476,
+    "evicted": {
+     "turns": [
+      4
+     ],
+     "tokens": 765
+    }
+   },
+   {
+    "n": 13,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5810,
+     "code": 689,
+     "prompt": 15,
+     "reserve": 512
+    },
+    "shared_tokens": 492,
+    "prompt_tokens_seen": 7040,
+    "evicted": {
+     "turns": [
+      5
+     ],
+     "tokens": 1140
+    }
+   },
+   {
+    "n": 14,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5246,
+     "code": 53,
+     "prompt": 10,
+     "reserve": 512
+    },
+    "shared_tokens": 492,
+    "prompt_tokens_seen": 5830,
+    "evicted": {
+     "turns": [
+      6,
+      7
+     ],
+     "tokens": 1268
+    }
+   },
+   {
+    "n": 15,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5308,
+     "code": 644,
+     "prompt": 17,
+     "reserve": 512
+    },
+    "shared_tokens": 5830,
+    "prompt_tokens_seen": 6497
+   },
+   {
+    "n": 16,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5969,
+     "code": 1065,
+     "prompt": 24,
+     "reserve": 512
+    },
+    "shared_tokens": 6497,
+    "prompt_tokens_seen": 7593
+   },
+   {
+    "n": 17,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5340,
+     "code": 625,
+     "prompt": 11,
+     "reserve": 512
+    },
+    "shared_tokens": 487,
+    "prompt_tokens_seen": 6499,
+    "evicted": {
+     "turns": [
+      8,
+      9,
+      10
+     ],
+     "tokens": 1719
+    }
+   },
+   {
+    "n": 18,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5976,
+     "code": 847,
+     "prompt": 12,
+     "reserve": 512
+    },
+    "shared_tokens": 6499,
+    "prompt_tokens_seen": 7364
+   },
+   {
+    "n": 19,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5231,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    },
+    "shared_tokens": 487,
+    "prompt_tokens_seen": 6810,
+    "evicted": {
+     "turns": [
+      11,
+      12
+     ],
+     "tokens": 1604
+    }
+   },
+   {
+    "n": 20,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5585,
+     "code": 930,
+     "prompt": 23,
+     "reserve": 512
+    },
+    "shared_tokens": 492,
+    "prompt_tokens_seen": 7059,
+    "evicted": {
+     "turns": [
+      13
+     ],
+     "tokens": 704
+    }
+   }
+  ],
+  "totals": {
+   "prompt_tokens": 120980,
+   "history": 94747,
+   "code": 16318,
+   "cuts": 8,
+   "turns_dropped": 13,
+   "tokens_freed": 10084,
+   "mean_prefix_reuse": 0.5202
+  }
+ }
+}

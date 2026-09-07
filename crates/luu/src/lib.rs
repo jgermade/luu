@@ -9,7 +9,7 @@ use std::time::Duration;
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
-use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
+use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Repeat};
 use agent_core::fragment;
 use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
@@ -308,6 +308,12 @@ enum Command {
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
 
+        /// Render a span once, in the oldest turn of the window that carries
+        /// it, instead of in every turn that selected it. Off, so that a run
+        /// made without it stays comparable to every recording on disk.
+        #[arg(long)]
+        repeat_once: bool,
+
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
         #[arg(long)]
@@ -461,6 +467,12 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// Render a span once, in the oldest turn of the window that carries
+        /// it, instead of in every turn that selected it. Off, so that a run
+        /// made without it stays comparable to every recording on disk.
+        #[arg(long)]
+        repeat_once: bool,
 
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
@@ -624,6 +636,12 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// Render a span once, in the oldest turn of the window that carries
+        /// it, instead of in every turn that selected it. Off, so that a run
+        /// made without it stays comparable to every recording on disk.
+        #[arg(long)]
+        repeat_once: bool,
 
         /// Pin the sampler's temperature, so two runs meant to be compared
         /// differ only by what they're testing. Unset leaves it to the
@@ -1057,6 +1075,16 @@ impl EvictionKind {
             Self::Turn => Eviction::Turn,
             Self::Block => Eviction::Block { low_water },
         }
+    }
+}
+
+/// `--repeat-once` as the policy it sets. A `bool` at the flag because that is
+/// what a flag is; a named rule everywhere below it, because `true` at a call
+/// site says nothing about which of the two rules is on.
+fn repeat(once: bool) -> Repeat {
+    match once {
+        true => Repeat::Once,
+        false => Repeat::Always,
     }
 }
 
@@ -1511,6 +1539,7 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        repeat_once,
         temperature,
         seed,
         map_tokens,
@@ -1573,7 +1602,8 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
+                .repeating(repeat(repeat_once)),
             counter,
             agency,
             temperature,
@@ -1608,6 +1638,7 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        repeat_once,
         temperature,
         seed,
         map_tokens,
@@ -1660,7 +1691,8 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
+                .repeating(repeat(repeat_once)),
             counter,
             agency,
             temperature,
@@ -1696,6 +1728,7 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        repeat_once,
         temperature,
         seed,
         map_tokens,
@@ -1742,7 +1775,8 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
-    let budget = Budget::new(context_limit, reserve, evict.policy(low_water));
+    let budget =
+        Budget::new(context_limit, reserve, evict.policy(low_water)).repeating(repeat(repeat_once));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -2333,9 +2367,8 @@ mod tests {
             for spec in fragments {
                 let spec = fragment::Spec::parse(spec);
                 let path = root.join(&spec.path);
-                let body = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                    panic!("{name}: `## fragment: {}` — {e}", spec.source)
-                });
+                let body = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("{name}: `## fragment: {}` — {e}", spec.source));
                 if let Some((start, end)) = spec.lines {
                     let had = body.lines().count();
                     assert!(
@@ -2370,7 +2403,10 @@ mod tests {
             }
         }
 
-        assert!(checked > 0, "the scripts named no paths at all — did the directives change?");
+        assert!(
+            checked > 0,
+            "the scripts named no paths at all — did the directives change?"
+        );
     }
 
     #[test]
