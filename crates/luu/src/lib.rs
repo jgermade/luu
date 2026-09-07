@@ -9,7 +9,7 @@ use std::time::Duration;
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
-use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment};
+use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Repeat};
 use agent_core::fragment;
 use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
@@ -308,6 +308,12 @@ enum Command {
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
 
+        /// Render a span once, in the oldest turn of the window that carries
+        /// it, instead of in every turn that selected it. Off, so that a run
+        /// made without it stays comparable to every recording on disk.
+        #[arg(long)]
+        repeat_once: bool,
+
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
         #[arg(long)]
@@ -461,6 +467,12 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// Render a span once, in the oldest turn of the window that carries
+        /// it, instead of in every turn that selected it. Off, so that a run
+        /// made without it stays comparable to every recording on disk.
+        #[arg(long)]
+        repeat_once: bool,
 
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
@@ -624,6 +636,12 @@ enum Command {
         /// being one.
         #[arg(long, default_value_t = 0.5)]
         low_water: f32,
+
+        /// Render a span once, in the oldest turn of the window that carries
+        /// it, instead of in every turn that selected it. Off, so that a run
+        /// made without it stays comparable to every recording on disk.
+        #[arg(long)]
+        repeat_once: bool,
 
         /// Pin the sampler's temperature, so two runs meant to be compared
         /// differ only by what they're testing. Unset leaves it to the
@@ -1057,6 +1075,16 @@ impl EvictionKind {
             Self::Turn => Eviction::Turn,
             Self::Block => Eviction::Block { low_water },
         }
+    }
+}
+
+/// `--repeat-once` as the policy it sets. A `bool` at the flag because that is
+/// what a flag is; a named rule everywhere below it, because `true` at a call
+/// site says nothing about which of the two rules is on.
+fn repeat(once: bool) -> Repeat {
+    match once {
+        true => Repeat::Once,
+        false => Repeat::Always,
     }
 }
 
@@ -1511,6 +1539,7 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        repeat_once,
         temperature,
         seed,
         map_tokens,
@@ -1573,7 +1602,8 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
+                .repeating(repeat(repeat_once)),
             counter,
             agency,
             temperature,
@@ -1608,6 +1638,7 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        repeat_once,
         temperature,
         seed,
         map_tokens,
@@ -1660,7 +1691,8 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water)),
+            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
+                .repeating(repeat(repeat_once)),
             counter,
             agency,
             temperature,
@@ -1696,6 +1728,7 @@ pub async fn run() -> Result<()> {
         reserve,
         evict,
         low_water,
+        repeat_once,
         temperature,
         seed,
         map_tokens,
@@ -1742,7 +1775,8 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
-    let budget = Budget::new(context_limit, reserve, evict.policy(low_water));
+    let budget =
+        Budget::new(context_limit, reserve, evict.policy(low_water)).repeating(repeat(repeat_once));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -2211,6 +2245,8 @@ pub async fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::*;
 
     #[test]
@@ -2286,6 +2322,90 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("needs a path")
+        );
+    }
+
+    /// Every path the scripts in `scripts/tasks/` name, checked against the
+    /// tree they name it in.
+    ///
+    /// `crates/agent-core/src/task.rs` was renamed to `job.rs` in `d70e6d9` and
+    /// both grounded scripts kept pointing at it — five of twenty prompts in
+    /// each, an error rather than a warning, for four days. Nothing said so
+    /// because nothing ran them, and the same failure mode (a corpus that rots
+    /// while the tree moves under it) had already produced a stale coverage
+    /// table once. The second occurrence is what makes it a test: this runs on
+    /// every commit, so a rename breaks the build rather than the next run.
+    ///
+    /// It parses with `parse_script`, not with a second reader — a guard that
+    /// reads the directives differently from the program guards a different
+    /// file.
+    #[test]
+    fn every_script_names_a_file_that_exists() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = root.join("scripts/tasks");
+        let mut checked = 0;
+
+        let mut scripts: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .expect("scripts/tasks")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "txt"))
+            .collect();
+        scripts.sort();
+        assert!(!scripts.is_empty(), "no scripts found in {}", dir.display());
+
+        for script in &scripts {
+            let name = script.file_name().unwrap().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(script).expect(&name);
+            let steps = parse_script(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
+
+            // A `## fragment:` carries a range, and a range past the end is an
+            // error at run time — so it is one here too, where it is cheap.
+            let fragments = steps.iter().filter_map(|step| match step {
+                Step::Fragment(spec) => Some(spec),
+                _ => None,
+            });
+            for spec in fragments {
+                let spec = fragment::Spec::parse(spec);
+                let path = root.join(&spec.path);
+                let body = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("{name}: `## fragment: {}` — {e}", spec.source));
+                if let Some((start, end)) = spec.lines {
+                    let had = body.lines().count();
+                    assert!(
+                        start <= had,
+                        "{name}: `## fragment: {}` starts past the end of a {had}-line file",
+                        spec.source,
+                    );
+                    assert!(
+                        end <= had,
+                        "{name}: `## fragment: {}` ends past the end of a {had}-line file",
+                        spec.source,
+                    );
+                }
+                checked += 1;
+            }
+
+            // `## file:` and `## write:` are the plan's, not the prompt's, and
+            // a plan naming a path the tree has lost is approved against
+            // nothing.
+            let plans = steps.iter().filter_map(|step| match step {
+                Step::OpenJob { plan, .. } => Some(plan),
+                _ => None,
+            });
+            for plan in plans {
+                for declared in plan.files.iter().chain(plan.writes.iter()) {
+                    assert!(
+                        root.join(declared).exists(),
+                        "{name}: the plan declares `{declared}`, which is not in the tree",
+                    );
+                    checked += 1;
+                }
+            }
+        }
+
+        assert!(
+            checked > 0,
+            "the scripts named no paths at all — did the directives change?"
         );
     }
 

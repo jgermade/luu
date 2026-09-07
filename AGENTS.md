@@ -410,6 +410,11 @@ from training. See `RECORD/2026-08-27.grounded-fold-probe.completed.md`.
 eviction), `--reserve` is what is held back for the answer, `--evict` is how the
 history gives way (`turn` drops the minimum, `block` cuts to `--low-water` and
 then holds still), and `--tokenizer` points at the model's `tokenizer.json`.
+`--repeat-once` renders a span in the **oldest** turn of the window that carries
+it instead of in every turn that selected it — off, because it changes numbers
+every recording on disk was made without, and oldest rather than newest because
+that is what leaves the block above the newest message byte-identical. See
+[`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md).
 A cut says so: the run prints `== evicted turn N` and the recording carries an
 `evicted` line naming the turns that left, what they were worth, who counted
 them and which policy did it. Over the same twenty prompts at 1024 tokens that

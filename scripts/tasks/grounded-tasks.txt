@@ -11,6 +11,9 @@
 # things that happen to name the same file here. The plan's `## file:` lines are
 # checked against the sandbox before the first turn runs; the fragment is read
 # through it at the point it appears.
+#
+# Both scripts named `crates/agent-core/src/task.rs` until 2026-09-07, five
+# prompts each, unrunnable since the rename in d70e6d9. See `corpus_paths.rs`.
 
 ## fragment: crates/agent-core/src/context.rs:1-15
 ## task: work out what the context module commits to
@@ -23,10 +26,10 @@ which record does it point at for the reasoning?
 name one change that would break byte-identical prefix reuse
 ## close
 
-## fragment: crates/agent-core/src/task.rs:1-18
+## fragment: crates/agent-core/src/job.rs:1-12
 ## task: work out what a task is in this codebase
 ## step: read the head of the module and answer from it
-## file: crates/agent-core/src/task.rs
+## file: crates/agent-core/src/job.rs
 what three jobs does one task boundary do?
 what does "closing is an event, not a mutation" mean here?
 what does reopening a closed task do to its turns?

@@ -8,6 +8,11 @@
 #
 # The plans are real and are checked against the sandbox before anything runs:
 # `## file:` and `## command:` have to be things the policy already grants.
+#
+# Two of them stopped being granted anything at all: the records they name got
+# a `.completed` suffix and these lines did not follow, so both plans declared
+# a path the tree does not have. Found by `every_script_names_a_file_that_exists`
+# on the day it was written, not by a run — which is the point of it.
 
 ## task: explain what the context manager does
 ## step: describe the buckets and the budget
@@ -21,7 +26,7 @@ which turn is dropped first when the window fills?
 
 ## task: explain eviction and the prompt cache
 ## step: describe what a prefix cache can reuse
-## file: RECORD/2026-08-27.prefix-reuse-and-block-eviction.md
+## file: RECORD/2026-08-27.prefix-reuse-and-block-eviction.completed.md
 why are turns evicted whole rather than in halves?
 what does the prompt cache actually reuse?
 how is the stable prefix kept byte-identical?
@@ -31,7 +36,7 @@ what does an unknown context window mean here?
 
 ## task: explain how the numbers are made comparable
 ## step: describe the counter, the record and the trace channel
-## file: RECORD/2026-08-27.context-manager.md
+## file: RECORD/2026-08-27.context-manager.completed.md
 why does every count carry its counter?
 what is the difference between our count and the backend's?
 how does the record make two runs comparable?

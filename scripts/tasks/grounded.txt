@@ -17,6 +17,11 @@
 # The line ranges are the head of each file and are checked by the run: a range
 # past the end is an error, never an empty fragment, because a prompt that
 # quietly lost its grounding measures the model's training instead.
+#
+# The ranges rotted once and nothing said so: `task.rs` was renamed to `job.rs`
+# in d70e6d9 and five of these twenty prompts have been an error ever since —
+# found in 2026-09-06.what-leaves-the-history, not by a run. `corpus_paths.rs`
+# now fails the build when a script names a file the tree does not have.
 
 ## fragment: crates/agent-core/src/context.rs:1-15
 which two commitments does this file open with?
@@ -25,7 +30,7 @@ what does "decide, then render" forbid doing to the prompt string?
 which record does it point at for the reasoning?
 name one change that would break byte-identical prefix reuse
 
-## fragment: crates/agent-core/src/task.rs:1-18
+## fragment: crates/agent-core/src/job.rs:1-12
 what three jobs does one task boundary do?
 what does "closing is an event, not a mutation" mean here?
 what does reopening a closed task do to its turns?

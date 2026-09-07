@@ -14,6 +14,8 @@
 //!
 //! See `RECORD/2026-08-27.context-manager.completed.md` for how both were arrived at.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
@@ -116,7 +118,14 @@ impl TokenCounter for ModelCounter {
 }
 
 /// A piece of code selected for one turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `path` is the spec as it was written — `src/lib.rs:12-40`, not a canonical
+/// path — so it carries the span, and two fragments are the same fragment when
+/// the path *and* the bytes match. The bytes are half of that on purpose: a
+/// file edited between two turns yields the same spec and different text, and
+/// `resolving-a-symbol` is the record of what happens when the second one is
+/// mistaken for the first.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Fragment {
     pub path: String,
     pub text: String,
@@ -187,6 +196,35 @@ pub enum Eviction {
     Block { low_water: f32 },
 }
 
+/// What a span already in the window costs the turn that selects it again.
+///
+/// Rule A of `RECORD/2026-09-06.what-leaves-the-history.WIP.md`, and the
+/// smaller half of it: the `history` bucket of a selecting run is ~90% quoted
+/// code by turn 20, and 9.2% of the code tokens in the precision corpus are a
+/// span some earlier turn already put in the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repeat {
+    /// Send it again, in every turn that selected it. Everything recorded
+    /// before this enum existed, and the default, because a run made under a
+    /// rule that did not exist is not comparable to one made under it.
+    Always,
+    /// Render it once, in the **oldest** turn of the window that carries it.
+    ///
+    /// Oldest and not newest, and that is the whole decision. The alternative
+    /// rewrites a turn that is already in the prefix every time a later turn
+    /// repeats one of its spans, which is rule B's cost and rule B's
+    /// measurement; this way only the newest message changes, which is the one
+    /// that changes anyway.
+    ///
+    /// The owner is chosen inside the window being rendered, never over the
+    /// whole session, so eviction cannot orphan a span: dropping the turn that
+    /// owned one hands it to the next turn that carries it, in the same call.
+    /// Choosing an owner that may already be below the floor is
+    /// `the-fold-fix-verified`'s failure with a different mechanism, and the
+    /// precision corpus offers it 22 chances.
+    Once,
+}
+
 /// The window, what is held back from it, and how it gives way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -196,6 +234,8 @@ pub struct Budget {
     /// Room for the answer, set aside before any history is considered.
     pub reserve: u32,
     pub eviction: Eviction,
+    /// What a span already visible in the window costs to select again.
+    pub repeat: Repeat,
 }
 
 impl Budget {
@@ -205,7 +245,14 @@ impl Budget {
             limit: (limit > 0).then_some(limit),
             reserve,
             eviction,
+            repeat: Repeat::Always,
         }
+    }
+
+    /// Off by default and turned on here, so that every recording made before
+    /// it stays readable as the arm it was.
+    pub fn repeating(self, repeat: Repeat) -> Self {
+        Self { repeat, ..self }
     }
 }
 
@@ -702,8 +749,15 @@ impl Context {
     /// summary it folds to is the whole job's. That is deliberate and it is a
     /// cost: see `RECORD/2026-08-30.tasks-in-code.completed.md`.
     fn items(&self) -> Vec<Item> {
+        self.items_from(self.floor)
+    }
+
+    /// The same, from a floor that is not (yet) the one in force — the
+    /// eviction report needs the window as it stood before the cut, and that
+    /// floor is gone by the time there is anything to report.
+    fn items_from(&self, floor: usize) -> Vec<Item> {
         let mut items = Vec::new();
-        let mut index = self.floor;
+        let mut index = floor;
         while index < self.turns.len() {
             let folded = self.turns[index]
                 .job
@@ -771,6 +825,15 @@ impl Context {
         // not additive across a boundary, so this can differ by a token or two
         // from counting the concatenation; that is the same order as the
         // template overhead we already accept and report.
+        //
+        // Under `Repeat::Once` this is the whole bucket and not what will be
+        // sent: what the turn gives up to the history depends on where the
+        // floor lands, and the floor is decided below using this number. The
+        // fixed point is not worth solving, because the direction is the safe
+        // one — the budget the cut is computed against is the same one it would
+        // have had without the rule, so the cut is never deeper than the
+        // default's and the prompt that goes out is never bigger than the one
+        // it was sized for. The saving that pays is the history's, below.
         let code_tokens = counter.count(&fragments_text(code_context));
         let prompt_tokens = counter.count(prompt);
 
@@ -789,13 +852,13 @@ impl Context {
                 + budget.reserve;
             let available = limit.saturating_sub(fixed);
 
-            if self.fits_from(available, counter) > self.floor {
-                // Taken before the floor moves: these are the items the cut
-                // chooses from, and the ones it drops are unreachable
-                // afterwards — which is the whole reason this has to be
-                // reported from in here rather than reconstructed outside.
+            if self.fits_from(available, counter, budget.repeat) > self.floor {
+                // Taken before the floor moves: this is the window the cut
+                // chooses from, and what it drops is unreachable afterwards —
+                // which is the whole reason this has to be reported from in
+                // here rather than reconstructed outside.
                 let before = self.floor;
-                let items = self.items();
+                let held = self.window_tokens(before, counter, budget.repeat);
 
                 // It no longer fits. How deep the cut goes is the whole
                 // difference between the two policies.
@@ -805,20 +868,24 @@ impl Context {
                         (available as f32 * low_water.clamp(0.0, 1.0)) as u32
                     }
                 };
-                self.floor = self.fits_from(target, counter);
+                self.floor = self.fits_from(target, counter, budget.repeat);
 
-                // The floor only ever lands on an item boundary, so summing the
-                // items below it is exact rather than a share of one.
+                // What the cut freed, and not what the dropped turns were
+                // counted at. Under `Repeat::Once` those are two different
+                // numbers: a span the oldest turn owned passes to the next turn
+                // that carries it rather than leaving with it, so summing the
+                // items below the floor would report a saving the window did
+                // not get. The difference of two windows is the saving.
                 eviction = (self.floor > before).then(|| Evicted {
                     turns: self.turns[before..self.floor]
                         .iter()
                         .map(|turn| turn.id)
                         .collect(),
-                    tokens: items
-                        .iter()
-                        .filter(|item| item.first() < self.floor)
-                        .map(|item| self.item_tokens(item, counter))
-                        .sum(),
+                    tokens: held.saturating_sub(self.window_tokens(
+                        self.floor,
+                        counter,
+                        budget.repeat,
+                    )),
                     counter: counter.id(),
                     policy: budget.eviction,
                 });
@@ -833,13 +900,25 @@ impl Context {
         let mut summary_tokens = 0;
         let mut messages = Vec::with_capacity(items.len() * 2 + 2);
         messages.push(Message::system(self.system_message()));
+        // Oldest first, so the first turn that carries a span is the one that
+        // renders it — and the turn being asked, which is rendered last, is the
+        // only one that can lose a span to the history. That direction is what
+        // keeps the prefix: the block above the newest message is byte-identical
+        // to the one the previous call sent, exactly as it was before this rule.
+        let mut shown: HashSet<&Fragment> = HashSet::new();
         for item in &items {
             let tokens = self.item_tokens(item, counter);
             match item {
                 Item::Turn(index) => {
-                    history_tokens += tokens;
                     let turn = &self.turns[*index];
-                    messages.push(Message::user(user_text(&turn.code_context, &turn.prompt)));
+                    let (kept, dropped) =
+                        split_shown(&turn.code_context, &mut shown, budget.repeat);
+                    // The stored count, less what this render will not send.
+                    // Subtracted rather than recounted so that a turn repeating
+                    // nothing costs exactly what it has always cost, and every
+                    // recording made before `Repeat` reads unchanged.
+                    history_tokens += tokens.saturating_sub(fragments_tokens(&dropped, counter));
+                    messages.push(Message::user(user_text(kept, &turn.prompt)));
                     // Each step is a real exchange, so the alternation holds and
                     // no chat template has to decide what two user messages in a
                     // row mean.
@@ -867,7 +946,16 @@ impl Context {
                 }
             }
         }
-        messages.push(Message::user(user_text(code_context, prompt)));
+        // The turn being asked, last and youngest: what the history above it is
+        // already showing, it does not show again. `code_tokens` above was
+        // counted before the floor moved, so it is the whole bucket; this is
+        // what of it is actually sent.
+        let (kept, _) = split_shown(code_context, &mut shown, budget.repeat);
+        let code_tokens = match kept.len() == code_context.len() {
+            true => code_tokens,
+            false => counter.count(&fragments_text(kept.iter().copied())),
+        };
+        messages.push(Message::user(user_text(kept, prompt)));
 
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
@@ -904,18 +992,64 @@ impl Context {
     /// Items, not turns: a folded task is kept or dropped whole, because half a
     /// summary is not a summary of half a task. So the floor only ever lands on
     /// an item boundary.
-    fn fits_from(&self, available: u32, counter: &dyn TokenCounter) -> usize {
-        let mut left = available;
+    ///
+    /// Under [`Repeat::Once`] an item does not have a cost of its own: a turn
+    /// added here becomes the **oldest** of the candidate window and takes
+    /// ownership of its spans from whatever younger turn was rendering them, so
+    /// what it adds is its own tokens less the copies it just made redundant.
+    /// The two always come in pairs — a copy taken over is a copy this turn
+    /// already carries — so the running total never goes down and the break is
+    /// still a break.
+    fn fits_from(&self, available: u32, counter: &dyn TokenCounter, repeat: Repeat) -> usize {
+        let available = i64::from(available);
+        let mut spent: i64 = 0;
         let mut start = self.turns.len();
+        // A fragment in here is one some turn in the candidate window is
+        // already rendering. Folded turns never enter it: a fold sends its
+        // summary and not its turns, so a span inside one is not on the screen
+        // and cannot stand in for anything.
+        let mut rendered: HashSet<&Fragment> = HashSet::new();
         for item in self.items().iter().rev() {
-            let tokens = self.item_tokens(item, counter);
-            if tokens > left {
+            let mut tokens = i64::from(self.item_tokens(item, counter));
+            if let (Repeat::Once, Item::Turn(index)) = (repeat, item) {
+                for fragment in &self.turns[*index].code_context {
+                    if !rendered.insert(fragment) {
+                        tokens -= i64::from(fragment_tokens(fragment, counter));
+                    }
+                }
+            }
+            if spent + tokens > available {
                 break;
             }
-            left -= tokens;
+            spent += tokens;
             start = item.first();
         }
         start
+    }
+
+    /// What the window starting at `floor` costs, under the repeat rule in
+    /// force.
+    ///
+    /// Forward, because ownership is oldest-first and a forward walk is where
+    /// that is legible; [`Context::fits_from`] reads the same rule from the
+    /// other end because it has to stop early. The two agree on the total and
+    /// disagree about which turn is charged for a shared span, which is the
+    /// difference between deciding and reporting.
+    fn window_tokens(&self, floor: usize, counter: &dyn TokenCounter, repeat: Repeat) -> u32 {
+        let mut total: i64 = 0;
+        let mut shown: HashSet<&Fragment> = HashSet::new();
+        for item in &self.items_from(floor) {
+            let mut tokens = i64::from(self.item_tokens(item, counter));
+            if let (Repeat::Once, Item::Turn(index)) = (repeat, item) {
+                for fragment in &self.turns[*index].code_context {
+                    if !shown.insert(fragment) {
+                        tokens -= i64::from(fragment_tokens(fragment, counter));
+                    }
+                }
+            }
+            total += tokens;
+        }
+        total.max(0) as u32
     }
 
     /// The stored count, unless it was produced by a different counter — in
@@ -940,12 +1074,46 @@ fn steps_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
         .sum()
 }
 
-/// The fragments alone, as they are rendered inside a user message.
-fn fragments_text(code_context: &[Fragment]) -> String {
-    code_context
+/// One fragment, as it is rendered inside a user message.
+fn fragment_text(fragment: &Fragment) -> String {
+    format!("// {}\n{}\n\n", fragment.path, fragment.text)
+}
+
+/// What one fragment costs where it is rendered.
+fn fragment_tokens(fragment: &Fragment, counter: &dyn TokenCounter) -> u32 {
+    counter.count(&fragment_text(fragment))
+}
+
+fn fragments_tokens(fragments: &[&Fragment], counter: &dyn TokenCounter) -> u32 {
+    fragments
         .iter()
-        .map(|fragment| format!("// {}\n{}\n\n", fragment.path, fragment.text))
-        .collect()
+        .map(|fragment| fragment_tokens(fragment, counter))
+        .sum()
+}
+
+/// What this turn renders, and what a turn already rendered in this same call
+/// is showing for it.
+///
+/// `shown` carries across the whole render, which is the invariant the rule
+/// rests on: a span is only ever skipped because something *else in this
+/// prompt* has it. Under [`Repeat::Always`] nothing is recorded and nothing is
+/// skipped, so a run made without the rule cannot be quietly changed by it.
+fn split_shown<'a>(
+    code_context: &'a [Fragment],
+    shown: &mut HashSet<&'a Fragment>,
+    repeat: Repeat,
+) -> (Vec<&'a Fragment>, Vec<&'a Fragment>) {
+    match repeat {
+        Repeat::Always => (code_context.iter().collect(), Vec::new()),
+        Repeat::Once => code_context
+            .iter()
+            .partition(|fragment| shown.insert(fragment)),
+    }
+}
+
+/// The fragments alone, as they are rendered inside a user message.
+fn fragments_text<'a>(code_context: impl IntoIterator<Item = &'a Fragment>) -> String {
+    code_context.into_iter().map(fragment_text).collect()
 }
 
 /// The user half of a turn: its code, then what was asked.
@@ -953,7 +1121,7 @@ fn fragments_text(code_context: &[Fragment]) -> String {
 /// Fused into one message rather than sent as two, because a standalone
 /// context message leaves two `user` messages back to back and chat templates
 /// disagree about what that means.
-fn user_text(code_context: &[Fragment], prompt: &str) -> String {
+fn user_text<'a>(code_context: impl IntoIterator<Item = &'a Fragment>, prompt: &str) -> String {
     let mut text = fragments_text(code_context);
     text.push_str(prompt);
     text
@@ -1669,6 +1837,315 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Eviction::Turn).unwrap()["policy"],
             "turn"
+        );
+    }
+
+    // ---- Rule A: what a span already in the window costs to select again ----
+    //
+    // `RECORD/2026-09-06.what-leaves-the-history.WIP.md`. The corpus these were
+    // written against is `scripts/tasks/grounded.txt`, whose consecutive turns
+    // select overlapping spans; these are the mechanism underneath it.
+
+    fn fragment(path: &str, text: &str) -> Fragment {
+        Fragment {
+            path: path.into(),
+            text: text.into(),
+        }
+    }
+
+    /// A context whose turns each carry the fragments they were given.
+    fn context_carrying(spans: &[&[Fragment]], counter: &dyn TokenCounter) -> Context {
+        let mut context = Context::new("system prompt here");
+        for (n, code) in spans.iter().enumerate() {
+            context.push_turn(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                code.to_vec(),
+                counter,
+            );
+        }
+        context
+    }
+
+    fn user_messages(selection: &Selection) -> Vec<&String> {
+        selection
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .map(|m| &m.content)
+            .collect()
+    }
+
+    fn occurrences(selection: &Selection, needle: &str) -> usize {
+        selection
+            .messages
+            .iter()
+            .filter(|m| m.content.contains(needle))
+            .count()
+    }
+
+    #[test]
+    fn a_span_two_turns_carry_is_rendered_by_the_older_one() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&shared), std::slice::from_ref(&shared)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Once),
+            &counter,
+        );
+
+        assert_eq!(occurrences(&selection, "src/lib.rs:1-4"), 1);
+        let users = user_messages(&selection);
+        assert!(
+            users[0].contains("src/lib.rs:1-4"),
+            "the oldest turn keeps it, so the block above the newest message \
+             does not move when a later turn selects it again: {users:?}",
+        );
+        assert!(!users[1].contains("src/lib.rs:1-4"));
+    }
+
+    #[test]
+    fn the_default_sends_it_in_every_turn_that_selected_it() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&shared), std::slice::from_ref(&shared)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert_eq!(
+            occurrences(&selection, "src/lib.rs:1-4"),
+            2,
+            "every recording on disk was made under this arm and must stay readable as it",
+        );
+    }
+
+    #[test]
+    fn the_turn_being_asked_is_the_one_that_gives_the_span_up() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(&[std::slice::from_ref(&shared)], &counter);
+
+        let selection = context.select(
+            "now this",
+            std::slice::from_ref(&shared),
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Once),
+            &counter,
+        );
+
+        assert_eq!(occurrences(&selection, "src/lib.rs:1-4"), 1);
+        let last = selection.messages.last().unwrap();
+        assert_eq!(
+            last.content, "now this",
+            "the youngest message is the one that changes anyway",
+        );
+        let code = selection.buckets.iter().find(|b| b.name == "code").unwrap();
+        assert_eq!(code.tokens, 0, "the bucket has to say what was sent");
+    }
+
+    /// The failure this rule is one bad decision away from, and the reason the
+    /// owner is chosen inside the window rather than over the session:
+    /// `the-fold-fix-verified`, with a different mechanism.
+    #[test]
+    fn evicting_the_turn_that_owned_a_span_hands_it_to_the_next_one() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(&[std::slice::from_ref(&shared); 3], &counter);
+        let repeat = Repeat::Once;
+
+        // Wide enough for everything: turn 1 owns it.
+        let first = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(repeat),
+            &counter,
+        );
+        assert!(user_messages(&first)[0].contains("fn main () {}"));
+
+        // Narrow enough to lose turn 1. The span must not go with it.
+        let second = context.select(
+            "now this",
+            &[],
+            Budget::new(26, 0, Eviction::Turn).repeating(repeat),
+            &counter,
+        );
+        assert!(second.evicted > 0, "the point of the case");
+        assert_eq!(
+            occurrences(&second, "src/lib.rs:1-4"),
+            1,
+            "still exactly once — and now in a turn that is still here",
+        );
+        assert!(
+            user_messages(&second)[0].contains("fn main () {}"),
+            "a model reasoning over code it can no longer see is the failure \
+             this whole rule is built around",
+        );
+    }
+
+    #[test]
+    fn a_span_whose_bytes_changed_is_not_the_span_it_replaces() {
+        let counter = WordCounter::default();
+        let mut context = context_carrying(
+            &[&[fragment("src/lib.rs:1-4", "fn main () {}")][..]],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[fragment("src/lib.rs:1-4", "fn main () { work () }")],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Once),
+            &counter,
+        );
+
+        assert_eq!(
+            occurrences(&selection, "src/lib.rs:1-4"),
+            2,
+            "the same spec after an edit is a different claim — see \
+             `resolving-a-symbol`, which is the live bug this would reintroduce",
+        );
+    }
+
+    #[test]
+    fn a_span_inside_a_folded_job_does_not_stand_in_for_one_on_the_screen() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = Context::new("system prompt here");
+        let job = context.propose_job("read it", Plan::default());
+        context.approve_job(job, ApprovedBy::Operator);
+        context.push_turn(1, "look at this", "looked", vec![shared.clone()], &counter);
+        context.close_job_by(job, &counter, ClosedBy::User);
+        context.push_turn(2, "and again", "again", vec![shared.clone()], &counter);
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Once),
+            &counter,
+        );
+
+        assert!(
+            user_messages(&selection)
+                .iter()
+                .any(|text| text.contains("fn main () {}")),
+            "a folded job sends its summary, not its turns: nothing inside one \
+             is on the screen to stand in for anything — {:?}",
+            user_messages(&selection),
+        );
+    }
+
+    /// The buckets are what the panel plots and what a recording stores. A rule
+    /// that drops bytes from the prompt without moving the bar would make every
+    /// number after it a fiction.
+    #[test]
+    fn the_buckets_describe_what_was_actually_sent() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&shared), std::slice::from_ref(&shared)],
+            &counter,
+        );
+
+        let with = context.select(
+            "now this",
+            std::slice::from_ref(&shared),
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Once),
+            &counter,
+        );
+        let bucket = |selection: &Selection, name: &str| {
+            selection
+                .buckets
+                .iter()
+                .find(|b| b.name == name)
+                .unwrap()
+                .tokens
+        };
+
+        // The word counter is additive across a concatenation, so this is an
+        // equality here and would be within a token or two under a real
+        // tokenizer — the gap the `code`/`prompt` split already carries. What
+        // it pins is the bookkeeping: bytes dropped from the prompt are dropped
+        // from the bar.
+        let rendered: u32 = with
+            .messages
+            .iter()
+            .map(|m| counter.count(&m.content))
+            .sum();
+        let plotted = bucket(&with, "system")
+            + bucket(&with, "tools")
+            + bucket(&with, "map")
+            + bucket(&with, "summaries")
+            + bucket(&with, "history")
+            + bucket(&with, "code")
+            + bucket(&with, "prompt");
+        assert_eq!(rendered, plotted, "{:?}", with.buckets);
+    }
+
+    /// The guarantee that makes the rule safe to turn on: the cut is computed
+    /// against a history that costs less, so it is never deeper than the one
+    /// the same budget would have made without it.
+    #[test]
+    fn the_rule_never_evicts_more_than_the_default_would() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let carried = [std::slice::from_ref(&shared); 4];
+        let mut kept_more = 0;
+
+        for limit in 20..90 {
+            let budget = Budget::new(limit, 0, Eviction::Turn);
+            let mut plain = context_carrying(&carried, &counter);
+            let mut once = context_carrying(&carried, &counter);
+
+            let plain = plain.select("now this", &[], budget, &counter);
+            let once = once.select("now this", &[], budget.repeating(Repeat::Once), &counter);
+
+            assert!(
+                once.evicted <= plain.evicted,
+                "at limit {limit}: {} evicted with the rule against {} without it",
+                once.evicted,
+                plain.evicted,
+            );
+            kept_more += usize::from(once.evicted < plain.evicted);
+        }
+
+        assert!(
+            kept_more > 0,
+            "never worse is only half of it — a range of windows where the rule \
+             changes nothing is a range that proves nothing",
+        );
+    }
+
+    /// Rule A's whole claim against rule B: the history block does not move, so
+    /// a prefix cache reuses everything above the newest message.
+    #[test]
+    fn a_later_repeat_does_not_rewrite_the_block_above_it() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(&[std::slice::from_ref(&shared)], &counter);
+        let budget = Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Once);
+
+        let before = context.select("first", &[], budget, &counter);
+        // The next turn selects the same span, and answers.
+        context.push_turn(2, "second", "answered", vec![shared.clone()], &counter);
+        let after = context.select("third", &[], budget, &counter);
+
+        assert_eq!(
+            before.messages[..before.messages.len() - 1],
+            after.messages[..before.messages.len() - 1],
+            "everything the previous call sent above its own prompt is byte-identical",
         );
     }
 }

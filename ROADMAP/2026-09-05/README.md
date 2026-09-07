@@ -32,7 +32,7 @@ struck through at the top of it.
 | 3 | **Fleet measurement across target machines** — the hardware floor (6 GB card), native Linux confinement without a VM, and the BC-250's 14B ceiling | hardware and a hand on it, nothing else | [`machines.md`](machines.md) |
 | 4 | **A grammar for tool calls** — the text parse reads the block correctly; what fails is that generation does not stop. **Narrowed on 2026-09-06: tool calls only, the plan block stays as it is** | nothing — `llama-server` is reachable through the OpenAI backend | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
 | 5 | ~**A clock where there is no seam** — the deadline moved up into the agent loop, the in-process tools stopped blocking inside their own future, and a worker restart is counted~ | nothing | [`a-clock-where-there-is-no-seam`](../../RECORD/2026-09-05.a-clock-where-there-is-no-seam.completed.md) |
-| 6 | **What leaves the history** — a `cat` capped at 8 KiB and a selected fragment are the same object to the window, so this now covers both. **By turn 20 of the precision run, ~90% of the history block is quoted code** | nothing — the run that measures it is already on disk | [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.WIP.md) |
+| 6 | **What leaves the history** — a `cat` capped at 8 KiB and a selected fragment are the same object to the window, so this now covers both. **By turn 20 of the precision run, ~90% of the history block is quoted code**. **Half landed on 2026-09-07: ~~rule A, *do not re-inject*~~ is built and off by default (`--repeat-once`) — the `code` bucket falls 19.5% on twenty grounded turns, cuts go 12 → 8 and prefix reuse 34% → 52%. Rule B, *prune behind*, is where the 91% lives and is not built** | nothing | [`a-span-is-rendered-once`](../../RECORD/2026-09-07.a-span-is-rendered-once.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.WIP.md) |
 | 7 | ~**`openat2(RESOLVE_BENEATH)` for the in-process tools** — the kernel refuses the escape during resolution, and the verdict says so it was the kernel~ | nothing | [`beneath-the-root`](../../RECORD/2026-09-05.beneath-the-root.completed.md) |
 | 8 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide | nothing | `luu-design.md` §Open questions |
 | 10 | ~**Precision, with a model in the loop** — coverage says the right file was in the prompt; nothing says the model used it. The same 38 questions, one flag apart, scored against a 7B~ **33 of 38 against the baseline's 0; 91% precision on what the selector held. The block was wrong: machine 1 of `machines.md` is the M1 Pro this ran on** | nothing — it never needed the hardware it was ordered behind | [`does-the-model-read-it`](../../RECORD/2026-09-06.does-the-model-read-it.completed.md) |
@@ -53,7 +53,8 @@ gantt
     Beneath the root (openat2)             :done, toctou2, 2026-09-05, 1d
     section Next, and code-shaped
     A GBNF grammar for tool calls          :gbnf, 2026-09-06, 4d
-    Active pruning of tool results         :prune, after gbnf, 4d
+    Do not re-inject (--repeat-once)       :done, reinject, 2026-09-07, 1d
+    Prune behind (rule B)                  :prune, after gbnf, 4d
     Naming a provider (config.toml)        :done, prov, 2026-09-07, 1d
     Configuring from the browser (modal)   :done, modal, 2026-09-07, 1d
     openat2(RESOLVE_BENEATH)               :done, toctou, 2026-09-05, 1d
@@ -126,6 +127,21 @@ gantt
   index closes nothing that is left. **`--select-tokens` was the only flag
   affected, and it is off by default, so no recording on disk is invalidated.**
 
+- **Item 6 landed the half that could not break the prefix, and the corpus it
+  needed was broken.** Rule A was ordered first because it cannot rewrite the
+  cached block, and building it moved the rule: skipping a span in the *newest*
+  bucket saves nothing, because a turn stores what it selected and renders it
+  as history on the next call. The rule is the render's, over the whole window,
+  and its direction is load-bearing — the **oldest** turn keeps the span, so the
+  saving shows in `code` rather than in `history` and ownership is only ever
+  handed forward. The measurement was blocked on a corpus that had been dead
+  for four days: both grounded scripts pointed at `crates/agent-core/src/task.rs`,
+  renamed in `d70e6d9`, and five of twenty prompts in each had been an error
+  since. Writing the test that would have caught it found a second one — two
+  plans in `steady-state-tasks.txt` declaring records that had gained a
+  `.completed` suffix. That is the **third** time a stale artefact has been
+  found by reading rather than by running, after the coverage table and the
+  startup walk, and it is now a test.
 - **Items 4 and 6 were argued on 2026-09-06, and both came back changed.** A
   roadmap entry is a link to an argument, and until that day these two linked to
   the design's open questions instead — the honest way to say *ordered but not
