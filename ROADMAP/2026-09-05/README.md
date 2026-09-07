@@ -39,6 +39,7 @@ struck through at the top of it.
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 | 11 | ~**Naming a provider** — where a model lives, written down once: `[provider.<name>]` in the state directory's `config.toml`, `-p <name>` and `-m <model>`, and a `default` profile that will not load pointing off the machine without `remote = true`~ **answered `local-first`'s first open question with *not `luu.toml`*, and narrowed the declaration to the default profile alone the same day it was written: `-p` is the destination being typed** | nothing | [`naming-a-provider`](../../RECORD/2026-09-07.naming-a-provider.completed.md) |
 | 12 | ~**Configuring from the browser** — a modal with what this server resolved (read-only, including the window caveat nobody in a browser ever saw) and the providers (editable, **loopback only**). ~ **corrected item 11's closing sentence — editing the file is not a picker — and inverted its own: the browser never classifies a URL, the loader refuses the write and names the host to type back, so the rule has one implementation** | nothing | [`configuring-from-the-browser`](../../RECORD/2026-09-07.configuring-from-the-browser.completed.md) |
+| 13 | **Resolving a symbol** — the map and the selector hand out `path:START-END`, and a captured range goes stale silently on any edit above it. An index keyed on `(path, qualified name)`, re-resolved at the moment of acting. **Ordered last on purpose: the corpus on disk has zero `edit_file` calls, so a write-shaped run comes before any code** | a write-shaped corpus; nothing in the tree | [`resolving-a-symbol`](../../RECORD/2026-09-07.resolving-a-symbol.WIP.md) |
 
 ```mermaid
 gantt
@@ -57,6 +58,7 @@ gantt
     Configuring from the browser (modal)   :done, modal, 2026-09-07, 1d
     openat2(RESOLVE_BENEATH)               :done, toctou, 2026-09-05, 1d
     Enforcement per job                    :enf, 2026-09-06, 2d
+    Resolving a symbol (write-shaped run)  :sym, after enf, 3d
     section Waiting on hardware
     Fleet measurements across machines     :crit, bench, 2026-09-05, 10d
     Precision, with a model in the loop    :done, prec, 2026-09-06, 1d
@@ -111,6 +113,16 @@ gantt
   it code-shaped is the second half: a named destination is commitment 3
   (*nothing leaves the machine without the destination having been typed*)
   weakened, and the file has to be built to hold what is left of it.
+- **Item 13 is ordered behind a run it does not have.** It is the second entry
+  this revision did not order, and it arrives with the same shape item 10 had
+  before it was measured: a mechanism that sounds right and a corpus that cannot
+  score it. The 38 questions this repository trusts are read-shaped and contain
+  **no `edit_file` call at all**, so the failure the index removes — a stale
+  range answering with the wrong lines rather than failing — has never been
+  recorded here. The write-shaped run is therefore the item, and the index is
+  what the run either motivates or kills. It is also worth more than this item:
+  nothing scores editing today.
+
 - **Items 4 and 6 were argued on 2026-09-06, and both came back changed.** A
   roadmap entry is a link to an argument, and until that day these two linked to
   the design's open questions instead — the honest way to say *ordered but not
