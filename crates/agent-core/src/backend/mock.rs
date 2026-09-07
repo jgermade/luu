@@ -60,6 +60,11 @@ impl Backend for Mock {
         "mock"
     }
 
+    /// The one name it answers to, so a picker over a mock profile is not empty.
+    fn models(&self) -> super::BackendFuture<'_, Vec<String>> {
+        Box::pin(async { Ok(vec!["mock".to_string()]) })
+    }
+
     fn stream(&self, _request: CompletionRequest) -> ChunkStream<'_> {
         let reply = {
             let mut replies = self.replies.lock().expect("no panic holds this lock");

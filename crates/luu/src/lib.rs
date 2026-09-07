@@ -1133,21 +1133,41 @@ fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resol
         eprintln!("{line}");
     }
 
-    let backend: Box<dyn Backend> = match resolved.kind {
-        BackendKind::Mock => Box::new(
-            match args.mock_replies.is_empty() {
-                true => Mock::default(),
-                false => Mock::replies(args.mock_replies),
-            }
-            .delay(Duration::from_millis(args.mock_delay_ms)),
-        ),
+    let mock = match args.mock_replies.is_empty() {
+        true => Mock::default(),
+        false => Mock::replies(args.mock_replies),
+    }
+    .delay(Duration::from_millis(args.mock_delay_ms));
+    let backend = build_backend(&resolved, Some(mock), true)?;
+    // The mock's model name is the mock's, and it is written back here so
+    // every reader of the resolution — the record header, the page — sees the
+    // same string the turn will use.
+    let mut resolved = resolved;
+    resolved.model = model_for(backend.as_ref(), resolved.model);
+    Ok((backend, resolved))
+}
+
+/// One resolution, built into the backend that will answer it.
+///
+/// Split out of [`destination`] because it is no longer only the CLI that
+/// builds one: a session that names a provider builds another while the server
+/// is running (`serve::destination_for`). What that caller does *not* have is a
+/// terminal — hence `announce`, which is the difference between a run
+/// starting and a request being served.
+pub(crate) fn build_backend(
+    resolved: &provider::Resolved,
+    mock: Option<Mock>,
+    announce: bool,
+) -> Result<Box<dyn Backend>> {
+    Ok(match resolved.kind {
+        BackendKind::Mock => Box::new(mock.unwrap_or_default()),
         BackendKind::Ollama => Box::new(Ollama::new(&resolved.url)),
         BackendKind::Openai => {
             // Once, before anything is measured: this API has no field for the
             // window, so a run that budgets 8192 against a server started with
             // 4096 can only be told apart afterwards, by the prompt_tokens each
             // turn reports. Saying nothing here is how that becomes invisible.
-            if let Some(caveat) = OpenAi::window_caveat(Some(resolved.context_limit)) {
+            if announce && let Some(caveat) = OpenAi::window_caveat(Some(resolved.context_limit)) {
                 eprintln!("note: {caveat}");
             }
             let mut backend = OpenAi::new(&resolved.url);
@@ -1161,18 +1181,18 @@ fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resol
             }
             Box::new(backend)
         }
-    };
-    // The mock's model name is the mock's, and it is written back here so
-    // every reader of the resolution — the record header, the page — sees the
-    // same string the turn will use.
-    let mut resolved = resolved;
-    resolved.model = model_for(backend.as_ref(), resolved.model);
-    Ok((backend, resolved))
+    })
+}
+
+/// What a server building a destination mid-run wants: no fixtures, no delay,
+/// and nothing printed to a terminal nobody is watching.
+pub(crate) fn backend_for(resolved: &provider::Resolved) -> Result<Box<dyn Backend>> {
+    build_backend(resolved, None, false)
 }
 
 /// The mock ignores the model name; passing the Ollama default through would
 /// just put a model nobody loaded into the record file's header.
-fn model_for(backend: &dyn Backend, model: String) -> String {
+pub(crate) fn model_for(backend: &dyn Backend, model: String) -> String {
     match backend.name() {
         "mock" => "mock".to_string(),
         _ => model,
@@ -1605,6 +1625,7 @@ pub async fn run() -> Result<()> {
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
                 .repeating(repeat(repeat_once)),
             counter,
+            tokenizer,
             agency,
             temperature,
             seed,
@@ -1694,6 +1715,7 @@ pub async fn run() -> Result<()> {
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
                 .repeating(repeat(repeat_once)),
             counter,
+            tokenizer,
             agency,
             temperature,
             seed,

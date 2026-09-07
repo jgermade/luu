@@ -43,6 +43,7 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
         record: None,
         budget,
         counter,
+        tokenizer: None,
         agency,
         temperature: None,
         seed: None,

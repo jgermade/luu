@@ -22,6 +22,7 @@ struck through at the top of it.
 | **Selection at the gate** (2026-09-06) | Not an item on this revision, because the gap was only measurable once precision was: the mechanism that scores **33 of 38** existed in `chat` alone, while `serve` and `stdio` — the surfaces a person and an editor work in — ran on the map, which scores **8**. Both now take `--select-tokens`, the tree is walked once at startup beside the map, and the selection is read through the **live job's** sandbox, so an approved plan narrows what may be chosen exactly as it narrows what may be opened. End to end: the planning call selects over the whole tree at 2 678 prompt tokens, the model's plan grants one file, the approved turn selects at 797 — which is the narrowing, and is also a new cost, because the plan bounding the selector is one a 7B wrote — [`selection-at-the-gate`](../../RECORD/2026-09-06.selection-at-the-gate.completed.md) |
 | **Does the model read it?** (2026-09-06) | Item 10, which this revision ordered behind hardware it never needed. The same 38 questions one flag apart against `qwen2.5-coder:7b`: **0 of 38 with nothing in the prompt, 8 with the map, 33 with the selection**, and 91% precision on the 33 targets the selector held. All three predictions the protocol filed were falsified, the useful one being that position inside the bucket does not matter — held-but-not-first scores 13/14 against first place's 17/19. The cost is the finding nobody was looking for: fragments stay in history, so the arm evicted 31 times, prefix reuse fell from 93% to 17.7%, and it took 11.6× the wall clock — [`does-the-model-read-it`](../../RECORD/2026-09-06.does-the-model-read-it.completed.md) |
 | **Choosing fragments** | The `code` bucket, zero in every recording this repository has ever made, now fills itself with what the turn's own text points at. At 1024 tokens a path-ordered map holds the answer to 3 of the corpus's 38 questions and a selection holds 32. The reference graph's one-hop expansion was measured and **lost a third time**, so it ships off — [`choosing-fragments`](../../RECORD/2026-09-05.choosing-fragments.completed.md) |
+| **The first run has no provider** (2026-09-07) | Item 12 left the running server untouched by the modal, which on a fresh machine means configuring from the browser and then going back to a terminal to restart. Three pieces: the server says it has nowhere to send (`DestinationFrom`, so `--backend mock` typed is not the same fact as the mock a run fell into) and the page opens on the editor; `Backend::models` lists what Ollama and an OpenAI-compatible server actually serve, empty-with-a-reason when the provider is off; and `POST /api/sessions {provider, model}` swaps backend, model, budget and counter **together**, before the new session's header is written. The model offered is the last used with that profile, out of a new `provider` column in the store — [`the-first-run-has-no-provider`](../../RECORD/2026-09-07.the-first-run-has-no-provider.completed.md) |
 
 ## The order
 
@@ -39,6 +40,7 @@ struck through at the top of it.
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 | 11 | ~**Naming a provider** — where a model lives, written down once: `[provider.<name>]` in the state directory's `config.toml`, `-p <name>` and `-m <model>`, and a `default` profile that will not load pointing off the machine without `remote = true`~ **answered `local-first`'s first open question with *not `luu.toml`*, and narrowed the declaration to the default profile alone the same day it was written: `-p` is the destination being typed** | nothing | [`naming-a-provider`](../../RECORD/2026-09-07.naming-a-provider.completed.md) |
 | 12 | ~**Configuring from the browser** — a modal with what this server resolved (read-only, including the window caveat nobody in a browser ever saw) and the providers (editable, **loopback only**). ~ **corrected item 11's closing sentence — editing the file is not a picker — and inverted its own: the browser never classifies a URL, the loader refuses the write and names the host to type back, so the rule has one implementation** | nothing | [`configuring-from-the-browser`](../../RECORD/2026-09-07.configuring-from-the-browser.completed.md) |
+| 14 | ~**The first run has no provider** — a server with nowhere to send says so and the browser opens on the providers editor; each provider lists the models it serves; and a session names the profile and model it starts on, defaulting to the last one used there~ **came out of item 12's own closing line — *nothing in the modal changes the running server* — which is survivable on a configured machine and not on a fresh one. The destination is the **session's** now, not the process's, and the mid-session switch stays rejected where item 12 left it** | nothing | [`the-first-run-has-no-provider`](../../RECORD/2026-09-07.the-first-run-has-no-provider.completed.md) |
 | 13 | ~**Resolving a symbol** — a symbol index keyed on `(path, qualified name)`, so a citation can be re-resolved after an edit~ **rejected the day it was written, and the reading that rejected it found the live bug underneath: `walk_sources` ran once per process and nothing refreshed it, so an edited file stayed selectable at its *startup line numbers* and the loader read the current file at them. Fixed with a stamp and `rewalk_sources`; the index is not being built and `edit_file`'s `old_string` stays the model's, because deriving it from disk would remove the optimistic lock. **The two-turn test at the `serve` seam, run against the fix removed, hands turn two four lines of padding as the definition it asked for** | nothing | [`resolving-a-symbol`](../../RECORD/2026-09-07.resolving-a-symbol.completed.md) §later |
 
 ```mermaid
@@ -57,6 +59,7 @@ gantt
     Prune behind (rule B)                  :prune, after gbnf, 4d
     Naming a provider (config.toml)        :done, prov, 2026-09-07, 1d
     Configuring from the browser (modal)   :done, modal, 2026-09-07, 1d
+    The first run has no provider          :done, firstrun, 2026-09-07, 1d
     openat2(RESOLVE_BENEATH)               :done, toctou, 2026-09-05, 1d
     Enforcement per job                    :enf, 2026-09-06, 2d
     Resolving a symbol (rejected; cache fixed) :done, sym, 2026-09-07, 1d
@@ -126,6 +129,17 @@ gantt
   had to correct. A stamp per file and a re-walk of what moved closes it; the
   index closes nothing that is left. **`--select-tokens` was the only flag
   affected, and it is off by default, so no recording on disk is invalidated.**
+
+- **Item 14 was written by using item 12 on a machine that had nothing.** The
+  previous record closed by naming its own limit — the modal does not change the
+  running server — and filed *choosing a provider for a new session* as the next
+  item. What made it code-shaped rather than a nicety is the first run: a person
+  who has just written their first profile is told to restart from the terminal
+  they were trying not to need, by a page that until then showed them a mock
+  answering in sentences with nothing saying so. The interesting half is not the
+  swap, it is that **a destination is four things and one of them is derived**:
+  the counter is built from the model, and the tokenizer path had been consumed
+  at startup and dropped, so the field to rebuild it did not exist.
 
 - **Item 6 landed the half that could not break the prefix, and the corpus it
   needed was broken.** Rule A was ordered first because it cannot rewrite the

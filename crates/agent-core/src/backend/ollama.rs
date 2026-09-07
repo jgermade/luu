@@ -4,7 +4,8 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 
 use super::{
-    Backend, BackendError, Chunk, ChunkStream, CompletionRequest, Message, StopReason, Usage,
+    Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Message,
+    StopReason, Usage,
 };
 
 pub struct Ollama {
@@ -122,9 +123,48 @@ fn parse_line(line: &[u8]) -> Result<Option<Chunk>, BackendError> {
     Ok((!text.is_empty()).then_some(Chunk::Text(text)))
 }
 
+/// `GET /api/tags` — what this Ollama has pulled.
+#[derive(Deserialize)]
+struct Tags {
+    #[serde(default)]
+    models: Vec<Tag>,
+}
+
+#[derive(Deserialize)]
+struct Tag {
+    name: String,
+}
+
 impl Backend for Ollama {
     fn name(&self) -> &str {
         "ollama"
+    }
+
+    fn models(&self) -> BackendFuture<'_, Vec<String>> {
+        let url = format!("{}/api/tags", self.base_url);
+        let http = self.http.clone();
+        Box::pin(async move {
+            // Bounded, because this one is called from a request handler and a
+            // provider that is simply not running is the ordinary case on a
+            // laptop: the answer wanted there is "not now", quickly.
+            let response = http
+                .get(&url)
+                .timeout(super::LIST_TIMEOUT)
+                .send()
+                .await
+                .map_err(|error| BackendError::Transport(error.to_string()))?;
+            if !response.status().is_success() {
+                return Err(BackendError::Rejected(format!(
+                    "{} from {url}",
+                    response.status()
+                )));
+            }
+            let tags: Tags = response
+                .json()
+                .await
+                .map_err(|error| BackendError::Malformed(error.to_string()))?;
+            Ok(tags.models.into_iter().map(|tag| tag.name).collect())
+        })
     }
 
     fn stream(&self, request: CompletionRequest) -> ChunkStream<'_> {

@@ -51,7 +51,7 @@ use rusqlite::Connection;
 /// [`SessionStore::stream`] answers with nothing rather than with a stream
 /// folded back out of a view — that would invent line orders and timings the
 /// session never had.
-const SCHEMA: i32 = 2;
+const SCHEMA: i32 = 3;
 
 /// Where the store lives when nobody says otherwise.
 ///
@@ -77,6 +77,10 @@ const EVENTS: &str = "CREATE TABLE IF NOT EXISTS events (
     line    TEXT NOT NULL,
     PRIMARY KEY (session, seq)
 );";
+
+/// Added by migration rather than written into the `CREATE`, so a store made
+/// by an older build gains it without its rows being touched.
+const PROVIDER_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN provider TEXT;";
 
 pub struct SessionStore {
     connection: Connection,
@@ -119,7 +123,8 @@ impl SessionStore {
                         turns       INTEGER NOT NULL,
                         record      TEXT,
                         view        TEXT NOT NULL,
-                        saved_at    INTEGER NOT NULL
+                        saved_at    INTEGER NOT NULL,
+                        provider    TEXT
                     );",
                 )?;
                 connection.execute_batch(EVENTS)?;
@@ -131,6 +136,14 @@ impl SessionStore {
             // absence it is.
             1 => {
                 connection.execute_batch(EVENTS)?;
+                connection.execute_batch(PROVIDER_COLUMN)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            // A store from before a session could name the profile it ran on.
+            // The column is added and every row keeps its `NULL`, which is the
+            // true answer for a session recorded when nothing asked.
+            2 => {
+                connection.execute_batch(PROVIDER_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -203,12 +216,12 @@ impl SessionStore {
     /// A whole-row replace rather than a patch, because the thing being stored
     /// is a cache of a fold and a partially-updated cache of a fold is not a
     /// fold of anything.
-    pub fn save(&self, view: &SessionView) -> Result<()> {
+    pub fn save(&self, view: &SessionView, provider: Option<&str>) -> Result<()> {
         let summary = view.summary();
         self.connection.execute(
             "INSERT INTO sessions
-                 (id, title, backend, model, started_at, turns, record, view, saved_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 (id, title, backend, model, started_at, turns, record, view, saved_at, provider)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                  title = excluded.title,
                  backend = excluded.backend,
@@ -217,7 +230,8 @@ impl SessionStore {
                  turns = excluded.turns,
                  record = excluded.record,
                  view = excluded.view,
-                 saved_at = excluded.saved_at",
+                 saved_at = excluded.saved_at,
+                 provider = excluded.provider",
             rusqlite::params![
                 summary.id,
                 summary.title,
@@ -228,9 +242,29 @@ impl SessionStore {
                 summary.record,
                 serde_json::to_string(view)?,
                 crate::session::now_ms() as i64,
+                provider,
             ],
         )?;
         Ok(())
+    }
+
+    /// The model last used with a profile, for the picker to start on.
+    ///
+    /// Read out of the sessions that happened rather than kept as a preference
+    /// beside them: what a person means by "the last one" is the last session
+    /// they ran, and that row is already here. A store from before the column
+    /// existed answers `None`, which is what a machine with no such session
+    /// should say.
+    pub fn last_model(&self, provider: &str) -> Result<Option<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT model FROM sessions WHERE provider = ?1
+             ORDER BY started_at DESC, id DESC LIMIT 1",
+        )?;
+        let mut rows = statement.query([provider])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(row.get(0)?),
+            None => None,
+        })
     }
 
     /// The fold back, out of the blob.
@@ -316,7 +350,7 @@ mod tests {
     fn a_session_saved_comes_back_as_the_same_fold() {
         let store = SessionStore::in_memory().expect("a store");
         let view = view("one");
-        store.save(&view).expect("saving");
+        store.save(&view, None).expect("saving");
 
         let loaded = store.load("one").expect("loading").expect("the session");
         assert_eq!(
@@ -328,10 +362,10 @@ mod tests {
     #[test]
     fn saving_twice_replaces_rather_than_duplicates() {
         let store = SessionStore::in_memory().expect("a store");
-        store.save(&view("one")).expect("saving");
+        store.save(&view("one"), None).expect("saving");
         let mut later = view("one");
         later.title = "a name someone gave it".into();
-        store.save(&later).expect("saving again");
+        store.save(&later, None).expect("saving again");
 
         let listed = store.list().expect("listing");
         assert_eq!(listed.len(), 1, "one session, saved at two checkpoints");
@@ -388,7 +422,7 @@ mod tests {
         use agent_core::protocol::ServerMessage;
 
         let mut store = SessionStore::in_memory().expect("a store");
-        store.save(&view("one")).expect("saving");
+        store.save(&view("one"), None).expect("saving");
         store
             .append(
                 "one",
@@ -416,12 +450,104 @@ mod tests {
         assert!(!store.delete("nothing").expect("deleting"));
     }
 
+    /// A store written by the build before this one opens, keeps its rows, and
+    /// answers `None` for a memory it never had.
+    ///
+    /// The migration is one `ALTER TABLE`, which is exactly why it is worth a
+    /// test: a schema bump that dropped a row would be silent until somebody
+    /// went looking for a session from last week.
+    #[test]
+    fn a_store_from_the_previous_schema_gains_the_column_and_keeps_its_rows() {
+        // Its own path, and removed at the end: the same shape
+        // `tests/store_parity.rs` uses, and for the same reason — a store is a
+        // file, and the migration under test is about a file that already
+        // exists.
+        let path = std::env::temp_dir().join(format!(
+            "luu-schema-2-{}-{}.sqlite",
+            std::process::id(),
+            crate::session::now_ms()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            // Schema 2, by hand: the shape this build inherited.
+            let connection = rusqlite::Connection::open(&path).expect("opening");
+            connection
+                .execute_batch(
+                    "CREATE TABLE sessions (
+                         id TEXT PRIMARY KEY, title TEXT NOT NULL, backend TEXT NOT NULL,
+                         model TEXT NOT NULL, started_at INTEGER NOT NULL,
+                         turns INTEGER NOT NULL, record TEXT, view TEXT NOT NULL,
+                         saved_at INTEGER NOT NULL
+                     );",
+                )
+                .expect("the old table");
+            connection.execute_batch(EVENTS).expect("the events table");
+            connection
+                .execute(
+                    "INSERT INTO sessions VALUES ('old', 'old', 'ollama', 'qwen', 1, 0, NULL, ?1, 1)",
+                    [serde_json::to_string(&view("old")).expect("a view")],
+                )
+                .expect("a row from before");
+            connection
+                .pragma_update(None, "user_version", 2)
+                .expect("stamping the old version");
+        }
+
+        let store = SessionStore::open(&path).expect("opening the old store");
+        assert!(
+            store.load("old").expect("loading").is_some(),
+            "the migration adds a column and touches no row",
+        );
+        assert_eq!(
+            store.last_model("local").expect("asking"),
+            None,
+            "a session recorded before a profile could be named answers for none",
+        );
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// What the model picker starts on. The memory is the sessions that
+    /// happened rather than a preference beside them, so this is a query.
+    #[test]
+    fn the_last_model_is_the_last_one_a_session_on_that_profile_used() {
+        let store = SessionStore::in_memory().expect("a store");
+
+        let mut older = SessionView::new("older", "ollama", "qwen2.5-coder:7b");
+        older.started_at = 1_700_000_000_000;
+        store.save(&older, Some("local")).expect("saving");
+
+        let mut newer = SessionView::new("newer", "ollama", "qwen2.5-coder:14b");
+        newer.started_at = 1_700_000_900_000;
+        store.save(&newer, Some("local")).expect("saving");
+
+        // Another profile on the same backend is a different memory, which is
+        // the whole reason the column is the *profile* and not the backend.
+        let mut elsewhere = SessionView::new("elsewhere", "ollama", "llama3.1:8b");
+        elsewhere.started_at = 1_700_000_950_000;
+        store.save(&elsewhere, Some("lan-box")).expect("saving");
+
+        assert_eq!(
+            store.last_model("local").expect("asking"),
+            Some("qwen2.5-coder:14b".to_string()),
+        );
+        assert_eq!(
+            store.last_model("lan-box").expect("asking"),
+            Some("llama3.1:8b".to_string()),
+        );
+        // A profile nothing has run on, and a session recorded before the
+        // column existed, both answer the same way: nothing to suggest.
+        assert_eq!(store.last_model("never-used").expect("asking"), None);
+        store.save(&view("nameless"), None).expect("saving");
+        assert_eq!(store.last_model("").expect("asking"), None);
+    }
+
     #[test]
     fn the_listing_columns_are_the_folds_own_summary() {
         let store = SessionStore::in_memory().expect("a store");
         let mut view = view("one");
         view.record = Some("runs/one.jsonl".into());
-        store.save(&view).expect("saving");
+        store.save(&view, None).expect("saving");
 
         let listed = store.list().expect("listing");
         assert_eq!(

@@ -177,6 +177,7 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
         record: None,
         budget: Budget::new(0, 0, Eviction::Turn),
         counter: Arc::new(ApproximateCounter),
+        tokenizer: None,
         agency,
         temperature: None,
         seed: None,
@@ -262,6 +263,7 @@ async fn server_everything(
         record: None,
         budget,
         counter: Arc::new(ApproximateCounter),
+        tokenizer: None,
         agency,
         temperature: None,
         seed: None,
@@ -1830,6 +1832,67 @@ async fn the_settings_route_reports_what_the_run_resolved() {
             .is_some_and(|text| text.contains("read-write")),
         "the sandbox this run resolved is on the page, not only on stderr"
     );
+}
+
+/// A server that fell into the mock says so, in the one field a page is
+/// allowed to read it from.
+///
+/// The rule is the server's — see `provider::DestinationFrom`. This test exists
+/// because the page opens the providers editor on it, and a browser that worked
+/// it out for itself from `backend == "mock"` would be a second implementation
+/// of a rule that already has one.
+#[tokio::test]
+async fn a_server_with_nowhere_to_send_says_so() {
+    let address = server().await;
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+
+    // `server()` builds an `App` from `Resolved::mock()`, which is the
+    // resolution of a run that read no file and was given no flag.
+    assert_eq!(settings["unconfigured"], true);
+}
+
+/// A session may name a provider, and a name the file does not have is refused
+/// rather than quietly ignored.
+///
+/// The happy path is not here for the reason the write route's is not: it needs
+/// a `config.toml` on the machine running the tests. What this pins is that the
+/// route reads the file at all, and that a refusal leaves the session alone.
+#[tokio::test]
+async fn a_session_may_not_name_a_provider_that_is_not_in_the_file() {
+    let address = server().await;
+    let client = reqwest::Client::new();
+
+    let refused = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({ "provider": "no-such-profile-in-any-file" }))
+        .send()
+        .await
+        .expect("asking for a session on a profile that does not exist");
+    assert_eq!(refused.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
+
+    // And the destination is untouched: the refusal happens before anything is
+    // reset, so the session that was running is still the one that is running.
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+    assert_eq!(settings["backend"], "mock");
+
+    // A body-less POST still means "the destination this server is pointed at",
+    // which is what every client written before this parameter existed sends.
+    let created = client
+        .post(format!("http://{address}/api/sessions"))
+        .send()
+        .await
+        .expect("asking for a session with no body at all");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
 }
 
 /// The providers file as the editor reads it, on a loopback server.
