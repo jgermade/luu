@@ -393,6 +393,12 @@
             <span :if="entry.message.evicted" class="gone">
               · out of the window since turn {{ entry.message.evicted }}
             </span>
+            <!-- The turn is still here and still answers. What it no longer
+                 carries is the code it was answered from, which is exactly the
+                 thing a transcript cannot show by agreeing with itself. -->
+            <span :if="entry.message.pruned && !entry.message.evicted" class="unquoted">
+              · stopped quoting since turn {{ entry.message.pruned }}
+            </span>
           </div>
           <div class="text">{{ entry.message.text }}</div>
           <div :if="entry.message.reason" class="meta">
@@ -545,6 +551,12 @@
       <!-- What stopped being in the prompt. Beside the buckets rather than in
            them: a bucket that got smaller cannot say whether that was the
            policy or the arithmetic. -->
+      <p :if="state.pruned" class="dim">
+        Turn {{ state.pruned?.turn }} took the quotes out of turn(s)
+        {{ state.pruned?.turns.join(", ") }} — {{ state.pruned?.tokens }}
+        tokens of code out of the window. Those turns are still here and still
+        answerable; the paths they named are in the prompt.
+      </p>
       <p :if="state.evicted" class="dim">
         Turn {{ state.evicted?.turn }} dropped turn(s)
         {{ state.evicted?.turns.join(", ") }} — {{ state.evicted?.tokens }}
@@ -709,6 +721,9 @@
   article.evicted { opacity: .45; }
   article.evicted .text { text-decoration: line-through solid color-mix(in srgb, currentColor 35%, transparent); }
   .gone { color: var(--warn); text-transform: none; letter-spacing: 0; }
+  /* Not dimmed like an evicted turn: it is still in the prompt and still being
+     reasoned over. Only its quotes went, so only the marker says so. */
+  .unquoted { color: var(--dim); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   .meta { margin-top: .3rem; font-size: 12px; color: var(--dim); display: flex; gap: .6rem; }
   .meta .warn { color: var(--warn); }

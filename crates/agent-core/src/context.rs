@@ -225,6 +225,43 @@ pub enum Repeat {
     Once,
 }
 
+/// Whether a turn already answered keeps the bytes it was answered from.
+///
+/// Rule B of `RECORD/2026-09-06.what-leaves-the-history.WIP.md`, and the half
+/// the tokens are in: by turn 20 of the precision run ~90% of the `history`
+/// block is quoted code, re-sent every turn until eviction throws away the
+/// conversation around it. Rule A stops a span being sent *twice*; this is
+/// about the first copy, once the turn that needed it has been answered.
+///
+/// The two are separate flags because they are separate measurements and they
+/// pay differently: A cannot move the cached prefix and B rewrites it from the
+/// pruned turn down. That is the same trade [`Eviction::Block`] had to prove on
+/// its own, which is why the depth here is not a new knob — it is the eviction
+/// policy's own target, so pruning inherits an argument that has already been
+/// made rather than inventing a second one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prune {
+    /// It does, for as long as the turn is in the window. Everything recorded
+    /// before this enum existed, and the default.
+    Keep,
+    /// Below a watermark that only moves forward, a turn's fragments and tool
+    /// results render as a line naming what went and what it was worth.
+    ///
+    /// **Before eviction, not instead of it.** The window holds either the
+    /// conversation or the quotes, and the same 8 192 tokens that held
+    /// thirty-seven turns of one held five turns of the other. The quotes are
+    /// the part a path can rebuild — the tombstone names it, and the tools to
+    /// re-read it are in the prompt already; the conversation is the part
+    /// nothing can. So this spends the recoverable half first, and eviction
+    /// only reaches the turns that pruning could not save.
+    ///
+    /// The watermark moves forward and never back, for the reason
+    /// [`Context::floor`] does: a shorter prompt that let a pruned turn quote
+    /// itself again would move the front of the history, which is the one
+    /// thing a prefix cache cannot survive.
+    Behind,
+}
+
 /// The window, what is held back from it, and how it gives way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -236,6 +273,8 @@ pub struct Budget {
     pub eviction: Eviction,
     /// What a span already visible in the window costs to select again.
     pub repeat: Repeat,
+    /// Whether a turn already answered keeps the bytes it was answered from.
+    pub prune: Prune,
 }
 
 impl Budget {
@@ -246,6 +285,7 @@ impl Budget {
             reserve,
             eviction,
             repeat: Repeat::Always,
+            prune: Prune::Keep,
         }
     }
 
@@ -253,6 +293,11 @@ impl Budget {
     /// it stays readable as the arm it was.
     pub fn repeating(self, repeat: Repeat) -> Self {
         Self { repeat, ..self }
+    }
+
+    /// The same, for the other half of `what-leaves-the-history`.
+    pub fn pruning(self, prune: Prune) -> Self {
+        Self { prune, ..self }
     }
 }
 
@@ -273,6 +318,9 @@ pub struct Selection {
     /// selection that cut nothing, which is every one in a session that never
     /// fills its window.
     pub eviction: Option<Evicted>,
+    /// What *this* selection stopped quoting. Always `None` under
+    /// [`Prune::Keep`], which is every recording made before it existed.
+    pub pruning: Option<Pruned>,
 }
 
 /// What one selection dropped from the window — and it stays dropped: the
@@ -297,6 +345,25 @@ pub struct Evicted {
     /// deep they go, so a tombstone that did not name the policy would leave
     /// the reader doing the subtraction it exists to spare them.
     pub policy: Eviction,
+}
+
+/// What one selection stopped quoting — and it stays unquoted: the pruning
+/// watermark, like the floor, only ever moves forward.
+///
+/// Beside [`Evicted`] rather than inside it, because they are different losses
+/// and a reader who cannot tell them apart cannot read the policy. An evicted
+/// turn is gone; a pruned one is still there, still answerable, and no longer
+/// carrying the bytes it was answered from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Pruned {
+    /// The turns that stopped quoting, oldest first. Named for the reason
+    /// [`Evicted::turns`] are: a transcript cannot mark them, and a reader
+    /// months later cannot recover *which* without re-implementing the
+    /// watermark.
+    pub turns: Vec<TurnId>,
+    /// What that freed in the window it freed it in.
+    pub tokens: u32,
+    pub counter: Counter,
 }
 
 /// One unit of rendered history: a live turn, or a closed job folded to its
@@ -340,6 +407,14 @@ pub struct Context {
     turns: Vec<Turn>,
     /// The oldest turn still in the window. It only ever moves forward.
     floor: usize,
+    /// The oldest turn that still quotes what it was answered from. Below this
+    /// a turn renders its fragments and tool results as a line naming them —
+    /// see [`Prune::Behind`] — and like [`Context::floor`] it only ever moves
+    /// forward, so a turn that stopped quoting itself never starts again.
+    ///
+    /// `floor <= pruned` always: a turn out of the window cannot be in it
+    /// without its code.
+    pruned: usize,
     /// The session's jobs, in order. Closed ones fold their turns at
     /// selection time; nothing here rewrites the history.
     jobs: Vec<Job>,
@@ -353,6 +428,7 @@ impl Context {
             map: String::new(),
             turns: Vec::new(),
             floor: 0,
+            pruned: 0,
             jobs: Vec::new(),
         }
     }
@@ -469,6 +545,14 @@ impl Context {
             tools: tools.into(),
             map: map.into(),
             turns,
+            // A resumed turn carries no `code_context` — the store keeps the
+            // conversation, not the bytes a turn was handed — so there is
+            // nothing for the watermark to have been protecting and it starts
+            // where the floor is. Tool results *do* come back, so a resumed
+            // session prunes them again from scratch rather than remembering
+            // that it had: the watermark is not persisted, and inventing a
+            // value for it would be a claim the store cannot support.
+            pruned: floor,
             floor,
             jobs,
         }
@@ -838,6 +922,7 @@ impl Context {
         let prompt_tokens = counter.count(prompt);
 
         let mut eviction = None;
+        let mut pruning = None;
         if let Some(limit) = budget.limit {
             // The current turn and the reserve are not negotiable: nothing here
             // may trim the prompt the user just typed. If they alone exceed the
@@ -852,40 +937,76 @@ impl Context {
                 + budget.reserve;
             let available = limit.saturating_sub(fixed);
 
-            if self.fits_from(available, counter, budget.repeat) > self.floor {
-                // Taken before the floor moves: this is the window the cut
-                // chooses from, and what it drops is unreachable afterwards —
-                // which is the whole reason this has to be reported from in
+            if self.fits_from(available, counter, budget) > self.floor {
+                // Taken before either watermark moves: this is the window the
+                // cut chooses from, and what it drops is unreachable afterwards
+                // — which is the whole reason this has to be reported from in
                 // here rather than reconstructed outside.
                 let before = self.floor;
-                let held = self.window_tokens(before, counter, budget.repeat);
+                let pruned_before = self.pruned;
+                let held = self.window_tokens(before, counter, budget);
 
                 // It no longer fits. How deep the cut goes is the whole
-                // difference between the two policies.
+                // difference between the two policies — and pruning takes the
+                // same target rather than a knob of its own, so that "deep and
+                // infrequent beats shallow and constant" is one argument here
+                // and not two.
                 let target = match budget.eviction {
                     Eviction::Turn => available,
                     Eviction::Block { low_water } => {
                         (available as f32 * low_water.clamp(0.0, 1.0)) as u32
                     }
                 };
-                self.floor = self.fits_from(target, counter, budget.repeat);
 
-                // What the cut freed, and not what the dropped turns were
-                // counted at. Under `Repeat::Once` those are two different
-                // numbers: a span the oldest turn owned passes to the next turn
-                // that carries it rather than leaving with it, so summing the
-                // items below the floor would report a saving the window did
-                // not get. The difference of two windows is the saving.
+                // Spend the recoverable half first. A pruned turn keeps its
+                // question and its answer and loses the bytes it was answered
+                // from, which a path can fetch back; an evicted one loses the
+                // conversation, which nothing can. So this raises the pruning
+                // watermark as far as the target needs and only then cuts, and
+                // the cut it makes is the one pruning could not avoid.
+                if budget.prune == Prune::Behind {
+                    while self.pruned < self.turns.len()
+                        && self.window_tokens(self.floor, counter, budget) > target
+                    {
+                        self.pruned += 1;
+                    }
+                }
+                // Read while the floor is still where pruning saw it, so the
+                // two savings below are the two steps and not one number split
+                // by guesswork.
+                let stopped_quoting = self.pruned;
+                let after_pruning = self.window_tokens(before, counter, budget);
+
+                self.floor = self.fits_from(target, counter, budget);
+                // A turn out of the window cannot be in it without its code.
+                // This moves the watermark past turns that were evicted rather
+                // than pruned, which is why the report above was taken first.
+                self.pruned = self.pruned.max(self.floor);
+
+                // What each step freed, and not what the turns it touched were
+                // counted at. Under `Repeat::Once` those are different numbers:
+                // a span the oldest turn owned passes to the next turn that
+                // carries it rather than leaving with it, so summing the items
+                // below the floor would report a saving the window did not get.
+                // The difference of two windows is the saving, and taking the
+                // two steps in the order they happened splits it between them.
+                // A turn pruned and then evicted in the same call is in both
+                // lists, because both things happened to it.
+                pruning = (stopped_quoting > pruned_before).then(|| Pruned {
+                    turns: self.turns[pruned_before..stopped_quoting]
+                        .iter()
+                        .map(|turn| turn.id)
+                        .collect(),
+                    tokens: held.saturating_sub(after_pruning),
+                    counter: counter.id(),
+                });
                 eviction = (self.floor > before).then(|| Evicted {
                     turns: self.turns[before..self.floor]
                         .iter()
                         .map(|turn| turn.id)
                         .collect(),
-                    tokens: held.saturating_sub(self.window_tokens(
-                        self.floor,
-                        counter,
-                        budget.repeat,
-                    )),
+                    tokens: after_pruning
+                        .saturating_sub(self.window_tokens(self.floor, counter, budget)),
                     counter: counter.id(),
                     policy: budget.eviction,
                 });
@@ -905,27 +1026,60 @@ impl Context {
         // only one that can lose a span to the history. That direction is what
         // keeps the prefix: the block above the newest message is byte-identical
         // to the one the previous call sent, exactly as it was before this rule.
-        let mut shown: HashSet<&Fragment> = HashSet::new();
+        let mut shown = Shown::default();
         for item in &items {
             let tokens = self.item_tokens(item, counter);
             match item {
                 Item::Turn(index) => {
                     let turn = &self.turns[*index];
-                    let (kept, dropped) =
-                        split_shown(&turn.code_context, &mut shown, budget.repeat);
+                    let behind = budget.prune == Prune::Behind && *index < self.pruned;
+                    // Rule B first, for the reason `item_cost` gives: a pruned
+                    // turn is showing nothing, so it can neither take a span
+                    // over nor give one up.
+                    let (kept, dropped) = match behind {
+                        true => (Vec::new(), turn.code_context.iter().collect::<Vec<_>>()),
+                        false => split_shown(&turn.code_context, &mut shown, budget.repeat),
+                    };
                     // The stored count, less what this render will not send.
                     // Subtracted rather than recounted so that a turn repeating
                     // nothing costs exactly what it has always cost, and every
                     // recording made before `Repeat` reads unchanged.
-                    history_tokens += tokens.saturating_sub(fragments_tokens(&dropped, counter));
-                    messages.push(Message::user(user_text(kept, &turn.prompt)));
+                    let mut spent = tokens.saturating_sub(fragments_tokens(&dropped, counter));
+                    match behind {
+                        // What went, said in place rather than silently: the
+                        // path is what makes it recoverable, and `read_file` is
+                        // in the prompt already.
+                        true => {
+                            let stones: String = turn
+                                .code_context
+                                .iter()
+                                .map(|fragment| fragment_tombstone(fragment, counter))
+                                .collect();
+                            spent += counter.count(&stones);
+                            let mut text = stones;
+                            text.push_str(&turn.prompt);
+                            messages.push(Message::user(text));
+                        }
+                        false => messages.push(Message::user(user_text(kept, &turn.prompt))),
+                    }
                     // Each step is a real exchange, so the alternation holds and
                     // no chat template has to decide what two user messages in a
-                    // row mean.
+                    // row mean. Pruning replaces the *result*: what the turn
+                    // asked for is in the assistant half and stays.
                     for step in &turn.steps {
                         messages.push(Message::assistant(step.text.clone()));
-                        messages.push(Message::user(step.result_text()));
+                        let result = match behind {
+                            true => {
+                                let stone = step_tombstone(step, counter);
+                                spent = spent.saturating_sub(counter.count(&step.result_text()))
+                                    + counter.count(&stone);
+                                stone
+                            }
+                            false => step.result_text(),
+                        };
+                        messages.push(Message::user(result));
                     }
+                    history_tokens += spent;
                     messages.push(Message::assistant(turn.answer.clone()));
                 }
                 Item::Folded { job, .. } => {
@@ -983,6 +1137,7 @@ impl Context {
             counter: counter.id(),
             evicted: self.floor,
             eviction,
+            pruning,
         }
     }
 
@@ -1000,24 +1155,13 @@ impl Context {
     /// The two always come in pairs — a copy taken over is a copy this turn
     /// already carries — so the running total never goes down and the break is
     /// still a break.
-    fn fits_from(&self, available: u32, counter: &dyn TokenCounter, repeat: Repeat) -> usize {
+    fn fits_from(&self, available: u32, counter: &dyn TokenCounter, budget: Budget) -> usize {
         let available = i64::from(available);
         let mut spent: i64 = 0;
         let mut start = self.turns.len();
-        // A fragment in here is one some turn in the candidate window is
-        // already rendering. Folded turns never enter it: a fold sends its
-        // summary and not its turns, so a span inside one is not on the screen
-        // and cannot stand in for anything.
-        let mut rendered: HashSet<&Fragment> = HashSet::new();
+        let mut shown = Shown::default();
         for item in self.items().iter().rev() {
-            let mut tokens = i64::from(self.item_tokens(item, counter));
-            if let (Repeat::Once, Item::Turn(index)) = (repeat, item) {
-                for fragment in &self.turns[*index].code_context {
-                    if !rendered.insert(fragment) {
-                        tokens -= i64::from(fragment_tokens(fragment, counter));
-                    }
-                }
-            }
+            let tokens = self.item_cost(item, &mut shown, budget, counter);
             if spent + tokens > available {
                 break;
             }
@@ -1027,29 +1171,72 @@ impl Context {
         start
     }
 
-    /// What the window starting at `floor` costs, under the repeat rule in
-    /// force.
+    /// What the window starting at `floor` costs, under the rules in force.
     ///
     /// Forward, because ownership is oldest-first and a forward walk is where
     /// that is legible; [`Context::fits_from`] reads the same rule from the
-    /// other end because it has to stop early. The two agree on the total and
+    /// other end because it has to stop early. They agree on the total and
     /// disagree about which turn is charged for a shared span, which is the
-    /// difference between deciding and reporting.
-    fn window_tokens(&self, floor: usize, counter: &dyn TokenCounter, repeat: Repeat) -> u32 {
+    /// difference between deciding and reporting — so both go through
+    /// [`Context::item_cost`] rather than each carrying its own arithmetic.
+    fn window_tokens(&self, floor: usize, counter: &dyn TokenCounter, budget: Budget) -> u32 {
         let mut total: i64 = 0;
-        let mut shown: HashSet<&Fragment> = HashSet::new();
+        let mut shown = Shown::default();
         for item in &self.items_from(floor) {
-            let mut tokens = i64::from(self.item_tokens(item, counter));
-            if let (Repeat::Once, Item::Turn(index)) = (repeat, item) {
-                for fragment in &self.turns[*index].code_context {
-                    if !shown.insert(fragment) {
-                        tokens -= i64::from(fragment_tokens(fragment, counter));
-                    }
-                }
-            }
-            total += tokens;
+            total += self.item_cost(item, &mut shown, budget, counter);
         }
         total.max(0) as u32
+    }
+
+    /// What one item adds to the window it is being put into, under both rules,
+    /// and what it puts on the screen.
+    ///
+    /// The one place the arithmetic lives. It is a *delta* rather than a cost,
+    /// which is what lets the same function serve a walk in either direction:
+    /// under [`Repeat::Once`] a shared span is charged once to whichever turn
+    /// the walk reaches first, and the other turn's copy is subtracted at the
+    /// moment the pair is discovered.
+    ///
+    /// Rule B is read before rule A, and the order is not arbitrary: a pruned
+    /// turn puts nothing on the screen, so it can neither take a span over nor
+    /// give one up. A span two turns carry, whose older one has been pruned, is
+    /// rendered by the younger — which is the same rule that keeps eviction
+    /// from orphaning one.
+    fn item_cost<'a>(
+        &'a self,
+        item: &Item,
+        shown: &mut Shown<'a>,
+        budget: Budget,
+        counter: &dyn TokenCounter,
+    ) -> i64 {
+        let mut tokens = i64::from(self.item_tokens(item, counter));
+        // A fold sends its summary and not its turns, so nothing inside one is
+        // on the screen: it prunes nothing and stands in for nothing.
+        let Item::Turn(index) = item else {
+            return tokens;
+        };
+        let turn = &self.turns[*index];
+
+        if budget.prune == Prune::Behind && *index < self.pruned {
+            for fragment in &turn.code_context {
+                tokens -= i64::from(fragment_tokens(fragment, counter));
+                tokens += i64::from(counter.count(&fragment_tombstone(fragment, counter)));
+            }
+            for step in &turn.steps {
+                tokens -= i64::from(counter.count(&step.result_text()));
+                tokens += i64::from(counter.count(&step_tombstone(step, counter)));
+            }
+            return tokens;
+        }
+
+        if budget.repeat == Repeat::Once {
+            for fragment in &turn.code_context {
+                if !shown.0.insert(fragment) {
+                    tokens -= i64::from(fragment_tokens(fragment, counter));
+                }
+            }
+        }
+        tokens
     }
 
     /// The stored count, unless it was produced by a different counter — in
@@ -1084,6 +1271,35 @@ fn fragment_tokens(fragment: &Fragment, counter: &dyn TokenCounter) -> u32 {
     counter.count(&fragment_text(fragment))
 }
 
+/// What a pruned fragment leaves in its place: the path, the span, and what it
+/// was worth.
+///
+/// Not nothing, because a turn reasoning over code that was silently removed is
+/// the failure `RECORD/2026-08-30.the-fold-fix-verified.completed.md` closed,
+/// and the path is what makes it recoverable — `read_file` is in the prompt
+/// already. Not a summary either: model prose entering the history would enter
+/// a region every later turn is built on, which is the one place this design
+/// keeps prose out of. The deterministic line is the whole of the middle
+/// ground.
+fn fragment_tombstone(fragment: &Fragment, counter: &dyn TokenCounter) -> String {
+    format!(
+        "// [pruned] {} — {} tokens, no longer quoted\n\n",
+        fragment.path,
+        fragment_tokens(fragment, counter),
+    )
+}
+
+/// The same, for a tool result. The call itself is in the assistant message
+/// above it and is **not** pruned, so what the turn asked for stays legible and
+/// only the bytes it got back go.
+fn step_tombstone(step: &ToolStep, counter: &dyn TokenCounter) -> String {
+    format!(
+        "[pruned] {} — {} tokens, no longer quoted",
+        step.call.name,
+        counter.count(&step.result_text()),
+    )
+}
+
 fn fragments_tokens(fragments: &[&Fragment], counter: &dyn TokenCounter) -> u32 {
     fragments
         .iter()
@@ -1091,23 +1307,29 @@ fn fragments_tokens(fragments: &[&Fragment], counter: &dyn TokenCounter) -> u32 
         .sum()
 }
 
+/// The spans a render has already put on the screen.
+///
+/// One set for the whole render, which is the invariant both rules rest on: a
+/// span is skipped only because something *else in this prompt* is showing it.
+/// A pruned turn never enters anything here, because it is showing nothing.
+#[derive(Default)]
+struct Shown<'a>(HashSet<&'a Fragment>);
+
 /// What this turn renders, and what a turn already rendered in this same call
 /// is showing for it.
 ///
-/// `shown` carries across the whole render, which is the invariant the rule
-/// rests on: a span is only ever skipped because something *else in this
-/// prompt* has it. Under [`Repeat::Always`] nothing is recorded and nothing is
-/// skipped, so a run made without the rule cannot be quietly changed by it.
+/// Under [`Repeat::Always`] nothing is recorded and nothing is skipped, so a
+/// run made without the rule cannot be quietly changed by it.
 fn split_shown<'a>(
     code_context: &'a [Fragment],
-    shown: &mut HashSet<&'a Fragment>,
+    shown: &mut Shown<'a>,
     repeat: Repeat,
 ) -> (Vec<&'a Fragment>, Vec<&'a Fragment>) {
     match repeat {
         Repeat::Always => (code_context.iter().collect(), Vec::new()),
         Repeat::Once => code_context
             .iter()
-            .partition(|fragment| shown.insert(fragment)),
+            .partition(|fragment| shown.0.insert(fragment)),
     }
 }
 
@@ -2146,6 +2368,303 @@ mod tests {
             before.messages[..before.messages.len() - 1],
             after.messages[..before.messages.len() - 1],
             "everything the previous call sent above its own prompt is byte-identical",
+        );
+    }
+
+    // ---- Rule B: what a turn already answered keeps ----
+    //
+    // `RECORD/2026-09-07.pruning-behind.completed.md`. Rule A stops a span
+    // being sent twice; this is about the first copy, once the turn that needed
+    // it has been answered.
+
+    /// One tool exchange: the model's own call, and the bytes it got back.
+    fn read_step(n: usize) -> ToolStep {
+        use crate::sandbox::{Applied, Verdict};
+        use crate::tools::{ToolCall, ToolOutcome};
+        ToolStep {
+            text: format!("reading file {n} now"),
+            call: ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({ "path": format!("src/file{n}.rs") }),
+            },
+            outcome: ToolOutcome::ok(
+                Verdict::allow("test", Applied::Process),
+                "one two three four five six seven eight",
+            ),
+            duration_ms: 1,
+        }
+    }
+
+    /// A span the size a real one is. The tombstone that replaces it is nine
+    /// words; a span has to be worth more than its own epitaph or pruning is
+    /// arithmetic with no subject, which is the first thing these tests got
+    /// wrong.
+    fn body() -> String {
+        (0..40)
+            .map(|n| format!("word{n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Fills a window with turns that quote a big span each, so that pruning
+    /// and eviction both have something to reach for.
+    fn context_quoting(turns: usize, counter: &dyn TokenCounter) -> Context {
+        let spans: Vec<Vec<Fragment>> = (0..turns)
+            .map(|n| vec![fragment(&format!("src/file{n}.rs:1-4"), &body())])
+            .collect();
+        let borrowed: Vec<&[Fragment]> = spans.iter().map(Vec::as_slice).collect();
+        context_carrying(&borrowed, counter)
+    }
+
+    #[test]
+    fn a_pruned_turn_keeps_its_question_and_loses_its_quotes() {
+        let counter = WordCounter::default();
+        let mut context = context_quoting(4, &counter);
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(90, 0, Eviction::Turn).pruning(Prune::Behind),
+            &counter,
+        );
+
+        let pruned = selection
+            .pruning
+            .as_ref()
+            .expect("the window could not hold four");
+        assert!(!pruned.turns.is_empty());
+        let users = user_messages(&selection);
+        assert!(
+            users[0].contains("question number 0"),
+            "the conversation is the half nothing can rebuild: {users:?}",
+        );
+        assert!(
+            !users[0].contains("one two three four"),
+            "the quotes are the half a path can: {users:?}",
+        );
+        assert!(
+            users[0].contains("[pruned] src/file0.rs:1-4"),
+            "and it says so, with the path — `read_file` is in the prompt already: {users:?}",
+        );
+    }
+
+    #[test]
+    fn the_default_keeps_every_quote_until_the_turn_itself_goes() {
+        let counter = WordCounter::default();
+        let mut context = context_quoting(4, &counter);
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(90, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert!(selection.pruning.is_none());
+        assert!(
+            !selection
+                .messages
+                .iter()
+                .any(|m| m.content.contains("[pruned]")),
+            "every recording on disk was made under this arm",
+        );
+    }
+
+    /// The whole ordering claim: the recoverable half is spent first.
+    #[test]
+    fn pruning_buys_the_window_turns_that_eviction_would_have_taken() {
+        let counter = WordCounter::default();
+        let budget = Budget::new(90, 0, Eviction::Turn);
+        let mut plain = context_quoting(4, &counter);
+        let mut behind = context_quoting(4, &counter);
+
+        let plain = plain.select("now this", &[], budget, &counter);
+        let behind = behind.select("now this", &[], budget.pruning(Prune::Behind), &counter);
+
+        assert!(
+            behind.evicted < plain.evicted,
+            "a turn kept without its quotes is a turn kept: {} against {}",
+            behind.evicted,
+            plain.evicted,
+        );
+    }
+
+    #[test]
+    fn a_turn_that_stopped_quoting_never_starts_again() {
+        let counter = WordCounter::default();
+        let mut context = context_quoting(4, &counter);
+        let budget = Budget::new(90, 0, Eviction::Turn).pruning(Prune::Behind);
+
+        let tight = context.select("now this", &[], budget, &counter);
+        assert!(tight.pruning.is_some(), "the point of the case");
+
+        // The window opens right back up. Nothing may come back — the same
+        // rule the floor has, and for the same reason: a history whose front
+        // moves is the one thing a prefix cache cannot survive.
+        let roomy = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).pruning(Prune::Behind),
+            &counter,
+        );
+        assert!(
+            user_messages(&roomy)[0].contains("[pruned]"),
+            "a watermark that goes back is not a watermark: {:?}",
+            user_messages(&roomy),
+        );
+        assert!(roomy.pruning.is_none(), "and nothing new was pruned");
+    }
+
+    #[test]
+    fn a_pruned_tool_result_goes_and_the_call_that_asked_for_it_stays() {
+        let counter = WordCounter::default();
+        let mut context = Context::new("system prompt here");
+        for n in 0..4 {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                Vec::new(),
+                vec![read_step(n)],
+                &counter,
+            );
+        }
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(90, 0, Eviction::Turn).pruning(Prune::Behind),
+            &counter,
+        );
+
+        assert!(selection.pruning.is_some(), "the point of the case");
+        let texts: Vec<&String> = selection.messages.iter().map(|m| &m.content).collect();
+        assert!(
+            texts.iter().any(|t| t.starts_with("reading file")),
+            "the model's own call is not pruned — what a turn asked for stays legible: {texts:?}",
+        );
+        assert!(
+            texts.iter().any(|t| t.starts_with("[pruned] read_file")),
+            "and the bytes it got back are a line naming the tool: {texts:?}",
+        );
+    }
+
+    /// A span two turns carry whose older one has been pruned is rendered by
+    /// the younger. Rule B is read before rule A for exactly this: a pruned
+    /// turn is showing nothing, so it cannot stand in for anything.
+    ///
+    /// The shape of the fixture is the finding. Under [`Repeat::Once`] a span
+    /// is charged to the window **once**, whoever owns it, so pruning its owner
+    /// does not remove it — it moves the charge to the next carrier and adds a
+    /// tombstone on top, and the window gets *bigger*. Pruning only pays for a
+    /// shared span once the watermark has passed its youngest carrier. So the
+    /// turn pruned here has a second span nobody else holds, which is what
+    /// makes stopping at one turn a state the loop can reach at all.
+    #[test]
+    fn pruning_the_owner_of_a_shared_span_hands_it_to_the_next_turn() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", &body());
+        let alone = fragment("src/only.rs:1-9", &format!("{} {}", body(), body()));
+        let mut context = context_carrying(
+            &[
+                &[shared.clone(), alone][..],
+                &[shared.clone()][..],
+                &[][..],
+                &[][..],
+            ],
+            &counter,
+        );
+        let budget = Budget::new(110, 0, Eviction::Turn)
+            .repeating(Repeat::Once)
+            .pruning(Prune::Behind);
+
+        let selection = context.select("now this", &[], budget, &counter);
+
+        let pruned = selection.pruning.as_ref().expect("the point of the case");
+        assert_eq!(
+            pruned.turns,
+            [1],
+            "only the turn that had a span of its own"
+        );
+        assert_eq!(selection.evicted, 0, "and nothing had to be dropped");
+        let users = user_messages(&selection);
+        assert!(
+            users[0].contains("[pruned] src/lib.rs:1-4")
+                && users[0].contains("[pruned] src/only.rs"),
+            "the owner stopped quoting both of them: {users:?}",
+        );
+        assert!(
+            users[1].contains("word0 word1 word2"),
+            "and the span it owned is now rendered by the next turn that carries it, \
+             which is the whole reason ownership is decided inside the window: {users:?}",
+        );
+        assert_eq!(
+            occurrences(&selection, "word0 word1 word2"),
+            1,
+            "still exactly once: {users:?}",
+        );
+    }
+
+    #[test]
+    fn the_buckets_describe_what_a_pruned_window_actually_sent() {
+        let counter = WordCounter::default();
+        let mut context = context_quoting(4, &counter);
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(90, 0, Eviction::Turn).pruning(Prune::Behind),
+            &counter,
+        );
+
+        let rendered: u32 = selection
+            .messages
+            .iter()
+            .map(|m| counter.count(&m.content))
+            .sum();
+        let plotted: u32 = selection
+            .buckets
+            .iter()
+            .filter(|b| b.name != "reserve")
+            .map(|b| b.tokens)
+            .sum();
+        assert_eq!(rendered, plotted, "{:?}", selection.buckets);
+    }
+
+    /// The fold quotes what a job was shown, verbatim, at close. Pruning is a
+    /// render rule and `Turn::code_context` keeps everything, so the bytes are
+    /// still there to quote — this is the test that says so rather than a
+    /// sentence claiming it.
+    #[test]
+    fn the_fold_still_finds_what_a_pruned_turn_was_shown() {
+        let counter = WordCounter::default();
+        let mut context = Context::new("system prompt here");
+        let job = context.propose_job("read it", Plan::default());
+        context.approve_job(job, ApprovedBy::Operator);
+        for n in 0..4 {
+            context.push_turn(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![fragment("src/lib.rs:1-4", &body())],
+                &counter,
+            );
+        }
+
+        let pruned = context.select(
+            "now this",
+            &[],
+            Budget::new(90, 0, Eviction::Turn).pruning(Prune::Behind),
+            &counter,
+        );
+        assert!(pruned.pruning.is_some(), "the point of the case");
+
+        let summary = context
+            .close_job_by(job, &counter, ClosedBy::User)
+            .expect("the job folds");
+        assert!(
+            summary.contains(&body()),
+            "the fold reads `code_context`, which pruning never touched: {summary}",
         );
     }
 }

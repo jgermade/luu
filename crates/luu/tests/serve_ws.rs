@@ -17,6 +17,8 @@ use std::time::Duration;
 use agent_core::approval::{Approval, ApproverKey, Approvers, Signer};
 use agent_core::backend::mock::Mock;
 use agent_core::context::{ApproximateCounter, Budget, Eviction, TokenCounter};
+use agent_core::protocol::VERSION;
+use agent_core::record::FORMAT;
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
 use agent_core::tools::Tools;
 use futures_util::{SinkExt, StreamExt};
@@ -351,10 +353,11 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    // 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since `refused`: a new
-    // variant of a tagged enum is a change an older reader cannot parse, which is what this
-    // number is for.
-    assert_eq!(hello["protocol"], 5);
+    // 6 since `pruned`, 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since
+    // `refused`: a new variant of a tagged enum is a change an older reader cannot parse,
+    // which is what this number is for. Read from the constant rather than typed here —
+    // the last bump broke four tests that were not about versions.
+    assert_eq!(hello["protocol"], VERSION);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
     assert!(
@@ -1571,7 +1574,7 @@ async fn a_client_that_speaks_another_protocol_is_refused_out_loud() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 4, "format": 6}),
+        serde_json::json!({"type": "hello", "protocol": VERSION - 1, "format": FORMAT - 1}),
     )
     .await;
 
@@ -1582,7 +1585,7 @@ async fn a_client_that_speaks_another_protocol_is_refused_out_loud() {
         refused["detail"]
             .as_str()
             .expect("a detail")
-            .contains("protocol 5"),
+            .contains(&format!("protocol {VERSION}")),
         "the refusal says what this host speaks: {refused}",
     );
     let closed = tokio::time::timeout(PATIENCE, socket.next())
@@ -1604,7 +1607,7 @@ async fn a_newer_client_is_refused_in_the_other_direction_too() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 6}),
+        serde_json::json!({"type": "hello", "protocol": VERSION + 1}),
     )
     .await;
 
@@ -1625,7 +1628,7 @@ async fn a_matching_client_is_greeted_and_then_ignored() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 5, "format": 7}),
+        serde_json::json!({"type": "hello", "protocol": VERSION, "format": FORMAT}),
     )
     .await;
     // Nothing comes back: a handshake that matches is not an event in the

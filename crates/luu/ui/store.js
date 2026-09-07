@@ -31,8 +31,9 @@ export const state = $reactive({
   session: null,
   turn: null,
   // `turn` is the session's number for the exchange, which is what an eviction
-  // names; `evicted` is the turn whose selection dropped this one, or null.
-  messages: [],           // { id, turn, role, text, task, reason, usage, evicted }
+  // names; `evicted` is the turn whose selection dropped this one, or null, and
+  // `pruned` the turn whose selection took its quotes away.
+  messages: [],           // { id, turn, role, text, task, reason, usage, evicted, pruned }
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
@@ -67,6 +68,11 @@ export const state = $reactive({
   // the buckets say what the prompt is worth, this says what stopped being in
   // it. Null in a session that never filled its window.
   evicted: null,          // { turn, turns, tokens, counter, policy }
+  // The last thing the window stopped quoting. Beside `evicted` and not merged
+  // into it: an evicted turn is gone, a pruned one is still here and still
+  // answerable, and it is the second that this client exists to make visible —
+  // a turn that reads as grounded whose grounding is no longer in the prompt.
+  pruned: null,           // { turn, turns, tokens, counter }
   // Whether this session is a recording rather than a server. The status word
   // is not the same question: it says "running" while a recorded turn plays,
   // and a composer that reads the status is enabled over a recording nobody can
@@ -293,6 +299,21 @@ function onProtocol(message) {
       break
     }
 
+    // What stopped being quoted, and stays unquoted. Same shape as `evicted`
+    // and a different fact: the turn is still in the transcript and still
+    // answers, it just no longer carries the bytes it was answered from.
+    case "pruned": {
+      const quiet = new Set(message.turns)
+      state.messages = state.messages.map(m => quiet.has(m.turn) ? { ...m, pruned: message.turn } : m)
+      state.pruned = {
+        turn: message.turn,
+        turns: message.turns,
+        tokens: message.tokens,
+        counter: message.counter,
+      }
+      break
+    }
+
     case "token":
       appendToken(message.text)
       break
@@ -504,6 +525,7 @@ function reset() {
   state.error = null
   state.refused = null
   state.evicted = null
+  state.pruned = null
   state.turn = null
   pending = ""
 }
@@ -685,7 +707,7 @@ export async function refreshLiveSession() {
           task: t.job,
           reason: null,
           usage: null,
-          evicted: null,
+          evicted: null, pruned: null,
         })
       }
       if (t.text || (t.tools && t.tools.length)) {
@@ -698,7 +720,7 @@ export async function refreshLiveSession() {
           task: t.job,
           reason: null,
           usage: t.usage || null,
-          evicted: null,
+          evicted: null, pruned: null,
         })
       }
     }

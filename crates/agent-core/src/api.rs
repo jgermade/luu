@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::{Counter, Evicted};
+use crate::context::{Counter, Evicted, Pruned};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
@@ -147,6 +147,18 @@ pub struct TurnView {
     /// a debug client is for.
     #[serde(default)]
     pub evicted_by: Option<TurnId>,
+    /// What this turn's selection stopped quoting. Beside `dropped` and not
+    /// merged into it: an evicted turn is gone and a pruned one is still
+    /// answerable, and a view that could not tell them apart could not show the
+    /// policy that produced either.
+    #[serde(default)]
+    pub unquoted: Option<Pruned>,
+    /// The turn whose selection took this one's quotes away. The transcript
+    /// keeps the turn and marks it, for `evicted_by`'s reason: the difference
+    /// between what a person sees and what the model was sent is the one thing
+    /// a debug client is for.
+    #[serde(default)]
+    pub pruned_by: Option<TurnId>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -168,6 +180,8 @@ impl TurnView {
             tools: Vec::new(),
             dropped: None,
             evicted_by: None,
+            unquoted: None,
+            pruned_by: None,
             started_at_ms,
             ended_at_ms: None,
         }
@@ -328,6 +342,25 @@ impl SessionView {
                 for dropped in turns {
                     if let Some(view) = self.turn_mut(*dropped) {
                         view.evicted_by = Some(*turn);
+                    }
+                }
+            }
+            ServerMessage::Pruned {
+                turn,
+                turns,
+                tokens,
+                counter,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.unquoted = Some(Pruned {
+                        turns: turns.clone(),
+                        tokens: *tokens,
+                        counter: counter.clone(),
+                    });
+                }
+                for quiet in turns {
+                    if let Some(view) = self.turn_mut(*quiet) {
+                        view.pruned_by = Some(*turn);
                     }
                 }
             }

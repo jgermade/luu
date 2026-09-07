@@ -49,7 +49,15 @@ use crate::trace::TraceMessage;
 /// belongs to the host that made it, so no stream ever arrives from elsewhere.
 /// Un-made with the protocol bump beside it, for the same reason. See
 /// `RECORD/2026-09-04.sessions-stay-home.completed.md`.
-pub const FORMAT: u32 = 7;
+///
+/// 8, for real this time: `pruned` lines. A new variant of the tagged enum, so
+/// the same rule as 3, 4, 5 and 7 — and the number the un-made bump above had
+/// briefly taken, reused because nothing ever wrote it. A reader without it
+/// would see a turn's `history` bucket fall and have nothing saying which turns
+/// stopped quoting themselves, which is the arithmetic-or-policy ambiguity
+/// `eviction-tombstones` closed for the other way history gives way. See
+/// `RECORD/2026-09-07.pruning-behind.completed.md`.
+pub const FORMAT: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]

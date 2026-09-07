@@ -413,8 +413,16 @@ then holds still), and `--tokenizer` points at the model's `tokenizer.json`.
 `--repeat-once` renders a span in the **oldest** turn of the window that carries
 it instead of in every turn that selected it — off, because it changes numbers
 every recording on disk was made without, and oldest rather than newest because
-that is what leaves the block above the newest message byte-identical. See
-[`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md).
+that is what leaves the block above the newest message byte-identical.
+`--prune-behind` goes a rung further when the window fills: the oldest turns
+stop quoting, leaving a line naming what went, *before* any turn is dropped. It
+costs 1.2% more tokens on the grounded script and evicts nothing where the
+default evicts thirteen turns of twenty, which is the trade and not a bug. Both
+are off, and both are off for a second reason too — no model has been asked
+whether it reads a span eleven turns up, or a tombstone, as well as the bytes.
+See [`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md),
+[`RECORD/2026-09-07.pruning-behind.completed.md`](RECORD/2026-09-07.pruning-behind.completed.md)
+and [`RECORD/2026-09-07.can-a-model-read-a-tombstone.WIP.md`](RECORD/2026-09-07.can-a-model-read-a-tombstone.WIP.md).
 A cut says so: the run prints `== evicted turn N` and the recording carries an
 `evicted` line naming the turns that left, what they were worth, who counted
 them and which policy did it. Over the same twenty prompts at 1024 tokens that

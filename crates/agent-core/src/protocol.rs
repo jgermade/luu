@@ -58,7 +58,18 @@ use crate::turn::{EndReason, TurnEvent};
 /// bump was un-made rather than left standing — a number whose whole job is to
 /// tell two peers what they can parse must not carry a variant that no longer
 /// exists. See `RECORD/2026-09-04.sessions-stay-home.completed.md`.
-pub const VERSION: u32 = 5;
+///
+/// **6 is the rule used a fourth time**, for [`ServerMessage::Pruned`] — and it
+/// is 6 rather than 7 because the number above says so: the bump that briefly
+/// carried `imported` was un-made, so nothing ever spoke a 6 and reusing it
+/// leaves the sequence without a hole. It is
+/// here rather than on the trace channel for exactly [`ServerMessage::Evicted`]'s
+/// reason, one step further in: a pruned turn is *still in the transcript* and
+/// no longer carries the bytes it was answered from, so a client that could not
+/// parse this would draw a grounded-looking turn whose grounding is not in the
+/// prompt — a worse lie than the one that made eviction a message. See
+/// `RECORD/2026-09-07.pruning-behind.completed.md`.
+pub const VERSION: u32 = 6;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -234,6 +245,14 @@ pub enum ServerMessage {
         counter: Counter,
         policy: Eviction,
     },
+    /// What stopped being quoted, and stays unquoted. The turn is still here:
+    /// what left it is the code it was answered from.
+    Pruned {
+        turn: TurnId,
+        turns: Vec<TurnId>,
+        tokens: u32,
+        counter: Counter,
+    },
     /// The fold stops applying. Not an undo — nothing was deleted.
     #[serde(alias = "task_reopened")]
     JobReopened {
@@ -369,7 +388,8 @@ impl ServerMessage {
             | Self::ToolResult { turn, .. }
             // The turn that cut, not the turns that left: this is a thing the
             // selection for `turn` did.
-            | Self::Evicted { turn, .. } => Some(*turn),
+            | Self::Evicted { turn, .. }
+            | Self::Pruned { turn, .. } => Some(*turn),
             // A task spans turns and its lifecycle happens between them, and a
             // refusal is about the ask rather than about a turn — three of the
             // four happen when there is no turn to name.

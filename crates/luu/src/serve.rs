@@ -1715,6 +1715,15 @@ async fn begin_turn(
     // Before the prompt it explains: this is what the turn no longer carries,
     // and a client reading in order should learn that the history was cut
     // before it is handed the prompt that was cut from.
+    if let Some(pruned) = selection.pruning.clone() {
+        app.publish(Event::Protocol(ServerMessage::Pruned {
+            turn,
+            turns: pruned.turns,
+            tokens: pruned.tokens,
+            counter: pruned.counter,
+        }))
+        .await;
+    }
     if let Some(evicted) = selection.eviction.clone() {
         app.publish(Event::Protocol(ServerMessage::Evicted {
             turn,

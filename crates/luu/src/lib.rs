@@ -9,7 +9,7 @@ use std::time::Duration;
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
-use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Repeat};
+use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat};
 use agent_core::fragment;
 use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
@@ -314,6 +314,14 @@ enum Command {
         #[arg(long)]
         repeat_once: bool,
 
+        /// When the window fills, take the code out of the oldest turns before
+        /// dropping the turns themselves — a pruned turn keeps its question and
+        /// its answer and leaves a line naming what it stopped quoting. How
+        /// deep it goes is `--evict`'s target, not a knob of its own. Off, for
+        /// `--repeat-once`'s reason.
+        #[arg(long)]
+        prune_behind: bool,
+
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
         #[arg(long)]
@@ -473,6 +481,14 @@ enum Command {
         /// made without it stays comparable to every recording on disk.
         #[arg(long)]
         repeat_once: bool,
+
+        /// When the window fills, take the code out of the oldest turns before
+        /// dropping the turns themselves — a pruned turn keeps its question and
+        /// its answer and leaves a line naming what it stopped quoting. How
+        /// deep it goes is `--evict`'s target, not a knob of its own. Off, for
+        /// `--repeat-once`'s reason.
+        #[arg(long)]
+        prune_behind: bool,
 
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
@@ -642,6 +658,14 @@ enum Command {
         /// made without it stays comparable to every recording on disk.
         #[arg(long)]
         repeat_once: bool,
+
+        /// When the window fills, take the code out of the oldest turns before
+        /// dropping the turns themselves — a pruned turn keeps its question and
+        /// its answer and leaves a line naming what it stopped quoting. How
+        /// deep it goes is `--evict`'s target, not a knob of its own. Off, for
+        /// `--repeat-once`'s reason.
+        #[arg(long)]
+        prune_behind: bool,
 
         /// Pin the sampler's temperature, so two runs meant to be compared
         /// differ only by what they're testing. Unset leaves it to the
@@ -1085,6 +1109,14 @@ fn repeat(once: bool) -> Repeat {
     match once {
         true => Repeat::Once,
         false => Repeat::Always,
+    }
+}
+
+/// `--prune-behind`, the same way.
+fn prune(behind: bool) -> Prune {
+    match behind {
+        true => Prune::Behind,
+        false => Prune::Keep,
     }
 }
 
@@ -1540,6 +1572,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        prune_behind,
         temperature,
         seed,
         map_tokens,
@@ -1603,7 +1636,8 @@ pub async fn run() -> Result<()> {
             model,
             record,
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
-                .repeating(repeat(repeat_once)),
+                .repeating(repeat(repeat_once))
+                .pruning(prune(prune_behind)),
             counter,
             agency,
             temperature,
@@ -1639,6 +1673,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        prune_behind,
         temperature,
         seed,
         map_tokens,
@@ -1692,7 +1727,8 @@ pub async fn run() -> Result<()> {
             model,
             record,
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
-                .repeating(repeat(repeat_once)),
+                .repeating(repeat(repeat_once))
+                .pruning(prune(prune_behind)),
             counter,
             agency,
             temperature,
@@ -1729,6 +1765,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        prune_behind,
         temperature,
         seed,
         map_tokens,
@@ -1775,8 +1812,9 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
-    let budget =
-        Budget::new(context_limit, reserve, evict.policy(low_water)).repeating(repeat(repeat_once));
+    let budget = Budget::new(context_limit, reserve, evict.policy(low_water))
+        .repeating(repeat(repeat_once))
+        .pruning(prune(prune_behind));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -1993,7 +2031,28 @@ pub async fn run() -> Result<()> {
 
         // Said out loud, not only into the recording: a run that quietly
         // forgets half its history looks exactly like one that answers from all
-        // of it, and the difference is the whole subject.
+        // of it, and the difference is the whole subject. Pruning first,
+        // because that is the order it happened in.
+        if let Some(pruned) = &selection.pruning {
+            let turns = pruned
+                .turns
+                .iter()
+                .map(|turn| turn.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "\n== turn{} {turns} stopped quoting — {} tokens{} of code out of the window, still answerable",
+                match pruned.turns.len() {
+                    1 => "",
+                    _ => "s",
+                },
+                pruned.tokens,
+                match pruned.counter.is_approximate() {
+                    true => " (approximate)",
+                    false => "",
+                },
+            );
+        }
         if let Some(evicted) = &selection.eviction {
             let turns = evicted
                 .turns
@@ -2024,6 +2083,14 @@ pub async fn run() -> Result<()> {
             // Before the prompt it explains, so a file reads in the order the
             // session happened: the history was cut, then this is what was
             // sent.
+            if let Some(pruned) = selection.pruning.clone() {
+                recorder.write(&Event::Protocol(ServerMessage::Pruned {
+                    turn,
+                    turns: pruned.turns,
+                    tokens: pruned.tokens,
+                    counter: pruned.counter,
+                }));
+            }
             if let Some(evicted) = selection.eviction.clone() {
                 recorder.write(&Event::Protocol(ServerMessage::Evicted {
                     turn,
