@@ -118,10 +118,11 @@ struct App {
     /// history that only ever holds one thing.
     session_id: Mutex<String>,
     map_rendered: String,
-    /// The tree, tagged once at startup, that a selection is chosen from.
-    /// Empty when selection is off, and it is the walk rather than the choosing
-    /// that is expensive — the choosing is a scan of what this already holds.
-    walked: Vec<agent_core::repo_map::Walked>,
+    /// The tree a selection is chosen from, tagged at startup and **re-stamped
+    /// before every turn** — `rewalk_sources` re-parses only the files whose
+    /// mtime or length moved, because it is the parse rather than the choosing
+    /// that is expensive. Empty when selection is off.
+    walked: Mutex<Vec<agent_core::repo_map::Walked>>,
     /// What this server resolved, rendered once for `GET /api/settings`.
     settings: Settings,
     /// Tokens of selected fragments per turn. 0 is off.
@@ -260,10 +261,14 @@ impl App {
 
         // Beside the map and not for the map's reason. The map is built once
         // because it is a *prefix* and a prefix rebuilt mid-session is not one;
-        // this is built once because walking and tagging the tree is the
-        // expensive half of selection and it depends on the tree rather than on
-        // the turn. A file written mid-session is therefore not selectable
-        // until a restart, which is the same staleness the map already accepts.
+        // this is the seed of a cache that is re-stamped every turn.
+        //
+        // It used to be built once and kept, and the comment here said a file
+        // written mid-session was "not selectable until a restart". That was
+        // the benign reading of the wrong behaviour: a file edited mid-session
+        // stayed selectable at its *startup line numbers*, and the fragment
+        // loader reads the current file at them — so the turn got the wrong
+        // lines under the right path. See `rewalk_sources`.
         let walked = match select_tokens > 0 {
             true => {
                 let walked = agent_core::repo_map::walk_sources(agency.sandbox.as_ref());
@@ -338,7 +343,7 @@ impl App {
             backend,
             model,
             approvers,
-            walked,
+            walked: Mutex::new(walked),
             select_tokens,
             select_weights,
             session: Mutex::new(Session {
@@ -1639,8 +1644,37 @@ async fn begin_turn(
                     Some((_, sandbox)) => sandbox.clone(),
                     None => app.agency.sandbox.clone(),
                 };
+                // Re-stamped before it is scored, because the walk is a cache
+                // of line numbers and this turn may be answering after an edit
+                // the last turn made. Through the **agency's** sandbox: the
+                // cache belongs to the session, and refreshing it through a
+                // narrow plan would shrink it for every turn after. The
+                // narrowing is applied at the read, below and inside `select`.
+                //
+                // On a blocking thread, for the reason every other filesystem
+                // call in a turn is: a `std::fs` call inline in an `async`
+                // block never yields, so the loop's deadline above it never
+                // fires.
+                let mut walked = app.walked.lock().await;
+                let previous = std::mem::take(&mut *walked);
+                let agency = app.agency.sandbox.clone();
+                let rewalked = match tokio::task::spawn_blocking(move || {
+                    agent_core::repo_map::rewalk_sources(agency.as_ref(), &previous)
+                })
+                .await
+                {
+                    Ok(rewalked) => rewalked,
+                    Err(error) => std::panic::resume_unwind(error.into_panic()),
+                };
+                if rewalked.changed() {
+                    eprintln!(
+                        "selection — re-walked: {} changed, {} added, {} dropped",
+                        rewalked.reparsed, rewalked.added, rewalked.dropped,
+                    );
+                }
+                *walked = rewalked.walked;
                 agent_core::select::select(
-                    &app.walked,
+                    &walked,
                     sandbox.as_ref(),
                     &text,
                     tokens,
@@ -2305,7 +2339,13 @@ mod tests {
     /// these two builders differ by — a test that changed more than the flag
     /// would not be measuring the flag.
     fn app_selecting(replies: &[&str], select_tokens: u32) -> Arc<App> {
-        let base = std::env::current_dir().unwrap();
+        app_selecting_in(replies, select_tokens, std::env::current_dir().unwrap())
+    }
+
+    /// The same, over a tree the test owns and may edit. Nothing here writes
+    /// into the checkout: a test that edited this repository to prove a point
+    /// about staleness would be the worst possible way to prove it.
+    fn app_selecting_in(replies: &[&str], select_tokens: u32, base: PathBuf) -> Arc<App> {
         let agency = Agency {
             tools: Arc::new(agent_core::tools::Tools::standard()),
             sandbox: Arc::new(
@@ -2317,10 +2357,10 @@ mod tests {
         let agency_walk = agency.sandbox.clone();
         Arc::new(App {
             approvers: Approvers::default(),
-            walked: match select_tokens {
+            walked: Mutex::new(match select_tokens {
                 0 => Vec::new(),
                 _ => agent_core::repo_map::walk_sources(agency_walk.as_ref()),
-            },
+            }),
             select_tokens,
             select_weights: Default::default(),
             backend: Arc::new(
@@ -2370,6 +2410,35 @@ mod tests {
             session_started_at: Mutex::new(0),
             stream: Mutex::new(Vec::new()),
         })
+    }
+
+    /// A directory that removes itself, so a failing test does not leave one
+    /// behind and the next run does not read it.
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "luu-{name}-{}-{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("a clock after 1970")
+                    .as_nanos(),
+            ));
+            std::fs::create_dir_all(&path).expect("the temporary directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     /// The handlers spawn, so the assertions wait for the state they are about.
@@ -2537,6 +2606,102 @@ mod tests {
         assert!(session.context.job(1).unwrap().summary.is_none());
     }
 
+    /// The test that would have caught the stale walk, at the seam it was on.
+    ///
+    /// `repo_map`'s own tests cover `rewalk_sources`; this one covers the thing
+    /// that was actually broken, which is that nothing in `serve` called
+    /// anything like it. Two turns of one session with the file changing in
+    /// between: turn one sees the definition, the file moves under the session,
+    /// turn two must still see the definition and not the bytes that are now at
+    /// its old line numbers.
+    ///
+    /// The edit is made by the test rather than by a tool call, and that is the
+    /// honest shape: what is under test is the seam between the walk and the
+    /// filesystem, not `edit_file`. A turn that wrote the file through the tool
+    /// would exercise more and prove the same thing less directly.
+    #[tokio::test]
+    async fn a_second_turn_selects_the_file_as_it_is_now() {
+        // Two definitions, so the first one's span *ends* before the second
+        // rather than running to the end of the file. A span that ran to EOF
+        // would still contain the definition after everything shifted down,
+        // and the test would pass against the bug it exists to catch.
+        const BEACON: &str = "//! The beacon, which exists to be found.\n\
+                              \n\
+                              pub fn find_the_beacon() {\n\
+                                  let beacon = 1;\n\
+                              }\n\
+                              \n\
+                              pub fn something_else() {\n\
+                                  let other = 2;\n\
+                              }\n";
+        const PLAN_FOR_BEACON: &str = "```plan\n{\"objective\":\"find it\",\
+                                       \"tasks\":[\"read it\"],\
+                                       \"files\":[\"src/beacon.rs\"],\
+                                       \"commands\":[]}\n```";
+        const ASK: &str = "find_the_beacon";
+
+        let dir = TempRepo::new("serve-rewalk");
+        std::fs::create_dir_all(dir.path().join("src")).expect("the source directory");
+        std::fs::write(dir.path().join("src/beacon.rs"), BEACON).expect("beacon.rs");
+
+        let app = app_selecting_in(
+            &[PLAN_FOR_BEACON, "the answer", "the answer again"],
+            2048,
+            dir.path().to_path_buf(),
+        );
+
+        on_prompt(app.clone(), ASK.into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve_job(
+            app.clone(),
+            1,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+
+        let held = |session: &Session, turn: usize| -> String {
+            session.context.turns()[turn]
+                .code_context
+                .iter()
+                .map(|fragment| fragment.text.clone())
+                .collect()
+        };
+        assert!(
+            held(&*app.session.lock().await, 0).contains("pub fn find_the_beacon"),
+            "the first turn has to hold it, or the second turn proves nothing",
+        );
+
+        // Thirty lines above everything — more than the definition's own span,
+        // so the old range cannot overlap the new position by accident.
+        std::fs::write(
+            dir.path().join("src/beacon.rs"),
+            format!("{}{BEACON}", "// pushed down\n".repeat(30)),
+        )
+        .expect("the edit");
+
+        on_prompt(app.clone(), ASK.into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
+
+        let session = app.session.lock().await;
+        let second = held(&session, 1);
+        assert!(
+            second.contains("pub fn find_the_beacon"),
+            "the second turn was handed the file's old line numbers: {second:?}",
+        );
+        assert!(
+            !second.contains("// pushed down\n// pushed down"),
+            "and it was handed the definition rather than the padding that took \
+             its place: {second:?}",
+        );
+    }
+
     /// The reason selection is allowed in `serve` at all.
     ///
     /// The gate exists so a person decides what a job may touch. A selector
@@ -2550,8 +2715,9 @@ mod tests {
                                 \"tasks\":[\"read it\"],\"files\":[\"src/serve.rs\"],\
                                 \"commands\":[]}\n```";
         let app = app_selecting(&[ONE_FILE, "the answer"], 2048);
+        let walked = app.walked.lock().await.clone();
         assert!(
-            !app.walked.is_empty(),
+            !walked.is_empty(),
             "the walk found nothing, so this test would pass by holding zero files",
         );
 
@@ -2560,7 +2726,7 @@ mod tests {
         // query that was only ever going to pick one thing.
         const ASK: &str = "the session store, the http server and the exporter";
         let unnarrowed = agent_core::select::select(
-            &app.walked,
+            &walked,
             app.agency.sandbox.as_ref(),
             ASK,
             2048,

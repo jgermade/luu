@@ -39,6 +39,7 @@ struck through at the top of it.
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | item 8 is unrelated; this waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 | 11 | ~**Naming a provider** — where a model lives, written down once: `[provider.<name>]` in the state directory's `config.toml`, `-p <name>` and `-m <model>`, and a `default` profile that will not load pointing off the machine without `remote = true`~ **answered `local-first`'s first open question with *not `luu.toml`*, and narrowed the declaration to the default profile alone the same day it was written: `-p` is the destination being typed** | nothing | [`naming-a-provider`](../../RECORD/2026-09-07.naming-a-provider.completed.md) |
 | 12 | ~**Configuring from the browser** — a modal with what this server resolved (read-only, including the window caveat nobody in a browser ever saw) and the providers (editable, **loopback only**). ~ **corrected item 11's closing sentence — editing the file is not a picker — and inverted its own: the browser never classifies a URL, the loader refuses the write and names the host to type back, so the rule has one implementation** | nothing | [`configuring-from-the-browser`](../../RECORD/2026-09-07.configuring-from-the-browser.completed.md) |
+| 13 | ~**Resolving a symbol** — a symbol index keyed on `(path, qualified name)`, so a citation can be re-resolved after an edit~ **rejected the day it was written, and the reading that rejected it found the live bug underneath: `walk_sources` ran once per process and nothing refreshed it, so an edited file stayed selectable at its *startup line numbers* and the loader read the current file at them. Fixed with a stamp and `rewalk_sources`; the index is not being built and `edit_file`'s `old_string` stays the model's, because deriving it from disk would remove the optimistic lock. **The two-turn test at the `serve` seam, run against the fix removed, hands turn two four lines of padding as the definition it asked for** | nothing | [`resolving-a-symbol`](../../RECORD/2026-09-07.resolving-a-symbol.completed.md) §later |
 
 ```mermaid
 gantt
@@ -57,6 +58,7 @@ gantt
     Configuring from the browser (modal)   :done, modal, 2026-09-07, 1d
     openat2(RESOLVE_BENEATH)               :done, toctou, 2026-09-05, 1d
     Enforcement per job                    :enf, 2026-09-06, 2d
+    Resolving a symbol (rejected; cache fixed) :done, sym, 2026-09-07, 1d
     section Waiting on hardware
     Fleet measurements across machines     :crit, bench, 2026-09-05, 10d
     Precision, with a model in the loop    :done, prec, 2026-09-06, 1d
@@ -111,6 +113,19 @@ gantt
   it code-shaped is the second half: a named destination is commitment 3
   (*nothing leaves the machine without the destination having been typed*)
   weakened, and the file has to be built to hold what is left of it.
+- **Item 13 was proposed and rejected on the same day, and it still paid.** The
+  proposal was a symbol index; the reading done to schedule it found that the
+  failure the index was invented for is **already in the tree and caused by
+  something else**. `walk_sources` was called once per process and `app.walked`
+  was read every turn and never refreshed, so a file the session edited did not
+  become unselectable — it stayed selectable at its startup line numbers, and
+  `crate::fragment` read the *current* file at them. Wrong lines, right path,
+  presented as the definition. The comment beside the cache drew the benign
+  conclusion ("not selectable until a restart") and that is the sentence the fix
+  had to correct. A stamp per file and a re-walk of what moved closes it; the
+  index closes nothing that is left. **`--select-tokens` was the only flag
+  affected, and it is off by default, so no recording on disk is invalidated.**
+
 - **Items 4 and 6 were argued on 2026-09-06, and both came back changed.** A
   roadmap entry is a link to an argument, and until that day these two linked to
   the design's open questions instead — the honest way to say *ordered but not

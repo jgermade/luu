@@ -28,6 +28,7 @@
 //! See `RECORD/2026-08-31.the-repo-map.completed.md` and
 //! `RECORD/2026-09-02.ranking-the-map.completed.md`.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use tree_sitter::StreamingIterator;
@@ -151,6 +152,37 @@ pub struct Walked {
     pub doc: String,
     /// How many lines it has, so the last definition has an end.
     pub lines: usize,
+    /// What the file looked like to `stat` when it was parsed, so a later walk
+    /// can tell that this parse is still the file. `None` when the metadata
+    /// could not be read, which [`rewalk_sources`] treats as changed.
+    pub stamp: Option<Stamp>,
+}
+
+/// What says a file has not changed since it was parsed.
+///
+/// Modification time **and** length, because neither alone is enough: mtime
+/// granularity is a whole second on filesystems this will meet, and a length
+/// catches most of what two edits inside one tick would hide. It is a
+/// heuristic, and the bound is worth writing down rather than discovering — a
+/// same-length edit within the same mtime tick is not detected. Closing that
+/// means hashing every file on every turn, which is the cost this exists to
+/// avoid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    pub modified: std::time::SystemTime,
+    pub len: u64,
+}
+
+impl Stamp {
+    /// `None` rather than a default, because a file whose metadata cannot be
+    /// read must re-parse rather than be assumed unchanged.
+    fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: meta.modified().ok()?,
+            len: meta.len(),
+        })
+    }
 }
 
 impl Walked {
@@ -175,6 +207,90 @@ pub fn walk_sources(sandbox: &Sandbox) -> Vec<Walked> {
         .iter()
         .filter_map(|path| read_tags(sandbox, path))
         .collect()
+}
+
+/// What a re-walk found, so a caller can say whether the tree moved rather
+/// than assume it did not.
+#[derive(Debug, Clone, Default)]
+pub struct Rewalked {
+    pub walked: Vec<Walked>,
+    /// Files whose stamp changed, and which were therefore parsed again.
+    pub reparsed: usize,
+    /// Files this walk found that the previous one did not.
+    pub added: usize,
+    /// Files the previous walk had that are gone, unreadable, or now refused.
+    pub dropped: usize,
+}
+
+impl Rewalked {
+    /// Whether anything at all moved. A caller that rebuilds a cached block
+    /// wants this rather than the counts.
+    pub fn changed(&self) -> bool {
+        self.reparsed + self.added + self.dropped > 0
+    }
+}
+
+/// The same walk again, parsing only the files whose stamp moved.
+///
+/// **This exists because a walk kept from startup does not fail quiet, it
+/// answers wrong.** A `Walked` carries each definition's line, `select` turns
+/// that into `path:START-END`, and [`crate::fragment`] reads *the file as it is
+/// now* at those numbers. So an edit above a definition does not make the file
+/// unselectable — the range still parses, still passes the sandbox and still
+/// returns a fragment, of the wrong lines, labelled as the definition that was
+/// asked for. Not selecting it would have been the safe failure.
+///
+/// Walk with the **agency's** sandbox, not a job's narrowed one: the walk is
+/// the session's cache, and refreshing it through a narrow plan would shrink it
+/// for every turn after. Narrowing belongs at the read, which is where
+/// [`crate::select`] already applies it.
+pub fn rewalk_sources(sandbox: &Sandbox, previous: &[Walked]) -> Rewalked {
+    let prior: HashMap<&str, &Walked> = previous
+        .iter()
+        .map(|file| (file.outline.path.as_str(), file))
+        .collect();
+
+    let mut walked = Vec::new();
+    let mut reparsed = 0;
+    let mut added = 0;
+    for path in sources(sandbox) {
+        let check = sandbox.check_path(&path, Access::Read);
+        if !check.verdict.allowed {
+            continue;
+        }
+        let before = prior.get(display_path(sandbox, &path).as_str()).copied();
+        // One `stat` against one parse, which is the whole trade.
+        if let (Some(before), Some(stamp)) = (before, Stamp::of(&check.path))
+            && before.stamp == Some(stamp)
+        {
+            walked.push(before.clone());
+            continue;
+        }
+        let Some(file) = read_tags(sandbox, &path) else {
+            continue;
+        };
+        match before {
+            Some(_) => reparsed += 1,
+            None => added += 1,
+        }
+        walked.push(file);
+    }
+
+    let now: HashSet<&str> = walked
+        .iter()
+        .map(|file| file.outline.path.as_str())
+        .collect();
+    let dropped = previous
+        .iter()
+        .filter(|file| !now.contains(file.outline.path.as_str()))
+        .count();
+
+    Rewalked {
+        walked,
+        reparsed,
+        added,
+        dropped,
+    }
 }
 
 /// The map, built once and rendered as one block.
@@ -412,6 +528,12 @@ fn read_tags(sandbox: &Sandbox, path: &Path) -> Option<Walked> {
     if !check.verdict.allowed {
         return None;
     }
+    // Stamped *before* the read, and the order is the whole of the safety. A
+    // write landing between the two then leaves a stamp older than the bytes,
+    // so the next walk sees a mismatch and re-parses — one wasted parse. The
+    // other order records the *new* stamp against the *old* parse, and the next
+    // walk keeps it: stale, and silently.
+    let stamp = Stamp::of(&check.path);
     let source = std::fs::read_to_string(&check.path).ok()?;
     let tags = tags(&source);
     Some(Walked {
@@ -425,6 +547,7 @@ fn read_tags(sandbox: &Sandbox, path: &Path) -> Option<Walked> {
         },
         doc: module_doc(&source),
         lines: source.lines().count(),
+        stamp,
     })
 }
 
@@ -729,6 +852,145 @@ fn private_helper(x: u32) -> u32 {
         assert!(
             !text.iter().any(|line| line.contains("mod tests")),
             "{text:?}"
+        );
+    }
+
+    /// The stale walk, named as what it does rather than as what it fails to do.
+    ///
+    /// A walk kept from startup does not stop offering an edited file — it
+    /// offers it at the line numbers it had before the edit, and the fragment
+    /// loader reads the current file at them. So the failure is a wrong answer
+    /// under a right path, and the assertion is on the *line*, not on presence.
+    #[test]
+    fn a_rewalk_moves_a_definition_that_an_edit_pushed_down() {
+        let (dir, sandbox) = fixture();
+        let before = walk_sources(&sandbox);
+        let one = |walked: &[Walked]| -> Vec<Entry> {
+            walked
+                .iter()
+                .find(|file| file.outline.path == "src/one.rs")
+                .expect("src/one.rs is in the walk")
+                .outline
+                .entries
+                .clone()
+        };
+        let was = one(&before);
+        let budget = was
+            .iter()
+            .find(|entry| entry.text == "pub struct Budget")
+            .expect("the struct is outlined")
+            .line;
+
+        // Four lines above everything, which is what an `edit_file` near the
+        // top of a file does to every definition under it.
+        std::fs::write(
+            dir.path().join("src/one.rs"),
+            format!("// one\n// two\n// three\n// four\n{SOURCE}"),
+        )
+        .expect("the edit");
+
+        let after = rewalk_sources(&sandbox, &before);
+        assert_eq!(
+            (after.reparsed, after.added, after.dropped),
+            (1, 0, 0),
+            "one file changed and nothing else did",
+        );
+        let now = one(&after.walked)
+            .into_iter()
+            .find(|entry| entry.text == "pub struct Budget")
+            .expect("the struct is still outlined")
+            .line;
+        assert_eq!(
+            now,
+            budget + 4,
+            "the walk still says the struct is where it was before the edit",
+        );
+    }
+
+    /// The harm, end to end, which is the reason any of this is here.
+    ///
+    /// Not "an edited file stops being selectable" — it stays selectable, and
+    /// the turn is handed the bytes that are at the old line numbers now. A
+    /// wrong answer under a right path, which is the failure this project
+    /// refuses everywhere else.
+    #[test]
+    fn a_stale_walk_selects_the_wrong_lines_and_a_rewalk_does_not() {
+        let (dir, sandbox) = fixture();
+        let stale = walk_sources(&sandbox);
+
+        let fragment = |walked: &[Walked]| -> String {
+            let selection = crate::select::select(
+                walked,
+                &sandbox,
+                "Budget",
+                4096,
+                &ApproximateCounter,
+                &crate::select::Weights::default(),
+            );
+            selection
+                .specs()
+                .iter()
+                .filter_map(|spec| crate::fragment::load(&sandbox, spec).ok())
+                .map(|fragment| fragment.text)
+                .collect()
+        };
+
+        assert!(
+            fragment(&stale).contains("pub struct Budget"),
+            "the walk and the file agree before anything is edited",
+        );
+
+        // What a turn does with `edit_file` near the top of a file.
+        std::fs::write(
+            dir.path().join("src/one.rs"),
+            format!("// one\n// two\n// three\n// four\n{SOURCE}"),
+        )
+        .expect("the edit");
+
+        assert!(
+            !fragment(&stale).contains("pub struct Budget"),
+            "this is the bug: the stale walk still points at src/one.rs, and the \
+             lines it points at are no longer the definition",
+        );
+        assert!(
+            fragment(&rewalk_sources(&sandbox, &stale).walked).contains("pub struct Budget"),
+            "a re-stamped walk reads the definition where the edit left it",
+        );
+    }
+
+    #[test]
+    fn a_rewalk_keeps_the_parse_of_a_file_that_did_not_change() {
+        let (_dir, sandbox) = fixture();
+        let before = walk_sources(&sandbox);
+        let again = rewalk_sources(&sandbox, &before);
+
+        assert!(
+            !again.changed(),
+            "nothing was touched between the two walks"
+        );
+        assert_eq!(again.reparsed, 0, "an unchanged file is not parsed twice");
+        let paths = |walked: &[Walked]| -> Vec<String> {
+            walked.iter().map(|f| f.outline.path.clone()).collect()
+        };
+        assert_eq!(paths(&before), paths(&again.walked));
+    }
+
+    #[test]
+    fn a_rewalk_counts_what_appeared_and_what_went_away() {
+        let (dir, sandbox) = fixture();
+        let before = walk_sources(&sandbox);
+
+        std::fs::write(dir.path().join("src/three.rs"), "pub fn three() {}\n").expect("three.rs");
+        std::fs::remove_file(dir.path().join("src/two.rs")).expect("removing two.rs");
+
+        let after = rewalk_sources(&sandbox, &before);
+        assert_eq!((after.added, after.dropped, after.reparsed), (1, 1, 0));
+        assert!(
+            after
+                .walked
+                .iter()
+                .all(|file| file.outline.path != "src/two.rs"),
+            "a deleted file is not still selectable",
         );
     }
 
