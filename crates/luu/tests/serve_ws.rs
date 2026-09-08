@@ -1627,7 +1627,7 @@ async fn a_matching_client_is_greeted_and_then_ignored() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 5, "format": 7}),
+        serde_json::json!({"type": "hello", "protocol": 5, "format": 8}),
     )
     .await;
     // Nothing comes back: a handshake that matches is not an event in the

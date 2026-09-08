@@ -1833,6 +1833,15 @@ async fn begin_turn(
     if let Some(reuse) = reuse {
         app.publish(Event::Trace(reuse)).await;
     }
+    if let Some(pruned) = selection.pruning.clone() {
+        app.publish(Event::Trace(TraceMessage::Pruned {
+            turn,
+            turns: pruned.turns,
+            tokens: pruned.tokens,
+            counter: pruned.counter,
+        }))
+        .await;
+    }
     // Published before the call: this is what we decided to send. A turn that
     // gets cancelled has a budget too, which the old after-the-fact version
     // could not report.

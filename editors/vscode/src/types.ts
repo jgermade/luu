@@ -3,7 +3,7 @@
 /// What this client speaks. Sent as the first message so a host that speaks
 /// something else refuses it out loud, rather than by misreading the next one.
 export const PROTOCOL = 5;
-export const RECORD_FORMAT = 7;
+export const RECORD_FORMAT = 8;
 
 export type TurnId = number;
 export type JobId = number;

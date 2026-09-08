@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::{Counter, Evicted};
+use crate::context::{Counter, Evicted, Pruned};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
@@ -147,6 +147,16 @@ pub struct TurnView {
     /// a debug client is for.
     #[serde(default)]
     pub evicted_by: Option<TurnId>,
+    /// What this turn's selection pruned, when it pruned anything: the turns
+    /// that gave up their spans so that none of them had to be dropped whole.
+    #[serde(default)]
+    pub cited: Option<Pruned>,
+    /// The turn whose selection took *this* one's code out of the prompt. The
+    /// transcript keeps what was attached — the difference between the
+    /// transcript and the prompt is the one thing a debug client is for, and
+    /// this is the other half of it.
+    #[serde(default)]
+    pub pruned_by: Option<TurnId>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -168,6 +178,8 @@ impl TurnView {
             tools: Vec::new(),
             dropped: None,
             evicted_by: None,
+            cited: None,
+            pruned_by: None,
             started_at_ms,
             ended_at_ms: None,
         }
@@ -472,6 +484,27 @@ impl SessionView {
                         shared_tokens: *shared_tokens,
                         prompt_tokens: *prompt_tokens,
                     });
+                }
+            }
+            TraceMessage::Pruned {
+                turn,
+                turns,
+                tokens,
+                counter,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.cited = Some(Pruned {
+                        turns: turns.clone(),
+                        tokens: *tokens,
+                        counter: counter.clone(),
+                    });
+                }
+                // Both halves, as eviction does it: what did this turn take out
+                // of the prompt, and is that turn's code still in it.
+                for pruned in turns {
+                    if let Some(view) = self.turn_mut(*pruned) {
+                        view.pruned_by = Some(*turn);
+                    }
                 }
             }
             TraceMessage::StepCall {
