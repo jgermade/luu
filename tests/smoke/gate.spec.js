@@ -175,5 +175,62 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(live).toBeHidden({ timeout: 15_000 })
   await expect(page.locator(".fold .summary")).toBeVisible()
 
+  // And the two turns are still readable, without a reload: the panel keeps
+  // what it was showing instead of resetting when the next turn starts.
+  await expect(page.locator(".turn-picker select option")).toHaveText([
+    "live", "turn 1", "turn 2",
+  ])
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The panel over a turn that is no longer the live one — from the stream while
+ * the page stays open, and from the read API after it is reloaded. Runs on the
+ * session the test above left behind: turn 1 is the planning call, turn 2 is
+ * the approved run with the tool call in it.
+ *
+ * See `RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md`.
+ */
+test("the inspector can be pointed at a turn that has ended", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  // Reloaded, so the history comes from `/api/sessions/live` rather than from
+  // messages this page watched go by. Both fill the same panel and only one of
+  // them survives a refresh.
+  await page.goto(`${BASE}/index.html`)
+  // The same first run as above, and waited for rather than polled: it opens a
+  // beat after the socket says hello, and a check that ran before that left it
+  // to pop open later over the panel being clicked.
+  const modal = page.locator(".modal-backdrop").first()
+  await expect(modal).toBeVisible({ timeout: 15_000 })
+  await modal.locator("button.link", { hasText: "close" }).click()
+  await expect(modal).toBeHidden()
+
+  const picker = page.locator(".turn-picker select")
+  await expect(picker.locator("option")).toHaveText(["live", "turn 1", "turn 2"])
+
+  // The planning call: a prompt was sent, and it used no tools.
+  await picker.selectOption("1")
+  await expect(page.locator(".reading")).toContainText("Turn 1 as it was sent")
+  await expect(page.locator(".inspector pre")).toContainText("You are luu")
+  await expect(page.locator(".timeline li")).toHaveCount(0)
+
+  // The approved run: the call the amendment made possible, still there.
+  await picker.selectOption("2")
+  await expect(page.locator(".reading")).toContainText("Turn 2 as it was sent")
+  await expect(page.locator(".timeline li")).toHaveCount(1)
+  await expect(page.locator(".timeline .call b")).toHaveText("read_file")
+  await expect(page.locator(".timeline .verdict")).toContainText("README.md")
+  // Every bucket of that turn's budget, not the empty one a reset leaves.
+  await expect(page.locator(".legend li")).not.toHaveCount(0)
+
+  await page.locator(".turn-picker button", { hasText: "back to live" }).click()
+  await expect(page.locator(".reading")).toHaveCount(0)
+
   expect(errors, "the page logged errors").toEqual([])
 })

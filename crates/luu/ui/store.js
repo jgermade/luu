@@ -63,6 +63,17 @@ export const state = $reactive({
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
   refused: null,          // { request, reason, detail }
+  // Every turn this page can still show, oldest first, as the inspector will
+  // draw it: `{turn, job, budget, prefix, tools, extraCalls, prompt, dropped,
+  // usage, reason}`. Filled from `/api/sessions/:id` when a session is opened
+  // or resumed — so a turn from before this page existed is here too — and
+  // appended to as each live turn ends. Everything in it was already stored and
+  // already served; what was missing was a page that kept it.
+  history: [],
+  // Which turn the inspector is showing, or `null` for the live one. A person
+  // reading turn 3 while turn 9 runs keeps reading turn 3: the view moves when
+  // they move it.
+  selectedTurn: null,
   // The last cut the window made. Kept beside the budget rather than inside it:
   // the buckets say what the prompt is worth, this says what stopped being in
   // it. Null in a session that never filled its window.
@@ -306,6 +317,7 @@ function onProtocol(message) {
     case "ended":
       flush()
       replaceLast({ reason: message.reason, usage: message.usage })
+      keepTurn(message.turn ?? state.turn, { reason: message.reason, usage: message.usage })
       // The gap between this and what we counted is the chat template, applied
       // where we cannot see it. Reassigned rather than mutated: the panel reads
       // the object, and one write is one update.
@@ -348,6 +360,9 @@ function onProtocol(message) {
 
     case "failed":
       flush()
+      // A turn that failed is activity worth reading afterwards — often the
+      // most worth reading — so it is kept like any other.
+      keepTurn(message.turn ?? state.turn, { reason: "failed", error: message.message })
       state.error = message.message
       state.turn = null
       state.status = idle()
@@ -505,8 +520,83 @@ function idle() {
   return isReplay ? "replay" : "ready"
 }
 
+/// What the inspector is showing: the turn a person selected, or the live one.
+///
+/// The live turn is not a special case with its own bindings — it is the same
+/// six fields, read out of the fields the socket fills. That is the whole of
+/// why the panel can show turn 3: there is one shape, and history is a list of
+/// it.
+export function panel() {
+  if (state.selectedTurn !== null) {
+    return state.history.find(entry => entry.turn === state.selectedTurn) || null
+  }
+  return {
+    turn: state.turn,
+    job: null,
+    budget: state.budget,
+    prefix: state.prefix,
+    tools: state.tools,
+    extraCalls: state.extraCalls,
+    prompt: state.prompt,
+    dropped: state.evicted,
+    usage: null,
+    reason: null,
+    live: true,
+  }
+}
+
+export function selectTurn(turn) {
+  state.selectedTurn = turn === null || turn === "live" ? null : Number(turn)
+}
+
+/// Keeps what the panel is showing now, so the next turn does not take it.
+///
+/// Replaces rather than appends when the turn is already there: a resumed
+/// session arrives with its turns from the API, and then runs more of them.
+function keepTurn(turn, extra = {}) {
+  if (turn === null || turn === undefined) return
+  const kept = {
+    turn,
+    job: null,
+    budget: state.budget,
+    prefix: state.prefix,
+    tools: state.tools,
+    extraCalls: state.extraCalls,
+    prompt: state.prompt,
+    dropped: state.evicted,
+    usage: null,
+    reason: null,
+    ...extra,
+  }
+  state.history = [...state.history.filter(entry => entry.turn !== turn), kept]
+    .sort((a, b) => a.turn - b.turn)
+}
+
+/// The same shape, out of what the read API stores per turn.
+///
+/// `dropped` gains the turn that dropped it: the stored `Evicted` names the
+/// turns that left and not the cut that took them, which is the turn it is
+/// attached to.
+function fromStored(turn) {
+  return {
+    turn: turn.turn,
+    job: turn.job ?? null,
+    budget: turn.budget || null,
+    prefix: turn.prefix || null,
+    tools: turn.tools || [],
+    extraCalls: turn.extra_calls || [],
+    prompt: turn.prompt_sent || "",
+    dropped: turn.dropped ? { ...turn.dropped, turn: turn.turn } : null,
+    usage: turn.usage || null,
+    reason: turn.reason || null,
+    error: turn.error || null,
+  }
+}
+
 function reset() {
   state.messages = []
+  state.history = []
+  state.selectedTurn = null
   state.jobs = []
   state.tasks = []
   state.budget = null
@@ -759,6 +849,10 @@ export async function refreshLiveSession() {
       }
     }
     state.messages = msgs
+    // Everything the panel needs for a turn that ended before this page
+    // existed. The API answers with it on the same request the transcript is
+    // built from, and it used to be dropped on the floor here.
+    state.history = (view.turns || []).map(fromStored)
     nextId = id
   } catch {
     // Ignore fetch failure

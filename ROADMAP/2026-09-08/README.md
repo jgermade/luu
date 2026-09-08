@@ -54,7 +54,7 @@ inventory is the BC-250's 14B — see [`machines.md`](machines.md).
 | --- | --- | --- | --- |
 | 1 | ~**A granted file is not a directory** — a plan that names a file makes the file the job's sandbox root, and `.` beneath a regular file is `ENOTDIR`, so an approved plan could not read the one path it had just been approved for~ **fixed the day this revision was reordered, with the regression test that was missing. Found by driving the gate over the socket with the page's own messages; it is not Linux-only, and it had been in the tree since 2026-09-05** | nothing | [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) |
 | 2 | ~**A browser test of the gate, on the mock** — Playwright against a live `luu serve --mock-reply`, clicking Approve and asserting the tool ran. CI covers the static twin, which has no server behind it and therefore no gate; the only thing that drives the page through it needs a model, a server and a person watching fifteen prompts. **Two bugs in two days were found by hand there and none by a test**~ **landed: `tests/smoke/gate.spec.js` drives one whole job — prompt, gate, an amendment the plan never declared, Approve, the tool call, the fold — in a second, on the mock, in CI. It found a third bug before it passed: `record::FORMAT` went to 8 with rule B, `store.js` still said 7, the host refused every `hello`, and the UI had been unable to open a session at all since that commit** | nothing | [`a-test-that-clicks-approve`](../../RECORD/2026-09-08.a-test-that-clicks-approve.completed.md) |
-| 3 | **The panel keeps what the turn showed** — the inspector draws the budget, prefix reuse, the tool calls with their verdict and the prompt, and resets all four at `turn_started`, so nothing in the page can look at turn 3. **No protocol work and no server work**: `GET /api/sessions/:id/turns/:n` already answers with `prompt_sent`, `budget`, `prefix`, `extra_calls`, `tools`, `dropped`, `pruned_by`, `cited` and both timestamps | item 2, so that a page being reworked is a page with a test under it | [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md), and `luu-design.md` §Debug panels that earn their place |
+| 3 | ~**The panel keeps what the turn showed** — the inspector draws the budget, prefix reuse, the tool calls with their verdict and the prompt, and resets all four at `turn_started`, so nothing in the page can look at turn 3. **No protocol work and no server work**: `GET /api/sessions/:id/turns/:n` already answers with `prompt_sent`, `budget`, `prefix`, `extra_calls`, `tools`, `dropped`, `pruned_by`, `cited` and both timestamps~ **landed: one shape per turn, a picker at the top of the inspector, history filled from the API on connect and appended to as each turn ends. The live turn is that same shape read out of the socket's own fields, which is why it is a small diff rather than a second inspector** | nothing | [`the-panel-keeps-the-turn`](../../RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md) |
 | 4 | **The compaction log** — panel 4 of the four the design says justify building this at all, and the only one never built: when a summary was written, what it replaced, what it saved. The fold is already an event and the summary is already in the stream | item 3, which is where a per-turn history lands | `luu-design.md` §Debug panels that earn their place |
 | 5 | **The container, from the surface and on Linux** — every contained run in this repository is Docker Desktop on macOS, and `serve` resolves **one** worker at startup that every session shares, while the design says one container per session. The page shows the resolved sandbox and cannot choose it, which is exactly where the provider was before 2026-09-07 | nothing for the Linux run — machines 4, 5 and 6 are Linux; the per-session executor wants an argument first | [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) §Still open, [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) §Still open |
 
@@ -117,12 +117,13 @@ gantt
   asserts the two constants against each other
   ([`ui_versions.rs`](../../crates/luu/tests/ui_versions.rs)), because that
   check is free and belongs where the person bumping the number already is.
-- **Item 3 is a page reading an API that already answers.** This is worth saying
-  twice, because "a development panel" sounds like protocol work and is not: the
-  server stores and serves every per-turn number the live inspector draws, and
-  the page throws them away at `turn_started`. What has to be decided is
-  presentation — which turn is selected, and whether the live turn is a special
-  case of the history or the other way round.
+- **Item 3 landed, and the decision it turned on was the second one.** The live
+  turn is not a special case of the history: it is the same six fields read out
+  of the store the socket fills, so `panel()` returns one shape and every
+  binding in the inspector reads it. The API half was free — the page already
+  fetched `/api/sessions/live` to build the transcript and dropped everything
+  but `prompt`, `text` and `usage` on the floor. Both halves are asserted in the
+  browser: from the stream without a reload, and from the API after one.
 - **Item 5 splits in two and only half of it is code.** *Build the image on Linux
   and run a session in it* is an afternoon on machine 4, and it closes the last
   claim in the design that rests on one platform. *A session picks its executor*

@@ -800,12 +800,15 @@ resources.
 ### Debug panels that earn their place
 
 Chat and session list are table stakes. The ones that justify building this at all
-— and one thing true of every one that is built: **they draw the live turn and
-reset at `turn_started`**, so nothing in the page can look at turn 3. The server
-already answers `GET /api/sessions/:id/turns/:n` with `prompt_sent`, `budget`,
-`prefix`, `extra_calls`, `tools`, `dropped`, `pruned_by` and `cited`; the page
-does not read it. Closing that is UI work with no protocol behind it — see the
-current [`ROADMAP/`](ROADMAP/) revision.
+— and one thing true of every one that is built: **the panel is per turn, and any
+turn can be selected**. `state.history` holds one entry per turn —
+`{turn, job, budget, prefix, tools, extraCalls, prompt, dropped, usage, reason}` —
+filled from `GET /api/sessions/:id` when a session is opened or resumed and
+appended to as each live turn ends, and the live turn is that same shape read out
+of the fields the socket fills rather than a special case with its own bindings.
+Selecting a turn does not follow the conversation: a person reading turn 3 while
+turn 9 runs keeps reading turn 3. See
+[`RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md`](RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md).
 
 1. **Token budget per turn** — stacked bar of system/tools · code context · history · reserve, with
    the underlying text of each block on hover.
@@ -824,6 +827,10 @@ current [`ROADMAP/`](ROADMAP/) revision.
    was denied reads as itself rather than as nothing happening. Result size
    *before/after pruning* waits on pruning existing.
 4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
+   The only one of the four still unbuilt.
+
+Panels 1-3 are readable for **any turn of the session**, not only the running one,
+and the two that a recording carries replay the same way.
 
 ### The configuration modal
 
