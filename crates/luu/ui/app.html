@@ -297,18 +297,18 @@
   $: folds = (state.jobs || state.tasks)
     .filter(job => job.state === "closed" && job.summary)
     .map(job => {
+      // Both numbers come from the close, counted there by one counter at one
+      // moment. The page does not count anything: a saving worked out from
+      // chars/4 on one side and a real tokenizer on the other is not a saving.
       const before = job.replaced?.tokens ?? null
-      // What the summary costs where its turns used to be. Counted here from
-      // the text because the page has the text; the server's own count is in
-      // the `summaries` bucket beside it.
-      const after = job.summary ? Math.round(job.summary.length / 4) : 0
+      const after = job.replaced?.summary_tokens ?? null
       return {
         id: job.id,
         objective: job.objective,
         turns: job.replaced?.turns || [],
         before,
         after,
-        saved: before === null ? null : before - after,
+        saved: before === null || after === null ? null : before - after,
         closedBy: job.closedBy,
       }
     })

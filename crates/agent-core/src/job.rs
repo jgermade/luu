@@ -482,6 +482,13 @@ pub struct Replaced {
     /// What they were worth in the prompt they are no longer in — the unit
     /// `Summary::tokens` is in, and the one the `history` bucket sums.
     pub tokens: u32,
+    /// What the line that stands in for them costs, by the same counter at the
+    /// same moment. The same number as [`Summary::tokens`], carried here
+    /// because that is not what `job_closed` sends — the message carries the
+    /// summary's *text* — and a reader that had to count it again would be a
+    /// second implementation of the counter, disagreeing with the first
+    /// wherever a real tokenizer is in use.
+    pub summary_tokens: u32,
 }
 
 /// One piece of work: proposed, approved, run, closed.
@@ -564,11 +571,15 @@ impl Job {
         replaced: Option<Replaced>,
     ) {
         let text = summary_text(&self.objective, &self.plan, steps, shown, turns, counter);
+        let tokens = counter.count(&text);
         self.summary = Some(Summary {
-            tokens: counter.count(&text),
+            tokens,
             counted_by: counter.id(),
             text,
-            replaced,
+            replaced: replaced.map(|replaced| Replaced {
+                summary_tokens: tokens,
+                ..replaced
+            }),
         });
         self.state = JobState::Closed;
         self.closed_by = Some(by);

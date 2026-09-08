@@ -768,6 +768,9 @@ impl Context {
                 .filter(mine)
                 .map(|turn| self.tokens_of(turn, counter))
                 .sum(),
+            // Filled by the close, which is where the summary is written and
+            // therefore the only place its own count exists.
+            summary_tokens: 0,
         };
         let job = self.jobs.iter_mut().find(|job| job.id == id)?;
         // Only an open job folds. A proposal has no turns to fold and nothing
@@ -1777,6 +1780,10 @@ mod tests {
             summary.replaced.as_ref(),
             Some(&replaced),
             "the numbers live with the summary they are subtracted from",
+        );
+        assert_eq!(
+            replaced.summary_tokens, summary.tokens,
+            "the fold carries the summary's own count, so a reader never counts it again",
         );
         assert!(
             replaced.tokens > summary.tokens,

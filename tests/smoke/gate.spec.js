@@ -182,8 +182,11 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   const fold = page.locator(".folds li").first()
   await expect(fold).toBeVisible()
   await expect(fold).toContainText("job 1")
-  await expect(fold).toContainText("tokens of history")
-  await expect(fold).toContainText("saved")
+  // Both numbers come from the close and neither is counted in the page, so
+  // this asserts digits rather than the word: an empty span either side would
+  // still have read as "tokens of history … saved".
+  await expect(fold).toContainText(/\d+ tokens of history →\s+\d+ in the line/)
+  await expect(fold).toContainText(/-?\d+ saved/)
   await expect(fold).not.toContainText("not recorded")
 
   // And the two turns are still readable, without a reload: the panel keeps
