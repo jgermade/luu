@@ -146,6 +146,16 @@ jobs:
           npx playwright install --with-deps chromium
           npx playwright test
 
+      # The other half of the page: the socket, the gate, an approval and a
+      # tool call, against a live `luu serve` on the mock. The static twin above
+      # has no server behind it, so it cannot reach any of them — and every UI
+      # bug this repository has had lived exactly there.
+      - name: Smoke-test the gate against a live server
+        working-directory: tests/smoke
+        env:
+          LUU_BIN: target/release/luu
+        run: npx playwright test -c gate.config.js
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

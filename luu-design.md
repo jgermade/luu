@@ -679,7 +679,16 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `hello`, `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 7); `context_snapshot` is still ahead |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 8); `context_snapshot` is still ahead |
+
+**Both numbers live in two languages, and a test reads both.** `store.js`
+declares `PROTOCOL` and `FORMAT` beside `agent_core::protocol::VERSION` and
+`agent_core::record::FORMAT`; `crates/luu/tests/ui_versions.rs` asserts each
+pair, because when `FORMAT` went to 8 and the page still said 7 the host refused
+every `hello` the page sent and the UI could not open a session at all. A
+version refusal now also stops the page's reconnect loop, which had been turning
+it into the word "closed" and nothing else. See
+[`RECORD/2026-09-08.a-test-that-clicks-approve.completed.md`](RECORD/2026-09-08.a-test-that-clicks-approve.completed.md).
 
 **The wire says what it speaks, in both directions.** The server's `hello` has always
 carried `protocol`; the client's now answers with its own, and with the record format it

@@ -158,6 +158,13 @@ cargo run --bin luu -- tools --sandbox luu.container.toml
 cargo run --bin luu -- chat "hola" --sandbox luu.container.toml
 cargo run --bin luu -- tools --worker direct          # the seam, no container
 
+# the page itself, clicked: the gate, an amendment, Approve, the tool call and
+# the fold — against `luu serve` on the mock, which the spec starts. Node and a
+# built binary, which is why it is not in `cargo test`.
+make smoke
+cd tests/smoke && npx playwright test                        # the static twin
+cd tests/smoke && npx playwright test -c gate.config.js      # the live server
+
 # the tool loop end to end without a model: one reply per model call
 cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \
   --mock-reply 'looking

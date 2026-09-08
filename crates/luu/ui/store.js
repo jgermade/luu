@@ -19,7 +19,7 @@ import { $reactive } from "./vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 5
-const FORMAT = 7
+const FORMAT = 8
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -245,6 +245,12 @@ function onProtocol(message) {
     // and therefore indistinguishable from a message that never arrived.
     case "refused":
       state.refused = { request: message.request, reason: message.reason, detail: message.detail }
+      // Reconnecting cannot fix a version mismatch: the host refuses this
+      // client's `hello` and closes, and the retry loop turns that into the
+      // word "closed" and nothing else — which is how a page that could not
+      // open a session at all went unnoticed for a day. See
+      // `RECORD/2026-09-08.a-test-that-clicks-approve.completed.md`.
+      if (message.reason === "version") refusedVersion = true
       break
 
     case "job_rejected":
@@ -383,6 +389,9 @@ function onTrace(message) {
 let everConnected = false
 // Set once the page has given up on a server and taken the recordings instead.
 let fellBack = false
+// Set when the host refused this client's version. Not retried: the answer
+// would be the same every time, and the refusal is the thing to read.
+let refusedVersion = false
 
 function open(path, onMessage, assign, greet = false) {
   const ws = new WebSocket(url(path))
@@ -405,6 +414,10 @@ function open(path, onMessage, assign, greet = false) {
   ws.onclose = async () => {
     assign(null)
     state.status = "closed"
+
+    // The host said what it speaks and it is not this. Retrying would clear
+    // the refusal off the screen every few seconds and put it back.
+    if (refusedVersion) return
 
     // A fallback already took the page into replay: there is no server to
     // reconnect to and no second replay to start.
