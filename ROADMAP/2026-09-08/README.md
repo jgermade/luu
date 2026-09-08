@@ -56,7 +56,7 @@ inventory is the BC-250's 14B — see [`machines.md`](machines.md).
 | 2 | ~**A browser test of the gate, on the mock** — Playwright against a live `luu serve --mock-reply`, clicking Approve and asserting the tool ran. CI covers the static twin, which has no server behind it and therefore no gate; the only thing that drives the page through it needs a model, a server and a person watching fifteen prompts. **Two bugs in two days were found by hand there and none by a test**~ **landed: `tests/smoke/gate.spec.js` drives one whole job — prompt, gate, an amendment the plan never declared, Approve, the tool call, the fold — in a second, on the mock, in CI. It found a third bug before it passed: `record::FORMAT` went to 8 with rule B, `store.js` still said 7, the host refused every `hello`, and the UI had been unable to open a session at all since that commit** | nothing | [`a-test-that-clicks-approve`](../../RECORD/2026-09-08.a-test-that-clicks-approve.completed.md) |
 | 3 | ~**The panel keeps what the turn showed** — the inspector draws the budget, prefix reuse, the tool calls with their verdict and the prompt, and resets all four at `turn_started`, so nothing in the page can look at turn 3. **No protocol work and no server work**: `GET /api/sessions/:id/turns/:n` already answers with `prompt_sent`, `budget`, `prefix`, `extra_calls`, `tools`, `dropped`, `pruned_by`, `cited` and both timestamps~ **landed: one shape per turn, a picker at the top of the inspector, history filled from the API on connect and appended to as each turn ends. The live turn is that same shape read out of the socket's own fields, which is why it is a small diff rather than a second inspector** | nothing | [`the-panel-keeps-the-turn`](../../RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md) |
 | 4 | ~**The compaction log** — panel 4 of the four the design says justify building this at all, and the only one never built: when a summary was written, what it replaced, what it saved. **Not the same shape as item 3, which the reading for it found**: *when* is `job_closed` and *what it replaced* is the job's turns, both already in the stream, but *what it saved* is not — `job::Summary` carries its own `tokens` and nothing carries what the turns it replaced were worth. So it wants a record and probably a fold line of its own, at a format bump, before it wants a panel~ **landed, and as an added field rather than a new line: `job_closed` carries `replaced {turns, tokens}`, counted at the close with the counter that counted the summary. Record format 9, protocol untouched at 5, and the page's constant moved with the Rust one in the same commit — which is `ui_versions.rs` from item 2 doing its job** | nothing | [`what-a-fold-writes-down`](../../RECORD/2026-09-08.what-a-fold-writes-down.completed.md) |
-| 5 | **The container, from the surface** — ~and on Linux~ **(the Linux half landed: `scripts/container-check.sh` and the `container` job build the image and walk it on every push, and Landlock ABI v7 + seccomp hold `run_command` inside stock Docker on a runner — [`the-container-on-a-runner`](../../RECORD/2026-09-08.the-container-on-a-runner.completed.md))** — every contained run in this repository is Docker Desktop on macOS, and `serve` resolves **one** worker at startup that every session shares, while the design says one container per session. The page shows the resolved sandbox and cannot choose it, which is exactly where the provider was before 2026-09-07 | nothing for the Linux run — machines 4, 5 and 6 are Linux; the per-session executor wants an argument first | [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) §Still open, [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) §Still open |
+| 5 | **The container, from the surface** — ~and on Linux~ **(the Linux half landed: `scripts/container-check.sh` and the `container` job build the image and walk it on every push, and Landlock ABI v7 + seccomp hold `run_command` inside stock Docker on a runner — [`the-container-on-a-runner`](../../RECORD/2026-09-08.the-container-on-a-runner.completed.md))** — every contained run in this repository is Docker Desktop on macOS, and the worker `serve` starts at boot outlives every session it serves, while the design says a container's lifetime is the session's. The page shows the resolved sandbox and cannot choose it, which is exactly where the provider was before 2026-09-07. **The argument is written**: the unit is a *posture* (the policy file decides the sandbox and the seam together), named in `config.toml` beside the providers, chosen when a session starts and never moved, with the stream header saying which one — because `luu.container.toml` opens by saying runs under it are not comparable with runs without it | [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) §Still open, [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) §Still open |
 
 **Section B — the measurements and arguments the morning's order held.** Same
 rows, same reasoning, behind section A. The one that hurts is item 6: it was
@@ -84,7 +84,8 @@ gantt
     A browser test of the gate             :gate, after enotdir, 2d
     The panel keeps the turn               :panel, after gate, 3d
     The compaction log                     :fold, after panel, 2d
-    The container, on Linux and per session :ctr, after gate, 3d
+    The container on Linux                 :done, ctr, 2026-09-08, 1d
+    A session picks its posture            :posture, after ctr, 3d
     section The window
     Does a 7B miss the repetition          :rep, after panel, 2d
     Tool results, not only capped          :steps, after rep, 2d
@@ -138,9 +139,15 @@ gantt
   repository on every push — so the first non-macOS container run cost a script
   and a job rather than a trip to machine 4. What machine 4 still uniquely
   answers is a session with a *model* in it, which no runner will. The other
-  half — *a session picks its executor* — is unchanged and still wants the
-  argument the provider got on 2026-09-07: the choice is the session's, and the
-  moment is when it starts.
+  half now has its argument — [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.WIP.md),
+  the first `WIP` record on this revision — and writing it moved the row twice:
+  the thing to choose is a **posture** rather than a runtime, because the policy
+  file decides the sandbox and the seam together; and the row's own description
+  of the bug was wrong. `serve` runs **one** session at a time, so nothing is
+  shared between sessions: what is broken is the *lifetime*, a worker started at
+  boot outliving every session it serves. The record also finds a format bump
+  (10) nobody had ordered: a posture a session chooses and the recording does not
+  name is a corpus that cannot be read back.
 - **Item 6 is what this reordering costs.** The flag exists, the corpus exists,
   the model is on machine 1 and on machine 4, and rule A stays off in the
   meantime for a reason nobody has measured. It is one afternoon, and it is now

@@ -632,8 +632,13 @@ access = "execute"
   repository was Docker Desktop on macOS, by hand, once. See
   [`RECORD/2026-09-08.the-container-on-a-runner.completed.md`](RECORD/2026-09-08.the-container-on-a-runner.completed.md).
 - Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
-  **one worker per session rather than per process** — `serve` resolves a single
-  `Agency` at startup and every session in it shares that worker.
+  **the lifetime this section claims.** In `serve` the worker is started at boot
+  from the policy file the process was pointed at and lives until the process
+  exits, so it outlives every session it serves — `luu chat` keeps the claim
+  because there the process *is* the run, and the surface a person uses does not.
+  What a session should choose is not a runtime but a **posture**: the policy
+  file decides the sandbox and the seam together, on purpose. Argued in
+  [`RECORD/2026-09-08.a-session-picks-its-executor.WIP.md`](RECORD/2026-09-08.a-session-picks-its-executor.WIP.md).
 
 ## VSCode integration
 
