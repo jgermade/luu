@@ -378,6 +378,14 @@ and 2, and 3 in its development posture. See
    profile that blocks it, macOS) and the old two-step is what happened. `..`,
    absolute paths and links out are refused; a link that stays inside the tree is
    ordinary and still works, which is why `RESOLVE_NO_SYMLINKS` was rejected.
+   **A root asked for by its own name resolves as its own last component,
+   beneath the directory holding it** — the ordinary case at the gate, where a
+   plan grants a *file* and the file therefore is the job's root: `.` beneath a
+   regular file is `ENOTDIR`, and for three days that meant an approved plan
+   could not read the one path it had been approved for. A root is canonical, so
+   that component is not a symlink and one non-`..` step cannot leave the
+   directory it resolves in. See
+   [`RECORD/2026-09-08.the-surfaces-first.completed.md`](RECORD/2026-09-08.the-surfaces-first.completed.md).
    `list_dir` is still the old two-step, because a directory cannot be read from
    a descriptor through any stable API — it leaks names rather than contents, and
    it is named rather than quietly excepted. See
@@ -782,7 +790,13 @@ resources.
 
 ### Debug panels that earn their place
 
-Chat and session list are table stakes. The ones that justify building this at all:
+Chat and session list are table stakes. The ones that justify building this at all
+— and one thing true of every one that is built: **they draw the live turn and
+reset at `turn_started`**, so nothing in the page can look at turn 3. The server
+already answers `GET /api/sessions/:id/turns/:n` with `prompt_sent`, `budget`,
+`prefix`, `extra_calls`, `tools`, `dropped`, `pruned_by` and `cited`; the page
+does not read it. Closing that is UI work with no protocol behind it — see the
+current [`ROADMAP/`](ROADMAP/) revision.
 
 1. **Token budget per turn** — stacked bar of system/tools · code context · history · reserve, with
    the underlying text of each block on hover.
