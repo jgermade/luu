@@ -43,7 +43,7 @@ is the grounded pair and the map probe, both at two budgets, on that box.
 | --- | --- | --- |
 | ~~**3 · M4 Pro 48 GB**~~ | ~~Does the map's 0/6 → 6/6 survive at 14b and 32b?~~ Yes, at both — and each size fails the rest of the corpus in its own way, one of them a live sighting of `run_command` refusing on macOS. Closed by [`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md) | [`the-map-against-a-7b`](../../RECORD/2026-09-01.the-map-against-a-7b.completed.md) §The map probe |
 | **1 · M1 Pro** | **`run_command` with a model in the loop.** Landlock is active in its Docker VM, so the gate probe's command prompts become observable for the first time anywhere | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.completed.md), [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) |
-| **5 · 1660 Super, 6 GB** | **Where the stated target breaks.** The project claims 7B–32B at 8K–32K; 6 GB is the bottom of that claim and the only box that can falsify it | — needs a record |
+| ~~**5 · 1660 Super, 6 GB**~~ | ~~Where the stated target breaks.~~ It doesn't break qualitatively for 7B/Q4 — it degrades to partial CPU offload (18% at 8192) at no measurable decode cost; 100% GPU residency needs under ~400 tokens of configured context, and even that cutover moves with the desktop compositor's own VRAM use. Closed by [`the-floor-on-6gb`](../../RECORD/2026-09-08.the-floor-on-6gb.completed.md) | [`the-floor-on-6gb`](../../RECORD/2026-09-08.the-floor-on-6gb.completed.md) |
 | **6 · BC-250** | **A third serving stack.** Neither Metal nor CUDA — llama.cpp over Vulkan, which is the only non-vendor path in the inventory | — needs a record |
 | **4 · Ryzen + 5060 Ti** | **Native Linux without a VM**, and the fastest box for anything that fits in 16 GB | — |
 | **P1 · ModelArk** | **A judge that is not the model under test**, so probe scoring stops being fifteen answers read by hand | [`local-first`](../../RECORD/2026-09-01.local-first.completed.md) §Still open — the design says the judge is the same model, and that has to be argued with first |
@@ -72,8 +72,10 @@ backend.** Machines 4, 5 and 6 and both providers reach a model through
 Until that lands, five of six machines and both providers can only be used by
 pretending they are Ollama, which measures the pretence.
 
-4. **The floor**, on machine 5: how much context a 6 GB card actually gives a 7B,
-   and where the answer stops being 8K.
+4. ~~**The floor**, on machine 5: how much context a 6 GB card actually gives a
+   7B, and where the answer stops being 8K.~~ Closed by
+   [`the-floor-on-6gb`](../../RECORD/2026-09-08.the-floor-on-6gb.completed.md) —
+   it doesn't stop, it degrades, and the real cutover is under 400 tokens, not 8K.
 5. **The third stack**, on machine 6: whether anything in the tree assumes CUDA or
    Metal without saying so.
 6. **The ceiling**, on P2: the same corpus against a size no local box holds.
