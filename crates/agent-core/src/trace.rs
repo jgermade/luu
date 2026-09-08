@@ -76,6 +76,28 @@ pub enum TraceMessage {
         /// exact within one rendering.
         prompt_tokens: u32,
     },
+    /// What the window took out of the prompt without taking the turn with it:
+    /// the turns that gave up their spans, and what that saved.
+    ///
+    /// Here rather than on the protocol, which is where eviction goes, and the
+    /// line between them is what happened to the *conversation*: an evicted
+    /// turn is no longer in the session's window and cannot be answered from
+    /// again, while a pruned one is still asked, still answered, still in the
+    /// transcript. What it lost is code, which is a fact about the prompt — and
+    /// facts about the prompt are what this channel is. See
+    /// `RECORD/2026-09-08.prune-behind.completed.md`.
+    Pruned {
+        turn: TurnId,
+        /// The turns that gave up spans, oldest first, named rather than
+        /// counted for the reason an eviction tombstone names them: a reader
+        /// months later cannot recover which without re-implementing the line.
+        turns: Vec<TurnId>,
+        /// The difference of two windows, by the counter below — not the sum of
+        /// the spans, which under `Repeat::Once` is a saving the window does
+        /// not get.
+        tokens: u32,
+        counter: Counter,
+    },
     /// A model call *after* the first one of a turn: the tool-use round trip.
     ///
     /// [`Self::Budget`] and [`Self::PrefixReuse`] describe the call that starts

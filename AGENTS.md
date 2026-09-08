@@ -415,6 +415,14 @@ it instead of in every turn that selected it — off, because it changes numbers
 every recording on disk was made without, and oldest rather than newest because
 that is what leaves the block above the newest message byte-identical. See
 [`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md).
+`--prune-behind` is the other rule and is also off: under pressure the oldest
+turns give up their spans and keep their exchange — the code becomes a line
+citing it, and a turn is dropped whole only when pruning the window is not
+enough. The prune line moves to whatever target `--evict` chose, so it is
+shallow and frequent under `turn` and deep and rare under `block`, and a run
+under it carries `pruned` trace lines naming the turns that gave code up. On
+twenty grounded turns it evicts **nothing** where the default drops 13. See
+[`RECORD/2026-09-08.prune-behind.completed.md`](RECORD/2026-09-08.prune-behind.completed.md).
 A cut says so: the run prints `== evicted turn N` and the recording carries an
 `evicted` line naming the turns that left, what they were worth, who counted
 them and which policy did it. Over the same twenty prompts at 1024 tokens that

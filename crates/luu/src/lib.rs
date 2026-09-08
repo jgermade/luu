@@ -9,7 +9,7 @@ use std::time::Duration;
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
-use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Repeat};
+use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat};
 use agent_core::fragment;
 use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
@@ -314,6 +314,13 @@ enum Command {
         #[arg(long)]
         repeat_once: bool,
 
+        /// Under pressure, let the oldest turns of the window give up their
+        /// spans and keep their exchange: the code becomes the line that cites
+        /// it, and a turn is evicted whole only when pruning the window is not
+        /// enough. Off, for the same reason.
+        #[arg(long)]
+        prune_behind: bool,
+
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
         #[arg(long)]
@@ -473,6 +480,13 @@ enum Command {
         /// made without it stays comparable to every recording on disk.
         #[arg(long)]
         repeat_once: bool,
+
+        /// Under pressure, let the oldest turns of the window give up their
+        /// spans and keep their exchange: the code becomes the line that cites
+        /// it, and a turn is evicted whole only when pruning the window is not
+        /// enough. Off, for the same reason.
+        #[arg(long)]
+        prune_behind: bool,
 
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
@@ -642,6 +656,13 @@ enum Command {
         /// made without it stays comparable to every recording on disk.
         #[arg(long)]
         repeat_once: bool,
+
+        /// Under pressure, let the oldest turns of the window give up their
+        /// spans and keep their exchange: the code becomes the line that cites
+        /// it, and a turn is evicted whole only when pruning the window is not
+        /// enough. Off, for the same reason.
+        #[arg(long)]
+        prune_behind: bool,
 
         /// Pin the sampler's temperature, so two runs meant to be compared
         /// differ only by what they're testing. Unset leaves it to the
@@ -1085,6 +1106,15 @@ fn repeat(once: bool) -> Repeat {
     match once {
         true => Repeat::Once,
         false => Repeat::Always,
+    }
+}
+
+/// `--prune-behind` as the policy it sets, for the same reason `repeat` is a
+/// function: `true` at a call site says nothing about which rule is on.
+fn prune(behind: bool) -> Prune {
+    match behind {
+        true => Prune::Behind,
+        false => Prune::Never,
     }
 }
 
@@ -1560,6 +1590,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        prune_behind,
         temperature,
         seed,
         map_tokens,
@@ -1623,7 +1654,8 @@ pub async fn run() -> Result<()> {
             model,
             record,
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
-                .repeating(repeat(repeat_once)),
+                .repeating(repeat(repeat_once))
+                .pruning(prune(prune_behind)),
             counter,
             tokenizer,
             agency,
@@ -1660,6 +1692,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        prune_behind,
         temperature,
         seed,
         map_tokens,
@@ -1713,7 +1746,8 @@ pub async fn run() -> Result<()> {
             model,
             record,
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
-                .repeating(repeat(repeat_once)),
+                .repeating(repeat(repeat_once))
+                .pruning(prune(prune_behind)),
             counter,
             tokenizer,
             agency,
@@ -1751,6 +1785,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        prune_behind,
         temperature,
         seed,
         map_tokens,
@@ -1797,8 +1832,9 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
-    let budget =
-        Budget::new(context_limit, reserve, evict.policy(low_water)).repeating(repeat(repeat_once));
+    let budget = Budget::new(context_limit, reserve, evict.policy(low_water))
+        .repeating(repeat(repeat_once))
+        .pruning(prune(prune_behind));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -2063,6 +2099,18 @@ pub async fn run() -> Result<()> {
             recorder.write(&Event::Trace(TraceMessage::Prompt { turn, text }));
             if let Some(reuse) = reuse {
                 recorder.write(&Event::Trace(reuse));
+            }
+            // What the window took out of the prompt without taking the turn
+            // with it. Beside the budget rather than beside the eviction: the
+            // buckets are the only other place a reader learns what the prompt
+            // was, as opposed to what the session is.
+            if let Some(pruned) = selection.pruning.clone() {
+                recorder.write(&Event::Trace(TraceMessage::Pruned {
+                    turn,
+                    turns: pruned.turns,
+                    tokens: pruned.tokens,
+                    counter: pruned.counter,
+                }));
             }
             // Before the call, not after: this is what we decided to send, and
             // a cancelled turn has it too.

@@ -37,12 +37,12 @@ inventory is the BC-250's 14B — see [`machines.md`](machines.md).
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 1 | **Prune behind (rule B)** — a span inside an *older* rendered turn is replaced by the line that cites it, so the conversation survives a cut that its quoted code does not. The half of item 6 where the **91%** lives, and the half that rewrites the prefix | nothing — the corpus and the flag rule A needed are built | [`prune-behind`](../../RECORD/2026-09-08.prune-behind.WIP.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.WIP.md) |
+| 1 | ~**Prune behind (rule B)** — a span inside an *older* rendered turn is replaced by the line that cites it, so the conversation survives a cut that its quoted code does not~ **landed the day this revision was written, off by default (`--prune-behind`). The saving is not the one this row predicted: −0.3% of prompt tokens and *nothing evicted* — 0 turns dropped against 13. There was no 91% to free; what the flag buys is what the same prompt is made of. Two findings under it: pruning is not monotone under rule A, so it declines where A already took the saving, and a recording said nothing about it until `pruned` trace lines and `record::FORMAT` 8** | nothing | [`prune-behind`](../../RECORD/2026-09-08.prune-behind.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) |
 | 2 | **Whether a 7B misses the repetition** — `--repeat-once` one flag apart against a model. Rule A is off for two reasons and this closes the second: position inside the *bucket* does not matter, position across the *window* has never been asked | a model on a machine, which machines 1 and 4 both now are | [`a-span-is-rendered-once`](../../RECORD/2026-09-07.a-span-is-rendered-once.completed.md) §Still open |
 | 3 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is | nothing, and the **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
 | 4 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts | nothing; item 3 is a sentence without it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
 | 5 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide. **Ordered since 2026-09-05 and still unargued**: the next move on it is a record, not a diff | nothing | `luu-design.md` §Open questions |
-| 6 | **Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today | item 1, whose shape decides whether one rule covers both | [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.WIP.md) §Still open |
+| 6 | **Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. **Unblocked: item 1 landed, and the shape it settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result would reuse** | nothing | [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
 | 7 | **The BC-250's 14B ceiling** — ~9.4 GiB usable against a 14B Q4; the last unconfirmed ceiling in the inventory, and the only row left that needs a box | hardware and a hand on it | [`machines.md`](machines.md), from [`the-bc250-run`](../../RECORD/2026-09-04.the-bc250-run.completed.md) |
 | 8 | **A judge that is not the model under test** — every probe in this repository is scored by a key on disk or by a person reading replies. Scoring at corpus scale wants a judge, and a judge wants an argument before it wants an endpoint | needs a design argument | [`machines.md`](machines.md) P1 |
 | 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
@@ -53,7 +53,7 @@ gantt
     dateFormat YYYY-MM-DD
     axisFormat %b %d
     section The window
-    Prune behind (rule B)                  :active, prune, 2026-09-08, 3d
+    Prune behind (rule B)                  :done, prune, 2026-09-08, 1d
     Does a 7B miss the repetition          :rep, after prune, 2d
     Tool results, not only capped          :steps, after prune, 2d
     section Constraining a call
@@ -69,15 +69,16 @@ gantt
 
 ## What actually blocks what
 
-- **Item 1 is first because it is the only row with a number already waiting for
-  it.** Rule A was ordered ahead of B because it cannot rewrite the cached
-  prefix, and it paid what it was predicted to pay: 19.5% off the `code` bucket
-  on the grounded corpus. B is the other 90% of the history block, and it is a
-  different bet — a deep, infrequent rewrite, the same trade `Eviction::Block`
-  already had to prove separately against the shallow one. Nothing else in the
-  tree is waiting on it, and it needs no hardware: the corpus is fixed, the flag
-  discipline is in place, and the mock backend can show the shape before a model
-  is asked whether it minds.
+- **Item 1 landed the day this revision was written, and it moved.** It was
+  ordered for "the 91%", and there was no 91% to free: the room a prune frees is
+  spent immediately on the turns the default was dropping. **0 evicted against
+  13**, at −0.3% of prompt tokens — the flag does not make the prompt cheaper,
+  it changes what the same prompt is made of, and the row that says so is
+  `turns dropped` rather than any token row. It also settled that the trade is
+  `--evict`'s and not the flag's: the prune line moves 13 times under `turn` and
+  **4** under `block`, because it goes to the target that policy already
+  computed rather than to a depth of its own. Prefix reuse under `block` ends
+  higher than the arm that was throwing turns away — 69.8% against 66.5%.
 - **Item 2 is the cheapest unbought answer in the project.** The flag exists,
   the corpus exists, the model is on the machine, and until it runs, rule A is
   off for a reason that was never measured — *the model may need the

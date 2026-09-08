@@ -49,7 +49,16 @@ use crate::trace::TraceMessage;
 /// belongs to the host that made it, so no stream ever arrives from elsewhere.
 /// Un-made with the protocol bump beside it, for the same reason. See
 /// `RECORD/2026-09-04.sessions-stay-home.completed.md`.
-pub const FORMAT: u32 = 7;
+///
+/// 8, taken this time: `pruned` trace lines, written by a run under
+/// `--prune-behind`. Same rule as 3, 4 and 5 — a new variant of a tagged enum,
+/// and an older reader chokes on it rather than skipping it. The number is the
+/// one the paragraph above un-made, which is free precisely because nothing
+/// ever wrote it: a format number says what a file may contain, and no file
+/// contains `imported`. The protocol is untouched at 5, because what a prune
+/// changes is the prompt and not the conversation. See
+/// `RECORD/2026-09-08.prune-behind.completed.md`.
+pub const FORMAT: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]
