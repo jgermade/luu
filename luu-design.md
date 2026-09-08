@@ -622,7 +622,18 @@ access = "execute"
   else in a call is checked against the sandbox, and this one was checked against
   nothing. See
   [`RECORD/2026-09-05.a-clock-at-the-seam.completed.md`](RECORD/2026-09-05.a-clock-at-the-seam.completed.md).
-- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`.
+- **It runs on Linux, in CI, on every push.** `scripts/container-check.sh` builds
+  the image and walks it — the handshake, the policy's commands against the
+  image's manifest, a read inside the tree, the same read on the host with both
+  recordings compared field by field, a denial, and a `run_command` — and the
+  `container` job runs it on `ubuntu-latest`. Landlock **ABI v7** + seccomp +
+  rlimits hold the child inside stock Docker, with no `--privileged` and the
+  default seccomp profile. Until 2026-09-08 every contained run in this
+  repository was Docker Desktop on macOS, by hand, once. See
+  [`RECORD/2026-09-08.the-container-on-a-runner.completed.md`](RECORD/2026-09-08.the-container-on-a-runner.completed.md).
+- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
+  **one worker per session rather than per process** — `serve` resolves a single
+  `Agency` at startup and every session in it shares that worker.
 
 ## VSCode integration
 
