@@ -290,6 +290,30 @@
   // the top, instead of every number pretending to be current.
   $: reading = state.selectedTurn !== null
 
+  // The compaction log: every fold this session has made, newest first. A job
+  // closed before record format 9 has a summary and no numbers, and reads as
+  // *not recorded* rather than as nothing saved — see
+  // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+  $: folds = (state.jobs || state.tasks)
+    .filter(job => job.state === "closed" && job.summary)
+    .map(job => {
+      const before = job.replaced?.tokens ?? null
+      // What the summary costs where its turns used to be. Counted here from
+      // the text because the page has the text; the server's own count is in
+      // the `summaries` bucket beside it.
+      const after = job.summary ? Math.round(job.summary.length / 4) : 0
+      return {
+        id: job.id,
+        objective: job.objective,
+        turns: job.replaced?.turns || [],
+        before,
+        after,
+        saved: before === null ? null : before - after,
+        closedBy: job.closedBy,
+      }
+    })
+    .reverse()
+
   $: budgetTotal = view?.budget
     ? view.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
     : 0
@@ -862,6 +886,35 @@
       No tool calls this turn. A turn that only answers makes none.
     </p>
 
+    <h2>Compaction</h2>
+    <ol class="folds" :if="folds.length">
+      <li :each="fold in folds" :key="fold.id">
+        <div class="call">
+          <b>job {{ fold.id }}</b>
+          <span class="dim">{{ fold.objective }}</span>
+        </div>
+        <div class="held">
+          <span :if="fold.turns.length">turns {{ fold.turns.join(", ") }}</span>
+          <span :if="!fold.turns.length" class="dim">turns not recorded</span>
+          <span :if="fold.closedBy === 'exit_code'" class="dim">· closed by exit code</span>
+        </div>
+        <div :if="fold.before !== null" class="held">
+          <b>{{ fold.before }}</b> tokens of history →
+          <b>{{ fold.after }}</b> in the line that stands in for them,
+          <span :class="fold.saved > 0 ? 'ok' : 'bad'">{{ fold.saved }} saved</span>
+        </div>
+        <!-- Absent is not zero. A recording made before the fold counted what
+             it replaced cannot say, and saying nothing is the honest answer. -->
+        <div :if="fold.before === null" class="held dim">
+          what it replaced was not recorded — this stream predates format 9
+        </div>
+      </li>
+    </ol>
+    <p :if="!folds.length" class="dim">
+      Nothing folded yet. A job that is closed is sent as one summary from then
+      on, and this is where what that cost goes.
+    </p>
+
     <h2>Prompt sent to the model</h2>
     <pre :if="view?.prompt">{{ view?.prompt }}</pre>
     <p :if="!view?.prompt" class="dim">Nothing sent yet this session.</p>
@@ -1092,6 +1145,18 @@
   .timeline .held { color: var(--dim); }
   .timeline .held.warn { color: var(--warn); }
   .timeline .err { color: var(--bad); overflow-wrap: anywhere; }
+
+  .folds { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .folds li {
+    border-left: 2px solid var(--b-summaries);
+    padding: 0 0 .5rem .6rem;
+    margin-bottom: .5rem;
+  }
+  .folds .call b { color: var(--b-summaries); }
+  .folds .held { color: var(--dim); }
+  .folds .held b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .folds .ok { color: var(--b-history); }
+  .folds .bad { color: var(--bad); }
 
   pre {
     background: #0e1014;

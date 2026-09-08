@@ -1628,9 +1628,10 @@ async fn close_job(app: Arc<App>, job: JobId) {
         if summary.is_some() && session.narrowed.as_ref().is_some_and(|(id, _)| *id == job) {
             session.narrowed = None;
         }
-        summary
+        // Read inside the same lock as the close that wrote it.
+        summary.map(|text| (text, session.context.replaced_by(job)))
     };
-    let Some(summary) = summary else {
+    let Some((summary, replaced)) = summary else {
         refuse(
             &app,
             "close_job",
@@ -1645,6 +1646,7 @@ async fn close_job(app: Arc<App>, job: JobId) {
         job,
         summary,
         by: Some(ClosedBy::User),
+        replaced,
     }))
     .await;
 }
@@ -1977,14 +1979,16 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                 // when a person closes one.
                 session.narrowed = None;
             }
-            closed
+            // Read under the same lock as the close, like the handler above.
+            closed.map(|(job, summary)| (job, summary, session.context.replaced_by(job)))
         };
 
-        if let Some((job, summary)) = closed {
+        if let Some((job, summary, replaced)) = closed {
             app.publish(Event::Protocol(ServerMessage::JobClosed {
                 job,
                 summary,
                 by: Some(ClosedBy::ExitCode),
+                replaced,
             }))
             .await;
         }

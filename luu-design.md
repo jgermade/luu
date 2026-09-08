@@ -827,10 +827,16 @@ turn 9 runs keeps reading turn 3. See
    was denied reads as itself rather than as nothing happening. Result size
    *before/after pruning* waits on pruning existing.
 4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
-   The only one of the four still unbuilt.
+   Built, and the third of those was the work: `job::Summary` carries a
+   `replaced: Option<Replaced>` — which turns stopped being sent and what they
+   were worth in the prompt they left — counted **at the close**, with the
+   counter that counted the summary, because the window moves and the number is
+   only true then. `None` is *not recorded* rather than zero, which is what a
+   recording written before format 9 gets. See
+   [`RECORD/2026-09-08.what-a-fold-writes-down.completed.md`](RECORD/2026-09-08.what-a-fold-writes-down.completed.md).
 
-Panels 1-3 are readable for **any turn of the session**, not only the running one,
-and the two that a recording carries replay the same way.
+All four are readable for **any turn of the session**, not only the running one,
+and the ones a recording carries replay the same way.
 
 ### The configuration modal
 

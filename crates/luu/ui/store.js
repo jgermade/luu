@@ -19,7 +19,7 @@ import { $reactive } from "./vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 5
-const FORMAT = 8
+const FORMAT = 9
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -281,6 +281,10 @@ function onProtocol(message) {
         state: "closed",
         summary: message.summary,
         closedBy: message.by ?? "user",
+        // What the fold replaced, counted at the close. `null` in a stream
+        // written before record format 9, and the panel says *not recorded*
+        // rather than nothing — zero saved is a different claim.
+        replaced: message.replaced ?? null,
       })
       break
     }
@@ -290,7 +294,7 @@ function onProtocol(message) {
       // The summary goes with the fold: it is an account of work that is being
       // written again.
       const id = message.job ?? message.task
-      patchJob(id, { state: "approved", summary: null, closedBy: null })
+      patchJob(id, { state: "approved", summary: null, closedBy: null, replaced: null })
       break
     }
 
@@ -815,6 +819,7 @@ export async function refreshLiveSession() {
       state: j.state,
       summary: j.summary,
       closedBy: j.closed_by || null,
+      replaced: j.replaced || null,
     }))
     state.tasks = state.jobs
 

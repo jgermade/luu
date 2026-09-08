@@ -1975,6 +1975,7 @@ pub async fn run() -> Result<()> {
                         // `## close` is a person's instruction written down in
                         // advance, which is the same authority typed later.
                         by: Some(ClosedBy::User),
+                        replaced: context.replaced_by(id),
                     }));
                 }
                 println!("\n== job {id} closed; its turns are now sent as:");

@@ -458,6 +458,30 @@ pub struct Summary {
     /// Which counter produced `tokens` — same reason [`crate::context::Turn`]
     /// carries one: two counters summed into one bar is not a measurement.
     pub counted_by: Counter,
+    /// What this summary stands in for, counted at the close.
+    ///
+    /// `None` in a recording written before format 9, and that is not zero: a
+    /// fold that saved nothing and a fold nobody measured are different claims.
+    /// See `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+    #[serde(default)]
+    pub replaced: Option<Replaced>,
+}
+
+/// The turns a fold took out of the prompt, and what they were worth there.
+///
+/// Counted at the close with the counter that counted the summary, because the
+/// saving is `tokens` subtracted from this one and two counters subtracted from
+/// each other are not a saving. It cannot be recovered later either: by then the
+/// window has moved, a resume may have changed the counter, and eviction may
+/// have taken some of the same turns.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Replaced {
+    /// Named rather than counted: a reader months later cannot recover *which*
+    /// turns stopped being sent, and the transcript can point at them.
+    pub turns: Vec<crate::protocol::TurnId>,
+    /// What they were worth in the prompt they are no longer in — the unit
+    /// `Summary::tokens` is in, and the one the `history` bucket sums.
+    pub tokens: u32,
 }
 
 /// One piece of work: proposed, approved, run, closed.
@@ -526,6 +550,10 @@ impl Job {
     /// they were handed, both in order, and `turns` is how many turns it took.
     /// All three are facts about what happened; nothing the model said about
     /// what happened is used.
+    /// `replaced` is what the job's turns were worth in the prompt, counted by
+    /// the caller with this same counter — the fold's whole claim is the
+    /// difference between it and the summary, so the two are counted together
+    /// or not at all.
     pub fn close(
         &mut self,
         steps: &[&ToolStep],
@@ -533,12 +561,14 @@ impl Job {
         turns: usize,
         counter: &dyn TokenCounter,
         by: ClosedBy,
+        replaced: Option<Replaced>,
     ) {
         let text = summary_text(&self.objective, &self.plan, steps, shown, turns, counter);
         self.summary = Some(Summary {
             tokens: counter.count(&text),
             counted_by: counter.id(),
             text,
+            replaced,
         });
         self.state = JobState::Closed;
         self.closed_by = Some(by);
@@ -883,6 +913,7 @@ mod tests {
             3,
             &ApproximateCounter,
             ClosedBy::User,
+            None,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -908,6 +939,7 @@ mod tests {
             8,
             &ApproximateCounter,
             ClosedBy::User,
+            None,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -922,7 +954,7 @@ mod tests {
     #[test]
     fn a_task_that_ran_no_tools_says_so_rather_than_stopping() {
         let mut task = Task::new(1, "explain the design", Plan::default());
-        task.close(&[], &[], 4, &ApproximateCounter, ClosedBy::User);
+        task.close(&[], &[], 4, &ApproximateCounter, ClosedBy::User, None);
         let text = &task.summary.as_ref().unwrap().text;
         assert!(text.contains("no tools ran"), "{text}");
         assert!(text.contains("4 turn(s) folded"), "{text}");
@@ -952,6 +984,7 @@ mod tests {
             5,
             &ApproximateCounter,
             ClosedBy::User,
+            None,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -981,6 +1014,7 @@ mod tests {
             2,
             &ApproximateCounter,
             ClosedBy::User,
+            None,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -1005,6 +1039,7 @@ mod tests {
             4,
             &ApproximateCounter,
             ClosedBy::User,
+            None,
         );
 
         let text = &task.summary.as_ref().unwrap().text;
@@ -1022,7 +1057,7 @@ mod tests {
     #[test]
     fn reopening_drops_the_summary_without_recovering_anything() {
         let mut task = Task::new(1, "x", Plan::default());
-        task.close(&[], &[], 1, &ApproximateCounter, ClosedBy::User);
+        task.close(&[], &[], 1, &ApproximateCounter, ClosedBy::User, None);
         task.reopen();
         assert!(task.is_open());
         assert!(

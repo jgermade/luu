@@ -1625,9 +1625,17 @@ async fn a_matching_client_is_greeted_and_then_ignored() {
         .expect("the websocket handshake");
     let _ = next_message(&mut socket).await;
 
+    // The constants rather than the numbers: this test is about a *matching*
+    // client, and a literal here makes every format bump look like a broken
+    // handshake. See `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`,
+    // which bumped one and found this.
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 5, "format": 8}),
+        serde_json::json!({
+            "type": "hello",
+            "protocol": agent_core::protocol::VERSION,
+            "format": agent_core::record::FORMAT,
+        }),
     )
     .await;
     // Nothing comes back: a handshake that matches is not an event in the

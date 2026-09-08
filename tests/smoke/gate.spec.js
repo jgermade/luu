@@ -175,6 +175,17 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(live).toBeHidden({ timeout: 15_000 })
   await expect(page.locator(".fold .summary")).toBeVisible()
 
+  // The fold, with what it cost: the compaction log is the fourth of the four
+  // panels the design says justify building this client, and the numbers in it
+  // are counted at the close because they are only true then. See
+  // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+  const fold = page.locator(".folds li").first()
+  await expect(fold).toBeVisible()
+  await expect(fold).toContainText("job 1")
+  await expect(fold).toContainText("tokens of history")
+  await expect(fold).toContainText("saved")
+  await expect(fold).not.toContainText("not recorded")
+
   // And the two turns are still readable, without a reload: the panel keeps
   // what it was showing instead of resetting when the next turn starts.
   await expect(page.locator(".turn-picker select option")).toHaveText([

@@ -58,7 +58,14 @@ use crate::trace::TraceMessage;
 /// contains `imported`. The protocol is untouched at 5, because what a prune
 /// changes is the prompt and not the conversation. See
 /// `RECORD/2026-09-08.prune-behind.completed.md`.
-pub const FORMAT: u32 = 8;
+///
+/// 9: `job_closed` carries what the fold replaced — which turns stopped being
+/// sent, and what they were worth in the prompt they are no longer in. Additive
+/// to an existing message, which is the rule 7 was taken under, and absent means
+/// *not recorded* rather than zero. The protocol is untouched at 5: a client
+/// that ignores the field lacks a panel, it does not misread a conversation. See
+/// `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+pub const FORMAT: u32 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]
