@@ -45,7 +45,7 @@ is the grounded pair and the map probe, both at two budgets, on that box.
 | **1 · M1 Pro** | **`run_command` with a model in the loop.** Landlock is active in its Docker VM, so the gate probe's command prompts become observable for the first time anywhere | [`the-container-decided`](../../RECORD/2026-09-01.the-container-decided.completed.md), [`the-gate-probe`](../../RECORD/2026-08-31.the-gate-probe.completed.md) |
 | ~~**5 · 1660 Super, 6 GB**~~ | ~~Where the stated target breaks.~~ It doesn't break qualitatively for 7B/Q4 — it degrades to partial CPU offload (18% at 8192) at no measurable decode cost; 100% GPU residency needs under ~400 tokens of configured context, and even that cutover moves with the desktop compositor's own VRAM use. Closed by [`the-floor-on-6gb`](../../RECORD/2026-09-08.the-floor-on-6gb.completed.md) | [`the-floor-on-6gb`](../../RECORD/2026-09-08.the-floor-on-6gb.completed.md) |
 | **6 · BC-250** | **A third serving stack.** Neither Metal nor CUDA — llama.cpp over Vulkan, which is the only non-vendor path in the inventory | — needs a record |
-| **4 · Ryzen + 5060 Ti** | **Native Linux without a VM**, and the fastest box for anything that fits in 16 GB | — |
+| **4 · Ryzen + 5060 Ti** | **Native Linux without a VM**, and the fastest box for anything that fits in 16 GB | [`the-landlock-holds-natively`](../../RECORD/2026-09-08.landlock-holds-natively.completed.md) — the VM half; speed is out of scope by design |
 | **P1 · ModelArk** | **A judge that is not the model under test**, so probe scoring stops being fifteen answers read by hand | [`local-first`](../../RECORD/2026-09-01.local-first.completed.md) §Still open — the design says the judge is the same model, and that has to be argued with first |
 | **P2 · build.nvidia.com** | **A ceiling.** The same open-weight family at a size no local box holds — but a different quantisation and serving stack, so it is a bound, never an A/B | — needs a record |
 | **2 · M4 mini** | Nothing the others do not. Second opinion on 1, and a second host the day federation is testable | — |
@@ -120,9 +120,14 @@ gantt
   answers it more cheaply. It does not: the hosted one changes quantisation and
   sampler at the same time. But if the local sweep is expensive to arrange, that
   trade is worth stating rather than assumed.
-- **Landlock on machines 4 and 6**, once either runs Linux, and inside Apple's
+- ~~**Landlock on machines 4 and 6**, once either runs Linux, and inside Apple's
   `container` if it is ever installed. One command each, and it decides whether
-  the box can hold a subprocess at all.
+  the box can hold a subprocess at all.~~ Closed for machine 4 — it holds a
+  subprocess natively, no VM or container needed, `landlock ABI v10 + seccomp`
+  applied directly in `pre_exec`. Machine 6 is still open. See
+  [`the-landlock-holds-natively`](../../RECORD/2026-09-08.landlock-holds-natively.completed.md).
+- **Apple's `container`**, if it is ever installed — whether its kernel has
+  Landlock at all.
 - **Nothing here measures latency**, deliberately: every corpus in this repository
   scores answers, not seconds. A machine comparison that ignores speed is odd
   enough to be worth saying out loud, and the reason is that speed does not
