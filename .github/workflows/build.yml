@@ -77,6 +77,25 @@ jobs:
           path: dist/luu-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
+  # Level 3, run rather than described. Every contained run this repository had
+  # until 2026-09-08 was Docker Desktop on macOS, by hand, once — and the runner
+  # here is Linux with a real daemon, which is the platform the whole sandbox
+  # ladder is aimed at. See RECORD/2026-09-03.the-container-observed.completed.md
+  # and scripts/container-check.sh, which is the same walk a person takes.
+  container:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin luu
+
+      - name: The image, the handshake, and the same calls inside and out
+        run: LUU_BIN=target/release/luu scripts/container-check.sh
+
   web:
     needs: test
     runs-on: ubuntu-latest

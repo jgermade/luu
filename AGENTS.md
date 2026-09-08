@@ -157,6 +157,11 @@ docker build -t luu-worker:dev -f Containerfile .
 cargo run --bin luu -- tools --sandbox luu.container.toml
 cargo run --bin luu -- chat "hola" --sandbox luu.container.toml
 cargo run --bin luu -- tools --worker direct          # the seam, no container
+# the whole of level 3 in one script — the image, the handshake, a read, a
+# denial and a child process, plus the same read on the host to prove the two
+# sides answer the same bytes. CI runs it on every push; a person with a daemon
+# runs the same file.
+scripts/container-check.sh
 
 # the page itself, clicked: the gate, an amendment, Approve, the tool call and
 # the fold — against `luu serve` on the mock, which the spec starts. Node and a
