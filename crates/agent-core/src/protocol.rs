@@ -394,6 +394,34 @@ mod tests {
         json
     }
 
+    /// The alias is for a client that has not been rewritten, and it is a
+    /// second *spelling*, not a second field.
+    ///
+    /// A frame naming both is `job` twice, which serde refuses and the server
+    /// drops — silently, because an unparseable frame must not take the socket
+    /// down with it. That is how every approval this repository's own page sent
+    /// was discarded between the rename and the day somebody clicked Approve in
+    /// a browser and watched the gate stay shut.
+    #[test]
+    fn a_gate_frame_names_the_job_once() {
+        let approve = |body: &str| serde_json::from_str::<ClientMessage>(body);
+
+        assert!(
+            approve(r#"{"type":"approve_job","job":1}"#).is_ok(),
+            "the spelling every current client sends",
+        );
+        assert!(
+            approve(r#"{"type":"approve_task","task":1}"#).is_ok(),
+            "and the one written before the rename, which the alias exists for",
+        );
+        let both = approve(r#"{"type":"approve_job","job":1,"task":1}"#)
+            .expect_err("naming the same field twice is not a frame");
+        assert!(
+            both.to_string().contains("duplicate field"),
+            "the error is what it is: {both}",
+        );
+    }
+
     #[test]
     fn a_token_is_tagged_by_type() {
         let json = roundtrip(&ServerMessage::Token {

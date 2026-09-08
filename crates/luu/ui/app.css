@@ -134,6 +134,20 @@ body {
 }
 .declare p { margin: 0 0 .5rem; font-size: 12px; line-height: 1.5; }
 .declare input { width: 18rem; margin-right: .5rem; }
+/* The first run. Loud on purpose and once: a page that opens on a chat box
+   answering from a fixture is the one thing this says out loud. */
+.first-run {
+  margin: 0 0 1rem;
+  padding: .7rem .9rem;
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: 4px;
+}
+.first-run p { margin: .4rem 0 0; font-size: 12px; line-height: 1.6; color: var(--dim); }
+.first-run code { color: var(--fg); }
+/* The session starter asks two questions; the providers table shows seven
+   columns. They should not be the same width. */
+.modal.narrow { width: min(34rem, 100%); }
 .refused {
   margin: .4rem 0;
   padding: .5rem .7rem;

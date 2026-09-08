@@ -5,7 +5,8 @@
           approveJob, rejectJob, closeJob, reopenJob,
           approveTask, rejectTask, closeTask, reopenTask,
           newSession, resumeSession, deleteSession,
-          openSettings, closeSettings, saveProviders } = await import("./store.js")
+          openSettings, closeSettings, saveProviders,
+          loadProviders, providerModels, checkConfigured } = await import("./store.js")
 
   connect()
 
@@ -139,6 +140,113 @@
     }
   }
 
+  // ---- starting a session ------------------------------------------------
+  //
+  // `null` when the dialog is closed. A session picks where it sends and which
+  // model there; the destination becomes the *session's*, and this is the only
+  // moment it can be chosen — see
+  // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
+  let starter = null
+  let starting = false
+  // Which of the two things the dialog is doing, so the one that is running
+  // says so on its own button rather than on both.
+  let continuing = false
+
+  const openStarter = async provider => {
+    if (!state.providers) await loadProviders()
+    continuing = false
+    const names = Object.keys(state.providers?.providers || {})
+    const chosen = provider
+      || state.providers?.running
+      || state.providers?.default
+      || names[0]
+      || ""
+    starter = { provider: chosen, model: "", models: [], reason: null, from: null, loading: false }
+    if (chosen) await loadModels(chosen)
+  }
+  // The list is fetched from the provider itself, so it is what is *pulled*
+  // rather than what somebody remembered. An empty one with a reason is the
+  // ordinary "that server is not running right now", and the field stays
+  // typable: a model not pulled yet is a legitimate thing to write down.
+  const loadModels = async name => {
+    starter = { ...starter, provider: name, loading: true, models: [], reason: null }
+    const answer = await providerModels(name)
+    starter = {
+      ...starter,
+      loading: false,
+      models: answer.models || [],
+      reason: answer.reason || null,
+      from: answer.suggested_from || null,
+      model: answer.suggested || "",
+    }
+  }
+  const closeStarter = () => { starter = null; continuing = false }
+  const startSession = async () => {
+    starting = true
+    const ok = await newSession({ provider: starter.provider, model: starter.model })
+    starting = false
+    if (ok) {
+      starter = null
+      closeConfig()
+    }
+  }
+  // The same two answers, against the session already on screen. Its history
+  // comes along, and the server writes a header into its stream saying where
+  // it changed — so turn 8 on another model is not silently comparable with
+  // turn 7 on this one.
+  const continueHere = async () => {
+    starting = true
+    continuing = true
+    const ok = await resumeSession(state.session, {
+      provider: starter.provider,
+      model: starter.model,
+    })
+    starting = false
+    continuing = false
+    if (ok) {
+      starter = null
+      closeConfig()
+    }
+  }
+
+  // The first run, and the one thing a person can do on it. A server with
+  // nowhere to send opens on the editor rather than on a chat box that would
+  // answer them from a fixture without saying so.
+  //
+  // Asked **only of a server that said hello**. The deployed page is a static
+  // twin of the read API with no `/api/settings` behind it, and a 404 there
+  // would be a console error on every visit — over a question that cannot
+  // apply, because a static site has no destination to configure.
+  ;(async () => {
+    for (let waited = 0; waited < 40 && !state.protocol && !state.replay; waited++) {
+      await new Promise(resume => setTimeout(resume, 100))
+    }
+    if (!state.protocol || state.replay) return
+    if (await checkConfigured()) await openConfig()
+  })()
+
+  $: profileNames = Object.keys(state.providers?.providers || {})
+  // What stands in the way of continuing the session on screen, or "" when
+  // nothing does. A control that cannot work says why rather than failing when
+  // it is pressed.
+  // What stands in the way of *either* action: the server refuses both while a
+  // turn is in flight or a proposal is unanswered, and a button that fails when
+  // pressed is worse than one that says why it will not.
+  $: busy = state.status === "running"
+    ? "a turn is running"
+    : proposed
+      ? "a proposal is waiting at the gate"
+      : ""
+  $: cannotContinue = busy
+    || (state.replay
+      ? "this is a recording"
+      : !state.session
+        ? "no session is open"
+        : !state.messages.length
+          ? "this session has no turns yet — start one instead"
+          : !state.settings?.store
+            ? "this server keeps no session store, so nothing can be resumed"
+            : "")
   $: editable = !!state.providers?.editable
   $: canDeclare = !!declaration && typed.trim() === declaration.host
   $: windowSource = ({
@@ -226,7 +334,8 @@
         {{ s.id === 'live' ? 'Live session' : (s.title || s.id) }} ({{ s.turns }}t)
       </option>
     </select>
-    <button class="new-btn" @click="newSession()" title="Start a new session">+ New</button>
+    <button class="new-btn" @click="openStarter()"
+            title="Start a new session — where it sends, and which model">+ New</button>
   </div>
   <span class="status" :class="state.status">{{ state.status }}</span>
 </header>
@@ -244,6 +353,19 @@
     </header>
 
     <section class="modal-body">
+      <!-- The first run. The server decides this (`unconfigured`), the page
+           only shows it: a browser working it out from the backend name would
+           be a second copy of a rule that already has one. -->
+      <div :if="state.settings?.unconfigured" class="first-run">
+        <strong>Nothing says where this machine sends.</strong>
+        <p>
+          There is no provider in <code>config.toml</code> and no destination was
+          typed on the command line, so this server fell back to the mock — which
+          answers in sentences and is nowhere. Write one below, then start a
+          session on it.
+        </p>
+      </div>
+
       <h3>What this server is running</h3>
       <p class="dim small">
         Resolved when it started and fixed for its lifetime. Editing the
@@ -313,7 +435,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr :each="row in config.profiles" :key="row.id">
+          <tr :each="row in config?.profiles || []" :key="row.id">
             <td>
               <input type="radio" name="default" :disabled="!editable || !row.name"
                      :checked="config.default === row.name"
@@ -345,6 +467,12 @@
             </td>
             <td>
               <span :if="row.remote" class="tag warn" title="Declared as off this machine">remote</span>
+              <!-- Only for a profile that is in the file: this starts a session
+                   against what the server can resolve, not against an unsaved
+                   row. -->
+              <button type="button" class="link" :if="profileNames.includes(row.name)"
+                      title="Start a session on this provider"
+                      @click="openStarter(row.name)">use →</button>
               <button type="button" class="link" :disabled="!editable"
                       @click="removeProfile(row.id)">remove</button>
             </td>
@@ -377,6 +505,77 @@
         </div>
       </div>
 
+    </section>
+  </div>
+</div>
+
+<!-- Starting a session: the one moment its destination is chosen. Nothing
+     switches inside a session — every per-turn number is backend-specific, and
+     one label over two backends is a comparison nobody can make. -->
+<div :if="starter" class="modal-backdrop" @click="closeStarter()">
+  <div class="modal narrow" @click="$event.stopPropagation()">
+    <header class="modal-head">
+      <strong>Where a session sends</strong>
+      <button type="button" class="link" @click="closeStarter()">close</button>
+    </header>
+    <section class="modal-body">
+      <p :if="!profileNames.length" class="refused">
+        There are no providers in <code>config.toml</code> yet. Write one in
+        Configuration first — a session can only be sent somewhere this machine
+        has already named.
+      </p>
+
+      <dl class="settings" :if="profileNames.length">
+        <dt>Provider</dt>
+        <dd>
+          <select :value="starter?.provider" @change="loadModels($event.target.value)">
+            <option :each="name in profileNames" :key="name" :value="name">{{ name }}</option>
+          </select>
+          <span :if="starter?.provider === state.providers?.default" class="dim">· the file's default</span>
+        </dd>
+
+        <dt>Model</dt>
+        <dd>
+          <input class="w-model" :value="starter?.model" list="starter-models"
+                 placeholder="{{ starter?.loading ? 'asking the provider…' : 'a model name' }}"
+                 @input="starter = { ...starter, model: $event.target.value }">
+          <datalist id="starter-models">
+            <option :each="name in starter?.models || []" :key="name" :value="name"></option>
+          </datalist>
+          <span :if="starter?.from" class="dim">· {{ starter?.from }}</span>
+        </dd>
+        <dd :if="starter?.reason" class="caveat">
+          Could not list this provider's models: {{ starter?.reason }}. Type one —
+          a model that is not pulled yet is still a name worth writing down.
+        </dd>
+        <dd :if="!starter?.reason && !starter?.loading && !starter?.models?.length" class="dim">
+          This provider offers no list, so the model is whatever you type.
+        </dd>
+      </dl>
+
+      <p class="dim small" :if="profileNames.length">
+        <strong>Start session</strong> opens an empty one there.
+        <strong>Continue here</strong> keeps the history on screen and moves it —
+        the session's stream gains a header saying where it changed, so the turns
+        before it are not read as comparable with the ones after.
+        Neither changes the file, and neither touches a turn that is running.
+      </p>
+      <p class="dim small" :if="profileNames.length && cannotContinue">
+        Cannot continue: {{ cannotContinue }}.
+      </p>
+      <p class="dim small" :if="profileNames.length && busy">
+        Cannot start one either: {{ busy }}.
+      </p>
+
+      <div class="modal-foot">
+        <div class="modal-actions">
+          <button type="button" :disabled="!profileNames.length || starting || !!cannotContinue"
+                  title="Keep this session's history and move it to the chosen destination"
+                  @click="continueHere()">{{ starting && continuing ? "Moving…" : "Continue here" }}</button>
+          <button type="button" class="save" :disabled="!profileNames.length || starting || !!busy"
+                  @click="startSession()">{{ starting && !continuing ? "Starting…" : "Start session" }}</button>
+        </div>
+      </div>
     </section>
   </div>
 </div>

@@ -36,7 +36,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{Mutex, broadcast, mpsc, watch};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
 
 /// The UI, embedded in the binary.
 ///
@@ -86,14 +86,39 @@ struct Pending {
 /// persisted, and naming it beats a magic string at four call sites.
 pub const LIVE_SESSION: &str = "live";
 
-struct App {
+/// Where the live session sends, and everything decided by that.
+///
+/// One struct because these are decided *together* and must move together. A
+/// backend swapped without its budget budgets the new destination against the
+/// old one's window; swapped without its counter, it counts one model's tokens
+/// with another's tokenizer — and the session header, whose whole job is to say
+/// what two runs may be compared as, would name the new backend beside the old
+/// numbers.
+///
+/// Held behind an `RwLock` and read as a clone: a guard carried across an
+/// `await` is a deadlock nothing in the tests would reliably find. It is
+/// replaced **only** when a session is created — see `create_session`, and
+/// `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md` for why never
+/// inside one.
+struct Destination {
     backend: Arc<dyn Backend>,
     model: String,
+    budget: Budget,
+    counter: Arc<dyn TokenCounter>,
+    /// The same resolution, rendered for the page.
+    settings: Settings,
+}
+
+struct App {
+    /// The live session's destination. See [`Destination`].
+    destination: RwLock<Arc<Destination>>,
+    /// The tokenizer flag, kept because a destination built later needs the
+    /// same answer this one got: a counter is per *model*, so a switch that
+    /// left the old one in place would count the new model with it.
+    tokenizer: Option<PathBuf>,
     session: Mutex<Session>,
     events: broadcast::Sender<Event>,
     recorder: Option<Recorder>,
-    counter: Arc<dyn TokenCounter>,
-    budget: Budget,
     agency: Agency,
     /// Pinned sampling, forwarded to every call the same way `budget` is.
     /// `None` leaves it to the server's own default.
@@ -123,8 +148,6 @@ struct App {
     /// mtime or length moved, because it is the parse rather than the choosing
     /// that is expensive. Empty when selection is off.
     walked: Mutex<Vec<agent_core::repo_map::Walked>>,
-    /// What this server resolved, rendered once for `GET /api/settings`.
-    settings: Settings,
     /// Tokens of selected fragments per turn. 0 is off.
     select_tokens: u32,
     /// Which signals score a file.
@@ -176,6 +199,49 @@ pub struct Settings {
     map_tokens: u32,
     sandbox: String,
     store: Option<String>,
+    /// Nothing has said where this run sends — see
+    /// [`crate::provider::DestinationFrom`]. The page opens on the providers
+    /// editor when it is set, and **never works this out for itself**: a
+    /// browser deciding it from `backend == "mock"` is the same class of
+    /// mistake as a second `is_this_machine` in JavaScript, and it would call a
+    /// deliberate `--backend mock` run unconfigured.
+    unconfigured: bool,
+}
+
+impl Settings {
+    /// The same run, pointed somewhere else.
+    ///
+    /// Every field a *destination* decides is replaced; every field the
+    /// *process* decided — the sandbox, the map and selection budgets, the
+    /// store — is kept, because a new session does not re-resolve those.
+    fn pointed_at(
+        &self,
+        provider: &crate::provider::Resolved,
+        budget: Budget,
+        counter: agent_core::context::Counter,
+        counter_warning: Option<String>,
+    ) -> Self {
+        Self {
+            profile: provider.profile.clone(),
+            backend: provider.kind.as_str().to_string(),
+            destination: provider.url.clone(),
+            remote: !provider.url.is_empty() && !crate::provider::is_this_machine(&provider.url),
+            model: provider.model.clone(),
+            window: budget.limit,
+            window_from: provider.window_from,
+            window_caveat: match provider.kind {
+                crate::provider::BackendKind::Openai => {
+                    agent_core::backend::openai::OpenAi::window_caveat(budget.limit)
+                }
+                _ => None,
+            },
+            reserve: budget.reserve,
+            counter,
+            counter_warning,
+            unconfigured: provider.unconfigured(),
+            ..self.clone()
+        }
+    }
 }
 
 pub struct StdioOptions {
@@ -192,6 +258,10 @@ pub struct StdioOptions {
     pub record: Option<PathBuf>,
     pub budget: Budget,
     pub counter: Arc<dyn TokenCounter>,
+    /// The `--tokenizer` path, if one was given. Kept rather than only used,
+    /// because a session that switches provider needs a counter for the *new*
+    /// model and this is the only thing that answers how to build one.
+    pub tokenizer: Option<PathBuf>,
     pub agency: Agency,
     /// `[approvals]` from the same file the sandbox came from: who may approve,
     /// and whether anyone must sign to.
@@ -227,6 +297,7 @@ impl App {
             record,
             budget,
             counter,
+            tokenizer,
             agency,
             temperature,
             seed,
@@ -337,11 +408,17 @@ impl App {
             map_tokens,
             sandbox: agency.describe(),
             store: store.as_ref().map(|path| path.display().to_string()),
+            unconfigured: provider.unconfigured(),
         };
         Ok(Arc::new(App {
-            settings,
-            backend,
-            model,
+            destination: RwLock::new(Arc::new(Destination {
+                backend,
+                model,
+                budget,
+                counter,
+                settings,
+            })),
+            tokenizer,
             approvers,
             walked: Mutex::new(walked),
             select_tokens,
@@ -359,8 +436,6 @@ impl App {
             }),
             events: broadcast::channel(1024).0,
             recorder,
-            counter,
-            budget,
             agency,
             temperature,
             seed,
@@ -384,6 +459,15 @@ impl App {
                 started_at,
             )]),
         }))
+    }
+
+    /// The live session's destination, as a cheap clone.
+    ///
+    /// Every reader takes one of these and drops the guard. Holding it across
+    /// an `await` — which is most of what this file does — would be a deadlock
+    /// against the one writer in `create_session`.
+    async fn destination(&self) -> Arc<Destination> {
+        self.destination.read().await.clone()
     }
 
     /// Publishes one event to every client and to the record, in that order.
@@ -448,7 +532,10 @@ impl App {
         if let Err(error) = store.append(&id, &queued) {
             eprintln!("warning: could not write the session stream: {error:#}");
         }
-        if let Err(error) = store.save(&stored) {
+        // The profile this session ran on, so the picker can start on the
+        // model it was last given. `None` where nothing named a profile.
+        let provider = self.destination().await.settings.profile.clone();
+        if let Err(error) = store.save(&stored, provider.as_deref()) {
             eprintln!("warning: could not write the session store: {error:#}");
         }
     }
@@ -499,6 +586,8 @@ pub struct ServeOptions {
     pub record: Option<PathBuf>,
     pub budget: Budget,
     pub counter: Arc<dyn TokenCounter>,
+    /// The `--tokenizer` path, if one was given. See [`StdioOptions::tokenizer`].
+    pub tokenizer: Option<PathBuf>,
     pub agency: Agency,
     /// `[approvals]` from the same file the sandbox came from: who may approve,
     /// and whether anyone must sign to.
@@ -567,6 +656,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         record,
         budget,
         counter,
+        tokenizer,
         agency,
         temperature,
         seed,
@@ -592,6 +682,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         record,
         budget,
         counter,
+        tokenizer,
         agency,
         temperature,
         seed,
@@ -629,6 +720,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/settings.json", get(get_settings))
         .route("/api/providers", get(get_providers).put(put_providers))
         .route("/api/providers.json", get(get_providers))
+        .route("/api/providers/{name}/models", get(get_provider_models))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions.json", get(list_sessions))
         .route(
@@ -789,11 +881,12 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
     let mut greeted = false;
 
     let hello = {
+        let sending = app.destination().await;
         let session = app.session.lock().await;
         ServerMessage::Hello {
             protocol: protocol::VERSION,
-            backend: app.backend.name().to_string(),
-            model: app.model.clone(),
+            backend: sending.backend.name().to_string(),
+            model: sending.model.clone(),
             turn: session.current,
             session: Some(app.session_id.lock().await.clone()),
         }
@@ -943,11 +1036,12 @@ where
     let mut events = app.events.subscribe();
 
     let hello = {
+        let sending = app.destination().await;
         let session = app.session.lock().await;
         ServerMessage::Hello {
             protocol: protocol::VERSION,
-            backend: app.backend.name().to_string(),
-            model: app.model.clone(),
+            backend: sending.backend.name().to_string(),
+            model: sending.model.clone(),
             turn: session.current,
             session: Some(app.session_id.lock().await.clone()),
         }
@@ -1143,7 +1237,8 @@ async fn propose_job(app: Arc<App>, prompt: String) {
                 }
             })
         };
-        let outcome = run_turn(app.backend.as_ref(), request, tx, cancel_rx).await;
+        let sending = app.destination().await;
+        let outcome = run_turn(sending.backend.as_ref(), request, tx, cancel_rx).await;
         let _ = forwarder.await;
 
         {
@@ -1525,7 +1620,7 @@ async fn close_job(app: Arc<App>, job: JobId) {
             .await;
             return;
         }
-        let counter = app.counter.clone();
+        let counter = app.destination().await.counter.clone();
         let summary = session.context.close_job(job, counter.as_ref());
         // The job's sandbox goes with the job. Outside one, the policy file
         // is the whole answer again — and the next prompt proposes a new job
@@ -1608,6 +1703,10 @@ async fn begin_turn(
     CompletionRequest,
     Vec<Fragment>,
 )> {
+    // Taken before the session lock and held for the whole turn: a turn is
+    // built, measured and sent against **one** destination, and the swap in
+    // `create_session` cannot happen inside one anyway.
+    let sending = app.destination().await;
     let (turn, job, cancel_rx, selection, prompt_sent, reuse, code) = {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
@@ -1678,7 +1777,7 @@ async fn begin_turn(
                     sandbox.as_ref(),
                     &text,
                     tokens,
-                    app.counter.as_ref(),
+                    sending.counter.as_ref(),
                     &app.select_weights,
                 )
                 .specs()
@@ -1691,15 +1790,16 @@ async fn begin_turn(
         };
         // Selected under the same lock that hands out the turn number, so the
         // history a turn is built from is the history at the moment it started.
-        let selection = session
-            .context
-            .select(&text, &code, app.budget, app.counter.as_ref());
+        let selection =
+            session
+                .context
+                .select(&text, &code, sending.budget, sending.counter.as_ref());
         // Measured under the same lock, so two turns cannot interleave and
         // measure themselves against each other's prompt.
         let prompt_sent = rendered(&selection.messages);
         let reuse = session
             .prefix
-            .measure(turn, &prompt_sent, app.counter.as_ref());
+            .measure(turn, &prompt_sent, sending.counter.as_ref());
         let job = session.context.live_job();
         (turn, job, rx, selection, prompt_sent, reuse, code)
     };
@@ -1748,11 +1848,11 @@ async fn begin_turn(
         turn,
         cancel_rx,
         CompletionRequest {
-            model: app.model.clone(),
+            model: sending.model.clone(),
             messages: selection.messages,
             // The window we budgeted against, sent so the server serves it. The
             // same `None` the budget means by "unknown".
-            context_limit: app.budget.limit,
+            context_limit: sending.budget.limit,
             temperature: app.temperature,
             seed: app.seed,
         },
@@ -1764,6 +1864,8 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     let Some((turn, cancel_rx, request, code)) = begin_turn(&app, &prompt, None).await else {
         return;
     };
+    // The same destination the request was built against. See [`Destination`].
+    let sending = app.destination().await;
 
     // Inside a task, the plan it was approved with is what holds this turn;
     // outside one, the policy file. A turn is never checked against both.
@@ -1779,6 +1881,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let (tx, mut rx) = mpsc::channel(256);
         let forwarder = {
             let app = app.clone();
+            let counter = sending.counter.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     // The tool round trips. `budget` and `prefix_reuse`
@@ -1791,7 +1894,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                             let text = rendered(messages);
                             let measured = {
                                 let mut session = app.session.lock().await;
-                                session.prefix.measure(turn, &text, app.counter.as_ref())
+                                session.prefix.measure(turn, &text, counter.as_ref())
                             };
                             if let Some(TraceMessage::PrefixReuse {
                                 shared_bytes,
@@ -1821,7 +1924,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         };
 
         let outcome = run_agent_turn(
-            app.backend.as_ref(),
+            sending.backend.as_ref(),
             request,
             app.agency.executor(),
             sandbox.as_ref(),
@@ -1846,7 +1949,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                     outcome.text,
                     code,
                     outcome.steps,
-                    app.counter.as_ref(),
+                    sending.counter.as_ref(),
                 );
             }
             session.current = None;
@@ -1856,7 +1959,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             // steps — the ones that just ran the command it closes on. Before
             // the lock is dropped, so a prompt arriving between the two cannot
             // start a turn inside a task that is already folding.
-            let counter = app.counter.clone();
+            let counter = sending.counter.clone();
             let closed = session.context.close_if_met(counter.as_ref());
             if let Some((job, _)) = &closed
                 && session.narrowed.as_ref().is_some_and(|(id, _)| id == job)
@@ -1912,7 +2015,7 @@ fn not_found(what: &str) -> Response {
 /// Everything here was already decided before the listener existed and printed
 /// once to stderr. The page is where a person actually is.
 async fn get_settings(State(state): State<AppRouterState>) -> Response {
-    Json(state.app.settings.clone()).into_response()
+    Json(state.app.destination().await.settings.clone()).into_response()
 }
 
 /// The providers file, as the editor sees it.
@@ -1935,7 +2038,9 @@ struct ProvidersView {
     running: Option<String>,
 }
 
-fn providers_view(state: &AppRouterState) -> Result<ProvidersView, crate::provider::ConfigError> {
+async fn providers_view(
+    state: &AppRouterState,
+) -> Result<ProvidersView, crate::provider::ConfigError> {
     let (config, path) = crate::provider::Config::load()?;
     Ok(ProvidersView {
         path: path
@@ -1953,18 +2058,102 @@ fn providers_view(state: &AppRouterState) -> Result<ProvidersView, crate::provid
         },
         default: config.default_name().map(str::to_string),
         providers: config.profiles().clone(),
-        running: state.app.settings.profile.clone(),
+        running: state.app.destination().await.settings.profile.clone(),
     })
 }
 
 async fn get_providers(State(state): State<AppRouterState>) -> Response {
-    match providers_view(&state) {
+    match providers_view(&state).await {
         Ok(view) => Json(view).into_response(),
         // A file that does not load is the one a person most needs to see, so
         // the message goes to the page rather than only to the terminal that
         // started this.
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     }
+}
+
+/// What one provider will answer for, and which model a session there should
+/// start on.
+///
+/// **A provider that is not running is not an error here.** On a laptop it is
+/// the ordinary state — Ollama is not started, `llama-server` is not up — and a
+/// 502 in the page would read as a broken page rather than as a machine that is
+/// simply off. So the list comes back empty with `reason` set, and the field
+/// stays typable: a model that has not been pulled yet is a legitimate thing to
+/// write down.
+#[derive(serde::Serialize)]
+struct ProviderModels {
+    models: Vec<String>,
+    /// Why the list is empty, when something went wrong producing it.
+    reason: Option<String>,
+    /// What a session here should start on: the model last used with this
+    /// profile, else the profile's own, else the first the provider listed.
+    suggested: Option<String>,
+    /// Where that suggestion came from, so the page can say.
+    suggested_from: Option<&'static str>,
+}
+
+/// The models one profile offers. Reaches the destination — see the record.
+async fn get_provider_models(
+    State(state): State<AppRouterState>,
+    Path(name): Path<String>,
+) -> Response {
+    let name = bare(&name);
+    let (config, path) = match crate::provider::Config::load() {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+        }
+    };
+    let resolved = match crate::provider::resolve(
+        &config,
+        path.as_deref(),
+        crate::provider::Flags {
+            provider: Some(name),
+            ..Default::default()
+        },
+    ) {
+        Ok(resolved) => resolved,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let backend = match crate::backend_for(&resolved) {
+        Ok(backend) => backend,
+        Err(error) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")).into_response();
+        }
+    };
+
+    let (models, reason) = match backend.models().await {
+        Ok(models) => (models, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+
+    // Last used with *this profile*, then what the profile itself says, then
+    // whatever the provider listed first. The first of those is why the store
+    // keeps a `provider` column at all.
+    let last = match &state.app.store {
+        Some(store) => store.lock().await.last_model(name).unwrap_or_default(),
+        None => None,
+    };
+    let (suggested, suggested_from) =
+        match last.filter(|model| models.is_empty() || models.contains(model)) {
+            Some(model) => (Some(model), Some("last used")),
+            None => match config.profiles().get(name).and_then(|p| p.model.clone()) {
+                Some(model) => (Some(model), Some("the profile")),
+                None => match models.first() {
+                    Some(model) => (Some(model.clone()), Some("the provider's list")),
+                    None => (None, None),
+                },
+            },
+        };
+
+    Json(ProviderModels {
+        models,
+        reason,
+        suggested,
+        suggested_from,
+    })
+    .into_response()
 }
 
 /// Why a write was refused, in a shape an editor can act on.
@@ -2036,7 +2225,7 @@ async fn put_providers(
         )
             .into_response();
     }
-    match providers_view(&state) {
+    match providers_view(&state).await {
         Ok(view) => Json(view).into_response(),
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     }
@@ -2055,8 +2244,145 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     Json(sessions).into_response()
 }
 
-async fn create_session(State(state): State<AppRouterState>) -> Response {
+/// What a new session may choose: where it sends, and which model there.
+///
+/// Both optional and both absent is what every client sent before this existed,
+/// and it keeps meaning *the session this server is already pointed at*.
+#[derive(Debug, Default, serde::Deserialize)]
+struct NewSession {
+    /// A profile name out of `config.toml`. Never a URL: what may be chosen is
+    /// bounded by what somebody wrote on this machine.
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+/// The body both session routes take, which is allowed to be absent.
+///
+/// Not `Json<NewSession>`: a client that posts no body at all — which is every
+/// client written before this parameter existed — would be answered with a 415
+/// about a missing content type rather than with the session it asked for.
+fn asked_for(body: &axum::body::Bytes) -> Result<NewSession, (StatusCode, String)> {
+    match body.is_empty() {
+        true => Ok(NewSession::default()),
+        false => serde_json::from_slice(body)
+            .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error}"))),
+    }
+}
+
+/// The line that says the rest of this stream was produced somewhere else.
+///
+/// `None` when it would say nothing new. The comparison is against the **fold**
+/// — which is what the stream's last header folded to — and not against the
+/// destination the server happens to be pointed at, so a plain resume that
+/// inherits a different destination records that too. It was doing it silently
+/// before this existed.
+///
+/// `started_at` is the session's own, never the moment of the resume: every
+/// `at_ms` in a stream is relative to the first header's, which is what the
+/// field means.
+fn retarget_header(
+    view: &SessionView,
+    sending: &Destination,
+    counter: agent_core::context::Counter,
+) -> Option<record::RecordLine> {
+    let same = view.backend == sending.backend.name() && view.model == sending.model;
+    match same {
+        true => None,
+        false => Some(crate::session::header(
+            sending.backend.name(),
+            &sending.model,
+            sending.budget,
+            counter,
+            view.started_at,
+        )),
+    }
+}
+
+/// The destination a new session asked for, built out of the providers file.
+///
+/// Everything a destination decides is rebuilt together — see [`Destination`] —
+/// and everything the *process* decided (the sandbox, the map, the store, the
+/// tokens a turn may select) is carried over from the one in place.
+async fn destination_for(
+    app: &App,
+    current: &Destination,
+    asked: &NewSession,
+    editable: bool,
+) -> Result<Destination, (StatusCode, String)> {
+    let (config, path) = crate::provider::Config::load()
+        .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    let resolved = crate::provider::resolve(
+        &config,
+        path.as_deref(),
+        crate::provider::Flags {
+            provider: asked.provider.as_deref(),
+            ..Default::default()
+        },
+    )
+    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+
+    // The one authority rule this route has, and it is narrower than the write
+    // route's. Writing a `default` outlives the session and the gate, so it is
+    // loopback-only; a session's destination dies with the session. What the
+    // bearer token must still not buy is *this machine's prompts leaving it* to
+    // a destination whoever holds the token picked — so off loopback the choice
+    // is bounded to profiles that stay here. Decided by `is_this_machine`,
+    // server-side, in the one place it is implemented.
+    if !editable && !resolved.url.is_empty() && !crate::provider::is_this_machine(&resolved.url) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} sends off this machine, and this server is bound off loopback: a token says \
+                 who may reach the port, not where this machine's prompts may go. Choose it from \
+                 a browser on the machine itself.",
+                asked.provider.as_deref().unwrap_or("that provider"),
+            ),
+        ));
+    }
+
+    let mut resolved = resolved;
+    if let Some(model) = asked
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        resolved.model = model.to_string();
+    }
+    let backend = crate::backend_for(&resolved)
+        .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")))?;
+    // Written back through the same function the CLI uses, so the page, the
+    // header and the turn all name the model the same way.
+    resolved.model = crate::model_for(backend.as_ref(), resolved.model);
+    let (counter, counter_warning) =
+        crate::session::counter_for(&resolved.model, app.tokenizer.as_deref())
+            .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")))?;
+    // The profile's window, and everything else about the budget kept: the
+    // reserve, the eviction policy and the repeat rule are the run's, not the
+    // destination's.
+    let budget = Budget {
+        limit: (resolved.context_limit > 0).then_some(resolved.context_limit),
+        ..current.budget
+    };
+    let settings = current
+        .settings
+        .pointed_at(&resolved, budget, counter.id(), counter_warning);
+    Ok(Destination {
+        backend: backend.into(),
+        model: resolved.model,
+        budget,
+        counter,
+        settings,
+    })
+}
+
+async fn create_session(State(state): State<AppRouterState>, body: axum::body::Bytes) -> Response {
     let app = &state.app;
+    let asked = match asked_for(&body) {
+        Ok(asked) => asked,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+
     {
         let session = app.session.lock().await;
         if session.current.is_some() || session.pending.is_some() {
@@ -2066,17 +2392,32 @@ async fn create_session(State(state): State<AppRouterState>) -> Response {
 
     app.checkpoint().await;
 
+    // Resolved before anything is reset: a session that cannot be pointed
+    // anywhere is one that should not have ended the previous one.
+    let sending = match (asked.provider.is_some(), asked.model.is_some()) {
+        (false, false) => app.destination().await,
+        _ => {
+            let current = app.destination().await;
+            match destination_for(app, &current, &asked, state.providers_editable).await {
+                Ok(next) => Arc::new(next),
+                Err((status, message)) => return (status, message).into_response(),
+            }
+        }
+    };
+    *app.destination.write().await = sending.clone();
+
     let started_at = now_ms();
     let new_id = session_id(started_at);
     *app.session_id.lock().await = new_id.clone();
     *app.session_started_at.lock().await = started_at;
     // A new session is a new stream, and a stream starts with the header that
-    // says what it is comparable with.
+    // says what it is comparable with — which is why the destination is
+    // swapped above this line and never below it.
     *app.stream.lock().await = vec![crate::session::header(
-        app.backend.name(),
-        &app.model,
-        app.budget,
-        app.counter.id(),
+        sending.backend.name(),
+        &sending.model,
+        sending.budget,
+        sending.counter.id(),
         started_at,
     )];
 
@@ -2095,7 +2436,7 @@ async fn create_session(State(state): State<AppRouterState>) -> Response {
 
     let summary = {
         let mut view = app.view.lock().await;
-        *view = SessionView::new(LIVE_SESSION, app.backend.name(), &app.model);
+        *view = SessionView::new(LIVE_SESSION, sending.backend.name(), &sending.model);
         view.started_at = started_at;
         let mut s = view.summary();
         s.id = new_id.clone();
@@ -2104,8 +2445,8 @@ async fn create_session(State(state): State<AppRouterState>) -> Response {
 
     let hello = ServerMessage::Hello {
         protocol: protocol::VERSION,
-        backend: app.backend.name().to_string(),
-        model: app.model.clone(),
+        backend: sending.backend.name().to_string(),
+        model: sending.model.clone(),
         turn: None,
         // The new name, not the old one: a client that signs an approval after
         // a switch signs it against the session it is now watching.
@@ -2116,9 +2457,23 @@ async fn create_session(State(state): State<AppRouterState>) -> Response {
     (StatusCode::CREATED, Json(summary)).into_response()
 }
 
-async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<String>) -> Response {
+/// Picks a stored session back up — optionally somewhere else.
+///
+/// The body is `POST /api/sessions`', and means the same thing: a profile out
+/// of the file and a model there. What differs is what comes with it — the
+/// history — and that the stream gains a `Header` saying where it changed. See
+/// `RECORD/2026-09-07.a-second-header.completed.md`.
+async fn resume_session(
+    State(state): State<AppRouterState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
     let app = &state.app;
     let id = bare(&id);
+    let asked = match asked_for(&body) {
+        Ok(asked) => asked,
+        Err((status, message)) => return (status, message).into_response(),
+    };
 
     {
         let session = app.session.lock().await;
@@ -2129,6 +2484,20 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
 
     let Some(store_mutex) = &app.store else {
         return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
+    };
+
+    // Before the checkpoint and before anything is loaded: a body naming a
+    // profile the file does not have leaves the session that is running exactly
+    // as it was.
+    let sending = match (asked.provider.is_some(), asked.model.is_some()) {
+        (false, false) => app.destination().await,
+        _ => {
+            let current = app.destination().await;
+            match destination_for(app, &current, &asked, state.providers_editable).await {
+                Ok(next) => Arc::new(next),
+                Err((status, message)) => return (status, message).into_response(),
+            }
+        }
     };
 
     app.checkpoint().await;
@@ -2147,7 +2516,7 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
             SYSTEM,
             app.agency.definitions(),
             &app.map_rendered,
-            app.counter.as_ref(),
+            sending.counter.as_ref(),
         ) {
             Ok(c) => c,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
@@ -2158,11 +2527,22 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         (view, context)
     };
 
+    // After the fold is rebuilt and before anything runs on it.
+    *app.destination.write().await = sending.clone();
+
     *app.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store
     // already holds rather than starting a second one under the same name.
     *app.session_started_at.lock().await = loaded_view.started_at;
-    app.stream.lock().await.clear();
+    {
+        let mut stream = app.stream.lock().await;
+        stream.clear();
+        // The one line this route writes. It says the rest of these turns were
+        // produced somewhere else, and it is absent when they were not.
+        if let Some(header) = retarget_header(&loaded_view, &sending, sending.counter.id()) {
+            stream.push(header);
+        }
+    }
 
     {
         let mut session = app.session.lock().await;
@@ -2183,16 +2563,28 @@ async fn resume_session(State(state): State<AppRouterState>, Path(id): Path<Stri
         let mut view = app.view.lock().await;
         let mut live_view = loaded_view.clone();
         live_view.id = LIVE_SESSION.to_string();
+        // The fold has one backend and one model, so after a switch it names
+        // the one the next turn will use. The *stream* keeps both, in order,
+        // which is where "what produced turn 4" is answered.
+        live_view.backend = sending.backend.name().to_string();
+        live_view.model = sending.model.clone();
         *view = live_view;
         let mut s = view.summary();
         s.id = id.to_string();
         s
     };
 
+    // Written down now rather than at the next turn's checkpoint. A stream
+    // line saying *the rest of this was produced somewhere else* is worth
+    // nothing if a session that was moved and then left alone loses it — and
+    // unlike a new session, this one already has a row, so the checkpoint
+    // updates rather than inventing one.
+    app.checkpoint().await;
+
     let hello = ServerMessage::Hello {
         protocol: protocol::VERSION,
-        backend: app.backend.name().to_string(),
-        model: app.model.clone(),
+        backend: sending.backend.name().to_string(),
+        model: sending.model.clone(),
         turn: None,
         session: Some(id.to_string()),
     };
@@ -2363,28 +2755,34 @@ mod tests {
             }),
             select_tokens,
             select_weights: Default::default(),
-            backend: Arc::new(
-                Mock::replies(replies.iter().map(|r| (*r).to_string()).collect())
-                    .delay(std::time::Duration::ZERO),
-            ),
-            model: "mock".into(),
-            settings: Settings {
-                profile: None,
-                backend: "mock".into(),
-                destination: String::new(),
-                remote: false,
+            destination: RwLock::new(Arc::new(Destination {
+                backend: Arc::new(
+                    Mock::replies(replies.iter().map(|r| (*r).to_string()).collect())
+                        .delay(std::time::Duration::ZERO),
+                ),
                 model: "mock".into(),
-                window: None,
-                window_from: crate::provider::WindowFrom::Unset,
-                window_caveat: None,
-                reserve: 0,
-                counter: agent_core::context::Counter::Approximate,
-                counter_warning: None,
-                select_tokens,
-                map_tokens: 0,
-                sandbox: String::new(),
-                store: None,
-            },
+                budget: Budget::new(0, 0, Eviction::Turn),
+                counter: Arc::new(ApproximateCounter),
+                settings: Settings {
+                    profile: None,
+                    backend: "mock".into(),
+                    destination: String::new(),
+                    remote: false,
+                    model: "mock".into(),
+                    window: None,
+                    window_from: crate::provider::WindowFrom::Unset,
+                    window_caveat: None,
+                    reserve: 0,
+                    counter: agent_core::context::Counter::Approximate,
+                    counter_warning: None,
+                    select_tokens,
+                    map_tokens: 0,
+                    sandbox: String::new(),
+                    store: None,
+                    unconfigured: true,
+                },
+            })),
+            tokenizer: None,
             session: Mutex::new(Session {
                 next_turn: 1,
                 current: None,
@@ -2396,8 +2794,6 @@ mod tests {
             }),
             events: broadcast::channel(1024).0,
             recorder: None,
-            counter: Arc::new(ApproximateCounter),
-            budget: Budget::new(0, 0, Eviction::Turn),
             agency,
             temperature: None,
             seed: None,
@@ -2410,6 +2806,76 @@ mod tests {
             session_started_at: Mutex::new(0),
             stream: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The one line a resume writes, and the two cases it is about.
+    ///
+    /// The comparison is against the **fold**, which is what the stream's last
+    /// header folded to — so a resume that inherits a destination the session
+    /// never ran on records that too, which it was doing silently before this
+    /// line existed.
+    #[test]
+    fn a_resume_records_a_header_only_where_the_destination_moved() {
+        let sending = |backend: &str, model: &str| Destination {
+            backend: Arc::new(Mock::default()),
+            model: model.to_string(),
+            budget: Budget::new(8192, 512, Eviction::Turn),
+            counter: Arc::new(ApproximateCounter),
+            settings: Settings {
+                profile: None,
+                backend: backend.to_string(),
+                destination: String::new(),
+                remote: false,
+                model: model.to_string(),
+                window: Some(8192),
+                window_from: crate::provider::WindowFrom::Unset,
+                window_caveat: None,
+                reserve: 512,
+                counter: agent_core::context::Counter::Approximate,
+                counter_warning: None,
+                select_tokens: 0,
+                map_tokens: 0,
+                sandbox: String::new(),
+                store: None,
+                unconfigured: false,
+            },
+        };
+
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.started_at = 1_700_000_000_000;
+
+        // The same destination the stream already names: nothing to say.
+        assert!(
+            retarget_header(
+                &view,
+                &sending("mock", "mock"),
+                agent_core::context::Counter::Approximate
+            )
+            .is_none(),
+            "a resume that changed nothing must not write a line saying it did",
+        );
+
+        // A different model on the same backend is a different destination —
+        // the numbers a header exists to make comparable are the model's.
+        let moved = retarget_header(
+            &view,
+            &sending("mock", "other"),
+            agent_core::context::Counter::Approximate,
+        )
+        .expect("the destination moved, so the stream has to say so");
+        match moved {
+            record::RecordLine::Header {
+                model, started_at, ..
+            } => {
+                assert_eq!(model, "other");
+                assert_eq!(
+                    started_at, view.started_at,
+                    "every at_ms in the stream is relative to the session's own start, \
+                     so a second header carries it rather than the moment of the resume",
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A directory that removes itself, so a failing test does not leave one
@@ -2730,7 +3196,7 @@ mod tests {
             app.agency.sandbox.as_ref(),
             ASK,
             2048,
-            app.counter.as_ref(),
+            app.destination().await.counter.as_ref(),
             &app.select_weights,
         );
         let reach: std::collections::HashSet<_> = unnarrowed

@@ -130,7 +130,27 @@ pub type ChunkStream<'a> = Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>
 
 /// Object-safe on purpose: the turn loop holds a `dyn Backend`, so swapping
 /// Ollama for an FFI binding never reaches the loop.
+/// How long a model listing may take. Not the generation timeout: nothing is
+/// being generated, and the caller is a page waiting on a request.
+pub const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A future a `dyn Backend` can hand back. Boxed for the same reason
+/// [`ChunkStream`] is: the turn loop holds a `dyn Backend`.
+pub type BackendFuture<'a, T> =
+    Pin<Box<dyn std::future::Future<Output = Result<T, BackendError>> + Send + 'a>>;
+
 pub trait Backend: Send + Sync {
     fn name(&self) -> &str;
     fn stream(&self, request: CompletionRequest) -> ChunkStream<'_>;
+
+    /// The models this destination will answer for, when it can say.
+    ///
+    /// The default is **empty, not an error**: "this destination does not offer
+    /// a list" is a fact about a backend, and a caller that has to tell it apart
+    /// from a failure gets that from the `Err` arm. Nothing in a turn calls
+    /// this — it exists so a person choosing a model is choosing from what is
+    /// actually pulled rather than typing one from memory.
+    fn models(&self) -> BackendFuture<'_, Vec<String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }

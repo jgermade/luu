@@ -828,12 +828,63 @@ the word is produced by a person answering the machine's objection rather than
 by a checkbox the program pre-ticked. Keys are paths and never values, for the
 reason the provider section gives.
 
-**Nothing in the modal changes the running server**, which resolved its
-destination at startup and keeps it; the file it writes is what the *next* run
-reads, and the modal says so. Choosing a provider for a new session is a
-different question — `AppState` holds one backend for every session — and is not
-this. See
+**Nothing in the modal changes the session that is running.** What a session
+sends to is fixed for its lifetime, and the file the modal writes is what the
+*next* one resolves from. Which is now a session rather than a process — see
+below. The mid-session switch stays rejected: every per-turn number is
+backend-specific, and one label over two backends is a comparison nobody can
+make. See
 [`RECORD/2026-09-07.configuring-from-the-browser.completed.md`](RECORD/2026-09-07.configuring-from-the-browser.completed.md).
+
+### The first run, and the session that picks a destination
+
+**A server with nowhere to send says so, and the page opens there.** With no
+`config.toml` and no flag, a run falls back to the mock — a destination that is
+nowhere, and one that answers in sentences. `provider::DestinationFrom` is the
+difference between the mock somebody *typed* (`--backend mock` is a choice) and
+the mock a run *fell into*, `GET /api/settings` carries it as `unconfigured`,
+and the browser opens the providers editor on it instead of a chat box that
+would answer from a fixture without saying so. **The page never works this out
+for itself** — a browser deciding it from `backend == "mock"` is the same class
+of mistake as a second `is_this_machine` in JavaScript.
+
+**A provider lists what it serves.** `Backend::models` reads Ollama's
+`/api/tags` and an OpenAI-compatible `/models`, so a model is chosen from what
+is actually pulled rather than typed from memory. A provider that is not running
+is not an error here: the list comes back empty with the reason beside it, and
+the field stays typable, because a model that has not been pulled yet is a
+legitimate thing to write down.
+
+**The destination belongs to the session, not to the process.** `POST
+/api/sessions` takes `{ provider, model }` — a profile name out of the file,
+never a URL — and the backend, the model, the budget and the counter are
+swapped together before the new session's header is written, because a backend
+swapped without its budget budgets the new destination against the old one's
+window. The model offered defaults to the last one used with that profile, read
+from the store's `provider` column, then the profile's own, then the first the
+provider listed. **Off loopback the choice is bounded to profiles that stay on
+this machine**: the write route is loopback-only because a `default` outlives
+the session and the gate, and what a bearer token must still not buy is this
+machine's prompts leaving it to a destination whoever holds the token picked.
+See
+[`RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`](RECORD/2026-09-07.the-first-run-has-no-provider.completed.md).
+
+**A session can be picked back up somewhere else, and the stream says where.**
+`POST /api/sessions/{id}/resume` takes the same `{ provider, model }` body, and
+the history comes with it — which is the difference between it and starting a
+new one. Where the destination differs from what the session's stream already
+names, the stream gains a **second `Header` line**: no new variant and no format
+bump, because a header is already *the terms these lines were produced under*,
+and both readers that fold a stream apply one by overwriting backend and model.
+It carries **the session's own `started_at`**, never the moment of the resume,
+since every `at_ms` in a stream is relative to the first one. The context is
+re-folded with the new destination's counter, so a history counted with one
+tokenizer is not budgeted with another. The line is checkpointed where it is
+written rather than at the next turn, so a session moved and then left alone
+keeps the fact. This also closes a hole that predates the choice: a plain resume
+inheriting a destination the session never ran on now records that too, instead
+of running under a header that names another. See
+[`RECORD/2026-09-07.a-second-header.completed.md`](RECORD/2026-09-07.a-second-header.completed.md).
 
 ### Record and replay
 
@@ -930,6 +981,11 @@ this repository deliberately runs code it did not write. A file is the only one
 of the three whose exposure the program can check, so both secrets — the API key
 and `/ws`'s bearer token — are read and checked in the same place. See
 [`RECORD/2026-09-07.naming-a-provider.completed.md`](RECORD/2026-09-07.naming-a-provider.completed.md).
+
+**A profile is written and chosen from the browser as well as by hand**: the
+configuration modal edits this file on loopback, and a new session names one of
+these profiles and a model it serves — see [The first run, and the session that
+picks a destination](#the-first-run-and-the-session-that-picks-a-destination).
 
 ## Persistence
 

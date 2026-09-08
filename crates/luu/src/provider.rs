@@ -368,6 +368,22 @@ pub enum WindowFrom {
     Unset,
 }
 
+/// Where the destination itself came from — the question `WindowFrom` asks
+/// about the window, and for the same reason: a page is read by somebody who
+/// did not type the flags.
+///
+/// `Default` is the one that matters. It is the mock **nobody asked for**: no
+/// `config.toml`, or one with no `default` and no `-p`. A run in that state has
+/// nowhere to send, which is a thing to say on the surface a person works in
+/// rather than a backend name they have to know to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DestinationFrom {
+    Flag,
+    Profile,
+    Default,
+}
+
 /// One destination, resolved. Flags beat the profile field by field; the
 /// profile beats the built-in defaults.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,6 +397,8 @@ pub struct Resolved {
     pub window_from: WindowFrom,
     /// The profile this came from, when one did.
     pub profile: Option<String>,
+    /// Whether anything named this destination at all. See [`DestinationFrom`].
+    pub destination_from: DestinationFrom,
 }
 
 impl Resolved {
@@ -396,7 +414,17 @@ impl Resolved {
             context_limit: 0,
             window_from: WindowFrom::Unset,
             profile: None,
+            destination_from: DestinationFrom::Default,
         }
+    }
+
+    /// Nothing has said where this run sends: no flag, no profile, no file.
+    ///
+    /// The whole of the rule, in the crate that owns it. A browser deciding
+    /// this for itself would have to know that `mock` means *nowhere* — and
+    /// would then call a deliberate `--backend mock` run unconfigured.
+    pub fn unconfigured(&self) -> bool {
+        self.destination_from == DestinationFrom::Default
     }
 
     /// The line a run prints before it sends anything.
@@ -464,6 +492,15 @@ pub fn resolve(
         .or_else(|| kind.default_url().map(str::to_string))
         .unwrap_or_default();
 
+    // A flag beats the file here exactly as it does field by field above, and
+    // the mock is a destination when somebody typed it: `--backend mock` is a
+    // choice, and the mock a run falls into having read nothing is not.
+    let destination_from = match (flags.backend.is_some() || flag_url.is_some(), &name) {
+        (true, _) => DestinationFrom::Flag,
+        (false, Some(_)) => DestinationFrom::Profile,
+        (false, None) => DestinationFrom::Default,
+    };
+
     Ok(Resolved {
         kind,
         url,
@@ -486,6 +523,9 @@ pub fn resolve(
             _ => WindowFrom::Flag,
         },
         profile: name,
+        // A flag beats the file here exactly as it does field by field above,
+        // and the mock is a destination when somebody typed it.
+        destination_from,
     })
 }
 
@@ -560,6 +600,45 @@ mod tests {
         // Unparseable is remote: the failure that matters is a destination
         // reached with no declaration, so it asks for one rather than skipping.
         assert!(!is_this_machine("nonsense"));
+    }
+
+    /// The whole of the first-run rule: a mock somebody typed is a
+    /// destination, and a mock a run fell into is not.
+    #[test]
+    fn a_run_that_read_nothing_says_it_has_nowhere_to_send() {
+        // No file at all: the shape `serve` has on a machine nobody has
+        // configured, and the one the page opens the editor on.
+        let empty = Config::from_parts(None, BTreeMap::new());
+        let fallen = resolve(&empty, None, Flags::default()).expect("it resolves");
+        assert_eq!(fallen.destination_from, DestinationFrom::Default);
+        assert!(fallen.unconfigured());
+
+        // A file with profiles but no `default`, and no `-p`: still nowhere,
+        // and the editor is still the right place to open — with the profiles
+        // that exist and no default chosen among them.
+        let no_default = resolved("[provider.local]\nbackend = \"ollama\"\n", Flags::default());
+        assert!(no_default.unconfigured());
+
+        // Typed. `--backend mock` is a choice, and a run that made it is not
+        // asked to configure anything.
+        let asked_for = resolved(
+            "",
+            Flags {
+                backend: Some(BackendKind::Mock),
+                ..Default::default()
+            },
+        );
+        assert_eq!(asked_for.kind, BackendKind::Mock);
+        assert_eq!(asked_for.destination_from, DestinationFrom::Flag);
+        assert!(!asked_for.unconfigured());
+
+        // Written down. The file answered, so nothing is missing.
+        let from_file = resolved(
+            "default = \"local\"\n[provider.local]\nbackend = \"ollama\"\n",
+            Flags::default(),
+        );
+        assert_eq!(from_file.destination_from, DestinationFrom::Profile);
+        assert!(!from_file.unconfigured());
     }
 
     #[test]

@@ -185,7 +185,7 @@ fn what_the_store_gives_back_is_what_folding_the_record_produces() {
 
     for (id, lines) in &recordings {
         let folded = SessionView::from_record(id.clone(), lines);
-        store.save(&folded).expect("saving the fold");
+        store.save(&folded, None).expect("saving the fold");
         let loaded = store
             .load(id)
             .expect("loading it back")
@@ -227,7 +227,7 @@ fn a_stored_fold_still_answers_the_read_side_questions() {
         .find(|(id, _)| id == "one-task")
         .expect("the task recording");
     let folded = SessionView::from_record(id.clone(), &lines);
-    store.save(&folded).expect("saving");
+    store.save(&folded, None).expect("saving");
 
     let loaded = store.load(&id).expect("loading").expect("the session");
     assert!(!loaded.turns.is_empty(), "a session with no turns");
@@ -258,7 +258,7 @@ fn a_resumed_context_produces_matching_budget_and_prompt_selection() {
         .find(|(id, _)| id == "one-task")
         .expect("the task recording");
     let folded = SessionView::from_record(id.clone(), &lines);
-    store.save(&folded).expect("saving");
+    store.save(&folded, None).expect("saving");
 
     let counter = ApproximateCounter;
     let mut resumed = store
@@ -310,7 +310,7 @@ fn a_resumed_context_produces_matching_budget_and_prompt_selection() {
         .find(|(id, _)| id == "eviction")
         .expect("the eviction recording");
     let ev_folded = SessionView::from_record(ev_id.clone(), &ev_lines);
-    store.save(&ev_folded).expect("saving eviction");
+    store.save(&ev_folded, None).expect("saving eviction");
 
     let resumed_ev = store
         .resume(&ev_id, "sys", "", "", &counter)

@@ -25,7 +25,8 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 
 use super::{
-    Backend, BackendError, Chunk, ChunkStream, CompletionRequest, Message, StopReason, Usage,
+    Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Message,
+    StopReason, Usage,
 };
 
 /// `llama-server`'s default. Not a claim that it is the likeliest server, just
@@ -233,9 +234,49 @@ fn payload_of(line: &[u8]) -> Option<&[u8]> {
     (!payload.is_empty()).then_some(payload)
 }
 
+/// `GET /models` — every OpenAI-compatible server answers this one, including
+/// `llama-server`, vLLM and LM Studio, each with the single model it loaded.
+#[derive(Deserialize)]
+struct Models {
+    #[serde(default)]
+    data: Vec<Model>,
+}
+
+#[derive(Deserialize)]
+struct Model {
+    id: String,
+}
+
 impl Backend for OpenAi {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn models(&self) -> BackendFuture<'_, Vec<String>> {
+        let url = format!("{}/models", self.base_url);
+        let http = self.http.clone();
+        let api_key = self.api_key.clone();
+        Box::pin(async move {
+            let mut request = http.get(&url).timeout(super::LIST_TIMEOUT);
+            if let Some(key) = api_key {
+                request = request.bearer_auth(key);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|error| BackendError::Transport(error.to_string()))?;
+            if !response.status().is_success() {
+                return Err(BackendError::Rejected(format!(
+                    "{} from {url}",
+                    response.status()
+                )));
+            }
+            let models: Models = response
+                .json()
+                .await
+                .map_err(|error| BackendError::Malformed(error.to_string()))?;
+            Ok(models.data.into_iter().map(|model| model.id).collect())
+        })
     }
 
     fn stream(&self, request: CompletionRequest) -> ChunkStream<'_> {
