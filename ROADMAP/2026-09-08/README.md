@@ -17,6 +17,12 @@ in the tree since 2026-09-05, which is now item 1 and is fixed:
 The rows the morning's order held are all still here, in their own order, behind
 it — nothing was dropped, and what slips says so.
 
+**All five rows of section A closed within the day**, and what that cost and left
+open is gathered in
+[`RECORD/2026-09-09.state-of-play.completed.md`](../../RECORD/2026-09-09.state-of-play.completed.md).
+What remains of this revision is section B, untouched — which is what the next
+revision should be made of.
+
 Supersedes [`ROADMAP/2026-09-05/`](../2026-09-05/) wholesale. That revision was
 written to put the design's open questions in an order, and in three days **nine
 of its fifteen rows closed** — seven of them by code, two by a measurement it had
