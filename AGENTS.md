@@ -150,6 +150,17 @@ cargo run --bin luu -- key new --out ~/.luu/approval.key --name jgermade
 echo '{"type":"approve_job","job":1,"files":["Cargo.toml"]}' \
   | cargo run --bin luu -- key sign --key ~/.luu/approval.key --session <id> --as jgermade
 
+# what a *session* may do, chosen when it starts: `[posture.<name>]` in the
+# state directory's config.toml names a policy file, and `serve` offers the
+# names to the page. The posture decides the sandbox and the seam together,
+# because one file decides both.
+#
+#   [posture.container]
+#   policy = "luu.container.toml"
+#
+# A resume may not move it: a destination is where a session sends and a posture
+# is what it may do, and its jobs were approved against this one.
+
 # level 3: the same run, with every tool call executed inside a container.
 # `--worker direct` is the same seam with no container at all, which is how the
 # IPC gets tested where no runtime is installed.
@@ -157,6 +168,18 @@ docker build -t luu-worker:dev -f Containerfile .
 cargo run --bin luu -- tools --sandbox luu.container.toml
 cargo run --bin luu -- chat "hola" --sandbox luu.container.toml
 cargo run --bin luu -- tools --worker direct          # the seam, no container
+# the whole of level 3 in one script — the image, the handshake, a read, a
+# denial and a child process, plus the same read on the host to prove the two
+# sides answer the same bytes. CI runs it on every push; a person with a daemon
+# runs the same file.
+scripts/container-check.sh
+
+# the page itself, clicked: the gate, an amendment, Approve, the tool call and
+# the fold — against `luu serve` on the mock, which the spec starts. Node and a
+# built binary, which is why it is not in `cargo test`.
+make smoke
+cd tests/smoke && npx playwright test                        # the static twin
+cd tests/smoke && npx playwright test -c gate.config.js      # the live server
 
 # the tool loop end to end without a model: one reply per model call
 cargo run --bin luu -- chat "what is in AGENTS.md?" --mock-delay-ms 0 \

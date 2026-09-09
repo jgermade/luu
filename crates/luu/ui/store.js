@@ -19,7 +19,7 @@ import { $reactive } from "./vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 5
-const FORMAT = 7
+const FORMAT = 10
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -63,6 +63,20 @@ export const state = $reactive({
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
   refused: null,          // { request, reason, detail }
+  // Every turn this page can still show, oldest first, as the inspector will
+  // draw it: `{turn, job, budget, prefix, tools, extraCalls, prompt, dropped,
+  // usage, reason}`. Filled from `/api/sessions/:id` when a session is opened
+  // or resumed — so a turn from before this page existed is here too — and
+  // appended to as each live turn ends. Everything in it was already stored and
+  // already served; what was missing was a page that kept it.
+  history: [],
+  // Which turn the inspector is showing, or `null` for the live one. A person
+  // reading turn 3 while turn 9 runs keeps reading turn 3: the view moves when
+  // they move it.
+  selectedTurn: null,
+  // `{ path, choosable, running, postures }` — what a new session may be
+  // allowed to do, or `null` where nothing has asked yet.
+  postures: null,
   // The last cut the window made. Kept beside the budget rather than inside it:
   // the buckets say what the prompt is worth, this says what stopped being in
   // it. Null in a session that never filled its window.
@@ -245,6 +259,12 @@ function onProtocol(message) {
     // and therefore indistinguishable from a message that never arrived.
     case "refused":
       state.refused = { request: message.request, reason: message.reason, detail: message.detail }
+      // Reconnecting cannot fix a version mismatch: the host refuses this
+      // client's `hello` and closes, and the retry loop turns that into the
+      // word "closed" and nothing else — which is how a page that could not
+      // open a session at all went unnoticed for a day. See
+      // `RECORD/2026-09-08.a-test-that-clicks-approve.completed.md`.
+      if (message.reason === "version") refusedVersion = true
       break
 
     case "job_rejected":
@@ -264,6 +284,10 @@ function onProtocol(message) {
         state: "closed",
         summary: message.summary,
         closedBy: message.by ?? "user",
+        // What the fold replaced, counted at the close. `null` in a stream
+        // written before record format 9, and the panel says *not recorded*
+        // rather than nothing — zero saved is a different claim.
+        replaced: message.replaced ?? null,
       })
       break
     }
@@ -273,7 +297,7 @@ function onProtocol(message) {
       // The summary goes with the fold: it is an account of work that is being
       // written again.
       const id = message.job ?? message.task
-      patchJob(id, { state: "approved", summary: null, closedBy: null })
+      patchJob(id, { state: "approved", summary: null, closedBy: null, replaced: null })
       break
     }
 
@@ -300,6 +324,7 @@ function onProtocol(message) {
     case "ended":
       flush()
       replaceLast({ reason: message.reason, usage: message.usage })
+      keepTurn(message.turn ?? state.turn, { reason: message.reason, usage: message.usage })
       // The gap between this and what we counted is the chat template, applied
       // where we cannot see it. Reassigned rather than mutated: the panel reads
       // the object, and one write is one update.
@@ -342,6 +367,9 @@ function onProtocol(message) {
 
     case "failed":
       flush()
+      // A turn that failed is activity worth reading afterwards — often the
+      // most worth reading — so it is kept like any other.
+      keepTurn(message.turn ?? state.turn, { reason: "failed", error: message.message })
       state.error = message.message
       state.turn = null
       state.status = idle()
@@ -383,6 +411,9 @@ function onTrace(message) {
 let everConnected = false
 // Set once the page has given up on a server and taken the recordings instead.
 let fellBack = false
+// Set when the host refused this client's version. Not retried: the answer
+// would be the same every time, and the refusal is the thing to read.
+let refusedVersion = false
 
 function open(path, onMessage, assign, greet = false) {
   const ws = new WebSocket(url(path))
@@ -405,6 +436,10 @@ function open(path, onMessage, assign, greet = false) {
   ws.onclose = async () => {
     assign(null)
     state.status = "closed"
+
+    // The host said what it speaks and it is not this. Retrying would clear
+    // the refusal off the screen every few seconds and put it back.
+    if (refusedVersion) return
 
     // A fallback already took the page into replay: there is no server to
     // reconnect to and no second replay to start.
@@ -492,8 +527,83 @@ function idle() {
   return isReplay ? "replay" : "ready"
 }
 
+/// What the inspector is showing: the turn a person selected, or the live one.
+///
+/// The live turn is not a special case with its own bindings — it is the same
+/// six fields, read out of the fields the socket fills. That is the whole of
+/// why the panel can show turn 3: there is one shape, and history is a list of
+/// it.
+export function panel() {
+  if (state.selectedTurn !== null) {
+    return state.history.find(entry => entry.turn === state.selectedTurn) || null
+  }
+  return {
+    turn: state.turn,
+    job: null,
+    budget: state.budget,
+    prefix: state.prefix,
+    tools: state.tools,
+    extraCalls: state.extraCalls,
+    prompt: state.prompt,
+    dropped: state.evicted,
+    usage: null,
+    reason: null,
+    live: true,
+  }
+}
+
+export function selectTurn(turn) {
+  state.selectedTurn = turn === null || turn === "live" ? null : Number(turn)
+}
+
+/// Keeps what the panel is showing now, so the next turn does not take it.
+///
+/// Replaces rather than appends when the turn is already there: a resumed
+/// session arrives with its turns from the API, and then runs more of them.
+function keepTurn(turn, extra = {}) {
+  if (turn === null || turn === undefined) return
+  const kept = {
+    turn,
+    job: null,
+    budget: state.budget,
+    prefix: state.prefix,
+    tools: state.tools,
+    extraCalls: state.extraCalls,
+    prompt: state.prompt,
+    dropped: state.evicted,
+    usage: null,
+    reason: null,
+    ...extra,
+  }
+  state.history = [...state.history.filter(entry => entry.turn !== turn), kept]
+    .sort((a, b) => a.turn - b.turn)
+}
+
+/// The same shape, out of what the read API stores per turn.
+///
+/// `dropped` gains the turn that dropped it: the stored `Evicted` names the
+/// turns that left and not the cut that took them, which is the turn it is
+/// attached to.
+function fromStored(turn) {
+  return {
+    turn: turn.turn,
+    job: turn.job ?? null,
+    budget: turn.budget || null,
+    prefix: turn.prefix || null,
+    tools: turn.tools || [],
+    extraCalls: turn.extra_calls || [],
+    prompt: turn.prompt_sent || "",
+    dropped: turn.dropped ? { ...turn.dropped, turn: turn.turn } : null,
+    usage: turn.usage || null,
+    reason: turn.reason || null,
+    error: turn.error || null,
+  }
+}
+
 function reset() {
   state.messages = []
+  state.history = []
+  state.selectedTurn = null
   state.jobs = []
   state.tasks = []
   state.budget = null
@@ -612,6 +722,22 @@ export async function openSettings() {
   await loadProviders()
 }
 
+/// What a session may be started under, by name.
+///
+/// Read-only: a posture is a policy file, and a page that could write one would
+/// be a page that could widen its own sandbox. The names come from
+/// `config.toml`, read by the server when it started. See
+/// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+export async function loadPostures() {
+  try {
+    const res = await fetch("./api/postures", { headers: apiHeaders() })
+    if (!res.ok) return
+    state.postures = await res.json()
+  } catch {
+    // A static twin has no server behind it, and no session to start either.
+  }
+}
+
 /// The providers file, without opening anything.
 ///
 /// The session starter needs the list of profiles and is not the modal, which
@@ -712,6 +838,7 @@ export async function refreshLiveSession() {
       state: j.state,
       summary: j.summary,
       closedBy: j.closed_by || null,
+      replaced: j.replaced || null,
     }))
     state.tasks = state.jobs
 
@@ -746,6 +873,10 @@ export async function refreshLiveSession() {
       }
     }
     state.messages = msgs
+    // Everything the panel needs for a turn that ended before this page
+    // existed. The API answers with it on the same request the transcript is
+    // built from, and it used to be dropped on the floor here.
+    state.history = (view.turns || []).map(fromStored)
     nextId = id
   } catch {
     // Ignore fetch failure
@@ -770,7 +901,8 @@ export async function refreshSessionsList() {
 /// never a URL: what may be chosen is bounded by what somebody wrote on this
 /// machine.
 export async function newSession(choice) {
-  const asked = choice && (choice.provider || choice.model) ? choice : null
+  const asked =
+    choice && (choice.provider || choice.model || choice.posture) ? choice : null
   try {
     const res = await fetch("./api/sessions", {
       method: "POST",

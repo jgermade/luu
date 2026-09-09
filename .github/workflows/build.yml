@@ -77,6 +77,29 @@ jobs:
           path: dist/luu-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
+  # Level 3, run rather than described. Every contained run this repository had
+  # until 2026-09-08 was Docker Desktop on macOS, by hand, once — and the runner
+  # here is Linux with a real daemon, which is the platform the whole sandbox
+  # ladder is aimed at. See RECORD/2026-09-03.the-container-observed.completed.md
+  # and scripts/container-check.sh, which is the same walk a person takes.
+  container:
+    needs: test
+    runs-on: ubuntu-latest
+    # The image build is the long pole and it is minutes, not tens of them: a
+    # step that runs longer than this is wedged, and a wedged job that waits out
+    # the six-hour default is one nobody sees fail.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin luu
+
+      - name: The image, the handshake, and the same calls inside and out
+        run: LUU_BIN=target/release/luu scripts/container-check.sh
+
   web:
     needs: test
     runs-on: ubuntu-latest
@@ -145,6 +168,16 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           npx playwright test
+
+      # The other half of the page: the socket, the gate, an approval and a
+      # tool call, against a live `luu serve` on the mock. The static twin above
+      # has no server behind it, so it cannot reach any of them — and every UI
+      # bug this repository has had lived exactly there.
+      - name: Smoke-test the gate against a live server
+        working-directory: tests/smoke
+        env:
+          LUU_BIN: target/release/luu
+        run: npx playwright test -c gate.config.js
 
       - uses: actions/upload-artifact@v4
         if: always()

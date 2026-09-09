@@ -234,12 +234,26 @@ impl PathCheck {
             .strip_prefix(&root)
             .unwrap_or(&self.path)
             .to_path_buf();
-        // The root asked for by its own name resolves to itself.
-        let relative = match relative.as_os_str().is_empty() {
-            true => PathBuf::from("."),
-            false => relative,
-        };
-        Some((root, relative))
+        if !relative.as_os_str().is_empty() {
+            return Some((root, relative));
+        }
+        // The root asked for by its own name. `.` beneath it resolves only when
+        // the root is a *directory*, and a plan that grants a file makes the
+        // file the root — the ordinary case at the gate, where a model names
+        // the file it wants. `openat2` handed a regular file as its `dirfd`
+        // answers ENOTDIR, so between 2026-09-05 and this line an approved plan
+        // could not read the one path it had just been approved for.
+        //
+        // Resolved as its last component instead, beneath the directory holding
+        // it. Nothing widens: a root is canonical, so that component is not a
+        // symlink, and one component that is not `..` cannot leave the
+        // directory it resolves in. See
+        // `RECORD/2026-09-08.the-surfaces-first.completed.md`.
+        match (root.parent(), root.file_name()) {
+            (Some(parent), Some(name)) => Some((parent.to_path_buf(), PathBuf::from(name))),
+            // `/`, which has no component to be named by.
+            _ => Some((root, PathBuf::from("."))),
+        }
     }
 }
 

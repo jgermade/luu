@@ -484,6 +484,57 @@ mod tests {
         }
     }
 
+    /// The grant is a **file**, which is what a plan approved at the gate
+    /// ordinarily is: a model asked what it needs names files, and
+    /// `Plan::narrow` builds the job's sandbox out of those words.
+    ///
+    /// The root is then the file itself, and resolving `.` beneath a regular
+    /// file is `ENOTDIR` — so between `beneath-the-root` (2026-09-05) and
+    /// `RECORD/2026-09-08.the-surfaces-first.completed.md` an approved plan
+    /// could not read the one path it had been approved for. Found by driving
+    /// the gate, not by a test, which is why this one exists.
+    #[tokio::test]
+    async fn a_grant_of_one_file_can_read_that_file() {
+        let fixture = Fixture::new("file-root");
+        let base = fixture.root.join("proj").canonicalize().unwrap();
+        let sandbox = Sandbox::new(
+            &SandboxPolicy {
+                paths: vec![PathRule::new("src/main.rs", Access::Read)],
+                ..SandboxPolicy::default()
+            },
+            &base,
+        )
+        .unwrap();
+
+        let granted = Tools::standard()
+            .call(
+                &ToolCall {
+                    name: "read_file".into(),
+                    arguments: json!({"path": "src/main.rs"}),
+                },
+                &sandbox,
+            )
+            .await;
+        assert!(granted.verdict.allowed, "{granted:?}");
+        assert!(granted.error.is_none(), "{granted:?}");
+        assert!(granted.output.starts_with("fn main"), "{granted:?}");
+
+        // And nothing beside it: the grant is one file, and the sibling in the
+        // same directory is the thing a root one level up would have opened.
+        std::fs::write(base.join("src/other.rs"), "fn other() {}\n").unwrap();
+        let sibling = Tools::standard()
+            .call(
+                &ToolCall {
+                    name: "read_file".into(),
+                    arguments: json!({"path": "src/other.rs"}),
+                },
+                &sandbox,
+            )
+            .await;
+        assert!(!sibling.verdict.allowed, "{sibling:?}");
+        assert!(!sibling.output.contains("other"), "{sibling:?}");
+    }
+
     #[tokio::test]
     async fn read_file_returns_the_text_and_can_be_asked_for_a_range() {
         let fixture = Fixture::new("read");

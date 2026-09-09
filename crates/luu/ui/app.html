@@ -6,7 +6,8 @@
           approveTask, rejectTask, closeTask, reopenTask,
           newSession, resumeSession, deleteSession,
           openSettings, closeSettings, saveProviders,
-          loadProviders, providerModels, checkConfigured } = await import("./store.js")
+          loadProviders, providerModels, checkConfigured,
+          panel, selectTurn, loadPostures } = await import("./store.js")
 
   connect()
 
@@ -154,6 +155,10 @@
 
   const openStarter = async provider => {
     if (!state.providers) await loadProviders()
+    // What this session may be allowed to do, offered beside where it sends —
+    // and chosen at the same moment, because it is the only one there is: a
+    // posture is what a session's jobs are approved against, so it never moves.
+    if (!state.postures) await loadPostures()
     continuing = false
     const names = Object.keys(state.providers?.providers || {})
     const chosen = provider
@@ -161,7 +166,17 @@
       || state.providers?.default
       || names[0]
       || ""
-    starter = { provider: chosen, model: "", models: [], reason: null, from: null, loading: false }
+    starter = {
+      provider: chosen,
+      model: "",
+      models: [],
+      reason: null,
+      from: null,
+      loading: false,
+      // "" is the server's own policy file, which is what every session got
+      // before a session could choose.
+      posture: "",
+    }
     if (chosen) await loadModels(chosen)
   }
   // The list is fetched from the provider itself, so it is what is *pulled*
@@ -183,7 +198,11 @@
   const closeStarter = () => { starter = null; continuing = false }
   const startSession = async () => {
     starting = true
-    const ok = await newSession({ provider: starter.provider, model: starter.model })
+    const ok = await newSession({
+      provider: starter.provider,
+      model: starter.model,
+      posture: starter.posture || undefined,
+    })
     starting = false
     if (ok) {
       starter = null
@@ -226,6 +245,11 @@
   })()
 
   $: profileNames = Object.keys(state.providers?.providers || {})
+  // Empty where nobody has written a posture down, and where a surface cannot
+  // choose one at all — over stdio the process is the session.
+  $: postureNames = state.postures?.choosable
+    ? Object.keys(state.postures?.postures || {})
+    : []
   // What stands in the way of continuing the session on screen, or "" when
   // nothing does. A control that cannot work says why rather than failing when
   // it is pressed.
@@ -277,12 +301,48 @@
     ? (proposed.source ? proposed.source === "prose" : !declares)
     : false
   $: entries = foldTranscript(state.messages, state.jobs || state.tasks, expanded)
-  $: budgetTotal = state.budget
-    ? state.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
+
+  // What the inspector is showing: the turn a person selected, or the live one.
+  // The dependencies are named before the call so the computed wakes on each of
+  // them — `panel()` reads them out of the store, and this line is what says
+  // which reads matter.
+  $: view = (state.selectedTurn, state.history, state.turn, state.budget,
+             state.prefix, state.tools, state.extraCalls, state.prompt,
+             state.evicted, panel())
+  // A turn that is being read rather than watched. The panel says so once, at
+  // the top, instead of every number pretending to be current.
+  $: reading = state.selectedTurn !== null
+
+  // The compaction log: every fold this session has made, newest first. A job
+  // closed before record format 9 has a summary and no numbers, and reads as
+  // *not recorded* rather than as nothing saved — see
+  // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+  $: folds = (state.jobs || state.tasks)
+    .filter(job => job.state === "closed" && job.summary)
+    .map(job => {
+      // Both numbers come from the close, counted there by one counter at one
+      // moment. The page does not count anything: a saving worked out from
+      // chars/4 on one side and a real tokenizer on the other is not a saving.
+      const before = job.replaced?.tokens ?? null
+      const after = job.replaced?.summary_tokens ?? null
+      return {
+        id: job.id,
+        objective: job.objective,
+        turns: job.replaced?.turns || [],
+        before,
+        after,
+        saved: before === null || after === null ? null : before - after,
+        closedBy: job.closedBy,
+      }
+    })
+    .reverse()
+
+  $: budgetTotal = view?.budget
+    ? view.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
     : 0
   // What we actually sent: the reserve is headroom, not content.
-  $: budgetSent = state.budget
-    ? state.budget.buckets
+  $: budgetSent = view?.budget
+    ? view.budget.buckets
         .filter(b => b.name !== "reserve")
         .reduce((sum, b) => sum + b.tokens, 0)
     : 0
@@ -290,19 +350,19 @@
   // summed over all of them. Comparing it against the first call alone reports
   // the other calls as chat-template overhead, which is how a 2-token gap reads
   // as 1 962.
-  $: extraSent = state.extraCalls.reduce((sum, call) => sum + call.prompt_tokens, 0)
+  $: extraSent = (view?.extraCalls || []).reduce((sum, call) => sum + call.prompt_tokens, 0)
   // The chat template, which the backend applies where we cannot see it. A
   // stable number here is overhead; a moving one means the template changed.
-  $: templateOverhead = state.budget?.backendPrompt
-    ? state.budget.backendPrompt - budgetSent - extraSent
+  $: templateOverhead = view?.budget?.backendPrompt
+    ? view.budget.backendPrompt - budgetSent - extraSent
     : null
   // How much of this prompt the previous one already contained. A cache stops
   // at the first difference, so this is a prefix, not a total of matching text.
-  $: reusePercent = state.prefix?.prompt_tokens
-    ? Math.round((state.prefix.shared_tokens / state.prefix.prompt_tokens) * 100)
+  $: reusePercent = view?.prefix?.prompt_tokens
+    ? Math.round((view.prefix.shared_tokens / view.prefix.prompt_tokens) * 100)
     : null
-  $: reuseFresh = state.prefix
-    ? state.prefix.prompt_tokens - state.prefix.shared_tokens
+  $: reuseFresh = view?.prefix
+    ? view.prefix.prompt_tokens - view.prefix.shared_tokens
     : 0
 </script>
 
@@ -411,6 +471,15 @@
         <dd>
           <span :if="state.settings.store">{{ state.settings.store }}</span>
           <span :if="!state.settings.store" class="dim">in memory only</span>
+        </dd>
+
+        <dt>Posture</dt>
+        <dd>
+          <span :if="state.settings.posture?.name" class="tag">{{ state.settings.posture?.name }}</span>
+          <span :if="!state.settings.posture?.name" class="dim">this server's own policy file</span>
+          <span class="dim">{{ state.settings.posture?.runtime }}</span>
+          <span class="dim">· {{ state.settings.posture?.enforcement }}</span>
+          <span :if="state.settings.posture?.network" class="warn">· network allowed</span>
         </dd>
 
         <dt>Sandbox</dt>
@@ -547,6 +616,22 @@
         <dd :if="starter?.reason" class="caveat">
           Could not list this provider's models: {{ starter?.reason }}. Type one —
           a model that is not pulled yet is still a name worth writing down.
+        </dd>
+
+        <!-- What the session may do, which is not where it sends. Offered only
+             where somebody has written one down: the names come from
+             `config.toml`, and a page cannot add to them. -->
+        <dt :if="postureNames.length">Posture</dt>
+        <dd :if="postureNames.length">
+          <select :value="starter?.posture"
+                  @change="starter = { ...starter, posture: $event.target.value }">
+            <option value="">this server's own policy file</option>
+            <option :each="name in postureNames" :key="name" :value="name">{{ name }}</option>
+          </select>
+        </dd>
+        <dd :if="postureNames.length && starter?.posture" class="dim small">
+          {{ state.postures?.postures[starter?.posture]?.policy }} — chosen now
+          and never moved: a session's jobs are approved against what it may do.
         </dd>
         <dd :if="!starter?.reason && !starter?.loading && !starter?.models?.length" class="dim">
           This provider offers no list, so the model is whatever you type.
@@ -709,78 +794,104 @@
   </section>
 
   <aside class="inspector">
+    <!-- Which turn this panel is about. Everything below is per turn and used
+         to be reset the moment the next one started, so a person could see
+         what the model was sent only while it was being sent. The history is
+         the same six fields, kept — and for a resumed session it arrives from
+         the read API, which had been storing them all along. See
+         `RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md`. -->
+    <div class="turn-picker">
+      <select
+        :value="state.selectedTurn === null ? 'live' : state.selectedTurn"
+        @change="selectTurn($event.target.value)">
+        <option value="live">live</option>
+        <option :each="entry in state.history" :key="entry.turn" :value="entry.turn">
+          turn {{ entry.turn }}
+        </option>
+      </select>
+      <span :if="!reading && state.turn" class="dim">turn {{ state.turn }}, running</span>
+      <span :if="!reading && !state.turn" class="dim">the newest turn</span>
+      <button :if="reading" type="button" class="link" @click="selectTurn(null)">back to live</button>
+    </div>
+    <p :if="reading" class="reading">
+      Turn {{ view?.turn }} as it was sent
+      <span :if="view?.reason && view?.reason !== 'stop'" class="warn">· {{ view?.reason }}</span>
+      <span :if="view?.usage" class="dim">
+        · {{ view?.usage.prompt_tokens }} prompt / {{ view?.usage.completion_tokens }} completion
+      </span>
+    </p>
     <h2>Token budget</h2>
-    <div :if="state.budget">
+    <div :if="view?.budget">
       <div class="bar">
         <span
-          :each="bucket in state.budget.buckets"
+          :each="bucket in view?.budget?.buckets"
           :key="bucket.name"
           :class="bucket.name"
           :attrs="{ style: `flex-grow:${bucket.tokens || 0}`, title: `${bucket.name}: ${bucket.tokens}` }"></span>
       </div>
       <ul class="legend">
-        <li :each="bucket in state.budget.buckets" :key="bucket.name">
+        <li :each="bucket in view?.budget?.buckets" :key="bucket.name">
           <span :class="bucket.name"></span>{{ bucket.name }}
           <b>{{ bucket.tokens }}</b>
         </li>
       </ul>
       <p class="dim">
-        {{ budgetSent }} tokens sent<span :if="state.budget?.limit">, {{ budgetTotal }} of {{ state.budget?.limit }} spoken for</span>
-        <span :if="!state.budget?.limit">— window unknown, so nothing was budgeted</span>
+        {{ budgetSent }} tokens sent<span :if="view?.budget?.limit">, {{ budgetTotal }} of {{ view?.budget?.limit }} spoken for</span>
+        <span :if="!view?.budget?.limit">— window unknown, so nothing was budgeted</span>
       </p>
-      <p :if="state.budget?.counter?.kind === 'approximate'" class="dim warn">
+      <p :if="view?.budget?.counter?.kind === 'approximate'" class="dim warn">
         Counted approximately (chars/4). Not a measurement — pass
         <code>--tokenizer</code> for real numbers.
       </p>
-      <p :if="state.extraCalls.length" class="dim">
-        This turn made {{ state.extraCalls.length + 1 }} model calls: the bar is
+      <p :if="view?.extraCalls?.length" class="dim">
+        This turn made {{ view?.extraCalls?.length + 1 }} model calls: the bar is
         the first, and the tool round trips sent {{ extraSent }} tokens more.
       </p>
       <p :if="templateOverhead !== null" class="dim">
-        Backend counted {{ state.budget?.backendPrompt }} over
-        {{ state.extraCalls.length + 1 }} call(s): {{ templateOverhead }}
+        Backend counted {{ view?.budget?.backendPrompt }} over
+        {{ view?.extraCalls?.length + 1 }} call(s): {{ templateOverhead }}
         more than we sent, the chat template applied on its side.
       </p>
       <!-- What stopped being in the prompt. Beside the buckets rather than in
            them: a bucket that got smaller cannot say whether that was the
            policy or the arithmetic. -->
-      <p :if="state.evicted" class="dim">
-        Turn {{ state.evicted?.turn }} dropped turn(s)
-        {{ state.evicted?.turns.join(", ") }} — {{ state.evicted?.tokens }}
+      <p :if="view?.dropped" class="dim">
+        Turn {{ view?.dropped?.turn }} dropped turn(s)
+        {{ view?.dropped?.turns.join(", ") }} — {{ view?.dropped?.tokens }}
         tokens out of the window, for good, under the
-        <b>{{ state.evicted?.policy.policy }}</b> policy.
+        <b>{{ view?.dropped?.policy.policy }}</b> policy.
       </p>
     </div>
-    <p :if="!state.budget" class="dim">
+    <p :if="!view?.budget" class="dim">
       No turn yet. The budget is decided before the call, so the first prompt
       fills this in.
     </p>
 
     <h2>Prefix reuse</h2>
-    <div :if="state.prefix">
+    <div :if="view?.prefix">
       <div class="bar">
         <span
           class="shared"
-          :attrs="{ style: `flex-grow:${state.prefix.shared_tokens || 0}`, title: `shared: ${state.prefix.shared_tokens}` }"></span>
+          :attrs="{ style: `flex-grow:${view?.prefix.shared_tokens || 0}`, title: `shared: ${view?.prefix.shared_tokens}` }"></span>
         <span
           class="fresh"
           :attrs="{ style: `flex-grow:${reuseFresh}`, title: `new: ${reuseFresh}` }"></span>
       </div>
       <p class="dim">
         <b>{{ reusePercent }}%</b> of this prompt was already in the previous
-        one: {{ state.prefix.shared_tokens }} of
-        {{ state.prefix.prompt_tokens }} tokens ({{ state.prefix.shared_bytes }}
+        one: {{ view?.prefix.shared_tokens }} of
+        {{ view?.prefix.prompt_tokens }} tokens ({{ view?.prefix.shared_bytes }}
         bytes) before the first difference, which is where the cache stops.
       </p>
     </div>
-    <p :if="!state.prefix" class="dim">
+    <p :if="!view?.prefix" class="dim">
       First turn of the session — no previous prompt to measure against, which
       is not the same as no reuse.
     </p>
 
     <h2>Tool calls</h2>
-    <ol class="timeline" :if="state.tools.length">
-      <li :each="call in state.tools" :key="call.step">
+    <ol class="timeline" :if="view?.tools?.length">
+      <li :each="call in view?.tools" :key="call.step">
         <div class="call">
           <b>{{ call.name }}</b>
           <span class="dim">{{ JSON.stringify(call.arguments) }}</span>
@@ -819,13 +930,42 @@
         <div :if="call.error" class="err">{{ call.error }}</div>
       </li>
     </ol>
-    <p :if="!state.tools.length" class="dim">
+    <p :if="!view?.tools?.length" class="dim">
       No tool calls this turn. A turn that only answers makes none.
     </p>
 
+    <h2>Compaction</h2>
+    <ol class="folds" :if="folds.length">
+      <li :each="fold in folds" :key="fold.id">
+        <div class="call">
+          <b>job {{ fold.id }}</b>
+          <span class="dim">{{ fold.objective }}</span>
+        </div>
+        <div class="held">
+          <span :if="fold.turns.length">turns {{ fold.turns.join(", ") }}</span>
+          <span :if="!fold.turns.length" class="dim">turns not recorded</span>
+          <span :if="fold.closedBy === 'exit_code'" class="dim">· closed by exit code</span>
+        </div>
+        <div :if="fold.before !== null" class="held">
+          <b>{{ fold.before }}</b> tokens of history →
+          <b>{{ fold.after }}</b> in the line that stands in for them,
+          <span :class="fold.saved > 0 ? 'ok' : 'bad'">{{ fold.saved }} saved</span>
+        </div>
+        <!-- Absent is not zero. A recording made before the fold counted what
+             it replaced cannot say, and saying nothing is the honest answer. -->
+        <div :if="fold.before === null" class="held dim">
+          what it replaced was not recorded — this stream predates format 9
+        </div>
+      </li>
+    </ol>
+    <p :if="!folds.length" class="dim">
+      Nothing folded yet. A job that is closed is sent as one summary from then
+      on, and this is where what that cost goes.
+    </p>
+
     <h2>Prompt sent to the model</h2>
-    <pre :if="state.prompt">{{ state.prompt }}</pre>
-    <p :if="!state.prompt" class="dim">Nothing sent yet this session.</p>
+    <pre :if="view?.prompt">{{ view?.prompt }}</pre>
+    <p :if="!view?.prompt" class="dim">Nothing sent yet this session.</p>
   </aside>
 </div>
 
@@ -963,6 +1103,18 @@
     margin: 1.2rem 0 .5rem;
   }
   .inspector h2:first-child { margin-top: 0; }
+  .turn-picker { display: flex; align-items: center; gap: .5rem; margin-bottom: .8rem; }
+  .turn-picker select {
+    background: var(--bg); color: inherit; border: 1px solid var(--line);
+    border-radius: 6px; font: inherit; font-size: 12px; padding: .15rem .4rem;
+  }
+  /* A panel that is not about the turn on screen says so once, here, rather
+     than by every number in it looking current. */
+  .reading {
+    margin: 0 0 .8rem; padding: .3rem .6rem; font-size: 12px;
+    border-left: 3px solid var(--b-history); background: #12151a;
+    border-radius: 0 6px 6px 0;
+  }
 
   /* The gate reads as a thing that stopped the conversation, because it is. */
   .gate {
@@ -1041,6 +1193,18 @@
   .timeline .held { color: var(--dim); }
   .timeline .held.warn { color: var(--warn); }
   .timeline .err { color: var(--bad); overflow-wrap: anywhere; }
+
+  .folds { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .folds li {
+    border-left: 2px solid var(--b-summaries);
+    padding: 0 0 .5rem .6rem;
+    margin-bottom: .5rem;
+  }
+  .folds .call b { color: var(--b-summaries); }
+  .folds .held { color: var(--dim); }
+  .folds .held b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .folds .ok { color: var(--b-history); }
+  .folds .bad { color: var(--bad); }
 
   pre {
     background: #0e1014;

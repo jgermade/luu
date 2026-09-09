@@ -1,6 +1,7 @@
 {
   "name": "luu-smoke",
   "private": true,
+  "type": "module",
   "description": "The Playwright smoke test over the assembled static site. Not part of the build: `cargo build` must not require node.",
   "scripts": {
     "test": "playwright test"

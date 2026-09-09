@@ -378,6 +378,14 @@ and 2, and 3 in its development posture. See
    profile that blocks it, macOS) and the old two-step is what happened. `..`,
    absolute paths and links out are refused; a link that stays inside the tree is
    ordinary and still works, which is why `RESOLVE_NO_SYMLINKS` was rejected.
+   **A root asked for by its own name resolves as its own last component,
+   beneath the directory holding it** — the ordinary case at the gate, where a
+   plan grants a *file* and the file therefore is the job's root: `.` beneath a
+   regular file is `ENOTDIR`, and for three days that meant an approved plan
+   could not read the one path it had been approved for. A root is canonical, so
+   that component is not a symlink and one non-`..` step cannot leave the
+   directory it resolves in. See
+   [`RECORD/2026-09-08.the-surfaces-first.completed.md`](RECORD/2026-09-08.the-surfaces-first.completed.md).
    `list_dir` is still the old two-step, because a directory cannot be read from
    a descriptor through any stable API — it leaks names rather than contents, and
    it is named rather than quietly excepted. See
@@ -614,7 +622,39 @@ access = "execute"
   else in a call is checked against the sandbox, and this one was checked against
   nothing. See
   [`RECORD/2026-09-05.a-clock-at-the-seam.completed.md`](RECORD/2026-09-05.a-clock-at-the-seam.completed.md).
-- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`.
+- **It runs on Linux, in CI, on every push.** `scripts/container-check.sh` builds
+  the image and walks it — the handshake, the policy's commands against the
+  image's manifest, a read inside the tree, the same read on the host with both
+  recordings compared field by field, a denial, and a `run_command` — and the
+  `container` job runs it on `ubuntu-latest`. Landlock **ABI v7** + seccomp +
+  rlimits hold the child inside stock Docker, with no `--privileged` and the
+  default seccomp profile. Until 2026-09-08 every contained run in this
+  repository was Docker Desktop on macOS, by hand, once. See
+  [`RECORD/2026-09-08.the-container-on-a-runner.completed.md`](RECORD/2026-09-08.the-container-on-a-runner.completed.md).
+- **A session picks its posture, and the container's lifetime is the session's.**
+  What is chosen is not a runtime but a *posture* — the policy file, which
+  decides the sandbox and the seam together, on purpose — named in the state
+  directory's `config.toml` beside the providers:
+
+  ```toml
+  [posture.container]
+  policy = "luu.container.toml"
+  ```
+
+  `POST /api/sessions {provider, model, posture}` resolves it **before** anything
+  is reset, so a runtime that is not installed refuses the new session rather
+  than ending the one that is running; the worker the previous posture started is
+  then ended rather than dropped, because `kill_on_drop` gets to a container
+  "eventually". The browser never types a path, for the reason it never types a
+  URL: what may be chosen is bounded by what somebody wrote on this machine, and
+  the names are read once when the server starts. **A resume may not move it** —
+  a destination is where a session sends and a posture is what it may do, and its
+  jobs were approved against this one. `luu chat` and `luu stdio` are unaffected:
+  there the process is the run, and its policy file is a flag. See
+  [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
+- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
+  concurrent sessions — one live session per `serve` is still the shape, so one
+  container at a time is still the shape.
 
 ## VSCode integration
 
@@ -671,7 +711,16 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `hello`, `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 7); `context_snapshot` is still ahead |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 8); `context_snapshot` is still ahead |
+
+**Both numbers live in two languages, and a test reads both.** `store.js`
+declares `PROTOCOL` and `FORMAT` beside `agent_core::protocol::VERSION` and
+`agent_core::record::FORMAT`; `crates/luu/tests/ui_versions.rs` asserts each
+pair, because when `FORMAT` went to 8 and the page still said 7 the host refused
+every `hello` the page sent and the UI could not open a session at all. A
+version refusal now also stops the page's reconnect loop, which had been turning
+it into the word "closed" and nothing else. See
+[`RECORD/2026-09-08.a-test-that-clicks-approve.completed.md`](RECORD/2026-09-08.a-test-that-clicks-approve.completed.md).
 
 **The wire says what it speaks, in both directions.** The server's `hello` has always
 carried `protocol`; the client's now answers with its own, and with the record format it
@@ -782,7 +831,16 @@ resources.
 
 ### Debug panels that earn their place
 
-Chat and session list are table stakes. The ones that justify building this at all:
+Chat and session list are table stakes. The ones that justify building this at all
+— and one thing true of every one that is built: **the panel is per turn, and any
+turn can be selected**. `state.history` holds one entry per turn —
+`{turn, job, budget, prefix, tools, extraCalls, prompt, dropped, usage, reason}` —
+filled from `GET /api/sessions/:id` when a session is opened or resumed and
+appended to as each live turn ends, and the live turn is that same shape read out
+of the fields the socket fills rather than a special case with its own bindings.
+Selecting a turn does not follow the conversation: a person reading turn 3 while
+turn 9 runs keeps reading turn 3. See
+[`RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md`](RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md).
 
 1. **Token budget per turn** — stacked bar of system/tools · code context · history · reserve, with
    the underlying text of each block on hover.
@@ -801,6 +859,16 @@ Chat and session list are table stakes. The ones that justify building this at a
    was denied reads as itself rather than as nothing happening. Result size
    *before/after pruning* waits on pruning existing.
 4. **Compaction log** — when a rolling summary was generated, what it replaced, tokens saved.
+   Built, and the third of those was the work: `job::Summary` carries a
+   `replaced: Option<Replaced>` — which turns stopped being sent and what they
+   were worth in the prompt they left — counted **at the close**, with the
+   counter that counted the summary, because the window moves and the number is
+   only true then. `None` is *not recorded* rather than zero, which is what a
+   recording written before format 9 gets. See
+   [`RECORD/2026-09-08.what-a-fold-writes-down.completed.md`](RECORD/2026-09-08.what-a-fold-writes-down.completed.md).
+
+All four are readable for **any turn of the session**, not only the running one,
+and the ones a recording carries replay the same way.
 
 ### The configuration modal
 

@@ -1,0 +1,13 @@
+# What the image does not need, and what would make its build slow, fat or
+# machine-dependent. `Containerfile` builds luu from source inside the image, so
+# the host's own artefacts are noise at best — a `target/` from a Mac is a
+# gigabyte of the wrong architecture.
+target/
+.git/
+site/
+node_modules/
+tests/smoke/node_modules/
+tests/smoke/test-results/
+tests/smoke/playwright-report/
+editors/vscode/node_modules/
+editors/vscode/dist/

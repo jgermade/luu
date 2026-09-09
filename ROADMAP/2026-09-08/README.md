@@ -5,6 +5,24 @@ what. Not a decision and not a description of the tree — for *what is true tod
 read [`luu-design.md`](../../luu-design.md), and for *why* read the dated file
 in [`RECORD/`](../../RECORD/) each item links to.
 
+**Reordered later the same day, and the reordering is the news.** The order
+below the "What landed" table was rewritten after the morning's version was read
+back: every row in it was a measurement, an argument or a box, and none of it was
+the surfaces a person works in. What the owner wants next is the UI configuring
+providers, a development panel over the activity, and the three things worth
+trying today — chat against a model, the gate over commands, tool calls inside
+the container. Driving those to write this order found a regression that had been
+in the tree since 2026-09-05, which is now item 1 and is fixed:
+[`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md).
+The rows the morning's order held are all still here, in their own order, behind
+it — nothing was dropped, and what slips says so.
+
+**All five rows of section A closed within the day**, and what that cost and left
+open is gathered in
+[`RECORD/2026-09-09.state-of-play.completed.md`](../../RECORD/2026-09-09.state-of-play.completed.md).
+What remains of this revision is section B, untouched — which is what the next
+revision should be made of.
+
 Supersedes [`ROADMAP/2026-09-05/`](../2026-09-05/) wholesale. That revision was
 written to put the design's open questions in an order, and in three days **nine
 of its fifteen rows closed** — seven of them by code, two by a measurement it had
@@ -35,81 +53,117 @@ inventory is the BC-250's 14B — see [`machines.md`](machines.md).
 
 ## The order
 
+**Section A — the surfaces, which is what is being asked for.** Argued in
+[`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md).
+
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 1 | ~**Prune behind (rule B)** — a span inside an *older* rendered turn is replaced by the line that cites it, so the conversation survives a cut that its quoted code does not~ **landed the day this revision was written, off by default (`--prune-behind`). The saving is not the one this row predicted: −0.3% of prompt tokens and *nothing evicted* — 0 turns dropped against 13. There was no 91% to free; what the flag buys is what the same prompt is made of. Two findings under it: pruning is not monotone under rule A, so it declines where A already took the saving, and a recording said nothing about it until `pruned` trace lines and `record::FORMAT` 8** | nothing | [`prune-behind`](../../RECORD/2026-09-08.prune-behind.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) |
-| 2 | **Whether a 7B misses the repetition** — `--repeat-once` one flag apart against a model. Rule A is off for two reasons and this closes the second: position inside the *bucket* does not matter, position across the *window* has never been asked | a model on a machine, which machines 1 and 4 both now are | [`a-span-is-rendered-once`](../../RECORD/2026-09-07.a-span-is-rendered-once.completed.md) §Still open |
-| 3 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is | nothing, and the **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
-| 4 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts | nothing; item 3 is a sentence without it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
-| 5 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide. **Ordered since 2026-09-05 and still unargued**: the next move on it is a record, not a diff | nothing | `luu-design.md` §Open questions |
-| 6 | **Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. **Unblocked: item 1 landed, and the shape it settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result would reuse** | nothing | [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
-| 7 | **The BC-250's 14B ceiling** — ~9.4 GiB usable against a 14B Q4; the last unconfirmed ceiling in the inventory, and the only row left that needs a box | hardware and a hand on it | [`machines.md`](machines.md), from [`the-bc250-run`](../../RECORD/2026-09-04.the-bc250-run.completed.md) |
-| 8 | **A judge that is not the model under test** — every probe in this repository is scored by a key on disk or by a person reading replies. Scoring at corpus scale wants a judge, and a judge wants an argument before it wants an endpoint | needs a design argument | [`machines.md`](machines.md) P1 |
-| 9 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
+| 1 | ~**A granted file is not a directory** — a plan that names a file makes the file the job's sandbox root, and `.` beneath a regular file is `ENOTDIR`, so an approved plan could not read the one path it had just been approved for~ **fixed the day this revision was reordered, with the regression test that was missing. Found by driving the gate over the socket with the page's own messages; it is not Linux-only, and it had been in the tree since 2026-09-05** | nothing | [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) |
+| 2 | ~**A browser test of the gate, on the mock** — Playwright against a live `luu serve --mock-reply`, clicking Approve and asserting the tool ran. CI covers the static twin, which has no server behind it and therefore no gate; the only thing that drives the page through it needs a model, a server and a person watching fifteen prompts. **Two bugs in two days were found by hand there and none by a test**~ **landed: `tests/smoke/gate.spec.js` drives one whole job — prompt, gate, an amendment the plan never declared, Approve, the tool call, the fold — in a second, on the mock, in CI. It found a third bug before it passed: `record::FORMAT` went to 8 with rule B, `store.js` still said 7, the host refused every `hello`, and the UI had been unable to open a session at all since that commit** | nothing | [`a-test-that-clicks-approve`](../../RECORD/2026-09-08.a-test-that-clicks-approve.completed.md) |
+| 3 | ~**The panel keeps what the turn showed** — the inspector draws the budget, prefix reuse, the tool calls with their verdict and the prompt, and resets all four at `turn_started`, so nothing in the page can look at turn 3. **No protocol work and no server work**: `GET /api/sessions/:id/turns/:n` already answers with `prompt_sent`, `budget`, `prefix`, `extra_calls`, `tools`, `dropped`, `pruned_by`, `cited` and both timestamps~ **landed: one shape per turn, a picker at the top of the inspector, history filled from the API on connect and appended to as each turn ends. The live turn is that same shape read out of the socket's own fields, which is why it is a small diff rather than a second inspector** | nothing | [`the-panel-keeps-the-turn`](../../RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md) |
+| 4 | ~**The compaction log** — panel 4 of the four the design says justify building this at all, and the only one never built: when a summary was written, what it replaced, what it saved. **Not the same shape as item 3, which the reading for it found**: *when* is `job_closed` and *what it replaced* is the job's turns, both already in the stream, but *what it saved* is not — `job::Summary` carries its own `tokens` and nothing carries what the turns it replaced were worth. So it wants a record and probably a fold line of its own, at a format bump, before it wants a panel~ **landed, and as an added field rather than a new line: `job_closed` carries `replaced {turns, tokens}`, counted at the close with the counter that counted the summary. Record format 9, protocol untouched at 5, and the page's constant moved with the Rust one in the same commit — which is `ui_versions.rs` from item 2 doing its job** | nothing | [`what-a-fold-writes-down`](../../RECORD/2026-09-08.what-a-fold-writes-down.completed.md) |
+| 5 | ~**The container, from the surface** — ~and on Linux~ **(the Linux half landed: `scripts/container-check.sh` and the `container` job build the image and walk it on every push, and Landlock ABI v7 + seccomp hold `run_command` inside stock Docker on a runner — [`the-container-on-a-runner`](../../RECORD/2026-09-08.the-container-on-a-runner.completed.md))** — every contained run in this repository is Docker Desktop on macOS, and the worker `serve` starts at boot outlives every session it serves, while the design says a container's lifetime is the session's. The page shows the resolved sandbox and cannot choose it, which is exactly where the provider was before 2026-09-07. **The argument is written**: the unit is a *posture* (the policy file decides the sandbox and the seam together), named in `config.toml` beside the providers, chosen when a session starts and never moved, with the stream header saying which one — because `luu.container.toml` opens by saying runs under it are not comparable with runs without it~ **landed, both halves: `[posture.<name>]` in `config.toml`, a picker in the starter dialog, the agency rebuilt per session and the previous worker ended rather than dropped, a resume refused with the reason, and record format 10 carrying the posture. Three deviations from the argument, each in the record: the worker starts with the session rather than at its first tool call, the postures are read once at startup, and `serve` takes a function rather than the command line's flags** | [`the-container-observed`](../../RECORD/2026-09-03.the-container-observed.completed.md) §Still open, [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) §Still open |
+
+**Section B — the measurements and arguments the morning's order held.** Same
+rows, same reasoning, behind section A. The one that hurts is item 6: it was
+correctly called the cheapest unbought answer in the project, and it now waits.
+
+| # | Item | Blocked on | Argued in |
+| --- | --- | --- | --- |
+| — | ~**Prune behind (rule B)**~ **landed 2026-09-08, off by default (`--prune-behind`). The saving is not the one the row predicted: −0.3% of prompt tokens and *nothing evicted* — 0 turns dropped against 13. There was no 91% to free; what the flag buys is what the same prompt is made of. Two findings under it: pruning is not monotone under rule A, and a recording said nothing about it until `pruned` trace lines and `record::FORMAT` 8** | nothing | [`prune-behind`](../../RECORD/2026-09-08.prune-behind.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) |
+| 6 | **Whether a 7B misses the repetition** — `--repeat-once` one flag apart against a model. Rule A is off for two reasons and this closes the second: position inside the *bucket* does not matter, position across the *window* has never been asked | a model on a machine, which machines 1 and 4 both now are | [`a-span-is-rendered-once`](../../RECORD/2026-09-07.a-span-is-rendered-once.completed.md) §Still open |
+| 7 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts | nothing; item 8 is a sentence without it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
+| 8 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is | item 7, and the **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
+| 9 | **Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. Unblocked: the shape rule B settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result would reuse | nothing | [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
+| 10 | **Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide. **Ordered since 2026-09-05 and still unargued**: the next move on it is a record, not a diff | nothing | `luu-design.md` §Open questions |
+| 11 | **A judge that is not the model under test** — every probe in this repository is scored by a key on disk or by a person reading replies. Scoring at corpus scale wants a judge, and a judge wants an argument before it wants an endpoint | needs a design argument | [`machines.md`](machines.md) P1 |
+| 12 | **The BC-250's 14B ceiling** — ~9.4 GiB usable against a 14B Q4; the last unconfirmed ceiling in the inventory, and the only row left that needs a box | hardware and a hand on it | [`machines.md`](machines.md), from [`the-bc250-run`](../../RECORD/2026-09-04.the-bc250-run.completed.md) |
+| 13 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 
 ```mermaid
 gantt
-    title The order as of 2026-09-08
+    title The order as of 2026-09-08, reordered
     dateFormat YYYY-MM-DD
     axisFormat %b %d
+    section The surfaces
+    A granted file is not a directory      :done, enotdir, 2026-09-08, 1d
+    A browser test of the gate             :gate, after enotdir, 2d
+    The panel keeps the turn               :panel, after gate, 3d
+    The compaction log                     :fold, after panel, 2d
+    The container on Linux                 :done, ctr, 2026-09-08, 1d
+    A session picks its posture            :done, posture, 2026-09-09, 1d
     section The window
-    Prune behind (rule B)                  :done, prune, 2026-09-08, 1d
-    Does a 7B miss the repetition          :rep, after prune, 2d
-    Tool results, not only capped          :steps, after prune, 2d
+    Does a 7B miss the repetition          :rep, after panel, 2d
+    Tool results, not only capped          :steps, after rep, 2d
     section Constraining a call
-    A probe for tool calls                 :probe, 2026-09-09, 3d
+    A probe for tool calls                 :probe, after fold, 3d
     A grammar for tool calls               :gbnf, after probe, 4d
     section Arguments not yet written
-    Enforcement per job                    :enf, 2026-09-10, 2d
+    Enforcement per job                    :enf, after steps, 2d
     A judge that is not the model          :judge, after enf, 3d
     section Waiting on a box, or on a fleet
-    The BC-250 14B ceiling                 :crit, bc250, 2026-09-08, 10d
-    Rotating and revoking an approval key  :keys, after enf, 3d
+    The BC-250 14B ceiling                 :crit, bc250, 2026-09-08, 14d
+    Rotating and revoking an approval key  :keys, after judge, 3d
 ```
 
 ## What actually blocks what
 
-- **Item 1 landed the day this revision was written, and it moved.** It was
-  ordered for "the 91%", and there was no 91% to free: the room a prune frees is
-  spent immediately on the turns the default was dropping. **0 evicted against
-  13**, at −0.3% of prompt tokens — the flag does not make the prompt cheaper,
-  it changes what the same prompt is made of, and the row that says so is
-  `turns dropped` rather than any token row. It also settled that the trade is
-  `--evict`'s and not the flag's: the prune line moves 13 times under `turn` and
-  **4** under `block`, because it goes to the target that policy already
-  computed rather than to a depth of its own. Prefix reuse under `block` ends
-  higher than the arm that was throwing turns away — 69.8% against 66.5%.
-- **Item 2 is the cheapest unbought answer in the project.** The flag exists,
-  the corpus exists, the model is on the machine, and until it runs, rule A is
-  off for a reason that was never measured — *the model may need the
-  repetition*. It is one flag apart against `qwen2.5-coder:7b`, and it is the
-  same shape as `does-the-model-read-it`, which is the run this repository
-  learned the most from.
-- **Item 3 cannot be scheduled ahead of item 4, and it was.** The previous
-  revision ordered the grammar at four days and never noticed that the claim it
-  would produce — *the grammar helps* — has no instrument behind it. Coverage
-  had `map-order-probe.key` before it had a result, and precision had the same
-  corpus one flag apart. A grammar arm with nothing counting *drifted* against
-  *continued past the fence* would be the first claim here that could not be
-  argued with. So: probe, then grammar, and the curl before either, because the
-  answer to it decides whether the grammar arm costs a chat template.
-- **Item 5 has been on three revisions and has never been argued.** That is
-  itself the finding. `network` and `egress` were narrowed per job because a
-  plan says what a job may reach; `enforcement` is a *level*, not a resource,
-  and nobody has written down whether a plan is allowed to lower it, raise it,
-  or neither. Two of the last three items to reach a record came back changed by
-  the writing of it (item 4 lost the plan block, item 6 grew the fragment half),
-  and this one is unusually likely to: the honest guess is that a plan may only
-  ever narrow, and that "narrow" is not obviously defined on a scale.
-- **Item 7 is the last row this project can call blocked by geography.** Five of
-  the six local machines have been reached, and the two the previous revision
-  was most unsure about — the 6 GB floor and native confinement without a VM —
-  both came back with the answer the design hoped for and neither came back with
-  the number it guessed. What remains is one ceiling on one board.
-- **Item 8 is the constraint nobody has hit yet and everybody will.** Every
-  number in `RECORD/` was produced by a key on disk (38 questions), a person
-  reading 38 replies, or a person reading 15. Item 4's probe is the first one
-  whose scoring is *four-way and per reply*, and the first where a human scorer
-  is the bottleneck rather than a formality. It needs the argument before it
-  needs the endpoint, because a judge that is the model under test is not a
-  measurement.
+- **Item 1 was not on any roadmap, and it is the reason this one moved.** It was
+  found in the first ten minutes of driving the gate over the socket with the
+  page's own messages: the plan granted `AGENTS.md`, the gate approved it, and
+  the read of that exact file came back `Not a directory (os error 20)`. One flag
+  apart — the same run with a plan granting a directory — was clean and held by
+  the kernel. Every test in the tree that opens a file does it under a directory
+  grant, so nothing caught it for three days.
+- **Item 2 landed and immediately paid for itself.** It cost one spec, one
+  config and a `make smoke`, it runs in a second on the mock, and the first time
+  it was run it found that the page could not open a session at all: `FORMAT`
+  drifted to 8 in the Rust and stayed 7 in the browser, so the host refused
+  every `hello` the page sent. Three bugs in three days, all in the half of the
+  UI that acts, and this is the first one a test found. `cargo test` now also
+  asserts the two constants against each other
+  ([`ui_versions.rs`](../../crates/luu/tests/ui_versions.rs)), because that
+  check is free and belongs where the person bumping the number already is.
+- **Item 3 landed, and the decision it turned on was the second one.** The live
+  turn is not a special case of the history: it is the same six fields read out
+  of the store the socket fills, so `panel()` returns one shape and every
+  binding in the inspector reads it. The API half was free — the page already
+  fetched `/api/sessions/live` to build the transcript and dropped everything
+  but `prompt`, `text` and `usage` on the floor. Both halves are asserted in the
+  browser: from the stream without a reload, and from the API after one.
+- **Item 4 was two thirds a page and one third a number nobody recorded**, and
+  the third decided its shape: what the fold saved cannot be recovered after the
+  close — the window moves, a resume can change the counter, and eviction may
+  take the same turns — so it is counted there or not at all. It landed as a
+  field on `job_closed` rather than a line of its own, because a new variant is
+  the one change an older reader chokes on rather than skips. The format bump it
+  cost (9) is also the first exercise of `ui_versions.rs`: the two constants
+  moved together in the same commit, which is the failure this morning's outage
+  was.
+- **Item 5 split in two and the half called *blocked on hardware* was not.** A
+  GitHub runner is a Linux box with a Docker daemon, free, already building this
+  repository on every push — so the first non-macOS container run cost a script
+  and a job rather than a trip to machine 4. What machine 4 still uniquely
+  answers is a session with a *model* in it, which no runner will. The other
+  half now has its argument — [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md),
+  the first `WIP` record on this revision — and writing it moved the row twice:
+  the thing to choose is a **posture** rather than a runtime, because the policy
+  file decides the sandbox and the seam together; and the row's own description
+  of the bug was wrong. `serve` runs **one** session at a time, so nothing is
+  shared between sessions: what is broken is the *lifetime*, a worker started at
+  boot outliving every session it serves. The record also finds a format bump
+  (10) nobody had ordered: a posture a session chooses and the recording does not
+  name is a corpus that cannot be read back.
+- **Item 6 is what this reordering costs.** The flag exists, the corpus exists,
+  the model is on machine 1 and on machine 4, and rule A stays off in the
+  meantime for a reason nobody has measured. It is one afternoon, and it is now
+  behind four rows of UI work. That is the trade, stated where it can be argued
+  with rather than discovered later.
+- **Items 7 and 8 keep their order and lose their start date.** The probe before
+  the grammar, the curl before either — nothing about the reordering touches
+  that, and the previous revision's argument for it stands as written.
+- **Item 10 has been on four revisions and has never been argued.** That is still
+  the finding. The honest guess is unchanged: a plan may only ever narrow, and
+  "narrow" is not obviously defined on a scale.
+- **Item 12 is the last row this project can call blocked by geography**, and it
+  is the only one in section B that section A cannot delay: a box is a box.

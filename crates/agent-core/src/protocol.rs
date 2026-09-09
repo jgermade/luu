@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::approval::Signature;
 use crate::backend::Usage;
 use crate::context::{Counter, Eviction};
-use crate::job::{ApprovedBy, ClosedBy, JobId, Plan, PlanSource};
+use crate::job::{ApprovedBy, ClosedBy, JobId, Plan, PlanSource, Replaced};
 use crate::sandbox::Verdict;
 use crate::tools::ToolStep;
 use crate::turn::{EndReason, TurnEvent};
@@ -225,6 +225,12 @@ pub enum ServerMessage {
         summary: String,
         #[serde(default)]
         by: Option<ClosedBy>,
+        /// What the fold took out of the prompt and what it was worth there,
+        /// counted at the close with the counter that counted the summary.
+        /// Absent in a stream written before format 9 — which is not zero. See
+        /// `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaced: Option<Replaced>,
     },
     /// What left the window, and stays out.
     Evicted {

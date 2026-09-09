@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
 use crate::context::{Counter, Evicted, Pruned};
-use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource};
+use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource, Replaced};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::RecordLine;
 use crate::sandbox::Verdict;
@@ -105,6 +105,12 @@ pub struct JobView {
     /// recording made before signatures existed.
     #[serde(default)]
     pub approved_by: Option<ApprovedBy>,
+    /// What the fold took out of the prompt, and what it was worth there —
+    /// counted at the close, because it is only true then. Absent while the job
+    /// is open, and in a view folded from a recording made before format 9. See
+    /// `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+    #[serde(default)]
+    pub replaced: Option<Replaced>,
 }
 
 pub type TaskView = JobView;
@@ -316,6 +322,7 @@ impl SessionView {
                         summary: None,
                         closed_by: None,
                         approved_by: None,
+                        replaced: None,
                     });
                 }
             }
@@ -363,11 +370,20 @@ impl SessionView {
                     view.approved_by = Some(approved_by.clone().unwrap_or(ApprovedBy::Operator));
                 }
             }
-            ServerMessage::JobClosed { job, summary, by } => {
+            ServerMessage::JobClosed {
+                job,
+                summary,
+                by,
+                replaced,
+            } => {
                 if let Some(view) = self.job_mut(*job) {
                     view.state = JobState::Closed;
                     view.summary = Some(summary.clone());
                     view.closed_by = Some(by.unwrap_or(ClosedBy::User));
+                    // Absent in a stream written before format 9, and that is
+                    // not zero: a fold that saved nothing and a fold nobody
+                    // measured are different claims.
+                    view.replaced = replaced.clone();
                 }
             }
             ServerMessage::JobRejected { job } => {
@@ -379,6 +395,9 @@ impl SessionView {
                 if let Some(view) = self.job_mut(*job) {
                     view.state = JobState::Approved;
                     view.summary = None;
+                    // With the summary, and for its reason: a reopened job's
+                    // turns are being sent again, so nothing has been saved.
+                    view.replaced = None;
                     view.closed_by = None;
                 }
             }
@@ -566,6 +585,7 @@ mod tests {
                 context_limit: Some(8192),
                 counter: Some(Counter::Model { id: "mock".into() }),
                 eviction: Some(crate::context::Eviction::Turn),
+                posture: None,
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {

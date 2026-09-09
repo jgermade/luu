@@ -7,6 +7,8 @@ import { defineConfig, devices } from "@playwright/test"
 // makes that a cross-origin request the browser refuses.
 export default defineConfig({
   testDir: ".",
+  // The live-server suite has its own config and its own server: `gate.config.js`.
+  testMatch: "site.spec.js",
   timeout: 30_000,
   // A smoke test that passes on the second attempt is a smoke test that failed.
   retries: 0,

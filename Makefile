@@ -15,13 +15,14 @@ EXTENSION := editors/vscode
 BIND ?= 127.0.0.1:7878
 
 .DEFAULT_GOAL := help
-.PHONY: help install test build up fmt lint
+.PHONY: help install test build up fmt lint smoke
 
 help:
 	@echo "make install   fetch dependencies, Rust and the VS Code extension's"
 	@echo "make test      cargo test --workspace, and the probes that need no model"
 	@echo "make build     release binary, and the extension if npm is here"
 	@echo "make up        the debug UI and the agent protocol on $(BIND)"
+	@echo "make smoke     the page driven through the gate, against a live mock server"
 	@echo ""
 	@echo "make fmt       cargo fmt --all"
 	@echo "make lint      what CI runs: fmt --check and clippy with -D warnings"
@@ -54,6 +55,13 @@ build:
 # the state directory, so a restart does not lose the conversation.
 up:
 	$(CARGO) run --bin luu -- serve --bind $(BIND)
+
+# The page, clicked: a prompt, the gate, an amendment, Approve, the tool call
+# and the fold — against `luu serve` on the mock, which the spec starts itself.
+# Needs node and a built binary, which is why it is not part of `make test`.
+smoke: build
+	cd tests/smoke && npm ci && npx playwright install chromium && \
+		LUU_BIN=target/release/luu npx playwright test -c gate.config.js
 
 fmt:
 	$(CARGO) fmt --all

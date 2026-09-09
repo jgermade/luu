@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
-use crate::job::{ApprovedBy, ClosedBy, Job, JobId, JobState, Plan, TaskId};
+use crate::job::{ApprovedBy, ClosedBy, Job, JobId, JobState, Plan, Replaced, TaskId};
 use crate::protocol::TurnId;
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
@@ -474,6 +474,11 @@ impl Context {
                 text: text.clone(),
                 tokens: counter.count(text),
                 counted_by: counter.id(),
+                // Carried rather than recomputed: what the fold replaced was
+                // counted at the close, over turns this view may no longer
+                // have. Recounting it here would answer a different question
+                // and look like the same one.
+                replaced: jv.replaced.clone(),
             });
             jobs.push(Job {
                 id: jv.id,
@@ -749,6 +754,24 @@ impl Context {
             .flat_map(|turn| turn.code_context.iter())
             .collect();
         let turns = self.turns.iter().filter(mine).count();
+        // What the fold is about to stop sending, counted here rather than
+        // afterwards: the window moves, a resume can change the counter, and
+        // eviction may already have taken some of the same turns, so this
+        // number is only true at the close. `tokens_of` is what the `history`
+        // bucket sums, which is the bar the saving will be read against. See
+        // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+        let replaced = Replaced {
+            turns: self.turns.iter().filter(mine).map(|turn| turn.id).collect(),
+            tokens: self
+                .turns
+                .iter()
+                .filter(mine)
+                .map(|turn| self.tokens_of(turn, counter))
+                .sum(),
+            // Filled by the close, which is where the summary is written and
+            // therefore the only place its own count exists.
+            summary_tokens: 0,
+        };
         let job = self.jobs.iter_mut().find(|job| job.id == id)?;
         // Only an open job folds. A proposal has no turns to fold and nothing
         // has been approved to summarise; closing one would take the gate off
@@ -757,8 +780,18 @@ impl Context {
         if !job.is_open() {
             return None;
         }
-        job.close(&steps, &shown, turns, counter, by);
+        job.close(&steps, &shown, turns, counter, by, Some(replaced));
         job.summary.as_ref().map(|summary| summary.text.clone())
+    }
+
+    /// What the fold of a closed job replaced, for the message that announces
+    /// it. Read back rather than returned by the close: the close's answer is
+    /// the summary a person reads, and threading a second value through four
+    /// call sites to save one lookup is how a signature grows.
+    pub fn replaced_by(&self, id: JobId) -> Option<Replaced> {
+        self.job(id)
+            .and_then(|job| job.summary.as_ref())
+            .and_then(|summary| summary.replaced.clone())
     }
 
     pub fn close_task_by(
@@ -1721,6 +1754,67 @@ mod tests {
             );
         }
         (context, task)
+    }
+
+    /// The fold's own claim: which turns stopped being sent, and what they were
+    /// worth in the prompt they left. Counted at the close because it is only
+    /// true then — see
+    /// `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+    #[test]
+    fn a_fold_writes_down_what_it_replaced() {
+        let counter = WordCounter::default();
+        let (context, task) = context_with_closed_task(0, &counter);
+
+        let replaced = context.replaced_by(task).expect("the close counted it");
+        assert_eq!(
+            replaced.turns,
+            vec![1, 2, 3],
+            "named rather than counted: which turns stopped being sent",
+        );
+
+        let summary = context
+            .job(task)
+            .and_then(|job| job.summary.as_ref())
+            .expect("a closed job has one");
+        assert_eq!(
+            summary.replaced.as_ref(),
+            Some(&replaced),
+            "the numbers live with the summary they are subtracted from",
+        );
+        assert_eq!(
+            replaced.summary_tokens, summary.tokens,
+            "the fold carries the summary's own count, so a reader never counts it again",
+        );
+        assert!(
+            replaced.tokens > summary.tokens,
+            "three turns cost more than the line that stands in for them: \
+             {} replaced by {}",
+            replaced.tokens,
+            summary.tokens,
+        );
+
+        // The same unit on both sides, which is the whole reason the count
+        // happens at the close: `tokens_of` is what the `history` bucket sums.
+        let by_hand: u32 = context
+            .turns
+            .iter()
+            .filter(|turn| turn.job == Some(task))
+            .map(|turn| context.tokens_of(turn, &counter))
+            .sum();
+        assert_eq!(replaced.tokens, by_hand);
+    }
+
+    /// A reopened job is being written again, so nothing has been saved and the
+    /// numbers go where the summary goes.
+    #[test]
+    fn reopening_drops_what_the_fold_wrote_down() {
+        let counter = WordCounter::default();
+        let (mut context, task) = context_with_closed_task(0, &counter);
+        assert!(context.replaced_by(task).is_some());
+
+        context.reopen_task(task);
+
+        assert!(context.replaced_by(task).is_none());
     }
 
     #[test]

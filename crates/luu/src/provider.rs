@@ -112,6 +112,29 @@ struct File {
     default: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     provider: BTreeMap<String, Profile>,
+    /// `[posture.<name>]`: what a session is allowed to do, by the name of the
+    /// policy file that decides it. Beside the providers because it is the same
+    /// kind of thing — a name written on this machine, so that what a surface
+    /// may choose is bounded by what somebody typed here. See
+    /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    posture: BTreeMap<String, Posture>,
+}
+
+/// One named posture: a policy file, and nothing else.
+///
+/// The file decides the sandbox **and** the seam — `commands`, `network`,
+/// `enforcement`, `limits` and `[worker]` — because the loosening and the
+/// container were put in one file on purpose
+/// (`RECORD/2026-09-01.the-container-decided.completed.md`). So a posture is a
+/// path, and never a runtime and an image named separately: the two would be a
+/// second way to say what the file already says.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Posture {
+    /// Relative to the directory the server runs in, which is the directory the
+    /// policy file's own paths are relative to.
+    pub policy: PathBuf,
 }
 
 /// The file, parsed and checked.
@@ -119,6 +142,7 @@ struct File {
 pub struct Config {
     default: Option<String>,
     providers: BTreeMap<String, Profile>,
+    postures: BTreeMap<String, Posture>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -166,6 +190,8 @@ pub enum ConfigError {
     Render { message: String },
     #[error("there is no [provider.{name}] in {path}")]
     NoSuchProfile { path: String, name: String },
+    #[error("there is no [posture.{name}] in {path}")]
+    NoSuchPosture { path: String, name: String },
     #[error("-p {name} was named, and this machine has no {file}")]
     NoConfigFile { name: String, file: String },
 }
@@ -205,6 +231,7 @@ impl Config {
         let config = Self {
             default: file.default,
             providers: file.provider,
+            postures: file.posture,
         };
         config.check_default(path)?;
         Ok(config)
@@ -299,6 +326,10 @@ impl Config {
         toml::to_string_pretty(&File {
             default: self.default.clone(),
             provider: self.providers.clone(),
+            // Carried through the editor untouched. The providers table is the
+            // only thing the page writes, and a writer that dropped the
+            // postures would delete them the first time somebody saved a URL.
+            posture: self.postures.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -335,8 +366,35 @@ impl Config {
     }
 
     /// The file as an editor hands it back: a default and a set of profiles.
-    pub fn from_parts(default: Option<String>, providers: BTreeMap<String, Profile>) -> Self {
-        Self { default, providers }
+    ///
+    /// The postures are *this* config's, not the editor's: the page does not
+    /// write them, and one that arrived without them would be one that erased
+    /// them.
+    pub fn from_parts(
+        &self,
+        default: Option<String>,
+        providers: BTreeMap<String, Profile>,
+    ) -> Self {
+        Self {
+            default,
+            providers,
+            postures: self.postures.clone(),
+        }
+    }
+
+    /// Every posture the file names.
+    pub fn postures(&self) -> &BTreeMap<String, Posture> {
+        &self.postures
+    }
+
+    /// One posture by name, or the refusal that says where to write it.
+    pub fn posture(&self, name: &str, path: &str) -> Result<&Posture, ConfigError> {
+        self.postures
+            .get(name)
+            .ok_or_else(|| ConfigError::NoSuchPosture {
+                path: path.to_string(),
+                name: name.to_string(),
+            })
     }
 }
 
@@ -608,7 +666,7 @@ mod tests {
     fn a_run_that_read_nothing_says_it_has_nowhere_to_send() {
         // No file at all: the shape `serve` has on a machine nobody has
         // configured, and the one the page opens the editor on.
-        let empty = Config::from_parts(None, BTreeMap::new());
+        let empty = Config::default().from_parts(None, BTreeMap::new());
         let fallen = resolve(&empty, None, Flags::default()).expect("it resolves");
         assert_eq!(fallen.destination_from, DestinationFrom::Default);
         assert!(fallen.unconfigured());
@@ -882,7 +940,7 @@ mod tests {
                 ..Profile::default()
             },
         );
-        let config = Config::from_parts(Some("local".to_string()), providers);
+        let config = Config::default().from_parts(Some("local".to_string()), providers);
         config.write(&path).expect("it writes");
 
         let text = std::fs::read_to_string(&path).expect("it is there");
@@ -916,7 +974,8 @@ mod tests {
                 ..Profile::default()
             },
         );
-        let error = Config::from_parts(Some("hosted".to_string()), providers)
+        let error = Config::default()
+            .from_parts(Some("hosted".to_string()), providers)
             .write(&path)
             .expect_err("an undeclared remote default is not a file this may write");
         assert!(matches!(error, ConfigError::UndeclaredRemoteDefault { .. }));
