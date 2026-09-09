@@ -53,7 +53,8 @@ question; both are a box, a flag and a corpus that already exist.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 3 | **Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. The shape rule B settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result reuses, so this is the cheapest row in the revision | nothing | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.WIP.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
+| 3 | ~**Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. The shape rule B settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result reuses, so this is the cheapest row in the revision~ **landed the day this revision was written, as rule C: `--prune-results`, off, and inert without `--prune-behind`. It reaches the case rule B cannot — a turn that ran a tool and selected nothing has no spans to give — and it has no number: nothing has been run one flag apart, which is now the row below.** Found under it: `job_closed`'s `replaced.tokens` had been over-reporting a pruned turn since rule B landed on 2026-09-08, counting what its turns were *stored* at rather than what the prompt they left was made of. Fixed in the same commit | nothing | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
+| 3b | **What rule C is worth** — `--prune-results` one flag apart, the way `--repeat-once` and `--prune-behind` were both measured. The rule the tests describe is *the prompt is smaller and the conversation is intact*; how much smaller is unmeasured, and a rule built without a run is the thing item 1 is a warning about. **It needs a corpus that does not exist**: `--mock-reply` is consumed one per model *call* with the last repeating, so a twenty-turn script on the mock runs a tool exactly once and the grounded corpus has no tool output in it at all. A mock that answers with a call per turn is the missing instrument — **and it is the same instrument item 4 needs**, which is the reason to build it once | a mock that can call a tool every turn | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md) §Still open |
 | 4 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts. **The instrument is writable without a model**; only running it is section A's kind of work | nothing for the harness; a model to run it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
 | 5 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is | item 4, and the **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
 
@@ -89,8 +90,9 @@ gantt
     Whether a 7B misses the repetition     :crit, rep, 2026-09-09, 2d
     A model inside a container             :crit, ctr, after rep, 2d
     section The window
-    Tool results are only capped           :active, steps, 2026-09-09, 1d
-    A probe for tool calls                 :probe, after steps, 3d
+    Tool results are only capped           :done, steps, 2026-09-09, 1d
+    What rule C is worth                   :worth, after steps, 1d
+    A probe for tool calls                 :probe, after worth, 3d
     A grammar for tool calls               :gbnf, after probe, 4d
     section What the night left open
     The panel reads the pruned lines       :trace, after steps, 1d
@@ -113,6 +115,11 @@ gantt
   answers is the most expensive kind of unfinished work this project produces,
   because it looks finished. Two revisions have now ordered it and neither has
   bought it.
+- **Item 3 landed the day this revision was written, and item 3b is what it
+  cost.** The rule is built, off, tested and unmeasured — which is precisely the
+  shape item 1 is at the top of this order for. It is one mock run on a corpus
+  that already exists, and it should not be allowed to become a second row that
+  looks finished.
 - **Item 3 is the last row of the window's original argument.**
   [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md)
   proposed two rules and left a third case open in its §Still open — *tool
@@ -120,6 +127,12 @@ gantt
   answered rather than assumed: they want the same *line* and a different
   citation. It needs no model, no box and no format bump, which is why it is
   ahead of everything in sections C and D.
+- **Items 3b and 4 want the same thing built first.** Neither can be run on the
+  mock as it stands: replies are consumed per model call with the last
+  repeating, so nothing on this machine can make a corpus where a tool is called
+  every turn. That instrument is one change to the mock, it unblocks a
+  measurement and a probe at once, and whoever picks up either row should build
+  it rather than working around it twice.
 - **Items 4 and 5 keep their order and their first move.** The probe before the
   grammar, the curl before either. What the reordering of 2026-09-08 changed is
   that the probe's *harness* is now visibly separable from the probe's *run* —

@@ -9,7 +9,9 @@ use std::time::Duration;
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
-use agent_core::context::{Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat};
+use agent_core::context::{
+    Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat, Results,
+};
 use agent_core::fragment;
 use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
@@ -321,6 +323,13 @@ enum Command {
         #[arg(long)]
         prune_behind: bool,
 
+        /// Let a turn behind the prune line give up its tool *output* too: the
+        /// call stays as the model wrote it and the result becomes the line
+        /// that cites it. Off, and inert without --prune-behind — nothing is
+        /// behind a line that never moves.
+        #[arg(long)]
+        prune_results: bool,
+
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
         #[arg(long)]
@@ -487,6 +496,13 @@ enum Command {
         /// enough. Off, for the same reason.
         #[arg(long)]
         prune_behind: bool,
+
+        /// Let a turn behind the prune line give up its tool *output* too: the
+        /// call stays as the model wrote it and the result becomes the line
+        /// that cites it. Off, and inert without --prune-behind — nothing is
+        /// behind a line that never moves.
+        #[arg(long)]
+        prune_results: bool,
 
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
@@ -663,6 +679,13 @@ enum Command {
         /// enough. Off, for the same reason.
         #[arg(long)]
         prune_behind: bool,
+
+        /// Let a turn behind the prune line give up its tool *output* too: the
+        /// call stays as the model wrote it and the result becomes the line
+        /// that cites it. Off, and inert without --prune-behind — nothing is
+        /// behind a line that never moves.
+        #[arg(long)]
+        prune_results: bool,
 
         /// Pin the sampler's temperature, so two runs meant to be compared
         /// differ only by what they're testing. Unset leaves it to the
@@ -1133,6 +1156,17 @@ fn prune(behind: bool) -> Prune {
     match behind {
         true => Prune::Behind,
         false => Prune::Never,
+    }
+}
+
+/// `--prune-results` as the policy it sets, for the same reason again. Its own
+/// flag rather than a widening of `--prune-behind`: there is a run on disk made
+/// under that one, and a flag that quietly starts meaning something else turns
+/// a recorded arm into an unrecorded one.
+fn results(cited: bool) -> Results {
+    match cited {
+        true => Results::Cited,
+        false => Results::Kept,
     }
 }
 
@@ -1609,6 +1643,7 @@ pub async fn run() -> Result<()> {
         low_water,
         repeat_once,
         prune_behind,
+        prune_results,
         temperature,
         seed,
         map_tokens,
@@ -1684,7 +1719,8 @@ pub async fn run() -> Result<()> {
             record,
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
                 .repeating(repeat(repeat_once))
-                .pruning(prune(prune_behind)),
+                .pruning(prune(prune_behind))
+                .citing(results(prune_results)),
             counter,
             tokenizer,
             agency,
@@ -1741,6 +1777,7 @@ pub async fn run() -> Result<()> {
         low_water,
         repeat_once,
         prune_behind,
+        prune_results,
         temperature,
         seed,
         map_tokens,
@@ -1795,7 +1832,8 @@ pub async fn run() -> Result<()> {
             record,
             budget: Budget::new(context_limit, reserve, evict.policy(low_water))
                 .repeating(repeat(repeat_once))
-                .pruning(prune(prune_behind)),
+                .pruning(prune(prune_behind))
+                .citing(results(prune_results)),
             counter,
             tokenizer,
             agency,
@@ -1839,6 +1877,7 @@ pub async fn run() -> Result<()> {
         low_water,
         repeat_once,
         prune_behind,
+        prune_results,
         temperature,
         seed,
         map_tokens,
@@ -1887,7 +1926,8 @@ pub async fn run() -> Result<()> {
 
     let budget = Budget::new(context_limit, reserve, evict.policy(low_water))
         .repeating(repeat(repeat_once))
-        .pruning(prune(prune_behind));
+        .pruning(prune(prune_behind))
+        .citing(results(prune_results));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
