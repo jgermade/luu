@@ -250,6 +250,36 @@ pub enum Prune {
     Behind,
 }
 
+/// What an old turn's *tool output* costs once its turn is behind the prune
+/// line.
+///
+/// The third rule over the same window, argued in
+/// `RECORD/2026-09-09.what-a-result-costs.completed.md`, and deliberately not a new
+/// idea: an 8 KiB `cat` is ~2 000 tokens at the approximate counter — twice
+/// what a whole turn selects at `--select-tokens 1024` — charged to every turn
+/// after the one that made the call, and until now the only thing that ever
+/// took it out of the prompt was evicting that turn with its question and its
+/// answer.
+///
+/// It has no line of its own. [`Prune::Behind`] already decides which turns are
+/// old enough to give something up; this decides whether tool output is one of
+/// the things they give up, which is why it is inert on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Results {
+    /// A tool result is sent in full for as long as its turn is in the window.
+    /// Everything recorded before this enum existed, and the default.
+    Kept,
+    /// Behind the prune line the output becomes the line that cites it, and the
+    /// call that asked for it stays verbatim.
+    ///
+    /// The assistant half is never rewritten — it is the model's own words, and
+    /// it is why [`crate::tools::ToolStep::text`] is stored rather than
+    /// re-rendered from the call. What is replaced is the result *whole*, head
+    /// included, so the number in the citation is the cost of exactly what is
+    /// no longer there.
+    Cited,
+}
+
 /// The window, what is held back from it, and how it gives way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -263,6 +293,10 @@ pub struct Budget {
     pub repeat: Repeat,
     /// What an old turn's spans cost once the window no longer fits.
     pub prune: Prune,
+    /// What an old turn's tool output costs once its turn is behind the prune
+    /// line. Inert without [`Prune::Behind`]: nothing is behind a line that
+    /// never moves.
+    pub results: Results,
 }
 
 impl Budget {
@@ -274,6 +308,7 @@ impl Budget {
             eviction,
             repeat: Repeat::Always,
             prune: Prune::Never,
+            results: Results::Kept,
         }
     }
 
@@ -288,6 +323,14 @@ impl Budget {
     /// same arm as one made without it.
     pub fn pruning(self, prune: Prune) -> Self {
         Self { prune, ..self }
+    }
+
+    /// Off by default, and its own flag rather than a widening of `pruning`:
+    /// there is a run on disk made under `--prune-behind`, and a flag that
+    /// quietly starts meaning something else turns a recorded arm into an
+    /// unrecorded one.
+    pub fn citing(self, results: Results) -> Self {
+        Self { results, ..self }
     }
 }
 
@@ -407,6 +450,15 @@ pub struct Context {
     /// forward only, and only under [`Prune::Behind`]. Never below the floor,
     /// because a turn nobody renders has nothing to give up.
     pruned: usize,
+    /// What the line took, the last time the window was rendered — the other
+    /// half of the state above. The line says *which* turns gave something up
+    /// and this says *what*, and a fold reads both: what it stopped sending is
+    /// what the prompt it left was actually made of, which under
+    /// [`Results::Cited`] is not what those turns are stored at.
+    ///
+    /// Set on every selection rather than only on the ones that prune, because
+    /// it describes the render and not the decision.
+    cited: Results,
     /// The session's jobs, in order. Closed ones fold their turns at
     /// selection time; nothing here rewrites the history.
     jobs: Vec<Job>,
@@ -421,6 +473,7 @@ impl Context {
             turns: Vec::new(),
             floor: 0,
             pruned: 0,
+            cited: Results::Kept,
             jobs: Vec::new(),
         }
     }
@@ -553,7 +606,14 @@ impl Context {
             // rebuilds every turn with an empty `code_context` and a resumed
             // session has nothing to prune. Restoring a line here would say a
             // turn had given up spans it is not carrying.
+            //
+            // Its *steps* do come back, so under `Results::Cited` a resumed
+            // session is the one case where the line has something to take
+            // from turn 1 — the spans are gone and the tool output is not.
             pruned: 0,
+            // The last render's rule, and a resumed session has not rendered:
+            // the next selection sets it from the budget it is given.
+            cited: Results::Kept,
             jobs,
         }
     }
@@ -757,16 +817,25 @@ impl Context {
         // What the fold is about to stop sending, counted here rather than
         // afterwards: the window moves, a resume can change the counter, and
         // eviction may already have taken some of the same turns, so this
-        // number is only true at the close. `tokens_of` is what the `history`
-        // bucket sums, which is the bar the saving will be read against. See
-        // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
+        // number is only true at the close. Counted through the accounting the
+        // `history` bucket sums rather than through the stored count, which are
+        // the same number for a turn above the prune line and are not for one
+        // below it: a pruned turn is in the prompt as its citations, so a fold
+        // that claimed its spans back would be claiming a saving rule B had
+        // already taken. That divergence arrived with rule B on 2026-09-08 and
+        // is fixed here. See
+        // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md` and
+        // `RECORD/2026-09-09.what-a-result-costs.completed.md`.
         let replaced = Replaced {
             turns: self.turns.iter().filter(mine).map(|turn| turn.id).collect(),
             tokens: self
                 .turns
                 .iter()
-                .filter(mine)
-                .map(|turn| self.tokens_of(turn, counter))
+                .enumerate()
+                .filter(|(_, turn)| turn.job == Some(id))
+                .map(|(index, _)| {
+                    self.item_tokens(&Item::Turn(index), counter, self.pruned, self.cited)
+                })
                 .sum(),
             // Filled by the close, which is where the summary is written and
             // therefore the only place its own count exists.
@@ -896,11 +965,18 @@ impl Context {
     /// line the context has not taken yet.
     ///
     /// A pruned turn is the stored count less the spans it will not send, plus
-    /// the citations that stand in for them. Subtracted rather than recounted,
-    /// which is rule A's rule for rule A's reason: a turn that gives up nothing
-    /// costs exactly what it has always cost, and every recording made before
-    /// this reads unchanged.
-    fn item_tokens(&self, item: &Item, counter: &dyn TokenCounter, pruned: usize) -> u32 {
+    /// the citations that stand in for them, and — under [`Results::Cited`] —
+    /// less its tool output and plus the lines that cite that. Subtracted
+    /// rather than recounted, which is rule A's rule for rule A's reason: a
+    /// turn that gives up nothing costs exactly what it has always cost, and
+    /// every recording made before this reads unchanged.
+    fn item_tokens(
+        &self,
+        item: &Item,
+        counter: &dyn TokenCounter,
+        pruned: usize,
+        results: Results,
+    ) -> u32 {
         match item {
             Item::Turn(index) => {
                 let turn = &self.turns[*index];
@@ -916,7 +992,14 @@ impl Context {
                         let cited: u32 = carried
                             .map(|fragment| pruned_fragment_tokens(fragment, counter))
                             .sum();
-                        stored.saturating_sub(full) + cited
+                        let stored = stored.saturating_sub(full) + cited;
+                        match results {
+                            Results::Kept => stored,
+                            Results::Cited => {
+                                stored.saturating_sub(results_tokens(&turn.steps, counter))
+                                    + pruned_results_tokens(&turn.steps, counter)
+                            }
+                        }
                     }
                 }
             }
@@ -955,6 +1038,7 @@ impl Context {
         budget: Budget,
         counter: &dyn TokenCounter,
     ) -> Selection {
+        self.cited = budget.results;
         let system_tokens = counter.count(&self.system);
         let tools_tokens = counter.count(&self.tools);
         let map_tokens = counter.count(&self.map);
@@ -1006,15 +1090,29 @@ impl Context {
             // and a pruned one loses only the code. The floor moves after, and
             // only if giving up every span in the window still leaves it over.
             if budget.prune == Prune::Behind
-                && self.fits_from(available, counter, budget.repeat, self.pruned) > self.floor
+                && self.fits_from(
+                    available,
+                    counter,
+                    budget.repeat,
+                    self.pruned,
+                    budget.results,
+                ) > self.floor
             {
                 let before = self.pruned;
-                let held = self.window_tokens(self.floor, counter, budget.repeat, before);
-                self.pruned = self.prune_to(target, counter, budget.repeat);
+                let held =
+                    self.window_tokens(self.floor, counter, budget.repeat, before, budget.results);
+                self.pruned = self.prune_to(target, counter, budget.repeat, budget.results);
                 pruning = (self.pruned > before).then(|| Pruned {
+                    // A turn is named here because it gave something up, and
+                    // under `Results::Cited` there is a second thing to give:
+                    // a turn that ran a tool and selected nothing is behind the
+                    // line for a reason the report has to be able to state.
                     turns: self.turns[before.max(self.floor)..self.pruned]
                         .iter()
-                        .filter(|turn| !turn.code_context.is_empty())
+                        .filter(|turn| {
+                            !turn.code_context.is_empty()
+                                || (budget.results == Results::Cited && !turn.steps.is_empty())
+                        })
                         .map(|turn| turn.id)
                         .collect(),
                     tokens: held.saturating_sub(self.window_tokens(
@@ -1022,12 +1120,20 @@ impl Context {
                         counter,
                         budget.repeat,
                         self.pruned,
+                        budget.results,
                     )),
                     counter: counter.id(),
                 });
             }
 
-            if self.fits_from(available, counter, budget.repeat, self.pruned) > self.floor {
+            if self.fits_from(
+                available,
+                counter,
+                budget.repeat,
+                self.pruned,
+                budget.results,
+            ) > self.floor
+            {
                 // Taken before the floor moves: this is the window the cut
                 // chooses from, and what it drops is unreachable afterwards —
                 // which is the whole reason this has to be reported from in
@@ -1035,9 +1141,11 @@ impl Context {
                 // already in force, so that what pruning saved is not reported
                 // as what the cut freed.
                 let before = self.floor;
-                let held = self.window_tokens(before, counter, budget.repeat, self.pruned);
+                let held =
+                    self.window_tokens(before, counter, budget.repeat, self.pruned, budget.results);
 
-                self.floor = self.fits_from(target, counter, budget.repeat, self.pruned);
+                self.floor =
+                    self.fits_from(target, counter, budget.repeat, self.pruned, budget.results);
 
                 // What the cut freed, and not what the dropped turns were
                 // counted at. Under `Repeat::Once` those are two different
@@ -1055,6 +1163,7 @@ impl Context {
                         counter,
                         budget.repeat,
                         self.pruned,
+                        budget.results,
                     )),
                     counter: counter.id(),
                     policy: budget.eviction,
@@ -1077,7 +1186,7 @@ impl Context {
         // to the one the previous call sent, exactly as it was before this rule.
         let mut shown: HashSet<&Fragment> = HashSet::new();
         for item in &items {
-            let tokens = self.item_tokens(item, counter, self.pruned);
+            let tokens = self.item_tokens(item, counter, self.pruned, budget.results);
             match item {
                 Item::Turn(index) if *index < self.pruned => {
                     // Below the prune line: the exchange stays, the code does
@@ -1093,9 +1202,17 @@ impl Context {
                         &turn.prompt,
                         counter,
                     )));
+                    // The call is the model's own words and stays verbatim;
+                    // what a pruned turn gives up is what came back. Under
+                    // `Results::Kept` this is the same loop the turn above it
+                    // runs, which is what keeps a run made before the rule
+                    // byte-identical under it.
                     for step in &turn.steps {
                         messages.push(Message::assistant(step.text.clone()));
-                        messages.push(Message::user(step.result_text()));
+                        messages.push(Message::user(match budget.results {
+                            Results::Kept => step.result_text(),
+                            Results::Cited => pruned_result_text(step, counter),
+                        }));
                     }
                     messages.push(Message::assistant(turn.answer.clone()));
                 }
@@ -1198,6 +1315,7 @@ impl Context {
         counter: &dyn TokenCounter,
         repeat: Repeat,
         pruned: usize,
+        results: Results,
     ) -> usize {
         let available = i64::from(available);
         let mut spent: i64 = 0;
@@ -1208,7 +1326,7 @@ impl Context {
         // and cannot stand in for anything.
         let mut rendered: HashSet<&Fragment> = HashSet::new();
         for item in self.items().iter().rev() {
-            let mut tokens = i64::from(self.item_tokens(item, counter, pruned));
+            let mut tokens = i64::from(self.item_tokens(item, counter, pruned, results));
             if let (Repeat::Once, Item::Turn(index)) = (repeat, item) {
                 // A pruned turn is not rendering its spans, so it neither owns
                 // one nor makes a younger copy redundant: `item_tokens` has
@@ -1245,11 +1363,12 @@ impl Context {
         counter: &dyn TokenCounter,
         repeat: Repeat,
         pruned: usize,
+        results: Results,
     ) -> u32 {
         let mut total: i64 = 0;
         let mut shown: HashSet<&Fragment> = HashSet::new();
         for item in &self.items_from(floor) {
-            let mut tokens = i64::from(self.item_tokens(item, counter, pruned));
+            let mut tokens = i64::from(self.item_tokens(item, counter, pruned, results));
             if let (Repeat::Once, Item::Turn(index)) = (repeat, item)
                 && *index >= pruned
             {
@@ -1285,18 +1404,24 @@ impl Context {
     ///
     /// The loop runs on the call where the window overflowed and walks only the
     /// turns still in it.
-    fn prune_to(&self, target: u32, counter: &dyn TokenCounter, repeat: Repeat) -> usize {
+    fn prune_to(
+        &self,
+        target: u32,
+        counter: &dyn TokenCounter,
+        repeat: Repeat,
+        results: Results,
+    ) -> usize {
         // Never below the floor: a turn nobody renders has nothing to give up,
         // and starting here is what keeps the line moving forward as the floor
         // does.
         let start = self.pruned.max(self.floor);
         let mut best = start;
-        let mut smallest = self.window_tokens(self.floor, counter, repeat, start);
+        let mut smallest = self.window_tokens(self.floor, counter, repeat, start, results);
 
         let mut line = start;
         while smallest > target && line < self.turns.len() {
             line += 1;
-            let cost = self.window_tokens(self.floor, counter, repeat, line);
+            let cost = self.window_tokens(self.floor, counter, repeat, line, results);
             if cost < smallest {
                 best = line;
                 smallest = cost;
@@ -1331,6 +1456,50 @@ fn steps_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
         .iter()
         .map(|step| counter.count(&step.text) + counter.count(&step.result_text()))
         .sum()
+}
+
+/// The half of those exchanges a pruned turn gives up: what came back, and not
+/// what was asked.
+fn results_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
+    steps
+        .iter()
+        .map(|step| counter.count(&step.result_text()))
+        .sum()
+}
+
+/// The same half, as the lines that cite it.
+fn pruned_results_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
+    steps
+        .iter()
+        .map(|step| counter.count(&pruned_result_text(step, counter)))
+        .sum()
+}
+
+/// One tool result, as the line that stands in for it once its turn has been
+/// pruned.
+///
+/// The tool that ran and what its answer was costing — enough for the model to
+/// tell that the call was made and came back, so that making it again is a
+/// decision rather than a discovery. The whole result is replaced, its `[name]
+/// ok` head included, so the number cites the cost of exactly what is no longer
+/// there; the assistant message that asked for it is untouched and says which
+/// call this answers.
+///
+/// The same guard as a span's citation, for the same reason: `[read_file] ok\n42`
+/// is cheaper than any line describing it, and a citation that is not cheaper is
+/// not a saving. Keeping the result there is also what keeps the window's cost
+/// monotone in the prune line.
+fn pruned_result_text(step: &ToolStep, counter: &dyn TokenCounter) -> String {
+    let full = step.result_text();
+    let citation = format!(
+        "[{}] output — {} tokens, pruned",
+        step.call.name,
+        counter.count(&full)
+    );
+    match counter.count(&citation) < counter.count(&full) {
+        true => citation,
+        false => full,
+    }
 }
 
 /// One fragment, as it is rendered inside a user message.
@@ -1432,6 +1601,8 @@ mod tests {
 
     use super::*;
     use crate::backend::Role;
+    use crate::sandbox::{Applied, Verdict};
+    use crate::tools::{ToolCall, ToolOutcome};
 
     /// One token per word, and it says how often it was asked. The second part
     /// is what makes "counted once" testable at all.
@@ -2728,6 +2899,280 @@ mod tests {
         assert_eq!(
             rendering, 1,
             "and the one copy is in a turn that is still here: {users:?}",
+        );
+    }
+
+    /// One tool call and what came back, for the results rule below.
+    fn ran(output: &str) -> ToolStep {
+        ToolStep {
+            text: "let me look".into(),
+            call: ToolCall {
+                name: "run_command".into(),
+                arguments: serde_json::json!({}),
+            },
+            outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
+            duration_ms: 1,
+        }
+    }
+
+    /// Turns that each ran one tool and selected nothing at all — the case rule
+    /// B cannot reach, which is the whole reason there is a third rule.
+    fn context_running(outputs: &[&str], counter: &dyn TokenCounter) -> Context {
+        let mut context = Context::new("system prompt here");
+        for (n, output) in outputs.iter().enumerate() {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![],
+                vec![ran(output)],
+                counter,
+            );
+        }
+        context
+    }
+
+    /// The rule, in one case: the call is the model's own words and stays, the
+    /// output is bytes nobody has looked at for two turns and becomes the line
+    /// that cites it.
+    #[test]
+    fn a_pruned_turn_keeps_the_call_and_gives_up_the_output() {
+        let counter = WordCounter::default();
+        let output = "one two three four five six seven eight nine ten";
+        let mut context = context_running(&[output, output, output], &counter);
+
+        let budget = Budget::new(70, 0, Eviction::Turn)
+            .pruning(Prune::Behind)
+            .citing(Results::Cited);
+        let selection = context.select("now this", &[], budget, &counter);
+
+        assert!(selection.pruned > 0, "the point of the case");
+        assert_eq!(selection.evicted, 0, "and nothing had to be dropped whole");
+        let users = user_messages(&selection);
+        assert!(
+            users[1].contains("[run_command] output —") && users[1].contains("pruned"),
+            "the citation stands where the output stood: {users:?}",
+        );
+        assert!(
+            !users[1].contains("seven"),
+            "and the output itself is gone: {users:?}",
+        );
+        assert!(
+            selection
+                .messages
+                .iter()
+                .any(|m| m.role == Role::Assistant && m.content == "let me look"),
+            "the call that asked for it is the model's own words and is untouched",
+        );
+        assert!(
+            users[0].contains("question number 0"),
+            "the question is still being asked: {users:?}",
+        );
+        for pair in selection.messages[1..].windows(2) {
+            assert_ne!(pair[0].role, pair[1].role, "the alternation survives it");
+        }
+    }
+
+    /// One flag apart, on the corpus rule B was built for and cannot help:
+    /// without it the window drops a turn whole, with it the conversation is
+    /// still there and only the bytes have gone.
+    #[test]
+    fn a_cited_result_saves_the_turn_that_ran_the_tool() {
+        let counter = WordCounter::default();
+        let output = "one two three four five six seven eight nine ten";
+        let carried = [output, output, output];
+        let behind = Budget::new(70, 0, Eviction::Turn).pruning(Prune::Behind);
+
+        let mut without = context_running(&carried, &counter);
+        let without = without.select("now this", &[], behind, &counter);
+        let mut with = context_running(&carried, &counter);
+        let with = with.select("now this", &[], behind.citing(Results::Cited), &counter);
+
+        assert!(
+            without.evicted > 0 && without.pruned == 0,
+            "rule B has nothing to take from a turn that selected nothing:              {} evicted, line at {}",
+            without.evicted,
+            without.pruned,
+        );
+        assert_eq!(
+            with.evicted, 0,
+            "and the turn that was dropped is still in the window",
+        );
+        assert!(with.pruned > 0, "having given up its output instead");
+    }
+
+    /// Every recording on disk was made under a flag that did not exist, and it
+    /// has to stay readable as the arm it was: this one is inert until the line
+    /// it hangs from is asked for.
+    #[test]
+    fn citing_results_is_inert_without_a_prune_line() {
+        let counter = WordCounter::default();
+        let output = "one two three four five six seven eight nine ten";
+        let carried = [output, output, output];
+        let plain = Budget::new(70, 0, Eviction::Turn);
+
+        let mut without = context_running(&carried, &counter);
+        let without = without.select("now this", &[], plain, &counter);
+        let mut with = context_running(&carried, &counter);
+        let with = with.select("now this", &[], plain.citing(Results::Cited), &counter);
+
+        assert_eq!(with.pruned, 0, "nothing is behind a line that never moved");
+        assert_eq!(
+            with.messages, without.messages,
+            "and the prompt is byte-identical to the arm without the flag",
+        );
+    }
+
+    /// The same guard a span's citation has, for the same reason: a line that
+    /// is not cheaper than what it replaces is not a saving.
+    #[test]
+    fn a_result_too_small_to_cite_is_left_alone() {
+        let counter = WordCounter::default();
+        let span = fragment(
+            "src/lib.rs:1-9",
+            "fn main () { let a = one two three four }",
+        );
+        let mut context = Context::new("system prompt here");
+        for n in 0..3 {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![span.clone()],
+                vec![ran("ok")],
+                &counter,
+            );
+        }
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(60, 0, Eviction::Turn)
+                .pruning(Prune::Behind)
+                .citing(Results::Cited),
+            &counter,
+        );
+
+        assert!(selection.pruned > 0, "the span is what moved the line");
+        let users = user_messages(&selection);
+        assert!(
+            users[1] == "[run_command] ok\nok",
+            "three words do not get cheaper by being cited: {users:?}",
+        );
+    }
+
+    /// The report has to be able to say why a turn is behind the line. Under
+    /// this rule a turn that selected nothing can be, which the span-only
+    /// filter would have left out of its own tombstone.
+    #[test]
+    fn the_report_names_a_turn_that_only_ran_a_tool() {
+        let counter = WordCounter::default();
+        let output = "one two three four five six seven eight nine ten";
+        let mut context = context_running(&[output, output, output], &counter);
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(70, 0, Eviction::Turn)
+                .pruning(Prune::Behind)
+                .citing(Results::Cited),
+            &counter,
+        );
+
+        let pruning = selection.pruning.expect("the line moved");
+        assert_eq!(
+            pruning.turns,
+            vec![1, 2],
+            "named rather than counted, and named though they carry no spans",
+        );
+        assert!(pruning.tokens > 0, "and the window is smaller for it");
+    }
+
+    /// The bar has to be a count of the prompt that went out — the failure that
+    /// would otherwise evict on tokens nobody sent.
+    #[test]
+    fn the_history_bucket_says_what_a_cited_window_actually_sent() {
+        let counter = WordCounter::default();
+        let output = "one two three four five six seven eight nine ten";
+        let mut context = context_running(&[output, output, output], &counter);
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(70, 0, Eviction::Turn)
+                .pruning(Prune::Behind)
+                .citing(Results::Cited),
+            &counter,
+        );
+        assert!(selection.pruned > 0, "the point of the case");
+
+        let history: u32 = selection.messages[1..selection.messages.len() - 1]
+            .iter()
+            .map(|m| counter.count(&m.content))
+            .sum();
+        let bucket = selection
+            .buckets
+            .iter()
+            .find(|b| b.name == "history")
+            .unwrap();
+        assert_eq!(bucket.tokens, history);
+    }
+
+    /// The bug this rule made visible, and it arrived with rule B rather than
+    /// with this one: a fold counted what its turns were *stored* at, and a
+    /// pruned turn is in the prompt as its citations. The fold was claiming a
+    /// saving the prune line had already taken.
+    #[test]
+    fn a_fold_does_not_claim_back_what_the_prune_line_already_took() {
+        let counter = WordCounter::default();
+        let output = "one two three four five six seven eight nine ten";
+        let mut context = Context::new("system prompt here");
+        let job = context.propose_job("run the tests", Plan::default());
+        context.approve_job(job, ApprovedBy::Operator);
+        for n in 0..3 {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![],
+                vec![ran(output)],
+                &counter,
+            );
+        }
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(70, 0, Eviction::Turn)
+                .pruning(Prune::Behind)
+                .citing(Results::Cited),
+            &counter,
+        );
+        assert!(selection.pruned > 0, "the fold has to land on pruned turns");
+
+        context.close_job(job, &counter);
+        let replaced = context.replaced_by(job).expect("the close counted it");
+
+        let stored: u32 = context
+            .turns
+            .iter()
+            .filter(|turn| turn.job == Some(job))
+            .map(|turn| context.tokens_of(turn, &counter))
+            .sum();
+        let sent: u32 = (0..context.turns.len())
+            .map(|index| {
+                context.item_tokens(&Item::Turn(index), &counter, context.pruned, context.cited)
+            })
+            .sum();
+        assert!(
+            replaced.tokens < stored,
+            "a pruned turn was not costing what it is stored at: {} against {}",
+            replaced.tokens,
+            stored,
+        );
+        assert_eq!(
+            replaced.tokens, sent,
+            "what the fold stopped sending is what the prompt was made of",
         );
     }
 }
