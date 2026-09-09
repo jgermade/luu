@@ -115,6 +115,112 @@ cat "$work/command.txt"
 has "$work/command.txt" "[1] ← ok"
 has "$work/command.txt" "held by"
 
+# 6. The whole point of the surface work: a *session* choosing the container,
+#    the way a person does it in the browser — a name in config.toml, a POST,
+#    and a tool call that runs on the far side of the pipe.
+say "a session started on a container posture"
+home="$work/home"
+mkdir -p "$home"
+cat > "$home/config.toml" <<TOML
+[provider.here]
+backend = "mock"
+model = "mock"
+
+[posture.container]
+policy = "$(pwd)/$policy"
+TOML
+
+port=7893
+# Three replies, because a prompt at the gate is three model calls: the plan a
+# person answers, the call the approved job makes, and the answer.
+LUU_HOME="$home" "$luu" serve --bind "127.0.0.1:$port" --no-store --mock-delay-ms 0 \
+  --mock-reply '```plan
+{"objective":"list a file","steps":["run ls"],"files":[],"commands":["ls"]}
+```' \
+  --mock-reply '```tool
+{"name":"run_command","arguments":{"command":"ls","args":["-1","AGENTS.md"]}}
+```' \
+  --mock-reply 'done' >"$work/serve.log" 2>&1 &
+serving=$!
+trap 'kill $serving 2>/dev/null; rm -rf "$work"' EXIT
+
+for waited in $(seq 1 60); do
+  curl -fsS "http://127.0.0.1:$port/api/settings" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+
+# It starts on the server's own policy file, which has no container in it.
+curl -fsS "http://127.0.0.1:$port/api/settings" >"$work/before.json"
+python3 -c "
+import json, sys
+before = json.load(open('$work/before.json'))
+assert before['posture']['name'] is None, before['posture']
+assert before['posture']['runtime'] == 'host', before['posture']
+print('before:', json.dumps(before['posture']))
+"
+
+# The names the page is offered, and then the session.
+curl -fsS "http://127.0.0.1:$port/api/postures" >"$work/postures.json"
+grep -q '"container"' "$work/postures.json" || { cat "$work/postures.json"; exit 1; }
+
+curl -fsS -X POST "http://127.0.0.1:$port/api/sessions" \
+  -H 'content-type: application/json' \
+  -d '{"posture":"container"}' >/dev/null
+
+curl -fsS "http://127.0.0.1:$port/api/settings" >"$work/after.json"
+python3 -c "
+import json
+after = json.load(open('$work/after.json'))
+posture = after['posture']
+assert posture['name'] == 'container', posture
+assert 'docker' in posture['runtime'], posture
+print('after: ', json.dumps(posture))
+"
+
+# And a tool call under it, over the socket the page uses. This step is the
+# whole ladder in one line: the same prompt on the *host* posture is refused on
+# a machine without Landlock — "the kernel cannot hold this child" — and it runs
+# here because the container is what provides one. Node is on every
+# GitHub runner and is not a build dependency of this repository, so its absence
+# is said out loud rather than failing the check: everything above this line has
+# already proved the container.
+if ! command -v node >/dev/null 2>&1; then
+  echo "no node on PATH: the session's own tool call is not exercised here"
+else
+node - "$port" <<'NODE' || { cat "$work/serve.log"; exit 1; }
+const port = process.argv[2]
+const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`)
+let job = null
+const done = new Promise((resolve, reject) => {
+  setTimeout(() => reject(new Error("the turn never finished")), 120000)
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "prompt", text: "list it" }))
+  })
+  ws.addEventListener("message", event => {
+    const message = JSON.parse(event.data)
+    if (message.type === "job_proposed") {
+      job = message.job
+      ws.send(JSON.stringify({
+        type: "approve_job", job, files: [], writes: [],
+        commands: ["ls"], closes_on: null,
+      }))
+    }
+    if (message.type === "tool_result") {
+      console.log("  contained call:", JSON.stringify(message.verdict))
+      if (message.error) reject(new Error(`the call failed: ${message.error}`))
+      resolve()
+    }
+    if (message.type === "failed") reject(new Error(message.message))
+  })
+})
+await done
+ws.close()
+NODE
+fi
+
+kill $serving 2>/dev/null || true
+trap 'rm -rf "$work"' EXIT
+
 say "what held it, on this machine"
 grep -o "held by [^·]*" "$work/command.txt" | head -1
 
