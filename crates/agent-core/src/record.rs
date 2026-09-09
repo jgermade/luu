@@ -59,13 +59,42 @@ use crate::trace::TraceMessage;
 /// changes is the prompt and not the conversation. See
 /// `RECORD/2026-09-08.prune-behind.completed.md`.
 ///
+/// 10: the header names the **posture** a session ran under — the policy file
+/// that decides its sandbox and its seam together. `luu.container.toml` opens by
+/// saying that probes run under it are not comparable with probes run without
+/// it, which is the same sentence `context_limit`, `counter` and `eviction` are
+/// in the header for; a posture a session chooses and the recording does not
+/// name is a corpus nobody can read back. `None` in every stream written before
+/// it. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+///
 /// 9: `job_closed` carries what the fold replaced — which turns stopped being
 /// sent, and what they were worth in the prompt they are no longer in. Additive
 /// to an existing message, which is the rule 7 was taken under, and absent means
 /// *not recorded* rather than zero. The protocol is untouched at 5: a client
 /// that ignores the field lacks a panel, it does not misread a conversation. See
 /// `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
-pub const FORMAT: u32 = 9;
+pub const FORMAT: u32 = 10;
+
+/// The posture a session ran under, as a recording names it.
+///
+/// A name and not only a name: a name is a label, and the file behind it can be
+/// edited tomorrow — `counter` is in the header as an id rather than as "the
+/// counter I thought was good", for the same reason. Three facts are enough to
+/// tell two recordings apart without copying a policy file into every stream.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Posture {
+    /// `None` when the run took the server's own policy file rather than a
+    /// posture somebody named in `config.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Where tool calls ran: `host`, `direct`, or a container runtime.
+    pub runtime: String,
+    /// What held a child process, as the policy asked for it.
+    pub enforcement: String,
+    /// Whether the session could reach the network at all. The per-job grant
+    /// narrows inside this and never widens it.
+    pub network: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]
@@ -96,6 +125,14 @@ pub enum RecordLine {
         /// the record never made.
         #[serde(default)]
         eviction: Option<Eviction>,
+        /// What this session was allowed to do: the policy file that decides
+        /// its sandbox and its seam, by name and by the three facts about it a
+        /// reader compares two runs on. Here for the reason the three fields
+        /// above are — `luu.container.toml` says in its own first paragraph that
+        /// runs under it are not comparable with runs without it — and `None` in
+        /// a stream written before format 10, or by a run that named no posture.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        posture: Option<Posture>,
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
@@ -124,6 +161,7 @@ mod tests {
             context_limit: Some(8192),
             counter: Some(Counter::Approximate),
             eviction: Some(Eviction::Turn),
+            posture: None,
             started_at: 1_700_000_000_000,
         };
         let token = RecordLine::Protocol {

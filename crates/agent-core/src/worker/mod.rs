@@ -340,6 +340,17 @@ impl Worker {
         self.restarts.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Ends this worker for good: the session that owned it is over.
+    ///
+    /// The same kill [`Worker::replace`] makes, and a different claim — nothing
+    /// is expected to start another. It is public because the container's
+    /// lifetime is supposed to *be* the session's, and until a caller could say
+    /// "this session is over" the only thing that ended one was the process
+    /// exiting. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+    pub async fn end(&self) {
+        self.replace().await;
+    }
+
     /// Ends the current worker, if there is one, and leaves the next call to
     /// start another. What [`Executor::abandon`] does here.
     async fn replace(&self) {

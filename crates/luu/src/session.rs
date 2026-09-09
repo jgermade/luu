@@ -78,6 +78,33 @@ pub struct Agency {
 }
 
 impl Agency {
+    /// This posture, as a recording names it — the three facts a reader compares
+    /// two runs on, and the name of the file they came from when a session
+    /// chose one. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+    pub fn posture(&self, name: Option<String>) -> record::Posture {
+        record::Posture {
+            name,
+            runtime: match &self.worker {
+                Some(worker) => worker.label().to_string(),
+                None => "host".to_string(),
+            },
+            enforcement: self.sandbox.enforcement().as_str().to_string(),
+            network: self.sandbox.network(),
+        }
+    }
+
+    /// Ends the worker this posture started, if it started one.
+    ///
+    /// Explicit rather than left to `kill_on_drop`, and for the reason
+    /// `Pipe::kill` gives: "eventually" is not a property worth having where the
+    /// thing being ended is a container. A session that has been replaced must
+    /// not leave one behind, which is the claim this whole seam is built on.
+    pub async fn shutdown(&self) {
+        if let Some(worker) = &self.worker {
+            worker.end().await;
+        }
+    }
+
     /// The tool definitions as they go into the cached prefix. Empty when there
     /// are no tools, so a run without them sends the same bytes it always did.
     pub fn definitions(&self) -> String {
@@ -252,6 +279,7 @@ pub fn header(
     model: &str,
     budget: Budget,
     counter: Counter,
+    posture: Option<record::Posture>,
     started_at: u64,
 ) -> RecordLine {
     RecordLine::Header {
@@ -262,6 +290,7 @@ pub fn header(
         context_limit: budget.limit,
         counter: Some(counter),
         eviction: Some(budget.eviction),
+        posture,
         started_at,
     }
 }
@@ -296,6 +325,10 @@ impl Recorder {
         model: &str,
         budget: Budget,
         counter: Counter,
+        // What the run was allowed to do, so a `--record` file can be read
+        // back against another one. See
+        // `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+        posture: Option<record::Posture>,
         started_at: u64,
     ) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -308,7 +341,7 @@ impl Recorder {
             .await
             .with_context(|| format!("creating {}", path.display()))?;
 
-        let header = header(backend, model, budget, counter, started_at);
+        let header = header(backend, model, budget, counter, posture, started_at);
         file.write_all(format!("{}\n", serde_json::to_string(&header)?).as_bytes())
             .await?;
 

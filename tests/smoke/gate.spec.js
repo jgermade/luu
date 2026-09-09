@@ -1,7 +1,7 @@
 // @ts-check
 import { expect, test } from "@playwright/test"
 import { spawn } from "node:child_process"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -72,6 +72,22 @@ test.beforeAll(async () => {
   // Its own state directory, so the run reads no `config.toml` of the person
   // running it and writes nothing into theirs.
   home = mkdtempSync(join(tmpdir(), "luu-gate-"))
+  // And one posture in it, so the starter dialog has something to offer. The
+  // policy file is wider than the server's own in the one way the page shows —
+  // `network` — so "which one is in force" is answerable from the browser.
+  writeFileSync(
+    join(home, "wide.toml"),
+    '[sandbox]\nnetwork = true\ncommands = ["ls"]\n\n' +
+      '[[sandbox.paths]]\npath = "."\naccess = "read-write"\n',
+  )
+  // A provider as well as the posture: the dialog offers what a session may do
+  // beside where it sends, and a session can only be started somewhere this
+  // machine has already named.
+  writeFileSync(
+    join(home, "config.toml"),
+    '[provider.here]\nbackend = "mock"\nmodel = "mock"\n\n' +
+      `[posture.wide]\npolicy = "${join(home, "wide.toml")}"\n`,
+  )
   server = spawn(
     binary(),
     [
@@ -247,4 +263,49 @@ test("the inspector can be pointed at a turn that has ended", async ({ page }) =
   await expect(page.locator(".reading")).toHaveCount(0)
 
   expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * A session picks what it may do, at the one moment it can — the same dialog
+ * that asks where it sends. **Last in the file on purpose**: these tests share
+ * one server, and starting a session ends the one the tests above are reading.
+ * See
+ * `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+ */
+test("a session is started on a posture, and the page says which", async ({ page }) => {
+  await page.goto(`${BASE}/index.html`)
+  const modal = page.locator(".modal-backdrop").first()
+  await expect(modal).toBeVisible({ timeout: 15_000 })
+
+  // The server's own policy file, before anything is chosen.
+  await expect(page.locator("dt", { hasText: "Posture" }).first()).toBeVisible()
+  await expect(page.locator(".settings dd").filter({ hasText: "this server's own" }))
+    .toBeVisible()
+  await modal.locator("button.link", { hasText: "close" }).click()
+  await expect(modal).toBeHidden()
+
+  await page.click('.session-ctrls button:has-text("+ New")')
+  const starter = page.locator(".modal.narrow")
+  await expect(starter).toBeVisible()
+
+  // Offered by name, out of config.toml. The page cannot add to the list: a
+  // posture is a policy file, and one the browser could write is a sandbox the
+  // browser could widen.
+  const picker = starter.locator("select").last()
+  await expect(picker.locator("option")).toHaveText([
+    "this server's own policy file",
+    "wide",
+  ])
+  await picker.selectOption("wide")
+  await starter.locator('button:has-text("Start session")').click()
+  await expect(starter).toBeHidden({ timeout: 30_000 })
+
+  // And it is in force: the modal's first section is what this server
+  // resolved, and it resolved the file the posture named.
+  await page.click('header button.tag-btn >> nth=0')
+  await expect(page.locator(".modal-backdrop").first()).toBeVisible()
+  const said = page.locator(".settings")
+  await expect(said).toContainText("wide")
+  await expect(said).toContainText("network allowed")
+  await expect(page.locator("pre.sandbox")).toContainText("ls")
 })

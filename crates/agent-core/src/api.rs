@@ -585,6 +585,7 @@ mod tests {
                 context_limit: Some(8192),
                 counter: Some(Counter::Model { id: "mock".into() }),
                 eviction: Some(crate::context::Eviction::Turn),
+                posture: None,
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {

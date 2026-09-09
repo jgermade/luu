@@ -878,7 +878,7 @@ fn write_private(path: &std::path::Path, text: &str) -> Result<()> {
 /// widening a project's sandbox for one run is a flag and narrowing it is an
 /// edit to the file — which is the direction that should be the harder one.
 #[derive(Clone, clap::Args)]
-struct SandboxArgs {
+pub(crate) struct SandboxArgs {
     /// Sandbox policy (TOML). Defaults to ./luu.toml when it is there.
     #[arg(long, value_name = "FILE")]
     sandbox: Option<std::path::PathBuf>,
@@ -980,6 +980,24 @@ impl SandboxArgs {
                 Approvers::from_file(&path).with_context(|| format!("reading {}", path.display()))
             }
             false => Ok(Approvers::default()),
+        }
+    }
+
+    /// The same resolution, against a policy file a *session* named rather than
+    /// the one this process was started with.
+    ///
+    /// A clone with one field replaced, so every other flag — the extra grants,
+    /// the enforcement override, the worker runtime and image — means what it
+    /// meant, and the rule that an explicit policy file must exist is the same
+    /// rule. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+    pub(crate) async fn resolve_posture(&self, policy: Option<&std::path::Path>) -> Result<Agency> {
+        match policy {
+            None => self.resolve().await,
+            Some(path) => {
+                let mut args = self.clone();
+                args.sandbox = Some(path.to_path_buf());
+                args.resolve().await
+            }
         }
     }
 
@@ -1621,6 +1639,17 @@ pub async fn run() -> Result<()> {
         }
         let approvers = sandbox_args.approvers()?;
         let agency = sandbox_args.resolve().await?;
+        // The postures this machine names, beside the providers and out of the
+        // same file. A config that will not load is not a reason to refuse to
+        // serve: it is already reported where the providers are, and a machine
+        // with none simply offers none.
+        let (postures, postures_path) = match crate::provider::Config::load() {
+            Ok((config, path)) => (
+                config.postures().clone(),
+                path.map(|path| path.display().to_string()),
+            ),
+            Err(_) => (Default::default(), None),
+        };
         eprint!("{}", agency.describe());
         if approvers.required {
             eprintln!(
@@ -1659,6 +1688,25 @@ pub async fn run() -> Result<()> {
             counter,
             tokenizer,
             agency,
+            // How a session's posture is built, as a function: the same
+            // flags with one field replaced, so every other one means what it
+            // meant. Only `serve` gets it — over stdio the process is the
+            // session, and its policy file is a flag.
+            // Read once, here: what a session may choose should not change
+            // under the surface that is offering it, which is the rule the
+            // modal's first section states about everything else this run
+            // resolved. A posture added to `config.toml` is offered by the
+            // next run.
+            postures: postures.clone(),
+            postures_path: postures_path.clone(),
+            agency_for: Some({
+                let args = sandbox_args.clone();
+                std::sync::Arc::new(move |policy: Option<std::path::PathBuf>| {
+                    let args = args.clone();
+                    Box::pin(async move { args.resolve_posture(policy.as_deref()).await })
+                        as futures_util::future::BoxFuture<'static, Result<_>>
+                })
+            }),
             temperature,
             seed,
             store,
@@ -1751,6 +1799,11 @@ pub async fn run() -> Result<()> {
             counter,
             tokenizer,
             agency,
+            // `None`: over stdio the process *is* the session, so its policy
+            // file is a flag and a session has nothing to choose.
+            agency_for: None,
+            postures: Default::default(),
+            postures_path: None,
             temperature,
             seed,
             store,
@@ -1844,6 +1897,9 @@ pub async fn run() -> Result<()> {
                 &model,
                 budget,
                 counter.id(),
+                // A one-shot names no posture: its policy file is the flag it
+                // was given, and the three facts are what that resolved to.
+                Some(agency.posture(None)),
                 started_at,
             )
             .await?,

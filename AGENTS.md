@@ -150,6 +150,17 @@ cargo run --bin luu -- key new --out ~/.luu/approval.key --name jgermade
 echo '{"type":"approve_job","job":1,"files":["Cargo.toml"]}' \
   | cargo run --bin luu -- key sign --key ~/.luu/approval.key --session <id> --as jgermade
 
+# what a *session* may do, chosen when it starts: `[posture.<name>]` in the
+# state directory's config.toml names a policy file, and `serve` offers the
+# names to the page. The posture decides the sandbox and the seam together,
+# because one file decides both.
+#
+#   [posture.container]
+#   policy = "luu.container.toml"
+#
+# A resume may not move it: a destination is where a session sends and a posture
+# is what it may do, and its jobs were approved against this one.
+
 # level 3: the same run, with every tool call executed inside a container.
 # `--worker direct` is the same seam with no container at all, which is how the
 # IPC gets tested where no runtime is installed.

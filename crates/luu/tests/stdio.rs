@@ -35,6 +35,11 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
     let counter = Arc::new(ApproximateCounter);
     let budget = Budget::new(0, 512, Eviction::Turn);
     StdioOptions {
+        // Over stdio the process is the session: nothing here chooses a
+        // posture, so there is nothing to build one from and nothing to offer.
+        agency_for: None,
+        postures: Default::default(),
+        postures_path: None,
         provider: luu::provider::Resolved::mock(),
         counter_warning: None,
         approvers: Default::default(),

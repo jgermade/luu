@@ -7,7 +7,7 @@
           newSession, resumeSession, deleteSession,
           openSettings, closeSettings, saveProviders,
           loadProviders, providerModels, checkConfigured,
-          panel, selectTurn } = await import("./store.js")
+          panel, selectTurn, loadPostures } = await import("./store.js")
 
   connect()
 
@@ -155,6 +155,10 @@
 
   const openStarter = async provider => {
     if (!state.providers) await loadProviders()
+    // What this session may be allowed to do, offered beside where it sends —
+    // and chosen at the same moment, because it is the only one there is: a
+    // posture is what a session's jobs are approved against, so it never moves.
+    if (!state.postures) await loadPostures()
     continuing = false
     const names = Object.keys(state.providers?.providers || {})
     const chosen = provider
@@ -162,7 +166,17 @@
       || state.providers?.default
       || names[0]
       || ""
-    starter = { provider: chosen, model: "", models: [], reason: null, from: null, loading: false }
+    starter = {
+      provider: chosen,
+      model: "",
+      models: [],
+      reason: null,
+      from: null,
+      loading: false,
+      // "" is the server's own policy file, which is what every session got
+      // before a session could choose.
+      posture: "",
+    }
     if (chosen) await loadModels(chosen)
   }
   // The list is fetched from the provider itself, so it is what is *pulled*
@@ -184,7 +198,11 @@
   const closeStarter = () => { starter = null; continuing = false }
   const startSession = async () => {
     starting = true
-    const ok = await newSession({ provider: starter.provider, model: starter.model })
+    const ok = await newSession({
+      provider: starter.provider,
+      model: starter.model,
+      posture: starter.posture || undefined,
+    })
     starting = false
     if (ok) {
       starter = null
@@ -227,6 +245,11 @@
   })()
 
   $: profileNames = Object.keys(state.providers?.providers || {})
+  // Empty where nobody has written a posture down, and where a surface cannot
+  // choose one at all — over stdio the process is the session.
+  $: postureNames = state.postures?.choosable
+    ? Object.keys(state.postures?.postures || {})
+    : []
   // What stands in the way of continuing the session on screen, or "" when
   // nothing does. A control that cannot work says why rather than failing when
   // it is pressed.
@@ -450,6 +473,15 @@
           <span :if="!state.settings.store" class="dim">in memory only</span>
         </dd>
 
+        <dt>Posture</dt>
+        <dd>
+          <span :if="state.settings.posture?.name" class="tag">{{ state.settings.posture?.name }}</span>
+          <span :if="!state.settings.posture?.name" class="dim">this server's own policy file</span>
+          <span class="dim">{{ state.settings.posture?.runtime }}</span>
+          <span class="dim">· {{ state.settings.posture?.enforcement }}</span>
+          <span :if="state.settings.posture?.network" class="warn">· network allowed</span>
+        </dd>
+
         <dt>Sandbox</dt>
         <dd><pre class="sandbox">{{ state.settings.sandbox }}</pre></dd>
       </dl>
@@ -584,6 +616,22 @@
         <dd :if="starter?.reason" class="caveat">
           Could not list this provider's models: {{ starter?.reason }}. Type one —
           a model that is not pulled yet is still a name worth writing down.
+        </dd>
+
+        <!-- What the session may do, which is not where it sends. Offered only
+             where somebody has written one down: the names come from
+             `config.toml`, and a page cannot add to them. -->
+        <dt :if="postureNames.length">Posture</dt>
+        <dd :if="postureNames.length">
+          <select :value="starter?.posture"
+                  @change="starter = { ...starter, posture: $event.target.value }">
+            <option value="">this server's own policy file</option>
+            <option :each="name in postureNames" :key="name" :value="name">{{ name }}</option>
+          </select>
+        </dd>
+        <dd :if="postureNames.length && starter?.posture" class="dim small">
+          {{ state.postures?.postures[starter?.posture]?.policy }} — chosen now
+          and never moved: a session's jobs are approved against what it may do.
         </dd>
         <dd :if="!starter?.reason && !starter?.loading && !starter?.models?.length" class="dim">
           This provider offers no list, so the model is whatever you type.

@@ -19,7 +19,7 @@ import { $reactive } from "./vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 5
-const FORMAT = 9
+const FORMAT = 10
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -74,6 +74,9 @@ export const state = $reactive({
   // reading turn 3 while turn 9 runs keeps reading turn 3: the view moves when
   // they move it.
   selectedTurn: null,
+  // `{ path, choosable, running, postures }` — what a new session may be
+  // allowed to do, or `null` where nothing has asked yet.
+  postures: null,
   // The last cut the window made. Kept beside the budget rather than inside it:
   // the buckets say what the prompt is worth, this says what stopped being in
   // it. Null in a session that never filled its window.
@@ -719,6 +722,22 @@ export async function openSettings() {
   await loadProviders()
 }
 
+/// What a session may be started under, by name.
+///
+/// Read-only: a posture is a policy file, and a page that could write one would
+/// be a page that could widen its own sandbox. The names come from
+/// `config.toml`, read by the server when it started. See
+/// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+export async function loadPostures() {
+  try {
+    const res = await fetch("./api/postures", { headers: apiHeaders() })
+    if (!res.ok) return
+    state.postures = await res.json()
+  } catch {
+    // A static twin has no server behind it, and no session to start either.
+  }
+}
+
 /// The providers file, without opening anything.
 ///
 /// The session starter needs the list of profiles and is not the modal, which
@@ -882,7 +901,8 @@ export async function refreshSessionsList() {
 /// never a URL: what may be chosen is bounded by what somebody wrote on this
 /// machine.
 export async function newSession(choice) {
-  const asked = choice && (choice.provider || choice.model) ? choice : null
+  const asked =
+    choice && (choice.provider || choice.model || choice.posture) ? choice : null
   try {
     const res = await fetch("./api/sessions", {
       method: "POST",

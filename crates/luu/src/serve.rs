@@ -119,7 +119,29 @@ struct App {
     session: Mutex<Session>,
     events: broadcast::Sender<Event>,
     recorder: Option<Recorder>,
-    agency: Agency,
+    /// What this session is allowed to do, and where its tools run. Behind a
+    /// lock for the same reason `destination` is: a session chooses it when it
+    /// starts, and the choice is the session's rather than the process's. See
+    /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+    agency: RwLock<Arc<Agency>>,
+    /// The posture the live session named, or `None` for the server's own
+    /// policy file.
+    posture: Mutex<Option<String>>,
+    /// How a session's posture is built: given a policy file, an agency.
+    ///
+    /// A function rather than the flags themselves, so this file knows nothing
+    /// about the command line and a test can hand it one. `None` where sessions
+    /// cannot choose a posture — over stdio, where the process is the session.
+    agency_for: Option<AgencyFactory>,
+    /// The postures this machine names, read when the server started.
+    ///
+    /// Resolved once rather than per request, and it is the same rule the
+    /// modal's first section states about everything else this server decided:
+    /// what a session may choose should not change under the surface that is
+    /// offering it. A posture added to `config.toml` is offered by the next run.
+    postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+    /// Where those came from, for the page to name.
+    postures_path: Option<String>,
     /// Pinned sampling, forwarded to every call the same way `budget` is.
     /// `None` leaves it to the server's own default.
     temperature: Option<f32>,
@@ -170,6 +192,18 @@ struct App {
     approvers: Approvers,
 }
 
+/// Given the policy file a session named — or `None` for the server's own — the
+/// agency that is it: the sandbox, the tools, the limits and the worker.
+///
+/// Boxed because it outlives the call that made it and is shared by every
+/// session, and a function because `serve` should not know what a command line
+/// is. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+pub type AgencyFactory = Arc<
+    dyn Fn(Option<PathBuf>) -> futures_util::future::BoxFuture<'static, Result<Agency>>
+        + Send
+        + Sync,
+>;
+
 /// What this server resolved at startup, for the surface a person works in.
 ///
 /// **Nothing here is new information.** Every field was decided before the
@@ -198,6 +232,12 @@ pub struct Settings {
     select_tokens: u32,
     map_tokens: u32,
     sandbox: String,
+    /// What this session is allowed to do, by the name it was chosen under and
+    /// the three facts a reader compares two runs on. Filled at the route from
+    /// the *live* agency rather than carried in the destination: a posture is
+    /// the session's, and a session can change it by starting another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    posture: Option<record::Posture>,
     store: Option<String>,
     /// Nothing has said where this run sends — see
     /// [`crate::provider::DestinationFrom`]. The page opens on the providers
@@ -263,6 +303,15 @@ pub struct StdioOptions {
     /// model and this is the only thing that answers how to build one.
     pub tokenizer: Option<PathBuf>,
     pub agency: Agency,
+    /// How to build the agency for a posture a session names. `None` over
+    /// stdio, where the process is the session and its policy file is a flag.
+    pub agency_for: Option<AgencyFactory>,
+    /// `[posture.<name>]` out of `config.toml`, read once when this run
+    /// started.
+    pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+    /// Where the file is, for the page to name. `None` on a machine with no
+    /// state directory.
+    pub postures_path: Option<String>,
     /// `[approvals]` from the same file the sandbox came from: who may approve,
     /// and whether anyone must sign to.
     pub approvers: Approvers,
@@ -299,6 +348,9 @@ impl App {
             counter,
             tokenizer,
             agency,
+            agency_for,
+            postures,
+            postures_path,
             temperature,
             seed,
             map_tokens,
@@ -360,6 +412,7 @@ impl App {
                     &model,
                     budget,
                     counter.id(),
+                    Some(agency.posture(None)),
                     started_at,
                 )
                 .await?,
@@ -407,9 +460,15 @@ impl App {
             select_tokens,
             map_tokens,
             sandbox: agency.describe(),
+            // Filled at the route, from whatever the live session is running.
+            posture: None,
             store: store.as_ref().map(|path| path.display().to_string()),
             unconfigured: provider.unconfigured(),
         };
+        // One `Arc` for the field and the header both: the posture line is a
+        // fact about this agency, and building it after the move would need a
+        // second one.
+        let agency = Arc::new(agency);
         Ok(Arc::new(App {
             destination: RwLock::new(Arc::new(Destination {
                 backend,
@@ -436,7 +495,11 @@ impl App {
             }),
             events: broadcast::channel(1024).0,
             recorder,
-            agency,
+            agency: RwLock::new(agency.clone()),
+            posture: Mutex::new(None),
+            agency_for,
+            postures,
+            postures_path,
             temperature,
             seed,
             view: Mutex::new({
@@ -456,6 +519,7 @@ impl App {
                 &model_name,
                 budget,
                 counter_id,
+                Some(agency.posture(None)),
                 started_at,
             )]),
         }))
@@ -468,6 +532,15 @@ impl App {
     /// against the one writer in `create_session`.
     async fn destination(&self) -> Arc<Destination> {
         self.destination.read().await.clone()
+    }
+
+    /// What this session may do and where its tools run, as a cheap clone.
+    ///
+    /// Beside [`App::destination`] and for its reason: the guard is never held
+    /// across an `await`, because the writer is `create_session` and the readers
+    /// are every turn.
+    async fn agency(&self) -> Arc<Agency> {
+        self.agency.read().await.clone()
     }
 
     /// Publishes one event to every client and to the record, in that order.
@@ -589,6 +662,15 @@ pub struct ServeOptions {
     /// The `--tokenizer` path, if one was given. See [`StdioOptions::tokenizer`].
     pub tokenizer: Option<PathBuf>,
     pub agency: Agency,
+    /// How to build the agency for a posture a session names. `None` over
+    /// stdio, where the process is the session and its policy file is a flag.
+    pub agency_for: Option<AgencyFactory>,
+    /// `[posture.<name>]` out of `config.toml`, read once when this run
+    /// started.
+    pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+    /// Where the file is, for the page to name. `None` on a machine with no
+    /// state directory.
+    pub postures_path: Option<String>,
     /// `[approvals]` from the same file the sandbox came from: who may approve,
     /// and whether anyone must sign to.
     pub approvers: Approvers,
@@ -658,6 +740,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         counter,
         tokenizer,
         agency,
+        agency_for,
+        postures,
+        postures_path,
         temperature,
         seed,
         map_tokens,
@@ -684,6 +769,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         counter,
         tokenizer,
         agency,
+        agency_for,
+        postures,
+        postures_path,
         temperature,
         seed,
         map_tokens,
@@ -721,6 +809,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/providers", get(get_providers).put(put_providers))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/{name}/models", get(get_provider_models))
+        .route("/api/postures", get(get_postures))
+        .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions.json", get(list_sessions))
         .route(
@@ -1353,7 +1443,7 @@ async fn approve_job(
         match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.job == job) {
             true => {
                 let (granted, mut dropped) = permitted(
-                    &app.agency.sandbox,
+                    &app.agency().await.sandbox,
                     files,
                     writes,
                     commands,
@@ -1365,7 +1455,7 @@ async fn approve_job(
                 // command the model already declared more often than for one
                 // they are adding in the same breath.
                 let (closes_on, refused) = closing_condition(
-                    &app.agency.sandbox,
+                    &app.agency().await.sandbox,
                     session.context.job(job).map(|t| &t.plan),
                     &granted,
                     closes_on,
@@ -1426,7 +1516,7 @@ async fn approve_job(
     // The job's own sandbox, from here until it closes. A plan that names
     // nothing narrows to nothing, which is the point: a turn inside a job may
     // touch what the job was approved for.
-    let narrowed = match plan.narrow(app.agency.sandbox.as_ref(), job) {
+    let narrowed = match plan.narrow(app.agency().await.sandbox.as_ref(), job) {
         Ok(sandbox) => Some(Arc::new(sandbox)),
         // Only a path that stopped existing between the check and here can do
         // this. Falling back to the session's sandbox would silently un-narrow
@@ -1653,6 +1743,9 @@ async fn close_job(app: Arc<App>, job: JobId) {
 
 /// Unfolds it. Nothing is recovered, because nothing was deleted.
 async fn reopen_job(app: Arc<App>, job: JobId) {
+    // Taken before the session lock, because the two are never held in the same
+    // order anywhere else either.
+    let reopening = app.agency().await;
     {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
@@ -1680,9 +1773,10 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
         // Live again, so its plan is the authority again. Rebuilt rather than
         // remembered: the sandbox is a resolution of the plan, and the plan is
         // what the session keeps.
+        let agency = reopening;
         let plan = session.context.job(job).map(|job| job.plan.clone());
         session.narrowed = plan
-            .and_then(|plan| plan.narrow(app.agency.sandbox.as_ref(), job).ok())
+            .and_then(|plan| plan.narrow(agency.sandbox.as_ref(), job).ok())
             .map(|sandbox| (job, Arc::new(sandbox)));
     }
     app.publish(Event::Protocol(ServerMessage::JobReopened { job }))
@@ -1709,6 +1803,10 @@ async fn begin_turn(
     // built, measured and sent against **one** destination, and the swap in
     // `create_session` cannot happen inside one anyway.
     let sending = app.destination().await;
+    // The session's posture, for the same reason and taken the same way: what a
+    // turn may read is decided by the plan when there is one and by this when
+    // there is not.
+    let agency = app.agency().await;
     let (turn, job, cancel_rx, selection, prompt_sent, reuse, code) = {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
@@ -1743,7 +1841,7 @@ async fn begin_turn(
             tokens => {
                 let sandbox = match &session.narrowed {
                     Some((_, sandbox)) => sandbox.clone(),
-                    None => app.agency.sandbox.clone(),
+                    None => agency.sandbox.clone(),
                 };
                 // Re-stamped before it is scored, because the walk is a cache
                 // of line numbers and this turn may be answering after an edit
@@ -1758,7 +1856,7 @@ async fn begin_turn(
                 // fires.
                 let mut walked = app.walked.lock().await;
                 let previous = std::mem::take(&mut *walked);
-                let agency = app.agency.sandbox.clone();
+                let agency = agency.sandbox.clone();
                 let rewalked = match tokio::task::spawn_blocking(move || {
                     agent_core::repo_map::rewalk_sources(agency.as_ref(), &previous)
                 })
@@ -1877,6 +1975,9 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     };
     // The same destination the request was built against. See [`Destination`].
     let sending = app.destination().await;
+    // And the same posture: what a turn may do is decided when its session
+    // starts, so it is read once here rather than per lock.
+    let agency = app.agency().await;
 
     // Inside a task, the plan it was approved with is what holds this turn;
     // outside one, the policy file. A turn is never checked against both.
@@ -1884,7 +1985,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let session = app.session.lock().await;
         match (session.context.live_task(), &session.narrowed) {
             (Some(live), Some((task, sandbox))) if live == *task => sandbox.clone(),
-            _ => app.agency.sandbox.clone(),
+            _ => agency.sandbox.clone(),
         }
     };
 
@@ -1937,9 +2038,9 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let outcome = run_agent_turn(
             sending.backend.as_ref(),
             request,
-            app.agency.executor(),
+            agency.executor(),
             sandbox.as_ref(),
-            app.agency.limits,
+            agency.limits,
             tx,
             cancel_rx,
         )
@@ -2028,7 +2129,45 @@ fn not_found(what: &str) -> Response {
 /// Everything here was already decided before the listener existed and printed
 /// once to stderr. The page is where a person actually is.
 async fn get_settings(State(state): State<AppRouterState>) -> Response {
-    Json(state.app.destination().await.settings.clone()).into_response()
+    let app = &state.app;
+    let mut settings = app.destination().await.settings.clone();
+    // The sandbox is the *session's* now, so it is read here rather than
+    // carried from the destination that was resolved when the process started.
+    let name = app.posture.lock().await.clone();
+    let agency = app.agency().await;
+    settings.sandbox = agency.describe();
+    settings.posture = Some(agency.posture(name));
+    Json(settings).into_response()
+}
+
+/// The postures a session may be started on, as the page offers them.
+#[derive(serde::Serialize)]
+struct PosturesView {
+    /// Where the file is, or `None` on a machine with no state directory.
+    path: Option<String>,
+    /// Whether a session may choose one here at all. False over stdio, where
+    /// the process is the session.
+    choosable: bool,
+    /// The posture the live session named, when it named one.
+    running: Option<String>,
+    postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+}
+
+/// What a session may be allowed to do, by name.
+///
+/// Read-only, and deliberately so: a posture is a policy file, and a page that
+/// could write one would be a page that could widen its own sandbox. The names
+/// are added to `config.toml` by whoever owns the machine — the same hand that
+/// writes the policy files they point at.
+async fn get_postures(State(state): State<AppRouterState>) -> Response {
+    let app = &state.app;
+    Json(PosturesView {
+        path: app.postures_path.clone(),
+        choosable: app.agency_for.is_some(),
+        running: app.posture.lock().await.clone(),
+        postures: app.postures.clone(),
+    })
+    .into_response()
 }
 
 /// The providers file, as the editor sees it.
@@ -2216,7 +2355,14 @@ async fn put_providers(
         )
             .into_response();
     };
-    let config = crate::provider::Config::from_parts(edit.default, edit.providers);
+    // Built from the file as it is on disk, so the postures it names survive an
+    // edit to the providers: the page writes one table and must not delete the
+    // other. A file that will not load is not a reason to refuse the write
+    // either — the writer checks that itself, with the loader's own rules.
+    let current = crate::provider::Config::load()
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let config = current.from_parts(edit.default, edit.providers);
     // Checked by the loader that will read it back, so the rule a remote
     // default has to declare itself is enforced here by being the same rule.
     if let Err(error) = config.write(&path) {
@@ -2257,9 +2403,10 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     Json(sessions).into_response()
 }
 
-/// What a new session may choose: where it sends, and which model there.
+/// What a new session may choose: where it sends, which model there, and what
+/// it is allowed to do while it is there.
 ///
-/// Both optional and both absent is what every client sent before this existed,
+/// All optional and all absent is what every client sent before these existed,
 /// and it keeps meaning *the session this server is already pointed at*.
 #[derive(Debug, Default, serde::Deserialize)]
 struct NewSession {
@@ -2267,6 +2414,10 @@ struct NewSession {
     /// bounded by what somebody wrote on this machine.
     provider: Option<String>,
     model: Option<String>,
+    /// A posture name out of the same file. Never a path, and never a runtime
+    /// and an image, for the same reason `provider` is never a URL. See
+    /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+    posture: Option<String>,
 }
 
 /// The body both session routes take, which is allowed to be absent.
@@ -2280,6 +2431,52 @@ fn asked_for(body: &axum::body::Bytes) -> Result<NewSession, (StatusCode, String
         false => serde_json::from_slice(body)
             .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error}"))),
     }
+}
+
+/// The posture a new session asked for, resolved into the agency that is it.
+///
+/// Nothing is swapped here: like the destination, it is built **before**
+/// anything is reset, so a posture whose image is not built or whose runtime is
+/// not installed leaves the session that is running exactly as it was.
+///
+/// A session that names none still gets a fresh one, out of the policy file
+/// this server was started with — so a new session picks up an edited
+/// `luu.toml`, and never inherits the container the previous one was using.
+async fn posture_for(
+    app: &App,
+    asked: Option<&str>,
+) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
+    let Some(build) = &app.agency_for else {
+        return match asked {
+            None => Ok((app.posture.lock().await.clone(), app.agency().await)),
+            Some(name) => Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "this surface cannot choose a posture, so `{name}` cannot be honoured here:                      over stdio the process is the session, and its policy file is a flag"
+                ),
+            )),
+        };
+    };
+    let policy = match asked {
+        None => None,
+        Some(name) => match app.postures.get(name) {
+            Some(posture) => Some(posture.policy.clone()),
+            None => {
+                let where_from = app
+                    .postures_path
+                    .clone()
+                    .unwrap_or_else(|| "config.toml".to_string());
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("there is no [posture.{name}] in {where_from}"),
+                ));
+            }
+        },
+    };
+    let agency = build(policy)
+        .await
+        .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error:#}")))?;
+    Ok((asked.map(str::to_string), Arc::new(agency)))
 }
 
 /// The line that says the rest of this stream was produced somewhere else.
@@ -2297,15 +2494,19 @@ fn retarget_header(
     view: &SessionView,
     sending: &Destination,
     counter: agent_core::context::Counter,
+    posture: record::Posture,
 ) -> Option<record::RecordLine> {
     let same = view.backend == sending.backend.name() && view.model == sending.model;
     match same {
         true => None,
+        // The posture is the one already in place: a resume moves where a
+        // session *sends* and never what it may *do* — see `resume_session`.
         false => Some(crate::session::header(
             sending.backend.name(),
             &sending.model,
             sending.budget,
             counter,
+            Some(posture),
             view.started_at,
         )),
     }
@@ -2417,7 +2618,23 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
             }
         }
     };
+    // And the same rule for what it may do: built before anything is reset, so
+    // a runtime that is not installed or an image that is not built refuses the
+    // *new* session rather than ending the one that is running.
+    let (posture_name, agency) = match posture_for(app, asked.posture.as_deref()).await {
+        Ok(resolved) => resolved,
+        Err((status, message)) => return (status, message).into_response(),
+    };
     *app.destination.write().await = sending.clone();
+    // The previous posture is ended rather than dropped: the thing being ended
+    // may be a container, and `kill_on_drop` would get to it eventually. Skipped
+    // when the resolver handed back the one already in place, which is what a
+    // surface that cannot choose a posture always gets.
+    let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
+    if !Arc::ptr_eq(&previous, &agency) {
+        previous.shutdown().await;
+    }
+    *app.posture.lock().await = posture_name.clone();
 
     let started_at = now_ms();
     let new_id = session_id(started_at);
@@ -2431,6 +2648,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         &sending.model,
         sending.budget,
         sending.counter.id(),
+        Some(agency.posture(posture_name)),
         started_at,
     )];
 
@@ -2440,7 +2658,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         session.current = None;
         session.cancel = None;
         session.context = AgentContext::new(SYSTEM)
-            .with_tools(app.agency.definitions())
+            .with_tools(app.agency().await.definitions())
             .with_map(&app.map_rendered);
         session.prefix = PrefixTracker::default();
         session.pending = None;
@@ -2487,6 +2705,20 @@ async fn resume_session(
         Ok(asked) => asked,
         Err((status, message)) => return (status, message).into_response(),
     };
+    // A destination may move under a history; a posture may not. What a session
+    // is allowed to do is what its jobs were approved against, and moving it
+    // under an open plan would widen or narrow a grant a person already
+    // answered for at the gate. See
+    // `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+    if let Some(name) = &asked.posture {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "a session cannot be moved to posture `{name}`: a destination is where a session                  sends and a posture is what it may do, and its jobs were approved against this                  one. Start a session on `{name}` instead."
+            ),
+        )
+            .into_response();
+    }
 
     {
         let session = app.session.lock().await;
@@ -2515,6 +2747,11 @@ async fn resume_session(
 
     app.checkpoint().await;
 
+    // Read before the store lock: the tool block is the same for every posture
+    // — the definitions never move, because they are the second half of the
+    // cached prefix — and asking for it inside the lock would be an await
+    // holding a guard that cannot cross a thread.
+    let definitions = app.agency().await.definitions();
     let (loaded_view, resumed_context) = {
         let store = store_mutex.lock().await;
         let Some(view) = (match store.load(id) {
@@ -2527,7 +2764,7 @@ async fn resume_session(
         let Some(context) = (match store.resume(
             id,
             SYSTEM,
-            app.agency.definitions(),
+            definitions,
             &app.map_rendered,
             sending.counter.as_ref(),
         ) {
@@ -2547,12 +2784,18 @@ async fn resume_session(
     // Its own clock, and its own stream: appends continue the one the store
     // already holds rather than starting a second one under the same name.
     *app.session_started_at.lock().await = loaded_view.started_at;
+    // The posture is the one already in place — a resume moves where a session
+    // sends and never what it may do — and it is read before the stream lock,
+    // because nothing in this file holds two locks across an await.
+    let posture_name = app.posture.lock().await.clone();
+    let posture = app.agency().await.posture(posture_name);
     {
         let mut stream = app.stream.lock().await;
         stream.clear();
         // The one line this route writes. It says the rest of these turns were
         // produced somewhere else, and it is absent when they were not.
-        if let Some(header) = retarget_header(&loaded_view, &sending, sending.counter.id()) {
+        if let Some(header) = retarget_header(&loaded_view, &sending, sending.counter.id(), posture)
+        {
             stream.push(header);
         }
     }
@@ -2791,6 +3034,7 @@ mod tests {
                     select_tokens,
                     map_tokens: 0,
                     sandbox: String::new(),
+                    posture: None,
                     store: None,
                     unconfigured: true,
                 },
@@ -2807,7 +3051,14 @@ mod tests {
             }),
             events: broadcast::channel(1024).0,
             recorder: None,
-            agency,
+            agency: RwLock::new(Arc::new(agency)),
+            posture: Mutex::new(None),
+            // These tests build an `App` directly, and none of them starts a
+            // session on a posture: a `None` here is the same answer stdio
+            // gets, and the route says so rather than pretending.
+            agency_for: None,
+            postures: Default::default(),
+            postures_path: None,
             temperature: None,
             seed: None,
             view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
@@ -2849,6 +3100,7 @@ mod tests {
                 select_tokens: 0,
                 map_tokens: 0,
                 sandbox: String::new(),
+                posture: None,
                 store: None,
                 unconfigured: false,
             },
@@ -2856,13 +3108,22 @@ mod tests {
 
         let mut view = SessionView::new("s", "mock", "mock");
         view.started_at = 1_700_000_000_000;
+        // The posture is carried, not compared: a resume moves where a session
+        // sends and never what it may do.
+        let posture = || record::Posture {
+            name: None,
+            runtime: "host".into(),
+            enforcement: "kernel".into(),
+            network: false,
+        };
 
         // The same destination the stream already names: nothing to say.
         assert!(
             retarget_header(
                 &view,
                 &sending("mock", "mock"),
-                agent_core::context::Counter::Approximate
+                agent_core::context::Counter::Approximate,
+                posture(),
             )
             .is_none(),
             "a resume that changed nothing must not write a line saying it did",
@@ -2874,6 +3135,7 @@ mod tests {
             &view,
             &sending("mock", "other"),
             agent_core::context::Counter::Approximate,
+            posture(),
         )
         .expect("the destination moved, so the stream has to say so");
         match moved {
@@ -3206,7 +3468,7 @@ mod tests {
         const ASK: &str = "the session store, the http server and the exporter";
         let unnarrowed = agent_core::select::select(
             &walked,
-            app.agency.sandbox.as_ref(),
+            app.agency().await.sandbox.as_ref(),
             ASK,
             2048,
             app.destination().await.counter.as_ref(),

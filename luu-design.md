@@ -631,14 +631,30 @@ access = "execute"
   default seccomp profile. Until 2026-09-08 every contained run in this
   repository was Docker Desktop on macOS, by hand, once. See
   [`RECORD/2026-09-08.the-container-on-a-runner.completed.md`](RECORD/2026-09-08.the-container-on-a-runner.completed.md).
+- **A session picks its posture, and the container's lifetime is the session's.**
+  What is chosen is not a runtime but a *posture* — the policy file, which
+  decides the sandbox and the seam together, on purpose — named in the state
+  directory's `config.toml` beside the providers:
+
+  ```toml
+  [posture.container]
+  policy = "luu.container.toml"
+  ```
+
+  `POST /api/sessions {provider, model, posture}` resolves it **before** anything
+  is reset, so a runtime that is not installed refuses the new session rather
+  than ending the one that is running; the worker the previous posture started is
+  then ended rather than dropped, because `kill_on_drop` gets to a container
+  "eventually". The browser never types a path, for the reason it never types a
+  URL: what may be chosen is bounded by what somebody wrote on this machine, and
+  the names are read once when the server starts. **A resume may not move it** —
+  a destination is where a session sends and a posture is what it may do, and its
+  jobs were approved against this one. `luu chat` and `luu stdio` are unaffected:
+  there the process is the run, and its policy file is a flag. See
+  [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
 - Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
-  **the lifetime this section claims.** In `serve` the worker is started at boot
-  from the policy file the process was pointed at and lives until the process
-  exits, so it outlives every session it serves — `luu chat` keeps the claim
-  because there the process *is* the run, and the surface a person uses does not.
-  What a session should choose is not a runtime but a **posture**: the policy
-  file decides the sandbox and the seam together, on purpose. Argued in
-  [`RECORD/2026-09-08.a-session-picks-its-executor.WIP.md`](RECORD/2026-09-08.a-session-picks-its-executor.WIP.md).
+  concurrent sessions — one live session per `serve` is still the shape, so one
+  container at a time is still the shape.
 
 ## VSCode integration
 
