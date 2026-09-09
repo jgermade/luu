@@ -85,6 +85,10 @@ jobs:
   container:
     needs: test
     runs-on: ubuntu-latest
+    # The image build is the long pole and it is minutes, not tens of them: a
+    # step that runs longer than this is wedged, and a wedged job that waits out
+    # the six-hour default is one nobody sees fail.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:

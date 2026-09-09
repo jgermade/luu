@@ -145,12 +145,12 @@ serving=$!
 trap 'kill $serving 2>/dev/null; rm -rf "$work"' EXIT
 
 for waited in $(seq 1 60); do
-  curl -fsS "http://127.0.0.1:$port/api/settings" >/dev/null 2>&1 && break
+  curl -fsS --max-time 5 "http://127.0.0.1:$port/api/settings" >/dev/null 2>&1 && break
   sleep 0.5
 done
 
 # It starts on the server's own policy file, which has no container in it.
-curl -fsS "http://127.0.0.1:$port/api/settings" >"$work/before.json"
+curl -fsS --max-time 10 "http://127.0.0.1:$port/api/settings" >"$work/before.json"
 python3 -c "
 import json, sys
 before = json.load(open('$work/before.json'))
@@ -160,14 +160,18 @@ print('before:', json.dumps(before['posture']))
 "
 
 # The names the page is offered, and then the session.
-curl -fsS "http://127.0.0.1:$port/api/postures" >"$work/postures.json"
+curl -fsS --max-time 10 "http://127.0.0.1:$port/api/postures" >"$work/postures.json"
 grep -q '"container"' "$work/postures.json" || { cat "$work/postures.json"; exit 1; }
 
-curl -fsS -X POST "http://127.0.0.1:$port/api/sessions" \
+# The one call that starts a container, and the only one here that is allowed
+# to take seconds. Bounded like the rest: everything this script talks to is a
+# server it started itself, so a wait with no end is a bug rather than a slow
+# peer.
+curl -fsS --max-time 120 -X POST "http://127.0.0.1:$port/api/sessions" \
   -H 'content-type: application/json' \
   -d '{"posture":"container"}' >/dev/null
 
-curl -fsS "http://127.0.0.1:$port/api/settings" >"$work/after.json"
+curl -fsS --max-time 10 "http://127.0.0.1:$port/api/settings" >"$work/after.json"
 python3 -c "
 import json
 after = json.load(open('$work/after.json'))
@@ -187,12 +191,15 @@ print('after: ', json.dumps(posture))
 if ! command -v node >/dev/null 2>&1; then
   echo "no node on PATH: the session's own tool call is not exercised here"
 else
-node - "$port" <<'NODE' || { cat "$work/serve.log"; exit 1; }
+timeout 180 node - "$port" <<'NODE' || { cat "$work/serve.log"; exit 1; }
 const port = process.argv[2]
 const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`)
 let job = null
+// Cleared on the way out: a pending timer keeps node alive after the answer
+// arrives, which is two minutes of a CI job spent waiting for nothing.
+let patience
 const done = new Promise((resolve, reject) => {
-  setTimeout(() => reject(new Error("the turn never finished")), 120000)
+  patience = setTimeout(() => reject(new Error("the turn never finished")), 120000)
   ws.addEventListener("open", () => {
     ws.send(JSON.stringify({ type: "prompt", text: "list it" }))
   })
@@ -214,6 +221,7 @@ const done = new Promise((resolve, reject) => {
   })
 })
 await done
+clearTimeout(patience)
 ws.close()
 NODE
 fi
