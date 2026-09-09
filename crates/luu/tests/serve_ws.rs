@@ -2001,6 +2001,16 @@ async fn a_session_started_on_a_posture_runs_under_it_and_says_which() {
         .await
         .expect("the settings are JSON");
     assert_eq!(before["posture"]["network"], false, "the server's own");
+    // The key is there and it is null. A reader that cannot tell an absent key
+    // from an absent posture is one that will get it wrong, and the check in
+    // `scripts/container-check.sh` is exactly that reader.
+    assert!(
+        before["posture"]
+            .as_object()
+            .expect("a posture")
+            .contains_key("name"),
+        "the name is always written: {before}",
+    );
     assert_eq!(before["posture"]["name"], serde_json::Value::Null);
 
     // The page asks what may be chosen first. Read-only, because a page that

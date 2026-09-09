@@ -85,7 +85,12 @@ pub const FORMAT: u32 = 10;
 pub struct Posture {
     /// `None` when the run took the server's own policy file rather than a
     /// posture somebody named in `config.toml`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Always written, `null` included: *no name* is a fact about the run, and
+    /// a reader that has to tell an absent key from an absent posture is one
+    /// that will get it wrong. A missing key read as `null` is also how the
+    /// first test of this passed while the check that reads it by name did not.
+    #[serde(default)]
     pub name: Option<String>,
     /// Where tool calls ran: `host`, `direct`, or a container runtime.
     pub runtime: String,

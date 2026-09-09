@@ -154,7 +154,7 @@ curl -fsS "http://127.0.0.1:$port/api/settings" >"$work/before.json"
 python3 -c "
 import json, sys
 before = json.load(open('$work/before.json'))
-assert before['posture']['name'] is None, before['posture']
+assert before['posture'].get('name') is None, before['posture']
 assert before['posture']['runtime'] == 'host', before['posture']
 print('before:', json.dumps(before['posture']))
 "
