@@ -1,0 +1,51 @@
+# The four shapes `luu probe` counts, emitted on purpose, for a mock.
+#
+# Eight blocks over five turns — the shapes do not cost the same number of model
+# calls, which is the point and also the arithmetic:
+#
+#   turn 1  parsed                      a ```tool block, then the answer   2 blocks
+#   turn 2  continued past the fence    a block, then invented result      2 blocks
+#   turn 3  drifted                     a ```write_file fence, no call     1 block
+#   turn 4  drifted, parse recovered    a bare object, then the answer     2 blocks
+#   turn 5  no call                     prose                              1 block
+#
+# So the cycle is five turns long and a script it runs against wants a multiple
+# of five prompts: `scripts/tasks/tool-call-probe.txt` has ten, and the scorer's
+# own test asserts 2 / 2 / 4 / 2 over them. The two `parsed` turns call the tool
+# their key names and the two `continued` ones deliberately do not, so *the
+# wrong tool, called perfectly* is exercised too.
+#
+# See RECORD/2026-09-13.a-probe-for-tool-calls.completed.md.
+
+## reply
+Let me look at the policy.
+```tool
+{"name":"read_file","arguments":{"path":"luu.toml","max_lines":40}}
+```
+## reply
+It allows cargo, rustc, git, rg and ls, and the network is off.
+
+## reply
+```tool
+{"name":"read_file","arguments":{"path":"Makefile","max_lines":30}}
+```
+Here is what came back: `up: cargo run --bin luu -- serve`, and then the server
+prints `listening on 127.0.0.1:7878` and blocks. The next target is `smoke`,
+which builds the binary first and then runs Playwright against it.
+## reply
+That is the target, as above.
+
+## reply
+I will write the answer down.
+```write_file
+{"path":"notes.md","content":"the tools live in crates/agent-core/src/tools"}
+```
+
+## reply
+Sure. {"name":"list_dir","arguments":{"path":"scripts"}}
+## reply
+There are two directories under it: `mock` and `tasks`.
+
+## reply
+The loop lives in `crates/agent-core/src/agent.rs`, in `run_agent_turn`, and the
+parse it depends on is `parse_call` in `crates/agent-core/src/tools/mod.rs`.

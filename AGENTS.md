@@ -212,6 +212,25 @@ for script in grounded grounded-tasks; do
     --context-limit 8192 --reserve 512 --record $script.jsonl
 done
 
+# the model's half of a scripted run, for a mock: `## reply` per block, cycling,
+# so `2 × n` blocks are `n` turns of a call and then the answer to its result.
+# `--mock-reply` hands over one reply per model *call* with the last repeating,
+# which is one tool call however long the script is — this is what puts tool
+# output in a corpus at all, and it is what rule C was measured on.
+cargo run --bin luu -- chat --script scripts/tasks/grounded.txt \
+  --mock-script scripts/mock/grounded-tools.txt \
+  --select-tokens 1024 --context-limit 8192 --mock-delay-ms 0 \
+  --prune-behind --prune-results --record both.jsonl
+
+# the tool-call probe: ten prompts that each need exactly one call, and a scorer
+# that reads the recording — parsed / continued past the fence / drifted / no
+# call, against the key. Scoring needs no model; producing the replies does.
+cargo run --bin luu -- chat --script scripts/tasks/tool-call-probe.txt \
+  -p workstation --record probe.jsonl
+cargo run --bin luu -- probe probe.jsonl --key scripts/tasks/tool-call-probe.key
+# and the same scorer over shapes a mock emitted on purpose, which is the test
+cargo test -p luu --test tool_call_probe
+
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
 

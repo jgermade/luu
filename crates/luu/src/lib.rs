@@ -31,6 +31,7 @@ use anyhow::{Context, Result};
 pub mod auth;
 pub mod config;
 pub mod export;
+pub mod probe;
 pub mod provider;
 pub mod secret;
 pub mod serve;
@@ -70,6 +71,25 @@ enum Command {
         /// How the page reaches the recordings, relative to the site root.
         #[arg(long, default_value = "./fixtures")]
         record_base: String,
+    },
+
+    /// Score a recording on what its replies did about *calling* a tool:
+    /// parsed / continued past the fence / drifted / no call.
+    ///
+    /// The harness half of the tool-call probe. It needs no model — the model
+    /// ran when the recording was made — so a taxonomy that grows a fifth shape
+    /// is a re-run over files already on disk rather than a second afternoon on
+    /// a box. See `RECORD/2026-09-13.a-probe-for-tool-calls.completed.md`.
+    Probe {
+        /// The recorded `.jsonl` session to score.
+        record: std::path::PathBuf,
+
+        /// The answer key: the tool each prompt needs, one per line, in the
+        /// script's own order, `#` comments and blank lines skipped. Without it
+        /// every shape is still counted and only *the wrong tool, called
+        /// perfectly* goes unmeasured.
+        #[arg(long, value_name = "PATH")]
+        key: Option<std::path::PathBuf>,
     },
 
     /// The executor half of the worker IPC: read tool calls on stdin, run them,
@@ -1526,6 +1546,27 @@ fn load_fragment(sandbox: &Sandbox, spec: &str) -> Result<Fragment> {
 
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
+
+    if let Command::Probe { record, key } = &command {
+        let lines = export::read_record(record)?;
+        let key: Vec<String> = match key {
+            Some(path) => std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_string)
+                .collect(),
+            None => Vec::new(),
+        };
+        // The set the run offered, which is what a drift is recognised against:
+        // ```write_file is a call attempt where `write_file` exists.
+        let tools = Tools::standard();
+        let names: Vec<&str> = tools.names().collect();
+        let score = probe::score(&lines, &names, &key);
+        print!("{}", probe::report(&score));
+        return Ok(());
+    }
 
     if let Command::Export {
         records,

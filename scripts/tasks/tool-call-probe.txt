@@ -1,0 +1,35 @@
+# Ten prompts that each require exactly one tool call, over this repository.
+#
+# Nothing is attached: every one of them is answerable only by opening something,
+# which is what makes a reply with no call in it a *failure to call* rather than
+# a model answering from what it was shown. Run it against a model and score the
+# recording with `luu probe`:
+#
+#   luu chat --script scripts/tasks/tool-call-probe.txt --record probe.jsonl
+#   luu probe probe.jsonl --key scripts/tasks/tool-call-probe.key
+#
+# The key beside this file names the tool each prompt needs, in this order. Ten
+# rather than the gate probe's fifteen or the map probe's thirty-eight: they are
+# written by hand from files that exist, and the number is what could be written
+# that way rather than the answer to a power calculation nobody has done.
+#
+# **No prompt here needs a write.** `edit_file` and `write_file` are in the tool
+# set and are not exercised, because a probe that edits the tree it is reading
+# changes the corpus underneath its own later prompts. What that leaves
+# unmeasured is whether the two tools nobody asks for are the two that drift.
+#
+# A run is one session, so prompt 7 has seen the first six answered. That is a
+# bias — a model that has produced six fenced calls is likelier to produce a
+# seventh — and it is the shape every other run in this repository has.
+# See RECORD/2026-09-13.a-probe-for-tool-calls.completed.md.
+
+which programs does luu.toml allow a command to be?
+what files are in crates/agent-core/src/tools?
+which two commitments does crates/agent-core/src/context.rs open with?
+use git to show the subject line of the most recent commit on this branch
+what is in the ROADMAP directory?
+what does crates/agent-core/src/backend/mock.rs say the mock exists for?
+count with rg how many rust files mention parse_call
+what does the Makefile's up target run, and on which address?
+list what is directly under scripts/
+what does AGENTS.md say RECORD/ is for?

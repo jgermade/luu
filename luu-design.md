@@ -345,6 +345,31 @@ waiting for is built and off by default — `--prune-results`, below: behind the
 prune line the output becomes the line that cites it, and the call that asked
 for it stays as the model wrote it.
 
+**What a reply did about calling is counted in four shapes, and `parse_call` is
+not one of them.** `luu probe <recording> [--key <file>]` scores each prompt's
+first reply as `Parsed` (a ```` ```tool ```` fence, a call in it, nothing after
+the closing fence), `Continued` (the same, and then generation kept going),
+`Drifted` (no `tool` call, but a call was attempted — a fence tagged with a
+tool's own name, or a bare object the parse recovered) or `NoCall`. The two
+middle ones are what the parse hides and what the repository keeps paying for:
+the precision run of 2026-09-06 bought ~1 700 characters of invented
+`sandbox.execute_tool` under a `Continued`, and `parse_call`'s own doc comment
+concedes a 7B *"drops the fence about a third of the time"* — a `Drifted` that
+`bare_object` absorbs. **A recovered drift is still a drift**, carried as a
+sub-count, because what a grammar arm would move is the format holding and not
+the parse's generosity. It scores a **recording** rather than a live turn, so a
+taxonomy that grows a fifth shape is a re-run over files already on disk;
+`scripts/tasks/tool-call-probe.{txt,key}` is ten prompts that each need exactly
+one call and the tool each one needs, and the key is what separates *the format
+held* from *the right thing was called*. The scorer is tested against shapes a
+mock emitted on purpose (`scripts/mock/tool-call-shapes.txt`), so what it counts
+is checked on a machine with no model; **what a model does with the format is
+unbought** — that is one afternoon on a box, and it is the half of
+`ROADMAP/2026-09-09` item 4 that is still open. See
+[`RECORD/2026-09-13.a-probe-for-tool-calls.completed.md`](RECORD/2026-09-13.a-probe-for-tool-calls.completed.md),
+and [`RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`](RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md)
+for the grammar this is the denominator of.
+
 **The outcome is structured and the rendering is not.** A `run_command` outcome
 carries `exit_code`, `signal`, `stdout`, `stderr` and `duration_ms` as *fields*,
 on the protocol and in the record; `ToolOutcome::render` still produces the same

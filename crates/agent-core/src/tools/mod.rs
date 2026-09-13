@@ -345,6 +345,62 @@ pub fn parse_call(text: &str) -> Option<ToolCall> {
         .filter(|call| !call.name.is_empty())
 }
 
+/// What a reply did about calling a tool, as opposed to whether a call could be
+/// read out of it.
+///
+/// [`parse_call`] answers one question and hides two: a reply that kept
+/// generating after the closing fence parses exactly like one that stopped, and
+/// a bare object with no fence at all parses like one that held the format. Both
+/// are failures, both are paid for — the first in tokens and in invented
+/// evidence, the second in a format nobody can constrain — and neither has ever
+/// been counted. See `RECORD/2026-09-13.a-probe-for-tool-calls.completed.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallShape {
+    /// A `tool` fence, a call inside it, and nothing after the closing fence.
+    Parsed,
+    /// The same, and then generation kept going. The precision run of
+    /// 2026-09-06 paid ~1 700 characters of invented Rust for this one.
+    Continued,
+    /// No `tool` call, but a call was attempted: a fence tagged with a tool's
+    /// own name, or a bare object [`parse_call`] recovered.
+    ///
+    /// `recovered` is the sub-count that says what the text parse is buying —
+    /// and therefore what removing its generosity would cost. A recovered drift
+    /// is still a drift: the format did not hold, the parse was merely kind.
+    Drifted { recovered: bool },
+    /// Nothing that looks like a call at all.
+    NoCall,
+}
+
+/// Which of the four a reply is, given the names a call could have named.
+///
+/// The names are an argument rather than a constant because a drift is only
+/// recognisable against the tool set the run actually offered: ```` ```write_file ````
+/// is a call attempt where `write_file` exists and a code fence where it does
+/// not. A model that invents a tool nobody defined scores [`CallShape::NoCall`],
+/// which is arguable — and argued, in the record.
+pub fn shape_of<'a>(text: &str, names: impl IntoIterator<Item = &'a str>) -> CallShape {
+    let call = parse_call(text);
+    if let Some((body, end)) = fenced_at(text, "tool")
+        && serde_json::from_str::<ToolCall>(body)
+            .ok()
+            .is_some_and(|call| !call.name.is_empty())
+    {
+        return match text[end..].trim().is_empty() {
+            true => CallShape::Parsed,
+            false => CallShape::Continued,
+        };
+    }
+
+    let tagged = names
+        .into_iter()
+        .any(|name| fenced_at(text, name).is_some());
+    match (tagged, call.is_some()) {
+        (false, false) => CallShape::NoCall,
+        (_, recovered) => CallShape::Drifted { recovered },
+    }
+}
+
 /// The body of the first ```tool block, if the block is closed. An unclosed one
 /// is a call still being generated, and half a call is not a call.
 /// The body of the first ```` ```<tag> ```` block, if there is one.
@@ -353,12 +409,21 @@ pub fn parse_call(text: &str) -> Option<ToolCall> {
 /// transport problem, and two scanners would drift on the same malformed
 /// block.
 pub(crate) fn fenced<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    fenced_at(text, tag).map(|(body, _)| body)
+}
+
+/// The same, and where the block ended — which is the whole of what separates
+/// *the model emitted a call* from *the model emitted a call and kept writing*.
+/// See [`CallShape`].
+fn fenced_at<'a>(text: &'a str, tag: &str) -> Option<(&'a str, usize)> {
     let fence = format!("```{tag}");
     let open = text.find(&fence)?;
-    let body = &text[open + fence.len()..];
+    let after = open + fence.len();
+    let body = &text[after..];
     let body = body.strip_prefix('\n').unwrap_or(body);
+    let offset = after + (text.len() - after - body.len());
     let close = body.find("```")?;
-    Some(body[..close].trim())
+    Some((body[..close].trim(), offset + close + 3))
 }
 
 /// The first `{…}` that parses as a call. Scanned from every `{` rather than
@@ -380,6 +445,88 @@ fn bare_object(text: &str) -> Option<ToolCall> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NAMES: [&str; 5] = [
+        "read_file",
+        "list_dir",
+        "edit_file",
+        "write_file",
+        "run_command",
+    ];
+
+    fn shape(text: &str) -> CallShape {
+        shape_of(text, NAMES)
+    }
+
+    #[test]
+    fn a_block_at_the_end_of_a_reply_is_the_shape_the_preamble_asks_for() {
+        assert_eq!(
+            shape("Looking.\n\n```tool\n{\"name\": \"read_file\", \"arguments\": {}}\n```\n"),
+            CallShape::Parsed
+        );
+    }
+
+    /// The precision run of 2026-09-06, reduced: the block is read correctly
+    /// and then the model writes the result itself. Nothing in the loop counts
+    /// this today, and the tokens were paid for either way.
+    #[test]
+    fn generation_that_does_not_stop_is_its_own_outcome() {
+        assert_eq!(
+            shape(
+                "```tool\n{\"name\": \"read_file\", \"arguments\": {}}\n```\nHere is the \
+                 continuation: let started = Instant::now();"
+            ),
+            CallShape::Continued
+        );
+    }
+
+    #[test]
+    fn a_fence_tagged_with_the_tools_own_name_is_a_drift_the_parse_cannot_take() {
+        assert_eq!(
+            shape("```write_file\n{\"path\": \"notes.md\", \"content\": \"hola\"}\n```"),
+            CallShape::Drifted { recovered: false }
+        );
+    }
+
+    /// The case `parse_call`'s own doc comment concedes — a 7B drops the fence
+    /// about a third of the time — counted as what it is rather than as
+    /// compliance, with the sub-count that says the run survived it.
+    #[test]
+    fn a_bare_object_is_a_drift_the_parse_recovered() {
+        assert_eq!(
+            shape("Sure. {\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}"),
+            CallShape::Drifted { recovered: true }
+        );
+    }
+
+    #[test]
+    fn an_answer_with_no_call_in_it_is_not_a_failure_to_call() {
+        assert_eq!(
+            shape("The loop lives in `crates/agent-core/src/agent.rs`."),
+            CallShape::NoCall
+        );
+    }
+
+    /// A code block is a code block. Drift is recognised against the tool set
+    /// the run offered and nothing else, which is why the names are passed in.
+    #[test]
+    fn a_rust_fence_is_not_a_call_attempt() {
+        assert_eq!(
+            shape("Like this:\n```rust\nlet x = 1;\n```"),
+            CallShape::NoCall
+        );
+    }
+
+    /// An unclosed block is a call still being generated — `parse_call` refuses
+    /// it, and so does this: a reply cut off mid-block did not drift, it was
+    /// interrupted.
+    #[test]
+    fn an_unclosed_tool_block_is_no_call_rather_than_a_drift() {
+        assert_eq!(
+            shape("```tool\n{\"name\": \"run_command\""),
+            CallShape::NoCall
+        );
+    }
 
     #[test]
     fn a_fenced_call_parses() {
