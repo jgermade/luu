@@ -1,0 +1,3008 @@
+{
+ "off": {
+  "totals": {
+   "prompt_tokens": 122626,
+   "buckets": {
+    "system": 220,
+    "tools": 9400,
+    "map": 0,
+    "summaries": 0,
+    "history": 92534,
+    "code": 20177,
+    "prompt": 295
+   },
+   "cuts": 15,
+   "turns_dropped": 17,
+   "prunes": 0,
+   "turns_pruned": 0,
+   "tokens_freed_by_pruning": 0,
+   "mean_prefix_reuse": 23.7,
+   "turns_with_a_tool_call": 20,
+   "tool_calls": 20
+  },
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "prefix_reuse": {
+     "shared_tokens": 3697,
+     "prompt_tokens": 4820
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3225,
+     "code": 1079,
+     "prompt": 18,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 3,
+    "evicted": [
+     {
+      "turns": [
+       1
+      ],
+      "tokens": 3225
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 4781
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3211,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 4,
+    "prefix_reuse": {
+     "shared_tokens": 5809,
+     "prompt_tokens": 6913
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5327,
+     "code": 1064,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 5,
+    "evicted": [
+     {
+      "turns": [
+       2
+      ],
+      "tokens": 3211
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 6848
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5208,
+     "code": 1115,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 6,
+    "evicted": [
+     {
+      "turns": [
+       3,
+       4
+      ],
+      "tokens": 5208
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 4851
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3154,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 7,
+    "evicted": [
+     {
+      "turns": [
+       5
+      ],
+      "tokens": 3154
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 4874
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3314,
+     "code": 1048,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 8,
+    "prefix_reuse": {
+     "shared_tokens": 5901,
+     "prompt_tokens": 6938
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5420,
+     "code": 996,
+     "prompt": 13,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 9,
+    "evicted": [
+     {
+      "turns": [
+       6
+      ],
+      "tokens": 3314
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 495,
+     "prompt_tokens": 5652
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5131,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 10,
+    "evicted": [
+     {
+      "turns": [
+       7
+      ],
+      "tokens": 2106
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 6664
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5061,
+     "code": 1079,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 11,
+    "evicted": [
+     {
+      "turns": [
+       8
+      ],
+      "tokens": 3025
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 7145
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5244,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 12,
+    "evicted": [
+     {
+      "turns": [
+       9
+      ],
+      "tokens": 2036
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 7210
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5644,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 13,
+    "evicted": [
+     {
+      "turns": [
+       10
+      ],
+      "tokens": 3208
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 487,
+     "prompt_tokens": 7094
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5509,
+     "code": 1061,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 14,
+    "evicted": [
+     {
+      "turns": [
+       11
+      ],
+      "tokens": 2436
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 487,
+     "prompt_tokens": 7590
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6172,
+     "code": 898,
+     "prompt": 10,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 15,
+    "evicted": [
+     {
+      "turns": [
+       12
+      ],
+      "tokens": 3073
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 7662
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6121,
+     "code": 1016,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 16,
+    "evicted": [
+     {
+      "turns": [
+       13
+      ],
+      "tokens": 3099
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 6665
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5097,
+     "code": 1034,
+     "prompt": 24,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 17,
+    "evicted": [
+     {
+      "turns": [
+       14
+      ],
+      "tokens": 3022
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 6666
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5149,
+     "code": 996,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 18,
+    "evicted": [
+     {
+      "turns": [
+       15
+      ],
+      "tokens": 2075
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 7671
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6105,
+     "code": 1045,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 19,
+    "evicted": [
+     {
+      "turns": [
+       16,
+       17
+      ],
+      "tokens": 6105
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 4725
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3171,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 20,
+    "prefix_reuse": {
+     "shared_tokens": 5752,
+     "prompt_tokens": 6649
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5271,
+     "code": 847,
+     "prompt": 23,
+     "reserve": 512
+    }
+   }
+  ]
+ },
+ "results": {
+  "totals": {
+   "prompt_tokens": 122626,
+   "buckets": {
+    "system": 220,
+    "tools": 9400,
+    "map": 0,
+    "summaries": 0,
+    "history": 92534,
+    "code": 20177,
+    "prompt": 295
+   },
+   "cuts": 15,
+   "turns_dropped": 17,
+   "prunes": 0,
+   "turns_pruned": 0,
+   "tokens_freed_by_pruning": 0,
+   "mean_prefix_reuse": 23.7,
+   "turns_with_a_tool_call": 20,
+   "tool_calls": 20
+  },
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "prefix_reuse": {
+     "shared_tokens": 3697,
+     "prompt_tokens": 4820
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3225,
+     "code": 1079,
+     "prompt": 18,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 3,
+    "evicted": [
+     {
+      "turns": [
+       1
+      ],
+      "tokens": 3225
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 4781
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3211,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 4,
+    "prefix_reuse": {
+     "shared_tokens": 5809,
+     "prompt_tokens": 6913
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5327,
+     "code": 1064,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 5,
+    "evicted": [
+     {
+      "turns": [
+       2
+      ],
+      "tokens": 3211
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 6848
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5208,
+     "code": 1115,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 6,
+    "evicted": [
+     {
+      "turns": [
+       3,
+       4
+      ],
+      "tokens": 5208
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 4851
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3154,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 7,
+    "evicted": [
+     {
+      "turns": [
+       5
+      ],
+      "tokens": 3154
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 4874
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3314,
+     "code": 1048,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 8,
+    "prefix_reuse": {
+     "shared_tokens": 5901,
+     "prompt_tokens": 6938
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5420,
+     "code": 996,
+     "prompt": 13,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 9,
+    "evicted": [
+     {
+      "turns": [
+       6
+      ],
+      "tokens": 3314
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 495,
+     "prompt_tokens": 5652
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5131,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 10,
+    "evicted": [
+     {
+      "turns": [
+       7
+      ],
+      "tokens": 2106
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 6664
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5061,
+     "code": 1079,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 11,
+    "evicted": [
+     {
+      "turns": [
+       8
+      ],
+      "tokens": 3025
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 7145
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5244,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 12,
+    "evicted": [
+     {
+      "turns": [
+       9
+      ],
+      "tokens": 2036
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 7210
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5644,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 13,
+    "evicted": [
+     {
+      "turns": [
+       10
+      ],
+      "tokens": 3208
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 487,
+     "prompt_tokens": 7094
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5509,
+     "code": 1061,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 14,
+    "evicted": [
+     {
+      "turns": [
+       11
+      ],
+      "tokens": 2436
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 487,
+     "prompt_tokens": 7590
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6172,
+     "code": 898,
+     "prompt": 10,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 15,
+    "evicted": [
+     {
+      "turns": [
+       12
+      ],
+      "tokens": 3073
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 7662
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6121,
+     "code": 1016,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 16,
+    "evicted": [
+     {
+      "turns": [
+       13
+      ],
+      "tokens": 3099
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 6665
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5097,
+     "code": 1034,
+     "prompt": 24,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 17,
+    "evicted": [
+     {
+      "turns": [
+       14
+      ],
+      "tokens": 3022
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 6666
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5149,
+     "code": 996,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 18,
+    "evicted": [
+     {
+      "turns": [
+       15
+      ],
+      "tokens": 2075
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 7671
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6105,
+     "code": 1045,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 19,
+    "evicted": [
+     {
+      "turns": [
+       16,
+       17
+      ],
+      "tokens": 6105
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 4725
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3171,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 20,
+    "prefix_reuse": {
+     "shared_tokens": 5752,
+     "prompt_tokens": 6649
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5271,
+     "code": 847,
+     "prompt": 23,
+     "reserve": 512
+    }
+   }
+  ]
+ },
+ "prune": {
+  "totals": {
+   "prompt_tokens": 126888,
+   "buckets": {
+    "system": 220,
+    "tools": 9400,
+    "map": 0,
+    "summaries": 0,
+    "history": 96796,
+    "code": 20177,
+    "prompt": 295
+   },
+   "cuts": 12,
+   "turns_dropped": 16,
+   "prunes": 17,
+   "turns_pruned": 18,
+   "tokens_freed_by_pruning": 17687,
+   "mean_prefix_reuse": 25.7,
+   "turns_with_a_tool_call": 20,
+   "tool_calls": 20
+  },
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "prefix_reuse": {
+     "shared_tokens": 3697,
+     "prompt_tokens": 4820
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3225,
+     "code": 1079,
+     "prompt": 18,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 3,
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 6910
+    },
+    "pruned": [
+     {
+      "turns": [
+       1
+      ],
+      "tokens": 1108
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5328,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 4,
+    "prefix_reuse": {
+     "shared_tokens": 2623,
+     "prompt_tokens": 7114
+    },
+    "pruned": [
+     {
+      "turns": [
+       2,
+       3
+      ],
+      "tokens": 1927
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5517,
+     "code": 1064,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 5,
+    "evicted": [
+     {
+      "turns": [
+       1
+      ],
+      "tokens": 2117
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 7170
+    },
+    "pruned": [
+     {
+      "turns": [
+       4
+      ],
+      "tokens": 973
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5519,
+     "code": 1115,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 6,
+    "evicted": [
+     {
+      "turns": [
+       2
+      ],
+      "tokens": 2242
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 7172
+    },
+    "pruned": [
+     {
+      "turns": [
+       5
+      ],
+      "tokens": 981
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5450,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 7,
+    "evicted": [
+     {
+      "turns": [
+       3,
+       4
+      ],
+      "tokens": 3277
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 5965
+    },
+    "pruned": [
+     {
+      "turns": [
+       6
+      ],
+      "tokens": 1095
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4392,
+     "code": 1048,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 8,
+    "prefix_reuse": {
+     "shared_tokens": 4912,
+     "prompt_tokens": 7063
+    },
+    "pruned": [
+     {
+      "turns": [
+       7
+      ],
+      "tokens": 967
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5531,
+     "code": 996,
+     "prompt": 13,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 9,
+    "evicted": [
+     {
+      "turns": [
+       5
+      ],
+      "tokens": 2173
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 6000
+    },
+    "pruned": [
+     {
+      "turns": [
+       8
+      ],
+      "tokens": 916
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5467,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 10,
+    "evicted": [
+     {
+      "turns": [
+       6
+      ],
+      "tokens": 2219
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 495,
+     "prompt_tokens": 6899
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5284,
+     "code": 1079,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 11,
+    "evicted": [
+     {
+      "turns": [
+       7,
+       8
+      ],
+      "tokens": 3248
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 6154
+    },
+    "pruned": [
+     {
+      "turns": [
+       10
+      ],
+      "tokens": 990
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4254,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 12,
+    "prefix_reuse": {
+     "shared_tokens": 4766,
+     "prompt_tokens": 6983
+    },
+    "pruned": [
+     {
+      "turns": [
+       11
+      ],
+      "tokens": 1285
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5405,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 13,
+    "evicted": [
+     {
+      "turns": [
+       9
+      ],
+      "tokens": 2036
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 7051
+    },
+    "pruned": [
+     {
+      "turns": [
+       12
+      ],
+      "tokens": 988
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5454,
+     "code": 1061,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 14,
+    "evicted": [
+     {
+      "turns": [
+       10
+      ],
+      "tokens": 2218
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 487,
+     "prompt_tokens": 6792
+    },
+    "pruned": [
+     {
+      "turns": [
+       13
+      ],
+      "tokens": 976
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5359,
+     "code": 898,
+     "prompt": 10,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 15,
+    "evicted": [
+     {
+      "turns": [
+       11,
+       12
+      ],
+      "tokens": 3236
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 487,
+     "prompt_tokens": 5882
+    },
+    "pruned": [
+     {
+      "turns": [
+       14
+      ],
+      "tokens": 807
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4338,
+     "code": 1016,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 16,
+    "prefix_reuse": {
+     "shared_tokens": 4861,
+     "prompt_tokens": 7084
+    },
+    "pruned": [
+     {
+      "turns": [
+       15
+      ],
+      "tokens": 912
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5501,
+     "code": 1034,
+     "prompt": 24,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 17,
+    "evicted": [
+     {
+      "turns": [
+       13
+      ],
+      "tokens": 2123
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 7045
+    },
+    "pruned": [
+     {
+      "turns": [
+       16
+      ],
+      "tokens": 939
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5513,
+     "code": 996,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 18,
+    "evicted": [
+     {
+      "turns": [
+       14
+      ],
+      "tokens": 2215
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 6993
+    },
+    "pruned": [
+     {
+      "turns": [
+       17
+      ],
+      "tokens": 916
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5413,
+     "code": 1045,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 19,
+    "evicted": [
+     {
+      "turns": [
+       15,
+       16
+      ],
+      "tokens": 3298
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 5933
+    },
+    "pruned": [
+     {
+      "turns": [
+       18
+      ],
+      "tokens": 919
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4367,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 20,
+    "prefix_reuse": {
+     "shared_tokens": 4888,
+     "prompt_tokens": 6870
+    },
+    "pruned": [
+     {
+      "turns": [
+       19
+      ],
+      "tokens": 988
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5479,
+     "code": 847,
+     "prompt": 23,
+     "reserve": 512
+    }
+   }
+  ]
+ },
+ "both": {
+  "totals": {
+   "prompt_tokens": 119384,
+   "buckets": {
+    "system": 220,
+    "tools": 9400,
+    "map": 0,
+    "summaries": 0,
+    "history": 89292,
+    "code": 20177,
+    "prompt": 295
+   },
+   "cuts": 0,
+   "turns_dropped": 0,
+   "prunes": 16,
+   "turns_pruned": 18,
+   "tokens_freed_by_pruning": 48434,
+   "mean_prefix_reuse": 41.2,
+   "turns_with_a_tool_call": 20,
+   "tool_calls": 20
+  },
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "prefix_reuse": {
+     "shared_tokens": 3697,
+     "prompt_tokens": 4820
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3225,
+     "code": 1079,
+     "prompt": 18,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 3,
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 4954
+    },
+    "pruned": [
+     {
+      "turns": [
+       1
+      ],
+      "tokens": 3064
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3372,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 4,
+    "prefix_reuse": {
+     "shared_tokens": 5982,
+     "prompt_tokens": 7086
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5488,
+     "code": 1064,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 5,
+    "prefix_reuse": {
+     "shared_tokens": 668,
+     "prompt_tokens": 7229
+    },
+    "pruned": [
+     {
+      "turns": [
+       2
+      ],
+      "tokens": 3016
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5564,
+     "code": 1115,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 6,
+    "prefix_reuse": {
+     "shared_tokens": 877,
+     "prompt_tokens": 5603
+    },
+    "pruned": [
+     {
+      "turns": [
+       3,
+       4
+      ],
+      "tokens": 4861
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3857,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 7,
+    "prefix_reuse": {
+     "shared_tokens": 1250,
+     "prompt_tokens": 5856
+    },
+    "pruned": [
+     {
+      "turns": [
+       5
+      ],
+      "tokens": 2937
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4234,
+     "code": 1048,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 8,
+    "prefix_reuse": {
+     "shared_tokens": 1478,
+     "prompt_tokens": 4779
+    },
+    "pruned": [
+     {
+      "turns": [
+       6
+      ],
+      "tokens": 3142
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3198,
+     "code": 996,
+     "prompt": 13,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 9,
+    "prefix_reuse": {
+     "shared_tokens": 6779,
+     "prompt_tokens": 6819
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6223,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 10,
+    "prefix_reuse": {
+     "shared_tokens": 1662,
+     "prompt_tokens": 5136
+    },
+    "pruned": [
+     {
+      "turns": [
+       7,
+       8
+      ],
+      "tokens": 4813
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3446,
+     "code": 1079,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 11,
+    "prefix_reuse": {
+     "shared_tokens": 2054,
+     "prompt_tokens": 6699
+    },
+    "pruned": [
+     {
+      "turns": [
+       9
+      ],
+      "tokens": 1956
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4698,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 12,
+    "prefix_reuse": {
+     "shared_tokens": 2095,
+     "prompt_tokens": 5774
+    },
+    "pruned": [
+     {
+      "turns": [
+       10
+      ],
+      "tokens": 3037
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4097,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 13,
+    "prefix_reuse": {
+     "shared_tokens": 2273,
+     "prompt_tokens": 6609
+    },
+    "pruned": [
+     {
+      "turns": [
+       11
+      ],
+      "tokens": 2269
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4901,
+     "code": 1061,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 14,
+    "prefix_reuse": {
+     "shared_tokens": 2461,
+     "prompt_tokens": 6620
+    },
+    "pruned": [
+     {
+      "turns": [
+       12
+      ],
+      "tokens": 2934
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5066,
+     "code": 898,
+     "prompt": 10,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 15,
+    "prefix_reuse": {
+     "shared_tokens": 2613,
+     "prompt_tokens": 6848
+    },
+    "pruned": [
+     {
+      "turns": [
+       13
+      ],
+      "tokens": 2932
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5156,
+     "code": 1016,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 16,
+    "prefix_reuse": {
+     "shared_tokens": 2811,
+     "prompt_tokens": 6109
+    },
+    "pruned": [
+     {
+      "turns": [
+       14
+      ],
+      "tokens": 2854
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4377,
+     "code": 1034,
+     "prompt": 24,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 17,
+    "prefix_reuse": {
+     "shared_tokens": 2975,
+     "prompt_tokens": 7249
+    },
+    "pruned": [
+     {
+      "turns": [
+       15
+      ],
+      "tokens": 1896
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5555,
+     "code": 996,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 18,
+    "prefix_reuse": {
+     "shared_tokens": 3167,
+     "prompt_tokens": 7457
+    },
+    "pruned": [
+     {
+      "turns": [
+       16
+      ],
+      "tokens": 2885
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5701,
+     "code": 1045,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 19,
+    "prefix_reuse": {
+     "shared_tokens": 3369,
+     "prompt_tokens": 7768
+    },
+    "pruned": [
+     {
+      "turns": [
+       17
+      ],
+      "tokens": 2872
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6000,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 20,
+    "prefix_reuse": {
+     "shared_tokens": 3558,
+     "prompt_tokens": 6728
+    },
+    "pruned": [
+     {
+      "turns": [
+       18
+      ],
+      "tokens": 2966
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5134,
+     "code": 847,
+     "prompt": 23,
+     "reserve": 512
+    }
+   }
+  ]
+ },
+ "block-prune": {
+  "totals": {
+   "prompt_tokens": 107448,
+   "buckets": {
+    "system": 220,
+    "tools": 9400,
+    "map": 0,
+    "summaries": 0,
+    "history": 77356,
+    "code": 20177,
+    "prompt": 295
+   },
+   "cuts": 6,
+   "turns_dropped": 16,
+   "prunes": 11,
+   "turns_pruned": 18,
+   "tokens_freed_by_pruning": 17687,
+   "mean_prefix_reuse": 46.7,
+   "turns_with_a_tool_call": 20,
+   "tool_calls": 20
+  },
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "prefix_reuse": {
+     "shared_tokens": 3697,
+     "prompt_tokens": 4820
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3225,
+     "code": 1079,
+     "prompt": 18,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 3,
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 5941
+    },
+    "pruned": [
+     {
+      "turns": [
+       1,
+       2
+      ],
+      "tokens": 2077
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4359,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 4,
+    "prefix_reuse": {
+     "shared_tokens": 4879,
+     "prompt_tokens": 7114
+    },
+    "pruned": [
+     {
+      "turns": [
+       3
+      ],
+      "tokens": 958
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5517,
+     "code": 1064,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 5,
+    "evicted": [
+     {
+      "turns": [
+       1,
+       2,
+       3
+      ],
+      "tokens": 5517
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 3747
+    },
+    "pruned": [
+     {
+      "turns": [
+       4
+      ],
+      "tokens": 973
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2119,
+     "code": 1115,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 6,
+    "prefix_reuse": {
+     "shared_tokens": 5757,
+     "prompt_tokens": 6983
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5273,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 7,
+    "evicted": [
+     {
+      "turns": [
+       4,
+       5
+      ],
+      "tokens": 4292
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 489,
+     "prompt_tokens": 3779
+    },
+    "pruned": [
+     {
+      "turns": [
+       5,
+       6
+      ],
+      "tokens": 2076
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2219,
+     "code": 1048,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 8,
+    "prefix_reuse": {
+     "shared_tokens": 4806,
+     "prompt_tokens": 5843
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4325,
+     "code": 996,
+     "prompt": 13,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 9,
+    "prefix_reuse": {
+     "shared_tokens": 2726,
+     "prompt_tokens": 6000
+    },
+    "pruned": [
+     {
+      "turns": [
+       7,
+       8
+      ],
+      "tokens": 1883
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5467,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 10,
+    "evicted": [
+     {
+      "turns": [
+       6,
+       7,
+       8
+      ],
+      "tokens": 5467
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 3627
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2036,
+     "code": 1079,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 11,
+    "prefix_reuse": {
+     "shared_tokens": 5725,
+     "prompt_tokens": 7145
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5244,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 12,
+    "prefix_reuse": {
+     "shared_tokens": 2542,
+     "prompt_tokens": 6983
+    },
+    "pruned": [
+     {
+      "turns": [
+       10,
+       11
+      ],
+      "tokens": 2275
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5405,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 13,
+    "evicted": [
+     {
+      "turns": [
+       9,
+       10,
+       11
+      ],
+      "tokens": 5405
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 486,
+     "prompt_tokens": 3658
+    },
+    "pruned": [
+     {
+      "turns": [
+       12
+      ],
+      "tokens": 988
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2085,
+     "code": 1061,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 14,
+    "prefix_reuse": {
+     "shared_tokens": 5668,
+     "prompt_tokens": 6602
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5184,
+     "code": 898,
+     "prompt": 10,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 15,
+    "evicted": [
+     {
+      "turns": [
+       12,
+       13
+      ],
+      "tokens": 4208
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 3746
+    },
+    "pruned": [
+     {
+      "turns": [
+       13,
+       14
+      ],
+      "tokens": 1783
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2215,
+     "code": 1016,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 16,
+    "prefix_reuse": {
+     "shared_tokens": 4773,
+     "prompt_tokens": 5859
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4290,
+     "code": 1034,
+     "prompt": 24,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 17,
+    "prefix_reuse": {
+     "shared_tokens": 2725,
+     "prompt_tokens": 7045
+    },
+    "pruned": [
+     {
+      "turns": [
+       15,
+       16
+      ],
+      "tokens": 1851
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5513,
+     "code": 996,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 18,
+    "evicted": [
+     {
+      "turns": [
+       14,
+       15,
+       16
+      ],
+      "tokens": 5513
+     }
+    ],
+    "prefix_reuse": {
+     "shared_tokens": 492,
+     "prompt_tokens": 3668
+    },
+    "pruned": [
+     {
+      "turns": [
+       17
+      ],
+      "tokens": 916
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2115,
+     "code": 1045,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 19,
+    "prefix_reuse": {
+     "shared_tokens": 5766,
+     "prompt_tokens": 6851
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5286,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 20,
+    "prefix_reuse": {
+     "shared_tokens": 2641,
+     "prompt_tokens": 6870
+    },
+    "pruned": [
+     {
+      "turns": [
+       18,
+       19
+      ],
+      "tokens": 1907
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5479,
+     "code": 847,
+     "prompt": 23,
+     "reserve": 512
+    }
+   }
+  ]
+ },
+ "block-both": {
+  "totals": {
+   "prompt_tokens": 92616,
+   "buckets": {
+    "system": 220,
+    "tools": 9400,
+    "map": 0,
+    "summaries": 0,
+    "history": 62524,
+    "code": 20177,
+    "prompt": 295
+   },
+   "cuts": 0,
+   "turns_dropped": 0,
+   "prunes": 9,
+   "turns_pruned": 19,
+   "tokens_freed_by_pruning": 50406,
+   "mean_prefix_reuse": 70.4,
+   "turns_with_a_tool_call": 20,
+   "tool_calls": 20
+  },
+  "turns": [
+   {
+    "n": 1,
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 0,
+     "code": 1190,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 2,
+    "prefix_reuse": {
+     "shared_tokens": 3697,
+     "prompt_tokens": 4820
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3225,
+     "code": 1079,
+     "prompt": 18,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 3,
+    "prefix_reuse": {
+     "shared_tokens": 496,
+     "prompt_tokens": 1939
+    },
+    "pruned": [
+     {
+      "turns": [
+       1,
+       2
+      ],
+      "tokens": 6080
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 356,
+     "code": 1056,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 4,
+    "prefix_reuse": {
+     "shared_tokens": 2966,
+     "prompt_tokens": 4071
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2472,
+     "code": 1064,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 5,
+    "prefix_reuse": {
+     "shared_tokens": 6071,
+     "prompt_tokens": 7229
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5564,
+     "code": 1115,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 6,
+    "prefix_reuse": {
+     "shared_tokens": 877,
+     "prompt_tokens": 2668
+    },
+    "pruned": [
+     {
+      "turns": [
+       3,
+       4,
+       5
+      ],
+      "tokens": 7798
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 920,
+     "code": 1189,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 7,
+    "prefix_reuse": {
+     "shared_tokens": 4766,
+     "prompt_tokens": 5856
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4234,
+     "code": 1048,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 8,
+    "prefix_reuse": {
+     "shared_tokens": 1478,
+     "prompt_tokens": 2829
+    },
+    "pruned": [
+     {
+      "turns": [
+       6,
+       7
+      ],
+      "tokens": 5093
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 1247,
+     "code": 996,
+     "prompt": 13,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 9,
+    "prefix_reuse": {
+     "shared_tokens": 4829,
+     "prompt_tokens": 4868
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4272,
+     "code": 0,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 10,
+    "prefix_reuse": {
+     "shared_tokens": 1831,
+     "prompt_tokens": 3181
+    },
+    "pruned": [
+     {
+      "turns": [
+       8,
+       9
+      ],
+      "tokens": 4818
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 1490,
+     "code": 1079,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 11,
+    "prefix_reuse": {
+     "shared_tokens": 5279,
+     "prompt_tokens": 6699
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4698,
+     "code": 1382,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 12,
+    "prefix_reuse": {
+     "shared_tokens": 2095,
+     "prompt_tokens": 3506
+    },
+    "pruned": [
+     {
+      "turns": [
+       10,
+       11
+      ],
+      "tokens": 5306
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 1828,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 13,
+    "prefix_reuse": {
+     "shared_tokens": 5506,
+     "prompt_tokens": 6609
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 4901,
+     "code": 1061,
+     "prompt": 15,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 14,
+    "prefix_reuse": {
+     "shared_tokens": 2461,
+     "prompt_tokens": 3690
+    },
+    "pruned": [
+     {
+      "turns": [
+       12,
+       13
+      ],
+      "tokens": 5866
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2134,
+     "code": 898,
+     "prompt": 10,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 15,
+    "prefix_reuse": {
+     "shared_tokens": 5788,
+     "prompt_tokens": 6848
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5156,
+     "code": 1016,
+     "prompt": 17,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 16,
+    "prefix_reuse": {
+     "shared_tokens": 2811,
+     "prompt_tokens": 4214
+    },
+    "pruned": [
+     {
+      "turns": [
+       14,
+       15
+      ],
+      "tokens": 4750
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2481,
+     "code": 1034,
+     "prompt": 24,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 17,
+    "prefix_reuse": {
+     "shared_tokens": 6214,
+     "prompt_tokens": 7249
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 5555,
+     "code": 996,
+     "prompt": 11,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 18,
+    "prefix_reuse": {
+     "shared_tokens": 3167,
+     "prompt_tokens": 4586
+    },
+    "pruned": [
+     {
+      "turns": [
+       16,
+       17
+      ],
+      "tokens": 5757
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 2829,
+     "code": 1045,
+     "prompt": 12,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 19,
+    "prefix_reuse": {
+     "shared_tokens": 6684,
+     "prompt_tokens": 7768
+    },
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 6000,
+     "code": 1041,
+     "prompt": 16,
+     "reserve": 512
+    }
+   },
+   {
+    "n": 20,
+    "prefix_reuse": {
+     "shared_tokens": 3558,
+     "prompt_tokens": 4757
+    },
+    "pruned": [
+     {
+      "turns": [
+       18,
+       19
+      ],
+      "tokens": 4938
+     }
+    ],
+    "buckets": {
+     "system": 11,
+     "tools": 470,
+     "map": 0,
+     "summaries": 0,
+     "history": 3162,
+     "code": 847,
+     "prompt": 23,
+     "reserve": 512
+    }
+   }
+  ]
+ }
+}

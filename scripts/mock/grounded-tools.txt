@@ -1,0 +1,52 @@
+# The model's half of a run over `scripts/tasks/grounded.txt`, for a mock.
+#
+# Eight blocks, consumed one per model call and cycling, so each turn of the
+# script costs two: a reply carrying a ```tool block, then the reply that reads
+# its result. Four turns of calls, repeated five times over the corpus'
+# twenty prompts.
+#
+# **These are not answers.** The mock never reads a prompt, so nothing below
+# responds to the question its turn asked; what is real is the call, the file
+# it opens through the sandbox and the bytes that come back — which is the
+# whole of what a rule over tool results is measured against. See
+# `RECORD/2026-09-13.a-mock-that-calls-a-tool.completed.md`.
+#
+# The four files are the ones the corpus is about, read at the cap rather than
+# at their heads: an 8 KiB result is the object rule C exists for, and a
+# ten-line one would measure nothing.
+#
+# `grounded.txt` opens no job, so these calls are checked against the session's
+# own policy (`luu.toml` grants the tree) and not against a plan. A corpus with
+# `## task:` groups would narrow that, and the calls would have to move with it.
+
+## reply
+let me read the context module before answering
+```tool
+{"name":"read_file","arguments":{"path":"crates/agent-core/src/context.rs","max_lines":200}}
+```
+## reply
+That is the module that decides what goes into the prompt and then renders it.
+
+## reply
+the task boundary is in the job module
+```tool
+{"name":"read_file","arguments":{"path":"crates/agent-core/src/job.rs","max_lines":200}}
+```
+## reply
+Closing is an event there, not a mutation: the turns stay and the fold replaces them.
+
+## reply
+the policy itself will say
+```tool
+{"name":"read_file","arguments":{"path":"luu.toml","max_lines":120}}
+```
+## reply
+It grants the tree read-write, allows five programs by name, and leaves the network off.
+
+## reply
+the tools are checked in the filesystem module
+```tool
+{"name":"read_file","arguments":{"path":"crates/agent-core/src/tools/fs.rs","max_lines":200}}
+```
+## reply
+Every path goes through the same check before it is opened, and a denial is a verdict.

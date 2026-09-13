@@ -633,6 +633,15 @@ enum Command {
         #[arg(long = "mock-reply", value_name = "TEXT")]
         mock_replies: Vec<String>,
 
+        /// The same replies from a file, `## reply` per block, **cycling**: a
+        /// list of `2 × n` blocks is `n` turns of call-then-answer, repeated
+        /// for as long as the script runs. What `--mock-reply` cannot do is a
+        /// corpus where every turn calls a tool, which is what measuring a
+        /// rule over tool results needs. See
+        /// `RECORD/2026-09-13.a-mock-that-calls-a-tool.completed.md`.
+        #[arg(long, value_name = "PATH", conflicts_with = "mock_replies")]
+        mock_script: Option<std::path::PathBuf>,
+
         /// Stop the turn after this many milliseconds, to exercise cancelling.
         #[arg(long)]
         cancel_after_ms: Option<u64>,
@@ -1185,6 +1194,10 @@ struct ModelArgs<'a> {
     context_limit: u32,
     mock_delay_ms: u64,
     mock_replies: Vec<String>,
+    /// The replies as a ring rather than a list whose last entry repeats —
+    /// `chat --mock-script`, and nothing else: `serve` makes a planning call
+    /// that a fixed cycle cannot stay in phase with.
+    mock_cycle: bool,
 }
 
 /// The destination, resolved, announced, and built.
@@ -1217,7 +1230,10 @@ fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resol
 
     let mock = match args.mock_replies.is_empty() {
         true => Mock::default(),
-        false => Mock::replies(args.mock_replies),
+        false => match args.mock_cycle {
+            true => Mock::replies(args.mock_replies).cycling(),
+            false => Mock::replies(args.mock_replies),
+        },
     }
     .delay(Duration::from_millis(args.mock_delay_ms));
     let backend = build_backend(&resolved, Some(mock), true)?;
@@ -1279,6 +1295,61 @@ pub(crate) fn model_for(backend: &dyn Backend, model: String) -> String {
         "mock" => "mock".to_string(),
         _ => model,
     }
+}
+
+/// Parses the mock's half of a scripted run: `## reply` per block.
+///
+/// ````text
+/// # what the mock answers, two blocks per turn.
+/// ## reply
+/// looking at the head of the policy
+/// ```tool
+/// {"name":"read_file","arguments":{"path":"luu.toml","max_lines":40}}
+/// ```
+/// ## reply
+/// It grants the tree and five programs.
+/// ````
+///
+/// Everything before the first `## reply` is the file's own header, because
+/// what a file like this holds is *the model's half of a recording* and a
+/// reader a month later needs to be told so. Inside a block nothing is
+/// stripped: a reply is bytes a model would have generated, `#` and fences and
+/// all, and a parser that ate a line of one would be editing the experiment.
+fn parse_mock_script(text: &str) -> Result<Vec<String>> {
+    let mut replies: Vec<String> = Vec::new();
+    let mut open = false;
+
+    for line in text.lines() {
+        if line.trim() == "## reply" {
+            replies.push(String::new());
+            open = true;
+            continue;
+        }
+        if !open {
+            continue;
+        }
+        let reply = replies.last_mut().expect("a block is open");
+        if !reply.is_empty() {
+            reply.push('\n');
+        }
+        reply.push_str(line);
+    }
+
+    let replies: Vec<String> = replies
+        .into_iter()
+        .map(|reply| reply.trim().to_string())
+        .collect();
+    if replies.is_empty() {
+        anyhow::bail!("no `## reply` block: every line would be the file's header");
+    }
+    if let Some(empty) = replies.iter().position(String::is_empty) {
+        anyhow::bail!(
+            "`## reply` block {} is empty; the mock would answer nothing and the turn after it \
+             would read the phase as drifted",
+            empty + 1
+        );
+    }
+    Ok(replies)
 }
 
 /// One instruction from a script, or the single prompt of a one-shot `chat`.
@@ -1665,6 +1736,10 @@ pub async fn run() -> Result<()> {
             context_limit,
             mock_delay_ms,
             mock_replies,
+            // `serve` and `stdio` take their replies as they always did: a
+            // cycle is an instrument for a scripted run, and only `chat` has
+            // one.
+            mock_cycle: false,
         })?;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
@@ -1799,6 +1874,10 @@ pub async fn run() -> Result<()> {
             context_limit,
             mock_delay_ms,
             mock_replies,
+            // `serve` and `stdio` take their replies as they always did: a
+            // cycle is an instrument for a scripted run, and only `chat` has
+            // one.
+            mock_cycle: false,
         })?;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
@@ -1868,6 +1947,7 @@ pub async fn run() -> Result<()> {
         api_key_file,
         mock_delay_ms,
         mock_replies,
+        mock_script,
         cancel_after_ms,
         record,
         context_limit,
@@ -1906,6 +1986,19 @@ pub async fn run() -> Result<()> {
         (None, None) => vec![Step::Prompt(std::io::read_to_string(std::io::stdin())?)],
     };
 
+    // The model's half of a scripted run, when there is no model. Read here
+    // rather than inside `destination` so a file that cannot be parsed stops
+    // the run before a destination is announced.
+    let (mock_replies, mock_cycle) = match &mock_script {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let replies = parse_mock_script(&text).with_context(|| path.display().to_string())?;
+            (replies, true)
+        }
+        None => (mock_replies, false),
+    };
+
     let (backend, resolved) = destination(ModelArgs {
         provider: provider.as_deref(),
         backend,
@@ -1916,6 +2009,7 @@ pub async fn run() -> Result<()> {
         context_limit,
         mock_delay_ms,
         mock_replies,
+        mock_cycle,
     })?;
     let model = resolved.model.clone();
     let context_limit = resolved.context_limit;
@@ -2415,6 +2509,48 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn a_mock_script_keeps_every_byte_of_a_block() {
+        let replies = parse_mock_script(
+            "# the header, and it is not a reply\n\
+             ## reply\n\
+             looking\n\
+             ```tool\n\
+             {\"name\":\"read_file\",\"arguments\":{\"path\":\"luu.toml\"}}\n\
+             ```\n\
+             ## reply\n\
+             # a heading the model wrote\n\
+             done\n",
+        )
+        .unwrap();
+        assert_eq!(replies.len(), 2);
+        assert!(replies[0].starts_with("looking\n```tool"));
+        assert!(replies[0].ends_with("```"));
+        // The `#` inside a block is the model's, not a comment: a parser that
+        // stripped it would be rewriting the reply being measured.
+        assert_eq!(replies[1], "# a heading the model wrote\ndone");
+    }
+
+    #[test]
+    fn a_mock_script_with_no_block_is_an_error() {
+        assert!(
+            parse_mock_script("# only a header\nand some prose\n")
+                .unwrap_err()
+                .to_string()
+                .contains("no `## reply` block")
+        );
+    }
+
+    /// An empty block would answer nothing and shift the phase of every turn
+    /// after it — the one failure this instrument cannot see from the inside.
+    #[test]
+    fn an_empty_block_is_refused_and_says_which() {
+        let error = parse_mock_script("## reply\nuno\n## reply\n## reply\ndos\n")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("block 2"), "{error}");
+    }
 
     #[test]
     fn a_script_without_tasks_parses_the_way_it_always_did() {

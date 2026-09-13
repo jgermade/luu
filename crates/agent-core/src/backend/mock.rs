@@ -11,11 +11,22 @@ use std::time::Duration;
 use super::{Backend, BackendError, Chunk, ChunkStream, CompletionRequest, StopReason, Usage};
 
 pub struct Mock {
-    /// One per call, in order; the last one repeats once they run out. A single
-    /// reply is the ordinary case and a list is what makes the tool loop
-    /// runnable without a model — a scripted call, then the answer to its
-    /// result.
+    /// One per call, in order; the last one repeats once they run out — unless
+    /// [`Self::cycling`], where the list is a ring instead. A single reply is
+    /// the ordinary case and a list is what makes the tool loop runnable
+    /// without a model — a scripted call, then the answer to its result.
     replies: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// Rotate the list instead of holding the last reply, so `2 × n` replies
+    /// are `n` turns of *call, then the answer to its result*, repeated.
+    ///
+    /// The mock is handed a prompt and never a turn, so nothing here knows
+    /// where one begins: the phase holds because a turn costs
+    /// `1 + (the calls it made)` model calls and a scripted run makes no
+    /// planning call. A turn that calls one tool fewer than the list expects
+    /// shifts every later turn by one, and it is the *run* that notices — a
+    /// turn with no step in its recording. See
+    /// `RECORD/2026-09-13.a-mock-that-calls-a-tool.completed.md`.
+    cycling: bool,
     delay: Duration,
     fail_with: Option<String>,
 }
@@ -28,9 +39,18 @@ impl Mock {
     pub fn replies(replies: Vec<String>) -> Self {
         Self {
             replies: std::sync::Mutex::new(replies.into()),
+            cycling: false,
             delay: Duration::from_millis(25),
             fail_with: None,
         }
+    }
+
+    /// The list as a ring: what makes a corpus where every turn calls a tool,
+    /// which is what measuring a rule over tool results needs and what
+    /// `--mock-reply` cannot produce.
+    pub fn cycling(mut self) -> Self {
+        self.cycling = true;
+        self
     }
 
     pub fn delay(mut self, delay: Duration) -> Self {
@@ -68,9 +88,14 @@ impl Backend for Mock {
     fn stream(&self, _request: CompletionRequest) -> ChunkStream<'_> {
         let reply = {
             let mut replies = self.replies.lock().expect("no panic holds this lock");
-            match replies.len() > 1 {
-                true => replies.pop_front().unwrap_or_default(),
-                false => replies.front().cloned().unwrap_or_default(),
+            match (self.cycling, replies.len() > 1) {
+                (true, _) => {
+                    let reply = replies.pop_front().unwrap_or_default();
+                    replies.push_back(reply.clone());
+                    reply
+                }
+                (false, true) => replies.pop_front().unwrap_or_default(),
+                (false, false) => replies.front().cloned().unwrap_or_default(),
             }
         };
         // Word by word, because what this backend exists to exercise is a
@@ -103,5 +128,62 @@ impl Backend for Mock {
                 usage: Some(Usage { prompt_tokens: 0, completion_tokens }),
             };
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Backend;
+    use futures_util::StreamExt;
+
+    async fn say(backend: &Mock, calls: usize) -> Vec<String> {
+        let mut said = Vec::new();
+        for _ in 0..calls {
+            let mut stream = backend.stream(CompletionRequest {
+                model: "mock".into(),
+                messages: Vec::new(),
+                context_limit: None,
+                temperature: None,
+                seed: None,
+            });
+            let mut text = String::new();
+            while let Some(chunk) = stream.next().await {
+                if let Ok(Chunk::Text(word)) = chunk {
+                    text.push_str(&word);
+                }
+            }
+            said.push(text);
+        }
+        said
+    }
+
+    #[tokio::test]
+    async fn the_last_reply_repeats_by_default() {
+        let backend = Mock::replies(vec!["uno".into(), "dos".into()]).delay(Duration::ZERO);
+        assert_eq!(say(&backend, 4).await, ["uno", "dos", "dos", "dos"]);
+    }
+
+    /// The whole of the instrument: two replies are one turn's worth of calls,
+    /// and turn 11 is answered exactly as turn 1 was.
+    #[tokio::test]
+    async fn cycling_makes_the_list_a_ring() {
+        let backend = Mock::replies(vec!["call".into(), "answer".into()])
+            .cycling()
+            .delay(Duration::ZERO);
+        assert_eq!(
+            say(&backend, 6).await,
+            ["call", "answer", "call", "answer", "call", "answer"]
+        );
+    }
+
+    /// A ring of one is the constant reply, not an empty one: the guard that
+    /// stops `--mock-script` with a single block from answering nothing.
+    #[tokio::test]
+    async fn a_ring_of_one_repeats_it() {
+        let backend = Mock::replies(vec!["solo".into()])
+            .cycling()
+            .delay(Duration::ZERO);
+        assert_eq!(say(&backend, 3).await, ["solo", "solo", "solo"]);
     }
 }
