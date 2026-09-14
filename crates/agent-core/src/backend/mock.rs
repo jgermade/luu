@@ -11,11 +11,12 @@ use std::time::Duration;
 use super::{Backend, BackendError, Chunk, ChunkStream, CompletionRequest, StopReason, Usage};
 
 pub struct Mock {
-    /// One per call, in order; the last one repeats once they run out. A single
-    /// reply is the ordinary case and a list is what makes the tool loop
-    /// runnable without a model — a scripted call, then the answer to its
-    /// result.
+    /// One per call, in order; the last one repeats once they run out, unless
+    /// `cycling` wraps back to the first instead. A single reply is the
+    /// ordinary case and a list is what makes the tool loop runnable without
+    /// a model — a scripted call, then the answer to its result.
     replies: std::sync::Mutex<std::collections::VecDeque<String>>,
+    cycling: bool,
     delay: Duration,
     fail_with: Option<String>,
 }
@@ -28,9 +29,21 @@ impl Mock {
     pub fn replies(replies: Vec<String>) -> Self {
         Self {
             replies: std::sync::Mutex::new(replies.into()),
+            cycling: false,
             delay: Duration::from_millis(25),
             fail_with: None,
         }
+    }
+
+    /// Off by default, so every existing script — one reply that repeats, or
+    /// a call-then-answer pair that answers forever after the first tool
+    /// loop — keeps meaning what it always meant. On, the list wraps back to
+    /// its first element instead of sticking on its last, which is how a
+    /// `call, answer` pair becomes a tool invoked on every turn of a script
+    /// of any length, rather than once at the start of the session.
+    pub fn cycle(mut self, cycling: bool) -> Self {
+        self.cycling = cycling;
+        self
     }
 
     pub fn delay(mut self, delay: Duration) -> Self {
@@ -68,9 +81,18 @@ impl Backend for Mock {
     fn stream(&self, _request: CompletionRequest) -> ChunkStream<'_> {
         let reply = {
             let mut replies = self.replies.lock().expect("no panic holds this lock");
-            match replies.len() > 1 {
-                true => replies.pop_front().unwrap_or_default(),
-                false => replies.front().cloned().unwrap_or_default(),
+            match self.cycling {
+                true => match replies.pop_front() {
+                    Some(front) => {
+                        replies.push_back(front.clone());
+                        front
+                    }
+                    None => String::new(),
+                },
+                false => match replies.len() > 1 {
+                    true => replies.pop_front().unwrap_or_default(),
+                    false => replies.front().cloned().unwrap_or_default(),
+                },
             }
         };
         // Word by word, because what this backend exists to exercise is a
@@ -103,5 +125,62 @@ impl Backend for Mock {
                 usage: Some(Usage { prompt_tokens: 0, completion_tokens }),
             };
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::StreamExt;
+
+    use super::*;
+    use crate::backend::Message;
+
+    fn request() -> CompletionRequest {
+        CompletionRequest {
+            model: "mock".into(),
+            messages: vec![Message::user("hola")],
+            context_limit: None,
+            temperature: None,
+            seed: None,
+        }
+    }
+
+    async fn text_of(mock: &Mock) -> String {
+        let mut stream = mock.stream(request());
+        let mut text = String::new();
+        while let Some(chunk) = stream.next().await {
+            if let Chunk::Text(word) = chunk.expect("the mock never fails without .failing()") {
+                text.push_str(&word);
+            }
+        }
+        text
+    }
+
+    #[tokio::test]
+    async fn off_by_default_the_last_reply_repeats() {
+        let mock = Mock::replies(vec!["call".into(), "answer".into()]).delay(Duration::ZERO);
+        assert_eq!(text_of(&mock).await, "call");
+        assert_eq!(text_of(&mock).await, "answer");
+        assert_eq!(text_of(&mock).await, "answer");
+        assert_eq!(text_of(&mock).await, "answer");
+    }
+
+    #[tokio::test]
+    async fn cycling_wraps_back_to_the_first_instead_of_sticking_on_the_last() {
+        let mock = Mock::replies(vec!["call".into(), "answer".into()])
+            .cycle(true)
+            .delay(Duration::ZERO);
+        assert_eq!(text_of(&mock).await, "call");
+        assert_eq!(text_of(&mock).await, "answer");
+        assert_eq!(text_of(&mock).await, "call");
+        assert_eq!(text_of(&mock).await, "answer");
+        assert_eq!(text_of(&mock).await, "call");
+    }
+
+    #[tokio::test]
+    async fn cycling_one_reply_is_the_same_as_not_cycling() {
+        let mock = Mock::new("only").cycle(true).delay(Duration::ZERO);
+        assert_eq!(text_of(&mock).await, "only");
+        assert_eq!(text_of(&mock).await, "only");
     }
 }

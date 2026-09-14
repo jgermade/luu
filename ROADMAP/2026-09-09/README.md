@@ -55,8 +55,8 @@ question; both are a box, a flag and a corpus that already exist.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 3 | ~**Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. The shape rule B settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result reuses, so this is the cheapest row in the revision~ **landed the day this revision was written, as rule C: `--prune-results`, off, and inert without `--prune-behind`. It reaches the case rule B cannot — a turn that ran a tool and selected nothing has no spans to give — and it has no number: nothing has been run one flag apart, which is now the row below.** Found under it: `job_closed`'s `replaced.tokens` had been over-reporting a pruned turn since rule B landed on 2026-09-08, counting what its turns were *stored* at rather than what the prompt they left was made of. Fixed in the same commit | nothing | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
-| 3b | **What rule C is worth** — `--prune-results` one flag apart, the way `--repeat-once` and `--prune-behind` were both measured. The rule the tests describe is *the prompt is smaller and the conversation is intact*; how much smaller is unmeasured, and a rule built without a run is the thing item 1 is a warning about. **It needs a corpus that does not exist**: `--mock-reply` is consumed one per model *call* with the last repeating, so a twenty-turn script on the mock runs a tool exactly once and the grounded corpus has no tool output in it at all. A mock that answers with a call per turn is the missing instrument — **and it is the same instrument item 4 needs**, which is the reason to build it once | a mock that can call a tool every turn | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md) §Still open |
-| 4 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts. **The instrument is writable without a model**; only running it is section A's kind of work | nothing for the harness; a model to run it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
+| 3b | **What rule C is worth** — `--prune-results` one flag apart, the way `--repeat-once` and `--prune-behind` were both measured. The rule the tests describe is *the prompt is smaller and the conversation is intact*; how much smaller is unmeasured, and a rule built without a run is the thing item 1 is a warning about. **The missing corpus is no longer missing**: `--mock-cycle` (2026-09-14) wraps `--mock-reply` back to its first element instead of sticking on its last, so `call, answer` becomes a tool called on every turn of a script of any length — [`a-call-every-turn`](../../RECORD/2026-09-14.a-call-every-turn.completed.md). What is left is running it | nothing; the run itself | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md) §Still open |
+| 4 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts. **The instrument both this and item 3b needed now exists** — `--mock-cycle`, same record as above. The harness (the scorer itself) is not written; only running a written harness is section A's kind of work | the harness, not yet written; then a model to run it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
 | 5 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is | item 4, and the **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
 
 **Section C — what the night left open.** Five rows, none of them ordered
@@ -127,12 +127,13 @@ gantt
   answered rather than assumed: they want the same *line* and a different
   citation. It needs no model, no box and no format bump, which is why it is
   ahead of everything in sections C and D.
-- **Items 3b and 4 want the same thing built first.** Neither can be run on the
-  mock as it stands: replies are consumed per model call with the last
-  repeating, so nothing on this machine can make a corpus where a tool is called
-  every turn. That instrument is one change to the mock, it unblocks a
-  measurement and a probe at once, and whoever picks up either row should build
-  it rather than working around it twice.
+- **Items 3b and 4 wanted the same thing built first, and it is built.**
+  `--mock-cycle` (2026-09-14) wraps the mock's reply queue back to its first
+  element instead of sticking on its last, so a corpus where a tool is called
+  every turn no longer needs a model or a box — see
+  [`a-call-every-turn`](../../RECORD/2026-09-14.a-call-every-turn.completed.md).
+  3b now wants a run; 4 still wants its harness written before a run means
+  anything.
 - **Items 4 and 5 keep their order and their first move.** The probe before the
   grammar, the curl before either. What the reordering of 2026-09-08 changed is
   that the probe's *harness* is now visibly separable from the probe's *run* —

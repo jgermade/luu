@@ -281,6 +281,13 @@ enum Command {
         #[arg(long = "mock-reply", value_name = "TEXT")]
         mock_replies: Vec<String>,
 
+        /// Wrap back to the first `--mock-reply` instead of repeating the
+        /// last one. What turns two replies — a call, then the reply that
+        /// reads its result — into a tool called every turn, for as long as
+        /// the script runs, instead of once at the start of the session.
+        #[arg(long)]
+        mock_cycle: bool,
+
         /// Write every protocol and trace message to a replayable JSON-lines file.
         #[arg(long)]
         record: Option<std::path::PathBuf>,
@@ -454,6 +461,13 @@ enum Command {
         /// the plan block the planning call returns, then the answer.
         #[arg(long = "mock-reply", value_name = "TEXT")]
         mock_replies: Vec<String>,
+
+        /// Wrap back to the first `--mock-reply` instead of repeating the
+        /// last one. What turns two replies — a call, then the reply that
+        /// reads its result — into a tool called every turn, for as long as
+        /// the script runs, instead of once at the start of the session.
+        #[arg(long)]
+        mock_cycle: bool,
 
         /// Write every protocol and trace message to a replayable JSON-lines file.
         #[arg(long)]
@@ -632,6 +646,12 @@ enum Command {
         /// reply that reads its result.
         #[arg(long = "mock-reply", value_name = "TEXT")]
         mock_replies: Vec<String>,
+
+        /// Wrap back to the first `--mock-reply` instead of repeating the
+        /// last one, so a script of any length gets a tool call on every
+        /// turn instead of one at the start of the session.
+        #[arg(long)]
+        mock_cycle: bool,
 
         /// Stop the turn after this many milliseconds, to exercise cancelling.
         #[arg(long)]
@@ -1185,6 +1205,7 @@ struct ModelArgs<'a> {
     context_limit: u32,
     mock_delay_ms: u64,
     mock_replies: Vec<String>,
+    mock_cycle: bool,
 }
 
 /// The destination, resolved, announced, and built.
@@ -1219,6 +1240,7 @@ fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resol
         true => Mock::default(),
         false => Mock::replies(args.mock_replies),
     }
+    .cycle(args.mock_cycle)
     .delay(Duration::from_millis(args.mock_delay_ms));
     let backend = build_backend(&resolved, Some(mock), true)?;
     // The mock's model name is the mock's, and it is written back here so
@@ -1635,6 +1657,7 @@ pub async fn run() -> Result<()> {
         api_key_file,
         mock_delay_ms,
         mock_replies,
+        mock_cycle,
         record,
         context_limit,
         tokenizer,
@@ -1665,6 +1688,7 @@ pub async fn run() -> Result<()> {
             context_limit,
             mock_delay_ms,
             mock_replies,
+            mock_cycle,
         })?;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
@@ -1769,6 +1793,7 @@ pub async fn run() -> Result<()> {
         api_key_file,
         mock_delay_ms,
         mock_replies,
+        mock_cycle,
         record,
         context_limit,
         tokenizer,
@@ -1799,6 +1824,7 @@ pub async fn run() -> Result<()> {
             context_limit,
             mock_delay_ms,
             mock_replies,
+            mock_cycle,
         })?;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
@@ -1868,6 +1894,7 @@ pub async fn run() -> Result<()> {
         api_key_file,
         mock_delay_ms,
         mock_replies,
+        mock_cycle,
         cancel_after_ms,
         record,
         context_limit,
@@ -1916,6 +1943,7 @@ pub async fn run() -> Result<()> {
         context_limit,
         mock_delay_ms,
         mock_replies,
+        mock_cycle,
     })?;
     let model = resolved.model.clone();
     let context_limit = resolved.context_limit;
