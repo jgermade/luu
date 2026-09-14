@@ -1,0 +1,5 @@
+[posture.host]
+policy = "luu.toml"
+
+[posture.container]
+policy = "luu.container.toml"
