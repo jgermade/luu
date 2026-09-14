@@ -1,0 +1,7 @@
+To run `cargo clippy --workspace --all-targets` and report whether it is clean, I'll execute the command and provide the output.
+
+```tool
+{"command":"cargo","args":["clippy","--workspace","--all-targets"],"cwd":".","timeout_ms":30000}
+```
+
+The result comes back as the next message.

@@ -1,0 +1,17 @@
+[
+  { "n": 1, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 2, "verdict": "Drifted", "byte_identical_to_unconstrained": true },
+  { "n": 3, "verdict": "ContinuedPastFence", "byte_identical_to_unconstrained": true },
+  { "n": 4, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 5, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 6, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 7, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 8, "verdict": "Parsed", "byte_identical_to_unconstrained": true },
+  { "n": 9, "verdict": "Drifted", "byte_identical_to_unconstrained": true },
+  { "n": 10, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 11, "verdict": "Parsed", "byte_identical_to_unconstrained": true },
+  { "n": 12, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 13, "verdict": "Parsed", "byte_identical_to_unconstrained": true },
+  { "n": 14, "verdict": "NoCall", "byte_identical_to_unconstrained": true },
+  { "n": 15, "verdict": "ContinuedPastFence", "byte_identical_to_unconstrained": true }
+]

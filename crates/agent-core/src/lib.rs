@@ -9,6 +9,7 @@ pub mod approval;
 pub mod backend;
 pub mod context;
 pub mod fragment;
+pub mod grammar;
 pub mod job;
 pub mod protocol;
 pub mod rank;
