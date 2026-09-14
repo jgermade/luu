@@ -345,6 +345,51 @@ pub fn parse_call(text: &str) -> Option<ToolCall> {
         .filter(|call| !call.name.is_empty())
 }
 
+/// Where a reply landed against the tool-call format, for a probe that
+/// scores one call per prompt. `parse_call` answers *is this a call*;
+/// `score_call` answers the four-way question roadmap item 4 asked for and
+/// no scanner in this crate counted before — see
+/// `RECORD/2026-09-14.the-tool-call-probe.completed.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallVerdict {
+    /// A call parsed, and nothing followed it.
+    Parsed,
+    /// A call parsed inside a ```tool fence, and the model kept writing after
+    /// the closing fence — the precision run's failure, found by accident:
+    /// ~1 700 invented characters of the call's own result, streamed and
+    /// stored, because the fenced form has no way to tell a model to stop.
+    ContinuedPastFence,
+    /// A fenced block tagged with a tool's own name (```write_file) instead
+    /// of the format (```tool {"name": "write_file", ...}) — an attempt that
+    /// missed the shape, not a decision not to call.
+    Drifted,
+    /// No call attempted; an ordinary prose answer.
+    NoCall,
+}
+
+/// Scores one reply. `tool_names` is the tool set the drift check looks for a
+/// misnamed fence against — the caller's, because this function has no
+/// [`Tools`] of its own and should not need one to be tested.
+pub fn score_call(text: &str, tool_names: &[&str]) -> CallVerdict {
+    if let Some((body, close_end)) = fenced_span(text, "tool")
+        && serde_json::from_str::<ToolCall>(body)
+            .ok()
+            .is_some_and(|call: ToolCall| !call.name.is_empty())
+    {
+        return match text[close_end..].trim().is_empty() {
+            true => CallVerdict::Parsed,
+            false => CallVerdict::ContinuedPastFence,
+        };
+    }
+    if tool_names.iter().any(|name| fenced(text, name).is_some()) {
+        return CallVerdict::Drifted;
+    }
+    match bare_object(text).is_some_and(|call| !call.name.is_empty()) {
+        true => CallVerdict::Parsed,
+        false => CallVerdict::NoCall,
+    }
+}
+
 /// The body of the first ```tool block, if the block is closed. An unclosed one
 /// is a call still being generated, and half a call is not a call.
 /// The body of the first ```` ```<tag> ```` block, if there is one.
@@ -353,12 +398,24 @@ pub fn parse_call(text: &str) -> Option<ToolCall> {
 /// transport problem, and two scanners would drift on the same malformed
 /// block.
 pub(crate) fn fenced<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    fenced_span(text, tag).map(|(body, _)| body)
+}
+
+/// Like [`fenced`], plus the byte offset in `text` right after the closing
+/// fence — for a caller that cares what came *after* the block, which
+/// `fenced` itself never needs to.
+fn fenced_span<'a>(text: &'a str, tag: &str) -> Option<(&'a str, usize)> {
     let fence = format!("```{tag}");
     let open = text.find(&fence)?;
-    let body = &text[open + fence.len()..];
-    let body = body.strip_prefix('\n').unwrap_or(body);
-    let close = body.find("```")?;
-    Some(body[..close].trim())
+    let rest = &text[open + fence.len()..];
+    let (skipped, body_region) = match rest.strip_prefix('\n') {
+        Some(r) => (1, r),
+        None => (0, rest),
+    };
+    let close = body_region.find("```")?;
+    let body = body_region[..close].trim();
+    let close_end = open + fence.len() + skipped + close + "```".len();
+    Some((body, close_end))
 }
 
 /// The first `{…}` that parses as a call. Scanned from every `{` rather than
@@ -417,6 +474,53 @@ mod tests {
     #[test]
     fn plain_prose_is_an_answer_and_not_a_call() {
         assert!(parse_call("The file defines one function, `main`.").is_none());
+    }
+
+    const TOOL_NAMES: &[&str] = &[
+        "read_file",
+        "list_dir",
+        "run_command",
+        "write_file",
+        "edit_file",
+    ];
+
+    #[test]
+    fn score_call_parses_a_clean_fenced_call() {
+        let text = "looking\n```tool\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"src/main.rs\"}}\n```";
+        assert_eq!(score_call(text, TOOL_NAMES), CallVerdict::Parsed);
+    }
+
+    #[test]
+    fn score_call_parses_a_bare_object_with_no_fence_to_have_continued_past() {
+        let text = "Sure. {\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}";
+        assert_eq!(score_call(text, TOOL_NAMES), CallVerdict::Parsed);
+    }
+
+    #[test]
+    fn score_call_catches_generation_that_does_not_stop_at_the_fence() {
+        // The precision run's failure, reproduced: the block parses, and then
+        // the model writes the tool's own result itself.
+        let text = "looking\n```tool\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.rs\"}}\n```\nThe file defines `run_agent_turn`, which loops until a call...";
+        assert_eq!(
+            score_call(text, TOOL_NAMES),
+            CallVerdict::ContinuedPastFence
+        );
+    }
+
+    #[test]
+    fn score_call_catches_a_call_fenced_under_the_tools_own_name() {
+        // The gate probe's own failure: ```write_file instead of
+        // ```tool {"name": "write_file", ...}.
+        let text = "```write_file\n{\"path\": \"a.rs\", \"content\": \"fn main() {}\"}\n```";
+        assert_eq!(score_call(text, TOOL_NAMES), CallVerdict::Drifted);
+    }
+
+    #[test]
+    fn score_call_is_no_call_for_plain_prose() {
+        assert_eq!(
+            score_call("The file defines one function, `main`.", TOOL_NAMES),
+            CallVerdict::NoCall
+        );
     }
 
     #[test]

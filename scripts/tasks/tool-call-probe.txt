@@ -1,0 +1,23 @@
+# Fifteen prompts about this repository, each answerable with exactly one
+# tool call — read a file, list a directory, or run a check — and nothing
+# else. Built for roadmap item 4: scoring a reply's *shape* against the
+# ```tool format, not whether its answer is right. No .key file, because this
+# probe does not read the answer at all.
+#
+# See RECORD/2026-09-14.the-tool-call-probe.completed.md.
+
+read AGENTS.md and say what its second heading is
+list the top-level entries of crates/agent-core/src
+read luu.toml and say what enforcement is set to
+run cargo fmt --all --check and report whether it exits clean
+list the files directly inside RECORD/
+read Cargo.toml and say which edition the workspace is on
+list what is in crates/agent-core/src/backend
+read crates/agent-core/src/tools/mod.rs and say what MAX_OUTPUT_BYTES is
+run cargo test -p agent-core score_call and report the result
+list the entries of scripts/tasks
+read .gitignore and say whether .tmp/ is in it
+list what is inside crates/luu/tests
+read crates/agent-core/src/backend/mock.rs and say what Mock::cycle does
+run cargo clippy --workspace --all-targets and report whether it is clean
+read ROADMAP/2026-09-09/README.md and say which item is first in section A
