@@ -1,0 +1,14 @@
+```
+RECORD/
+├── data/
+│   ├── records.txt
+│   └── metadata.json
+├── logs/
+│   ├── error.log
+│   └── access.log
+└── config/
+    ├── settings.conf
+    └── users.conf
+```
+
+[stop] 465 prompt / 59 completion

@@ -25,8 +25,8 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 
 use super::{
-    Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Message,
-    StopReason, Usage,
+    Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Constraint,
+    Message, StopReason, Usage,
 };
 
 /// `llama-server`'s default. Not a claim that it is the likeliest server, just
@@ -119,11 +119,34 @@ struct Body<'a> {
     // No `max_tokens`, and no window: see the module note. The output cap that
     // *would* belong here is `--reserve`, which `CompletionRequest` does not
     // carry — one change with one argument, not a field smuggled in beside this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat<'a>>,
+    /// Raw GBNF, undocumented on this endpoint and honoured anyway on a
+    /// standalone `llama-server` — silently ignored by Ollama's own `/v1`.
+    /// See `RECORD/2026-09-14.the-bare-grammar-field.completed.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grammar: Option<&'a str>,
 }
 
 #[derive(serde::Serialize)]
 struct StreamOptions {
     include_usage: bool,
+}
+
+/// The shape every server that documents `response_format` at all agrees
+/// on. `name` is fixed rather than threaded from the caller: one schema, one
+/// call, and nothing here reads the name back.
+#[derive(serde::Serialize)]
+struct ResponseFormat<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    json_schema: JsonSchema<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonSchema<'a> {
+    name: &'static str,
+    schema: &'a serde_json::Value,
 }
 
 /// Only the fields we act on, so a server-side addition never breaks the parse.
@@ -279,12 +302,47 @@ impl Backend for OpenAi {
         })
     }
 
+    /// `response_format` is what the OpenAI-shaped spec itself documents, and
+    /// every server behind this backend that claims compatibility at all
+    /// tends to agree on it. `grammar` is the opposite: measured, on this
+    /// project's own `llama-server`, to be honoured — and measured, on
+    /// Ollama's own `/v1`, to be silently ignored (same field, same
+    /// endpoint, different server). "OpenAI-compatible" does not imply
+    /// grammar support, so this says so every time one is sent, regardless
+    /// of which server is actually behind `base_url`. See
+    /// `RECORD/2026-09-14.the-bare-grammar-field.completed.md`.
+    fn constrain_caveat(&self, constraint: &Constraint) -> Option<String> {
+        match constraint {
+            Constraint::Grammar(_) => Some(format!(
+                "sending `grammar` to {}: `llama-server` itself honours this, undocumented; \
+                 Ollama's own /v1 silently ignores it. Whether it did anything here is not \
+                 knowable from this side of the request.",
+                self.base_url
+            )),
+            Constraint::Schema(_) => None,
+        }
+    }
+
     fn stream(&self, request: CompletionRequest) -> ChunkStream<'_> {
         let url = format!("{}/chat/completions", self.base_url);
         let http = self.http.clone();
         let api_key = self.api_key.clone();
 
         Box::pin(async_stream::try_stream! {
+            let (response_format, grammar) = match &request.constraint {
+                Some(Constraint::Schema(schema)) => (
+                    Some(ResponseFormat {
+                        kind: "json_schema",
+                        json_schema: JsonSchema {
+                            name: "tool_call",
+                            schema,
+                        },
+                    }),
+                    None,
+                ),
+                Some(Constraint::Grammar(grammar)) => (None, Some(grammar.as_str())),
+                None => (None, None),
+            };
             let mut post = http.post(&url).json(&Body {
                 model: &request.model,
                 messages: &request.messages,
@@ -292,6 +350,8 @@ impl Backend for OpenAi {
                 stream_options: StreamOptions { include_usage: true },
                 temperature: request.temperature,
                 seed: request.seed,
+                response_format,
+                grammar,
             });
             if let Some(key) = &api_key {
                 post = post.bearer_auth(key);
@@ -443,6 +503,8 @@ mod tests {
             },
             temperature: Some(0.0),
             seed: Some(42),
+            response_format: None,
+            grammar: None,
         })
         .unwrap();
 
@@ -466,6 +528,8 @@ mod tests {
             },
             temperature: None,
             seed: None,
+            response_format: None,
+            grammar: None,
         })
         .unwrap();
         assert!(body.get("temperature").is_none(), "{body}");

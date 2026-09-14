@@ -47,6 +47,7 @@ async fn text_of(backend: &dyn Backend, prompt: &str) -> String {
         context_limit: None,
         temperature: None,
         seed: None,
+        constraint: None,
     };
     let mut stream = backend.stream(request);
     let mut text = String::new();

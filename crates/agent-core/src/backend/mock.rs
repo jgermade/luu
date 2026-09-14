@@ -78,6 +78,15 @@ impl Backend for Mock {
         Box::pin(async { Ok(vec!["mock".to_string()]) })
     }
 
+    /// `stream` below takes `_request` and reads nothing from it — the mock
+    /// cannot enforce a schema or a grammar any more than it can enforce
+    /// the window, so a `--constrain` run against it must not look like an
+    /// unconstrained one that happened to pass, the same rule the window
+    /// caveat set.
+    fn constrain_caveat(&self, _constraint: &super::Constraint) -> Option<String> {
+        Some("the mock backend does not enforce constraints; this run is unconstrained".into())
+    }
+
     fn stream(&self, _request: CompletionRequest) -> ChunkStream<'_> {
         let reply = {
             let mut replies = self.replies.lock().expect("no panic holds this lock");
@@ -142,6 +151,7 @@ mod tests {
             context_limit: None,
             temperature: None,
             seed: None,
+            constraint: None,
         }
     }
 

@@ -77,6 +77,30 @@ pub struct CompletionRequest {
     /// could differ by without either one saying so.
     pub temperature: Option<f32>,
     pub seed: Option<u32>,
+    /// What the reply is constrained to produce, decoupled from how any one
+    /// server spells it — a backend renders this into its own field or
+    /// declines, via [`Backend::constrain_caveat`]. `None` is the ordinary
+    /// case: every recording made before this field existed sent nothing,
+    /// and this is what "nothing" still means.
+    pub constraint: Option<Constraint>,
+}
+
+/// What a reply must satisfy, independent of which field any one server
+/// spells it in — `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`
+/// §The proposal.
+#[derive(Debug, Clone)]
+pub enum Constraint {
+    /// A JSON Schema the whole reply must satisfy — every reply becomes a
+    /// document. [`crate::tools::Tools::call_schema`] builds the one this
+    /// project sends: a call to exactly one tool, nothing else. Preserving
+    /// the "just answer" case is not this constraint's job; a caller that
+    /// wants it back sends this only on a retry, after an unconstrained
+    /// first attempt drifted.
+    Schema(serde_json::Value),
+    /// Raw GBNF. [`crate::grammar::compile`] builds the one this project
+    /// sends, and its own doc names exactly what it does and does not keep
+    /// out — see `RECORD/2026-09-14.the-alternation-that-was-not-one.completed.md`.
+    Grammar(String),
 }
 
 /// Token counts, as the backend reports them. Not our own tokenizer's opinion —
@@ -152,5 +176,20 @@ pub trait Backend: Send + Sync {
     /// actually pulled rather than typing one from memory.
     fn models(&self) -> BackendFuture<'_, Vec<String>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// What to tell a caller **once**, before it measures anything, about a
+    /// constraint this destination cannot render or cannot be trusted to
+    /// honour. `None` is not a promise the constraint worked — only that
+    /// this backend did not decline it outright.
+    ///
+    /// The rule the window caveat set stays: a run that silently sent no
+    /// constraint and a run that sent one must not look the same afterwards.
+    /// Every backend renders what it can into its own field regardless of
+    /// this return value — a caveat is what the run is told, not what it
+    /// does.
+    fn constrain_caveat(&self, constraint: &Constraint) -> Option<String> {
+        let _ = constraint;
+        None
     }
 }

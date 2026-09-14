@@ -1,0 +1,21 @@
+{
+  "off": {
+    "01": "NoCall", "02": "Drifted", "03": "ContinuedPastFence", "04": "NoCall",
+    "05": "NoCall", "06": "NoCall", "07": "NoCall", "08": "Parsed",
+    "09": "Drifted", "10": "NoCall", "11": "Parsed", "12": "NoCall",
+    "13": "Parsed", "14": "NoCall", "15": "ContinuedPastFence"
+  },
+  "off_tally": { "Parsed": 3, "Drifted": 2, "ContinuedPastFence": 2, "NoCall": 8 },
+  "grammar": {
+    "01": "NoCall", "02": "Drifted", "03": "Parsed", "04": "Parsed",
+    "05": "NoCall", "06": "NoCall", "07": "NoCall", "08": "Parsed",
+    "09": "Drifted", "10": "NoCall", "11": "Parsed", "12": "NoCall",
+    "13": "Parsed", "14": "Parsed", "15": "Parsed"
+  },
+  "grammar_tally": { "Parsed": 7, "Drifted": 2, "ContinuedPastFence": 0, "NoCall": 6 },
+  "schema_tally": {
+    "note": "score_call does not apply — no prompt ever produced a final reply. All 15 hit [tool limit reached] after 8 identical or near-identical tool calls, having answered nothing.",
+    "tool_limit_reached": 15,
+    "total": 15
+  }
+}

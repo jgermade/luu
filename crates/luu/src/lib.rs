@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
-use agent_core::backend::{Backend, CompletionRequest, mock::Mock, ollama::Ollama, openai::OpenAi};
+use agent_core::backend::{
+    Backend, CompletionRequest, Constraint, mock::Mock, ollama::Ollama, openai::OpenAi,
+};
 use agent_core::context::{
     Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat, Results,
 };
@@ -762,6 +764,15 @@ enum Command {
         /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
         #[arg(long)]
         select_graph: bool,
+
+        /// Constrain every reply: `schema` (`response_format`, every reply
+        /// becomes a call, no "just answer") or `grammar` (GBNF, prose stays
+        /// reachable). Off, so a run made without it stays comparable to
+        /// every recording on disk. A backend that cannot render the one
+        /// asked for says so once and sends its own request unconstrained
+        /// regardless — see `Backend::constrain_caveat`.
+        #[arg(long, value_enum)]
+        constrain: Option<ConstrainKind>,
     },
 }
 
@@ -1157,6 +1168,35 @@ impl EvictionKind {
             Self::Turn => Eviction::Turn,
             Self::Block => Eviction::Block { low_water },
         }
+    }
+}
+
+/// `--constrain` as the two bets `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`
+/// named. Neither is the default: unconstrained is what every recording on
+/// disk before this flag existed was measured under, and a flag that
+/// changed the default would make them incomparable retroactively.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum ConstrainKind {
+    /// `response_format`: every reply becomes a call to exactly one tool.
+    /// No "just answer" branch — see `Tools::call_schema`'s own doc for why
+    /// that makes this a retry's constraint, not a first attempt's.
+    Schema,
+    /// GBNF, `agent_core::grammar::compile`: prose stays reachable, and the
+    /// one fenced shape the preamble asks for is the only fenced shape that
+    /// is — see `RECORD/2026-09-14.the-alternation-that-was-not-one.completed.md`
+    /// for exactly what that does and does not close off.
+    Grammar,
+}
+
+impl ConstrainKind {
+    fn build(self, tools: &Tools) -> anyhow::Result<Constraint> {
+        Ok(match self {
+            Self::Schema => Constraint::Schema(tools.call_schema()),
+            Self::Grammar => Constraint::Grammar(
+                agent_core::grammar::compile(tools)
+                    .map_err(|error| anyhow::anyhow!("compiling the grammar: {error}"))?,
+            ),
+        })
     }
 }
 
@@ -1914,6 +1954,7 @@ pub async fn run() -> Result<()> {
         select_tokens,
         select_docs,
         select_graph,
+        constrain,
     } = command
     else {
         unreachable!("serve and tools are handled above");
@@ -2001,6 +2042,19 @@ pub async fn run() -> Result<()> {
     let mut context = AgentContext::new(SYSTEM)
         .with_tools(agency.definitions())
         .with_map(map.render());
+    // Built once, before the first turn — a constraint compiled per call
+    // would cost the compile every turn for a value that is the same every
+    // time. `constrain_caveat` is asked here too, once, so a run that sent
+    // one is told what the backend could not promise about it before
+    // anything is measured, the same rule the window caveat set.
+    let constraint = constrain
+        .map(|kind| kind.build(&agency.tools))
+        .transpose()?;
+    if let Some(constraint) = &constraint
+        && let Some(caveat) = backend.constrain_caveat(constraint)
+    {
+        eprintln!("note: {caveat}");
+    }
     // Shared with the printer task, because the tool round trips are announced
     // there and they belong in the same chain as the turns: two trackers would
     // measure one session against two different pasts.
@@ -2256,6 +2310,7 @@ pub async fn run() -> Result<()> {
             context_limit: budget.limit,
             temperature,
             seed,
+            constraint: constraint.clone(),
         };
 
         let (stop, cancel) = watch::channel(false);

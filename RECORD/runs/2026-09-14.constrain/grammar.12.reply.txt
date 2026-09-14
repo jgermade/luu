@@ -1,0 +1,5 @@
+```json
+{
+  "path": "crates/luu/tests"
+}
+```

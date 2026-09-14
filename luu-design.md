@@ -320,10 +320,26 @@ The model never executes anything directly — it only emits a structured reques
 - **How the model expresses a call is a transport detail.** `ToolCall` is the type
   and the parser is one function. Today it reads a fenced ```` ```tool ```` block
   out of plain text, which works against any backend including a 7B that has
-  never seen a tool API. **Native function calling** — JSON Schema definitions,
-  a `tool_call` from the backend, and **GBNF grammars / constrained decoding**
-  under llama.cpp to force valid JSON — replaces that function and nothing above
+  never seen a tool API. **Native function calling** — JSON Schema definitions
+  and a `tool_call` from the backend — replaces that function and nothing above
   it. Not built.
+  **Constrained decoding is built, off by default, and is two different bets, not
+  one.** `--constrain grammar` compiles a GBNF that keeps the "just answer"
+  branch reachable and forces the one correct fenced shape to complete exactly
+  once it is started — measured against a real `llama-server` (`agent_core::grammar`,
+  [`the-alternation-that-was-not-one`](RECORD/2026-09-14.the-alternation-that-was-not-one.completed.md),
+  [`what-constrain-does`](RECORD/2026-09-14.what-constrain-does.completed.md)):
+  7/15 clean calls against 3/15 unconstrained on the tool-call probe, and the
+  fence-continuation failure eliminated outright. `--constrain schema` sends
+  `response_format`, forcing *every* reply into a call with no "just answer"
+  branch at all — measured to exhaust `--max-tool-steps` on **15 of 15** probe
+  prompts, because a model given a result from its own call and still not
+  allowed to answer just calls again. It is the retry `Tools::call_schema`'s
+  own doc names — after an unconstrained first attempt drifted, not applied to
+  every call in a turn — and nothing yet builds that retry loop. `llama-server`
+  honours a bare `grammar` field as an undocumented extension; Ollama's own
+  `/v1` and native `/api/chat` do not, and say so once per run rather than
+  silently sending nothing (`Backend::constrain_caveat`).
 - **The definitions are the second half of the cached prefix**, so their rendering
   is a wire format: tools sorted by name, schemas serialized through
   `serde_json`'s sorted maps, nothing interpolated. `luu tools` prints the exact

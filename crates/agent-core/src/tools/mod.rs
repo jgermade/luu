@@ -303,6 +303,37 @@ impl Tools {
         text
     }
 
+    /// A JSON Schema for exactly one call to exactly one of these tools —
+    /// `{"name": "read_file", "arguments": {...}}`, `ToolCall`'s own shape,
+    /// as a `oneOf` over every tool's own `parameters()`. No second
+    /// definition of a tool's shape, for the reason [`fenced`]'s own comment
+    /// gives about two scanners drifting.
+    ///
+    /// This is the *retry* arm `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`
+    /// names beside the grammar: sent as a server's `response_format`, every
+    /// reply becomes a call — there is no "just answer" branch, unlike
+    /// [`crate::grammar::compile`]'s. Sending it on a first attempt would
+    /// make every turn a tool call whether or not one was wanted; sending it
+    /// on a second attempt, after an unconstrained first one drifted, is the
+    /// shape that keeps "just answer" reachable at all.
+    pub fn call_schema(&self) -> serde_json::Value {
+        let one_of: Vec<serde_json::Value> = self
+            .tools
+            .iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"const": tool.name()},
+                        "arguments": tool.parameters(),
+                    },
+                    "required": ["name", "arguments"],
+                })
+            })
+            .collect();
+        serde_json::json!({ "oneOf": one_of })
+    }
+
     /// Runs a call, or says why it did not.
     pub async fn call(&self, call: &ToolCall, sandbox: &Sandbox) -> ToolOutcome {
         match self.get(&call.name) {

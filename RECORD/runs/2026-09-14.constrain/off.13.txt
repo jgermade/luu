@@ -1,0 +1,18 @@
+To read the file `crates/agent-core/src/backend/mock.rs`, I'll use the `read_file` tool:
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/backend/mock.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/backend/mock.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 5 ms
+
+The `Mock::cycle` method in the `mock.rs` file controls the behavior of the mock backend when it runs out of replies. Here's what it does:
+
+1. **Default Behavior**: When `cycle` is `false` (the default), the mock backend will return the last reply it has once it runs out of replies. This means that if you have a list of replies like `["call", "answer"]`, the backend will return "answer" indefinitely after the second call.
+
+2. **Cycling Behavior**: When `cycle` is `true`, the mock backend will wrap back to the first reply in the list once it runs out of replies. This means that if you have a list of replies like `["call", "answer"]`, the backend will cycle through "call" and "answer" repeatedly.
+
+The method allows you to configure the mock backend to either repeat the last reply or cycle through the replies in a loop, depending on your needs. This is useful for testing different scenarios where you want to simulate different behaviors of the backend.
+
+[stop] 2673 prompt / 271 completion

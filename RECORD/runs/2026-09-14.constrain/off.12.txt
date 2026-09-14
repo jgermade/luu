@@ -1,0 +1,7 @@
+```json
+{
+  "path": "crates/luu/tests"
+}
+```
+
+[stop] 467 prompt / 19 completion

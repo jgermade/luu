@@ -217,6 +217,7 @@ mod tests {
             context_limit: None,
             temperature: None,
             seed: None,
+            constraint: None,
         }
     }
 

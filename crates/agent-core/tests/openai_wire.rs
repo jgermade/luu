@@ -131,6 +131,7 @@ fn request() -> CompletionRequest {
         context_limit: None,
         temperature: None,
         seed: None,
+        constraint: None,
     }
 }
 

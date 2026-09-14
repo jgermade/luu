@@ -1,0 +1,3 @@
+```tool
+{"name": "read_file", "arguments": {"path": ".gitignore"}}
+```

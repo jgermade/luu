@@ -1964,6 +1964,10 @@ async fn begin_turn(
             context_limit: sending.budget.limit,
             temperature: app.temperature,
             seed: app.seed,
+            // `--constrain` is a `chat`-only flag so far; a session has no
+            // way to ask for one yet. See `RECORD/2026-09-14.the-alternation-that-was-not-one.completed.md`
+            // §Still open.
+            constraint: None,
         },
         code,
     ))

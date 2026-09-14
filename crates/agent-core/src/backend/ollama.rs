@@ -4,8 +4,8 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 
 use super::{
-    Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Message,
-    StopReason, Usage,
+    Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Constraint,
+    Message, StopReason, Usage,
 };
 
 pub struct Ollama {
@@ -38,6 +38,12 @@ struct ChatRequest<'a> {
     /// default rather than being told a number we made up.
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<Options>,
+    /// `Constraint::Schema`'s field on this API — a JSON Schema, or the bare
+    /// string `"json"`, per Ollama's own docs. There is no field here for
+    /// `Constraint::Grammar`: `constrain_caveat` declines it rather than
+    /// sending a field this endpoint does not document at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<&'a serde_json::Value>,
 }
 
 /// Only what we have a reason to set. Every field is optional and the struct
@@ -167,6 +173,23 @@ impl Backend for Ollama {
         })
     }
 
+    /// This API's own field for a constraint is `format`, and it takes a
+    /// JSON Schema or the bare string `"json"` — no GBNF field at all,
+    /// documented or otherwise. A `Constraint::Grammar` is not rendered
+    /// into anything here, so this says so every time one is asked for; a
+    /// `Constraint::Schema` is rendered, so it says nothing.
+    fn constrain_caveat(&self, constraint: &Constraint) -> Option<String> {
+        match constraint {
+            Constraint::Grammar(_) => Some(
+                "Ollama's /api/chat has no grammar field — this request was sent \
+                 unconstrained. `--backend openai` against a standalone llama-server \
+                 is the destination that honours one."
+                    .to_string(),
+            ),
+            Constraint::Schema(_) => None,
+        }
+    }
+
     fn stream(&self, request: CompletionRequest) -> ChunkStream<'_> {
         let url = format!("{}/api/chat", self.base_url);
         let http = self.http.clone();
@@ -179,6 +202,10 @@ impl Backend for Ollama {
                     messages: &request.messages,
                     stream: true,
                     options: Options::from_request(&request),
+                    format: match &request.constraint {
+                        Some(Constraint::Schema(schema)) => Some(schema),
+                        _ => None,
+                    },
                 })
                 .send()
                 .await
@@ -270,6 +297,7 @@ mod tests {
                 num_ctx: Some(8192),
                 ..Default::default()
             }),
+            format: None,
         })
         .unwrap();
         assert_eq!(body["options"]["num_ctx"], 8192);
@@ -287,6 +315,7 @@ mod tests {
             context_limit: Some(8192),
             temperature: Some(0.0),
             seed: Some(42),
+            constraint: None,
         };
         let options = Options::from_request(&request).unwrap();
         let body = serde_json::to_value(options).unwrap();
@@ -305,6 +334,7 @@ mod tests {
             context_limit: None,
             temperature: Some(0.0),
             seed: Some(42),
+            constraint: None,
         };
         assert!(Options::from_request(&request).is_some());
     }
@@ -319,6 +349,7 @@ mod tests {
             messages: &messages,
             stream: true,
             options: None,
+            format: None,
         })
         .unwrap();
         assert!(body.get("options").is_none(), "{body}");

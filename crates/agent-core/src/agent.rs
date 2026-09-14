@@ -138,6 +138,7 @@ pub async fn run_agent_turn(
         context_limit,
         temperature,
         seed,
+        constraint,
     } = request;
     let mut steps: Vec<ToolStep> = Vec::new();
     let mut usage: Option<Usage> = None;
@@ -178,6 +179,7 @@ pub async fn run_agent_turn(
                 context_limit,
                 temperature,
                 seed,
+                constraint: constraint.clone(),
             },
             inner,
             cancel.clone(),
@@ -401,6 +403,7 @@ mod tests {
                 context_limit: None,
                 temperature: None,
                 seed: None,
+                constraint: None,
             },
             &tools,
             &fixture.sandbox,
@@ -457,6 +460,7 @@ mod tests {
                 context_limit: None,
                 temperature: None,
                 seed: None,
+                constraint: None,
             },
             &tools,
             &fixture.sandbox,
