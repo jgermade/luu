@@ -1234,7 +1234,7 @@ resources.
 Chat and session list are table stakes. The ones that justify building this at all
 — and one thing true of every one that is built: **the panel is per turn, and any
 turn can be selected**. `state.history` holds one entry per turn —
-`{turn, job, budget, prefix, tools, extraCalls, prompt, dropped, usage, reason}` —
+`{turn, job, budget, prefix, tools, extraCalls, prompt, dropped, cited, usage, reason}` —
 filled from `GET /api/sessions/:id` when a session is opened or resumed and
 appended to as each live turn ends, and the live turn is that same shape read out
 of the fields the socket fills rather than a special case with its own bindings.
