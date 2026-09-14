@@ -56,8 +56,8 @@ question; both are a box, a flag and a corpus that already exist.
 | --- | --- | --- | --- |
 | 3 | ~**Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. The shape rule B settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result reuses, so this is the cheapest row in the revision~ **landed the day this revision was written, as rule C: `--prune-results`, off, and inert without `--prune-behind`. It reaches the case rule B cannot — a turn that ran a tool and selected nothing has no spans to give — and it has no number: nothing has been run one flag apart, which is now the row below.** Found under it: `job_closed`'s `replaced.tokens` had been over-reporting a pruned turn since rule B landed on 2026-09-08, counting what its turns were *stored* at rather than what the prompt they left was made of. Fixed in the same commit | nothing | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
 | 3b | ~**What rule C is worth** — `--prune-results` one flag apart, the way `--repeat-once` and `--prune-behind` were both measured. The rule the tests describe is *the prompt is smaller and the conversation is intact*; how much smaller is unmeasured, and a rule built without a run is the thing item 1 is a warning about.~ **measured 2026-09-14 on the mock, using `--mock-cycle`: `--prune-behind` alone changes nothing on a tool-only corpus (0 of 15 prune moves freed a token — it walks `code_context`, which this corpus has none of); adding `--prune-results` freed 32 752 tokens over 20 turns and, sharper than rule B's own finding, eliminated eviction entirely — 16/20 turns evicted whole without it, 0 with it, all 20 exchanges still in the prompt at turn 20. Whether a model minds losing tool output to a citation is still unmeasured** | nothing further for the mechanics; a model, for the accuracy question | [`what-rule-c-is-worth`](../../RECORD/2026-09-14.what-rule-c-is-worth.completed.md), from [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md) §Still open |
-| 4 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts. **The harness is written** (2026-09-14): `agent_core::tools::score_call`, a fifteen-prompt corpus (`scripts/tasks/tool-call-probe.txt`), and `crates/luu/tests/tool_call_probe.rs` proving the scorer against `--mock-cycle` recovers all four verdicts — [`the-tool-call-probe`](../../RECORD/2026-09-14.the-tool-call-probe.completed.md). Section A's kind of work is what is left: running it against a model | nothing for the harness; a model to run it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
-| 5 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is | item 4, and the **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
+| 4 | ~**A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts. **The harness is written** (2026-09-14): `agent_core::tools::score_call`, a fifteen-prompt corpus (`scripts/tasks/tool-call-probe.txt`), and `crates/luu/tests/tool_call_probe.rs` proving the scorer against `--mock-cycle` recovers all four verdicts — [`the-tool-call-probe`](../../RECORD/2026-09-14.the-tool-call-probe.completed.md). Section A's kind of work is what is left: running it against a model~ **run 2026-09-14 against `qwen2.5-coder:7b` on machine 1, fifteen independent one-shot prompts: 3 Parsed, 2 Drifted, 2 Continued past the fence, 8 No call — a 20% clean-call rate. Two of the eight No calls are a shape `score_call` does not name (a correctly-tagged `\`\`\`tool` fence around the wrong JSON shape; a fence tagged with neither `tool` nor a tool's own name), both falling through to No call by the algorithm as specified. Six of the eight are not refusals but confidently wrong answers the model gave instead of calling anything** | nothing further; item 5's first move, next | [`the-tool-call-probe-run`](../../RECORD/2026-09-14.the-tool-call-probe-run.completed.md), from [`the-tool-call-probe`](../../RECORD/2026-09-14.the-tool-call-probe.completed.md) |
+| 5 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is. Item 4's run gives this row a number to argue from rather than a guess: 20% of fifteen one-shot prompts parsed cleanly | nothing; item 4 is closed. The **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md), [`the-tool-call-probe-run`](../../RECORD/2026-09-14.the-tool-call-probe-run.completed.md) |
 
 **Section C — what the night left open.** Five rows, none of them ordered
 before, all of them from
@@ -93,7 +93,7 @@ gantt
     section The window
     Tool results are only capped           :done, steps, 2026-09-09, 1d
     What rule C is worth                   :done, worth, after steps, 5d
-    A probe for tool calls                 :probe, after worth, 3d
+    A probe for tool calls                 :done, probe, after worth, 3d
     A grammar for tool calls               :gbnf, after probe, 4d
     section What the night left open
     The panel reads the pruned lines       :trace, after steps, 1d
@@ -135,12 +135,17 @@ gantt
   corpus where a tool is called every turn no longer needs a model or a box —
   see [`a-call-every-turn`](../../RECORD/2026-09-14.a-call-every-turn.completed.md).
   3b's run is done ([`what-rule-c-is-worth`](../../RECORD/2026-09-14.what-rule-c-is-worth.completed.md));
-  4 still wants its harness written before a run means anything.
-- **Items 4 and 5 keep their order and their first move.** The probe before the
-  grammar, the curl before either. What the reordering of 2026-09-08 changed is
-  that the probe's *harness* is now visibly separable from the probe's *run* —
-  the harness is section B work and the run is section A work — and splitting
-  them is what stops the whole pair waiting on a box.
+  4's run is done too, the same day, against `qwen2.5-coder:7b` on machine 1:
+  20% of fifteen one-shot prompts parsed cleanly, and more than half the
+  no-calls were the model answering confidently wrong rather than declining —
+  see [`the-tool-call-probe-run`](../../RECORD/2026-09-14.the-tool-call-probe-run.completed.md).
+- **Item 4 closed the way item 1 did — the measurement, not the decision.**
+  What the reordering of 2026-09-08 changed is that the probe's *harness* was
+  section B work and its *run* was section A work, splitting them is what
+  stopped the pair waiting on a box, and both halves are now done. What item 4
+  does not decide is item 5: a 20% clean-call rate is the number a grammar
+  would exist to fix, and whether to build one is still the unmade call this
+  row was ordered ahead of.
 - **Item 6 is the smallest row here and the one that would have found the most.**
   Three of the three bugs of 2026-09-08 were found by watching the surface act.
   A rule whose whole effect is invisible in the panel is a rule nobody will

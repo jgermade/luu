@@ -1,0 +1,12 @@
+```
+RECORD/
+├── data/
+│   ├── records.txt
+│   └── metadata.json
+├── logs/
+│   ├── error.log
+│   └── access.log
+└── config/
+    ├── settings.conf
+    └── users.conf
+```

@@ -1,0 +1,7 @@
+To run `cargo fmt --all --check` and report whether it exits clean, I'll execute the command and provide the result.
+
+```tool
+{"command":"cargo","args":["fmt","--all","--check"],"cwd":".","timeout_ms":30000}
+```
+
+[stop] 471 prompt / 59 completion

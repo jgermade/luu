@@ -1,0 +1,9 @@
+```
+crates/agent-core/src/backend/
+├── mod.rs
+├── http.rs
+├── grpc.rs
+└── utils.rs
+```
+
+[stop] 468 prompt / 32 completion

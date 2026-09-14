@@ -1,0 +1,10 @@
+```tool
+{"name": "read_file", "arguments": {"path": ".gitignore"}}
+```
+
+  [1] → read_file {"path":".gitignore"}
+  [1] ← ok · . (read-write) · held by in-process check · 1 ms
+
+Yes, `.tmp/` is in the `.gitignore` file.
+
+[stop] 1006 prompt / 38 completion
