@@ -1,0 +1,280 @@
+
+> what does the context module say it opens with?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what does the tokens field on a budget bucket count?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> where is the floor defined?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what does Repeat::Once change about rendering?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> how does a turn get evicted?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what does the pruned line replace in the render?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> which struct holds the eviction policy?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what happens to a turn's spans below the prune line?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> how is a fragment identity defined?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what does the citation format look like?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what happens when a citation would cost more than the span?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> where does the budget count the history bucket?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what triggers a cut under evict turn?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what triggers a cut under evict block?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> how does low-water interact with block eviction?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what does the trace channel report about a prune?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what does a resumed session lose about pruning?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> how does rule A interact with rule B?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> what does the tool step store verbatim?
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion
+
+> summarize what you now know about pruning
+
+looking
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+Noted.
+
+[stop] 0 prompt / 6 completion

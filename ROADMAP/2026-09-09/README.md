@@ -55,7 +55,7 @@ question; both are a box, a flag and a corpus that already exist.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 3 | ~**Tool results are only capped** — an 8 KiB `cat` and a 1 000-token fragment are the same object to the window, and neither `Repeat` nor rule B reaches `ToolStep` today. The shape rule B settled on — a ratchet, a citation, and the eviction policy's own target — is the one a tool result reuses, so this is the cheapest row in the revision~ **landed the day this revision was written, as rule C: `--prune-results`, off, and inert without `--prune-behind`. It reaches the case rule B cannot — a turn that ran a tool and selected nothing has no spans to give — and it has no number: nothing has been run one flag apart, which is now the row below.** Found under it: `job_closed`'s `replaced.tokens` had been over-reporting a pruned turn since rule B landed on 2026-09-08, counting what its turns were *stored* at rather than what the prompt they left was made of. Fixed in the same commit | nothing | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md), from [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md) §Still open |
-| 3b | **What rule C is worth** — `--prune-results` one flag apart, the way `--repeat-once` and `--prune-behind` were both measured. The rule the tests describe is *the prompt is smaller and the conversation is intact*; how much smaller is unmeasured, and a rule built without a run is the thing item 1 is a warning about. **The missing corpus is no longer missing**: `--mock-cycle` (2026-09-14) wraps `--mock-reply` back to its first element instead of sticking on its last, so `call, answer` becomes a tool called on every turn of a script of any length — [`a-call-every-turn`](../../RECORD/2026-09-14.a-call-every-turn.completed.md). What is left is running it | nothing; the run itself | [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md) §Still open |
+| 3b | ~**What rule C is worth** — `--prune-results` one flag apart, the way `--repeat-once` and `--prune-behind` were both measured. The rule the tests describe is *the prompt is smaller and the conversation is intact*; how much smaller is unmeasured, and a rule built without a run is the thing item 1 is a warning about.~ **measured 2026-09-14 on the mock, using `--mock-cycle`: `--prune-behind` alone changes nothing on a tool-only corpus (0 of 15 prune moves freed a token — it walks `code_context`, which this corpus has none of); adding `--prune-results` freed 32 752 tokens over 20 turns and, sharper than rule B's own finding, eliminated eviction entirely — 16/20 turns evicted whole without it, 0 with it, all 20 exchanges still in the prompt at turn 20. Whether a model minds losing tool output to a citation is still unmeasured** | nothing further for the mechanics; a model, for the accuracy question | [`what-rule-c-is-worth`](../../RECORD/2026-09-14.what-rule-c-is-worth.completed.md), from [`what-a-result-costs`](../../RECORD/2026-09-09.what-a-result-costs.completed.md) §Still open |
 | 4 | **A probe for tool calls** — N prompts that each require exactly one call, scored *parsed* / *drifted* / *no call* / **continued past the fence**, the fourth being what the precision run found by accident and no existing probe counts. **The instrument both this and item 3b needed now exists** — `--mock-cycle`, same record as above. The harness (the scorer itself) is not written; only running a written harness is section A's kind of work | the harness, not yet written; then a model to run it | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) §The instrument |
 | 5 | **A grammar for tool calls** — the parse reads the block correctly; what fails is that generation does not stop. Narrowed to tool calls alone, the plan block stays as it is | item 4, and the **first move is one curl**: whether `/v1/chat/completions` takes a bare `grammar` field decides whether this costs a chat template or a branch | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md) |
 
@@ -92,7 +92,7 @@ gantt
     A model inside a container             :crit, ctr, after rep, 2d
     section The window
     Tool results are only capped           :done, steps, 2026-09-09, 1d
-    What rule C is worth                   :worth, after steps, 1d
+    What rule C is worth                   :done, worth, after steps, 5d
     A probe for tool calls                 :probe, after worth, 3d
     A grammar for tool calls               :gbnf, after probe, 4d
     section What the night left open
@@ -115,11 +115,13 @@ gantt
   unmade: the run cleared the bar (no verdict moved across 20 questions) but
   one conversation is not the same claim as a changed default. See
   [`the-7b-does-not-miss-it`](../../RECORD/2026-09-14.the-7b-does-not-miss-it.completed.md).
-- **Item 3 landed the day this revision was written, and item 3b is what it
-  cost.** The rule is built, off, tested and unmeasured — which is precisely the
-  shape item 1 is at the top of this order for. It is one mock run on a corpus
-  that already exists, and it should not be allowed to become a second row that
-  looks finished.
+- **Item 3 landed the day this revision was written, item 3b is what it cost,
+  and item 3b is now closed too.** Measured 2026-09-14: `--prune-behind` alone
+  is a no-op on a tool-heavy corpus and `--prune-results` is not, freeing
+  32 752 tokens and eliminating eviction outright over 20 turns. What is not
+  closed is the shape item 1 was a warning about either way — this is a mock
+  measurement of mechanics, and whether a model minds losing tool output to a
+  citation is unasked.
 - **Item 3 is the last row of the window's original argument.**
   [`what-leaves-the-history`](../../RECORD/2026-09-06.what-leaves-the-history.completed.md)
   proposed two rules and left a third case open in its §Still open — *tool
@@ -127,13 +129,13 @@ gantt
   answered rather than assumed: they want the same *line* and a different
   citation. It needs no model, no box and no format bump, which is why it is
   ahead of everything in sections C and D.
-- **Items 3b and 4 wanted the same thing built first, and it is built.**
-  `--mock-cycle` (2026-09-14) wraps the mock's reply queue back to its first
-  element instead of sticking on its last, so a corpus where a tool is called
-  every turn no longer needs a model or a box — see
-  [`a-call-every-turn`](../../RECORD/2026-09-14.a-call-every-turn.completed.md).
-  3b now wants a run; 4 still wants its harness written before a run means
-  anything.
+- **Items 3b and 4 wanted the same thing built first; it is built, and 3b is
+  now closed with it.** `--mock-cycle` (2026-09-14) wraps the mock's reply
+  queue back to its first element instead of sticking on its last, so a
+  corpus where a tool is called every turn no longer needs a model or a box —
+  see [`a-call-every-turn`](../../RECORD/2026-09-14.a-call-every-turn.completed.md).
+  3b's run is done ([`what-rule-c-is-worth`](../../RECORD/2026-09-14.what-rule-c-is-worth.completed.md));
+  4 still wants its harness written before a run means anything.
 - **Items 4 and 5 keep their order and their first move.** The probe before the
   grammar, the curl before either. What the reordering of 2026-09-08 changed is
   that the probe's *harness* is now visibly separable from the probe's *run* —

@@ -1,0 +1,131 @@
+[
+  {
+    "arm": "off",
+    "turn_20_buckets": [
+      {
+        "name": "system",
+        "tokens": 11
+      },
+      {
+        "name": "tools",
+        "tokens": 470
+      },
+      {
+        "name": "map",
+        "tokens": 0
+      },
+      {
+        "name": "summaries",
+        "tokens": 0
+      },
+      {
+        "name": "history",
+        "tokens": 6284
+      },
+      {
+        "name": "code",
+        "tokens": 0
+      },
+      {
+        "name": "prompt",
+        "tokens": 11
+      },
+      {
+        "name": "reserve",
+        "tokens": 512
+      }
+    ],
+    "evicted_events": 16,
+    "turns_evicted": 16,
+    "pruned_events": 0,
+    "pruned_nonzero": 0,
+    "tokens_freed_by_pruning": 0,
+    "mean_prefix_reuse": 0.21732865612916794
+  },
+  {
+    "arm": "prune-behind",
+    "turn_20_buckets": [
+      {
+        "name": "system",
+        "tokens": 11
+      },
+      {
+        "name": "tools",
+        "tokens": 470
+      },
+      {
+        "name": "map",
+        "tokens": 0
+      },
+      {
+        "name": "summaries",
+        "tokens": 0
+      },
+      {
+        "name": "history",
+        "tokens": 6284
+      },
+      {
+        "name": "code",
+        "tokens": 0
+      },
+      {
+        "name": "prompt",
+        "tokens": 11
+      },
+      {
+        "name": "reserve",
+        "tokens": 512
+      }
+    ],
+    "evicted_events": 16,
+    "turns_evicted": 16,
+    "pruned_events": 15,
+    "pruned_nonzero": 0,
+    "tokens_freed_by_pruning": 0,
+    "mean_prefix_reuse": 0.21732865612916794
+  },
+  {
+    "arm": "prune-results",
+    "turn_20_buckets": [
+      {
+        "name": "system",
+        "tokens": 11
+      },
+      {
+        "name": "tools",
+        "tokens": 470
+      },
+      {
+        "name": "map",
+        "tokens": 0
+      },
+      {
+        "name": "summaries",
+        "tokens": 0
+      },
+      {
+        "name": "history",
+        "tokens": 7053
+      },
+      {
+        "name": "code",
+        "tokens": 0
+      },
+      {
+        "name": "prompt",
+        "tokens": 11
+      },
+      {
+        "name": "reserve",
+        "tokens": 512
+      }
+    ],
+    "evicted_events": 0,
+    "turns_evicted": 0,
+    "pruned_events": 16,
+    "pruned_nonzero": 16,
+    "tokens_freed_by_pruning": 32752,
+    "mean_prefix_reuse": 0.26933903990535063
+  }
+]

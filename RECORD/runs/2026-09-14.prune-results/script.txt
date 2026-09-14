@@ -1,0 +1,20 @@
+what does the context module say it opens with?
+what does the tokens field on a budget bucket count?
+where is the floor defined?
+what does Repeat::Once change about rendering?
+how does a turn get evicted?
+what does the pruned line replace in the render?
+which struct holds the eviction policy?
+what happens to a turn's spans below the prune line?
+how is a fragment identity defined?
+what does the citation format look like?
+what happens when a citation would cost more than the span?
+where does the budget count the history bucket?
+what triggers a cut under evict turn?
+what triggers a cut under evict block?
+how does low-water interact with block eviction?
+what does the trace channel report about a prune?
+what does a resumed session lose about pruning?
+how does rule A interact with rule B?
+what does the tool step store verbatim?
+summarize what you now know about pruning
