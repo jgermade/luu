@@ -22,6 +22,11 @@ there needs to say so and argue with it, not route around it.
   per revision (`ROADMAP/YYYY-MM-DD/`). Rewritable *within* a revision and
   superseded wholesale by a later one, so the roadmap can be corrected without
   the correction erasing what was believed before it.
+- `.tmp/` — scratch that is not part of the record: raw run output, a script
+  written to drive a measurement, anything that would otherwise land in `/tmp`
+  and be unreadable to a check that only trusts the working tree. Gitignored.
+  What a run is *worth* still goes in `RECORD/`, evidence included — this is
+  only where the disposable half lives while the run is in progress.
 
 The three overlap on purpose and must not be merged. If you only update the
 design doc, the reasoning is lost; if you only write a record, nobody can tell

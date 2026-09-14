@@ -20,6 +20,13 @@ answer**, which is one afternoon of `--repeat-once` against a 7B. The file is
 carried forward rather than rewritten, because a plan that restates itself to
 look busy is the failure the roadmap split exists to prevent.
 
+**2026-09-14: machine 1 answered it.** `--repeat-once` against `qwen2.5-coder:7b`
+on `grounded.txt`, verdict-for-verdict identical to `off` across all 20
+questions — see
+[`the-7b-does-not-miss-it`](../../RECORD/2026-09-14.the-7b-does-not-miss-it.completed.md).
+Machine 4 remains the only box that can answer item 2, *a model inside a
+container*.
+
 ## The inventory
 
 Bandwidth figures are from specification, not measured here, and they are in the
@@ -28,7 +35,7 @@ what fits at all.
 
 | # | Machine | Memory for weights | ~Bandwidth | Ceiling at Q4 | Status as of 2026-09-08 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **M1 Pro, 16 GB** — macOS | 16 GB unified | ~200 GB/s | 7B comfortable, 14b tight | Gate probe, container baseline, and both model-in-the-loop runs (coverage, precision) |
+| 1 | **M1 Pro, 16 GB** — macOS | 16 GB unified | ~200 GB/s | 7B comfortable, 14b tight | Gate probe, container baseline, and three model-in-the-loop runs (coverage, precision, repeat-once) |
 | 2 | **Mac mini M4, 16 GB** | 16 GB unified | ~120 GB/s | same, slower | Reserve. Never allocated a question of its own |
 | 3 | **MacBook M4 Pro, 48 GB** | 48 GB unified | ~273 GB/s | **32b comfortable** | Size sweep completed — [`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md) |
 | 4 | **Ryzen 5 3600 + RTX 5060 Ti** | 16 GB VRAM | ~448 GB/s | 14b comfortable — measured, 11.1/16.3 GB at ctx 8192 | Native Linux confinement and the 14B ceiling, both closed — [`landlock-holds-natively`](../../RECORD/2026-09-08.landlock-holds-natively.completed.md), [`the-rtx-holds-14b`](../../RECORD/2026-09-08.the-rtx-holds-14b.completed.md), [`the-14b-context-ceiling`](../../RECORD/2026-09-08.the-14b-context-ceiling.completed.md) |

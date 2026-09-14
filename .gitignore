@@ -1,6 +1,7 @@
 target/
 site/
 node_modules/
+.tmp/
 tests/smoke/test-results/
 tests/smoke/playwright-report/
 records/

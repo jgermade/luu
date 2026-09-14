@@ -26,7 +26,8 @@ design.
 answer in the project on 2026-09-06, was ordered behind four rows of UI work on
 2026-09-08, and is still unbought on 2026-09-09. `--repeat-once` is off by
 default for two reasons; one of them was measured and the other has never been
-asked. It stays at the top of this order until a machine answers it.
+asked. It stays at the top of this order until a machine answers it. **It was:
+2026-09-14, machine 1, struck through below.**
 
 ## What landed since 2026-09-08
 
@@ -46,7 +47,7 @@ question; both are a box, a flag and a corpus that already exist.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 1 | **Whether a 7B misses the repetition** — `--repeat-once` one flag apart against a model. Rule A is off for two reasons and this closes the second: position inside the *bucket* does not matter, position across the *window* has never been asked. **One revision late** | an afternoon on machine 1 or 4 | [`a-span-is-rendered-once`](../../RECORD/2026-09-07.a-span-is-rendered-once.completed.md) §Still open |
+| 1 | ~**Whether a 7B misses the repetition** — `--repeat-once` one flag apart against a model. Rule A is off for two reasons and this closes the second: position inside the *bucket* does not matter, position across the *window* has never been asked. **One revision late**~ **measured 2026-09-14 against `qwen2.5-coder:7b` on machine 1: verdict-for-verdict identical between `off` and `--repeat-once` on all 20 questions of `grounded.txt` (11 right / 3 partial / 6 wrong, unchanged), while the `code` bucket fell 17.5% — replicating the mock's −19.5% almost exactly. The measurement is closed; whether the default flips is a separate, unmade decision** | nothing further; the decision, if anyone wants to make it | [`the-7b-does-not-miss-it`](../../RECORD/2026-09-14.the-7b-does-not-miss-it.completed.md), from [`a-span-is-rendered-once`](../../RECORD/2026-09-07.a-span-is-rendered-once.completed.md) §Still open |
 | 2 | **A model inside a container** — every contained run in this repository, on the Mac and on the runner, is the mock. The trigger `luu.container.toml` names for narrowing its network is the first `run_command` inside one with a model in the loop, and nothing has ever exercised it | machine 4, which is the only box that is both Linux and a model | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 
 **Section B — the window, which is where the code is.**
@@ -87,7 +88,7 @@ gantt
     dateFormat YYYY-MM-DD
     axisFormat %b %d
     section Needs a model
-    Whether a 7B misses the repetition     :crit, rep, 2026-09-09, 2d
+    Whether a 7B misses the repetition     :done, rep, 2026-09-09, 5d
     A model inside a container             :crit, ctr, after rep, 2d
     section The window
     Tool results are only capped           :done, steps, 2026-09-09, 1d
@@ -108,13 +109,12 @@ gantt
 
 ## What actually blocks what
 
-- **Item 1 blocks nothing and is first anyway.** Nothing in the tree waits on
-  the answer: rule A is built, it is off, and it stays off either way until
-  somebody runs it. What it blocks is the *decision* — whether the default
-  changes — and a rule that is built, measured on tokens and never measured on
-  answers is the most expensive kind of unfinished work this project produces,
-  because it looks finished. Two revisions have now ordered it and neither has
-  bought it.
+- **Item 1 blocked nothing and was first anyway, and is now closed.** Rule A is
+  built, off, and stayed off until somebody ran it — machine 1, 2026-09-14. What
+  it blocked was the *decision*, not any code, and the decision is still
+  unmade: the run cleared the bar (no verdict moved across 20 questions) but
+  one conversation is not the same claim as a changed default. See
+  [`the-7b-does-not-miss-it`](../../RECORD/2026-09-14.the-7b-does-not-miss-it.completed.md).
 - **Item 3 landed the day this revision was written, and item 3b is what it
   cost.** The rule is built, off, tested and unmeasured — which is precisely the
   shape item 1 is at the top of this order for. It is one mock run on a corpus

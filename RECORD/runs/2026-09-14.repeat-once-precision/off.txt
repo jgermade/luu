@@ -1,0 +1,201 @@
+
+== fragment crates/agent-core/src/context.rs:1-15 — 787 bytes into the next prompt
+
+> which two commitments does this file open with?
+
+The two commitments that this file opens with are:
+
+1. **Decide, then render.** The selection happens against a token budget and the rendering is a pure function of it, so every token sent can be attributed to a bucket. Rendering first and trimming the string afterwards loses that, and cuts wherever the limit happens to land.
+
+2. **The stable prefix stays byte-identical.** The system block is the part the prompt cache reuses. Nothing that changes per turn goes above it — selected code is fused into the *current* user message, as late as possible.
+
+[stop] 1736 prompt / 119 completion
+
+> where does selected code get fused, and why not above the system block?
+
+Selected code gets fused into the *current* user message, as late as possible, because:
+
+- **Byte-stable by construction**: The system block is a constant, the tools change when the tool set does, and the map changes when the repository does. A map fused into every user message would be paid for on every call and would push the changed bytes to the front of the prompt.
+
+- **Avoids unnecessary changes**: By fusing selected code into the current user message, only the parts that change per turn (like selected code) are updated, rather than the entire prompt. This minimizes the number of changes and keeps the stable prefix byte-identical, which can improve performance and reduce the likelihood of issues with the prompt cache.
+
+[stop] 2983 prompt / 151 completion
+
+> what does "decide, then render" forbid doing to the prompt string?
+
+"Decide, then render" forbids doing the following to the prompt string:
+
+- **Rendering first and trimming the string afterwards**: This approach loses the ability to attribute every token sent to a bucket. Instead, the selection happens against a token budget, and the rendering is a pure function of it. This ensures that every token can be clearly attributed to a specific part of the prompt, maintaining the integrity and traceability of the generated content.
+
+[stop] 4257 prompt / 90 completion
+
+> which record does it point at for the reasoning?
+
+The record it points at for the reasoning is:
+
+- **Recordings covering every kind of line the format has**: turns, the task lifecycle with a close, eviction, tool calls with both verdicts, a fused fragment, and a turn that failed.
+
+[stop] 5457 prompt / 52 completion
+
+> name one change that would break byte-identical prefix reuse
+
+One change that would break byte-identical prefix reuse is:
+
+- **Changing the order of tools in the tool definitions**: If the order of tools in the tool definitions changes, the byte-stable prefix would be altered, as the tool block is fused into the prompt. This would violate the commitment to keeping the stable prefix byte-identical.
+
+[stop] 6740 prompt / 71 completion
+
+== fragment crates/agent-core/src/job.rs:1-12 — 738 bytes into the next prompt
+
+== evicted turn 1 — 1396 tokens out of the window, for good
+
+> what three jobs does one task boundary do?
+
+One task boundary does the following three jobs:
+
+1. **Cut point for compaction**: It determines where the conversation should be compacted to save space or resources.
+2. **Scope permission granted at**: It sets the permissions for what actions can be taken within the scope of the task.
+3. **Grouping the transcript shows**: It organizes the transcript into logical groups or sections, making it easier to understand and navigate.
+
+[stop] 6664 prompt / 87 completion
+
+== evicted turn 2 — 1269 tokens out of the window, for good
+
+> what does "closing is an event, not a mutation" mean here?
+
+"Closing is an event, not a mutation" means that when a task is closed, it does not change or modify any existing data or state. Instead, it records the fact that the task has been closed as a new event or state. This approach ensures that the history and state of the task remain immutable, allowing for better tracking, auditing, and debugging.
+
+[stop] 6482 prompt / 74 completion
+
+> what does reopening a closed task do to its turns?
+
+Reopening a closed task does not change or modify the existing turns. Instead, it changes how those turns are rendered or displayed. This allows for a different perspective or format to be applied to the same content without altering the original data.
+
+[stop] 7611 prompt / 48 completion
+
+> which two records does it cite, and for what?
+
+The two records it cites, and for what, are:
+
+1. **RECORD/2026-08-27.tasks-instead-of-modes.completed.md**: This record provides the argument and rationale for using tasks instead of modes. It explains why tasks are a better approach for managing work, approval, and forgetting within a session.
+
+2. **RECORD/2026-08-30.tasks-in-code.completed.md**: This record details what the `job.rs` file does and does not do. It outlines the specific implementation and functionality related to tasks, including how they are numbered, how they are used, and how they interact with other parts of the system.
+
+[stop] 7679 prompt / 143 completion
+
+== evicted turn 3 — 1203 tokens out of the window, for good
+
+> is a session a sequence of tasks, or a mode the agent is in?
+
+A session is a sequence of tasks.
+
+[stop] 7724 prompt / 9 completion
+
+== fragment luu.toml:1-26 — 1200 bytes into the next prompt
+
+== evicted turns 4, 5 — 2444 tokens out of the window, for good
+
+> why is there no deny list in this policy?
+
+There is no deny list in this policy because Landlock is an allowlist-only sandboxing mechanism. This means that a subprocess can only do what is explicitly allowed by the ruleset, and there is no way to subtract permissions that have already been granted. By not having a deny list, the policy can be simpler and more straightforward, as it only needs to specify what is allowed.
+
+[stop] 6732 prompt / 78 completion
+
+== evicted turn 6 — 1336 tokens out of the window, for good
+
+> what does enforcement = "kernel" do where Landlock is missing?
+
+When `enforcement = "kernel"` is set and Landlock is missing, the policy falls back to "best-effort" enforcement. This means that the policy will still attempt to limit the capabilities of subprocesses, but it will not rely on the Landlock kernel feature. Instead, it will use other methods, such as seccomp filters, to enforce the policy. This ensures that the policy is still effective even if Landlock is not available on the system.
+
+[stop] 6515 prompt / 96 completion
+
+> why are commands program names rather than shell strings?
+
+Commands are program names rather than shell strings because they need to be checked against the policy file, which is committed with the project. If commands were shell strings, they could contain arbitrary shell commands, which could bypass the policy file. By using program names, the policy file can specify exactly which programs are allowed to run, and the system can enforce this policy.
+
+[stop] 7667 prompt / 73 completion
+
+== evicted turn 7 — 1074 tokens out of the window, for good
+
+> which programs does this policy allow?
+
+This policy allows the following programs:
+
+- `cargo`
+- `rustc`
+- `git`
+- `rg`
+- `ls`
+
+These programs are specified in the `commands` field of the `SandboxPolicy` struct.
+
+[stop] 7622 prompt / 48 completion
+
+== evicted turn 8 — 1093 tokens out of the window, for good
+
+> what happens to network access, and how would a verdict report it?
+
+Network access is controlled by the `network` field in the `SandboxPolicy` struct. If `network` is set to `true`, the policy allows network access. If `network` is set to `false`, the policy denies network access.
+
+A verdict would report network access as follows:
+
+- If network access is allowed, the `allowed` field in the `Verdict` struct would be `true`, and the `rule` field would indicate which rule allowed network access.
+- If network access is denied, the `allowed` field in the `Verdict` struct would be `false`, and the `rule` field would indicate which rule denied network access.
+
+[stop] 7638 prompt / 137 completion
+
+== evicted turns 9, 10 — 1267 tokens out of the window, for good
+
+> without looking at any file again: what were the two commitments the context module opens with?
+
+The context module opens two commitments with the following:
+
+1. The system block: This is a constant that is not expected to change often. It is used to provide information about the system, such as the tools available and the repository outline.
+
+2. The tools block: This is a block that is updated when the tool set changes. It is used to provide information about the tools available, such as their descriptions and parameters.
+
+[stop] 7586 prompt / 86 completion
+
+== evicted turn 11 — 1531 tokens out of the window, for good
+
+> what three jobs does one task boundary do?
+
+One task boundary does the following three jobs:
+
+1. It proposes a job to the user.
+2. It approves a job proposed by the user.
+3. It executes the approved job and returns the result.
+
+[stop] 7184 prompt / 43 completion
+
+== evicted turn 12 — 1137 tokens out of the window, for good
+
+> which programs does the sandbox policy allow?
+
+The sandbox policy allows the following programs:
+
+- `cargo`
+- `rustc`
+- `git`
+- `rg`
+- `ls`
+
+These programs are specified in the `commands` field of the `SandboxPolicy` struct.
+
+[stop] 7184 prompt / 49 completion
+
+== evicted turn 13 — 1119 tokens out of the window, for good
+
+> what does enforcement = "kernel" do when Landlock is missing?
+
+When Landlock is missing, the enforcement level set to "kernel" will not have any effect. The code checks if Landlock is available by calling the `kernel_abi` function, which returns `None` if Landlock is not available. If Landlock is not available, the code will not attempt to use it, regardless of the enforcement level set.
+
+[stop] 7155 prompt / 74 completion
+
+== evicted turn 14 — 1004 tokens out of the window, for good
+
+> which of your last four answers came from what you were shown, and which did you fill in?
+
+The last four answers were all filled in by me based on the information provided in the previous messages.
+
+[stop] 7354 prompt / 21 completion
