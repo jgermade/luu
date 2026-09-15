@@ -1,0 +1,5 @@
+To list the entries of the `scripts/tasks` directory, you can use the `list_dir` tool. Here is the command to do that:
+
+```tool
+{"name": "list_dir", "arguments": {"path": "scripts/tasks"}}
+```

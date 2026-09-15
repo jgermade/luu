@@ -1,0 +1,5 @@
+To check if `.tmp/` is in the `.gitignore` file, I'll read the file and look for the string.
+
+```tool
+{"name": "read_file", "arguments": {"path": ".gitignore"}}
+```

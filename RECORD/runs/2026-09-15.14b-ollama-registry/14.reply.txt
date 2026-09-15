@@ -1,0 +1,13 @@
+To run `cargo clippy --workspace --all-targets` and check if the output is clean, you can use the `run_command` tool. Here's how you can do it:
+
+```tool
+{
+  "name": "run_command",
+  "arguments": {
+    "argv": ["cargo", "clippy", "--workspace", "--all-targets", "--message-format=json"],
+    "cwd": "."
+  }
+}
+```
+
+This command will run `cargo clippy` and output the results in JSON format, which makes it easier to parse and check for any issues. If the output is clean, there should be no warnings or errors reported.
