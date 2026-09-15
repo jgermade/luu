@@ -1,0 +1,3 @@
+```tool
+{"name": "edit_file", "arguments": {"path": "config.json", "old_string": "30", "new_string": "60"}}
+```

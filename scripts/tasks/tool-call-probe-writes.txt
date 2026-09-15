@@ -1,0 +1,20 @@
+# Eight prompts, each answerable with exactly one call to edit_file or
+# write_file — the two tools scripts/tasks/tool-call-probe.txt never
+# exercises (that corpus only reaches read_file, list_dir and run_command).
+# Built to answer RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md's open
+# question of whether run_command's envelope collapse was a property of its
+# own schema or something any tool with a multi-key argument object risks.
+# Scored the same way: agent_core::tools::score_call, four verdicts, no
+# answer-correctness check. Run against a scratch project, never this
+# repository — both tools write.
+#
+# See RECORD/2026-09-15.does-the-envelope-collapse-generalize.completed.md.
+
+edit greeting.py to change the string "Hello, " to "Hi, "
+edit notes.md to change "item one" to "first item"
+edit config.json to change 30 to 60
+edit greeting.py to change the function name greet to say_hello
+create a file called done.txt containing exactly the text done
+create a file called version.txt containing exactly the text 1.0.0
+overwrite config.json so its only content is {"retries": 5}
+create a new file called util.py containing a function named add that takes a and b and returns a + b

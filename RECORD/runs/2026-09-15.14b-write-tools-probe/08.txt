@@ -1,0 +1,10 @@
+```tool
+{"name": "write_file", "arguments": {"path": "util.py", "content": "def add(a, b):\n    return a + b"}}
+```
+
+  [1] → write_file {"content":"def add(a, b):\n    return a + b","path":"util.py"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The file `util.py` has been created with the `add` function. You can now import and use this function in your other Python scripts.
+
+[stop] 1034 prompt / 70 completion

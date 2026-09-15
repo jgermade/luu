@@ -1,0 +1,10 @@
+```tool
+{"name": "write_file", "arguments": {"path": "config.json", "content": "{\"retries\": 5}"}}
+```
+
+  [1] → write_file {"content":"{\"retries\": 5}","path":"config.json"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+config.json has been successfully updated with the content `{"retries": 5}`.
+
+[stop] 1014 prompt / 52 completion

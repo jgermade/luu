@@ -1,0 +1,10 @@
+```tool
+{"name": "edit_file", "arguments": {"path": "notes.md", "old_string": "item one", "new_string": "first item"}}
+```
+
+  [1] → edit_file {"new_string":"first item","old_string":"item one","path":"notes.md"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+Great! The change has been made. If you need anything else, feel free to ask.
+
+[stop] 1016 prompt / 58 completion

@@ -1,0 +1,3 @@
+```tool
+{"name": "write_file", "arguments": {"path": "done.txt", "content": "done"}}
+```

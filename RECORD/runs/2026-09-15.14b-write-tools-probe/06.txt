@@ -1,0 +1,10 @@
+```tool
+{"name": "write_file", "arguments": {"path": "version.txt", "content": "1.0.0"}}
+```
+
+  [1] → write_file {"content":"1.0.0","path":"version.txt"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The file `version.txt` has been created with the content `1.0.0`.
+
+[stop] 1014 prompt / 52 completion

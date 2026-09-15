@@ -1,0 +1,3 @@
+```tool
+{"name": "write_file", "arguments": {"path": "config.json", "content": "{\"retries\": 5}"}}
+```

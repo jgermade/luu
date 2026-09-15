@@ -1,0 +1,10 @@
+```tool
+{"name": "write_file", "arguments": {"path": "done.txt", "content": "done"}}
+```
+
+  [1] → write_file {"content":"done","path":"done.txt"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The file `done.txt` has been created with the content "done".
+
+[stop] 1000 prompt / 44 completion

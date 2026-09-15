@@ -1,0 +1,10 @@
+```tool
+{"name": "edit_file", "arguments": {"path": "config.json", "old_string": "30", "new_string": "60"}}
+```
+
+  [1] → edit_file {"new_string":"60","old_string":"30","path":"config.json"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+Great! The change has been made. If you need to verify or make any other changes, feel free to ask.
+
+[stop] 1012 prompt / 63 completion
