@@ -1,0 +1,39 @@
+<script :setup>
+  // The middle column. Phase 1 is the layout only: nothing selects anything
+  // yet, because Files and Git are both stubs until phases 3 and 4 of
+  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  //
+  // When they land, what talks to this component is a small shared module
+  // beside `store.js` — the same singleton-module pattern the transport
+  // layer already uses — rather than props threaded through `app.html`:
+  // Files and Git are siblings of this component, and a parent that only
+  // relays between its children is a parent the state does not need.
+</script>
+
+<div class="placeholder">
+  <p class="dim">
+    A file, a diff, or an expanded detail shows here — whatever the
+    Inspector on the left has selected.
+  </p>
+  <p class="dim small">
+    Nothing selects anything yet: phase 1 of
+    <code>RECORD/2026-09-15.a-three-pane-inspector.WIP.md</code> is the three
+    columns themselves, and the panels that fill this one come after.
+  </p>
+</div>
+
+<style scoped>
+  .placeholder {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .6rem;
+    padding: 2rem;
+    text-align: center;
+  }
+  p { margin: 0; max-width: 28rem; line-height: 1.6; }
+  .small { font-size: 12px; }
+  code { color: var(--fg); font-size: 12px; }
+</style>

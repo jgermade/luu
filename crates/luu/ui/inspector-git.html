@@ -1,0 +1,25 @@
+<script :setup>
+  // Phase 1 is the layout only — see `inspector-files.html` for why this
+  // says what it says rather than rendering nothing.
+</script>
+
+<h2>Git</h2>
+<p class="dim">
+  Changed files go here, as a list you click to see the diff in the middle
+  column. Not built yet: it needs
+  <code>GET /api/workspace/git-status</code> and
+  <code>GET /api/workspace/git-diff</code>, which are phase 4 of
+  <code>RECORD/2026-09-15.a-three-pane-inspector.WIP.md</code>.
+</p>
+
+<style scoped>
+  h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--dim);
+    margin: 0 0 .5rem;
+  }
+  p { font-size: 13px; line-height: 1.5; }
+  code { color: var(--fg); font-size: 12px; }
+</style>

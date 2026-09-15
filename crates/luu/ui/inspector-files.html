@@ -1,0 +1,26 @@
+<script :setup>
+  // Phase 1 of `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` is the
+  // layout only: this is the shape the tree will land in, not the tree. The
+  // endpoint it will read (`GET /api/workspace/tree`) does not exist yet, so
+  // saying so beats an empty panel that reads as a bug.
+</script>
+
+<h2>Files</h2>
+<p class="dim">
+  The workspace tree goes here — gitignored entries dimmed, changed entries
+  highlighted. Not built yet: it needs
+  <code>GET /api/workspace/tree</code>, which is phase 3 of
+  <code>RECORD/2026-09-15.a-three-pane-inspector.WIP.md</code>.
+</p>
+
+<style scoped>
+  h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--dim);
+    margin: 0 0 .5rem;
+  }
+  p { font-size: 13px; line-height: 1.5; }
+  code { color: var(--fg); font-size: 12px; }
+</style>

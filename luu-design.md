@@ -701,6 +701,16 @@ access = "execute"
 A local web UI (chat, session browser, context inspector) is the fastest way to see what the
 context manager is actually doing — the CLI can't show a token budget or a prompt diff.
 
+**Three panes**: an inspector rail on the left, a content viewer in the middle, the agent chat
+on the right with one tab per session over it. The inspector switches between the workspace's
+file tree, its git changes, and the context-manager panel that used to be the whole right
+column; the viewer shows whatever the rail selected — a file, a diff, an expanded detail. The
+panes' contents are separate jq79 components (`inspector-{files,git,debug}.html`,
+`content-viewer.html`); `app.html` keeps the shell and the modals. Read-only throughout: the
+file tree and the git panel are a window onto the workspace, not a second way to change it —
+every write still goes through the job gate. See
+[`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`](RECORD/2026-09-15.a-three-pane-inspector.WIP.md).
+
 **v1 of the message enums is frozen.** `ClientMessage` is `prompt`, `cancel`,
 `approve_task`, `reject_task`, `close_task`, `reopen_task`; `ServerMessage` is
 the eleven the server emits, the task lifecycle included. It was frozen only once

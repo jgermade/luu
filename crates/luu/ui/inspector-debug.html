@@ -1,0 +1,277 @@
+<script :setup>
+  // The debug panel `app.html` used to render as the whole right column
+  // (`RECORD/2026-09-08.the-panel-keeps-the-turn.completed.md` and others),
+  // now one mode of the left Inspector
+  // (`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`). Self-sufficient on
+  // purpose: it imports `store.js` directly rather than taking `state` as a
+  // prop, so it stays a plain sibling of `inspector-files.html` and
+  // `inspector-git.html` instead of `app.html` having to thread six
+  // computed values through three components that each want a different
+  // subset of them.
+  const { state, panel, selectTurn } = await import("./store.js")
+
+  $: view = (state.selectedTurn, state.history, state.turn, state.budget,
+             state.prefix, state.tools, state.extraCalls, state.prompt,
+             state.evicted, panel())
+  $: reading = state.selectedTurn !== null
+
+  $: folds = (state.jobs || state.tasks)
+    .filter(job => job.state === "closed" && job.summary)
+    .map(job => {
+      const before = job.replaced?.tokens ?? null
+      const after = job.replaced?.summary_tokens ?? null
+      return {
+        id: job.id,
+        objective: job.objective,
+        turns: job.replaced?.turns || [],
+        before,
+        after,
+        saved: before === null || after === null ? null : before - after,
+        closedBy: job.closedBy,
+      }
+    })
+    .reverse()
+
+  $: budgetTotal = view?.budget
+    ? view.budget.buckets.reduce((sum, b) => sum + b.tokens, 0)
+    : 0
+  $: budgetSent = view?.budget
+    ? view.budget.buckets
+        .filter(b => b.name !== "reserve")
+        .reduce((sum, b) => sum + b.tokens, 0)
+    : 0
+  $: extraSent = (view?.extraCalls || []).reduce((sum, call) => sum + call.prompt_tokens, 0)
+  $: templateOverhead = view?.budget?.backendPrompt
+    ? view.budget.backendPrompt - budgetSent - extraSent
+    : null
+  $: reusePercent = view?.prefix?.prompt_tokens
+    ? Math.round((view.prefix.shared_tokens / view.prefix.prompt_tokens) * 100)
+    : null
+  $: reuseFresh = view?.prefix
+    ? view.prefix.prompt_tokens - view.prefix.shared_tokens
+    : 0
+</script>
+
+<div class="turn-picker">
+  <select
+    :value="state.selectedTurn === null ? 'live' : state.selectedTurn"
+    @change="selectTurn($event.target.value)">
+    <option value="live">live</option>
+    <option :each="entry in state.history" :key="entry.turn" :value="entry.turn">
+      turn {{ entry.turn }}
+    </option>
+  </select>
+  <span :if="!reading && state.turn" class="dim">turn {{ state.turn }}, running</span>
+  <span :if="!reading && !state.turn" class="dim">the newest turn</span>
+  <button :if="reading" type="button" class="link" @click="selectTurn(null)">back to live</button>
+</div>
+<p :if="reading" class="reading">
+  Turn {{ view?.turn }} as it was sent
+  <span :if="view?.reason && view?.reason !== 'stop'" class="warn">· {{ view?.reason }}</span>
+  <span :if="view?.usage" class="dim">
+    · {{ view?.usage.prompt_tokens }} prompt / {{ view?.usage.completion_tokens }} completion
+  </span>
+</p>
+<h2>Token budget</h2>
+<div :if="view?.budget">
+  <div class="bar">
+    <span
+      :each="bucket in view?.budget?.buckets"
+      :key="bucket.name"
+      :class="bucket.name"
+      :attrs="{ style: `flex-grow:${bucket.tokens || 0}`, title: `${bucket.name}: ${bucket.tokens}` }"></span>
+  </div>
+  <ul class="legend">
+    <li :each="bucket in view?.budget?.buckets" :key="bucket.name">
+      <span :class="bucket.name"></span>{{ bucket.name }}
+      <b>{{ bucket.tokens }}</b>
+    </li>
+  </ul>
+  <p class="dim">
+    {{ budgetSent }} tokens sent<span :if="view?.budget?.limit">, {{ budgetTotal }} of {{ view?.budget?.limit }} spoken for</span>
+    <span :if="!view?.budget?.limit">— window unknown, so nothing was budgeted</span>
+  </p>
+  <p :if="view?.budget?.counter?.kind === 'approximate'" class="dim warn">
+    Counted approximately (chars/4). Not a measurement — pass
+    <code>--tokenizer</code> for real numbers.
+  </p>
+  <p :if="view?.extraCalls?.length" class="dim">
+    This turn made {{ view?.extraCalls?.length + 1 }} model calls: the bar is
+    the first, and the tool round trips sent {{ extraSent }} tokens more.
+  </p>
+  <p :if="templateOverhead !== null" class="dim">
+    Backend counted {{ view?.budget?.backendPrompt }} over
+    {{ view?.extraCalls?.length + 1 }} call(s): {{ templateOverhead }}
+    more than we sent, the chat template applied on its side.
+  </p>
+  <p :if="view?.dropped" class="dim">
+    Turn {{ view?.dropped?.turn }} dropped turn(s)
+    {{ view?.dropped?.turns.join(", ") }} — {{ view?.dropped?.tokens }}
+    tokens out of the window, for good, under the
+    <b>{{ view?.dropped?.policy.policy }}</b> policy.
+  </p>
+</div>
+<p :if="!view?.budget" class="dim">
+  No turn yet. The budget is decided before the call, so the first prompt
+  fills this in.
+</p>
+
+<h2>Prefix reuse</h2>
+<div :if="view?.prefix">
+  <div class="bar">
+    <span
+      class="shared"
+      :attrs="{ style: `flex-grow:${view?.prefix.shared_tokens || 0}`, title: `shared: ${view?.prefix.shared_tokens}` }"></span>
+    <span
+      class="fresh"
+      :attrs="{ style: `flex-grow:${reuseFresh}`, title: `new: ${reuseFresh}` }"></span>
+  </div>
+  <p class="dim">
+    <b>{{ reusePercent }}%</b> of this prompt was already in the previous
+    one: {{ view?.prefix.shared_tokens }} of
+    {{ view?.prefix.prompt_tokens }} tokens ({{ view?.prefix.shared_bytes }}
+    bytes) before the first difference, which is where the cache stops.
+  </p>
+</div>
+<p :if="!view?.prefix" class="dim">
+  First turn of the session — no previous prompt to measure against, which
+  is not the same as no reuse.
+</p>
+
+<h2>Tool calls</h2>
+<ol class="timeline" :if="view?.tools?.length">
+  <li :each="call in view?.tools" :key="call.step">
+    <div class="call">
+      <b>{{ call.name }}</b>
+      <span class="dim">{{ JSON.stringify(call.arguments) }}</span>
+    </div>
+    <div :if="call.verdict" class="verdict">
+      <span :class="call.verdict.allowed ? 'ok' : 'bad'">
+        {{ call.verdict.allowed ? "allowed" : "denied" }}
+      </span>
+      <span class="dim">{{ call.verdict.rule }}</span>
+    </div>
+    <div :if="call.verdict" class="held" :class.warn="call.verdict.enforced_by.by === 'partial'">
+      held by
+      <span :if="call.verdict.enforced_by.by === 'process'">an in-process check</span>
+      <span :if="call.verdict.enforced_by.by === 'kernel'">{{ call.verdict.enforced_by.how }}</span>
+      <span :if="call.verdict.enforced_by.by === 'partial'">
+        {{ call.verdict.enforced_by.how }} — missing {{ call.verdict.enforced_by.missing }}
+      </span>
+      <span :if="call.duration_ms !== null" class="dim">· {{ call.duration_ms }} ms</span>
+      <span :if="call.output" class="dim">· {{ call.output.length }} bytes back</span>
+      <span :if="call.truncated" class="warn">· cut</span>
+    </div>
+    <div :if="call.command" class="held">
+      <span :class="call.command.exit_code === 0 ? 'ok' : 'bad'">
+        exit {{ call.command.exit_code === null ? "—" : call.command.exit_code }}
+      </span>
+      <span :if="call.command.signal !== null" class="warn">· signal {{ call.command.signal }}</span>
+      <span class="dim">· {{ call.command.duration_ms }} ms in the child</span>
+      <span :if="call.command.stderr" class="dim">· {{ call.command.stderr.length }} bytes on stderr</span>
+    </div>
+    <div :if="!call.verdict" class="dim">running…</div>
+    <div :if="call.error" class="err">{{ call.error }}</div>
+  </li>
+</ol>
+<p :if="!view?.tools?.length" class="dim">
+  No tool calls this turn. A turn that only answers makes none.
+</p>
+
+<h2>Compaction</h2>
+<ol class="folds" :if="folds.length">
+  <li :each="fold in folds" :key="fold.id">
+    <div class="call">
+      <b>job {{ fold.id }}</b>
+      <span class="dim">{{ fold.objective }}</span>
+    </div>
+    <div class="held">
+      <span :if="fold.turns.length">turns {{ fold.turns.join(", ") }}</span>
+      <span :if="!fold.turns.length" class="dim">turns not recorded</span>
+      <span :if="fold.closedBy === 'exit_code'" class="dim">· closed by exit code</span>
+    </div>
+    <div :if="fold.before !== null" class="held">
+      <b>{{ fold.before }}</b> tokens of history →
+      <b>{{ fold.after }}</b> in the line that stands in for them,
+      <span :class="fold.saved > 0 ? 'ok' : 'bad'">{{ fold.saved }} saved</span>
+    </div>
+    <div :if="fold.before === null" class="held dim">
+      what it replaced was not recorded — this stream predates format 9
+    </div>
+  </li>
+</ol>
+<p :if="!folds.length" class="dim">
+  Nothing folded yet. A job that is closed is sent as one summary from then
+  on, and this is where what that cost goes.
+</p>
+
+<h2>Prompt sent to the model</h2>
+<pre :if="view?.prompt">{{ view?.prompt }}</pre>
+<p :if="!view?.prompt" class="dim">Nothing sent yet this session.</p>
+
+<style scoped>
+  h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--dim);
+    margin: 1.2rem 0 .5rem;
+  }
+  h2:first-child { margin-top: 0; }
+  .turn-picker { display: flex; align-items: center; gap: .5rem; margin-bottom: .8rem; }
+  .turn-picker select {
+    background: var(--bg); color: inherit; border: 1px solid var(--line);
+    border-radius: 6px; font: inherit; font-size: 12px; padding: .15rem .4rem;
+  }
+  /* A panel that is not about the turn on screen says so once, here, rather
+     than by every number in it looking current. */
+  .reading {
+    margin: 0 0 .8rem; padding: .3rem .6rem; font-size: 12px;
+    border-left: 3px solid var(--b-history); background: #12151a;
+    border-radius: 0 6px 6px 0;
+  }
+
+  .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #0e1014; }
+  .bar span { min-width: 2px; }
+  .bar span.system, .legend span.system { background: var(--b-system); }
+  .bar span.tools, .legend span.tools { background: var(--b-tools); }
+  .bar span.map, .legend span.map { background: var(--b-map); }
+  .bar span.history, .legend span.history { background: var(--b-history); }
+  .bar span.summaries, .legend span.summaries { background: var(--b-summaries); }
+  .bar span.code, .legend span.code { background: var(--b-code); }
+  .bar span.prompt, .legend span.prompt { background: var(--b-prompt); }
+  .bar span.reserve, .legend span.reserve { background: var(--b-reserve); }
+  .bar span.shared { background: var(--b-history); }
+  .bar span.fresh { background: var(--b-reserve); }
+
+  .legend { list-style: none; margin: .6rem 0 0; padding: 0; font-size: 13px; }
+  .legend li { display: flex; align-items: center; gap: .4rem; }
+  .legend li b { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .legend span { width: 9px; height: 9px; border-radius: 2px; }
+
+  .timeline { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .timeline li {
+    border-left: 2px solid var(--line);
+    padding: 0 0 .5rem .6rem;
+    margin-bottom: .5rem;
+  }
+  .timeline .call { overflow-wrap: anywhere; }
+  .timeline .call b { color: var(--accent); }
+  .timeline .verdict .ok { color: var(--b-history); }
+  .timeline .verdict .bad { color: var(--bad); }
+  .timeline .held { color: var(--dim); }
+  .timeline .held.warn { color: var(--warn); }
+  .timeline .err { color: var(--bad); overflow-wrap: anywhere; }
+
+  .folds { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .folds li {
+    border-left: 2px solid var(--b-summaries);
+    padding: 0 0 .5rem .6rem;
+    margin-bottom: .5rem;
+  }
+  .folds .call b { color: var(--b-summaries); }
+  .folds .held { color: var(--dim); }
+  .folds .held b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .folds .ok { color: var(--b-history); }
+  .folds .bad { color: var(--bad); }
+</style>

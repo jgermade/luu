@@ -284,7 +284,11 @@ test("a session is started on a posture, and the page says which", async ({ page
   await modal.locator("button.link", { hasText: "close" }).click()
   await expect(modal).toBeHidden()
 
-  await page.click('.session-ctrls button:has-text("+ New")')
+  // The "+" at the end of the session tab strip. Sessions became tabs over
+  // the chat column in
+  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`; this used to be a
+  // `+ New` button beside a dropdown in the header.
+  await page.click(".session-tabs .tab.new")
   const starter = page.locator(".modal.narrow")
   await expect(starter).toBeVisible()
 
@@ -308,4 +312,49 @@ test("a session is started on a posture, and the page says which", async ({ page
   await expect(said).toContainText("wide")
   await expect(said).toContainText("network allowed")
   await expect(page.locator("pre.sandbox")).toContainText("ls")
+})
+
+/**
+ * The three-pane shell itself: the rails, the mode switch that chooses what
+ * the left one shows, and the session tabs over the chat column. The layout
+ * carries the panels every later phase of
+ * `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` adds, so a column that
+ * silently stopped rendering is worth catching here rather than in the
+ * phase that builds against it.
+ */
+test("the three panes are there, and the inspector switches between its modes", async ({ page }) => {
+  // Wide enough for all three: the middle column is dropped under 64rem, and
+  // the default viewport sits right on that edge.
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  const modal = page.locator(".modal-backdrop").first()
+  if (await modal.isVisible()) {
+    await modal.locator("button.link", { hasText: "close" }).click()
+  }
+
+  await expect(page.locator(".split .inspector")).toBeVisible()
+  await expect(page.locator(".split .viewer")).toBeVisible()
+  await expect(page.locator(".split .chat")).toBeVisible()
+
+  // Debug is the default mode, and it is the panel that used to be the whole
+  // right column: its turn picker is the cheapest proof it actually mounted.
+  await expect(page.locator(".inspector .modes button.on")).toHaveText("Debug")
+  await expect(page.locator(".inspector .turn-picker")).toBeVisible()
+
+  // The other two are stubs until phases 3 and 4, but they must mount.
+  await page.click('.inspector .modes button:has-text("Files")')
+  await expect(page.locator(".inspector .mode-body")).toContainText("workspace tree")
+  await expect(page.locator(".inspector .turn-picker")).toBeHidden()
+
+  await page.click('.inspector .modes button:has-text("Git")')
+  await expect(page.locator(".inspector .mode-body")).toContainText("Changed files")
+
+  await page.click('.inspector .modes button:has-text("Debug")')
+  await expect(page.locator(".inspector .turn-picker")).toBeVisible()
+
+  // One tab per session, the live one marked, and the "+" that starts another.
+  const tabs = page.locator(".session-tabs .tab")
+  await expect(tabs.first()).toBeVisible()
+  await expect(page.locator(".session-tabs .tab.on")).toHaveCount(1)
+  await expect(page.locator(".session-tabs .tab.new")).toHaveText("+")
 })
