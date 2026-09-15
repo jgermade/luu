@@ -1,0 +1,382 @@
+[
+ {
+  "n": 1,
+  "question": "which file runs the loop that turns a prompt into tool calls and back into an answer?",
+  "target": "crates/agent-core/src/agent.rs",
+  "held": true,
+  "answer": "The loop that turns a prompt into tool calls and back into an answer is likely handled in the `agent-core` crate, specifically within the `agent.rs` file. This is where the agent's main loop and interactions with tools are managed.\n\nTo get a more precise understanding, you can read the relevant parts of the `agent.rs` file:\n\n```tool\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/agent.rs\"}}\n```\n\n  [1] \u2192 read_file {\"path\":\"crates/agent-core/src/agent.rs\"}\n  [1] \u2190 ok \u00b7 . (read-write) \u00b7 held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) \u00b7 0 ms\n\nThe `run_agent_turn` function in `crates/agent-core/src/agent.rs` is responsible for running one turn, allowing the model to use tools until it answers. This function handles the loop that processes prompts, model responses, tool calls, and subsequent model responses until a final answer is produced.\n\n[stop] 4973 prompt / 162 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 6.9
+ },
+ {
+  "n": 2,
+  "question": "which file defines the read-side structure that both the live server and `luu export` fold into?",
+  "target": "crates/agent-core/src/api.rs",
+  "held": true,
+  "answer": "The file that defines the read-side structure that both the live server and `luu export` fold into is `crates/luu/src/export.rs`. This file contains the `read_record` function, which reads and processes records from a file into a structured format that can be used by both the live server and the export functionality.\n\n[stop] 1579 prompt / 69 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.3
+ },
+ {
+  "n": 3,
+  "question": "which file implements the backend that streams canned replies without a real model on the machine?",
+  "target": "crates/agent-core/src/backend/mock.rs",
+  "held": true,
+  "answer": "The file that implements the backend that streams canned replies without a real model on the machine is `crates/agent-core/src/backend/mock.rs`.\n\n[stop] 1577 prompt / 30 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.2
+ },
+ {
+  "n": 4,
+  "question": "which file defines the Backend trait every inference backend implements?",
+  "target": "crates/agent-core/src/backend/mod.rs",
+  "held": true,
+  "answer": "The `Backend` trait is defined in the file `crates/agent-core/src/backend/mod.rs`.\n\n[stop] 1528 prompt / 22 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.0
+ },
+ {
+  "n": 5,
+  "question": "which file talks to Ollama's chat endpoint over HTTP?",
+  "target": "crates/agent-core/src/backend/ollama.rs",
+  "held": true,
+  "answer": "The file that talks to Ollama's chat endpoint over HTTP is `crates/agent-core/src/backend/ollama.rs`. This file defines the `Ollama` struct and its methods, including `stream`, which likely handles communication with the Ollama chat endpoint.\n\n[stop] 1491 prompt / 58 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.8
+ },
+ {
+  "n": 6,
+  "question": "which file implements the OpenAI-compatible backend that also covers llama-server and vLLM?",
+  "target": "crates/agent-core/src/backend/openai.rs",
+  "held": true,
+  "answer": "The file that implements the OpenAI-compatible backend that also covers llama-server and vLLM is `crates/agent-core/src/backend/openai.rs`.\n\n[stop] 1493 prompt / 32 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.2
+ },
+ {
+  "n": 7,
+  "question": "which file decides what earns its place in the prompt and what gets evicted when it is full?",
+  "target": "crates/agent-core/src/context.rs",
+  "held": true,
+  "answer": "The eviction policy and logic are primarily defined in the `crates/agent-core/src/context.rs` file. The `Evicted` struct and its associated fields (`turns`, `tokens`, `counter`, `policy`) are responsible for managing what gets evicted when the prompt is full. Additionally, the `crates/agent-core/src/tools/mod.rs` file outlines the tools available to the agent, including those that might influence eviction policies. The `crates/luu/src/serve.rs` file contains the `on_prompt` function, which is responsible for handling incoming prompts and determining whether to propose a new job or start a new turn, which could indirectly affect eviction policies.\n\n[stop] 1541 prompt / 140 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 4.8
+ },
+ {
+  "n": 8,
+  "question": "which file fuses a real file into a single turn as a fragment?",
+  "target": "crates/agent-core/src/fragment.rs",
+  "held": false,
+  "answer": "The file that fuses a real file into a single turn as a fragment is `crates/agent-core/src/fragment.rs`. This file contains the definition of the `Fragment` struct and the logic for loading a fragment from a sandbox.\n\n[stop] 1596 prompt / 50 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.7
+ },
+ {
+  "n": 9,
+  "question": "which file is agent-core's crate root, with no knowledge of the CLI, VSCode or the browser?",
+  "target": "crates/agent-core/src/lib.rs",
+  "held": true,
+  "answer": "The crate root for `agent-core` is `crates/agent-core/src/lib.rs`.\n\n[stop] 1572 prompt / 20 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.0
+ },
+ {
+  "n": 10,
+  "question": "which file defines the one message schema carried over stdio, the WebSocket and the record format?",
+  "target": "crates/agent-core/src/protocol.rs",
+  "held": true,
+  "answer": "The file that defines the one message schema carried over stdio, the WebSocket, and the record format is `crates/agent-core/src/protocol.rs`.\n\n[stop] 1570 prompt / 33 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.4
+ },
+ {
+  "n": 11,
+  "question": "which file builds the reference graph and ranks the repository's files by what depends on what?",
+  "target": "crates/agent-core/src/rank.rs",
+  "held": true,
+  "answer": "The file that builds the reference graph and ranks the repository's files by what depends on what is `crates/agent-core/src/rank.rs`. This file contains the logic for ranking files based on their dependencies, which is a crucial part of the repository's outline and the teleport ranking system.\n\n[stop] 1438 prompt / 60 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.9
+ },
+ {
+  "n": 12,
+  "question": "which file defines the JSON-lines format a session is recorded to?",
+  "target": "crates/agent-core/src/record.rs",
+  "held": false,
+  "answer": "The JSON-lines format for a session is recorded in the `crates/luu/src/export.rs` file. This file defines the `Session` struct, which includes fields like `id`, `record`, and `lines`. The `lines` field is a vector of `RecordLine`, indicating that the session is recorded in a JSON-lines format.\n\n[stop] 1524 prompt / 72 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.2
+ },
+ {
+  "n": 13,
+  "question": "which file turns the repository into an outline of definitions with their bodies elided?",
+  "target": "crates/agent-core/src/repo_map.rs",
+  "held": true,
+  "answer": "The file that turns the repository into an outline of definitions with their bodies elided is `crates/agent-core/src/repo_map.rs`. The function `outline` in this file processes the source code and returns a vector of `Entry` objects, which represent the definitions in the code.\n\n[stop] 1577 prompt / 60 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.0
+ },
+ {
+  "n": 14,
+  "question": "which file is the sandbox's implementation for platforms that are not Linux?",
+  "target": "crates/agent-core/src/sandbox/fallback.rs",
+  "held": true,
+  "answer": "The sandbox's implementation for platforms that are not Linux is located in the file `crates/agent-core/src/sandbox/fallback.rs`.\n\n[stop] 1558 prompt / 29 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.2
+ },
+ {
+  "n": 15,
+  "question": "which file applies Landlock and seccomp to a child process between fork and exec?",
+  "target": "crates/agent-core/src/sandbox/linux.rs",
+  "held": true,
+  "answer": "The file that applies Landlock and seccomp to a child process between fork and exec is `crates/agent-core/src/sandbox/linux.rs`. This file contains the `install` method that configures these security mechanisms for the child process.\n\n[stop] 1535 prompt / 51 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.7
+ },
+ {
+  "n": 16,
+  "question": "which file defines the sandbox's rungs \u2014 what the agent may reach, checked in-process?",
+  "target": "crates/agent-core/src/sandbox/mod.rs",
+  "held": true,
+  "answer": "The file that defines the sandbox's rungs \u2014 what the agent may reach, checked in-process \u2014 is `crates/agent-core/src/sandbox/policy.rs`. This file contains the `SandboxPolicy` struct and the `Access` enum, which together define the permissions and access levels for the sandbox environment.\n\n[stop] 1601 prompt / 65 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.1
+ },
+ {
+  "n": 17,
+  "question": "which file defines what a project declares the agent may reach, before any path is resolved?",
+  "target": "crates/agent-core/src/sandbox/policy.rs",
+  "held": true,
+  "answer": "The file that defines what a project declares the agent may reach, before any path is resolved, is `crates/agent-core/src/sandbox/policy.rs`. This file contains the `SandboxPolicy` struct and its methods, which are responsible for defining the access policies for the agent. The `new` method in this file is used to create a new policy for a given path and access level.\n\n[stop] 1606 prompt / 83 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.6
+ },
+ {
+  "n": 18,
+  "question": "which file defines the task type \u2014 the unit of work, of approval and of forgetting?",
+  "target": "crates/agent-core/src/job.rs",
+  "held": true,
+  "answer": "The `Task` type, which represents the unit of work, is defined in the `crates/agent-core/src/job.rs` file.\n\n[stop] 1572 prompt / 30 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.4
+ },
+ {
+  "n": 19,
+  "question": "which file implements run_command, the one tool whose verdict is about the kernel rather than this process?",
+  "target": "crates/agent-core/src/tools/command.rs",
+  "held": false,
+  "answer": "The `run_command` tool is implemented in the `crates/agent-core/src/tools/mod.rs` file. This tool is responsible for running allowed programs and checking their verdicts, which can involve interactions with the kernel.\n\n[stop] 1576 prompt / 46 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.7
+ },
+ {
+  "n": 20,
+  "question": "which file implements the filesystem tools that check a path before touching it?",
+  "target": "crates/agent-core/src/tools/fs.rs",
+  "held": true,
+  "answer": "The file that implements the filesystem tools that check a path before touching it is `crates/agent-core/src/tools/fs.rs`.\n\n[stop] 1681 prompt / 27 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.2
+ },
+ {
+  "n": 21,
+  "question": "which file parses a model's structured tool request and validates it against the sandbox?",
+  "target": "crates/agent-core/src/tools/mod.rs",
+  "held": true,
+  "answer": "The file that parses a model's structured tool request and validates it against the sandbox is likely `crates/agent-core/src/worker/mod.rs`. This file contains the `Request` enum, which includes a `Call` variant for running a tool call under a sandbox. The worker is responsible for handling requests and ensuring they are executed within the constraints of the sandbox.\n\n```tool\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/worker/mod.rs\"}}\n```\n\n  [1] \u2192 read_file {\"path\":\"crates/agent-core/src/worker/mod.rs\"}\n  [1] \u2190 ok \u00b7 . (read-write) \u00b7 held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) \u00b7 0 ms\n\nThe provided code snippet from `crates/agent-core/src/worker/mod.rs` shows the structure of the worker module, which is responsible for executing tool calls within a sandboxed environment. The `Executor` trait defines the method for calling tools, and the `Tools` struct implements this method by running the tool call within the sandbox.\n\nThe `WireSandbox` struct represents a sandbox as it crosses a process boundary, containing the base directory, policy, and authority. The `resolve` method on `WireSandbox` resolves the sandbox against the current machine, ensuring that the paths are correctly set up for execution.\n\nThe `Request` enum defines the types of requests that can be made to the worker, with the `Call` variant specifically for running a tool call under a sandbox. The `Response` enum defines the types of responses that the worker can send back, including the outcome of the tool call or an error if the call could not be executed.\n\nIn summary, the worker module is responsible for parsing and validating tool requests, executing them within a sandboxed environment, and returning the results. The `WireSandbox` struct plays a crucial role in ensuring that the sandbox is correctly set up for execution.\n\n[stop] 5358 prompt / 350 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 11.7
+ },
+ {
+  "n": 22,
+  "question": "which file carries the trace channel that explains the context manager's choices?",
+  "target": "crates/agent-core/src/trace.rs",
+  "held": true,
+  "answer": "The trace channel that explains the context manager's choices is carried in the `crates/agent-core/src/trace.rs` file.\n\n[stop] 1493 prompt / 28 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.4
+ },
+ {
+  "n": 23,
+  "question": "which file runs one turn \u2014 prompt in, tokens out \u2014 with no tools involved?",
+  "target": "crates/agent-core/src/turn.rs",
+  "held": true,
+  "answer": "The file that runs one turn with no tools involved is `crates/agent-core/src/context.rs`. The function `push_turn` is defined there, which handles a turn without tools.\n\n[stop] 1555 prompt / 39 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.4
+ },
+ {
+  "n": 24,
+  "question": "which file is level 3 of the sandbox, where tools run in a container rather than this process?",
+  "target": "crates/agent-core/src/worker/mod.rs",
+  "held": false,
+  "answer": "The file `crates/agent-core/src/sandbox/mod.rs` is level 3 of the sandbox, where tools run in a container rather than this process.\n\n[stop] 1643 prompt / 34 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.4
+ },
+ {
+  "n": 25,
+  "question": "which file builds the argv for whichever container runtime is in use?",
+  "target": "crates/agent-core/src/worker/runtime.rs",
+  "held": true,
+  "answer": "The file that builds the argv for whichever container runtime is in use is likely to be in the `worker` module, specifically where the `Worker` struct and its methods are defined. This is because the `Worker` is responsible for starting and managing the container runtime processes.\n\nTo find the exact file, you can look for the `Worker` struct and its methods that handle the container runtime logic. A good starting point would be the `worker/mod.rs` file, which imports and re-exports the `runtime` module. From there, you can trace the implementation details to the specific file that constructs the argv for the container runtime.\n\nHere is a tool call to list the contents of the `worker` directory to help you locate the relevant file:\n\n```tool\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"crates/agent-core/src/worker\"}}\n```\n\n  [1] \u2192 list_dir {\"path\":\"crates/agent-core/src/worker\"}\n  [1] \u2190 ok \u00b7 . (read-write) \u00b7 held by in-process check \u00b7 0 ms\n\nBased on the directory listing, the `worker` module contains `mod.rs` and `runtime.rs`. Given the context of building the argv for the container runtime, the implementation is likely to be in `runtime.rs` since it deals with different runtime configurations.\n\nTo get a closer look at the contents of `runtime.rs`, you can read the file:\n\n```tool\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"crates/agent-core/src/worker/runtime.rs\"}}\n```\n\n  [2] \u2192 read_file {\"path\":\"crates/agent-core/src/worker/runtime.rs\"}\n  [2] \u2190 ok \u00b7 . (read-write) \u00b7 held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) \u00b7 0 ms\n\nThe `runtime.rs` file contains the implementation for the `Runtime` enum and its associated methods, which are responsible for determining the program to be invoked for each container runtime. The `program` method returns the program name for each runtime, which is used to build the argv for the container runtime.\n\nHere is a snippet from the `runtime.rs` file that shows the `program` method:\n\n```rust\nimpl Runtime {\n    /// The program this runtime is invoked as, or `None` when there is no\n    /// program because there is no container.\n    pub fn program(self) -> Option<&'static str> {\n        match self {\n            Self::Host | Self::Direct => None,\n            Self::Docker => Some(\"docker\"),\n            Self::Podman => Some(\"podman\"),\n            Self::Nerdctl => Some(\"nerdctl\"),\n            Self::Container => Some(\"container\"),\n            Self::Colima => Some(\"colima\"),\n        }\n    }\n}\n```\n\nThis method is used to determine the program name for each runtime, which is then used to build the argv for the container runtime. The `WorkerSpec` struct, which is defined in the same file, contains the `runtime` field, which is used to determine the program name and build the argv.\n\nTo summarize, the `runtime.rs` file is the one that builds the argv for whichever container runtime is in use.\n\n[stop] 6740 prompt / 569 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 17.6
+ },
+ {
+  "n": 26,
+  "question": "which test file asserts what the Ollama backend actually puts on the socket?",
+  "target": "crates/agent-core/tests/ollama_wire.rs",
+  "held": true,
+  "answer": "The test file that asserts what the Ollama backend actually puts on the socket is `crates/agent-core/tests/ollama_wire.rs`.\n\n[stop] 1561 prompt / 31 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.6
+ },
+ {
+  "n": 27,
+  "question": "which test file asserts what the OpenAI-compatible backend puts on the wire and reads back?",
+  "target": "crates/agent-core/tests/openai_wire.rs",
+  "held": true,
+  "answer": "The test file that asserts what the OpenAI-compatible backend puts on the wire and reads back is `crates/agent-core/tests/openai_wire.rs`.\n\n[stop] 1591 prompt / 32 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.4
+ },
+ {
+  "n": 28,
+  "question": "which file decides who may reach the control surface?",
+  "target": "crates/luu/src/auth.rs",
+  "held": true,
+  "answer": "The file that decides who may reach the control surface is `crates/luu/src/auth.rs`. This file contains the `Auth` enum, which defines the authentication requirements for accessing the control surface. Specifically, it checks for either loopback access or a bearer token.\n\n[stop] 1551 prompt / 56 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.9
+ },
+ {
+  "n": 29,
+  "question": "which file is the `main` function for the `luu` binary?",
+  "target": "crates/luu/src/bin/luu.rs",
+  "held": true,
+  "answer": "The `main` function for the `luu` binary is located in `crates/luu/src/bin/luu.rs`.\n\n[stop] 1515 prompt / 29 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.2
+ },
+ {
+  "n": 30,
+  "question": "which file defines every subcommand the CLI takes and dispatches them?",
+  "target": "crates/luu/src/lib.rs",
+  "held": true,
+  "answer": "The file that defines every subcommand the CLI takes and dispatches them is `crates/luu/src/lib.rs`. This is indicated by the presence of the `Cli` struct with the `#[command(subcommand)]` attribute, which suggests that the `command` field within this struct is responsible for handling subcommands.\n\n[stop] 1289 prompt / 67 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.0
+ },
+ {
+  "n": 31,
+  "question": "which file turns a recording into the static twin of the read API, for a host with no server behind it?",
+  "target": "crates/luu/src/export.rs",
+  "held": true,
+  "answer": "The file that turns a recording into the static twin of the read API, for a host with no server behind it, is `crates/luu/src/export.rs`. This file contains the `read_record` function, which reads a recording file and processes its contents to create a static mirror of the API.\n\n[stop] 1611 prompt / 64 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.1
+ },
+ {
+  "n": 32,
+  "question": "which file decides where this machine's state directory lives?",
+  "target": "crates/luu/src/config.rs",
+  "held": true,
+  "answer": "The file that decides where this machine's state directory lives is `crates/luu/src/config.rs`. This file contains the logic for determining the directory based on environment variables and conventions like `~/.luu` and `~/.config/luu`.\n\n[stop] 1513 prompt / 54 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.8
+ },
+ {
+  "n": 33,
+  "question": "which file is the local HTTP server behind the debug UI?",
+  "target": "crates/luu/src/serve.rs",
+  "held": true,
+  "answer": "The local HTTP server behind the debug UI is defined in the file `crates/luu/src/serve.rs`.\n\n[stop] 1456 prompt / 25 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.1
+ },
+ {
+  "n": 34,
+  "question": "which file makes sure chat and serve assemble the same prompt the same way?",
+  "target": "crates/luu/src/session.rs",
+  "held": true,
+  "answer": "The file that ensures chat and serve assemble the same prompt the same way is `crates/luu/src/session.rs`. This file contains the `measure` function, which is responsible for measuring and preparing the prompt for both chat and serve operations.\n\n[stop] 1563 prompt / 51 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.8
+ },
+ {
+  "n": 35,
+  "question": "which file caches sessions on disk as a cache of the fold, never a second log?",
+  "target": "crates/luu/src/store.rs",
+  "held": true,
+  "answer": "The file that caches sessions on disk as a cache of the fold, never a second log is `crates/luu/src/store.rs`.\n\n[stop] 1388 prompt / 30 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.1
+ },
+ {
+  "n": 36,
+  "question": "which test file drives one turn over the WebSocket against a running server?",
+  "target": "crates/luu/tests/serve_ws.rs",
+  "held": true,
+  "answer": "The test file that drives one turn over the WebSocket against a running server is `crates/luu/tests/serve_ws.rs`. This file contains the `server_running` function, which sets up a server with a specific policy and runs it. The test likely involves sending a request to this server and checking the response, which would involve one or more turns.\n\n[stop] 1593 prompt / 74 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.3
+ },
+ {
+  "n": 37,
+  "question": "which test file asserts that folding a record equals saving it to the store and loading it back?",
+  "target": "crates/luu/tests/store_parity.rs",
+  "held": true,
+  "answer": "The test file that asserts that folding a record equals saving it to the store and loading it back is `crates/luu/tests/store_parity.rs`.\n\n[stop] 1547 prompt / 33 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 2.3
+ },
+ {
+  "n": 38,
+  "question": "which test file drives a real worker end to end through a real pipe, outside a container?",
+  "target": "crates/luu/tests/worker_seam.rs",
+  "held": true,
+  "answer": "The test file that drives a real worker end to end through a real pipe, outside a container, is `crates/luu/tests/worker_seam.rs`. This file contains the test function `the_worker_greets_before_it_is_asked_anything`, which starts a worker and checks its greeting before any requests are made.\n\n[stop] 1573 prompt / 69 completion",
+  "stderr_tail": "",
+  "rc": 0,
+  "dur_s": 3.3
+ }
+]
