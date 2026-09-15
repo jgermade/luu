@@ -1,0 +1,15 @@
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core/src/backend"}}
+```
+
+  [1] → list_dir {"path":"crates/agent-core/src/backend"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+The directory `crates/agent-core/src/backend` contains the following files and directories:
+
+- `mock.rs`
+- `mod.rs`
+- `ollama.rs`
+- `openai.rs`
+
+[stop] 1002 prompt / 68 completion

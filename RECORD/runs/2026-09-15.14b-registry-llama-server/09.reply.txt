@@ -1,0 +1,11 @@
+To run the `cargo test -p agent-core score_call` command, I'll use the `run_command` tool. Here's the command:
+
+```tool
+{
+  "name": "run_command",
+  "arguments": {
+    "argv": ["cargo", "test", "-p", "agent-core", "score_call"],
+    "cwd": "."
+  }
+}
+```

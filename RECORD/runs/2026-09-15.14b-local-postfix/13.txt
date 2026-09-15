@@ -1,0 +1,10 @@
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/backend/mock.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/backend/mock.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+`Mock::cycle` is a method for the `Mock` struct that determines how the replies are handled when they run out. When `cycling` is set to `true`, the list of replies wraps back to its first element instead of sticking on its last. This means that a `call, answer` pair becomes a tool that is invoked on every turn of a script of any length, rather than once at the start of the session. When `cycling` is `false`, the last reply repeats indefinitely.
+
+[stop] 2660 prompt / 135 completion

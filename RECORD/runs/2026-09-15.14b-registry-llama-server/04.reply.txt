@@ -1,0 +1,11 @@
+To check if `cargo fmt --all --check` exits cleanly, I'll run the command and report the result.
+
+```tool
+{
+  "name": "run_command",
+  "arguments": {
+    "argv": ["cargo", "fmt", "--all", "--check"],
+    "cwd": "."
+  }
+}
+```

@@ -1,0 +1,77 @@
+[
+ {
+  "n": 1,
+  "prompt": "read AGENTS.md and say what its second heading is",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 2,
+  "prompt": "list the top-level entries of crates/agent-core/src",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 3,
+  "prompt": "read luu.toml and say what enforcement is set to",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 4,
+  "prompt": "run cargo fmt --all --check and report whether it exits clean",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 5,
+  "prompt": "list the files directly inside RECORD/",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 6,
+  "prompt": "read Cargo.toml and say which edition the workspace is on",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 7,
+  "prompt": "list what is in crates/agent-core/src/backend",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 8,
+  "prompt": "read crates/agent-core/src/tools/mod.rs and say what MAX_OUTPUT_BYTES is",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 9,
+  "prompt": "run cargo test -p agent-core score_call and report the result",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 10,
+  "prompt": "list the entries of scripts/tasks",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 11,
+  "prompt": "read .gitignore and say whether .tmp/ is in it",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 12,
+  "prompt": "list what is inside crates/luu/tests",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 13,
+  "prompt": "read crates/agent-core/src/backend/mock.rs and say what Mock::cycle does",
+  "verdict": "Parsed"
+ },
+ {
+  "n": 14,
+  "prompt": "run cargo clippy --workspace --all-targets and report whether it is clean",
+  "verdict": "ContinuedPastFence"
+ },
+ {
+  "n": 15,
+  "prompt": "read ROADMAP/2026-09-09/README.md and say which item is first in section A",
+  "verdict": "Parsed"
+ }
+]

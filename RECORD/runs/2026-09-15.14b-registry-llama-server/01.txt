@@ -1,0 +1,12 @@
+To determine the second heading in AGENTS.md, I'll read the file and extract the relevant information.
+
+```tool
+{"name": "read_file", "arguments": {"path": "AGENTS.md"}}
+```
+
+  [1] → read_file {"path":"AGENTS.md"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The second heading in AGENTS.md is "Where things live".
+
+[stop] 3105 prompt / 58 completion

@@ -1,0 +1,7 @@
+To run the `cargo test -p agent-core score_call` command and report the result, you can use the `run_command` tool. Here's how you can do it:
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["cargo", "test", "-p", "agent-core", "score_call"]}}
+```
+
+This will execute the test and return the result.

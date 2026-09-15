@@ -1,0 +1,7 @@
+To run `cargo clippy --workspace --all-targets` and check if the output is clean, you can use the `run_command` tool. Here's how you can do it:
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["cargo", "clippy", "--workspace", "--all-targets"]}}
+```
+
+After running the command, you can check the output to determine if there are any linting errors. If the output is clean, it means there are no linting issues. If there are any warnings or errors, they will be listed in the output.
