@@ -1,0 +1,24 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+```tool
+{"name": "list_dir", "arguments": {"path": "scripts/tasks"}}
+```
+
+  [1] → list_dir {"path":"scripts/tasks"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+The directory `scripts/tasks` contains the following entries:
+
+- grounded-tasks.txt
+- grounded.txt
+- long-session.txt
+- map-order-probe.key
+- map-order-probe.txt
+- map-probe.txt
+- one-task.txt
+- steady-state-tasks.txt
+- steady-state.txt
+- tool-call-probe-writes.txt
+- tool-call-probe.txt
+
+[stop] 1034 prompt / 101 completion

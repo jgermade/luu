@@ -1,0 +1,14 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+To read the `luu.toml` file and determine the enforcement setting, I'll use the `read_file` tool.
+
+```tool
+{"name": "read_file", "arguments": {"path": "luu.toml"}}
+```
+
+  [1] → read_file {"path":"luu.toml"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The enforcement setting in `luu.toml` is set to `"kernel"`.
+
+[stop] 2045 prompt / 68 completion

@@ -1,0 +1,6 @@
+{
+  "arguments": {
+    "argv": ["cargo", "test", "-p", "agent-core", "score_call"]
+  },
+  "name": "run_command"
+}

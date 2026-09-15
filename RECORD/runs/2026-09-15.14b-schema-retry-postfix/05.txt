@@ -1,0 +1,107 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+```tool
+{"name": "list_dir", "arguments": {"path": "RECORD"}}
+```
+
+  [1] → list_dir {"path":"RECORD"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+The files directly inside the `RECORD/` directory are:
+
+- `2026-08-26.open-after-pr-1.completed.md`
+- `2026-08-26.walking-skeleton.completed.md`
+- `2026-08-26.web-debug-client.completed.md`
+- `2026-08-27.aider-repo-map.completed.md`
+- `2026-08-27.cline-openhands.completed.md`
+- `2026-08-27.context-manager.completed.md`
+- `2026-08-27.grounded-fold-probe.completed.md`
+- `2026-08-27.prefix-reuse-and-block-eviction.completed.md`
+- `2026-08-27.tasks-instead-of-modes.completed.md`
+- `2026-08-27.the-m4-pro-run.completed.md`
+- `2026-08-27.tools-and-sandbox.completed.md`
+- `2026-08-30.a-refusal-is-a-message.completed.md`
+- `2026-08-30.narrowing.completed.md`
+- `2026-08-30.ready-for-the-m4-run.completed.md`
+- `2026-08-30.state-of-play.completed.md`
+- `2026-08-30.tasks-in-code.completed.md`
+- `2026-08-30.tests-that-run-it.completed.md`
+- `2026-08-30.the-fold-fix-verified.completed.md`
+- `2026-08-30.the-fold-probe-run.completed.md`
+- `2026-08-30.the-gate.completed.md`
+- `2026-08-30.what-a-summary-should-carry.completed.md`
+- `2026-08-31.eviction-tombstones.completed.md`
+- `2026-08-31.the-gate-probe.completed.md`
+- `2026-08-31.the-portal-and-the-gate.completed.md`
+- `2026-08-31.the-repo-map.completed.md`
+- `2026-08-31.what-a-plan-writes.completed.md`
+- `2026-08-31.what-no-model-has-seen.completed.md`
+- `2026-08-31.what-the-three-commits-left.completed.md`
+- `2026-09-01.an-openai-compatible-backend.completed.md`
+- `2026-09-01.how-a-surface-reaches-the-engine.completed.md`
+- `2026-09-01.local-first.completed.md`
+- `2026-09-01.the-container-decided.completed.md`
+- `2026-09-01.the-map-against-a-7b.completed.md`
+- `2026-09-01.what-the-audit-left.completed.md`
+- `2026-09-02.closing-on-an-exit-code.completed.md`
+- `2026-09-02.ranking-the-map.completed.md`
+- `2026-09-02.sessions-in-sqlite.completed.md`
+- `2026-09-02.the-worker-and-the-seam.completed.md`
+- `2026-09-03.state-of-play.completed.md`
+- `2026-09-03.the-container-observed.completed.md`
+- `2026-09-03.the-map-order-probe.completed.md`
+- `2026-09-03.the-size-sweep.completed.md`
+- `2026-09-04.egress-through-the-host.completed.md`
+- `2026-09-04.from-tasks-to-jobs.completed.md`
+- `2026-09-04.in-degree-and-fill.completed.md`
+- `2026-09-04.multi-session-in-serve.completed.md`
+- `2026-09-04.network-per-plan.completed.md`
+- `2026-09-04.protocol-over-stdio.completed.md`
+- `2026-09-04.session-resume.completed.md`
+- `2026-09-04.sessions-stay-home.completed.md`
+- `2026-09-04.signed-approvals.completed.md`
+- `2026-09-04.the-bc250-run.completed.md`
+- `2026-09-04.the-border-and-the-gate.completed.md`
+- `2026-09-04.the-name-and-the-config-dir.completed.md`
+- `2026-09-04.vscode-extension.completed.md`
+- `2026-09-05.a-clock-at-the-seam.completed.md`
+- `2026-09-05.a-clock-where-there-is-no-seam.completed.md`
+- `2026-09-05.beneath-the-root.completed.md`
+- `2026-09-05.choosing-fragments.completed.md`
+- `2026-09-06.a-grammar-for-tool-calls.WIP.md`
+- `2026-09-06.does-the-model-read-it.completed.md`
+- `2026-09-06.selection-at-the-gate.completed.md`
+- `2026-09-06.what-leaves-the-history.completed.md`
+- `2026-09-07.a-second-header.completed.md`
+- `2026-09-07.a-span-is-rendered-once.completed.md`
+- `2026-09-07.configuring-from-the-browser.completed.md`
+- `2026-09-07.naming-a-provider.completed.md`
+- `2026-09-07.resolving-a-symbol.completed.md`
+- `2026-09-07.the-first-run-has-no-provider.completed.md`
+- `2026-09-08.a-session-picks-its-executor.completed.md`
+- `2026-09-08.a-test-that-clicks-approve.completed.md`
+- `2026-09-08.landlock-holds-natively.completed.md`
+- `2026-09-08.prune-behind.completed.md`
+- `2026-09-08.the-14b-context-ceiling.completed.md`
+- `2026-09-08.the-container-on-a-runner.completed.md`
+- `2026-09-08.the-floor-on-6gb.completed.md`
+- `2026-09-08.the-panel-keeps-the-turn.completed.md`
+- `2026-09-08.the-rtx-holds-14b.completed.md`
+- `2026-09-08.the-surfaces-first.completed.md`
+- `2026-09-08.what-a-fold-writes-down.completed.md`
+- `2026-09-09.state-of-play.completed.md`
+- `2026-09-09.what-a-result-costs.completed.md`
+- `2026-09-14.a-call-every-turn.completed.md`
+- `2026-09-14.state-of-play.completed.md`
+- `2026-09-14.the-7b-does-not-miss-it.completed.md`
+- `2026-09-14.the-alternation-that-was-not-one.completed.md`
+- `2026-09-14.the-bare-grammar-field.completed.md`
+- `2026-09-14.the-tool-call-probe-run.completed.md`
+- `2026-09-14.the-tool-call-probe.completed.md`
+- `2026-09-14.what-constrain-does.completed.md`
+- `2026-09-14.what-rule-c-is-worth.completed.md`
+- `2026-09-15.does-the-envelope-collapse-generalize.completed.md`
+- `2026-09-15.the-drift-was-never-the-backend.completed.md`
+- `runs/`
+
+[stop] 2687 prompt / 1934 completion

@@ -1,0 +1,8 @@
+{
+  "arguments": {
+    "argv": ["cargo", "fmt", "--all", "--check"],
+    "cwd": ".",
+    "timeout_ms": 30000
+  },
+  "name": "run_command"
+}

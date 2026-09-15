@@ -1,0 +1,12 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/tools/mod.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/tools/mod.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+MAX_OUTPUT_BYTES is 8 * 1024.
+
+[stop] 2964 prompt / 43 completion

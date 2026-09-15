@@ -1,0 +1,6 @@
+{
+  "arguments": {
+    "path": "RECORD/"
+  },
+  "name": "list_dir"
+}
