@@ -1,0 +1,8 @@
+```list_dir
+{"path": "RECORD/"}
+```{
+  "arguments": {
+    "path": "RECORD/"
+  },
+  "name": "list_dir"
+}

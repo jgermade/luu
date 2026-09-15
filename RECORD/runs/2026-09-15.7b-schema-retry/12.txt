@@ -1,0 +1,26 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+warning: no tokenizer for qwen2.5-coder-7b: counting approximately (chars/4). Pass --tokenizer <tokenizer.json> for real numbers.
+```list_dir
+{"path":"crates/luu/tests"}
+```{
+  "arguments": {
+    "path": "crates/luu/tests"
+  },
+  "name": "list_dir"
+}
+
+  [1] → list_dir {"path":"crates/luu/tests"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+The directory `crates/luu/tests` contains the following files:
+
+- select_probe.rs
+- serve_ws.rs
+- stdio.rs
+- store_parity.rs
+- tool_call_probe.rs
+- ui_versions.rs
+- worker_seam.rs
+
+[stop] 1492 prompt / 103 completion

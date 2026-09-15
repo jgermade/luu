@@ -1,0 +1,17 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+warning: no tokenizer for qwen2.5-coder-7b: counting approximately (chars/4). Pass --tokenizer <tokenizer.json> for real numbers.
+To read the file `ROADMAP/2026-09-09/README.md` and determine the first item in section A, I'll use the `read_file` tool.
+
+```tool
+{"name": "read_file", "arguments": {"path": "ROADMAP/2026-09-09/README.md"}}
+```
+
+  [1] → read_file {"path":"ROADMAP/2026-09-09/README.md"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The first item in section A is:
+
+1. **Whether a 7B misses the repetition** — `--repeat-once` one flag apart against a model. Rule A is off for two reasons and this closes the second: position inside the *bucket* does not matter, position across the *window* has never been asked. **One revision late**~ **measured 2026-09-14 against `qwen2.5-coder:7b` on machine 1: verdict-for-verdict identical between `off` and `--repeat-once` on all 20 questions of `grounded.txt` (11 right / 3 partial / 6 wrong, unchanged), while the `code` bucket fell 17.5% — replicating the mock's −19.5% almost exactly. The measurement is closed; whether the default flips is a separate, unmade decision**
+
+[stop] 3444 prompt / 272 completion

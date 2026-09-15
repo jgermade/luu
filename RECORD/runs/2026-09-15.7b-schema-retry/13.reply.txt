@@ -1,0 +1,5 @@
+To read the file `crates/agent-core/src/backend/mock.rs` and determine what `Mock::cycle` does, I'll need to access that file. Please allow me to read the file:
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/backend/mock.rs"}}
+```

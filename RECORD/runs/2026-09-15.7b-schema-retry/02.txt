@@ -1,0 +1,38 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+warning: no tokenizer for qwen2.5-coder-7b: counting approximately (chars/4). Pass --tokenizer <tokenizer.json> for real numbers.
+```list_dir
+{"path": "crates/agent-core/src"}
+```{
+  "arguments": {
+    "path": "crates/agent-core/src"
+  },
+  "name": "list_dir"
+}
+
+  [1] → list_dir {"path":"crates/agent-core/src"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+The top-level entries of `crates/agent-core/src` are:
+
+- agent.rs
+- api.rs
+- approval.rs
+- backend/
+- context.rs
+- fragment.rs
+- grammar.rs
+- job.rs
+- lib.rs
+- protocol.rs
+- rank.rs
+- record.rs
+- repo_map.rs
+- sandbox/
+- select.rs
+- tools/
+- trace.rs
+- turn.rs
+- worker/
+
+[stop] 1523 prompt / 140 completion

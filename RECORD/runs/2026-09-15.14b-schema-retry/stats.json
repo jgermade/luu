@@ -1,0 +1,122 @@
+[
+ {
+  "n": 1,
+  "prompt": "read AGENTS.md and say what its second heading is",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 2,
+  "prompt": "list the top-level entries of crates/agent-core/src",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 3,
+  "prompt": "read luu.toml and say what enforcement is set to",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 4,
+  "prompt": "run cargo fmt --all --check and report whether it exits clean",
+  "score_call_verdict": "ContinuedPastFence",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "tool_limit",
+  "retry_engaged": false
+ },
+ {
+  "n": 5,
+  "prompt": "list the files directly inside RECORD/",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 6,
+  "prompt": "read Cargo.toml and say which edition the workspace is on",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 7,
+  "prompt": "list what is in crates/agent-core/src/backend",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 8,
+  "prompt": "read crates/agent-core/src/tools/mod.rs and say what MAX_OUTPUT_BYTES is",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 9,
+  "prompt": "run cargo test -p agent-core score_call and report the result",
+  "score_call_verdict": "ContinuedPastFence",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "tool_limit",
+  "retry_engaged": false
+ },
+ {
+  "n": 10,
+  "prompt": "list the entries of scripts/tasks",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 11,
+  "prompt": "read .gitignore and say whether .tmp/ is in it",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 12,
+  "prompt": "list what is inside crates/luu/tests",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 13,
+  "prompt": "read crates/agent-core/src/backend/mock.rs and say what Mock::cycle does",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ },
+ {
+  "n": 14,
+  "prompt": "run cargo clippy --workspace --all-targets and report whether it is clean",
+  "score_call_verdict": "ContinuedPastFence",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "tool_limit",
+  "retry_engaged": false
+ },
+ {
+  "n": 15,
+  "prompt": "read ROADMAP/2026-09-09/README.md and say which item is first in section A",
+  "score_call_verdict": "Parsed",
+  "first_attempt_executed_a_call": true,
+  "turn_end_reason": "stop",
+  "retry_engaged": false
+ }
+]

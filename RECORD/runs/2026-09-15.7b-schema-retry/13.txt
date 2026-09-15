@@ -1,0 +1,36 @@
+provider: Local OLLAMA → openai@127.0.0.1:8080
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+warning: no tokenizer for qwen2.5-coder-7b: counting approximately (chars/4). Pass --tokenizer <tokenizer.json> for real numbers.
+To read the file `crates/agent-core/src/backend/mock.rs` and determine what `Mock::cycle` does, I'll need to access that file. Please allow me to read the file:
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/backend/mock.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/backend/mock.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The `Mock::cycle` method in the `mock.rs` file controls whether the mock backend repeats its replies in a cyclic manner. Here's a detailed explanation:
+
+- **Function Signature**:
+  ```rust
+  pub fn cycle(mut self, cycling: bool) -> Self
+  ```
+  - `self`: The mutable instance of the `Mock` struct.
+  - `cycling`: A boolean indicating whether the replies should cycle (`true`) or not (`false`).
+
+- **Behavior**:
+  - If `cycling` is `true`, the mock backend will cycle through the replies in a loop. Once it reaches the end of the replies list, it will wrap back to the first element.
+  - If `cycling` is `false`, the mock backend will use the replies in the order they are provided. If there is only one reply, it will repeat that reply indefinitely.
+
+- **Implementation**:
+  - The method sets the `cycling` field of the `Mock` struct to the value of the `cycling` parameter.
+  - It then returns the modified `Mock` instance.
+
+- **Usage**:
+  - This method is used to configure the mock backend to either cycle through its replies or use them in a linear fashion.
+  - It is part of the `Mock` struct's builder pattern, allowing for flexible configuration of the mock backend.
+
+In summary, `Mock::cycle` controls whether the mock backend's replies are repeated in a cyclic manner or used in a linear fashion.
+
+[stop] 2701 prompt / 381 completion

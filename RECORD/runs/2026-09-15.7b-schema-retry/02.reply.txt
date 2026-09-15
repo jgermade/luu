@@ -1,0 +1,8 @@
+```list_dir
+{"path": "crates/agent-core/src"}
+```{
+  "arguments": {
+    "path": "crates/agent-core/src"
+  },
+  "name": "list_dir"
+}

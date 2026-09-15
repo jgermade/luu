@@ -21,11 +21,26 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 
-use crate::backend::{Backend, CompletionRequest, Message, Usage};
+use crate::backend::{Backend, CompletionRequest, Constraint, Message, Usage};
 use crate::sandbox::Sandbox;
-use crate::tools::{ToolStep, parse_call};
+use crate::tools::{CallVerdict, ToolStep, parse_call, score_call};
 use crate::turn::{EndReason, TurnEvent, TurnOutcome, run_turn};
 use crate::worker::Executor;
+
+/// The retry `Constraint::Schema` is honest for — see
+/// [`crate::tools::Tools::call_schema`]'s own doc and
+/// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`. An unconstrained
+/// first attempt keeps "just answer" reachable; only a reply that attempted
+/// a call and missed the shape (`CallVerdict::Drifted`) is retried, once,
+/// forced into this schema. A clean decline (`CallVerdict::NoCall`) is never
+/// retried — a schema cannot tell "the model chose not to call" from "the
+/// model forgot to," so the loop does not guess at the ones score_call
+/// already can tell apart.
+#[derive(Debug, Clone)]
+pub struct SchemaRetry {
+    pub schema: serde_json::Value,
+    pub tool_names: Vec<&'static str>,
+}
 
 /// How many tool calls one turn may make before it has to answer.
 ///
@@ -123,12 +138,14 @@ impl AgentOutcome {
 /// a pipe into a container. That is the whole of what level 3 changed here —
 /// and if adding the container had had to touch this function, the loop was
 /// wrong. See `RECORD/2026-09-02.the-worker-and-the-seam.completed.md`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_turn(
     backend: &dyn Backend,
     request: CompletionRequest,
     tools: &dyn Executor,
     sandbox: &Sandbox,
     limits: Limits,
+    schema_retry: Option<&SchemaRetry>,
     events: mpsc::Sender<TurnEvent>,
     cancel: watch::Receiver<bool>,
 ) -> AgentOutcome {
@@ -203,6 +220,67 @@ pub async fn run_agent_turn(
                 .await;
             return AgentOutcome::from_final(outcome.text.clone(), steps, outcome, usage);
         }
+
+        // The one retry `Constraint::Schema` is for: the first attempt above
+        // was unconstrained, and only a `Drifted` verdict — a fenced block
+        // under a tool's own name, the shape that missed rather than a
+        // decision not to call — earns a second, schema-forced attempt. See
+        // `SchemaRetry`'s own doc.
+        let outcome = if parse_call(&outcome.text).is_none()
+            && let Some(retry) = schema_retry
+            && score_call(&outcome.text, &retry.tool_names) == CallVerdict::Drifted
+        {
+            let (inner, mut inbox) = mpsc::channel::<TurnEvent>(256);
+            let forward = {
+                let events = events.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = inbox.recv().await {
+                        if let TurnEvent::Token(_) = event
+                            && events.send(event).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                })
+            };
+            let _ = events
+                .send(TurnEvent::ModelCall {
+                    step,
+                    messages: messages.clone(),
+                })
+                .await;
+            let retried = run_turn(
+                backend,
+                CompletionRequest {
+                    model: model.clone(),
+                    messages: messages.clone(),
+                    context_limit,
+                    temperature,
+                    seed,
+                    constraint: Some(Constraint::Schema(retry.schema.clone())),
+                },
+                inner,
+                cancel.clone(),
+            )
+            .await;
+            let _ = forward.await;
+            usage = sum(usage, retried.usage);
+            if retried.error.is_some() || retried.reason == EndReason::Cancelled {
+                let _ = events
+                    .send(match &retried.error {
+                        Some(error) => TurnEvent::Failed(error.clone()),
+                        None => TurnEvent::Ended {
+                            reason: EndReason::Cancelled,
+                            usage: None,
+                        },
+                    })
+                    .await;
+                return AgentOutcome::from_final(retried.text.clone(), steps, retried, usage);
+            }
+            retried
+        } else {
+            outcome
+        };
 
         let Some(call) = parse_call(&outcome.text) else {
             let _ = events
@@ -384,6 +462,15 @@ mod tests {
         replies: &[&str],
         max_steps: u32,
     ) -> (Vec<TurnEvent>, AgentOutcome) {
+        drive_with(fixture, replies, max_steps, None).await
+    }
+
+    async fn drive_with(
+        fixture: &Fixture,
+        replies: &[&str],
+        max_steps: u32,
+        schema_retry: Option<&SchemaRetry>,
+    ) -> (Vec<TurnEvent>, AgentOutcome) {
         let backend = Scripted::new(replies);
         let tools = crate::tools::Tools::standard();
         let (tx, mut rx) = mpsc::channel(256);
@@ -408,6 +495,7 @@ mod tests {
             &tools,
             &fixture.sandbox,
             Limits::default().with_max_steps(max_steps),
+            schema_retry,
             tx,
             cancel,
         )
@@ -465,6 +553,7 @@ mod tests {
             &tools,
             &fixture.sandbox,
             Limits::default().with_tool_timeout(Duration::from_millis(300)),
+            None,
             tx,
             cancel,
         )
@@ -627,6 +716,84 @@ mod tests {
             !events
                 .iter()
                 .any(|e| matches!(e, TurnEvent::ToolCall { .. }))
+        );
+    }
+
+    fn schema_retry() -> SchemaRetry {
+        SchemaRetry {
+            schema: crate::tools::Tools::standard().call_schema(),
+            tool_names: crate::tools::Tools::standard().names().collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_drifted_call_is_retried_once_under_the_schema_and_then_runs() {
+        // The one retry `Constraint::Schema` is for: fenced under the tool's
+        // own name instead of ```tool, the exact drift
+        // RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md names throughout.
+        // The scripted retry reply is what a schema-constrained server is
+        // supposed to guarantee — the correct envelope — and the loop should
+        // execute it rather than giving up on the first, malformed attempt.
+        let fixture = Fixture::new("schema-retry-drift");
+        let retry = schema_retry();
+        let (events, outcome) = drive_with(
+            &fixture,
+            &[
+                "```list_dir\n{}\n```",
+                "```tool\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\"}}\n```",
+                "It says the answer is 42.",
+            ],
+            DEFAULT_MAX_STEPS,
+            Some(&retry),
+        )
+        .await;
+
+        assert_eq!(outcome.text, "It says the answer is 42.");
+        assert_eq!(outcome.steps.len(), 1, "the retried call is the one run");
+        assert!(outcome.steps[0].outcome.output.contains("42"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, TurnEvent::ModelCall { .. }))
+                .count(),
+            3,
+            "the drifted attempt, its schema-constrained retry, and the call after the tool result",
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, TurnEvent::ToolCall { .. }))
+                .count(),
+            1,
+            "one call executed, not the drifted attempt and the retry both",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_decline_is_never_retried() {
+        // A schema cannot tell "chose not to call" from "forgot to" — only
+        // score_call's Drifted can, and NoCall is not it. Retrying here would
+        // force a call the model never attempted, which is exactly the "a
+        // constrained model cannot say no" cost the WIP record names.
+        let fixture = Fixture::new("schema-retry-noretry");
+        let retry = schema_retry();
+        let (events, outcome) = drive_with(
+            &fixture,
+            &["It is a text file.", "unreachable: never scripted to run"],
+            DEFAULT_MAX_STEPS,
+            Some(&retry),
+        )
+        .await;
+
+        assert_eq!(outcome.text, "It is a text file.");
+        assert!(outcome.steps.is_empty());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, TurnEvent::ModelCall { .. }))
+                .count(),
+            1,
+            "a clean decline earns no retry",
         );
     }
 

@@ -1,0 +1,12 @@
+To run `cargo test -p agent-core score_call` and report the result, I'll execute the command and provide the output.
+
+```run_command
+{"argv":["cargo","test","-p","agent-core","score_call"],"cwd":".","timeout_ms":30000}
+```
+
+The result will be reported in the next message.{
+  "arguments": {
+    "argv": ["cargo", "test", "-p", "agent-core", "score_call"]
+  },
+  "name": "run_command"
+}

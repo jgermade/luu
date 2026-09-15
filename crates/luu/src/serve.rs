@@ -2045,6 +2045,9 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             agency.executor(),
             sandbox.as_ref(),
             agency.limits,
+            // `--constrain` is a `chat`-only flag so far; a session started
+            // through `serve` has no schema to retry into either.
+            None,
             tx,
             cancel_rx,
         )

@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use agent_core::agent::{DEFAULT_MAX_STEPS, run_agent_turn};
+use agent_core::agent::{DEFAULT_MAX_STEPS, SchemaRetry, run_agent_turn};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{
     Backend, CompletionRequest, Constraint, mock::Mock, ollama::Ollama, openai::OpenAi,
@@ -765,12 +765,17 @@ enum Command {
         #[arg(long)]
         select_graph: bool,
 
-        /// Constrain every reply: `schema` (`response_format`, every reply
-        /// becomes a call, no "just answer") or `grammar` (GBNF, prose stays
-        /// reachable). Off, so a run made without it stays comparable to
-        /// every recording on disk. A backend that cannot render the one
-        /// asked for says so once and sends its own request unconstrained
-        /// regardless — see `Backend::constrain_caveat`.
+        /// `schema` (`response_format`) or `grammar` (GBNF). Off, so a run
+        /// made without it stays comparable to every recording on disk. The
+        /// two arms constrain differently, not just differently-spelled:
+        /// `grammar` constrains every reply from the first attempt — prose
+        /// stays reachable through the alternation. `schema` has no "just
+        /// answer" branch, so it is never sent on a first attempt; it is
+        /// spent once, as `SchemaRetry`, only after an unconstrained first
+        /// reply drifted (`CallVerdict::Drifted` — fenced under a tool's own
+        /// name, not a decision not to call). A backend that cannot render
+        /// the one asked for says so once and sends its own request
+        /// unconstrained regardless — see `Backend::constrain_caveat`.
         #[arg(long, value_enum)]
         constrain: Option<ConstrainKind>,
     },
@@ -2047,14 +2052,32 @@ pub async fn run() -> Result<()> {
     // time. `constrain_caveat` is asked here too, once, so a run that sent
     // one is told what the backend could not promise about it before
     // anything is measured, the same rule the window caveat set.
-    let constraint = constrain
+    let built = constrain
         .map(|kind| kind.build(&agency.tools))
         .transpose()?;
-    if let Some(constraint) = &constraint
-        && let Some(caveat) = backend.constrain_caveat(constraint)
+    if let Some(built) = &built
+        && let Some(caveat) = backend.constrain_caveat(built)
     {
         eprintln!("note: {caveat}");
     }
+    // The two arms diverge here. `Grammar` is honestly a first-attempt
+    // constraint — prose stays reachable through the alternation — so it is
+    // sent on every step below, unchanged from before. `Schema` has no
+    // "just answer" branch (`Tools::call_schema`'s own doc), so it is never
+    // the per-step constraint; it is offered to `run_agent_turn` as a
+    // `SchemaRetry`, spent only on a reply that drifted. See
+    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    let (constraint, schema_retry) = match (constrain, built) {
+        (Some(ConstrainKind::Grammar), Some(grammar)) => (Some(grammar), None),
+        (Some(ConstrainKind::Schema), Some(Constraint::Schema(schema))) => (
+            None,
+            Some(SchemaRetry {
+                schema,
+                tool_names: agency.tools.names().collect(),
+            }),
+        ),
+        _ => (None, None),
+    };
     // Shared with the printer task, because the tool round trips are announced
     // there and they belong in the same chain as the turns: two trackers would
     // measure one session against two different pasts.
@@ -2456,6 +2479,7 @@ pub async fn run() -> Result<()> {
             agency.executor(),
             sandbox.as_ref(),
             agency.limits,
+            schema_retry.as_ref(),
             tx,
             cancel,
         )

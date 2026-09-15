@@ -1,0 +1,5 @@
+To determine the edition of the Rust workspace, I'll read the `Cargo.toml` file.
+
+```tool
+{"name": "read_file", "arguments": {"path": "Cargo.toml"}}
+```

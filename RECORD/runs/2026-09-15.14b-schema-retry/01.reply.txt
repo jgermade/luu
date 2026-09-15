@@ -1,0 +1,5 @@
+To determine the second heading in AGENTS.md, I'll read the file and extract the relevant information.
+
+```tool
+{"name": "read_file", "arguments": {"path": "AGENTS.md"}}
+```
