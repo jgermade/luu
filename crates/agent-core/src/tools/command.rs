@@ -5,11 +5,17 @@
 //! not: it makes its own syscalls, and nothing we wrote is in the way. So this
 //! is the one tool whose verdict is about the kernel.
 //!
-//! There is no shell. `command` is a program name and `args` is a list, because
-//! a string handed to `sh -c` makes the allowlist it was checked against
-//! meaningless — `sh -c "cargo test; curl …"` passes any check that looks at
-//! the first word. Anyone who wants a shell puts `sh` in `commands`, and then
-//! the grant reads as what it is.
+//! There is no shell. `argv` is a list, program name first, because a string
+//! handed to `sh -c` makes the allowlist it was checked against meaningless —
+//! `sh -c "cargo test; curl …"` passes any check that looks at the first
+//! word. Anyone who wants a shell puts `sh` in `commands`, and then the grant
+//! reads as what it is.
+//!
+//! One list rather than a `command` string beside an `args` list on purpose:
+//! that pair reads as a call in its own right — a program name playing
+//! `name`'s part and an argument list playing `arguments`'s — and a model
+//! asked for the wrapped form sometimes emits the pair *unwrapped*, believing
+//! it already answered. See `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -73,40 +79,45 @@ impl Tool for RunCommand {
         json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Program name, which must be in the sandbox's allowed commands."},
-                "args": {"type": "array", "items": {"type": "string"}},
+                "argv": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The program and its arguments, argv[0] first. argv[0] must be in the sandbox's allowed commands.",
+                },
                 "cwd": {"type": "string", "description": "Working directory. Default: the project root."},
                 "timeout_ms": {"type": "integer", "description": "Default 30000, capped at 600000."},
             },
-            "required": ["command"],
+            "required": ["argv"],
         })
     }
 
     fn run<'a>(&'a self, arguments: &'a serde_json::Value, sandbox: &'a Sandbox) -> ToolFuture<'a> {
         Box::pin(async move {
-            let Some(program) = arguments.get("command").and_then(serde_json::Value::as_str) else {
+            let Some(argv) = arguments.get("argv").and_then(serde_json::Value::as_array) else {
                 return ToolOutcome::failed(
-                    Verdict::deny("run_command: `command` is required and must be a string"),
-                    "`command` is required and must be a string",
+                    Verdict::deny("run_command: `argv` is required and must be an array"),
+                    "`argv` is required and must be an array",
+                );
+            };
+            let Some(program) = argv.first().and_then(serde_json::Value::as_str) else {
+                return ToolOutcome::failed(
+                    Verdict::deny(
+                        "run_command: `argv` must have at least one element, the program",
+                    ),
+                    "`argv` must have at least one element, the program",
                 );
             };
 
-            let args: Vec<String> = arguments
-                .get("args")
-                .and_then(serde_json::Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .map(|value| match value.as_str() {
-                            Some(text) => text.to_string(),
-                            // A number or a bool in `args` is a small model
-                            // being loose, not an attack. Rendering it is what
-                            // a shell would have done.
-                            None => value.to_string(),
-                        })
-                        .collect()
+            let args: Vec<String> = argv[1..]
+                .iter()
+                .map(|value| match value.as_str() {
+                    Some(text) => text.to_string(),
+                    // A number or a bool in `argv` is a small model being
+                    // loose, not an attack. Rendering it is what a shell
+                    // would have done.
+                    None => value.to_string(),
                 })
-                .unwrap_or_default();
+                .collect();
 
             let cwd = match arguments.get("cwd").and_then(serde_json::Value::as_str) {
                 Some(path) => {
@@ -314,7 +325,7 @@ mod tests {
     async fn a_command_that_is_not_allowed_never_starts() {
         let dir = scratch("denied");
         let sandbox = sandbox_allowing(&dir, &[], Enforcement::BestEffort);
-        let outcome = run(&sandbox, json!({"command": "echo", "args": ["hola"]})).await;
+        let outcome = run(&sandbox, json!({"argv": ["echo", "hola"]})).await;
 
         assert!(!outcome.verdict.allowed);
         assert!(outcome.output.is_empty());
@@ -326,7 +337,7 @@ mod tests {
     async fn an_allowed_command_runs_and_the_verdict_says_who_held_it() {
         let dir = scratch("allowed");
         let sandbox = sandbox_allowing(&dir, &["echo"], Enforcement::BestEffort);
-        let outcome = run(&sandbox, json!({"command": "echo", "args": ["hola"]})).await;
+        let outcome = run(&sandbox, json!({"argv": ["echo", "hola"]})).await;
 
         assert!(outcome.error.is_none(), "{outcome:?}");
         assert!(outcome.output.contains("hola"), "{}", outcome.output);
@@ -342,7 +353,7 @@ mod tests {
     async fn a_non_zero_exit_keeps_the_output_and_says_it_failed() {
         let dir = scratch("exit");
         let sandbox = sandbox_allowing(&dir, &["false"], Enforcement::BestEffort);
-        let outcome = run(&sandbox, json!({"command": "false"})).await;
+        let outcome = run(&sandbox, json!({"argv": ["false"]})).await;
         assert!(outcome.error.unwrap().contains("exited with 1"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -359,7 +370,7 @@ mod tests {
         let sandbox = sandbox_allowing(&dir, &["sh"], Enforcement::BestEffort);
         let outcome = run(
             &sandbox,
-            json!({"command": "sh", "args": ["-c", "echo out; echo err >&2; exit 3"]}),
+            json!({"argv": ["sh", "-c", "echo out; echo err >&2; exit 3"]}),
         )
         .await;
 
@@ -402,7 +413,7 @@ mod tests {
         );
         let outcome = run(
             &sandbox,
-            json!({"command": "sh", "args": ["-c", "while :; do :; done"]}),
+            json!({"argv": ["sh", "-c", "while :; do :; done"]}),
         )
         .await;
 
@@ -450,7 +461,7 @@ mod tests {
         };
         assert_eq!(clock("read_file", json!({"path": "x"})), Duration::ZERO);
         assert_eq!(
-            clock("run_command", json!({"command": "ls"})),
+            clock("run_command", json!({"argv": ["ls"]})),
             Duration::from_millis(DEFAULT_TIMEOUT_MS),
         );
     }
@@ -461,7 +472,7 @@ mod tests {
         let sandbox = sandbox_allowing(&dir, &["sleep"], Enforcement::BestEffort);
         let outcome = run(
             &sandbox,
-            json!({"command": "sleep", "args": ["30"], "timeout_ms": 200}),
+            json!({"argv": ["sleep", "30"], "timeout_ms": 200}),
         )
         .await;
         assert!(outcome.error.unwrap().contains("killed after"));
@@ -474,7 +485,7 @@ mod tests {
         let sandbox = sandbox_allowing(&dir, &["echo"], Enforcement::BestEffort);
         // The whole point of taking a program and a list: this is one program
         // name with a space in it, and there is nothing on PATH called that.
-        let outcome = run(&sandbox, json!({"command": "echo hola; id"})).await;
+        let outcome = run(&sandbox, json!({"argv": ["echo hola; id"]})).await;
         assert!(!outcome.verdict.allowed, "{outcome:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -486,7 +497,7 @@ mod tests {
         // Not `/etc`: allowing any command grants the system roots read and
         // execute, so `/etc` is inside the sandbox on purpose. The parent of
         // the project is not.
-        let outcome = run(&sandbox, json!({"command": "echo", "cwd": ".."})).await;
+        let outcome = run(&sandbox, json!({"argv": ["echo"], "cwd": ".."})).await;
         assert!(!outcome.verdict.allowed, "{outcome:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -495,7 +506,7 @@ mod tests {
     async fn the_child_is_held_by_the_kernel_or_it_does_not_run() {
         let dir = scratch("required");
         let sandbox = sandbox_allowing(&dir, &["echo"], Enforcement::Kernel);
-        let outcome = run(&sandbox, json!({"command": "echo", "args": ["hola"]})).await;
+        let outcome = run(&sandbox, json!({"argv": ["echo", "hola"]})).await;
 
         match outcome.verdict.allowed {
             // Where both mechanisms are there, the verdict names them.

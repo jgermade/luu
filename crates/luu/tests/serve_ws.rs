@@ -1206,7 +1206,7 @@ const PLAN_THAT_RUNS_SH: &str = "```plan\n{\"objective\":\"make it pass\",\
 fn runs(script: &str) -> String {
     format!(
         "Running it.\n```tool\n{{\"name\":\"run_command\",\"arguments\":\
-         {{\"command\":\"sh\",\"args\":[\"-c\",\"{script}\"]}}}}\n```"
+         {{\"argv\":[\"sh\",\"-c\",\"{script}\"]}}}}\n```"
     )
 }
 

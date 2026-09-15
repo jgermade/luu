@@ -744,22 +744,13 @@ pub fn command_line(call: &ToolCall) -> Option<String> {
     if let Some(path) = call.arguments.get("path").and_then(|v| v.as_str()) {
         return Some(path.to_string());
     }
-    let command = call.arguments.get("command")?.as_str()?;
-    let args = call
-        .arguments
-        .get("args")
-        .and_then(|v| v.as_array())
-        .map(|args| {
-            args.iter()
-                .filter_map(|arg| arg.as_str())
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
-    Some(match args.is_empty() {
-        true => command.to_string(),
-        false => format!("{command} {args}"),
-    })
+    let argv = call.arguments.get("argv")?.as_array()?;
+    let line = argv
+        .iter()
+        .filter_map(|arg| arg.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!line.is_empty()).then_some(line)
 }
 
 #[cfg(test)]
@@ -790,11 +781,10 @@ mod tests {
     /// The same, for a command that actually ran: `met_by` reads the exit code
     /// and nothing else, so a step without one can never meet a condition.
     fn ran(command: &str, args: &[&str], exit_code: Option<i32>, signal: Option<i32>) -> ToolStep {
-        let mut step = step(
-            "run_command",
-            serde_json::json!({"command": command, "args": args}),
-            None,
-        );
+        let argv: Vec<&str> = std::iter::once(command)
+            .chain(args.iter().copied())
+            .collect();
+        let mut step = step("run_command", serde_json::json!({"argv": argv}), None);
         step.outcome.command = Some(crate::tools::CommandResult {
             exit_code,
             signal,
@@ -914,7 +904,7 @@ mod tests {
             step("read_file", serde_json::json!({"path": "src/lib.rs"}), None),
             step(
                 "run_command",
-                serde_json::json!({"command": "cargo", "args": ["test"]}),
+                serde_json::json!({"argv": ["cargo", "test"]}),
                 Some("cargo exited with 1"),
             ),
         ];

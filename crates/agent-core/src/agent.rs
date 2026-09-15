@@ -513,7 +513,7 @@ mod tests {
         };
         let long = crate::tools::ToolCall {
             name: "run_command".into(),
-            arguments: serde_json::json!({"command": "sleep", "timeout_ms": 300_000}),
+            arguments: serde_json::json!({"argv": ["sleep"], "timeout_ms": 300_000}),
         };
         assert_eq!(limits.deadline(&read), Duration::from_millis(1_000));
         assert_eq!(limits.deadline(&long), Duration::from_millis(301_000));

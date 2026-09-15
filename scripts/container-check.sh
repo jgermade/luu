@@ -108,7 +108,7 @@ has "$work/denied.txt" "denied"
 say "run_command, inside the container"
 "$luu" chat "list it" --sandbox "$policy" --mock-delay-ms 0 \
   --mock-reply '```tool
-{"name":"run_command","arguments":{"command":"ls","args":["-1","AGENTS.md"]}}
+{"name":"run_command","arguments":{"argv":["ls","-1","AGENTS.md"]}}
 ```' \
   --mock-reply 'done' >"$work/command.txt" 2>&1 || { cat "$work/command.txt"; exit 1; }
 cat "$work/command.txt"
@@ -138,7 +138,7 @@ LUU_HOME="$home" "$luu" serve --bind "127.0.0.1:$port" --no-store --mock-delay-m
 {"objective":"list a file","steps":["run ls"],"files":[],"commands":["ls"]}
 ```' \
   --mock-reply '```tool
-{"name":"run_command","arguments":{"command":"ls","args":["-1","AGENTS.md"]}}
+{"name":"run_command","arguments":{"argv":["ls","-1","AGENTS.md"]}}
 ```' \
   --mock-reply 'done' >"$work/serve.log" 2>&1 &
 serving=$!

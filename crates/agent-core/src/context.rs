@@ -3200,7 +3200,10 @@ mod tool_turn_tests {
     /// only kind `close_if_met` looks at.
     fn ran(command: &str, args: &[&str], exit_code: Option<i32>) -> ToolStep {
         let mut step = step("run_command", "running it", "");
-        step.call.arguments = serde_json::json!({"command": command, "args": args});
+        let argv: Vec<&str> = std::iter::once(command)
+            .chain(args.iter().copied())
+            .collect();
+        step.call.arguments = serde_json::json!({"argv": argv});
         step.outcome.command = Some(crate::tools::CommandResult {
             exit_code,
             signal: None,

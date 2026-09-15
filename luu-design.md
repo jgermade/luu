@@ -448,9 +448,13 @@ access = "read-write"           # read | execute | read-write
   could not be honoured in a subprocess, so `denied = ["./.env"]` would stop
   `read_file` and would not stop `cat .env`, with nothing in the config saying so.
   The way to deny is to not grant.
-- **The commands allowlist is a program name.** `run_command` takes `command` plus
-  `args` and never a shell string, which would make the allowlist meaningless —
-  `sh -c "cargo test; curl …"` passes any check that looks at the first word.
+- **The commands allowlist is a program name.** `run_command` takes one `argv`
+  array, program first, and never a shell string, which would make the
+  allowlist meaningless — `sh -c "cargo test; curl …"` passes any check that
+  looks at the first word. (Until 2026-09-15 this was a `command` string
+  beside an `args` list — the same information, but shaped like a call in its
+  own right, which is why a model sometimes emitted it unwrapped instead of
+  inside `arguments`; see `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.)
 - **Allowing any command implies read+execute on the system roots** (`/usr`, `/bin`,
   `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt`), because a program cannot run without
   reading its own interpreter. **For the child only** — an in-process tool sees
