@@ -183,6 +183,7 @@ pub async fn run_agent_turn(
             .send(TurnEvent::ModelCall {
                 step,
                 messages: messages.clone(),
+                retry: false,
             })
             .await;
 
@@ -247,6 +248,7 @@ pub async fn run_agent_turn(
                 .send(TurnEvent::ModelCall {
                     step,
                     messages: messages.clone(),
+                    retry: true,
                 })
                 .await;
             let retried = run_turn(
@@ -285,8 +287,14 @@ pub async fn run_agent_turn(
                 // check below already knows how to end a turn on — instead
                 // of failing the turn outright. See
                 // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s own
-                // "what a refused grammar does to a session".
-                Some(_) => outcome,
+                // "what a refused grammar does to a session". Reported once,
+                // here, the same rule `constrain_caveat` set for a known
+                // incompatibility at startup — this is the runtime half of
+                // it, discovered per compile rather than known in advance.
+                Some(error) => {
+                    let _ = events.send(TurnEvent::ConstraintRefused { error }).await;
+                    outcome
+                }
                 None => retried,
             }
         } else {
@@ -682,7 +690,7 @@ mod tests {
         let calls: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                TurnEvent::ModelCall { step, messages } => Some((*step, messages)),
+                TurnEvent::ModelCall { step, messages, .. } => Some((*step, messages)),
                 _ => None,
             })
             .collect();
@@ -902,6 +910,13 @@ mod tests {
         assert!(
             !events.iter().any(|e| matches!(e, TurnEvent::Failed(_))),
             "the turn ends normally, not on a Failed event"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                TurnEvent::ConstraintRefused { error } if error.contains("failed to parse grammar")
+            )),
+            "the refusal is reported loudly, once, with the backend's own error"
         );
     }
 

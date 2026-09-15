@@ -328,6 +328,7 @@ impl ServerMessage {
     pub fn from_turn_event(turn: TurnId, event: TurnEvent) -> Option<Self> {
         Some(match event {
             TurnEvent::ModelCall { .. } => return None,
+            TurnEvent::ConstraintRefused { .. } => return None,
             TurnEvent::Token(text) => Self::Token { turn, text },
             TurnEvent::Ended { reason, usage } => Self::Ended {
                 turn,
@@ -491,7 +492,8 @@ mod tests {
                 1,
                 TurnEvent::ModelCall {
                     step: 2,
-                    messages: Vec::new()
+                    messages: Vec::new(),
+                    retry: false,
                 }
             )
             .is_none()

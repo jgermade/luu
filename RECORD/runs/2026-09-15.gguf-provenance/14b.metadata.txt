@@ -1,0 +1,167 @@
+=== /home/joshua/models/qwen2.5-coder-14b/qwen2.5-coder-14b-instruct-q4_k_m.gguf ===
+  general.architecture = qwen2
+  general.basename = Qwen2.5-Coder
+  general.file_type = 15
+  general.finetune = Instruct-AWQ
+  general.name = Qwen2.5 Coder 14B Instruct AWQ
+  general.quantization_version = 2
+  general.size_label = 14B
+  general.type = model
+  qwen2.attention.head_count = 40
+  qwen2.attention.head_count_kv = 8
+  qwen2.attention.layer_norm_rms_epsilon = 9.999999974752427e-07
+  qwen2.block_count = 48
+  qwen2.context_length = 131072
+  qwen2.embedding_length = 5120
+  qwen2.feed_forward_length = 13824
+  qwen2.rope.freq_base = 1000000.0
+  split.count = 0
+  split.no = 0
+  split.tensors.count = 579
+  tokenizer.chat_template = {%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0]['role'] == 'system' %}
+        {{- messages[0]['content'] }}
+    {%- else %}
+        {{- 'You are Qwen, created by Alibaba Cloud. You are a helpful assistant.' }}
+    {%- endif %}
+    {{- "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {%- if messages[0]['role'] == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0]['content'] + '<|im_end|>\n' }}
+    {%- else %}
+        {{- '<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- for message in messages %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {{- '<|im_start|>' + message.role }}
+        {%- if message.content %}
+            {{- '\n' + message.content }}
+        {%- endif %}
+        {%- for tool_call in message.tool_calls %}
+            {%- if tool_call.function is defined %}
+                {%- set tool_call = tool_call.function %}
+            {%- endif %}
+            {{- '\n<tool_call>\n{"name": "' }}
+            {{- tool_call.name }}
+            {{- '", "arguments": ' }}
+            {{- tool_call.arguments | tojson }}
+            {{- '}\n</tool_call>' }}
+        {%- endfor %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- message.content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}
+
+  tokenizer.ggml.add_bos_token = 0
+  tokenizer.ggml.bos_token_id = 151643
+  tokenizer.ggml.eos_token_id = 151645
+  tokenizer.ggml.model = gpt2
+  tokenizer.ggml.padding_token_id = 151643
+  tokenizer.ggml.pre = qwen2
+
+=== /home/joshua/.ollama/models/blobs/sha256-ac9bc7a69dab38da1c790838955f1293420b55ab555ef6b4615efa1c1507b1ed ===
+  general.architecture = qwen2
+  general.base_model.0.name = Qwen2.5 Coder 14B
+  general.base_model.0.organization = Qwen
+  general.base_model.0.repo_url = https://huggingface.co/Qwen/Qwen2.5-Coder-14B
+  general.base_model.count = 1
+  general.basename = Qwen2.5-Coder
+  general.file_type = 15
+  general.finetune = Instruct
+  general.license = apache-2.0
+  general.license.link = https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct/blob/main/LICENSE
+  general.name = Qwen2.5 Coder 14B Instruct
+  general.quantization_version = 2
+  general.size_label = 14B
+  general.type = model
+  qwen2.attention.head_count = 40
+  qwen2.attention.head_count_kv = 8
+  qwen2.attention.layer_norm_rms_epsilon = 9.999999974752427e-07
+  qwen2.block_count = 48
+  qwen2.context_length = 32768
+  qwen2.embedding_length = 5120
+  qwen2.feed_forward_length = 13824
+  qwen2.rope.freq_base = 1000000.0
+  tokenizer.chat_template = {%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0]['role'] == 'system' %}
+        {{- messages[0]['content'] }}
+    {%- else %}
+        {{- 'You are Qwen, created by Alibaba Cloud. You are a helpful assistant.' }}
+    {%- endif %}
+    {{- "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {%- if messages[0]['role'] == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0]['content'] + '<|im_end|>\n' }}
+    {%- else %}
+        {{- '<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- for message in messages %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {{- '<|im_start|>' + message.role }}
+        {%- if message.content %}
+            {{- '\n' + message.content }}
+        {%- endif %}
+        {%- for tool_call in message.tool_calls %}
+            {%- if tool_call.function is defined %}
+                {%- set tool_call = tool_call.function %}
+            {%- endif %}
+            {{- '\n<tool_call>\n{"name": "' }}
+            {{- tool_call.name }}
+            {{- '", "arguments": ' }}
+            {{- tool_call.arguments | tojson }}
+            {{- '}\n</tool_call>' }}
+        {%- endfor %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- message.content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}
+
+  tokenizer.ggml.add_bos_token = 0
+  tokenizer.ggml.bos_token_id = 151643
+  tokenizer.ggml.eos_token_id = 151645
+  tokenizer.ggml.model = gpt2
+  tokenizer.ggml.padding_token_id = 151643
+  tokenizer.ggml.pre = qwen2
+

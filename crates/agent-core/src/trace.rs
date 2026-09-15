@@ -98,7 +98,8 @@ pub enum TraceMessage {
         tokens: u32,
         counter: Counter,
     },
-    /// A model call *after* the first one of a turn: the tool-use round trip.
+    /// A model call *after* the first one of a turn: the tool-use round trip,
+    /// or a schema retry.
     ///
     /// [`Self::Budget`] and [`Self::PrefixReuse`] describe the call that starts
     /// a turn. A turn that uses a tool makes more, each one carrying the
@@ -109,9 +110,15 @@ pub enum TraceMessage {
     /// panel as chat-template overhead.
     StepCall {
         turn: TurnId,
-        /// Counts from 1 within the turn; this message is only emitted from 2.
-        /// The first call is the turn's own prompt, already measured beside its
-        /// budget, and measuring it twice would put it in the chain twice.
+        /// Counts from 1 within the turn; the turn's own first call is
+        /// already measured beside its budget, so this is only emitted for a
+        /// second call — one after a tool ran (`step > 1`), or the one
+        /// `SchemaRetry` spends on a drifted reply, which shares `step` with
+        /// the attempt it retries. That second case is why this is *not*
+        /// simply "`step > 1`": before it was measured explicitly, a
+        /// retry's own call was silently absent from this chain, the gap
+        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md` names as "the
+        /// tool-call probe's own instrument cannot see a retry".
         step: u32,
         /// The exact string this call handed to the model.
         text: String,

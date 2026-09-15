@@ -1,0 +1,65 @@
+=== /home/joshua/models/qwen2.5-coder-7b/qwen2.5-coder-7b-instruct-q4_k_m.gguf ===
+{
+  "path": "/home/joshua/models/qwen2.5-coder-7b/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+  "gguf_version": 3,
+  "tensor_count": 339,
+  "kv_count": 29,
+  "type_histogram": {
+    "Q4_K": 169,
+    "F32": 141,
+    "Q6_K": 29
+  },
+  "meta": {
+    "general.architecture": "qwen2",
+    "general.file_type": 15,
+    "general.quantization_version": 2,
+    "qwen2.attention.head_count": 28,
+    "qwen2.attention.head_count_kv": 4,
+    "qwen2.block_count": 28,
+    "qwen2.context_length": 131072,
+    "qwen2.embedding_length": 3584,
+    "qwen2.rope.freq_base": 1000000.0
+  }
+}
+=== /home/joshua/.ollama/models/blobs/sha256-60e05f2100071479f596b964f89f510f057ce397ea22f2833a0cfe029bfc2463 ===
+{
+  "path": "/home/joshua/.ollama/models/blobs/sha256-60e05f2100071479f596b964f89f510f057ce397ea22f2833a0cfe029bfc2463",
+  "gguf_version": 3,
+  "tensor_count": 339,
+  "kv_count": 34,
+  "type_histogram": {
+    "Q4_K": 169,
+    "F32": 141,
+    "Q6_K": 29
+  },
+  "meta": {
+    "general.architecture": "qwen2",
+    "general.file_type": 15,
+    "general.quantization_version": 2,
+    "qwen2.attention.head_count": 28,
+    "qwen2.attention.head_count_kv": 4,
+    "qwen2.block_count": 28,
+    "qwen2.context_length": 32768,
+    "qwen2.embedding_length": 3584,
+    "qwen2.rope.freq_base": 1000000.0
+  }
+}
+
+=== per-tensor type differences ===
+  blk.10.ffn_down.weight: Q4_K -> Q6_K
+  blk.11.attn_v.weight: Q6_K -> Q4_K
+  blk.12.attn_v.weight: Q4_K -> Q6_K
+  blk.12.ffn_down.weight: Q6_K -> Q4_K
+  blk.13.ffn_down.weight: Q4_K -> Q6_K
+  blk.14.attn_v.weight: Q6_K -> Q4_K
+  blk.14.ffn_down.weight: Q6_K -> Q4_K
+  blk.15.attn_v.weight: Q4_K -> Q6_K
+  blk.16.ffn_down.weight: Q4_K -> Q6_K
+  blk.17.attn_v.weight: Q6_K -> Q4_K
+  blk.17.ffn_down.weight: Q6_K -> Q4_K
+  blk.18.attn_v.weight: Q4_K -> Q6_K
+  blk.7.ffn_down.weight: Q6_K -> Q4_K
+  blk.8.attn_v.weight: Q4_K -> Q6_K
+  blk.9.attn_v.weight: Q6_K -> Q4_K
+  blk.9.ffn_down.weight: Q4_K -> Q6_K
+total tensors: 339, differing: 16

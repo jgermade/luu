@@ -57,6 +57,7 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
         map_fill: agent_core::repo_map::Fill::Greedy,
         select_tokens: 0,
         select_weights: Default::default(),
+        constrain: None,
         store: None,
     }
 }

@@ -8,10 +8,10 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_core::agent::run_agent_turn;
+use agent_core::agent::{SchemaRetry, run_agent_turn};
 use agent_core::api::SessionView;
 use agent_core::approval::{Approval, Approvers, Signature};
-use agent_core::backend::{Backend, CompletionRequest};
+use agent_core::backend::{Backend, CompletionRequest, Constraint};
 use agent_core::context::{Budget, Context as AgentContext, Fragment, TokenCounter};
 use agent_core::job::{ClosedBy, JobId, Plan, PlanSource, Proposal, parse_plan};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
@@ -146,6 +146,18 @@ struct App {
     /// `None` leaves it to the server's own default.
     temperature: Option<f32>,
     seed: Option<u32>,
+    /// Sent on every step, unless `schema_retry` is instead spent once on a
+    /// drifted reply. Built once at session start, the same reason `budget`
+    /// is: a constraint compiled per turn would cost the compile every turn
+    /// for a value that is the same every time. `None` is unconstrained, the
+    /// only case every recording made before `--constrain` reached `serve`
+    /// and `stdio` was measured under. See
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    constraint: Option<Constraint>,
+    /// The retry `Constraint::Schema` is honest for, spent once per turn on a
+    /// reply that drifted rather than sent on every attempt. `None` when
+    /// `--constrain schema` was not asked for.
+    schema_retry: Option<SchemaRetry>,
     /// The read side, folded from the same events the sockets carry — so
     /// `GET /api/...` can never disagree with what a client watched happen.
     view: Mutex<SessionView>,
@@ -332,6 +344,10 @@ pub struct StdioOptions {
     pub select_tokens: u32,
     /// Which signals score a file, from the flags that switch them.
     pub select_weights: agent_core::select::Weights,
+    /// `schema` or `grammar`, for every turn of the session — the same flag
+    /// `chat` carries, unbuilt here until now. See
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    pub constrain: Option<crate::ConstrainKind>,
     /// Where sessions are cached between restarts.
     pub store: Option<PathBuf>,
 }
@@ -358,6 +374,7 @@ impl App {
             map_fill,
             select_tokens,
             select_weights,
+            constrain,
             store,
             approvers,
         } = options;
@@ -469,6 +486,29 @@ impl App {
         // fact about this agency, and building it after the move would need a
         // second one.
         let agency = Arc::new(agency);
+        // Built once, here, for the same reason the map is: a constraint
+        // compiled per turn would cost the compile every turn for a value
+        // that is the same every time. Mirrors `chat`'s own handling exactly
+        // — see `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+        let built = constrain
+            .map(|kind| kind.build(&agency.tools))
+            .transpose()?;
+        if let Some(built) = &built
+            && let Some(caveat) = backend.constrain_caveat(built)
+        {
+            eprintln!("note: {caveat}");
+        }
+        let (constraint, schema_retry) = match (constrain, built) {
+            (Some(crate::ConstrainKind::Grammar), Some(grammar)) => (Some(grammar), None),
+            (Some(crate::ConstrainKind::Schema), Some(Constraint::Schema(schema))) => (
+                None,
+                Some(SchemaRetry {
+                    schema,
+                    tool_names: agency.tools.names().collect(),
+                }),
+            ),
+            _ => (None, None),
+        };
         Ok(Arc::new(App {
             destination: RwLock::new(Arc::new(Destination {
                 backend,
@@ -502,6 +542,8 @@ impl App {
             postures_path,
             temperature,
             seed,
+            constraint,
+            schema_retry,
             view: Mutex::new({
                 let mut view = SessionView::new(LIVE_SESSION, &backend_name, &model_name);
                 view.started_at = started_at;
@@ -688,6 +730,9 @@ pub struct ServeOptions {
     pub select_tokens: u32,
     /// Which signals score a file, from the flags that switch them.
     pub select_weights: agent_core::select::Weights,
+    /// `schema` or `grammar`, for every turn of the session. See
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    pub constrain: Option<crate::ConstrainKind>,
     /// The file holding the bearer token this server requires, if any.
     /// `None` on a loopback address means no auth; `None` on any other
     /// address means [`bind`] refuses.
@@ -750,6 +795,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         map_fill,
         select_tokens,
         select_weights,
+        constrain,
         auth_token_file,
         store,
         approvers,
@@ -779,6 +825,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         map_fill,
         select_tokens,
         select_weights,
+        constrain,
         store,
         approvers,
     })
@@ -1964,10 +2011,13 @@ async fn begin_turn(
             context_limit: sending.budget.limit,
             temperature: app.temperature,
             seed: app.seed,
-            // `--constrain` is a `chat`-only flag so far; a session has no
-            // way to ask for one yet. See `RECORD/2026-09-14.the-alternation-that-was-not-one.completed.md`
-            // §Still open.
-            constraint: None,
+            // `Grammar` is honestly a first-attempt constraint — prose stays
+            // reachable through the alternation — so it is sent on every
+            // step, the same as `chat`. `Schema` is never here: it has no
+            // "just answer" branch, so it is spent once, as `schema_retry`,
+            // only on a reply that drifted. See
+            // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+            constraint: app.constraint.clone(),
         },
         code,
     ))
@@ -2004,9 +2054,18 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                     // describe the call that starts a turn; a turn that used a
                     // tool made more, and until these are published the panel
                     // shows their cost as chat-template overhead. Measured into
-                    // the same chain as the turns, from the second call on.
-                    if let TurnEvent::ModelCall { step, messages } = &event {
-                        if *step > 1 {
+                    // the same chain as the turns, from the second call on —
+                    // and a schema retry counts too, even at `step == 1`. See
+                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s
+                    // "the tool-call probe's own instrument cannot see a
+                    // retry".
+                    if let TurnEvent::ModelCall {
+                        step,
+                        messages,
+                        retry,
+                    } = &event
+                    {
+                        if *step > 1 || *retry {
                             let text = rendered(messages);
                             let measured = {
                                 let mut session = app.session.lock().await;
@@ -2032,6 +2091,16 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                         }
                         continue;
                     }
+                    // Loud on the server's own stderr, the same rule
+                    // `constrain_caveat` sets for a known incompatibility at
+                    // startup — this is the runtime half, discovered per
+                    // compile. Not a protocol message: `from_turn_event`
+                    // already answers `None` for it below, and a client has
+                    // no more use for this than it does for `ModelCall`.
+                    if let TurnEvent::ConstraintRefused { error } = &event {
+                        eprintln!("note: a constrained retry was refused: {error}");
+                        continue;
+                    }
                     if let Some(message) = ServerMessage::from_turn_event(turn, event) {
                         app.publish(Event::Protocol(message)).await;
                     }
@@ -2045,9 +2114,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             agency.executor(),
             sandbox.as_ref(),
             agency.limits,
-            // `--constrain` is a `chat`-only flag so far; a session started
-            // through `serve` has no schema to retry into either.
-            None,
+            app.schema_retry.as_ref(),
             tx,
             cancel_rx,
         )
@@ -3068,6 +3135,8 @@ mod tests {
             postures_path: None,
             temperature: None,
             seed: None,
+            constraint: None,
+            schema_retry: None,
             view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
             session_id: Mutex::new("session-test".into()),
             map_rendered: String::new(),
@@ -3077,6 +3146,59 @@ mod tests {
             session_started_at: Mutex::new(0),
             stream: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The gap named in
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s "the tool-call
+    /// probe's own instrument cannot see a retry": before `ModelCall` carried
+    /// `retry`, the interceptor's `step > 1` rule silently dropped the one
+    /// extra call `SchemaRetry` spends on a drifted reply, because that call
+    /// shares `step == 1` with the attempt it retries. This drives a real
+    /// retry through `start_turn` and asserts the `StepCall` it should now
+    /// produce actually arrives on the event bus.
+    #[tokio::test]
+    async fn a_schema_retry_reaches_the_step_call_chain_even_at_step_one() {
+        let mut app = app_selecting(
+            &[
+                // Fenced under the tool's own bare name: `score_call` reads
+                // this as `Drifted`, not `NoCall` — the one verdict
+                // `SchemaRetry` is built to retry.
+                "```list_dir\n{}\n```",
+                // The retry's reply. Not a call at all, so the turn ends
+                // here rather than looping — what is under test is that the
+                // retry's own `ModelCall` was traced, not what it answered.
+                "there is one file",
+            ],
+            0,
+        );
+        Arc::get_mut(&mut app).unwrap().schema_retry = Some(SchemaRetry {
+            schema: serde_json::json!({}),
+            tool_names: agent_core::tools::Tools::standard().names().collect(),
+        });
+
+        let mut events = app.events.subscribe();
+        // `start_turn` spawns the turn and returns; it does not run it. The
+        // turn itself finishes on its own task, so the assertion waits for
+        // the state it left behind rather than for `start_turn` itself.
+        start_turn(app.clone(), "list the directory".into()).await;
+        assert!(
+            until(&app, |s| s.context.turns().len() == 1).await,
+            "the turn never finished",
+        );
+
+        let mut step_call_at_one = false;
+        while let Ok(event) = events.try_recv() {
+            if let Event::Trace(TraceMessage::StepCall { step, .. }) = event
+                && step == 1
+            {
+                step_call_at_one = true;
+            }
+        }
+        assert!(
+            step_call_at_one,
+            "the retry is a second call at step 1 and belongs in the same \
+             chain a tool-loop's second call already reaches",
+        );
     }
 
     /// The one line a resume writes, and the two cases it is about.

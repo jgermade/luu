@@ -393,6 +393,14 @@ enum Command {
         /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
         #[arg(long)]
         select_graph: bool,
+
+        /// `schema` (`response_format`) or `grammar` (GBNF), for every turn of
+        /// the session. Off, so a run made without it stays comparable to
+        /// every recording on disk — same flag `chat` carries, see its own doc
+        /// for what the two arms cost. See
+        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+        #[arg(long, value_enum)]
+        constrain: Option<ConstrainKind>,
     },
 
     /// Serve the agent protocol over stdin/stdout as NDJSON.
@@ -574,6 +582,14 @@ enum Command {
         /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
         #[arg(long)]
         select_graph: bool,
+
+        /// `schema` (`response_format`) or `grammar` (GBNF), for every turn of
+        /// the session. Off, so a run made without it stays comparable to
+        /// every recording on disk — same flag `chat` carries, see its own doc
+        /// for what the two arms cost. See
+        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+        #[arg(long, value_enum)]
+        constrain: Option<ConstrainKind>,
     },
 
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
@@ -1181,7 +1197,7 @@ impl EvictionKind {
 /// disk before this flag existed was measured under, and a flag that
 /// changed the default would make them incomparable retroactively.
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
-enum ConstrainKind {
+pub enum ConstrainKind {
     /// `response_format`: every reply becomes a call to exactly one tool.
     /// No "just answer" branch — see `Tools::call_schema`'s own doc for why
     /// that makes this a retry's constraint, not a first attempt's.
@@ -1194,7 +1210,10 @@ enum ConstrainKind {
 }
 
 impl ConstrainKind {
-    fn build(self, tools: &Tools) -> anyhow::Result<Constraint> {
+    // `pub`: `ServeOptions`/`StdioOptions` carry the raw flag and build it in
+    // `App::create`, once, the same reason `chat` builds it once — see
+    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    pub fn build(self, tools: &Tools) -> anyhow::Result<Constraint> {
         Ok(match self {
             Self::Schema => Constraint::Schema(tools.call_schema()),
             Self::Grammar => Constraint::Grammar(
@@ -1721,6 +1740,7 @@ pub async fn run() -> Result<()> {
         select_tokens,
         select_docs,
         select_graph,
+        constrain,
     } = command
     {
         let (backend, resolved) = destination(ModelArgs {
@@ -1820,6 +1840,7 @@ pub async fn run() -> Result<()> {
             map_fill: fill_of(map_non_greedy),
             select_tokens,
             select_weights: weights_of(select_docs, select_graph),
+            constrain,
             auth_token_file,
             approvers,
         })
@@ -1857,6 +1878,7 @@ pub async fn run() -> Result<()> {
         select_tokens,
         select_docs,
         select_graph,
+        constrain,
     } = command
     {
         let (backend, resolved) = destination(ModelArgs {
@@ -1921,6 +1943,7 @@ pub async fn run() -> Result<()> {
             map_fill: fill_of(map_non_greedy),
             select_tokens,
             select_weights: weights_of(select_docs, select_graph),
+            constrain,
             approvers,
         })
         .await;
@@ -2361,9 +2384,20 @@ pub async fn run() -> Result<()> {
                     // A model call is not a protocol message: it explains the
                     // agent rather than driving it. Measured into the same
                     // chain as the turns, from the second call on — the first
-                    // is the turn's own prompt and is already in it.
-                    if let TurnEvent::ModelCall { step, messages } = &event {
-                        if let (Some(recorder), true) = (recorder.as_ref(), *step > 1) {
+                    // is the turn's own prompt and is already in it — and a
+                    // schema retry counts too, even at `step == 1`: it is a
+                    // second call the tracker's own chain has not seen yet,
+                    // and skipping it is the gap named in
+                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s
+                    // "the tool-call probe's own instrument cannot see a
+                    // retry".
+                    if let TurnEvent::ModelCall {
+                        step,
+                        messages,
+                        retry,
+                    } = &event
+                    {
+                        if let (Some(recorder), true) = (recorder.as_ref(), *step > 1 || *retry) {
                             let text = rendered(messages);
                             let mut tracker = prefix
                                 .lock()
@@ -2465,6 +2499,14 @@ pub async fn run() -> Result<()> {
                         // Handled above, before the protocol conversion: it is
                         // not a protocol message and it is not printed.
                         TurnEvent::ModelCall { .. } => {}
+                        // Loud, the way a known-incompatible backend's caveat
+                        // is at startup — on stderr rather than into the
+                        // transcript `out` carries, so a run compared against
+                        // one made before this existed is not diffing a note
+                        // neither one asked for.
+                        TurnEvent::ConstraintRefused { error } => {
+                            eprintln!("note: a constrained retry was refused: {error}");
+                        }
                     }
                 }
             })

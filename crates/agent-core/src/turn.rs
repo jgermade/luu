@@ -54,9 +54,19 @@ pub enum TurnEvent {
     ///
     /// It costs one clone of the prompt per call, made whether or not anyone is
     /// recording — the same order as the clone the request already needs.
+    ///
+    /// `retry` is `true` for the one extra call `SchemaRetry` spends on a
+    /// drifted reply, same `step` as the attempt it is retrying. Before this
+    /// field existed a retry's own `ModelCall` was indistinguishable from a
+    /// first attempt's, both carrying `step == 1` — which is exactly why the
+    /// interceptor's old `step > 1` rule to measure a `StepCall` missed the
+    /// retry outright, a gap named in
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s "the tool-call
+    /// probe's own instrument cannot see a retry".
     ModelCall {
         step: u32,
         messages: Vec<Message>,
+        retry: bool,
     },
     /// The model asked for a tool. Emitted before the sandbox is consulted, so
     /// a denial is visible as a call that was made and refused rather than as
@@ -77,6 +87,17 @@ pub enum TurnEvent {
         usage: Option<Usage>,
     },
     Failed(String),
+    /// `run_agent_turn`'s schema retry was refused by the backend — a grammar
+    /// or schema it would not compile, a transport error, whatever it said no
+    /// to. The turn survives by falling back to the pre-retry answer
+    /// (`RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s "what a refused
+    /// retry does to a turn"); this is the loud, once-per-occurrence note that
+    /// fallback needed and did not have. Debug data, like `ModelCall`: it
+    /// explains the agent rather than driving it, and never becomes a
+    /// protocol message.
+    ConstraintRefused {
+        error: String,
+    },
 }
 
 /// What the caller gets back, once the turn is over.

@@ -334,12 +334,22 @@ The model never executes anything directly — it only emits a structured reques
   `response_format`, forcing *every* reply into a call with no "just answer"
   branch at all — measured to exhaust `--max-tool-steps` on **15 of 15** probe
   prompts, because a model given a result from its own call and still not
-  allowed to answer just calls again. It is the retry `Tools::call_schema`'s
-  own doc names — after an unconstrained first attempt drifted, not applied to
-  every call in a turn — and nothing yet builds that retry loop. `llama-server`
-  honours a bare `grammar` field as an undocumented extension; Ollama's own
-  `/v1` and native `/api/chat` do not, and say so once per run rather than
-  silently sending nothing (`Backend::constrain_caveat`).
+  allowed to answer just calls again. Built instead as the retry
+  `Tools::call_schema`'s own doc names: `SchemaRetry` sends `schema` only
+  once, after an unconstrained first attempt scores `Drifted` — fenced under
+  a tool's own name, not a decision not to call — and never on a clean
+  decline. Measured against `qwen2.5-coder:7b`: 7/15 unconstrained drifted
+  replies recover to 13/15 executed calls
+  ([`a-grammar-for-tool-calls`](RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md)).
+  A retry the backend refuses outright — a schema or grammar it will not
+  compile — falls back to the pre-retry drifted answer instead of failing the
+  turn, and reports the refusal once, loudly, on stderr rather than the wire:
+  `TurnEvent::ConstraintRefused` is debug data, like `ModelCall`, and never
+  becomes a protocol message. `--constrain` reaches `chat`, `serve` and
+  `stdio` alike, one flag built once per session rather than compiled per
+  turn. `llama-server` honours a bare `grammar` field as an undocumented
+  extension; Ollama's own `/v1` and native `/api/chat` do not, and say so once
+  per run rather than silently sending nothing (`Backend::constrain_caveat`).
 - **The definitions are the second half of the cached prefix**, so their rendering
   is a wire format: tools sorted by name, schemas serialized through
   `serde_json`'s sorted maps, nothing interpolated. `luu tools` prints the exact
