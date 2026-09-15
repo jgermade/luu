@@ -1,25 +1,121 @@
 <script :setup>
-  // Phase 1 is the layout only — see `inspector-files.html` for why this
-  // says what it says rather than rendering nothing.
+  // What git says changed, as a list you click to see the diff in the middle
+  // column. Read-only: nothing here stages, commits or reverts — see
+  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` on why this panel is a
+  // window and not a second way to change the workspace.
+  const { workspace, loadStatus, showDiff } = await import("./workspace.js")
+
+  loadStatus()
+
+  // Git's `XY` code is two positions, not one word: X is the index against
+  // HEAD and Y the working tree against the index. Splitting them is what
+  // decides which diff a click should ask for.
+  $: changes = Object.entries(workspace.status)
+    .map(([path, code]) => {
+      const padded = code.padEnd(2, " ")
+      const untracked = code.trim() === "??"
+      return {
+        path,
+        code,
+        name: path.split("/").pop(),
+        dir: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "",
+        untracked,
+        staged: !untracked && padded[0] !== " ",
+        unstaged: !untracked && padded[1] !== " ",
+      }
+    })
+    .sort((a, b) => a.path.localeCompare(b.path))
+
+  // Not `selected` — that name collides with the DOM property and loops
+  // the render effect. See `content-viewer.html`.
+  $: picked = workspace.selected?.kind === "diff" ? workspace.selected : null
 </script>
 
-<h2>Git</h2>
-<p class="dim">
-  Changed files go here, as a list you click to see the diff in the middle
-  column. Not built yet: it needs
-  <code>GET /api/workspace/git-status</code> and
-  <code>GET /api/workspace/git-diff</code>, which are phase 4 of
-  <code>RECORD/2026-09-15.a-three-pane-inspector.WIP.md</code>.
+<div class="head">
+  <h2>Git</h2>
+  <button type="button" class="link" @click="loadStatus()" title="Ask git again">↻</button>
+</div>
+
+<p :if="workspace.gitError" class="err">{{ workspace.gitError }}</p>
+
+<ul class="changes">
+  <li :each="change in changes" :key="change.path">
+    <button
+      type="button"
+      class="row"
+      :class.on="picked?.path === change.path"
+      :attrs="{ title: change.path }"
+      @click="showDiff(change.path, change.staged && !change.unstaged)">
+      <span class="code" :class.new="change.untracked">{{ change.code }}</span>
+      <span class="name">{{ change.name }}</span>
+      <span :if="change.dir" class="where dim">{{ change.dir }}</span>
+    </button>
+  </li>
+</ul>
+
+<p :if="!changes.length && !workspace.gitError" class="dim">
+  Nothing changed — the working tree matches <code>HEAD</code>.
+</p>
+
+<p :if="changes.length" class="legend dim">
+  Two positions, as git writes them: the index against <code>HEAD</code>, then
+  the working tree against the index. <code>??</code> is untracked, and has no
+  diff to show.
 </p>
 
 <style scoped>
+  .head { display: flex; align-items: baseline; gap: .5rem; margin-bottom: .4rem; }
   h2 {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: .08em;
     color: var(--dim);
-    margin: 0 0 .5rem;
+    margin: 0;
   }
-  p { font-size: 13px; line-height: 1.5; }
-  code { color: var(--fg); font-size: 12px; }
+  .head .link { margin-left: auto; font-size: 13px; text-decoration: none; color: var(--dim); }
+  .head .link:hover { color: var(--fg); }
+
+  .changes { list-style: none; margin: 0; padding: 0; }
+  .row {
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    padding: .15rem .3rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .row:hover { background: var(--bg); }
+  .row.on { background: var(--accent); color: var(--on-accent); }
+  .code {
+    flex: none;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--warn);
+    white-space: pre;
+  }
+  .code.new { color: var(--b-history); }
+  .row.on .code, .row.on .where { color: var(--on-accent); }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The directory, after the filename and quieter: two files called `mod.rs`
+     are told apart by it, and it is not what you read first. */
+  .where {
+    margin-left: auto;
+    flex: none;
+    font-size: 11px;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+  }
+  .legend { font-size: 11px; line-height: 1.5; margin: .8rem 0 0; }
+  .err { color: var(--bad); font-size: 12px; line-height: 1.5; }
+  code { font-size: 11px; }
 </style>

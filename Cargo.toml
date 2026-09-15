@@ -20,6 +20,12 @@ clap = { version = "4", features = ["derive"] }
 # RECORD/2026-09-04.signed-approvals.completed.md.
 ed25519-dalek = "3"
 futures-util = "0.3"
+# Gitignore-aware directory walking for the debug UI's file tree. The
+# alternative was a matcher over the root `.gitignore` by hand, which gets
+# nested ignore files, negations and the global config wrong -- this crate is
+# ripgrep's own walker and already implements all of it. See
+# RECORD/2026-09-15.a-three-pane-inspector.WIP.md.
+ignore = "0.4"
 landlock = "0.4"
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

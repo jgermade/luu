@@ -708,7 +708,20 @@ column; the viewer shows whatever the rail selected — a file, a diff, an expan
 panes' contents are separate jq79 components (`inspector-{files,git,debug}.html`,
 `content-viewer.html`); `app.html` keeps the shell and the modals. Read-only throughout: the
 file tree and the git panel are a window onto the workspace, not a second way to change it —
-every write still goes through the job gate. See
+every write still goes through the job gate. A hamburger in the header opens preferences, whose
+one setting is a light/dark theme kept in `localStorage` — a fact about the screen somebody
+reads from, not about the run, so not in `config.toml`.
+
+The panels are fed by four plain `GET`s — `/api/workspace/{tree,file,git-status,git-diff}` —
+which are **not** behind the job gate on purpose: a person clicking a directory is not a model
+proposing a tool call, and routing it through approval would mean either rubber-stamping a job
+nobody asked for or building a second, unaudited read path. Every path still resolves through
+`Sandbox::check_path`, so the panels reach exactly what the session's policy grants and nothing
+above it. Ignored entries come from the difference between what `ignore`'s walker yields and
+what `read_dir` does, which gets nested `.gitignore` files and negations right for free. The
+diff is parsed into hunks server-side rather than shipped as text — the same call this document
+makes for prompt diffs below, answered by parsing git's own output rather than adding a second
+diff implementation. See
 [`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`](RECORD/2026-09-15.a-three-pane-inspector.WIP.md).
 
 **v1 of the message enums is frozen.** `ClientMessage` is `prompt`, `cancel`,

@@ -38,6 +38,7 @@ pub mod secret;
 pub mod serve;
 pub mod session;
 pub mod store;
+pub mod workspace;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::io::{AsyncWriteExt, stdout};
 use tokio::sync::{mpsc, watch};

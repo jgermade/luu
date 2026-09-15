@@ -1,26 +1,106 @@
 <script :setup>
-  // Phase 1 of `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` is the
-  // layout only: this is the shape the tree will land in, not the tree. The
-  // endpoint it will read (`GET /api/workspace/tree`) does not exist yet, so
-  // saying so beats an empty panel that reads as a bug.
+  // The workspace tree. Lazy per directory, because a repository with a
+  // `target/` in it is not one to walk eagerly, and because the endpoint is
+  // one directory wide for the same reason. See
+  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  const { workspace, openDir, toggleDir, refresh, showFile, loadStatus } =
+    await import("./workspace.js")
+
+  openDir("")
+  loadStatus()
+
+  // The tree, flattened to what is actually on screen: one pass that walks
+  // only the directories that are expanded, carrying a depth for the indent.
+  // A recursive component would need one instance per node to say the same
+  // thing.
+  const flatten = (path, depth, out) => {
+    for (const entry of workspace.open[path] || []) {
+      out.push({ ...entry, depth })
+      if (entry.dir && workspace.expanded[entry.path]) {
+        flatten(entry.path, depth + 1, out)
+      }
+    }
+    return out
+  }
+  $: rows = (workspace.open, workspace.expanded, flatten("", 0, []))
+
+  $: selectedPath = workspace.selected?.kind === "file" ? workspace.selected.path : null
 </script>
 
-<h2>Files</h2>
-<p class="dim">
-  The workspace tree goes here — gitignored entries dimmed, changed entries
-  highlighted. Not built yet: it needs
-  <code>GET /api/workspace/tree</code>, which is phase 3 of
-  <code>RECORD/2026-09-15.a-three-pane-inspector.WIP.md</code>.
-</p>
+<div class="head">
+  <h2>Files</h2>
+  <button type="button" class="link" @click="refresh()" title="Re-read the tree and git">↻</button>
+</div>
+
+<p :if="workspace.error" class="err">{{ workspace.error }}</p>
+
+<ul class="tree">
+  <li :each="row in rows" :key="row.path">
+    <button
+      type="button"
+      class="row"
+      :class.on="row.path === selectedPath"
+      :class.ignored="row.ignored"
+      :attrs="{ style: `padding-left:${row.depth * 0.75 + 0.2}rem`, title: row.path }"
+      @click="row.dir ? toggleDir(row.path) : showFile(row.path)">
+      <span class="twist">{{ row.dir ? (workspace.expanded[row.path] ? "▾" : "▸") : "" }}</span>
+      <span class="name">{{ row.name }}</span>
+      <!-- Git's own letter, not a word: `M`, `??`, `A` are what `git status`
+           says, and a person reading this panel already knows them. -->
+      <span :if="row.status" class="status" :class="row.status.trim()">{{ row.status }}</span>
+    </button>
+  </li>
+</ul>
+
+<p :if="!rows.length && !workspace.error" class="dim">Reading the workspace…</p>
 
 <style scoped>
+  .head { display: flex; align-items: baseline; gap: .5rem; margin-bottom: .4rem; }
   h2 {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: .08em;
     color: var(--dim);
-    margin: 0 0 .5rem;
+    margin: 0;
   }
-  p { font-size: 13px; line-height: 1.5; }
-  code { color: var(--fg); font-size: 12px; }
+  .head .link { margin-left: auto; font-size: 13px; text-decoration: none; color: var(--dim); }
+  .head .link:hover { color: var(--fg); }
+
+  .tree { list-style: none; margin: 0; padding: 0; }
+  .row {
+    display: flex;
+    align-items: baseline;
+    gap: .25rem;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    padding: .1rem .3rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .row:hover { background: var(--bg); }
+  .row.on { background: var(--accent); color: var(--on-accent); }
+  /* Dimmed, not hidden: somebody looking for `target/` wants to see that it is
+     there and ignored rather than wonder whether the tree is broken. */
+  .row.ignored .name { opacity: .45; }
+  .twist { width: .7rem; flex: none; color: var(--dim); font-size: 10px; }
+  .row.on .twist { color: var(--on-accent); }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status {
+    margin-left: auto;
+    flex: none;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    color: var(--warn);
+    white-space: pre;
+  }
+  /* Untracked is the one that reads differently from "changed": nothing of it
+     is in git yet. */
+  .status.\?\? { color: var(--b-history); }
+  .row.on .status { color: var(--on-accent); }
+  .err { color: var(--bad); font-size: 12px; line-height: 1.5; }
 </style>

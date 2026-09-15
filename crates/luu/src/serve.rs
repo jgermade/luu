@@ -24,6 +24,7 @@ use agent_core::turn::{EndReason, TurnEvent, run_turn};
 use crate::auth::Auth;
 use crate::session::{Agency, Event, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
 use crate::store::SessionStore;
+use crate::workspace;
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
@@ -875,6 +876,15 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/sessions/{id}/context", get(get_context))
         .route("/api/sessions/{id}/context.json", get(get_context))
+        // The workspace, for the person rather than for the model: a file
+        // tree, what git says changed, one file, one diff. Read-only and
+        // deliberately not behind the job gate — see `crate::workspace`'s own
+        // first paragraph for why, and note that the sandbox still bounds
+        // every path.
+        .route("/api/workspace/tree", get(get_workspace_tree))
+        .route("/api/workspace/file", get(get_workspace_file))
+        .route("/api/workspace/git-status", get(get_workspace_git_status))
+        .route("/api/workspace/git-diff", get(get_workspace_git_diff))
         .layer(middleware::from_fn_with_state(auth.clone(), require_token));
 
     let router = guarded
@@ -2233,6 +2243,83 @@ struct PosturesView {
 /// could write one would be a page that could widen its own sandbox. The names
 /// are added to `config.toml` by whoever owns the machine — the same hand that
 /// writes the policy files they point at.
+/// What the workspace panels ask for: a path, relative to the sandbox base.
+///
+/// Absent means the base itself, which is what the tree opens on.
+#[derive(Debug, Default, serde::Deserialize)]
+struct WorkspaceQuery {
+    #[serde(default)]
+    path: String,
+    /// `git-diff` only: the index against `HEAD` rather than the working tree
+    /// against the index.
+    #[serde(default)]
+    staged: bool,
+}
+
+/// One `workspace::Error` as one HTTP answer. Here rather than as an
+/// `IntoResponse` impl on the error because the mapping is this surface's
+/// opinion, not the module's: `workspace` is about a filesystem and knows
+/// nothing about status codes.
+fn workspace_error(error: workspace::Error) -> Response {
+    let status = match &error {
+        // Not `FORBIDDEN`: the sandbox refusing a path is the policy working,
+        // and a client that asked for something outside it asked wrongly.
+        workspace::Error::Refused(_) => StatusCode::BAD_REQUEST,
+        workspace::Error::Missing(_) => StatusCode::NOT_FOUND,
+        workspace::Error::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, error.to_string()).into_response()
+}
+
+/// The live agency's sandbox. Read through the lock on every call rather than
+/// cloned once: a session that moved to another posture moved its sandbox, and
+/// a panel reading the old one would be showing a tree the running session
+/// cannot reach.
+async fn workspace_sandbox(state: &AppRouterState) -> Arc<agent_core::sandbox::Sandbox> {
+    state.app.agency.read().await.sandbox.clone()
+}
+
+async fn get_workspace_tree(
+    State(state): State<AppRouterState>,
+    Query(query): Query<WorkspaceQuery>,
+) -> Response {
+    let sandbox = workspace_sandbox(&state).await;
+    match workspace::tree(sandbox.as_ref(), &query.path).await {
+        Ok(tree) => Json(tree).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
+async fn get_workspace_file(
+    State(state): State<AppRouterState>,
+    Query(query): Query<WorkspaceQuery>,
+) -> Response {
+    let sandbox = workspace_sandbox(&state).await;
+    match workspace::file(sandbox.as_ref(), &query.path).await {
+        Ok(file) => Json(file).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
+async fn get_workspace_git_status(State(state): State<AppRouterState>) -> Response {
+    let sandbox = workspace_sandbox(&state).await;
+    match workspace::git_status(sandbox.base()).await {
+        Ok(map) => Json(map).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
+async fn get_workspace_git_diff(
+    State(state): State<AppRouterState>,
+    Query(query): Query<WorkspaceQuery>,
+) -> Response {
+    let sandbox = workspace_sandbox(&state).await;
+    match workspace::diff(sandbox.as_ref(), &query.path, query.staged).await {
+        Ok(diff) => Json(diff).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
 async fn get_postures(State(state): State<AppRouterState>) -> Response {
     let app = &state.app;
     Json(PosturesView {

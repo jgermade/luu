@@ -181,7 +181,10 @@ function url(path) {
 }
 
 /// The read side, with the token when there is one.
-function apiHeaders() {
+/// Exported so the workspace panels authenticate the same way the rest of the
+/// page does. One place knows how this port is reached; a second copy of this
+/// is a second thing to fix when it changes.
+export function apiHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 

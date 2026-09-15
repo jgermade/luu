@@ -126,6 +126,25 @@ test.afterAll(() => {
   rmSync(home, { recursive: true, force: true })
 })
 
+/**
+ * Closes the first-run dialog if this page gets one.
+ *
+ * Two legitimate states, and which one a test sees depends on what ran before
+ * it: the dialog opens only once the page has heard the protocol say hello and
+ * asked whether anything is configured, and a session started by an earlier
+ * test answers yes. So it is neither "always there" (an immediate
+ * `isVisible()` also misses it while it is still being decided, and then its
+ * backdrop swallows every later click) nor "never there".
+ */
+async function dismissFirstRun(page) {
+  const modal = page.locator(".modal-backdrop").first()
+  await modal.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
+  if (await modal.isVisible()) {
+    await modal.locator("button.link", { hasText: "close" }).click()
+    await expect(modal).toBeHidden()
+  }
+}
+
 test("a prompt is planned, amended, approved, run and folded", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
@@ -327,10 +346,7 @@ test("the three panes are there, and the inspector switches between its modes", 
   // the default viewport sits right on that edge.
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  const modal = page.locator(".modal-backdrop").first()
-  if (await modal.isVisible()) {
-    await modal.locator("button.link", { hasText: "close" }).click()
-  }
+  await dismissFirstRun(page)
 
   await expect(page.locator(".split .inspector")).toBeVisible()
   await expect(page.locator(".split .viewer")).toBeVisible()
@@ -341,13 +357,15 @@ test("the three panes are there, and the inspector switches between its modes", 
   await expect(page.locator(".inspector .modes button.on")).toHaveText("Debug")
   await expect(page.locator(".inspector .turn-picker")).toBeVisible()
 
-  // The other two are stubs until phases 3 and 4, but they must mount.
+  // The other two mount and replace it. What each one *shows* is asserted by
+  // its own test below; this is about the switch.
   await page.click('.inspector .modes button:has-text("Files")')
-  await expect(page.locator(".inspector .mode-body")).toContainText("workspace tree")
+  await expect(page.locator(".inspector .tree")).toBeVisible({ timeout: 15_000 })
   await expect(page.locator(".inspector .turn-picker")).toBeHidden()
 
   await page.click('.inspector .modes button:has-text("Git")')
-  await expect(page.locator(".inspector .mode-body")).toContainText("Changed files")
+  await expect(page.locator(".inspector h2")).toHaveText("Git")
+  await expect(page.locator(".inspector .tree")).toBeHidden()
 
   await page.click('.inspector .modes button:has-text("Debug")')
   await expect(page.locator(".inspector .turn-picker")).toBeVisible()
@@ -357,4 +375,83 @@ test("the three panes are there, and the inspector switches between its modes", 
   await expect(tabs.first()).toBeVisible()
   await expect(page.locator(".session-tabs .tab.on")).toHaveCount(1)
   await expect(page.locator(".session-tabs .tab.new")).toHaveText("+")
+})
+
+/**
+ * The workspace panels, against this repository itself: the tree the server
+ * walks is the checkout the test runs from, so `.gitignore` and `git status`
+ * have real answers to give. Phases 3 and 4 of
+ * `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+ *
+ * Deliberately not asserting *which* files are changed — that depends on who
+ * is running it and when. What is asserted is the shape: a tree that lists,
+ * ignored entries marked as ignored, a file that opens with its lines, and a
+ * diff that arrives as hunks rather than as text.
+ */
+test("the files panel lists the workspace, and a file opens in the viewer", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await dismissFirstRun(page)
+
+  await page.click('.inspector .modes button:has-text("Files")')
+  const rows = page.locator(".inspector .tree .row")
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 })
+  // `luu.toml` is in every checkout; `target/` is ignored in every checkout
+  // that has been built, and this suite needs a built binary to run at all.
+  await expect(rows.filter({ hasText: "luu.toml" })).toHaveCount(1)
+  await expect(page.locator(".inspector .tree .row.ignored").first()).toBeVisible()
+
+  await page.click('.inspector .tree .row:has-text("luu.toml")')
+  await expect(page.locator(".viewer .path")).toHaveText("luu.toml")
+  // The real file's first line, so this fails if the viewer renders someone
+  // else's bytes under that name.
+  await expect(page.locator(".viewer .code li").first())
+    .toContainText("luu's own sandbox")
+
+  // A directory opens in place rather than replacing the tree.
+  const before = await rows.count()
+  await page.click('.inspector .tree .row:has-text("crates")')
+  await expect(rows).not.toHaveCount(before)
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+test("the git panel lists changes, and one opens as a diff of hunks", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await dismissFirstRun(page)
+
+  await page.click('.inspector .modes button:has-text("Git")')
+  const changes = page.locator(".inspector .changes .row")
+  // A clean checkout is a legitimate state, and then there is nothing to
+  // click — the panel says so and this test has made its point either way.
+  const empty = page.locator(".inspector .mode-body p", { hasText: "Nothing changed" })
+  await expect(changes.first().or(empty)).toBeVisible({ timeout: 15_000 })
+
+  if (await changes.count()) {
+    // Git's own two-position code, untrimmed: the space is which side changed,
+    // and trimming it made every unstaged file look staged.
+    await expect(page.locator(".inspector .changes .code").first()).toHaveText(/^[ MADRCU?!]{2}$/)
+    await changes.first().click()
+    await expect(page.locator(".viewer .path")).not.toBeEmpty()
+    // Either hunks, or the note that says why there are none (an untracked
+    // file has no diff). An empty panel with neither is the failure.
+    const hunks = page.locator(".viewer .hunk").first()
+    const note = page.locator(".viewer .diff .pad")
+    await expect(hunks.or(note)).toBeVisible({ timeout: 15_000 })
+    // Both sides are reachable, which is the whole reason the toggle is there.
+    await expect(page.locator('.viewer .which button:has-text("staged")')).toBeVisible()
+  }
+
+  expect(errors, "the page logged errors").toEqual([])
 })

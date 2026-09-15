@@ -1,25 +1,74 @@
 <script :setup>
-  // The middle column. Phase 1 is the layout only: nothing selects anything
-  // yet, because Files and Git are both stubs until phases 3 and 4 of
+  // The middle column: whatever the Inspector selected. A file's text, or a
+  // diff's hunks — already classified per line by the server, so nothing here
+  // parses a patch. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  const { workspace, showDiff, showFile } = await import("./workspace.js")
+
+  $: shown = workspace.content
+  // `picked` rather than `selected`, and the name is load-bearing: a scope
+  // variable called `selected` collides with the DOM property of that name,
+  // and the render effect ends up writing what it reads. jq79 gives up after
+  // 100 passes with a console error that names neither the variable nor this
+  // file, so this cost half an hour to find. See
   // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
-  //
-  // When they land, what talks to this component is a small shared module
-  // beside `store.js` — the same singleton-module pattern the transport
-  // layer already uses — rather than props threaded through `app.html`:
-  // Files and Git are siblings of this component, and a parent that only
-  // relays between its children is a parent the state does not need.
+  $: picked = workspace.selected
+  // Line numbers for a file: computed here rather than shipped, because they
+  // are a fact about the text and the server has no opinion about them.
+  $: lines = shown?.kind === "file" ? shown.text.split("\n") : []
 </script>
 
-<div class="placeholder">
+<div :if="!picked" class="placeholder">
   <p class="dim">
     A file, a diff, or an expanded detail shows here — whatever the
     Inspector on the left has selected.
   </p>
   <p class="dim small">
-    Nothing selects anything yet: phase 1 of
-    <code>RECORD/2026-09-15.a-three-pane-inspector.WIP.md</code> is the three
-    columns themselves, and the panels that fill this one come after.
+    Click a file in <b>Files</b>, or a change in <b>Git</b>.
   </p>
+</div>
+
+<div :if="picked" class="viewer-head">
+  <span class="path">{{ picked?.path }}</span>
+  <span :if="shown?.truncated" class="warn small">cut at 512 KB</span>
+  <!-- Both diffs of the same file, because "staged" and "unstaged" are two
+       different answers and a panel that shows one silently is a panel that
+       lies by omission when the other exists. -->
+  <span :if="picked?.kind === 'diff'" class="which">
+    <button type="button" :class.on="!picked?.staged" @click="showDiff(picked?.path, false)">working tree</button>
+    <button type="button" :class.on="picked?.staged" @click="showDiff(picked?.path, true)">staged</button>
+  </span>
+  <button
+    :if="picked?.kind === 'diff'"
+    type="button"
+    class="link"
+    @click="showFile(picked?.path)">open the file</button>
+  <button
+    :if="picked?.kind === 'file'"
+    type="button"
+    class="link"
+    @click="showDiff(picked?.path, false)">diff it</button>
+</div>
+
+<p :if="workspace.loading" class="dim pad">Reading…</p>
+<p :if="workspace.error" class="err pad">{{ workspace.error }}</p>
+
+<!-- A file. `pre` per line rather than one block, so the gutter and the text
+     stay aligned without the gutter being part of what you copy. -->
+<div :if="!workspace.loading && shown?.kind === 'file'" class="file">
+  <ol class="code">
+    <li :each="line in lines"><code>{{ line }}</code></li>
+  </ol>
+</div>
+
+<div :if="!workspace.loading && shown?.kind === 'diff'" class="diff">
+  <p :if="shown?.note" class="dim pad">{{ shown?.note }}</p>
+  <div :each="hunk in shown?.hunks" :key="hunk.header" class="hunk">
+    <div class="hunk-head">{{ hunk.header }}</div>
+    <div :each="line in hunk.lines" class="line" :class="line.kind">
+      <span class="sign">{{ line.kind === "add" ? "+" : (line.kind === "del" ? "-" : " ") }}</span>
+      <code>{{ line.text }}</code>
+    </div>
+  </div>
 </div>
 
 <style scoped>
@@ -33,7 +82,90 @@
     padding: 2rem;
     text-align: center;
   }
-  p { margin: 0; max-width: 28rem; line-height: 1.6; }
+  .placeholder p { margin: 0; max-width: 28rem; line-height: 1.6; }
   .small { font-size: 12px; }
-  code { color: var(--fg); font-size: 12px; }
+  .pad { padding: .8rem 1rem; margin: 0; }
+
+  .viewer-head {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: .45rem .8rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .path {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .which { display: flex; gap: .2rem; margin-left: auto; }
+  .which button {
+    background: none;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    padding: .1rem .45rem;
+    cursor: pointer;
+  }
+  .which button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .viewer-head .link { font-size: 12px; }
+  .which ~ .link { margin-left: 0; }
+  .viewer-head > .link:not(.which ~ .link) { margin-left: auto; }
+
+  .code { list-style: none; margin: 0; padding: .5rem 0; counter-reset: line; }
+  .code li {
+    display: flex;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre;
+  }
+  .code li::before {
+    counter-increment: line;
+    content: counter(line);
+    flex: none;
+    width: 3.5rem;
+    padding-right: .8rem;
+    text-align: right;
+    color: var(--dim);
+    opacity: .6;
+    user-select: none;
+  }
+  .code code { white-space: pre; }
+
+  .diff { padding: .5rem 0 1rem; }
+  .hunk { margin-bottom: .8rem; }
+  .hunk-head {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--dim);
+    background: var(--sunken);
+    padding: .2rem .8rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .line {
+    display: flex;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre;
+    padding-right: .8rem;
+  }
+  .line .sign { flex: none; width: 1.6rem; text-align: center; color: var(--dim); user-select: none; }
+  /* Tinted by the same accents the rest of the page uses for the same
+     meanings: history-green is what was added, bad-red what left. */
+  .line.add { background: color-mix(in srgb, var(--b-history) 14%, transparent); }
+  .line.del { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .line.add .sign { color: var(--b-history); }
+  .line.del .sign { color: var(--bad); }
+  .err { color: var(--bad); font-size: 12px; line-height: 1.5; }
 </style>
