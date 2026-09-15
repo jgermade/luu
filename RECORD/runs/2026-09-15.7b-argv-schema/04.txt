@@ -1,0 +1,9 @@
+To run `cargo fmt --all --check` and report whether it exits clean, I'll execute the command and check its output.
+
+```run_command
+{"argv":["cargo","fmt","--all","--check"]}
+```
+
+The result comes back as the next message.
+
+[stop] 477 prompt / 56 completion

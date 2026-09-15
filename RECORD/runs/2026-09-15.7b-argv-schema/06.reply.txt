@@ -1,0 +1,5 @@
+To determine the edition of the workspace in `Cargo.toml`, I'll read the file and extract the relevant information.
+
+```tool
+{"name": "read_file", "arguments": {"path": "Cargo.toml"}}
+```
