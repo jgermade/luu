@@ -710,7 +710,17 @@ panes' contents are separate jq79 components (`inspector-{files,git,debug}.html`
 file tree and the git panel are a window onto the workspace, not a second way to change it —
 every write still goes through the job gate. A hamburger in the header opens preferences, whose
 one setting is a light/dark theme kept in `localStorage` — a fact about the screen somebody
-reads from, not about the run, so not in `config.toml`.
+reads from, not about the run, so not in `config.toml`. A tab's × deletes that stored session,
+so it arms on the first click and deletes on the second, and it is not drawn on the live
+session or the active one, which the server refuses to delete either way.
+
+**The chrome is drawn, not typed.** `app.html` also carries one `<svg>` sprite — a caret, a
+refresh, a menu, a close, a plus and the file/folder pair — and every symbol on the page is a
+`<use>` of it, stroked in `currentColor` so it takes the colour of the control it sits in and
+needs no second set for the light theme. These were text glyphs (`↻`, `▾`/`▸`, `▪`/`▫`, `≡`),
+and a text glyph's size, weight and baseline belong to whichever font on the machine carries
+that codepoint, so none of them lined up with the 16px box a theme's file icons occupy. The
+exception is prose: the `→` in `use →` is a word, not a control, and stays a character.
 
 The panels are fed by four plain `GET`s — `/api/workspace/{tree,file,git-status,git-diff}` —
 which are **not** behind the job gate on purpose: a person clicking a directory is not a model
@@ -723,16 +733,35 @@ diff is parsed into hunks server-side rather than shipped as text — the same c
 makes for prompt diffs below, answered by parsing git's own output rather than adding a second
 diff implementation.
 
+**The viewer opens in two blocks.** A file arrives whole and already coloured, and what costs
+is the DOM: about 50 µs per row, measured, **with or without colour** — so a 3807-line file is
+~20 ms of server and ~300 ms of browser. The page renders a screenful first and everything
+after it one frame later, as **two `:each` groups over two arrays** rather than one array that
+grows: jq79 rebuilds an `:each` when its array changes, so a growing array would rebuild the
+rows somebody is already reading, losing their selection and costing the work again. Two
+groups in one `<ol>`, so the CSS counter numbers the second block without being told where it
+starts, and a spacer the height of the rows still to come, so the scrollbar is the length of
+the file from the first frame and never jumps. Something readable arrives in a third of the
+time; finishing costs 8–28% more, which is the right way round for a panel somebody is
+looking at. This is also the answer to "colour it in the browser with WebAssembly,
+progressively": the colouring is the cheap half, and moving it into the page would add work to
+the thread that is already the bottleneck. The grammars' queries are compiled once at startup
+rather than per request, which is what took a small Rust file from 15 ms to 0.6.
+
 **Icons and highlighting follow the same two rules.** File icons come from a VSCode icon theme
 this machine already has, named by `[ui] icon-theme` in `config.toml` — an extension directory
-or a theme JSON — and nothing is vendored: the page draws two plain glyphs until somebody names
-one, the same way the sandbox waits to be told where `~/.cargo` is. The theme is read once into
-an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
+or a theme JSON — and nothing is vendored: the page draws its own file and folder until
+somebody names one, the same way the sandbox waits to be told where `~/.cargo` is. The theme is
+read once into an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
 reaches the filesystem. Syntax highlighting is `tree-sitter-highlight` on the server, thirteen
 grammars, sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does
 not. The capture names map to this page's own palette, so the viewer follows the light/dark
-toggle without acquiring a second theme system. See
+toggle without acquiring a second theme system. The payload reads head-first — `path`,
+`language`, `truncated`, `total_lines`, then `lines` — because `serde` writes fields in
+declaration order and the facts about a file have no business sitting behind 681 KB of it.
+`total_lines` is counted before the 512 KB cut, so a truncated file says *6255 of 20001 lines*
+rather than only that it was cut. See
 [`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`](RECORD/2026-09-15.a-three-pane-inspector.WIP.md).
 
 **v1 of the message enums is frozen.** `ClientMessage` is `prompt`, `cancel`,

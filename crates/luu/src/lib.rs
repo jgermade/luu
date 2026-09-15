@@ -1780,7 +1780,7 @@ pub async fn run() -> Result<()> {
         };
         // Read once, here, so a theme that will not load says so beside the
         // other startup lines rather than as a silent absence of icons in the
-        // page. A failure is not fatal: the tree draws its own glyphs.
+        // page. A failure is not fatal: the tree draws its own shapes.
         let icons = match ui.as_ref().and_then(|ui| ui.icon_theme.as_ref()) {
             None => std::sync::Arc::new(crate::icons::Theme::default()),
             Some(named) => {
@@ -1801,6 +1801,13 @@ pub async fn run() -> Result<()> {
                 }
             }
         };
+        // The grammars, compiled here rather than inside the first click: the
+        // queries are the same every time and building them per request was
+        // most of what opening a file cost. Beside the icon theme because it is
+        // the same kind of decision — pay a fixed cost where somebody is
+        // watching the process start. See the phase 8 section of
+        // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+        crate::highlight::warm();
         eprint!("{}", agency.describe());
         if approvers.required {
             eprintln!(

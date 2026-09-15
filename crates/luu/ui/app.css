@@ -110,6 +110,33 @@ body {
 
 #app { display: block; height: 100vh; }
 
+/* ---- the page's own symbols ---------------------------------------------
+   One sprite of `<symbol>`s lives at the top of `app.html`; this is the box
+   they are drawn into. Global rather than in any component's `<style scoped>`
+   because the caret and the refresh are each used in two files, and a scoped
+   rule is rewritten per component. See
+   RECORD/2026-09-15.a-three-pane-inspector.WIP.md. */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ic {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  /* `currentColor` and no fill is the whole colour model: a symbol takes the
+     colour of the control it sits in — `--dim` in a panel head, `--on-accent`
+     on a selected row — so the light theme needs no second set, exactly as the
+     highlighter uses the page's own tokens rather than a palette of its own. */
+  fill: none;
+  stroke: currentColor;
+  /* 2 on a 24-unit grid is 1.33px once the box is 16, which is the weight the
+     file icons a theme draws sit at. One number for the whole set. */
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* `▾` and `▸` were two codepoints for one control. This is one shape, turned. */
+.ic.open { transform: rotate(90deg); transform-origin: center; }
+
 /* ---- the configuration modal --------------------------------------------
    Two sections that are not the same kind of thing: what this server resolved
    (fixed for its lifetime) and the file the next run will read. The styling

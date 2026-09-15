@@ -63,11 +63,6 @@ pub struct Tree {
 #[derive(Debug, Serialize)]
 pub struct FileView {
     pub path: String,
-    /// One entry per line, each already cut into highlighted runs. Not the
-    /// whole text plus offsets: see `crate::highlight`'s own first paragraph
-    /// for why offsets across the wire are a bug waiting for a non-ASCII
-    /// character.
-    pub lines: Vec<Vec<crate::highlight::Chunk>>,
     /// Which grammar highlighted it, or `None` for a file that got none —
     /// unknown extension, too big to parse, or a parse that failed. The page
     /// shows it beside the path.
@@ -76,6 +71,27 @@ pub struct FileView {
     /// True when the file was cut at [`MAX_FILE_BYTES`]. The page says so
     /// rather than showing a truncated file as if it were whole.
     pub truncated: bool,
+    /// How many lines the **file** has, which is `lines.len()` for everything
+    /// that fits and more than it for everything that was cut.
+    ///
+    /// Not redundant, which is the only reason it is here: the read below
+    /// holds the whole file before the cut, so this number is already in hand,
+    /// and without it `truncated` is a shrug — the page can say *cut at
+    /// 512 KB* but not how much of the file that leaves. It is also the one
+    /// fact a reader would need up front if this body ever became a stream,
+    /// which is why it sits above `lines` with the rest of them.
+    pub total_lines: usize,
+    /// One entry per line, each already cut into highlighted runs. Not the
+    /// whole text plus offsets: see `crate::highlight`'s own first paragraph
+    /// for why offsets across the wire are a bug waiting for a non-ASCII
+    /// character.
+    ///
+    /// **Last on purpose.** `serde` writes a struct's fields in declaration
+    /// order, so anything after this one sits behind the whole file — 681 KB
+    /// of JSON for `serve.rs` — both for a person reading the response in
+    /// devtools and for any reader that ever consumes this as a stream. The
+    /// facts about the file come first; the file comes last.
+    pub lines: Vec<Vec<crate::highlight::Chunk>>,
 }
 
 /// The cap on a file the viewer will render. A debug UI has no business
@@ -313,6 +329,11 @@ pub async fn file(sandbox: &Sandbox, relative: &str) -> Result<FileView, Error> 
             _ => Error::Failed(format!("{relative}: {error}")),
         })?;
     let truncated = bytes.len() > MAX_FILE_BYTES;
+    // Counted over the whole file rather than over what is sent, and counted
+    // the way the text is split below: `split('\n')` yields one more piece
+    // than there are newlines, so a file with no newline at all is one line
+    // and an empty file is one empty line.
+    let total_lines = bytes.iter().filter(|byte| **byte == b'\n').count() + 1;
     let bytes = match truncated {
         true => &bytes[..MAX_FILE_BYTES],
         false => &bytes[..],
@@ -325,9 +346,10 @@ pub async fn file(sandbox: &Sandbox, relative: &str) -> Result<FileView, Error> 
     let (language, lines) = crate::highlight::lines(&path, &text);
     Ok(FileView {
         path,
-        lines,
         language,
         truncated,
+        total_lines,
+        lines,
     })
 }
 
@@ -434,6 +456,31 @@ async fn git(base: &Path, args: &[&str]) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The count is the file's, not the payload's, and the two agree exactly
+    /// when nothing was cut. Written because the off-by-one is the whole risk:
+    /// the text is split on `\n`, which yields one more piece than there are
+    /// newlines, so a count of newlines alone would be short by one on every
+    /// file in the repository.
+    #[test]
+    fn the_line_count_is_the_one_the_lines_themselves_come_to() {
+        for text in [
+            "",
+            "one line, no newline",
+            "two\nlines\n",
+            "trailing blank\n\n",
+            "\n\n\n",
+        ] {
+            let counted = text.bytes().filter(|byte| *byte == b'\n').count() + 1;
+            let (_, lines) = crate::highlight::lines("x.txt", text);
+            assert_eq!(
+                counted,
+                lines.len(),
+                "{text:?} counts {counted} and splits into {}",
+                lines.len()
+            );
+        }
+    }
 
     /// The rename record eats its second field. Written because the loop that
     /// does it is the one piece of parsing here that a reader cannot check by

@@ -16,21 +16,32 @@
   // thing.
   const flatten = (path, depth, out) => {
     for (const entry of workspace.open[path] || []) {
-      out.push({ ...entry, depth })
+      // The icon id is resolved in the pass rather than in the template, where
+      // it took two calls per row — one for the `:if`, one for the `src`. A
+      // `null` here is what selects the page's own shape, and it means *this
+      // row has no theme icon*, which is not the same question as *is a theme
+      // loaded*: a theme that declares no `file` default answers null too.
+      const open = !!entry.dir && !!workspace.expanded[entry.path]
+      out.push({ ...entry, depth, open, icon: iconFor(entry.name, entry.dir, open) })
       if (entry.dir && workspace.expanded[entry.path]) {
         flatten(entry.path, depth + 1, out)
       }
     }
     return out
   }
-  $: rows = (workspace.open, workspace.expanded, flatten("", 0, []))
+  // `workspace.icons` is in the list because the manifest arrives after the
+  // first listing does — without it the tree would keep the shapes it resolved
+  // in the moment before the theme loaded.
+  $: rows = (workspace.open, workspace.expanded, workspace.icons, flatten("", 0, []))
 
   $: selectedPath = workspace.selected?.kind === "file" ? workspace.selected.path : null
 </script>
 
 <div class="head">
   <h2>Files</h2>
-  <button type="button" class="link" @click="refresh()" title="Re-read the tree and git">↻</button>
+  <button type="button" class="link" @click="refresh()" title="Re-read the tree and git">
+    <svg class="ic"><use href="#i-refresh"/></svg>
+  </button>
 </div>
 
 <p :if="workspace.error" class="err">{{ workspace.error }}</p>
@@ -44,15 +55,19 @@
       :class.ignored="row.ignored"
       :attrs="{ style: `padding-left:${row.depth * 0.75 + 0.2}rem`, title: row.path }"
       @click="row.dir ? toggleDir(row.path) : showFile(row.path)">
-      <span class="twist">{{ row.dir ? (workspace.expanded[row.path] ? "▾" : "▸") : "" }}</span>
-      <!-- The theme's own art when a theme is named, and this page's two
-           glyphs when none is. Never both. -->
+      <span class="twist">
+        <svg :if="row.dir" class="ic" :class.open="row.open"><use href="#i-caret"/></svg>
+      </span>
+      <!-- The theme's own art where the theme has some, and this page's two
+           shapes where it has none. Never both — and the condition is the row's
+           own icon rather than `icons.loaded`, or a theme that declares no
+           default would leave the row with neither and lose its 16px box. -->
       <img
-        :if="iconFor(row.name, row.dir, workspace.expanded[row.path])"
+        :if="row.icon"
         class="icon"
-        :src="`./api/icons/${iconFor(row.name, row.dir, workspace.expanded[row.path])}`"
+        :src="`./api/icons/${row.icon}`"
         :attrs="{ alt: '', loading: 'lazy' }">
-      <span :if="!workspace.icons.loaded" class="glyph">{{ row.dir ? "▪" : "▫" }}</span>
+      <svg :if="!row.icon" class="ic glyph"><use :attrs="{ href: row.dir ? '#i-folder' : '#i-file' }"/></svg>
       <span class="name">{{ row.name }}</span>
       <!-- Git's own letter, not a word: `M`, `??`, `A` are what `git status`
            says, and a person reading this panel already knows them. -->
@@ -72,13 +87,17 @@
     color: var(--dim);
     margin: 0;
   }
-  .head .link { margin-left: auto; font-size: 13px; text-decoration: none; color: var(--dim); }
+  .head .link { margin-left: auto; display: flex; text-decoration: none; color: var(--dim); }
+  .head .link .ic { width: 14px; height: 14px; }
   .head .link:hover { color: var(--fg); }
 
   .tree { list-style: none; margin: 0; padding: 0; }
   .row {
     display: flex;
-    align-items: baseline;
+    /* Centred, not baseline: most of this row is now a 16px box and an SVG's
+       baseline is its bottom edge, which would hang every icon a few pixels
+       below the name it belongs to. */
+    align-items: center;
     gap: .25rem;
     width: 100%;
     background: none;
@@ -96,12 +115,14 @@
   /* Dimmed, not hidden: somebody looking for `target/` wants to see that it is
      there and ignored rather than wonder whether the tree is broken. */
   .row.ignored .name { opacity: .45; }
-  .twist { width: .7rem; flex: none; color: var(--dim); font-size: 10px; }
-  .icon { width: 16px; height: 16px; flex: none; align-self: center; }
-  /* The fallback, and deliberately not a second icon set: enough that an
-     unconfigured tree reads as intentional. `[ui] icon-theme` in config.toml
-     replaces it with any VSCode icon theme on this machine. */
-  .glyph { width: 16px; flex: none; text-align: center; color: var(--dim); font-size: 9px; }
+  .twist { width: 14px; flex: none; display: flex; justify-content: center; color: var(--dim); }
+  .twist .ic { width: 12px; height: 12px; }
+  .icon { width: 16px; height: 16px; flex: none; }
+  /* The fallback, and still deliberately not a second icon set: two shapes,
+     enough that an unconfigured tree reads as intentional. `[ui] icon-theme`
+     in config.toml replaces them with any VSCode icon theme on this machine. */
+  .glyph { color: var(--dim); }
+  .row.on .glyph { color: var(--on-accent); }
   .row.on .twist { color: var(--on-accent); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status {

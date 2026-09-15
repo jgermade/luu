@@ -370,11 +370,19 @@ test("the three panes are there, and the inspector switches between its modes", 
   await page.click('.inspector .modes button:has-text("Debug")')
   await expect(page.locator(".inspector .turn-picker")).toBeVisible()
 
-  // One tab per session, the live one marked, and the "+" that starts another.
+  // One tab per session, the live one marked, and the one that starts another.
   const tabs = page.locator(".session-tabs .tab")
   await expect(tabs.first()).toBeVisible()
   await expect(page.locator(".session-tabs .tab.on")).toHaveCount(1)
-  await expect(page.locator(".session-tabs .tab.new")).toHaveText("+")
+  // Drawn rather than typed since phase 7 of the same record — this used to
+  // assert the text "+". Every symbol on the page is a `<use>` of the sprite
+  // in `app.html`, so a sprite that stopped rendering blanks all of them at
+  // once and is worth one assertion of its own.
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(7)
+  await expect(page.locator('.session-tabs .tab.new use[href="#i-plus"]')).toHaveCount(1)
+  // The live session cannot be deleted — the server refuses it — so the tab
+  // that is on carries no ×.
+  await expect(page.locator(".session-tabs .tab.on .close")).toHaveCount(0)
 })
 
 /**
@@ -476,9 +484,15 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   await page.click('.inspector .modes button:has-text("Files")')
   await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
   // No `[ui] icon-theme` in this server's config, so: no theme art, and the
-  // page's own glyph on every row instead of a column of nothing.
+  // page's own shape on every row instead of a column of nothing. Which of
+  // the two it is depends on the row, so both are named — the condition is the
+  // row's own icon, and a bug in it shows up as a row with neither.
   await expect(page.locator(".inspector .tree img.icon")).toHaveCount(0)
-  await expect(page.locator(".inspector .tree .glyph").first()).toBeVisible()
+  await expect(page.locator(".inspector .tree svg.glyph").first()).toBeVisible()
+  await expect(page.locator('.inspector .tree use[href="#i-folder"]').first()).toBeVisible()
+  await expect(page.locator('.inspector .tree use[href="#i-file"]').first()).toBeVisible()
+  // And a directory row carries the caret that opens it.
+  await expect(page.locator('.inspector .tree .twist use[href="#i-caret"]').first()).toBeVisible()
 
   // A Rust file, opened through the store the way a click does, because this
   // one is several directories down and the point is the highlighting.
@@ -487,6 +501,15 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     await showFile("crates/luu/src/highlight.rs")
   })
   await expect(page.locator(".viewer .lang")).toHaveText("rust")
+  // Longer than the viewer's first block, which is what makes this worth
+  // asserting: the page renders a screenful and fills in the rest one frame
+  // later, so a tail that never arrives leaves a file that looks whole and is
+  // not. See the phase 8 sections of
+  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  const rows = await page.evaluate(async () =>
+    (await import("./workspace.js")).workspace.content.lines.length)
+  expect(rows, "this file is meant to outrun the first block").toBeGreaterThan(200)
+  await expect(page.locator(".viewer .code li")).toHaveCount(rows)
   // Three captures that any Rust file has, so this fails if the grammar stops
   // loading or the chunks stop carrying their kind.
   await expect(page.locator(".viewer code.hl-keyword").first()).toBeVisible()

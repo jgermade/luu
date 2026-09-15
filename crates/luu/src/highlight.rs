@@ -12,6 +12,9 @@
 //! first accented character in a comment. Sending the text already cut removes
 //! the question. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use serde::Serialize;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -62,7 +65,14 @@ fn class_of(index: usize) -> Option<&'static str> {
 ///
 /// One table, so a language is one line. Returns the language's name as the
 /// page shows it, alongside the grammar and its queries.
-fn language_for(path: &str) -> Option<(&'static str, HighlightConfiguration)> {
+/// The grammar for a path, by filename first and extension second.
+///
+/// Separate from the table below on purpose: this half is a fact about
+/// filenames and changes when somebody adds an extension, that half is a fact
+/// about crates and changes when somebody adds a grammar. A name with no entry
+/// in the table — `dockerfile`, today — simply has no grammar, and the file is
+/// served as text.
+fn language_of(path: &str) -> Option<&'static str> {
     let name = path.rsplit('/').next().unwrap_or(path);
     let ext = name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
 
@@ -74,127 +84,174 @@ fn language_for(path: &str) -> Option<(&'static str, HighlightConfiguration)> {
         _ => ext,
     };
 
-    let built = |name: &'static str,
-                 language: tree_sitter::Language,
-                 highlights: &str,
-                 injections: &str,
-                 locals: &str| {
-        HighlightConfiguration::new(language, name, highlights, injections, locals)
-            .ok()
-            .map(|mut config| {
-                config.configure(NAMES);
-                (name, config)
-            })
+    Some(match key {
+        "rs" => "rust",
+        "js" | "mjs" | "cjs" | "jsx" => "javascript",
+        "ts" | "mts" | "cts" => "typescript",
+        "tsx" => "tsx",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "toml" => "toml",
+        "md" | "markdown" => "markdown",
+        "json" => "json",
+        "py" | "pyi" => "python",
+        "go" => "go",
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" => "cpp",
+        "yaml" | "yml" => "yaml",
+        "sh" | "bash" | "zsh" => "bash",
+        _ => return None,
+    })
+}
+
+/// Every grammar, compiled once for the life of the process.
+///
+/// **This used to be built per request**, and that was most of what opening a
+/// file cost: `HighlightConfiguration::new` compiles the grammar's queries,
+/// measured at ~15 ms for Rust against ~25 ms to parse the 153 KB file it was
+/// being rebuilt for — so thirteen bytes of Rust cost 15 ms and 153 KB cost 40.
+/// A configuration is immutable once `configure` has run, so one per language
+/// is all there ever needs to be. See the phase 8 section of
+/// `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+///
+/// A grammar whose queries will not compile is dropped rather than panicking,
+/// which is what the `.ok()` was doing before: one bad grammar should not take
+/// the other twelve, and the file it was for is still readable as text.
+static GRAMMARS: LazyLock<HashMap<&'static str, HighlightConfiguration>> = LazyLock::new(|| {
+    let mut grammars = HashMap::new();
+    let mut add = |name: &'static str,
+                   language: tree_sitter::Language,
+                   highlights: &str,
+                   injections: &str,
+                   locals: &str| {
+        if let Ok(mut config) =
+            HighlightConfiguration::new(language, name, highlights, injections, locals)
+        {
+            config.configure(NAMES);
+            grammars.insert(name, config);
+        }
     };
 
-    match key {
-        "rs" => built(
-            "rust",
-            tree_sitter_rust::LANGUAGE.into(),
-            tree_sitter_rust::HIGHLIGHTS_QUERY,
-            tree_sitter_rust::INJECTIONS_QUERY,
-            "",
-        ),
-        "js" | "mjs" | "cjs" | "jsx" => built(
-            "javascript",
-            tree_sitter_javascript::LANGUAGE.into(),
-            tree_sitter_javascript::HIGHLIGHT_QUERY,
-            tree_sitter_javascript::INJECTIONS_QUERY,
-            tree_sitter_javascript::LOCALS_QUERY,
-        ),
-        "ts" | "mts" | "cts" => built(
-            "typescript",
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            tree_sitter_typescript::HIGHLIGHTS_QUERY,
-            "",
-            tree_sitter_typescript::LOCALS_QUERY,
-        ),
-        "tsx" => built(
-            "tsx",
-            tree_sitter_typescript::LANGUAGE_TSX.into(),
-            tree_sitter_typescript::HIGHLIGHTS_QUERY,
-            "",
-            tree_sitter_typescript::LOCALS_QUERY,
-        ),
-        "html" | "htm" => built(
-            "html",
-            tree_sitter_html::LANGUAGE.into(),
-            tree_sitter_html::HIGHLIGHTS_QUERY,
-            tree_sitter_html::INJECTIONS_QUERY,
-            "",
-        ),
-        "css" => built(
-            "css",
-            tree_sitter_css::LANGUAGE.into(),
-            tree_sitter_css::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-        "toml" => built(
-            "toml",
-            tree_sitter_toml_ng::LANGUAGE.into(),
-            tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-        "md" | "markdown" => built(
-            "markdown",
-            tree_sitter_md::LANGUAGE.into(),
-            tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
-            tree_sitter_md::INJECTION_QUERY_BLOCK,
-            "",
-        ),
-        "json" => built(
-            "json",
-            tree_sitter_json::LANGUAGE.into(),
-            tree_sitter_json::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-        "py" | "pyi" => built(
-            "python",
-            tree_sitter_python::LANGUAGE.into(),
-            tree_sitter_python::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-        "go" => built(
-            "go",
-            tree_sitter_go::LANGUAGE.into(),
-            tree_sitter_go::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-        "c" | "h" => built(
-            "c",
-            tree_sitter_c::LANGUAGE.into(),
-            tree_sitter_c::HIGHLIGHT_QUERY,
-            "",
-            "",
-        ),
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" => built(
-            "cpp",
-            tree_sitter_cpp::LANGUAGE.into(),
-            tree_sitter_cpp::HIGHLIGHT_QUERY,
-            "",
-            "",
-        ),
-        "yaml" | "yml" => built(
-            "yaml",
-            tree_sitter_yaml::LANGUAGE.into(),
-            tree_sitter_yaml::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-        "sh" | "bash" | "zsh" => built(
-            "bash",
-            tree_sitter_bash::LANGUAGE.into(),
-            tree_sitter_bash::HIGHLIGHT_QUERY,
-            "",
-            "",
-        ),
-        _ => None,
-    }
+    add(
+        "rust",
+        tree_sitter_rust::LANGUAGE.into(),
+        tree_sitter_rust::HIGHLIGHTS_QUERY,
+        tree_sitter_rust::INJECTIONS_QUERY,
+        "",
+    );
+    add(
+        "javascript",
+        tree_sitter_javascript::LANGUAGE.into(),
+        tree_sitter_javascript::HIGHLIGHT_QUERY,
+        tree_sitter_javascript::INJECTIONS_QUERY,
+        tree_sitter_javascript::LOCALS_QUERY,
+    );
+    add(
+        "typescript",
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        "",
+        tree_sitter_typescript::LOCALS_QUERY,
+    );
+    add(
+        "tsx",
+        tree_sitter_typescript::LANGUAGE_TSX.into(),
+        tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        "",
+        tree_sitter_typescript::LOCALS_QUERY,
+    );
+    add(
+        "html",
+        tree_sitter_html::LANGUAGE.into(),
+        tree_sitter_html::HIGHLIGHTS_QUERY,
+        tree_sitter_html::INJECTIONS_QUERY,
+        "",
+    );
+    add(
+        "css",
+        tree_sitter_css::LANGUAGE.into(),
+        tree_sitter_css::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    );
+    add(
+        "toml",
+        tree_sitter_toml_ng::LANGUAGE.into(),
+        tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    );
+    add(
+        "markdown",
+        tree_sitter_md::LANGUAGE.into(),
+        tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
+        tree_sitter_md::INJECTION_QUERY_BLOCK,
+        "",
+    );
+    add(
+        "json",
+        tree_sitter_json::LANGUAGE.into(),
+        tree_sitter_json::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    );
+    add(
+        "python",
+        tree_sitter_python::LANGUAGE.into(),
+        tree_sitter_python::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    );
+    add(
+        "go",
+        tree_sitter_go::LANGUAGE.into(),
+        tree_sitter_go::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    );
+    add(
+        "c",
+        tree_sitter_c::LANGUAGE.into(),
+        tree_sitter_c::HIGHLIGHT_QUERY,
+        "",
+        "",
+    );
+    add(
+        "cpp",
+        tree_sitter_cpp::LANGUAGE.into(),
+        tree_sitter_cpp::HIGHLIGHT_QUERY,
+        "",
+        "",
+    );
+    add(
+        "yaml",
+        tree_sitter_yaml::LANGUAGE.into(),
+        tree_sitter_yaml::HIGHLIGHTS_QUERY,
+        "",
+        "",
+    );
+    add(
+        "bash",
+        tree_sitter_bash::LANGUAGE.into(),
+        tree_sitter_bash::HIGHLIGHT_QUERY,
+        "",
+        "",
+    );
+    grammars
+});
+
+/// Compiles every grammar now, so that no request is the one that pays for it.
+///
+/// Called from `serve`'s startup beside the icon theme, and for the same
+/// reason: a cost that is going to be paid once should be paid where somebody
+/// is watching the process start, not inside the first click.
+pub fn warm() {
+    LazyLock::force(&GRAMMARS);
+}
+
+fn language_for(path: &str) -> Option<(&'static str, &'static HighlightConfiguration)> {
+    let name = language_of(path)?;
+    Some((name, GRAMMARS.get(name)?))
 }
 
 /// The cap above which a file is served unhighlighted.
@@ -217,7 +274,7 @@ pub fn lines(path: &str, text: &str) -> (Option<&'static str>, Vec<Vec<Chunk>>) 
     let Some((name, config)) = language_for(path) else {
         return (None, plain(text));
     };
-    match highlighted(text, &config) {
+    match highlighted(text, config) {
         Some(lines) => (Some(name), lines),
         // A grammar that failed on this file is not worth a message: the file
         // is still readable, which is what the panel is for.
