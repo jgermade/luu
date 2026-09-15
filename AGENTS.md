@@ -121,7 +121,7 @@ cargo run --bin luu -- serve --no-store
 # viewer, and the chat with one tab per session. Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed
 # extension's directory, or its theme JSON); nothing is vendored, so without
-# it the tree draws two plain glyphs. Source files are highlighted server-side
+# it the tree draws its own two shapes. Source files are highlighted server-side
 # by tree-sitter and follow the light/dark toggle.
 #
 #   [ui]

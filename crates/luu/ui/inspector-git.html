@@ -33,7 +33,9 @@
 
 <div class="head">
   <h2>Git</h2>
-  <button type="button" class="link" @click="loadStatus()" title="Ask git again">↻</button>
+  <button type="button" class="link" @click="loadStatus()" title="Ask git again">
+    <svg class="ic"><use href="#i-refresh"/></svg>
+  </button>
 </div>
 
 <p :if="workspace.gitError" class="err">{{ workspace.gitError }}</p>
@@ -72,7 +74,8 @@
     color: var(--dim);
     margin: 0;
   }
-  .head .link { margin-left: auto; font-size: 13px; text-decoration: none; color: var(--dim); }
+  .head .link { margin-left: auto; display: flex; text-decoration: none; color: var(--dim); }
+  .head .link .ic { width: 14px; height: 14px; }
   .head .link:hover { color: var(--fg); }
 
   .changes { list-style: none; margin: 0; padding: 0; }

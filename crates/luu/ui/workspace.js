@@ -29,6 +29,23 @@ export const workspace = $reactive({
   /// Set while a fetch for `selected` is in flight, so the viewer can say so
   /// instead of showing the previous file under the new file's name.
   loading: false,
+  /// The file's rows, in the two blocks the viewer renders as two `:each`
+  /// groups: `head` is the first screenful and `tail` is everything after it,
+  /// one frame later.
+  ///
+  /// **Two arrays rather than one that grows.** The file arrives whole and
+  /// already coloured; what costs is the row per line — ~50 µs, measured, with
+  /// or without colour — and jq79 rebuilds an `:each` rather than appending to
+  /// it. A growing array therefore rebuilds the rows already on screen every
+  /// time it grows; two arrays mean the second render touches only the second
+  /// block and the first is never built twice. See the phase 8 sections of
+  /// `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  head: [],
+  tail: [],
+  /// How many rows `tail` *will* have, for the spacer that keeps the scrollbar
+  /// the length of the file rather than the length of the first screen while
+  /// the tail is still being built.
+  pending: 0,
   /// Every changed path, mapped to git's own two-letter code.
   status: {},
   /// Why git could not be asked, when it could not. A workspace that is not a
@@ -37,7 +54,8 @@ export const workspace = $reactive({
   /// The last failure from any of these endpoints, for the panel to show.
   error: null,
   /// The icon theme's maps, by icon id, or `{ loaded: false }` when this
-  /// machine named none. See `crate::icons` for why nothing is vendored.
+  /// machine named none. See `crate::icons` for why nothing is vendored, and
+  /// `iconFor` for why the tree asks it per row rather than reading this flag.
   icons: { loaded: false },
 })
 
@@ -45,8 +63,9 @@ export const workspace = $reactive({
 ///
 /// Full filename first, then progressively shorter extensions — so `d.ts`
 /// beats `ts` for `index.d.ts`, which is the distinction those themes draw —
-/// then the theme's default. `null` when no theme is loaded, and the tree
-/// draws its own glyph.
+/// then the theme's default. `null` when this row has no icon in this theme —
+/// no theme loaded, or a theme that declares no default — and the tree draws
+/// its own file or folder instead.
 export function iconFor(name, isDir, expanded = false) {
   const theme = workspace.icons
   if (!theme.loaded) return null
@@ -135,6 +154,23 @@ export async function loadStatus() {
   }
 }
 
+/// Rows in the first pass: a screenful with room to scroll into, and nothing
+/// to do with the window's real height — a viewer that measures itself has to
+/// decide again on every resize.
+const FIRST_ROWS = 200
+
+/// Fills the second block, one frame after the first one is on screen.
+function showTheRest(path, lines) {
+  if (lines.length <= FIRST_ROWS) return
+  requestAnimationFrame(() => {
+    // Dropped if the viewer moved on while this frame was waiting: these rows
+    // belong to the file on screen, never to the one that was.
+    if (workspace.selected?.kind !== "file" || workspace.selected?.path !== path) return
+    workspace.tail = lines.slice(FIRST_ROWS)
+    workspace.pending = 0
+  })
+}
+
 export async function showFile(path) {
   workspace.selected = { kind: "file", path, staged: false }
   workspace.loading = true
@@ -144,6 +180,10 @@ export async function showFile(path) {
     // the panel's title and its body have to be the same file.
     if (workspace.selected?.path !== path || workspace.selected?.kind !== "file") return
     workspace.content = { kind: "file", ...file }
+    workspace.head = file.lines.slice(0, FIRST_ROWS)
+    workspace.tail = []
+    workspace.pending = Math.max(0, file.lines.length - FIRST_ROWS)
+    showTheRest(path, file.lines)
     workspace.error = null
   } catch (e) {
     workspace.content = null

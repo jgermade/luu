@@ -115,6 +115,22 @@
     resumeSession(id)
   }
 
+  // Closing a tab here *is* deleting the stored session — its stream and its
+  // fold, out of SQLite, with nothing that undoes it. So the × arms on the
+  // first click and deletes on the second, and a click anywhere else in the
+  // strip disarms it. A `confirm()` would be one line and would also be the
+  // only browser dialog in a page that already has its own modals.
+  let armedClose = ""
+  const onCloseSession = (id, event) => {
+    event.stopPropagation()
+    if (armedClose !== id) {
+      armedClose = id
+      return
+    }
+    armedClose = ""
+    deleteSession(id)
+  }
+
   const submit = () => {
     send(draft)
     draft = ""
@@ -379,6 +395,36 @@
   // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
 </script>
 
+<!-- The page's own chrome, drawn rather than typed. Every one of these was a
+     text glyph — `↻`, `▾`/`▸`, `▪`/`▫`, `≡` — and a text glyph's size, weight
+     and baseline belong to whichever font on the machine carries that
+     codepoint, so none of them landed on the 16px box the theme's file icons
+     occupy. Seven symbols on a 24-unit grid, stroked in `currentColor` so each
+     takes the colour of the control it sits in, and one sprite because the
+     caret and the refresh are each used in two files. See
+     `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`. -->
+<svg class="sprite" aria-hidden="true" width="0" height="0">
+  <!-- One caret for both states: `.ic.open` turns it, so what the screen shows
+       is the same triangle rotated rather than a second codepoint. -->
+  <symbol id="i-caret" viewBox="0 0 24 24"><path d="M9.5 5.5 16 12l-6.5 6.5"/></symbol>
+  <!-- Three quarters of a circle travelling clockwise, with a filled head at
+       the end of the sweep: the gap and the head are the same corner, which is
+       what says which way round it goes. -->
+  <symbol id="i-refresh" viewBox="0 0 24 24">
+    <path d="M19 12a7 7 0 1 1-2.05-4.95"/>
+    <path d="M20.49 10.59 19.21 4.79 14.69 9.31Z" fill="currentColor" stroke="none"/>
+  </symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6.5 6.5 11 11m0-11-11 11"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <!-- The two the tree falls back to when no `[ui] icon-theme` is named. Still
+       exactly two — phase 5's "not a second icon set" holds — but a drawn page
+       and a drawn folder rather than two of a font's small squares, which is
+       what the first person to meet them read as a broken tree. -->
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zm0 0v5h5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.8a2 2 0 0 1 1.7.9l1 1.6H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+</svg>
+
 <header>
   <strong>luu</strong>
   <!-- The thing you click is the thing it is about: these two tags are what
@@ -403,7 +449,7 @@
     type="button"
     class="hamburger"
     title="Preferences"
-    @click="prefsOpen = true">≡</button>
+    @click="prefsOpen = true"><svg class="ic"><use href="#i-menu"/></svg></button>
 </header>
 
 <!-- Preferences. Everything here is about the browser looking at the server,
@@ -731,23 +777,38 @@
     <!-- Sessions, as tabs, over the column they are about. A dropdown
          answered "which session am I on" only while open; this answers it,
          and "how many are there", without a click. -->
-    <div :if="!state.replay" class="session-tabs">
-      <button
+    <div :if="!state.replay" class="session-tabs" @click="armedClose = ''">
+      <!-- A tab is two controls, so it is not itself a button: one that
+           switches to the session and one that deletes it. -->
+      <span
         :each="s in state.sessions"
         :key="s.id"
-        type="button"
         class="tab"
-        :class.on="s.id === state.currentSessionId"
-        :attrs="{ title: s.id }"
-        @click="onSwitchSession(s.id)">
-        {{ s.id === 'live' ? 'Live session' : (s.title || s.id) }}
-        <span class="dim">{{ s.turns }}t</span>
-      </button>
+        :class.on="s.id === state.currentSessionId">
+        <button type="button" class="pick" :attrs="{ title: s.id }" @click="onSwitchSession(s.id)">
+          {{ s.id === 'live' ? 'Live session' : (s.title || s.id) }}
+          <span class="dim">{{ s.turns }}t</span>
+        </button>
+        <!-- Only where the server would take it: `delete_session_handler`
+             refuses the live session and the active one, and a control that is
+             only ever refused is worse than no control at all. -->
+        <button
+          :if="s.id !== 'live' && s.id !== state.currentSessionId"
+          type="button"
+          class="close"
+          :class.armed="armedClose === s.id"
+          :attrs="{ title: armedClose === s.id
+            ? 'Click again to delete this session and its stream'
+            : 'Delete this session' }"
+          @click="onCloseSession(s.id, $event)">
+          <svg class="ic"><use href="#i-close"/></svg>
+        </button>
+      </span>
       <button
         type="button"
         class="tab new"
         title="Start a new session — where it sends, and which model"
-        @click="openStarter()">+</button>
+        @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
     </div>
 
     <div class="transcript">
@@ -775,8 +836,8 @@
              turns were. Opening it shows what the prompt no longer carries. -->
         <div :if="entry.kind === 'fold'" class="fold">
           <div class="fold-head">
-            <button type="button" class="link" @click="toggle((entry.job || entry.task).id)">
-              {{ expanded.includes((entry.job || entry.task).id) ? "▾" : "▸" }}
+            <button type="button" class="link disclose" @click="toggle((entry.job || entry.task).id)">
+              <svg class="ic" :class.open="expanded.includes((entry.job || entry.task).id)"><use href="#i-caret"/></svg>
               job {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
             </button>
             <!-- Which authority folded it. Shown rather than counted in
@@ -905,9 +966,9 @@
     color: var(--dim);
     border: 0;
     border-radius: 6px;
-    font-size: 18px;
-    line-height: 1;
-    padding: .1rem .45rem .25rem;
+    display: flex;
+    align-items: center;
+    padding: .35rem;
     cursor: pointer;
   }
   .hamburger:hover { color: var(--fg); background: var(--bg); }
@@ -939,17 +1000,23 @@
     scrollbar-width: thin;
   }
   .session-tabs .tab {
-    background: none;
     color: var(--dim);
-    border: 0;
     border-bottom: 2px solid transparent;
-    border-radius: 0;
-    font: inherit;
     font-size: 12px;
     font-weight: 500;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+  }
+  .session-tabs .tab .pick,
+  .session-tabs .tab.new {
+    background: none;
+    color: inherit;
+    border: 0;
+    border-radius: 0;
+    font: inherit;
     padding: .3rem .6rem .35rem;
     cursor: pointer;
-    white-space: nowrap;
     display: flex;
     align-items: baseline;
     gap: .35rem;
@@ -957,7 +1024,27 @@
   .session-tabs .tab:hover { color: var(--fg); }
   .session-tabs .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
   .session-tabs .tab .dim { font-size: 11px; font-variant-numeric: tabular-nums; }
-  .session-tabs .tab.new { color: var(--accent); font-size: 14px; padding: .2rem .55rem .35rem; }
+  /* Quiet until the tab is under the pointer, because it is the destructive
+     half of a control whose other half is just "look at this session" — and
+     visible on focus, or it would be a button only a mouse can find. */
+  .session-tabs .tab .close {
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    padding: .15rem;
+    margin-right: .3rem;
+    cursor: pointer;
+    opacity: 0;
+  }
+  .session-tabs .tab:hover .close,
+  .session-tabs .tab .close:focus-visible { opacity: .7; }
+  .session-tabs .tab .close:hover { opacity: 1; background: var(--bg); }
+  /* Armed: one more click deletes the session, and the colour is the page's
+     own "this is the bad one". */
+  .session-tabs .tab .close.armed { opacity: 1; color: var(--bad); background: var(--bg); }
+  .session-tabs .tab .close .ic { width: 12px; height: 12px; }
+  .session-tabs .tab.new { color: var(--accent); align-items: center; padding: .3rem .55rem .35rem; }
 
   /* Inspector · content viewer · agent chat. The middle column is the
      flexible one because a file and a diff are what want the width; the two
@@ -1112,6 +1199,9 @@
   }
   .fold-head { display: flex; align-items: center; gap: .6rem; }
   .fold-head button:first-child { flex: 1; text-align: left; }
+  /* The same caret the tree uses, at the size of the line it opens. */
+  .disclose { display: flex; align-items: center; gap: .35rem; }
+  .disclose .ic { width: 12px; height: 12px; }
   .fold .summary { margin: .4rem 0 0; white-space: pre-wrap; font-size: 12px; color: var(--dim); }
   button.link {
     background: none; border: 0; color: inherit; cursor: pointer;
