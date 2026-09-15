@@ -194,6 +194,8 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
         worker: None,
     };
     let serving = bind(ServeOptions {
+        // No icon theme in a test: the page is not what is under test.
+        icons: std::sync::Arc::new(luu::icons::Theme::default()),
         provider: luu::provider::Resolved::mock(),
         counter_warning: None,
         approvers: Default::default(),
@@ -311,6 +313,8 @@ async fn server_with_postures(
         worker: None,
     };
     let serving = bind(ServeOptions {
+        // No icon theme in a test: the page is not what is under test.
+        icons: std::sync::Arc::new(luu::icons::Theme::default()),
         provider: luu::provider::Resolved::mock(),
         counter_warning: None,
         approvers,

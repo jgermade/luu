@@ -117,6 +117,16 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 # `--no-store` turns it off. The first run asks where that directory goes —
 # ~/.luu or ~/.config/luu — and LUU_HOME answers it without being asked.
 cargo run --bin luu -- serve --no-store
+# The page is three panes — an inspector (files, git, the context panel), a
+# viewer, and the chat with one tab per session. Files get VSCode icons if
+# `[ui] icon-theme` in config.toml names a theme on this machine (an installed
+# extension's directory, or its theme JSON); nothing is vendored, so without
+# it the tree draws two plain glyphs. Source files are highlighted server-side
+# by tree-sitter and follow the light/dark toggle.
+#
+#   [ui]
+#   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
+#
 cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
 

@@ -63,7 +63,16 @@ pub struct Tree {
 #[derive(Debug, Serialize)]
 pub struct FileView {
     pub path: String,
-    pub text: String,
+    /// One entry per line, each already cut into highlighted runs. Not the
+    /// whole text plus offsets: see `crate::highlight`'s own first paragraph
+    /// for why offsets across the wire are a bug waiting for a non-ASCII
+    /// character.
+    pub lines: Vec<Vec<crate::highlight::Chunk>>,
+    /// Which grammar highlighted it, or `None` for a file that got none —
+    /// unknown extension, too big to parse, or a parse that failed. The page
+    /// shows it beside the path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<&'static str>,
     /// True when the file was cut at [`MAX_FILE_BYTES`]. The page says so
     /// rather than showing a truncated file as if it were whole.
     pub truncated: bool,
@@ -311,9 +320,13 @@ pub async fn file(sandbox: &Sandbox, relative: &str) -> Result<FileView, Error> 
     // Lossy rather than refused: a file with one bad byte in it is still worth
     // looking at, and the alternative is a panel that says nothing about a file
     // the tree says exists.
+    let path = relative.trim_start_matches('/').to_string();
+    let text = String::from_utf8_lossy(bytes).into_owned();
+    let (language, lines) = crate::highlight::lines(&path, &text);
     Ok(FileView {
-        path: relative.trim_start_matches('/').to_string(),
-        text: String::from_utf8_lossy(bytes).into_owned(),
+        path,
+        lines,
+        language,
         truncated,
     })
 }

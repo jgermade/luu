@@ -455,3 +455,52 @@ test("the git panel lists changes, and one opens as a diff of hunks", async ({ p
 
   expect(errors, "the page logged errors").toEqual([])
 })
+
+/**
+ * Highlighting, and the icon fallback. The gate server names no icon theme,
+ * so this is the unconfigured half of phase 5 — that the tree draws its own
+ * glyphs rather than nothing — and all of phase 6, which needs no
+ * configuration at all. See
+ * `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+ */
+test("a source file arrives highlighted, and an unthemed tree still has glyphs", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await dismissFirstRun(page)
+
+  await page.click('.inspector .modes button:has-text("Files")')
+  await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
+  // No `[ui] icon-theme` in this server's config, so: no theme art, and the
+  // page's own glyph on every row instead of a column of nothing.
+  await expect(page.locator(".inspector .tree img.icon")).toHaveCount(0)
+  await expect(page.locator(".inspector .tree .glyph").first()).toBeVisible()
+
+  // A Rust file, opened through the store the way a click does, because this
+  // one is several directories down and the point is the highlighting.
+  await page.evaluate(async () => {
+    const { showFile } = await import("./workspace.js")
+    await showFile("crates/luu/src/highlight.rs")
+  })
+  await expect(page.locator(".viewer .lang")).toHaveText("rust")
+  // Three captures that any Rust file has, so this fails if the grammar stops
+  // loading or the chunks stop carrying their kind.
+  await expect(page.locator(".viewer code.hl-keyword").first()).toBeVisible()
+  await expect(page.locator(".viewer code.hl-comment").first()).toBeVisible()
+  await expect(page.locator(".viewer code.hl-string").first()).toBeVisible()
+
+  // A file with no grammar takes the same path out: lines, no language.
+  await page.evaluate(async () => {
+    const { showFile } = await import("./workspace.js")
+    await showFile("Makefile")
+  })
+  await expect(page.locator(".viewer .path")).toHaveText("Makefile")
+  await expect(page.locator(".viewer .lang")).toHaveCount(0)
+  await expect(page.locator(".viewer .code li").first()).toBeVisible()
+
+  expect(errors, "the page logged errors").toEqual([])
+})

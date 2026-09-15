@@ -33,6 +33,8 @@ use anyhow::{Context, Result};
 pub mod auth;
 pub mod config;
 pub mod export;
+pub mod highlight;
+pub mod icons;
 pub mod provider;
 pub mod secret;
 pub mod serve;
@@ -1768,12 +1770,36 @@ pub async fn run() -> Result<()> {
         // same file. A config that will not load is not a reason to refuse to
         // serve: it is already reported where the providers are, and a machine
         // with none simply offers none.
-        let (postures, postures_path) = match crate::provider::Config::load() {
+        let (postures, postures_path, ui) = match crate::provider::Config::load() {
             Ok((config, path)) => (
                 config.postures().clone(),
                 path.map(|path| path.display().to_string()),
+                config.ui().cloned(),
             ),
-            Err(_) => (Default::default(), None),
+            Err(_) => (Default::default(), None, None),
+        };
+        // Read once, here, so a theme that will not load says so beside the
+        // other startup lines rather than as a silent absence of icons in the
+        // page. A failure is not fatal: the tree draws its own glyphs.
+        let icons = match ui.as_ref().and_then(|ui| ui.icon_theme.as_ref()) {
+            None => std::sync::Arc::new(crate::icons::Theme::default()),
+            Some(named) => {
+                let path = crate::provider::expand_home(named);
+                match crate::icons::load(&path) {
+                    Ok(theme) => {
+                        eprintln!(
+                            "icons — {} ({} file types)",
+                            theme.manifest.name.as_deref().unwrap_or("icon theme"),
+                            theme.manifest.file_extensions.len() + theme.manifest.file_names.len(),
+                        );
+                        std::sync::Arc::new(theme)
+                    }
+                    Err(error) => {
+                        eprintln!("warning: [ui] icon-theme did not load: {error}");
+                        std::sync::Arc::new(crate::icons::Theme::default())
+                    }
+                }
+            }
         };
         eprint!("{}", agency.describe());
         if approvers.required {
@@ -1801,6 +1827,7 @@ pub async fn run() -> Result<()> {
             }
         };
         return serve::serve(serve::ServeOptions {
+            icons,
             provider: resolved,
             counter_warning: warning,
             address: bind,
@@ -1919,6 +1946,8 @@ pub async fn run() -> Result<()> {
             }
         };
         return serve::stdio(serve::StdioOptions {
+            // No page over stdio, so no icons to serve one.
+            icons: std::sync::Arc::new(crate::icons::Theme::default()),
             provider: resolved,
             counter_warning: warning,
             backend: backend.into(),

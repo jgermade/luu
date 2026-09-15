@@ -37,6 +37,24 @@
   --b-code: #bb9af7;
   --b-prompt: #e0af68;
   --b-reserve: #3b4048;
+  /* Syntax highlighting. Deliberately the page's own palette rather than a
+     second theme system: the viewer follows the light/dark toggle for free,
+     and there is one set of colours to argue about. The capture names are
+     `crate::highlight`'s NAMES. */
+  --hl-keyword: #bb9af7;
+  --hl-string: #9ece6a;
+  --hl-comment: #6b7487;
+  --hl-number: #ff9e64;
+  --hl-function: #7aa2f7;
+  --hl-type: #2ac3de;
+  --hl-constant: #ff9e64;
+  --hl-variable: #e6e8ec;
+  --hl-property: #73daca;
+  --hl-operator: #89ddff;
+  --hl-punctuation: #8b93a3;
+  --hl-attribute: #e0af68;
+  --hl-tag: #f7768e;
+  --hl-constructor: #2ac3de;
   color-scheme: dark;
 }
 
@@ -64,6 +82,20 @@
   --b-code: #6f3fb5;
   --b-prompt: #8a5d12;
   --b-reserve: #c3c9d3;
+  --hl-keyword: #7a29b8;
+  --hl-string: #35701a;
+  --hl-comment: #6b7280;
+  --hl-number: #a04a06;
+  --hl-function: #2f5bbd;
+  --hl-type: #06697d;
+  --hl-constant: #a04a06;
+  --hl-variable: #1a1d23;
+  --hl-property: #0b6b5e;
+  --hl-operator: #0d5f86;
+  --hl-punctuation: #6b7280;
+  --hl-attribute: #8a5d12;
+  --hl-tag: #b8253f;
+  --hl-constructor: #06697d;
   color-scheme: light;
 }
 
@@ -239,3 +271,21 @@ body {
   border-color: var(--accent);
   color: var(--on-accent);
 }
+
+/* One class per capture `crate::highlight` emits. Global rather than scoped to
+   the viewer because the chunks are plain `<code>` elements and a future panel
+   that shows code should colour it the same way. */
+.hl-keyword { color: var(--hl-keyword); }
+.hl-string { color: var(--hl-string); }
+.hl-comment { color: var(--hl-comment); font-style: italic; }
+.hl-number { color: var(--hl-number); }
+.hl-function { color: var(--hl-function); }
+.hl-type { color: var(--hl-type); }
+.hl-constant { color: var(--hl-constant); }
+.hl-variable { color: var(--hl-variable); }
+.hl-property { color: var(--hl-property); }
+.hl-operator { color: var(--hl-operator); }
+.hl-punctuation { color: var(--hl-punctuation); }
+.hl-attribute { color: var(--hl-attribute); }
+.hl-tag { color: var(--hl-tag); }
+.hl-constructor { color: var(--hl-constructor); }

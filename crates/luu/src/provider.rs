@@ -119,6 +119,23 @@ struct File {
     /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     posture: BTreeMap<String, Posture>,
+    /// `[ui]`: what the debug page looks like, as opposed to where a run
+    /// sends. Here because it is the same kind of thing as the two above —
+    /// something written on this machine — and because the one setting in it
+    /// names a path that only exists on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ui: Option<Ui>,
+}
+
+/// `[ui]`. One setting so far.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Ui {
+    /// A VSCode icon theme: either an installed extension's directory or a
+    /// theme JSON. Nothing is vendored, so with this unset the tree draws the
+    /// page's own two glyphs — see `crate::icons`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_theme: Option<PathBuf>,
 }
 
 /// One named posture: a policy file, and nothing else.
@@ -143,6 +160,7 @@ pub struct Config {
     default: Option<String>,
     providers: BTreeMap<String, Profile>,
     postures: BTreeMap<String, Posture>,
+    ui: Option<Ui>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -232,6 +250,7 @@ impl Config {
             default: file.default,
             providers: file.provider,
             postures: file.posture,
+            ui: file.ui,
         };
         config.check_default(path)?;
         Ok(config)
@@ -330,6 +349,7 @@ impl Config {
             // only thing the page writes, and a writer that dropped the
             // postures would delete them the first time somebody saved a URL.
             posture: self.postures.clone(),
+            ui: self.ui.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -379,7 +399,13 @@ impl Config {
             default,
             providers,
             postures: self.postures.clone(),
+            ui: self.ui.clone(),
         }
+    }
+
+    /// What the page should look like, as the file asks for it.
+    pub fn ui(&self) -> Option<&Ui> {
+        self.ui.as_ref()
     }
 
     /// Every posture the file names.
@@ -588,7 +614,7 @@ pub fn resolve(
 }
 
 /// `~` against `$HOME`, for a key path written in a file rather than typed.
-fn expand_home(path: &Path) -> PathBuf {
+pub fn expand_home(path: &Path) -> PathBuf {
     let Ok(rest) = path.strip_prefix("~") else {
         return path.to_path_buf();
     };

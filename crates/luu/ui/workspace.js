@@ -36,7 +36,49 @@ export const workspace = $reactive({
   gitError: null,
   /// The last failure from any of these endpoints, for the panel to show.
   error: null,
+  /// The icon theme's maps, by icon id, or `{ loaded: false }` when this
+  /// machine named none. See `crate::icons` for why nothing is vendored.
+  icons: { loaded: false },
 })
+
+/// The icon id for one entry, by VSCode's own rules.
+///
+/// Full filename first, then progressively shorter extensions — so `d.ts`
+/// beats `ts` for `index.d.ts`, which is the distinction those themes draw —
+/// then the theme's default. `null` when no theme is loaded, and the tree
+/// draws its own glyph.
+export function iconFor(name, isDir, expanded = false) {
+  const theme = workspace.icons
+  if (!theme.loaded) return null
+  const lower = name.toLowerCase()
+  if (isDir) {
+    return (
+      theme.folder_names?.[lower] ??
+      (expanded ? theme.folder_expanded : theme.folder) ??
+      theme.folder ??
+      null
+    )
+  }
+  const named = theme.file_names?.[lower]
+  if (named) return named
+  const parts = lower.split(".")
+  for (let at = 1; at < parts.length; at++) {
+    const suffix = parts.slice(at).join(".")
+    const found = theme.file_extensions?.[suffix]
+    if (found) return found
+  }
+  return theme.file ?? null
+}
+
+export async function loadIcons() {
+  try {
+    workspace.icons = await ask("./api/icons/manifest")
+  } catch {
+    // A page that cannot read the manifest simply has no icons; the tree is
+    // the point and it still lists.
+    workspace.icons = { loaded: false }
+  }
+}
 
 async function ask(url) {
   const answer = await fetch(url, { headers: apiHeaders() })

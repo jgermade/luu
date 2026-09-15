@@ -143,6 +143,11 @@ struct App {
     postures: std::collections::BTreeMap<String, crate::provider::Posture>,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
+    /// The icon theme `[ui] icon-theme` named, read once when the server
+    /// started, or an empty one when nothing named it or it did not load.
+    /// Read once for the reason the postures are: what a page is shown should
+    /// not change under it mid-session.
+    icons: Arc<crate::icons::Theme>,
     /// Pinned sampling, forwarded to every call the same way `budget` is.
     /// `None` leaves it to the server's own default.
     temperature: Option<f32>,
@@ -325,6 +330,10 @@ pub struct StdioOptions {
     /// Where the file is, for the page to name. `None` on a machine with no
     /// state directory.
     pub postures_path: Option<String>,
+    /// The icon theme, already loaded. Loaded by the caller rather than here
+    /// so that a failure to read it is reported where the other startup
+    /// messages are, and so this file does not learn about `config.toml`.
+    pub icons: Arc<crate::icons::Theme>,
     /// `[approvals]` from the same file the sandbox came from: who may approve,
     /// and whether anyone must sign to.
     pub approvers: Approvers,
@@ -368,6 +377,7 @@ impl App {
             agency_for,
             postures,
             postures_path,
+            icons,
             temperature,
             seed,
             map_tokens,
@@ -541,6 +551,7 @@ impl App {
             agency_for,
             postures,
             postures_path,
+            icons,
             temperature,
             seed,
             constraint,
@@ -714,6 +725,10 @@ pub struct ServeOptions {
     /// Where the file is, for the page to name. `None` on a machine with no
     /// state directory.
     pub postures_path: Option<String>,
+    /// The icon theme `[ui] icon-theme` named, already loaded. Only the
+    /// browser surface has one: `stdio` gets an empty theme, because there
+    /// is no page there to draw it.
+    pub icons: Arc<crate::icons::Theme>,
     /// `[approvals]` from the same file the sandbox came from: who may approve,
     /// and whether anyone must sign to.
     pub approvers: Approvers,
@@ -800,6 +815,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         auth_token_file,
         store,
         approvers,
+        icons,
     } = options;
     // Before anything else, and before the listener exists: a port that would
     // publish task approval to the network is not a port this binds and then
@@ -811,6 +827,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         provider,
         counter_warning,
         model,
+        icons,
         record,
         budget,
         counter,
@@ -885,6 +902,10 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/workspace/file", get(get_workspace_file))
         .route("/api/workspace/git-status", get(get_workspace_git_status))
         .route("/api/workspace/git-diff", get(get_workspace_git_diff))
+        // The icon theme this machine named, if it named one. `{id}` is an id
+        // out of the manifest and never a path — see `crate::icons`.
+        .route("/api/icons/manifest", get(get_icons_manifest))
+        .route("/api/icons/{id}", get(get_icon))
         .layer(middleware::from_fn_with_state(auth.clone(), require_token));
 
     let router = guarded
@@ -2320,6 +2341,39 @@ async fn get_workspace_git_diff(
     }
 }
 
+async fn get_icons_manifest(State(state): State<AppRouterState>) -> Response {
+    Json(state.app.icons.manifest.clone()).into_response()
+}
+
+/// One icon's bytes.
+///
+/// The id is looked up in the table the theme was read into; an id that is not
+/// in it is a 404 and never a filesystem access. That is the whole of the path
+/// safety here, and it is why there is no path to validate.
+async fn get_icon(State(state): State<AppRouterState>, Path(id): Path<String>) -> Response {
+    let Some(path) = state.app.icons.path(&id) else {
+        return (StatusCode::NOT_FOUND, "no such icon").into_response();
+    };
+    let content_type = crate::icons::content_type(path);
+    match tokio::fs::read(path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, content_type),
+                // The theme does not change while the server runs — it is read
+                // once at startup — so the browser may keep these.
+                (header::CACHE_CONTROL, "public, max-age=3600"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not read the icon: {error}"),
+        )
+            .into_response(),
+    }
+}
+
 async fn get_postures(State(state): State<AppRouterState>) -> Response {
     let app = &state.app;
     Json(PosturesView {
@@ -3220,6 +3274,7 @@ mod tests {
             agency_for: None,
             postures: Default::default(),
             postures_path: None,
+            icons: Arc::new(crate::icons::Theme::default()),
             temperature: None,
             seed: None,
             constraint: None,

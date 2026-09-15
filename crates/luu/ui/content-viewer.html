@@ -12,9 +12,11 @@
   // file, so this cost half an hour to find. See
   // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
   $: picked = workspace.selected
-  // Line numbers for a file: computed here rather than shipped, because they
-  // are a fact about the text and the server has no opinion about them.
-  $: lines = shown?.kind === "file" ? shown.text.split("\n") : []
+  // The server sends one list of chunks per line, already cut and classified —
+  // never offsets, which would be Rust byte indices read as JavaScript UTF-16
+  // ones. Line numbers are the page's own, because they are a fact about the
+  // layout rather than about the file.
+  $: lines = shown?.kind === "file" ? shown.lines : []
 </script>
 
 <div :if="!picked" class="placeholder">
@@ -29,6 +31,7 @@
 
 <div :if="picked" class="viewer-head">
   <span class="path">{{ picked?.path }}</span>
+  <span :if="shown?.language" class="lang small dim">{{ shown?.language }}</span>
   <span :if="shown?.truncated" class="warn small">cut at 512 KB</span>
   <!-- Both diffs of the same file, because "staged" and "unstaged" are two
        different answers and a panel that shows one silently is a panel that
@@ -56,7 +59,9 @@
      stay aligned without the gutter being part of what you copy. -->
 <div :if="!workspace.loading && shown?.kind === 'file'" class="file">
   <ol class="code">
-    <li :each="line in lines"><code>{{ line }}</code></li>
+    <li :each="line in lines"><code
+      :each="chunk in line"
+      :class="chunk.kind ? `hl-${chunk.kind}` : ''">{{ chunk.text }}</code></li>
   </ol>
 </div>
 

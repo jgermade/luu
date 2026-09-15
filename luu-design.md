@@ -721,7 +721,18 @@ above it. Ignored entries come from the difference between what `ignore`'s walke
 what `read_dir` does, which gets nested `.gitignore` files and negations right for free. The
 diff is parsed into hunks server-side rather than shipped as text — the same call this document
 makes for prompt diffs below, answered by parsing git's own output rather than adding a second
-diff implementation. See
+diff implementation.
+
+**Icons and highlighting follow the same two rules.** File icons come from a VSCode icon theme
+this machine already has, named by `[ui] icon-theme` in `config.toml` — an extension directory
+or a theme JSON — and nothing is vendored: the page draws two plain glyphs until somebody names
+one, the same way the sandbox waits to be told where `~/.cargo` is. The theme is read once into
+an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
+reaches the filesystem. Syntax highlighting is `tree-sitter-highlight` on the server, thirteen
+grammars, sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
+UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does
+not. The capture names map to this page's own palette, so the viewer follows the light/dark
+toggle without acquiring a second theme system. See
 [`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`](RECORD/2026-09-15.a-three-pane-inspector.WIP.md).
 
 **v1 of the message enums is frozen.** `ClientMessage` is `prompt`, `cancel`,

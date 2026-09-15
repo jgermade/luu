@@ -35,6 +35,8 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
     let counter = Arc::new(ApproximateCounter);
     let budget = Budget::new(0, 512, Eviction::Turn);
     StdioOptions {
+        // No icon theme in a test: the page is not what is under test.
+        icons: std::sync::Arc::new(luu::icons::Theme::default()),
         // Over stdio the process is the session: nothing here chooses a
         // posture, so there is nothing to build one from and nothing to offer.
         agency_for: None,

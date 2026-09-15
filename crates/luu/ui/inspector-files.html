@@ -3,11 +3,12 @@
   // `target/` in it is not one to walk eagerly, and because the endpoint is
   // one directory wide for the same reason. See
   // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
-  const { workspace, openDir, toggleDir, refresh, showFile, loadStatus } =
+  const { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor } =
     await import("./workspace.js")
 
   openDir("")
   loadStatus()
+  loadIcons()
 
   // The tree, flattened to what is actually on screen: one pass that walks
   // only the directories that are expanded, carrying a depth for the indent.
@@ -44,6 +45,14 @@
       :attrs="{ style: `padding-left:${row.depth * 0.75 + 0.2}rem`, title: row.path }"
       @click="row.dir ? toggleDir(row.path) : showFile(row.path)">
       <span class="twist">{{ row.dir ? (workspace.expanded[row.path] ? "▾" : "▸") : "" }}</span>
+      <!-- The theme's own art when a theme is named, and this page's two
+           glyphs when none is. Never both. -->
+      <img
+        :if="iconFor(row.name, row.dir, workspace.expanded[row.path])"
+        class="icon"
+        :src="`./api/icons/${iconFor(row.name, row.dir, workspace.expanded[row.path])}`"
+        :attrs="{ alt: '', loading: 'lazy' }">
+      <span :if="!workspace.icons.loaded" class="glyph">{{ row.dir ? "▪" : "▫" }}</span>
       <span class="name">{{ row.name }}</span>
       <!-- Git's own letter, not a word: `M`, `??`, `A` are what `git status`
            says, and a person reading this panel already knows them. -->
@@ -88,6 +97,11 @@
      there and ignored rather than wonder whether the tree is broken. */
   .row.ignored .name { opacity: .45; }
   .twist { width: .7rem; flex: none; color: var(--dim); font-size: 10px; }
+  .icon { width: 16px; height: 16px; flex: none; align-self: center; }
+  /* The fallback, and deliberately not a second icon set: enough that an
+     unconfigured tree reads as intentional. `[ui] icon-theme` in config.toml
+     replaces it with any VSCode icon theme on this machine. */
+  .glyph { width: 16px; flex: none; text-align: center; color: var(--dim); font-size: 9px; }
   .row.on .twist { color: var(--on-accent); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status {
