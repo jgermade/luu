@@ -54,6 +54,24 @@ mod kernel;
 /// is the design's one informed approval.
 pub const SYSTEM_ROOTS: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt"];
 
+/// The null device, granted **read-write to a subprocess** on the same terms
+/// as [`SYSTEM_ROOTS`] — and separately from them because it is the one path
+/// here that execute permission would not answer.
+///
+/// `git` is what found it: every `git` invocation, `git --version` included,
+/// exited 128 in one millisecond with `fatal: could not open '/dev/null' for
+/// reading and writing: Permission denied`. Git calls `sanitize_stdfds()`
+/// before it does anything else, and that opens `/dev/null` to guarantee fds
+/// 0/1/2 exist. A policy that names `git` in `commands` was granting a command
+/// that could not start. See
+/// `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md`.
+///
+/// Read-write and still not a hole: writes are discarded and reads are EOF, by
+/// definition of the device. Nothing can be persisted through it, hidden in it
+/// or read back out of it, which is why every sandbox that runs ordinary
+/// programs — bubblewrap, Docker, systemd — mounts it unconditionally.
+pub const NULL_DEVICE: &str = "/dev/null";
+
 /// Who held a call, as opposed to who was asked to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "by", rename_all = "snake_case")]
@@ -304,6 +322,18 @@ impl Sandbox {
                     path,
                     access: Access::Execute,
                     source: (*name).to_string(),
+                    implicit: true,
+                });
+            }
+            // Read-write rather than execute, which is why it is not in the
+            // list above: a program opens the null device, it does not run it.
+            if let Ok(path) = Path::new(NULL_DEVICE).canonicalize()
+                && !roots.iter().any(|root| root.path == path)
+            {
+                roots.push(Root {
+                    path,
+                    access: Access::ReadWrite,
+                    source: NULL_DEVICE.to_string(),
                     implicit: true,
                 });
             }
@@ -1068,12 +1098,45 @@ mod tests {
                 .any(|root| root.implicit && root.access == Access::Execute),
             "a command that cannot read libc cannot run"
         );
+        // Narrowed rather than dropped when `/dev/null` became an implicit
+        // read-write grant: what this has always been guarding is that the
+        // *system trees* never quietly became writable, and that is still the
+        // assertion. The null device is the one exception and is named, so a
+        // second one cannot arrive without this line being edited again. See
+        // `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md`.
         assert!(
-            sandbox
-                .roots()
-                .iter()
-                .all(|root| !root.implicit || root.access != Access::ReadWrite),
-            "and it is never granted write"
+            sandbox.roots().iter().all(|root| {
+                !root.implicit
+                    || root.access != Access::ReadWrite
+                    || root.path == Path::new(NULL_DEVICE)
+            }),
+            "and nothing but the null device is granted write"
+        );
+    }
+
+    #[test]
+    fn the_null_device_comes_with_a_command_because_git_cannot_start_without_it() {
+        let fixture = Fixture::new("devnull");
+        let sandbox = fixture.sandbox(&SandboxPolicy {
+            commands: vec!["git".into()],
+            ..read_write_here()
+        });
+
+        assert!(
+            sandbox.roots().iter().any(|root| {
+                root.implicit
+                    && root.path == Path::new(NULL_DEVICE)
+                    && root.access == Access::ReadWrite
+            }),
+            "git opens /dev/null before main() and exits 128 without it"
+        );
+
+        // And not for a policy that allows no commands at all: the grant exists
+        // for subprocesses, and a session with none has nothing to start.
+        let quiet = fixture.sandbox(&read_write_here());
+        assert!(
+            !quiet.roots().iter().any(|root| root.implicit),
+            "no commands, no implicit grants"
         );
     }
 

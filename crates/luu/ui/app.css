@@ -1,3 +1,9 @@
+/* Dark is the default and stays the one written out first: every screenshot
+   and every record in this repo was taken against it, and a light theme that
+   arrived by making dark the special case would quietly reinterpret all of
+   them. Light is a `[data-theme="light"]` override, set from the preferences
+   menu and remembered in `localStorage` — see
+   RECORD/2026-09-15.a-three-pane-inspector.WIP.md. */
 :root {
   --bg: #14161a;
   --panel: #1b1e24;
@@ -7,6 +13,16 @@
   --accent: #7aa2f7;
   --warn: #e0af68;
   --bad: #f7768e;
+  /* Text on an accent-filled button. A token rather than a literal because it
+     is the one colour that has to move *against* the theme: dark ink on a
+     light-blue button, light ink on a dark-blue one. */
+  --on-accent: #10131a;
+  /* Wells — a bar's groove, a `pre`'s ground: below the page, not on it. */
+  --sunken: #0e1014;
+  /* Raised-but-quiet blocks: a panel that is about another turn, a fold. */
+  --raised: #12151a;
+  /* The ground under anything bordered in `--warn`: the gate, a refusal. */
+  --warn-bg: #1a1712;
   /* One colour per bucket, so a bar and its legend agree. Named after the
      buckets the context manager emits, not after a palette. */
   --b-system: #7aa2f7;
@@ -22,6 +38,33 @@
   --b-prompt: #e0af68;
   --b-reserve: #3b4048;
   color-scheme: dark;
+}
+
+/* The same names, re-pointed. Every bucket colour darkens: the dark palette's
+   pastels are legible on #14161a and wash out on white, and a legend whose
+   swatch cannot be told from its neighbour is not a legend. */
+:root[data-theme="light"] {
+  --bg: #f4f5f8;
+  --panel: #ffffff;
+  --line: #d7dbe2;
+  --fg: #1a1d23;
+  --dim: #5b6472;
+  --accent: #2f5bbd;
+  --warn: #8a5d12;
+  --bad: #b8253f;
+  --on-accent: #ffffff;
+  --sunken: #eaedf2;
+  --raised: #f0f2f6;
+  --warn-bg: #fdf7e9;
+  --b-system: #2f5bbd;
+  --b-tools: #0b7185;
+  --b-map: #075a6b;
+  --b-history: #4a7a1c;
+  --b-summaries: #33561a;
+  --b-code: #6f3fb5;
+  --b-prompt: #8a5d12;
+  --b-reserve: #c3c9d3;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -175,3 +218,24 @@ body {
   padding: .6rem 0;
 }
 .modal-actions .save { margin-left: auto; }
+
+/* A small segmented control: two or three mutually exclusive answers where a
+   `<select>` would hide all but one of them behind a click. */
+.choice { display: flex; gap: .3rem; }
+.choice button {
+  background: var(--bg);
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: .2rem .7rem;
+  cursor: pointer;
+}
+.choice button:hover { color: var(--fg); }
+.choice button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}

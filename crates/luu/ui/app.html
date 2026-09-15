@@ -48,6 +48,41 @@
     }
   }
 
+  // ---- preferences -------------------------------------------------------
+  //
+  // Kept in the browser, not on the server and not in `config.toml`: a theme
+  // is a fact about the screen somebody is reading from, and the same server
+  // answers two people on two machines. `config.toml` is where a *destination*
+  // is written down, which is a fact about the run.
+  //
+  // The attribute goes on `<html>` rather than on this component's root
+  // because `app.css` defines both palettes on `:root`, and because `body`'s
+  // own background is painted from outside anything jq79 mounts.
+  let prefsOpen = false
+  let theme = (() => {
+    try {
+      return localStorage.getItem("luu.theme") === "light" ? "light" : "dark"
+    } catch {
+      return "dark"
+    }
+  })()
+  const applyTheme = which => {
+    // Dark is `:root`'s own palette, so it is the absence of the attribute
+    // rather than a value of it — one source for "what dark is", not two.
+    if (which === "light") document.documentElement.setAttribute("data-theme", "light")
+    else document.documentElement.removeAttribute("data-theme")
+  }
+  applyTheme(theme)
+  const setTheme = which => {
+    theme = which
+    applyTheme(which)
+    try {
+      localStorage.setItem("luu.theme", which)
+    } catch {
+      // Unremembered, still applied.
+    }
+  }
+
   let draft = ""
   // Which closed jobs are open in the transcript. Reassigned, never mutated.
   let expanded = []
@@ -364,7 +399,45 @@
     </option>
   </select>
   <span class="status" :class="state.status">{{ state.status }}</span>
+  <button
+    type="button"
+    class="hamburger"
+    title="Preferences"
+    @click="prefsOpen = true">≡</button>
 </header>
+
+<!-- Preferences. Everything here is about the browser looking at the server,
+     which is why none of it is in `config.toml` and none of it is sent
+     anywhere. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`. -->
+<div :if="prefsOpen" class="modal-backdrop" @click="prefsOpen = false">
+  <div class="modal narrow" @click="$event.stopPropagation()">
+    <header class="modal-head">
+      <strong>Preferences</strong>
+      <button type="button" class="link" @click="prefsOpen = false">close</button>
+    </header>
+    <section class="modal-body">
+      <dl class="settings">
+        <dt>Theme</dt>
+        <dd>
+          <div class="choice">
+            <button type="button" :class.on="theme === 'dark'" @click="setTheme('dark')">Dark</button>
+            <button type="button" :class.on="theme === 'light'" @click="setTheme('light')">Light</button>
+          </div>
+        </dd>
+        <dd class="caveat">
+          Remembered in this browser only — it is not written to
+          <code>config.toml</code>, which says where a run sends rather than
+          what it looks like.
+        </dd>
+      </dl>
+      <p class="small dim">
+        Where this server sends, and the providers it can be pointed at, are
+        in
+        <button type="button" class="link" @click="prefsOpen = false; openConfig()">Configuration</button>.
+      </p>
+    </section>
+  </div>
+</div>
 
 
 <!-- Configuration. Two sections and they are not the same kind of thing: the
@@ -825,6 +898,19 @@
     padding: 0 .5rem;
   }
   .status { margin-left: auto; font-size: 12px; color: var(--dim); }
+  /* Last in the header, after the status, because it is the one control here
+     that is about the page rather than about the run. */
+  .hamburger {
+    background: none;
+    color: var(--dim);
+    border: 0;
+    border-radius: 6px;
+    font-size: 18px;
+    line-height: 1;
+    padding: .1rem .45rem .25rem;
+    cursor: pointer;
+  }
+  .hamburger:hover { color: var(--fg); background: var(--bg); }
   .status.running { color: var(--accent); }
   .status.replay { color: var(--warn); }
   .status.closed { color: var(--bad); }
@@ -940,7 +1026,7 @@
   input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button {
     background: var(--accent);
-    color: #10131a;
+    color: var(--on-accent);
     border: 0;
     border-radius: 6px;
     font: inherit;
@@ -992,7 +1078,7 @@
   /* The gate reads as a thing that stopped the conversation, because it is. */
   .gate {
     margin: 0 1rem .6rem; padding: .7rem .9rem;
-    border: 1px solid var(--warn); border-radius: 8px; background: #1a1712;
+    border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-bg);
   }
   .gate .objective { font-weight: 600; margin: .2rem 0 .4rem; }
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
@@ -1001,7 +1087,7 @@
   .refused {
     margin: 0 1rem .4rem; padding: .4rem .7rem;
     border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0;
-    background: #1a1712; color: var(--dim); font-size: 13px;
+    background: var(--warn-bg); color: var(--dim); font-size: 13px;
   }
   .refused b { color: var(--warn); font-weight: 600; }
 
@@ -1022,7 +1108,7 @@
   /* A closed task: one entry, where its turns were. */
   .fold {
     margin: .4rem 0; padding: .5rem .7rem;
-    border-left: 3px solid var(--b-summaries); background: #12151a; border-radius: 0 6px 6px 0;
+    border-left: 3px solid var(--b-summaries); background: var(--raised); border-radius: 0 6px 6px 0;
   }
   .fold-head { display: flex; align-items: center; gap: .6rem; }
   .fold-head button:first-child { flex: 1; text-align: left; }
@@ -1034,7 +1120,7 @@
   button.link:disabled { opacity: .5; cursor: default; }
 
   pre {
-    background: #0e1014;
+    background: var(--sunken);
     border: 1px solid var(--line);
     border-radius: 6px;
     padding: .6rem;

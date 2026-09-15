@@ -12,7 +12,7 @@ use agent_core::backend::Message;
 use agent_core::context::{ApproximateCounter, Budget, Counter, ModelCounter, TokenCounter};
 use agent_core::protocol::{self, ServerMessage, TurnId};
 use agent_core::record::{self, RecordLine};
-use agent_core::sandbox::Sandbox;
+use agent_core::sandbox::{NULL_DEVICE, Sandbox};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::worker::{Executor, Worker};
@@ -132,9 +132,15 @@ impl Agency {
                 "  {:<10} {}{}\n",
                 root.access.as_str(),
                 root.path.display(),
-                match root.implicit {
-                    true => "   (implicit: commands need their interpreter)",
-                    false => "",
+                // Two implicit grants with two reasons, and one line each: the
+                // system trees are there so a command can read its interpreter
+                // and libc, `/dev/null` so it can open the fds every program
+                // assumes — `git` could not start without it. See
+                // `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md`.
+                match (root.implicit, root.path.as_path() == Path::new(NULL_DEVICE)) {
+                    (true, true) => "   (implicit: programs open the null device)",
+                    (true, false) => "   (implicit: commands need their interpreter)",
+                    (false, _) => "",
                 }
             ));
         }

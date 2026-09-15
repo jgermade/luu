@@ -154,6 +154,16 @@ fn build_ruleset(roots: &[Root]) -> Result<OwnedFd, String> {
             Access::Execute => AccessFs::from_read(TARGET_ABI),
             Access::ReadWrite => AccessFs::from_all(TARGET_ABI),
         };
+        // A rule on a regular file may only carry rights that mean something
+        // for a file: the kernel answers `EINVAL` to `ReadDir` or `MakeReg` on
+        // one, and the whole ruleset fails rather than that rule. Every root
+        // named by a policy is a directory, so this is reached by exactly one
+        // thing today — `/dev/null`, which is a character device and not a
+        // tree. See `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md`.
+        let access = match root.path.is_dir() {
+            true => access,
+            false => access & AccessFs::from_file(TARGET_ABI),
+        };
         let fd = PathFd::new(&root.path)
             .map_err(|error| format!("landlock {}: {error}", root.path.display()))?;
         ruleset = ruleset

@@ -65,6 +65,16 @@ access = "read-write"
 #   path = "~/.rustup"
 #   access = "execute"
 #
+# `git` is the same story with a sharper failure: it reads the global config at
+# startup and treats *permission denied* on it as fatal, where a merely missing
+# one is fine. Without this line `git status` exits 128 saying only "an unknown
+# error occurred while reading the configuration files" — see
+# RECORD/2026-09-15.git-could-not-open-dev-null.completed.md.
+#
+#   [[sandbox.paths]]
+#   path = "~/.gitconfig"
+#   access = "read"
+#
 # One informed line beats a prompt per call, which is what trains people to click
 # yes without reading.
 
