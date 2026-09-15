@@ -1,0 +1,12 @@
+To find the value of `MAX_OUTPUT_BYTES` in the file `crates/agent-core/src/tools/mod.rs`, I'll read the file and extract the relevant information.
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/tools/mod.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/tools/mod.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The value of `MAX_OUTPUT_BYTES` in the file `crates/agent-core/src/tools/mod.rs` is `8 * 1024`.
+
+[stop] 2987 prompt / 97 completion

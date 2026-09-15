@@ -1,0 +1,14 @@
+To check if `cargo fmt --all --check` exits cleanly, you can run the command and capture its exit status. Here's how you can do it:
+
+```tool
+{
+  "name": "run_command",
+  "arguments": {
+    "command": "cargo",
+    "args": ["fmt", "--all", "--check"],
+    "cwd": "."
+  }
+}
+```
+
+The result will indicate whether the command ran successfully or if there were any formatting issues. If the command exits with a status of 0, it means there were no issues. If it exits with a non-zero status, there were formatting errors that need to be addressed.

@@ -1,0 +1,7 @@
+To check if the workspace is clean using `cargo clippy`, you can run the following command:
+
+```tool
+{"name": "run_command", "arguments": {"command": "cargo", "args": ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]}}
+```
+
+This command will run `cargo clippy` on the entire workspace and all targets, treating all warnings as errors. If there are no warnings or errors, the output will indicate that the code is clean. If there are any issues, they will be reported in the output.

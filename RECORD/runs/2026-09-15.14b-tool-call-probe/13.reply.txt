@@ -1,0 +1,5 @@
+To understand what `Mock::cycle` does, I'll read the relevant part of the file.
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/backend/mock.rs"}}
+```

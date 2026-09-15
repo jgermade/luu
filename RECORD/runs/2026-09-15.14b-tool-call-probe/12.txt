@@ -1,0 +1,18 @@
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/luu/tests"}}
+```
+
+  [1] → list_dir {"path":"crates/luu/tests"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+The directory `crates/luu/tests` contains the following files:
+
+- `select_probe.rs`
+- `serve_ws.rs`
+- `stdio.rs`
+- `store_parity.rs`
+- `tool_call_probe.rs`
+- `ui_versions.rs`
+- `worker_seam.rs`
+
+[stop] 1003 prompt / 86 completion

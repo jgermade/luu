@@ -1,0 +1,30 @@
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core/src"}}
+```
+
+  [1] → list_dir {"path":"crates/agent-core/src"}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+The top-level entries in `crates/agent-core/src` are:
+
+- `agent.rs`
+- `api.rs`
+- `approval.rs`
+- `backend/`
+- `context.rs`
+- `fragment.rs`
+- `grammar.rs`
+- `job.rs`
+- `lib.rs`
+- `protocol.rs`
+- `rank.rs`
+- `record.rs`
+- `repo_map.rs`
+- `sandbox/`
+- `select.rs`
+- `tools/`
+- `trace.rs`
+- `turn.rs`
+- `worker/`
+
+[stop] 1032 prompt / 138 completion
