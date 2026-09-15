@@ -265,19 +265,30 @@ pub async fn run_agent_turn(
             .await;
             let _ = forward.await;
             usage = sum(usage, retried.usage);
-            if retried.error.is_some() || retried.reason == EndReason::Cancelled {
+            if retried.reason == EndReason::Cancelled {
                 let _ = events
-                    .send(match &retried.error {
-                        Some(error) => TurnEvent::Failed(error.clone()),
-                        None => TurnEvent::Ended {
-                            reason: EndReason::Cancelled,
-                            usage: None,
-                        },
+                    .send(TurnEvent::Ended {
+                        reason: EndReason::Cancelled,
+                        usage: None,
                     })
                     .await;
                 return AgentOutcome::from_final(retried.text.clone(), steps, retried, usage);
             }
-            retried
+            match retried.error {
+                // The retry itself was refused — a grammar or schema the
+                // backend would not compile, a transport error, whatever it
+                // said no to. The pre-retry attempt is a real reply the
+                // model produced; throwing it away for an error would trade
+                // a working (if malformed) answer for nothing. Fall back to
+                // it, so a refused constraint degrades to "the drift the
+                // retry couldn't fix" — which the ordinary `parse_call`
+                // check below already knows how to end a turn on — instead
+                // of failing the turn outright. See
+                // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s own
+                // "what a refused grammar does to a session".
+                Some(_) => outcome,
+                None => retried,
+            }
         } else {
             outcome
         };
@@ -379,7 +390,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::backend::{Chunk, ChunkStream, StopReason};
+    use crate::backend::{BackendError, Chunk, ChunkStream, StopReason};
     use crate::sandbox::{Access, Applied, PathRule, SandboxPolicy};
 
     /// A backend that says one scripted thing per call, so a tool loop can be
@@ -420,6 +431,48 @@ mod tests {
                     }),
                 }),
             ]))
+        }
+    }
+
+    /// A backend whose first call drifts and whose second call — the
+    /// schema-forced retry — is refused outright, the shape a grammar or
+    /// schema the server won't compile takes.
+    struct DriftThenRefuse {
+        first_reply: String,
+        calls: std::sync::atomic::AtomicU32,
+    }
+
+    impl DriftThenRefuse {
+        fn new(first_reply: &str) -> Self {
+            Self {
+                first_reply: first_reply.to_string(),
+                calls: std::sync::atomic::AtomicU32::new(0),
+            }
+        }
+    }
+
+    impl Backend for DriftThenRefuse {
+        fn name(&self) -> &str {
+            "drift-then-refuse"
+        }
+
+        fn stream(&self, _request: CompletionRequest) -> ChunkStream<'_> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                let text = self.first_reply.clone();
+                return Box::pin(futures_util::stream::iter(vec![
+                    Ok(Chunk::Text(text)),
+                    Ok(Chunk::Done {
+                        stop: StopReason::Stop,
+                        usage: Some(Usage {
+                            prompt_tokens: 10,
+                            completion_tokens: 2,
+                        }),
+                    }),
+                ]));
+            }
+            Box::pin(futures_util::stream::iter(vec![Err(
+                BackendError::Rejected("failed to parse grammar".into()),
+            )]))
         }
     }
 
@@ -794,6 +847,61 @@ mod tests {
                 .count(),
             1,
             "a clean decline earns no retry",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_retry_falls_back_to_the_drifted_answer_instead_of_failing_the_turn() {
+        // What a refused grammar (or schema) does to a session, named still
+        // open throughout RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md:
+        // the pre-retry attempt is a real reply the model produced, and
+        // discarding it because the server would not compile the retry's
+        // constraint would trade a working answer for nothing.
+        let fixture = Fixture::new("schema-retry-refused");
+        let retry = schema_retry();
+        let backend = DriftThenRefuse::new("```list_dir\n{}\n```");
+        let tools = crate::tools::Tools::standard();
+        let (tx, mut rx) = mpsc::channel(256);
+        let drain = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while let Some(event) = rx.recv().await {
+                seen.push(event);
+            }
+            seen
+        });
+        let (_stop, cancel) = watch::channel(false);
+        let outcome = run_agent_turn(
+            &backend,
+            CompletionRequest {
+                model: "scripted".into(),
+                messages: vec![Message::user("list the directory")],
+                context_limit: None,
+                temperature: None,
+                seed: None,
+                constraint: None,
+            },
+            &tools,
+            &fixture.sandbox,
+            Limits::default(),
+            Some(&retry),
+            tx,
+            cancel,
+        )
+        .await;
+        let events = drain.await.unwrap();
+
+        assert!(
+            outcome.error.is_none(),
+            "a refused retry is not the turn failing"
+        );
+        assert_eq!(
+            outcome.text, "```list_dir\n{}\n```",
+            "the pre-retry drifted answer survives, not an empty or failed one"
+        );
+        assert!(outcome.steps.is_empty(), "no call was ever executed");
+        assert!(
+            !events.iter().any(|e| matches!(e, TurnEvent::Failed(_))),
+            "the turn ends normally, not on a Failed event"
         );
     }
 
