@@ -1,0 +1,6 @@
+```
+list_dir
+{"path": "RECORD/"}
+```
+
+[stop] 471 prompt / 15 completion

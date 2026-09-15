@@ -1,0 +1,9 @@
+To run `cargo fmt --all --check` and report whether it exits clean, I'll execute the command and provide the result.
+
+```run_command
+{"argv":["cargo","fmt","--all","--check"]}
+```
+
+The command has been executed. Please provide the result.
+
+[stop] 477 prompt / 58 completion

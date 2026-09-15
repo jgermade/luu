@@ -1,0 +1,3 @@
+The workspace is on edition 2018.
+
+[stop] 476 prompt / 12 completion

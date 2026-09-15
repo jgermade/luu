@@ -1,0 +1,14 @@
+To read the `luu.toml` file and determine the enforcement setting, I'll use the `read_file` tool:
+
+```tool
+{"name": "read_file", "arguments": {"path": "luu.toml"}}
+```
+
+The result comes back as the next message. One call per reply. When no tool is needed, answer in plain text and do not emit a block.
+
+  [1] → read_file {"path":"luu.toml"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+The enforcement setting in the `luu.toml` file is set to "kernel".
+
+[stop] 2077 prompt / 101 completion

@@ -1,0 +1,7 @@
+To run the specific test `score_call` in the `agent-core` package, you can use the following command:
+
+```run_command
+{"argv":["cargo","test","-p","agent-core","score_call"]}
+```
+
+This command will execute the `score_call` test within the `agent-core` package and provide the result.

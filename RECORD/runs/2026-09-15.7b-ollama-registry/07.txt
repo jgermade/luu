@@ -1,0 +1,7 @@
+```json
+{
+  "path": "crates/agent-core/src/backend"
+}
+```
+
+[stop] 474 prompt / 20 completion

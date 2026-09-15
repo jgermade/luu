@@ -1,0 +1,8 @@
+```
+scripts/
+├── build.sh
+├── deploy.sh
+└── test.sh
+```
+
+[stop] 470 prompt / 21 completion

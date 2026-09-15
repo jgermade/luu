@@ -1,0 +1,5 @@
+```list_dir
+{"path": "crates/agent-core/src"}
+```
+
+[stop] 475 prompt / 17 completion
