@@ -7,6 +7,11 @@
   const {
     ui, loadModels, editStarter, closeStarter, startSession, continueHere,
   } = await import("./ui.js")
+  const { asModal } = await import("./modal.js")
+
+  // ESC, the focus trap and the backdrop come from `<dialog>` rather than from
+  // this file. See `modal.js`.
+  asModal("starter-dialog", { close: closeStarter })
 
   $: profileNames = Object.keys(state.providers?.providers || {})
   // Empty where nobody has written a posture down, and where a surface cannot
@@ -35,86 +40,84 @@
             : "")
 </script>
 
-<div class="modal-backdrop" @click="closeStarter()">
-  <div class="modal narrow" @click="$event.stopPropagation()">
-    <header class="modal-head">
-      <strong>Where a session sends</strong>
-      <button type="button" class="link" @click="closeStarter()">close</button>
-    </header>
-    <section class="modal-body">
-      <p :if="!profileNames.length" class="refused">
-        There are no providers in <code>config.toml</code> yet. Write one in
-        Settings → Models first — a session can only be sent somewhere this
-        machine has already named.
-      </p>
+<dialog id="starter-dialog" class="modal narrow" @click.self="closeStarter()">
+  <header class="modal-head">
+    <strong>Where a session sends</strong>
+    <button type="button" class="link" @click="closeStarter()">close</button>
+  </header>
+  <section class="modal-body">
+    <p :if="!profileNames.length" class="refused">
+      There are no providers in <code>config.toml</code> yet. Write one in
+      Settings → Models first — a session can only be sent somewhere this
+      machine has already named.
+    </p>
 
-      <dl class="settings" :if="profileNames.length">
-        <dt>Provider</dt>
-        <dd>
-          <select :value="ui.starter?.provider" @change="loadModels($event.target.value)">
-            <option :each="name in profileNames" :key="name" :value="name">{{ name }}</option>
-          </select>
-          <span :if="ui.starter?.provider === state.providers?.default" class="dim">· the file's default</span>
-        </dd>
+    <dl class="settings" :if="profileNames.length">
+      <dt>Provider</dt>
+      <dd>
+        <select :value="ui.starter?.provider" @change="loadModels($event.target.value)">
+          <option :each="name in profileNames" :key="name" :value="name">{{ name }}</option>
+        </select>
+        <span :if="ui.starter?.provider === state.providers?.default" class="dim">· the file's default</span>
+      </dd>
 
-        <dt>Model</dt>
-        <dd>
-          <input class="w-model" :value="ui.starter?.model" list="starter-models"
-                 placeholder="{{ ui.starter?.loading ? 'asking the provider…' : 'a model name' }}"
-                 @input="editStarter({ model: $event.target.value })">
-          <datalist id="starter-models">
-            <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
-          </datalist>
-          <span :if="ui.starter?.from" class="dim">· {{ ui.starter?.from }}</span>
-        </dd>
-        <dd :if="ui.starter?.reason" class="caveat">
-          Could not list this provider's models: {{ ui.starter?.reason }}. Type one —
-          a model that is not pulled yet is still a name worth writing down.
-        </dd>
+      <dt>Model</dt>
+      <dd>
+        <input class="w-model" :value="ui.starter?.model" list="starter-models"
+               placeholder="{{ ui.starter?.loading ? 'asking the provider…' : 'a model name' }}"
+               @input="editStarter({ model: $event.target.value })">
+        <datalist id="starter-models">
+          <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
+        </datalist>
+        <span :if="ui.starter?.from" class="dim">· {{ ui.starter?.from }}</span>
+      </dd>
+      <dd :if="ui.starter?.reason" class="caveat">
+        Could not list this provider's models: {{ ui.starter?.reason }}. Type one —
+        a model that is not pulled yet is still a name worth writing down.
+      </dd>
 
-        <!-- What the session may do, which is not where it sends. Offered only
-             where somebody has written one down: the names come from
-             `config.toml`, and a page cannot add to them. -->
-        <dt :if="postureNames.length">Posture</dt>
-        <dd :if="postureNames.length">
-          <select :value="ui.starter?.posture"
-                  @change="editStarter({ posture: $event.target.value })">
-            <option value="">this server's own policy file</option>
-            <option :each="name in postureNames" :key="name" :value="name">{{ name }}</option>
-          </select>
-        </dd>
-        <dd :if="postureNames.length && ui.starter?.posture" class="dim small">
-          {{ state.postures?.postures[ui.starter?.posture]?.policy }} — chosen now
-          and never moved: a session's jobs are approved against what it may do.
-        </dd>
-        <dd :if="!ui.starter?.reason && !ui.starter?.loading && !ui.starter?.models?.length" class="dim">
-          This provider offers no list, so the model is whatever you type.
-        </dd>
-      </dl>
+      <!-- What the session may do, which is not where it sends. Offered only
+           where somebody has written one down: the names come from
+           `config.toml`, and a page cannot add to them. -->
+      <dt :if="postureNames.length">Posture</dt>
+      <dd :if="postureNames.length">
+        <select :value="ui.starter?.posture"
+                @change="editStarter({ posture: $event.target.value })">
+          <option value="">this server's own policy file</option>
+          <option :each="name in postureNames" :key="name" :value="name">{{ name }}</option>
+        </select>
+      </dd>
+      <dd :if="postureNames.length && ui.starter?.posture" class="dim small">
+        {{ state.postures?.postures[ui.starter?.posture]?.policy }} — chosen now
+        and never moved: a session's jobs are approved against what it may do.
+      </dd>
+      <dd :if="!ui.starter?.reason && !ui.starter?.loading && !ui.starter?.models?.length" class="dim">
+        This provider offers no list, so the model is whatever you type.
+      </dd>
+    </dl>
 
-      <p class="dim small" :if="profileNames.length">
-        <strong>Start session</strong> opens an empty one there.
-        <strong>Continue here</strong> keeps the history on screen and moves it —
-        the session's stream gains a header saying where it changed, so the turns
-        before it are not read as comparable with the ones after.
-        Neither changes the file, and neither touches a turn that is running.
-      </p>
-      <p class="dim small" :if="profileNames.length && cannotContinue">
-        Cannot continue: {{ cannotContinue }}.
-      </p>
-      <p class="dim small" :if="profileNames.length && busy">
-        Cannot start one either: {{ busy }}.
-      </p>
+    <p class="dim small" :if="profileNames.length">
+      <strong>Start session</strong> opens an empty one there.
+      <strong>Continue here</strong> keeps the history on screen and moves it —
+      the session's stream gains a header saying where it changed, so the turns
+      before it are not read as comparable with the ones after.
+      Neither changes the file, and neither touches a turn that is running.
+    </p>
+    <p class="dim small" :if="profileNames.length && cannotContinue">
+      Cannot continue: {{ cannotContinue }}.
+    </p>
+    <p class="dim small" :if="profileNames.length && busy">
+      Cannot start one either: {{ busy }}.
+    </p>
 
-      <div class="modal-foot">
-        <div class="modal-actions">
-          <button type="button" :disabled="!profileNames.length || ui.starting || !!cannotContinue"
-                  title="Keep this session's history and move it to the chosen destination"
-                  @click="continueHere()">{{ ui.starting && ui.continuing ? "Moving…" : "Continue here" }}</button>
-          <button type="button" class="save" :disabled="!profileNames.length || ui.starting || !!busy"
-                  @click="startSession()">{{ ui.starting && !ui.continuing ? "Starting…" : "Start session" }}</button>
-        </div>
+    <div class="modal-foot">
+      <div class="modal-actions">
+        <button type="button" :disabled="!profileNames.length || ui.starting || !!cannotContinue"
+                title="Keep this session's history and move it to the chosen destination"
+                @click="continueHere()">{{ ui.starting && ui.continuing ? "Moving…" : "Continue here" }}</button>
+        <button type="button" class="save" :disabled="!profileNames.length || ui.starting || !!busy"
+                @click="startSession()">{{ ui.starting && !ui.continuing ? "Starting…" : "Start session" }}</button>
       </div>
-    </section>
-  </div>
-</div>
+    </div>
+  </section>
+</dialog>

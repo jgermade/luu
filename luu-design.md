@@ -717,10 +717,12 @@ replay, the hamburger opened preferences about the browser. A strip of other col
 cost every column 3rem of height to say so, and it was the one thing on the page with a fixed
 height, so the grid was `calc(100vh - 3rem)` — a magic number that was wrong the moment it
 wrapped. What each 40px carries now: the inspector's head is the `luu` logo (which is a control
-— it means *back to the conversation*) and the panel tabs, its foot the chosen folder and the
-status word; the content column's head is one tab per open thing and its foot that thing's own
-facts; the chat's head is the session's name, editable in place, beside new-session, history
-and settings.
+— it means *back to the conversation*) and the panel tabs, its foot the chosen folder, the
+status word and **settings**; the content column's head is one tab per open thing and its foot
+that thing's own facts; the chat's head is the session's name, editable in place, beside
+new-session and history. Settings sits in the inspector rather than in the chat's head because
+the chat's head is the one head that disappears: below 1260px the second column is a choice, and
+with the content showing there was no settings button on the page at all.
 
 The inspector switches between the workspace's file tree, its git changes, and the
 context-manager panel that used to be the whole right column. The content column holds **one tab
@@ -772,6 +774,18 @@ composer is disabled and the foot says which, because that is certain and costs 
 the far end to discover. A provider that did not answer at all: the foot says so and the composer
 stays enabled, because a provider that is starting up is an ordinary state and locking the
 composer over one would be wrong more often than right.
+
+**Every modal is a `<dialog>` opened with `showModal()`** — settings, the folder picker, the
+session starter — so ESC, the focus trap, everything behind it inert and the `::backdrop` are
+the platform's rather than three hand-built copies of a `z-index: 50` div. What the platform does
+not own is *whether* a modal is on screen, which is the page's state, so `modal.js` routes every
+native dismissal back to the same close function the close button calls; the folder picker on a
+first visit refuses both, because there is nothing behind it to go back to. **ESC walks a ladder**
+— a modal cancels itself and the page does nothing else on that keypress, then the history
+popover, a rename in progress, an armed delete, and finally, with nothing left to cancel and two
+columns on screen, it swaps content and chat. A running turn is deliberately not on it: it is the
+one cancellable thing whose undo costs work. See
+[`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md).
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps:
 *General* (theme, editor, layout, which folder) and *Models* (what this server resolved, then the

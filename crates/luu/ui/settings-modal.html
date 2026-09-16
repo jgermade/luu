@@ -8,48 +8,54 @@
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const { state, closeSettings } = await import("./store.js")
   const { ui, showSection } = await import("./ui.js")
+  const { asModal } = await import("./modal.js")
+
+  // ESC, the focus trap and the backdrop come from `<dialog>` rather than from
+  // this file. See `modal.js`.
+  asModal("settings-dialog", { close: closeSettings })
 
   const SettingsGeneral = await import("./settings-general.html")
   const SettingsModels = await import("./settings-models.html")
 </script>
 
-<div class="modal-backdrop" @click="closeSettings()">
-  <div class="modal wide" @click="$event.stopPropagation()">
-    <header class="modal-head">
-      <strong>Settings</strong>
-      <button type="button" class="link" @click="closeSettings()">close</button>
-    </header>
+<!-- `@click.self` is the backdrop: a click that lands on the dialog itself
+     rather than on anything inside it is a click outside the box, because the
+     dialog has no padding of its own for a click to land in. -->
+<dialog id="settings-dialog" class="modal wide" @click.self="closeSettings()">
+  <header class="modal-head">
+    <strong>Settings</strong>
+    <button type="button" class="link" @click="closeSettings()">close</button>
+  </header>
 
-    <div class="sections">
-      <!-- The rail. Two sections today, and the shape is what makes a third
-           free: a section is a name and a component, not a place in a scroll. -->
-      <nav class="rail">
-        <button
-          type="button"
-          :class.on="ui.section === 'general'"
-          @click="showSection('general')">
-          <svg class="ic"><use href="#i-sliders"/></svg>
-          <span>General</span>
-        </button>
-        <button
-          type="button"
-          :class.on="ui.section === 'models'"
-          @click="showSection('models')">
-          <svg class="ic"><use href="#i-server"/></svg>
-          <span>Models</span>
-        </button>
-      </nav>
+  <div class="sections">
+    <!-- The rail. Two sections today, and the shape is what makes a third
+         free: a section is a name and a component, not a place in a scroll. -->
+    <nav class="rail">
+      <button
+        type="button"
+        :class.on="ui.section === 'general'"
+        @click="showSection('general')">
+        <svg class="ic"><use href="#i-sliders"/></svg>
+        <span>General</span>
+      </button>
+      <button
+        type="button"
+        :class.on="ui.section === 'models'"
+        @click="showSection('models')">
+        <svg class="ic"><use href="#i-server"/></svg>
+        <span>Models</span>
+      </button>
+    </nav>
 
-      <section class="modal-body pane">
-        <SettingsGeneral :if="ui.section === 'general'" />
-        <SettingsModels :if="ui.section === 'models'" />
-      </section>
-    </div>
+    <section class="modal-body pane">
+      <SettingsGeneral :if="ui.section === 'general'" />
+      <SettingsModels :if="ui.section === 'models'" />
+    </section>
   </div>
-</div>
+</dialog>
 
 <style scoped>
-  .modal.wide { width: min(76rem, 100%); }
+  .modal.wide { width: min(76rem, calc(100vw - 2rem)); }
   .sections {
     display: grid;
     grid-template-columns: 12rem minmax(0, 1fr);
