@@ -11,6 +11,7 @@
   const { workspace } = await import("./workspace.js")
   const { prefs, monacoAvailable } = await import("./prefs.js")
   const { paint, dispose, textOf } = await import("./monaco.js")
+  const { paintFile } = await import("./rows.js")
 
   $: shown = workspace.content
   // `picked` rather than `selected`, and the name is load-bearing: a scope
@@ -67,14 +68,39 @@
   // detached element is a leak that only shows up after twenty tab switches.
   $: attached = monacoing ? draw((prefs.theme, shown)) : (dispose(), "")
 
+  // ---- the own viewer ---------------------------------------------------
+  //
   // The server sends one list of chunks per line, already cut and classified —
   // never offsets, which would be Rust byte indices read as JavaScript UTF-16
   // ones. Line numbers are the page's own, because they are a fact about the
   // layout rather than about the file.
   //
-  // `workspace.head` and `workspace.tail` are read straight off the store and
-  // never sliced here: a slice in a reactive statement is a new array every
-  // time it re-runs, and a new array is a list jq79 rebuilds.
+  // **The rows are built by `rows.js`, not by a template**, and they are the
+  // second thing in this file to be attached to a plain element by id rather
+  // than through the renderer. The reason is the same one Monaco's host gives
+  // above, plus a measured one: a `:each` inside a `:each` charges a scope and
+  // two effects per coloured span, and the spans arrive whole and never change.
+  // See `RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`.
+  $: filing = !monacoing && !workspace.loading && shown?.kind === "file"
+
+  // Keyed on the content object rather than on the tab, because re-reading a
+  // file gives the same tab a new one — and on the element, because jq79's
+  // `:if` hands out a fresh empty `<ol>` every time the condition flips, which
+  // has to repaint. Both facts are one identity check.
+  const fill = content => {
+    const id = workspace.active
+    requestAnimationFrame(() => {
+      const ol = document.getElementById("code-rows")
+      const spacer = document.getElementById("code-pending")
+      if (!ol || !spacer || workspace.active !== id) return
+      if (ol.painted === content) return
+      ol.painted = content
+      paintFile(ol, spacer, content.lines, () => workspace.active === id)
+    })
+    return content.path
+  }
+
+  $: rows = filing ? fill(shown) : ""
 </script>
 
 <div :if="!picked" class="placeholder">
@@ -96,28 +122,21 @@
      no height measures as none. -->
 <div :if="monacoing" id="monaco-host" class="monaco"></div>
 
-<!-- A file. `pre` per line rather than one block, so the gutter and the text
-     stay aligned without the gutter being part of what you copy. -->
+<!-- A file. One `<li>` per line rather than one block, so the gutter and the
+     text stay aligned without the gutter being part of what you copy.
+
+     Both elements are empty here and filled by `rows.js`: the renderer owns
+     whether this box exists, and nothing else about it. The CSS counter that
+     numbers the rows lives on the `<ol>`, so the rows number themselves
+     whichever pass built them. Their rules are in `app.css` rather than in the
+     `<style scoped>` below — a scoped rule is rewritten to match
+     `[data-jq79="…"]`, which only elements the compiler built carry. -->
 <div :if="!monacoing && !workspace.loading && shown?.kind === 'file'" class="file">
-  <!-- Two `:each` groups, one list. Two groups because the second render then
-       builds only the rows it adds and leaves the first screenful alone —
-       jq79 rebuilds an `:each`, so what must not change is the array the first
-       group is bound to. One list because the CSS counter that numbers the
-       rows runs across both, so the tail numbers itself. -->
-  <ol class="code">
-    <li :each="line in workspace.head"><code
-      :each="chunk in line"
-      :class="chunk.kind ? `hl-${chunk.kind}` : ''">{{ chunk.text }}</code></li>
-    <li :each="line in workspace.tail"><code
-      :each="chunk in line"
-      :class="chunk.kind ? `hl-${chunk.kind}` : ''">{{ chunk.text }}</code></li>
-  </ol>
+  <ol id="code-rows" class="code"></ol>
   <!-- The room the rows that have not arrived are going to take, so the
        scrollbar is the length of the file from the first frame rather than the
-       length of its first screen. `1lh` is one row, because this carries the
-       same metrics a row does. -->
-  <div :if="workspace.pending" class="pending"
-       :attrs="{ style: `--rows:${workspace.pending}` }"></div>
+       length of its first screen. -->
+  <div id="code-pending" class="pending" hidden></div>
 </div>
 
 <div :if="!workspace.loading && shown?.kind === 'diff'" class="diff">
@@ -155,27 +174,11 @@
      scrolling inside a scroll. */
   .monaco { height: 100%; min-height: 20rem; }
 
-  .code { list-style: none; margin: 0; padding: .5rem 0; counter-reset: line; }
-  .code li {
-    display: flex;
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre;
-  }
-  .code li::before {
-    counter-increment: line;
-    content: counter(line);
-    flex: none;
-    width: 3.5rem;
-    padding-right: .8rem;
-    text-align: right;
-    color: var(--dim);
-    opacity: .6;
-    user-select: none;
-  }
-  .code code { white-space: pre; }
-  .pending { font-size: 12px; line-height: 1.5; height: calc(var(--rows) * 1lh); }
+  /* `.code`, its rows and `.pending` are in `app.css`, not here: `<style
+     scoped>` rewrites every selector to match `[data-jq79="…"]`, and the rows
+     are built by `rows.js` rather than by the compiler, so they carry no such
+     attribute. The `hl-*` classes were already global for the neighbouring
+     reason. */
 
   .diff { padding: .5rem 0 1rem; }
   .hunk { margin-bottom: .8rem; }

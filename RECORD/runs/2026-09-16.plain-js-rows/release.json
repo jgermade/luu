@@ -1,0 +1,12 @@
+{
+  "note": "Two release binaries built from the same tree, one on each UI, run minutes apart on the same machine. `rust_embed` bakes the UI into a release build, so the arms cannot be swapped inside one binary. Median of nine opens after a warm-up.",
+  "before": {
+    "crates/luu/src/serve.rs": { "lines": 3947, "first": 71, "whole": 790, "nodes": 25601, "scrollHeight": 71062, "heapMB": 551.9 },
+    "crates/luu/ui/store.js": { "lines": 1036, "first": 39, "whole": 243, "nodes": 7509, "scrollHeight": 18664, "heapMB": 722.0 }
+  },
+  "after": {
+    "crates/luu/src/serve.rs": { "lines": 3947, "first": 61, "whole": 359, "nodes": 25602, "scrollHeight": 71062, "heapMB": 13.3 },
+    "crates/luu/ui/store.js": { "lines": 1036, "first": 24, "whole": 118, "nodes": 7510, "scrollHeight": 18664, "heapMB": 11.7 }
+  },
+  "do-not-compare": "These absolutes are this container's. Phase 8's release figures were taken on a different machine roughly three times faster on the same work — its before column was 271 ms where this one is 790 ms. Only a column against the column beside it means anything here."
+}

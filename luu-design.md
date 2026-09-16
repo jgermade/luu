@@ -717,24 +717,39 @@ replay, the hamburger opened preferences about the browser. A strip of other col
 cost every column 3rem of height to say so, and it was the one thing on the page with a fixed
 height, so the grid was `calc(100vh - 3rem)` — a magic number that was wrong the moment it
 wrapped. What each 40px carries now: the inspector's head is the `luu` logo (which is a control
-— it means *back to the conversation*) and the panel tabs, its foot the chosen folder and the
-status word; the content column's head is one tab per open thing and its foot that thing's own
-facts; the chat's head is the session's name, editable in place, beside new-session, history
-and settings.
+— it means *back to the conversation*) and the panel tabs, its foot the chosen folder, the
+status word and **settings**; the content column's head is one tab per open thing and its foot
+that thing's own facts; the chat's head is the session's name, editable in place, beside
+new-session and history. Settings sits in the inspector rather than in the chat's head because
+the chat's head is the one head that disappears: below 1260px the second column is a choice, and
+with the content showing there was no settings button on the page at all.
 
 The inspector switches between the workspace's file tree, its git changes, and the
 context-manager panel that used to be the whole right column. The content column holds **one tab
 per open thing** — a file, a diff, or a block of debug text such as a prompt at the width it was
 written for — so looking at a diff no longer loses the file on screen. A tab holds its identity
 and not its bytes: activating one re-fetches, because the server answers the largest file in
-this repository in 20 ms and the 271 ms a file costs is building the rows, which a cache would
-not save. Read-only throughout: the file tree and the git panel are a window onto the workspace,
-not a second way to change it — every write still goes through the job gate.
+this repository in 20 ms and what a file costs is building the rows — which a cache would not
+save. Those rows are **built in plain JS by `rows.js`, not by a template**: a `:each` inside a
+`:each` charges a scope and two effects per coloured span, over spans that arrive whole,
+already coloured, and never change. Dropping the renderer from that one subtree halves the time
+to the whole file and takes the tab's JS heap from hundreds of megabytes to about twelve. See
+[`RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`](RECORD/2026-09-16.the-viewer-in-plain-js.completed.md). Read-only throughout: the file tree and the git panel are a window onto the workspace,
+not a second way to change it — every write still goes through the job gate. A tree row is an
+`<li>` holding three controls rather than one big `<button>` — the button that opens the thing,
+git's letter, and an **edit pencil that appears only under the pointer** (and under keyboard
+focus, because an action that exists only on hover is one a keyboard cannot find). Its slot is
+reserved rather than conjured, so revealing it does not reflow the name being pointed at. **The
+pencil opens the file today**: the write half is not decided, and deciding it means arguing with
+the sentence above rather than routing around it. See
+[`RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`](RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md).
 
 The columns' contents and every dialog are separate jq79 components
 (`inspector-{files,git,debug}.html`, `content-viewer.html`, `settings-{modal,general,models}.html`,
 `session-starter.html`, `folder-picker.html`); `app.html` keeps the shell — the grid, the three
-columns' chrome, and the chat. Preferences live in `prefs.js` and in `localStorage`: theme
+columns' chrome, and the chat. Two things inside `content-viewer.html` are attached to plain
+elements by id rather than drawn by the renderer, for the same reason and now with a number
+behind it: the optional Monaco editor, and the own viewer's rows. Preferences live in `prefs.js` and in `localStorage`: theme
 (auto/light/dark, where auto is `prefers-color-scheme` resolved live in JS rather than a second
 copy of the light palette), which editor draws a file, the layout, and who answers the gate.
 None of it is in `config.toml`, which says where a run *sends* — a fact about the run, not about
@@ -766,6 +781,18 @@ composer is disabled and the foot says which, because that is certain and costs 
 the far end to discover. A provider that did not answer at all: the foot says so and the composer
 stays enabled, because a provider that is starting up is an ordinary state and locking the
 composer over one would be wrong more often than right.
+
+**Every modal is a `<dialog>` opened with `showModal()`** — settings, the folder picker, the
+session starter — so ESC, the focus trap, everything behind it inert and the `::backdrop` are
+the platform's rather than three hand-built copies of a `z-index: 50` div. What the platform does
+not own is *whether* a modal is on screen, which is the page's state, so `modal.js` routes every
+native dismissal back to the same close function the close button calls; the folder picker on a
+first visit refuses both, because there is nothing behind it to go back to. **ESC walks a ladder**
+— a modal cancels itself and the page does nothing else on that keypress, then the history
+popover, a rename in progress, an armed delete, and finally, with nothing left to cancel and two
+columns on screen, it swaps content and chat. A running turn is deliberately not on it: it is the
+one cancellable thing whose undo costs work. See
+[`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md).
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps:
 *General* (theme, editor, layout, which folder) and *Models* (what this server resolved, then the

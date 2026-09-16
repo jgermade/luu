@@ -141,7 +141,7 @@ test.afterAll(() => {
  * browser context and the choice is remembered in `localStorage`.
  */
 async function chooseFolder(page) {
-  const picker = page.locator(".modal-backdrop").first()
+  const picker = page.locator("dialog.modal").first()
   await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
   if (await picker.isVisible()) {
     await picker.locator('button:has-text("Use this folder")').click()
@@ -171,11 +171,11 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // machine sends. It is said in Settings → Models rather than by a modal that
   // opens itself, because on a first visit that would be the second dialog
   // over a folder question that cannot be dismissed.
-  await page.click('.chat .acts button[title="Settings"]')
+  await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
   await expect(page.locator(".first-run")).toBeVisible()
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
-  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // The prompt is held, unrun, until somebody answers for it.
   const composer = page.locator(".composer input")
@@ -306,13 +306,13 @@ test("a session is started on a posture, and the page says which", async ({ page
 
   // The server's own policy file, before anything is chosen. In Settings →
   // Models, which is where what this server resolved now lives.
-  await page.click('.chat .acts button[title="Settings"]')
+  await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
   await expect(page.locator("dt", { hasText: "Posture" }).first()).toBeVisible()
   await expect(page.locator(".settings dd").filter({ hasText: "this server's own" }))
     .toBeVisible()
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
-  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // The "+" in the chat's head. Sessions were a tab strip over the chat
   // column (`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`) and before that
@@ -339,7 +339,7 @@ test("a session is started on a posture, and the page says which", async ({ page
   // row, which is where the destination is reported now — the two tags that
   // used to be in the page header.
   await page.click(".options .dest")
-  await expect(page.locator(".modal-backdrop").first()).toBeVisible()
+  await expect(page.locator("dialog.modal").first()).toBeVisible()
   await expect(page.locator(".modal .rail button.on")).toHaveText("Models")
   const said = page.locator(".settings")
   await expect(said).toContainText("wide")
@@ -403,12 +403,16 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // a history popover — see
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   await expect(page.locator(".chat .name")).not.toBeEmpty()
-  await expect(page.locator(".chat .acts button")).toHaveCount(3)
+  // Two, not three: the cog moved to the inspector's foot, which is the column
+  // that is always on screen. See
+  // `RECORD/2026-09-16.the-modals-are-dialogs.completed.md`.
+  await expect(page.locator(".chat .acts button")).toHaveCount(2)
+  await expect(page.locator('.inspector .col-foot button[title="Settings"]')).toHaveCount(1)
   // Drawn rather than typed since phase 7 of the three-pane record — this used
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(13)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(14)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip. The live session cannot be deleted — the
@@ -464,6 +468,121 @@ test("under 1260px the second column switches between content and chat", async (
 })
 
 /**
+ * The tree's row: three controls in one highlight, and an edit icon that is
+ * only there under the pointer.
+ *
+ * The row stopped being a `<button>` to make room for it — jq79 builds
+ * templates with `createElement`, which nests a button inside a button
+ * happily, and then one click fires both handlers. See
+ * `RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`.
+ */
+test("the tree shows an edit icon on hover, and the name does not move", async ({ page }) => {
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .tabs button:has-text("Files")')
+  const node = page.locator('.inspector .tree .node:has-text("luu.toml")').first()
+  await expect(node).toBeVisible({ timeout: 15_000 })
+
+  // No nesting: the two buttons are siblings inside the row, not one in the
+  // other, which is what stops a click on the icon also opening the file.
+  await expect(node.locator("button.row button")).toHaveCount(0)
+  await expect(node.locator("> button")).toHaveCount(2)
+
+  const edit = node.locator("button.edit")
+  const name = node.locator(".name")
+
+  // Present but invisible, and — the part that matters — not clickable while
+  // invisible.
+  await expect(edit).toHaveCSS("opacity", "0")
+  await expect(edit).toHaveCSS("pointer-events", "none")
+
+  // The slot is reserved, so revealing the icon must not move the name.
+  const before = await name.boundingBox()
+  await node.hover()
+  await expect(edit).toHaveCSS("opacity", "1")
+  const after = await name.boundingBox()
+  expect(Math.round(after.width)).toBe(Math.round(before.width))
+
+  // And the icon is the rightmost thing in the row.
+  const nameBox = await name.boundingBox()
+  const editBox = await edit.boundingBox()
+  expect(editBox.x).toBeGreaterThan(nameBox.x + nameBox.width - 1)
+
+  // A keyboard can find it: hover is not the only way it appears.
+  await page.locator("button.row", { hasText: "luu.toml" }).first().focus()
+  await page.keyboard.press("Tab")
+  await expect(edit).toBeFocused()
+  await expect(edit).toHaveCSS("opacity", "1")
+})
+
+/**
+ * ESC, which means four different things depending on what is open, and the
+ * settings button that moved out of the chat's head to say so.
+ *
+ * The modals are `<dialog>` elements opened with `showModal()`, so ESC is the
+ * platform's rather than a key handler of this page's — what is asserted here
+ * is that the page did not *also* act on the same keypress, and that the one
+ * dialog which must not be dismissed still is not. See
+ * `RECORD/2026-09-16.the-modals-are-dialogs.completed.md`.
+ */
+test("ESC closes what is open, and swaps the columns when nothing is", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1100, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+
+  // A first visit opens the folder picker and it cannot be dismissed: there is
+  // nothing behind it to go back to. ESC has to refuse with it, or the browser
+  // would close a dialog the page still believes is open.
+  const picker = page.locator("dialog.modal")
+  await expect(picker).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(picker).toBeVisible()
+  await picker.locator('button:has-text("Use this folder")').click()
+  await expect(picker).toBeHidden()
+
+  // Settings is in the inspector's foot now — the column that is always on
+  // screen — rather than in the chat's head, which is a head that disappears
+  // whenever two columns are showing the content.
+  await expect(page.locator('.chat .acts button[title="Settings"]')).toHaveCount(0)
+
+  await expect(page.locator(".app")).toHaveAttribute("data-columns", "2")
+  const shown = async () =>
+    (await page.locator(".col.content").count()) ? "content" : "chat"
+  const before = await shown()
+
+  // ESC over a modal closes the modal and nothing else: the column underneath
+  // it must be the one it was.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await expect(page.locator("dialog.modal")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+  expect(await shown()).toBe(before)
+
+  // With nothing left to cancel, it swaps them — and back.
+  await page.keyboard.press("Escape")
+  expect(await shown()).not.toBe(before)
+  await page.keyboard.press("Escape")
+  expect(await shown()).toBe(before)
+
+  // Three columns are all on screen, so there is nothing to swap and ESC is
+  // inert rather than doing something arbitrary.
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(page.locator(".app")).toHaveAttribute("data-columns", "3")
+  await expect(page.locator(".col.content")).toBeVisible()
+  await expect(page.locator(".col.chat")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.locator(".col.content")).toBeVisible()
+  await expect(page.locator(".col.chat")).toBeVisible()
+
+  expect(errors).toEqual([])
+})
+
+/**
  * The workspace panels, against this repository itself: the tree the server
  * walks is the checkout the test runs from, so `.gitignore` and `git status`
  * have real answers to give. Phases 3 and 4 of
@@ -490,7 +609,7 @@ test("the files panel lists the workspace, and a file opens in the viewer", asyn
   // `luu.toml` is in every checkout; `target/` is ignored in every checkout
   // that has been built, and this suite needs a built binary to run at all.
   await expect(rows.filter({ hasText: "luu.toml" })).toHaveCount(1)
-  await expect(page.locator(".inspector .tree .row.ignored").first()).toBeVisible()
+  await expect(page.locator(".inspector .tree .node.ignored").first()).toBeVisible()
 
   await page.click('.inspector .tree .row:has-text("luu.toml")')
   await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")
@@ -674,7 +793,7 @@ test("the workspace can be narrowed to a subdirectory of where serve started", a
 
   // The forced picker: it covers the window and has no close, because on a
   // first visit there is nothing behind it to go back to.
-  const picker = page.locator(".modal-backdrop").first()
+  const picker = page.locator("dialog.modal").first()
   await expect(picker).toBeVisible({ timeout: 15_000 })
   await expect(picker.locator("button.link", { hasText: "close" })).toHaveCount(0)
   await expect(picker).toContainText(root)
@@ -701,7 +820,7 @@ test("the workspace can be narrowed to a subdirectory of where serve started", a
   // Remembered, so the question is asked once per server rather than per
   // visit.
   await page.reload()
-  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
   await expect(page.locator(".inspector .col-foot .root")).toContainText("crates")
 
   expect(errors, "the page logged errors").toEqual([])
@@ -734,7 +853,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
   const installed = await page.evaluate(async () =>
     (await (await fetch("./api/monaco")).json()).installed)
 
-  await page.click('.chat .acts button[title="Settings"]')
+  await page.click('.inspector .col-foot button[title="Settings"]')
   const monaco = page.locator('.modal .choice button:has-text("Monaco")')
   await expect(monaco).toBeVisible()
 
@@ -748,7 +867,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
 
   await monaco.click()
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
-  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   await page.click('.inspector .tabs button:has-text("Files")')
   await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
@@ -760,7 +879,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
 
   // And switching back disposes it: an editor left attached to a detached
   // element is a leak that only shows up after twenty tab switches.
-  await page.click('.chat .acts button[title="Settings"]')
+  await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .choice button:has-text("This page")')
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
   await expect(page.locator("#monaco-host")).toHaveCount(0)

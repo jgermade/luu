@@ -53,23 +53,6 @@ export const workspace = $reactive({
   /// Set while a fetch for the active tab is in flight, so the viewer can say
   /// so instead of showing the previous file under the new file's name.
   loading: false,
-  /// The file's rows, in the two blocks the viewer renders as two `:each`
-  /// groups: `head` is the first screenful and `tail` is everything after it,
-  /// one frame later.
-  ///
-  /// **Two arrays rather than one that grows.** The file arrives whole and
-  /// already coloured; what costs is the row per line — ~50 µs, measured, with
-  /// or without colour — and jq79 rebuilds an `:each` rather than appending to
-  /// it. A growing array therefore rebuilds the rows already on screen every
-  /// time it grows; two arrays mean the second render touches only the second
-  /// block and the first is never built twice. See the phase 8 sections of
-  /// `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
-  head: [],
-  tail: [],
-  /// How many rows `tail` *will* have, for the spacer that keeps the scrollbar
-  /// the length of the file rather than the length of the first screen while
-  /// the tail is still being built.
-  pending: 0,
   /// Every changed path in the whole base, mapped to git's own two-letter code.
   /// Asked for the base and filtered to the root in the page rather than
   /// parameterised: it is one `git status --porcelain` for a repository either
@@ -171,9 +154,6 @@ export async function chooseRoot(path) {
   workspace.active = null
   workspace.selected = null
   workspace.content = null
-  workspace.head = []
-  workspace.tail = []
-  workspace.pending = 0
   workspace.open = {}
   workspace.expanded = {}
   await openDir(path, true)
@@ -324,9 +304,6 @@ export function closeTab(id) {
     workspace.active = null
     workspace.selected = null
     workspace.content = null
-    workspace.head = []
-    workspace.tail = []
-    workspace.pending = 0
   }
 }
 
@@ -346,28 +323,9 @@ export function activate(id) {
   // A debug tab carries its own text: there is nothing to fetch, because the
   // context panel already had it.
   workspace.content = { kind: "debug", text: tab.text, path: tab.title }
-  workspace.head = []
-  workspace.tail = []
-  workspace.pending = 0
   workspace.loading = false
 }
 
-/// Rows in the first pass: a screenful with room to scroll into, and nothing
-/// to do with the window's real height — a viewer that measures itself has to
-/// decide again on every resize.
-const FIRST_ROWS = 200
-
-/// Fills the second block, one frame after the first one is on screen.
-function showTheRest(id, lines) {
-  if (lines.length <= FIRST_ROWS) return
-  requestAnimationFrame(() => {
-    // Dropped if the viewer moved on while this frame was waiting: these rows
-    // belong to the tab on screen, never to the one that was.
-    if (workspace.active !== id) return
-    workspace.tail = lines.slice(FIRST_ROWS)
-    workspace.pending = 0
-  })
-}
 
 export function showFile(path) {
   return openTab({ id: fileId(path), kind: "file", path, title: basename(path), staged: false })
@@ -391,11 +349,13 @@ async function loadFile(tab) {
     // Dropped if the person clicked something else while this was in flight:
     // the column's tab and its body have to be the same file.
     if (workspace.active !== tab.id) return
+    // The rows themselves are not stored: `content.lines` is what the viewer
+    // paints from, and `rows.js` owns the two passes that put them on screen.
+    // They used to be three reactive fields here — `head`, `tail` and
+    // `pending` — and all three existed only to work around a `:each` that
+    // re-derives its list rather than appending to it. See
+    // `RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`.
     workspace.content = { kind: "file", ...file }
-    workspace.head = file.lines.slice(0, FIRST_ROWS)
-    workspace.tail = []
-    workspace.pending = Math.max(0, file.lines.length - FIRST_ROWS)
-    showTheRest(tab.id, file.lines)
     workspace.error = null
   } catch (e) {
     workspace.content = null
@@ -413,9 +373,6 @@ async function loadDiff(tab) {
     )
     if (workspace.active !== tab.id) return
     workspace.content = { kind: "diff", ...diff }
-    workspace.head = []
-    workspace.tail = []
-    workspace.pending = 0
     workspace.error = null
   } catch (e) {
     workspace.content = null

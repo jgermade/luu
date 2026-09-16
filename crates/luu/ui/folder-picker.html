@@ -10,6 +10,16 @@
   // See `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const { workspace, openDir, browseTo, chooseRoot, closePicker } =
     await import("./workspace.js")
+  const { asModal } = await import("./modal.js")
+
+  // **Forced is locked.** On a first visit there is nothing behind this to go
+  // back to, so `closePicker` refuses — and ESC has to refuse with it, or the
+  // browser would close a dialog the page still believes is open. See
+  // `modal.js`.
+  asModal("folder-dialog", {
+    close: closePicker,
+    locked: () => workspace.picker.forced,
+  })
 
   openDir(workspace.picker.at || "")
 
@@ -34,61 +44,59 @@
   $: here = at || ""
 </script>
 
-<div class="modal-backdrop" @click="closePicker()">
-  <div class="modal narrow" @click="$event.stopPropagation()">
-    <header class="modal-head">
-      <strong>{{ workspace.picker.forced ? "Which folder?" : "Change folder" }}</strong>
+<dialog id="folder-dialog" class="modal narrow" @click.self="closePicker()">
+  <header class="modal-head">
+    <strong>{{ workspace.picker.forced ? "Which folder?" : "Change folder" }}</strong>
+    <button
+      :if="!workspace.picker.forced"
+      type="button"
+      class="link"
+      @click="closePicker()">close</button>
+  </header>
+
+  <section class="modal-body">
+    <p :if="workspace.picker.forced" class="dim small intro">
+      <code>luu serve</code> was started in <code>{{ workspace.base }}</code>.
+      Everything the panels can reach is under it — pick the folder you are
+      working in, or take the whole thing.
+    </p>
+
+    <nav class="crumbs">
       <button
-        :if="!workspace.picker.forced"
+        :each="crumb in crumbs"
+        :key="crumb.path"
         type="button"
-        class="link"
-        @click="closePicker()">close</button>
-    </header>
+        class="crumb"
+        :class.on="crumb.path === here"
+        @click="browseTo(crumb.path)">{{ crumb.name }}</button>
+    </nav>
 
-    <section class="modal-body">
-      <p :if="workspace.picker.forced" class="dim small intro">
-        <code>luu serve</code> was started in <code>{{ workspace.base }}</code>.
-        Everything the panels can reach is under it — pick the folder you are
-        working in, or take the whole thing.
-      </p>
-
-      <nav class="crumbs">
+    <ul class="folders">
+      <li :each="row in folders" :key="row.path">
         <button
-          :each="crumb in crumbs"
-          :key="crumb.path"
           type="button"
-          class="crumb"
-          :class.on="crumb.path === here"
-          @click="browseTo(crumb.path)">{{ crumb.name }}</button>
-      </nav>
+          class="row"
+          :class.ignored="row.ignored"
+          :attrs="{ title: row.path }"
+          @click="browseTo(row.path)">
+          <svg class="ic"><use href="#i-folder"/></svg>
+          <span class="name">{{ row.name }}</span>
+          <svg class="ic caret"><use href="#i-caret"/></svg>
+        </button>
+      </li>
+    </ul>
+    <p :if="!folders.length" class="dim small">
+      Nothing but files in here. Take it, or go back up.
+    </p>
 
-      <ul class="folders">
-        <li :each="row in folders" :key="row.path">
-          <button
-            type="button"
-            class="row"
-            :class.ignored="row.ignored"
-            :attrs="{ title: row.path }"
-            @click="browseTo(row.path)">
-            <svg class="ic"><use href="#i-folder"/></svg>
-            <span class="name">{{ row.name }}</span>
-            <svg class="ic caret"><use href="#i-caret"/></svg>
-          </button>
-        </li>
-      </ul>
-      <p :if="!folders.length" class="dim small">
-        Nothing but files in here. Take it, or go back up.
-      </p>
-
-      <div class="modal-foot">
-        <div class="modal-actions">
-          <span class="chosen small dim">{{ here ? here : "the whole workspace" }}</span>
-          <button type="button" class="save" @click="chooseRoot(here)">Use this folder</button>
-        </div>
+    <div class="modal-foot">
+      <div class="modal-actions">
+        <span class="chosen small dim">{{ here ? here : "the whole workspace" }}</span>
+        <button type="button" class="save" @click="chooseRoot(here)">Use this folder</button>
       </div>
-    </section>
-  </div>
-</div>
+    </div>
+  </section>
+</dialog>
 
 <style scoped>
   .intro { margin: 0 0 .8rem; line-height: 1.6; }

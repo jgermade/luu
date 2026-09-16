@@ -10,6 +10,7 @@
     await import("./workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel } =
     await import("./ui.js")
+  const { modalOpen } = await import("./modal.js")
 
   // The panes' contents and the page's modals, each its own file — see
   // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` and
@@ -129,6 +130,13 @@
     renaming = true
     nameDraft = sessionName
   }
+  // Dropped rather than committed. `commitRename` runs on blur too, and taking
+  // the field away is a blur — so this clears the flag first and that call
+  // returns on its own guard.
+  const cancelRename = () => {
+    renaming = false
+    nameDraft = ""
+  }
   const commitRename = async () => {
     if (!renaming) return
     renaming = false
@@ -136,6 +144,35 @@
     if (!asked || asked === sessionName) return
     await renameSession(state.currentSessionId, asked)
   }
+
+  // ---- ESC -------------------------------------------------------------
+  //
+  // One key, and what it means depends on what is open. The list is in the
+  // order a person would undo things: the innermost thing on screen first, and
+  // the columns last, because moving them is not cancelling anything — it is
+  // what ESC does when there is nothing left to cancel.
+  //
+  // **A modal is not in the list.** `<dialog>` cancels itself on ESC, and this
+  // returns rather than acting so that one keypress does not both close the
+  // settings and swap the column underneath it. See `modal.js`.
+  //
+  // A *running turn* is deliberately not in the list either: it is the one
+  // cancellable thing on this page whose undo costs work, and ESC is too easy
+  // to hit for that. The composer's own button stays the way to stop one.
+  const onKeydown = event => {
+    if (event.key !== "Escape") return
+    if (modalOpen()) return
+    if (ui.history) return closeHistory()
+    if (renaming) return cancelRename()
+    if (armedClose) {
+      armedClose = ""
+      return
+    }
+    // Three columns are all on screen, so there is nothing to swap.
+    if (columns !== 2) return
+    setPane(prefs.pane === "chat" ? "content" : "chat")
+  }
+  document.addEventListener("keydown", onKeydown)
 
   // ---- the gate, answered once ------------------------------------------
   //
@@ -271,6 +308,13 @@
        what the first person to meet them read as a broken tree. -->
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zm0 0v5h5"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.8a2 2 0 0 1 1.7.9l1 1.6H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <!-- The pencil the tree shows on hover. Two strokes rather than one outline:
+       the body, and the ferrule across it, which is what reads as a pencil at
+       13px instead of as a diagonal bar. -->
+  <symbol id="i-edit" viewBox="0 0 24 24">
+    <path d="M4 20h4.2L19.6 8.6a2.3 2.3 0 0 0-3.2-3.2L5 16.8z"/>
+    <path d="M14.9 6.9l3.2 3.2"/>
+  </symbol>
   <!-- The chat's head and the settings rail. A clock for the sessions that
        happened, a cog for the settings, two sliders for what is general about
        this browser, a stack for what this server sends to, and a paperclip for
@@ -337,6 +381,13 @@
         <span>{{ rootLabel }}</span>
       </button>
       <span class="status" :class="state.status">{{ state.status }}</span>
+      <!-- Settings, in the column that is always on screen rather than in the
+           chat's head — which is the one head that disappears when two columns
+           show the content instead. -->
+      <button type="button" class="cog" title="Settings"
+              @click="openSettingsAt('general')">
+        <svg class="ic"><use href="#i-cog"/></svg>
+      </button>
     </footer>
   </aside>
 
@@ -419,8 +470,6 @@
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
         <button type="button" title="Earlier sessions"
                 @click="ui.history ? closeHistory() : openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
-        <button type="button" title="Settings"
-                @click="openSettingsAt('general')"><svg class="ic"><use href="#i-cog"/></svg></button>
         <button
           :if="columns === 2"
           type="button"
@@ -841,6 +890,21 @@
   .root .ic { width: 13px; height: 13px; flex: none; }
   .root span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status { margin-left: auto; flex: none; font-size: 12px; color: var(--dim); }
+  /* At the far right of the foot, past the status. It used to be one of the
+     chat's `.acts` and needs its own rule here, because those are styled as a
+     group. */
+  .cog {
+    display: flex;
+    flex: none;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    padding: .2rem;
+    cursor: pointer;
+  }
+  .cog:hover { color: var(--fg); background: var(--bg); }
+  .cog .ic { width: 14px; height: 14px; }
   .status.running { color: var(--accent); }
   .status.replay { color: var(--warn); }
   .status.closed { color: var(--bad); }

@@ -1,0 +1,62 @@
+{
+  "before": {
+    "serve.rs": {
+      "lines": 3947,
+      "first": 204,
+      "whole": 969,
+      "nodes": 25601,
+      "rows": 3947,
+      "scrollHeight": 71062,
+      "heapMB": 444
+    },
+    "store.js": {
+      "lines": 1036,
+      "first": 82,
+      "whole": 285,
+      "nodes": 7509,
+      "rows": 1036,
+      "scrollHeight": 18664,
+      "heapMB": 137.6
+    }
+  },
+  "html": {
+    "serve.rs": {
+      "lines": 3947,
+      "first": 191,
+      "whole": 514,
+      "nodes": 25602,
+      "rows": 3947,
+      "scrollHeight": 71062,
+      "heapMB": 45.2
+    },
+    "store.js": {
+      "lines": 1036,
+      "first": 66,
+      "whole": 159,
+      "nodes": 7510,
+      "rows": 1036,
+      "scrollHeight": 18664,
+      "heapMB": 10.6
+    }
+  },
+  "dom": {
+    "serve.rs": {
+      "lines": 3947,
+      "first": 191,
+      "whole": 512,
+      "nodes": 25602,
+      "rows": 3947,
+      "scrollHeight": 71062,
+      "heapMB": 13.1
+    },
+    "store.js": {
+      "lines": 1036,
+      "first": 66,
+      "whole": 158,
+      "nodes": 7510,
+      "rows": 1036,
+      "scrollHeight": 18664,
+      "heapMB": 14
+    }
+  }
+}
