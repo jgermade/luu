@@ -30,7 +30,10 @@ landlock = "0.4"
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 mime_guess = "2"
-rust-embed = "8"
+# `include-exclude` is what lets the UI folder keep a gitignored
+# `node_modules` — Monaco is a node dependency of it, served from disk rather
+# than baked into a release binary. See `serve::Ui`.
+rust-embed = { version = "8", features = ["include-exclude"] }
 # `bundled`: SQLite compiled in, so the store does not depend on what the host
 # happens to have installed. Local-first applied to the one dependency that
 # would otherwise be a system package.

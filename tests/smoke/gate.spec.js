@@ -127,21 +127,25 @@ test.afterAll(() => {
 })
 
 /**
- * Closes the first-run dialog if this page gets one.
+ * Answers the folder question, which is the first thing a fresh browser gets.
  *
- * Two legitimate states, and which one a test sees depends on what ran before
- * it: the dialog opens only once the page has heard the protocol say hello and
- * asked whether anything is configured, and a session started by an earlier
- * test answers yes. So it is neither "always there" (an immediate
- * `isVisible()` also misses it while it is still being decided, and then its
- * backdrop swallows every later click) nor "never there".
+ * The picker covers the window and **has no close**: on a first visit there is
+ * nothing behind it to go back to, so the only way out is choosing. Every test
+ * below takes the whole workspace, because the tree they assert against is this
+ * checkout. See
+ * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+ *
+ * Waited for rather than polled: it opens a beat after the socket says hello,
+ * and a check that ran before that left it to pop open later over the panel
+ * being clicked. Tolerant of it being absent, because Playwright reuses a
+ * browser context and the choice is remembered in `localStorage`.
  */
-async function dismissFirstRun(page) {
-  const modal = page.locator(".modal-backdrop").first()
-  await modal.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
-  if (await modal.isVisible()) {
-    await modal.locator("button.link", { hasText: "close" }).click()
-    await expect(modal).toBeHidden()
+async function chooseFolder(page) {
+  const picker = page.locator(".modal-backdrop").first()
+  await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
+  if (await picker.isVisible()) {
+    await picker.locator('button:has-text("Use this folder")').click()
+    await expect(picker).toBeHidden()
   }
 }
 
@@ -152,17 +156,26 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
     if (message.type() === "error") errors.push(`console: ${message.text()}`)
   })
 
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator("header strong")).toHaveText("luu")
+  // The logo, which is also the control that goes back to the chat. It is in
+  // the inspector's head since the page-wide `<header>` came out — that header
+  // was a strip of other columns' controls. See
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
 
-  // The first run: nothing in `config.toml` says where this machine sends, so
-  // the page opens on the editor rather than on a chat box that would answer
-  // from the mock without saying so.
-  const modal = page.locator(".modal-backdrop").first()
-  await expect(modal).toBeVisible({ timeout: 15_000 })
+  // The first thing a fresh browser is asked: which folder.
+  await chooseFolder(page)
+
+  // The first run's other half: nothing in `config.toml` says where this
+  // machine sends. It is said in Settings → Models rather than by a modal that
+  // opens itself, because on a first visit that would be the second dialog
+  // over a folder question that cannot be dismissed.
+  await page.click('.chat .acts button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
   await expect(page.locator(".first-run")).toBeVisible()
-  await modal.locator("button.link", { hasText: "close" }).click()
-  await expect(modal).toBeHidden()
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
 
   // The prompt is held, unrun, until somebody answers for it.
   const composer = page.locator(".composer input")
@@ -251,14 +264,9 @@ test("the inspector can be pointed at a turn that has ended", async ({ page }) =
   // Reloaded, so the history comes from `/api/sessions/live` rather than from
   // messages this page watched go by. Both fill the same panel and only one of
   // them survives a refresh.
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  // The same first run as above, and waited for rather than polled: it opens a
-  // beat after the socket says hello, and a check that ran before that left it
-  // to pop open later over the panel being clicked.
-  const modal = page.locator(".modal-backdrop").first()
-  await expect(modal).toBeVisible({ timeout: 15_000 })
-  await modal.locator("button.link", { hasText: "close" }).click()
-  await expect(modal).toBeHidden()
+  await chooseFolder(page)
 
   const picker = page.locator(".turn-picker select")
   await expect(picker.locator("option")).toHaveText(["live", "turn 1", "turn 2"])
@@ -292,22 +300,25 @@ test("the inspector can be pointed at a turn that has ended", async ({ page }) =
  * `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
  */
 test("a session is started on a posture, and the page says which", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  const modal = page.locator(".modal-backdrop").first()
-  await expect(modal).toBeVisible({ timeout: 15_000 })
+  await chooseFolder(page)
 
-  // The server's own policy file, before anything is chosen.
+  // The server's own policy file, before anything is chosen. In Settings →
+  // Models, which is where what this server resolved now lives.
+  await page.click('.chat .acts button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
   await expect(page.locator("dt", { hasText: "Posture" }).first()).toBeVisible()
   await expect(page.locator(".settings dd").filter({ hasText: "this server's own" }))
     .toBeVisible()
-  await modal.locator("button.link", { hasText: "close" }).click()
-  await expect(modal).toBeHidden()
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
 
-  // The "+" at the end of the session tab strip. Sessions became tabs over
-  // the chat column in
-  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`; this used to be a
-  // `+ New` button beside a dropdown in the header.
-  await page.click(".session-tabs .tab.new")
+  // The "+" in the chat's head. Sessions were a tab strip over the chat
+  // column (`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`) and before that
+  // a `+ New` button beside a dropdown in the page header; one session is on
+  // screen, so the head names it and the strip became the history popover.
+  await page.click('.chat .acts button[title*="New session"]')
   const starter = page.locator(".modal.narrow")
   await expect(starter).toBeVisible()
 
@@ -323,10 +334,13 @@ test("a session is started on a posture, and the page says which", async ({ page
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
 
-  // And it is in force: the modal's first section is what this server
-  // resolved, and it resolved the file the posture named.
-  await page.click('header button.tag-btn >> nth=0')
+  // And it is in force: Models opens on what this server resolved, and it
+  // resolved the file the posture named. Reached from the composer's second
+  // row, which is where the destination is reported now — the two tags that
+  // used to be in the page header.
+  await page.click(".options .dest")
   await expect(page.locator(".modal-backdrop").first()).toBeVisible()
+  await expect(page.locator(".modal .rail button.on")).toHaveText("Models")
   const said = page.locator(".settings")
   await expect(said).toContainText("wide")
   await expect(said).toContainText("network allowed")
@@ -334,55 +348,119 @@ test("a session is started on a posture, and the page says which", async ({ page
 })
 
 /**
- * The three-pane shell itself: the rails, the mode switch that chooses what
- * the left one shows, and the session tabs over the chat column. The layout
- * carries the panels every later phase of
+ * The shell itself: the three columns, the switch that chooses what the left
+ * one shows, and the chat's head. The layout carries the panels every later
+ * phase of
  * `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` adds, so a column that
  * silently stopped rendering is worth catching here rather than in the
  * phase that builds against it.
  */
-test("the three panes are there, and the inspector switches between its modes", async ({ page }) => {
-  // Wide enough for all three: the middle column is dropped under 64rem, and
-  // the default viewport sits right on that edge.
+test("the three columns are there, each with a head and a foot", async ({ page }) => {
+  // Wide enough for all three: below 1260 the second column switches between
+  // content and chat instead, which the test after this one is about.
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await dismissFirstRun(page)
+  await chooseFolder(page)
 
-  await expect(page.locator(".split .inspector")).toBeVisible()
-  await expect(page.locator(".split .viewer")).toBeVisible()
-  await expect(page.locator(".split .chat")).toBeVisible()
+  await expect(page.locator(".app")).toHaveAttribute("data-columns", "3")
+  await expect(page.locator(".col.inspector")).toBeVisible()
+  await expect(page.locator(".col.content")).toBeVisible()
+  await expect(page.locator(".col.chat")).toBeVisible()
+  // The skeleton every column now shares, and the reason the page-wide header
+  // came out: three heads and three feet, all the same height.
+  await expect(page.locator(".col-head")).toHaveCount(3)
+  await expect(page.locator(".col-foot")).toHaveCount(3)
+  const heights = await page.locator(".col-head, .col-foot").evaluateAll(
+    nodes => nodes.map(node => Math.round(node.getBoundingClientRect().height)),
+  )
+  // Five at 40 and one at 80: the chat's foot is two rows, and that is the
+  // only exception.
+  expect(heights.filter(h => h === 40)).toHaveLength(5)
+  expect(heights.filter(h => h === 80)).toHaveLength(1)
+  // The page-wide `<header>` is gone, and staying gone is the point.
+  await expect(page.locator("#app > header, .app > header")).toHaveCount(0)
 
-  // Debug is the default mode, and it is the panel that used to be the whole
+  // Debug is the default panel, and it is the one that used to be the whole
   // right column: its turn picker is the cheapest proof it actually mounted.
-  await expect(page.locator(".inspector .modes button.on")).toHaveText("Debug")
+  await expect(page.locator(".inspector .tabs button.on")).toHaveText("Debug")
   await expect(page.locator(".inspector .turn-picker")).toBeVisible()
 
   // The other two mount and replace it. What each one *shows* is asserted by
   // its own test below; this is about the switch.
-  await page.click('.inspector .modes button:has-text("Files")')
+  await page.click('.inspector .tabs button:has-text("Files")')
   await expect(page.locator(".inspector .tree")).toBeVisible({ timeout: 15_000 })
   await expect(page.locator(".inspector .turn-picker")).toBeHidden()
 
-  await page.click('.inspector .modes button:has-text("Git")')
+  await page.click('.inspector .tabs button:has-text("Git")')
   await expect(page.locator(".inspector h2")).toHaveText("Git")
   await expect(page.locator(".inspector .tree")).toBeHidden()
 
-  await page.click('.inspector .modes button:has-text("Debug")')
+  await page.click('.inspector .tabs button:has-text("Debug")')
   await expect(page.locator(".inspector .turn-picker")).toBeVisible()
 
-  // One tab per session, the live one marked, and the one that starts another.
-  const tabs = page.locator(".session-tabs .tab")
-  await expect(tabs.first()).toBeVisible()
-  await expect(page.locator(".session-tabs .tab.on")).toHaveCount(1)
-  // Drawn rather than typed since phase 7 of the same record — this used to
-  // assert the text "+". Every symbol on the page is a `<use>` of the sprite
-  // in `app.html`, so a sprite that stopped rendering blanks all of them at
-  // once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(7)
-  await expect(page.locator('.session-tabs .tab.new use[href="#i-plus"]')).toHaveCount(1)
-  // The live session cannot be deleted — the server refuses it — so the tab
-  // that is on carries no ×.
-  await expect(page.locator(".session-tabs .tab.on .close")).toHaveCount(0)
+  // The chat's head: the session's name, and the three controls beside it.
+  // One session is on screen, so the strip of tabs became a name in words and
+  // a history popover — see
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  await expect(page.locator(".chat .name")).not.toBeEmpty()
+  await expect(page.locator(".chat .acts button")).toHaveCount(3)
+  // Drawn rather than typed since phase 7 of the three-pane record — this used
+  // to assert the text "+". Every symbol on the page is a `<use>` of the
+  // sprite in `app.html`, so a sprite that stopped rendering blanks all of
+  // them at once and is worth one assertion of its own.
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(13)
+  await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
+
+  // The history is the old strip. The live session cannot be deleted — the
+  // server refuses it — so the row that is on carries no ×.
+  await page.click('.chat .acts button[title="Earlier sessions"]')
+  await expect(page.locator(".chat .history .row").first()).toBeVisible()
+  await expect(page.locator(".chat .history .row.on")).toHaveCount(1)
+  await expect(page.locator(".chat .history .row.on .close")).toHaveCount(0)
+})
+
+/**
+ * Below 1260px there are two columns and the second one is a choice rather
+ * than a casualty. The layout this replaced dropped the content column at
+ * 64rem and gave no way to get it back, which answered *which two columns*
+ * with the viewport instead of with the person. See
+ * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+ */
+test("under 1260px the second column switches between content and chat", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  await expect(page.locator(".app")).toHaveAttribute("data-columns", "2")
+  await expect(page.locator(".col.inspector")).toBeVisible()
+  // Exactly one of the two, never both and never neither.
+  const second = page.locator(".col.content, .col.chat")
+  await expect(second).toHaveCount(1)
+
+  // Whichever it is, its head carries the way to the other one.
+  await page.click(".col-head .swap")
+  await expect(second).toHaveCount(1)
+  await page.click(".col-head .swap")
+  await expect(second).toHaveCount(1)
+
+  // Opening something in the content column switches to it: the click already
+  // said which column the person wants, and having nothing happen is the bug
+  // this rule exists to prevent.
+  await page.click(".logo")
+  await expect(page.locator(".col.chat")).toBeVisible()
+  await page.click('.inspector .tabs button:has-text("Files")')
+  await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
+  await page.click('.inspector .tree .row:has-text("luu.toml")')
+  await expect(page.locator(".col.content")).toBeVisible()
+  await expect(page.locator(".col.chat")).toHaveCount(0)
+
+  // And the logo is the way back, which is what it means in both layouts.
+  await page.click(".logo")
+  await expect(page.locator(".col.chat")).toBeVisible()
+
+  // Three columns again the moment there is room.
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(page.locator(".app")).toHaveAttribute("data-columns", "3")
 })
 
 /**
@@ -404,9 +482,9 @@ test("the files panel lists the workspace, and a file opens in the viewer", asyn
   })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await dismissFirstRun(page)
+  await chooseFolder(page)
 
-  await page.click('.inspector .modes button:has-text("Files")')
+  await page.click('.inspector .tabs button:has-text("Files")')
   const rows = page.locator(".inspector .tree .row")
   await expect(rows.first()).toBeVisible({ timeout: 15_000 })
   // `luu.toml` is in every checkout; `target/` is ignored in every checkout
@@ -415,10 +493,10 @@ test("the files panel lists the workspace, and a file opens in the viewer", asyn
   await expect(page.locator(".inspector .tree .row.ignored").first()).toBeVisible()
 
   await page.click('.inspector .tree .row:has-text("luu.toml")')
-  await expect(page.locator(".viewer .path")).toHaveText("luu.toml")
+  await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")
   // The real file's first line, so this fails if the viewer renders someone
   // else's bytes under that name.
-  await expect(page.locator(".viewer .code li").first())
+  await expect(page.locator(".content .code li").first())
     .toContainText("luu's own sandbox")
 
   // A directory opens in place rather than replacing the tree.
@@ -437,13 +515,13 @@ test("the git panel lists changes, and one opens as a diff of hunks", async ({ p
   })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await dismissFirstRun(page)
+  await chooseFolder(page)
 
-  await page.click('.inspector .modes button:has-text("Git")')
+  await page.click('.inspector .tabs button:has-text("Git")')
   const changes = page.locator(".inspector .changes .row")
   // A clean checkout is a legitimate state, and then there is nothing to
   // click — the panel says so and this test has made its point either way.
-  const empty = page.locator(".inspector .mode-body p", { hasText: "Nothing changed" })
+  const empty = page.locator(".inspector .col-main p", { hasText: "Nothing changed" })
   await expect(changes.first().or(empty)).toBeVisible({ timeout: 15_000 })
 
   if (await changes.count()) {
@@ -451,14 +529,14 @@ test("the git panel lists changes, and one opens as a diff of hunks", async ({ p
     // and trimming it made every unstaged file look staged.
     await expect(page.locator(".inspector .changes .code").first()).toHaveText(/^[ MADRCU?!]{2}$/)
     await changes.first().click()
-    await expect(page.locator(".viewer .path")).not.toBeEmpty()
+    await expect(page.locator(".content .col-foot .path")).not.toBeEmpty()
     // Either hunks, or the note that says why there are none (an untracked
     // file has no diff). An empty panel with neither is the failure.
-    const hunks = page.locator(".viewer .hunk").first()
-    const note = page.locator(".viewer .diff .pad")
+    const hunks = page.locator(".content .hunk").first()
+    const note = page.locator(".content .diff .pad")
     await expect(hunks.or(note)).toBeVisible({ timeout: 15_000 })
     // Both sides are reachable, which is the whole reason the toggle is there.
-    await expect(page.locator('.viewer .which button:has-text("staged")')).toBeVisible()
+    await expect(page.locator('.content .col-foot .which button:has-text("staged")')).toBeVisible()
   }
 
   expect(errors, "the page logged errors").toEqual([])
@@ -479,9 +557,9 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await dismissFirstRun(page)
+  await chooseFolder(page)
 
-  await page.click('.inspector .modes button:has-text("Files")')
+  await page.click('.inspector .tabs button:has-text("Files")')
   await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
   // No `[ui] icon-theme` in this server's config, so: no theme art, and the
   // page's own shape on every row instead of a column of nothing. Which of
@@ -500,7 +578,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     const { showFile } = await import("./workspace.js")
     await showFile("crates/luu/src/highlight.rs")
   })
-  await expect(page.locator(".viewer .lang")).toHaveText("rust")
+  await expect(page.locator(".content .col-foot .lang")).toHaveText("rust")
   // Longer than the viewer's first block, which is what makes this worth
   // asserting: the page renders a screenful and fills in the rest one frame
   // later, so a tail that never arrives leaves a file that looks whole and is
@@ -509,21 +587,184 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   const rows = await page.evaluate(async () =>
     (await import("./workspace.js")).workspace.content.lines.length)
   expect(rows, "this file is meant to outrun the first block").toBeGreaterThan(200)
-  await expect(page.locator(".viewer .code li")).toHaveCount(rows)
+  await expect(page.locator(".content .code li")).toHaveCount(rows)
   // Three captures that any Rust file has, so this fails if the grammar stops
   // loading or the chunks stop carrying their kind.
-  await expect(page.locator(".viewer code.hl-keyword").first()).toBeVisible()
-  await expect(page.locator(".viewer code.hl-comment").first()).toBeVisible()
-  await expect(page.locator(".viewer code.hl-string").first()).toBeVisible()
+  await expect(page.locator(".content code.hl-keyword").first()).toBeVisible()
+  await expect(page.locator(".content code.hl-comment").first()).toBeVisible()
+  await expect(page.locator(".content code.hl-string").first()).toBeVisible()
 
   // A file with no grammar takes the same path out: lines, no language.
   await page.evaluate(async () => {
     const { showFile } = await import("./workspace.js")
     await showFile("Makefile")
   })
-  await expect(page.locator(".viewer .path")).toHaveText("Makefile")
-  await expect(page.locator(".viewer .lang")).toHaveCount(0)
-  await expect(page.locator(".viewer .code li").first()).toBeVisible()
+  await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
+  await expect(page.locator(".content .col-foot .lang")).toHaveCount(0)
+  await expect(page.locator(".content .code li").first()).toBeVisible()
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The content column holds more than one thing at a time. Before this it held
+ * exactly one and forgot it: `showFile` and `showDiff` overwrote the selection,
+ * so opening a diff lost the file on screen with no way back that did not go
+ * through the tree again. See
+ * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+ */
+test("the content column keeps one tab per open thing", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  // Nothing open is a state the column says out loud rather than showing as a
+  // blank strip.
+  await expect(page.locator(".content .tabs.files .none")).toBeVisible()
+
+  await page.click('.inspector .tabs button:has-text("Files")')
+  await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
+  await page.click('.inspector .tree .row:has-text("luu.toml")')
+  await expect(page.locator(".content .tabs.files .tab")).toHaveCount(1)
+  await page.click('.inspector .tree .row:has-text("Makefile")')
+  await expect(page.locator(".content .tabs.files .tab")).toHaveCount(2)
+
+  // The second one is what the column is showing, and the foot says which.
+  await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText("Makefile")
+  await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
+
+  // And the first is still there to go back to, which is the whole point.
+  await page.click('.content .tabs.files .tab:has-text("luu.toml") .pick')
+  await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")
+  await expect(page.locator(".content .code li").first()).toContainText("luu's own sandbox")
+
+  // Opening the same file again focuses the tab rather than adding a second.
+  await page.click('.inspector .tree .row:has-text("luu.toml")')
+  await expect(page.locator(".content .tabs.files .tab")).toHaveCount(2)
+
+  // Closing the active one lands on its neighbour rather than on nothing.
+  await page.hover(".content .tabs.files .tab.on")
+  await page.click(".content .tabs.files .tab.on .close")
+  await expect(page.locator(".content .tabs.files .tab")).toHaveCount(1)
+  await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The folder the panels are rooted at, chosen under the one `luu serve` was
+ * started in. Nothing here widens anything — every path still resolves through
+ * `Sandbox::check_path` against that base, and the root is a prefix the page
+ * narrows what it *lists* by. See
+ * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+ */
+test("the workspace can be narrowed to a subdirectory of where serve started", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+
+  // The forced picker: it covers the window and has no close, because on a
+  // first visit there is nothing behind it to go back to.
+  const picker = page.locator(".modal-backdrop").first()
+  await expect(picker).toBeVisible({ timeout: 15_000 })
+  await expect(picker.locator("button.link", { hasText: "close" })).toHaveCount(0)
+  await expect(picker).toContainText(root)
+  // Directories only: this chooses where a tree starts, and a file is not a
+  // place a tree can start.
+  await expect(picker.locator(".folders .row")).not.toHaveCount(0)
+  await expect(picker.locator('.folders .row:has-text("Cargo.toml")')).toHaveCount(0)
+
+  await picker.locator('.folders .row:has-text("crates")').click()
+  await expect(picker.locator(".crumbs .crumb")).toHaveCount(2)
+  await picker.locator('button:has-text("Use this folder")').click()
+  await expect(picker).toBeHidden()
+
+  // The tree starts there, and the foot says so.
+  await expect(page.locator(".inspector .col-foot .root")).toContainText("crates")
+  await page.click('.inspector .tabs button:has-text("Files")')
+  const rows = page.locator(".inspector .tree .row")
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 })
+  await expect(rows.filter({ hasText: "agent-core" })).toHaveCount(1)
+  // And what is above it is not listed: `luu.toml` is in the base, not in
+  // `crates/`.
+  await expect(rows.filter({ hasText: "luu.toml" })).toHaveCount(0)
+
+  // Remembered, so the question is asked once per server rather than per
+  // visit.
+  await page.reload()
+  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
+  await expect(page.locator(".inspector .col-foot .root")).toContainText("crates")
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The optional editor, in whichever state this checkout is in.
+ *
+ * Monaco is an npm dependency of `crates/luu/ui`, gitignored and excluded from
+ * the embedded UI, so *not installed* is the ordinary state for a checkout that
+ * ran `cargo build` and nothing else — and it is the state CI is in. Both halves
+ * are asserted because both are real: the setting says why it is unavailable, or
+ * it works. Neither is a skip, because a skipped test is a test that is not
+ * there. See
+ * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+ */
+test("the editor setting offers Monaco where it is installed and says so where it is not", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  // The server answers the question rather than the page reading a 404 off a
+  // missing file — which works, and logs a console error on every visit of
+  // every checkout without it.
+  const installed = await page.evaluate(async () =>
+    (await (await fetch("./api/monaco")).json()).installed)
+
+  await page.click('.chat .acts button[title="Settings"]')
+  const monaco = page.locator('.modal .choice button:has-text("Monaco")')
+  await expect(monaco).toBeVisible()
+
+  if (!installed) {
+    await expect(monaco).toBeDisabled()
+    await expect(page.locator(".modal .caveat", { hasText: "Monaco is not installed" }))
+      .toBeVisible()
+    expect(errors, "the page logged errors").toEqual([])
+    return
+  }
+
+  await monaco.click()
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator(".modal-backdrop")).toHaveCount(0)
+
+  await page.click('.inspector .tabs button:has-text("Files")')
+  await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
+  await page.click('.inspector .tree .row:has-text("Makefile")')
+
+  // It draws instead of this page's viewer, not beside it.
+  await expect(page.locator("#monaco-host .view-line").first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator(".content .code li")).toHaveCount(0)
+
+  // And switching back disposes it: an editor left attached to a detached
+  // element is a leak that only shows up after twenty tab switches.
+  await page.click('.chat .acts button[title="Settings"]')
+  await page.click('.modal .choice button:has-text("This page")')
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator("#monaco-host")).toHaveCount(0)
+  await expect(page.locator(".content .code li").first()).toBeVisible()
 
   expect(errors, "the page logged errors").toEqual([])
 })

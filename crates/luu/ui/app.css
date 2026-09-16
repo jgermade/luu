@@ -5,6 +5,10 @@
    menu and remembered in `localStorage` — see
    RECORD/2026-09-15.a-three-pane-inspector.WIP.md. */
 :root {
+  /* One number for every column head and every column foot on the page. The
+     chat's foot is twice it, and that is the only exception — see
+     RECORD/2026-09-16.three-columns-that-each-have-a-footer.WIP.md. */
+  --chrome-h: 40px;
   --bg: #14161a;
   --panel: #1b1e24;
   --line: #2b3038;
@@ -108,7 +112,9 @@ body {
   font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-#app { display: block; height: 100vh; }
+/* `dvh` rather than `vh`: a mobile browser's toolbar is the difference between
+   a page that fits and one whose footer is under the chrome. */
+#app { display: block; height: 100dvh; }
 
 /* ---- the page's own symbols ---------------------------------------------
    One sprite of `<symbol>`s lives at the top of `app.html`; this is the box
@@ -137,19 +143,13 @@ body {
 /* `▾` and `▸` were two codepoints for one control. This is one shape, turned. */
 .ic.open { transform: rotate(90deg); transform-origin: center; }
 
-/* ---- the configuration modal --------------------------------------------
-   Two sections that are not the same kind of thing: what this server resolved
-   (fixed for its lifetime) and the file the next run will read. The styling
-   keeps them apart on purpose — the first reads as a report, the second as a
-   form. See RECORD/2026-09-07.configuring-from-the-browser.completed.md. */
-.tag-btn {
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.tag-btn:hover { border-color: var(--accent); color: var(--fg); }
-
+/* ---- the modals ---------------------------------------------------------
+   Settings is sections down the side rather than one scroll, because the
+   sections are not steps; inside Models, what this server resolved (fixed for
+   its lifetime) and the file the next run will read are styled apart on
+   purpose — the first reads as a report, the second as a form. See
+   RECORD/2026-09-07.configuring-from-the-browser.completed.md and
+   RECORD/2026-09-16.three-columns-that-each-have-a-footer.WIP.md. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -199,12 +199,27 @@ body {
 .settings dt { color: var(--dim); }
 .settings dd { margin: 0; display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; }
 .settings dd.caveat, .caveat {
+  /* `display: block`, against the `dd` rule above it: a caveat is a *sentence*,
+     and a flex container turns every `<b>` and `<code>` in one into an item
+     that wraps on its own — which reads as a line break in the middle of a
+     clause. The `dd`s above are rows of facts and stay flex. */
+  display: block;
   grid-column: 2;
   color: var(--warn);
   font-size: 12px;
   line-height: 1.4;
 }
 .settings .warn { color: var(--warn); }
+/* The same shape as a caveat and not the same colour: `--warn` means *this may
+   not be what you think*, and a settings panel where every explanation is
+   yellow has spent the one colour that was supposed to stand out. */
+.settings dd.note, .note {
+  display: block;
+  grid-column: 2;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .sandbox {
   margin: 0;
   font-size: 11px;

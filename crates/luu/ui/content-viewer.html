@@ -1,8 +1,16 @@
 <script :setup>
-  // The middle column: whatever the Inspector selected. A file's text, or a
-  // diff's hunks — already classified per line by the server, so nothing here
-  // parses a patch. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
-  const { workspace, showDiff, showFile } = await import("./workspace.js")
+  // The content column's *body*. A file's text, a diff's hunks, or a block of
+  // debug text — already classified per line by the server, so nothing here
+  // parses a patch.
+  //
+  // The tabs above it and the facts below it are the column's chrome and belong
+  // to `app.html`, which owns all three columns' heads and feet so that they
+  // are the same 40px. This file draws what is inside the box. See
+  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` and
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  const { workspace } = await import("./workspace.js")
+  const { prefs, monacoAvailable } = await import("./prefs.js")
+  const { paint, dispose, textOf } = await import("./monaco.js")
 
   $: shown = workspace.content
   // `picked` rather than `selected`, and the name is load-bearing: a scope
@@ -12,6 +20,53 @@
   // file, so this cost half an hour to find. See
   // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
   $: picked = workspace.selected
+
+  // ---- the optional editor ----------------------------------------------
+  //
+  // Whether Monaco is on this machine is whether `npm install` was run in this
+  // directory, so the answer cannot change while the page is open and is cached
+  // after the first ask. Until it answers, and forever on a machine that has
+  // none, the own viewer draws — which is the honest state rather than a
+  // failure.
+  let monacoHere = false
+  let monacoBroken = false
+  // Asked only where the answer is needed: a page that probed on every visit
+  // would log a 404 on every visit of every checkout without it, which is most
+  // of them.
+  $: probed = prefs.editor === "monaco"
+    ? monacoAvailable().then(found => { monacoHere = found })
+    : null
+
+  // Monaco is attached to a plain element by id rather than through a lifecycle
+  // hook: the element is the one thing both sides can name, and a viewer that
+  // needed a framework hook to exist would be a viewer that broke the day the
+  // template moved. If the host is not there, or Monaco refuses, `monacoBroken`
+  // sends the column back to the viewer that always works.
+  const draw = content => {
+    if (!content || content.kind !== "file") return ""
+    requestAnimationFrame(async () => {
+      const host = document.getElementById("monaco-host")
+      if (!host) return
+      const dark = document.documentElement.getAttribute("data-theme") !== "light"
+      const ok = await paint(host, {
+        text: textOf(content.lines),
+        language: content.language,
+        dark,
+      })
+      if (!ok) monacoBroken = true
+    })
+    return `${content.path}`
+  }
+
+  // Three conditions and they are not one: what somebody chose, what this
+  // machine has, and whether it worked. Collapsing them would mean a checkout
+  // without Monaco showing an empty box because a setting said so.
+  $: monacoing =
+    prefs.editor === "monaco" && monacoHere && !monacoBroken && shown?.kind === "file"
+  // Disposed the moment the column stops using it: an editor left attached to a
+  // detached element is a leak that only shows up after twenty tab switches.
+  $: attached = monacoing ? draw((prefs.theme, shown)) : (dispose(), "")
+
   // The server sends one list of chunks per line, already cut and classified —
   // never offsets, which would be Rust byte indices read as JavaScript UTF-16
   // ones. Line numbers are the page's own, because they are a fact about the
@@ -24,48 +79,26 @@
 
 <div :if="!picked" class="placeholder">
   <p class="dim">
-    A file, a diff, or an expanded detail shows here — whatever the
-    Inspector on the left has selected.
+    A file, a diff or a debug block shows here — whatever the Inspector on the
+    left opened.
   </p>
   <p class="dim small">
-    Click a file in <b>Files</b>, or a change in <b>Git</b>.
+    Click a file in <b>Files</b>, or a change in <b>Git</b>. Each one opens a
+    tab above, so looking at a diff no longer loses the file you were reading.
   </p>
-</div>
-
-<div :if="picked" class="viewer-head">
-  <span class="path">{{ picked?.path }}</span>
-  <span :if="shown?.language" class="lang small dim">{{ shown?.language }}</span>
-  <!-- How much of the file this is, not just that it is not all of it: the
-       server counts the lines before it cuts, so the panel can say what it is
-       leaving out instead of leaving the reader to wonder. -->
-  <span :if="shown?.truncated" class="warn small">
-    cut at 512 KB — {{ shown?.lines.length }} of {{ shown?.total_lines }} lines
-  </span>
-  <!-- Both diffs of the same file, because "staged" and "unstaged" are two
-       different answers and a panel that shows one silently is a panel that
-       lies by omission when the other exists. -->
-  <span :if="picked?.kind === 'diff'" class="which">
-    <button type="button" :class.on="!picked?.staged" @click="showDiff(picked?.path, false)">working tree</button>
-    <button type="button" :class.on="picked?.staged" @click="showDiff(picked?.path, true)">staged</button>
-  </span>
-  <button
-    :if="picked?.kind === 'diff'"
-    type="button"
-    class="link"
-    @click="showFile(picked?.path)">open the file</button>
-  <button
-    :if="picked?.kind === 'file'"
-    type="button"
-    class="link"
-    @click="showDiff(picked?.path, false)">diff it</button>
 </div>
 
 <p :if="workspace.loading" class="dim pad">Reading…</p>
 <p :if="workspace.error" class="err pad">{{ workspace.error }}</p>
 
+<!-- Monaco, where it is installed and chosen. Sized by the box rather than by
+     its content: `automaticLayout` measures this element, and an element with
+     no height measures as none. -->
+<div :if="monacoing" id="monaco-host" class="monaco"></div>
+
 <!-- A file. `pre` per line rather than one block, so the gutter and the text
      stay aligned without the gutter being part of what you copy. -->
-<div :if="!workspace.loading && shown?.kind === 'file'" class="file">
+<div :if="!monacoing && !workspace.loading && shown?.kind === 'file'" class="file">
   <!-- Two `:each` groups, one list. Two groups because the second render then
        builds only the rows it adds and leaves the first screenful alone —
        jq79 rebuilds an `:each`, so what must not change is the array the first
@@ -98,6 +131,11 @@
   </div>
 </div>
 
+<!-- A prompt, a trace, a tool's output: text the context panel already had, in
+     the column that is wide enough to read it. The one thing a 20rem rail has
+     never been able to show. -->
+<pre :if="!workspace.loading && shown?.kind === 'debug'" class="debug">{{ shown?.text }}</pre>
+
 <style scoped>
   .placeholder {
     height: 100%;
@@ -113,39 +151,9 @@
   .small { font-size: 12px; }
   .pad { padding: .8rem 1rem; margin: 0; }
 
-  .viewer-head {
-    display: flex;
-    align-items: center;
-    gap: .6rem;
-    padding: .45rem .8rem;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-  .path {
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .which { display: flex; gap: .2rem; margin-left: auto; }
-  .which button {
-    background: none;
-    color: var(--dim);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    font: inherit;
-    font-size: 11px;
-    padding: .1rem .45rem;
-    cursor: pointer;
-  }
-  .which button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .viewer-head .link { font-size: 12px; }
-  .which ~ .link { margin-left: 0; }
-  .viewer-head > .link:not(.which ~ .link) { margin-left: auto; }
+  /* The column's body is the scroll region, so Monaco fills it rather than
+     scrolling inside a scroll. */
+  .monaco { height: 100%; min-height: 20rem; }
 
   .code { list-style: none; margin: 0; padding: .5rem 0; counter-reset: line; }
   .code li {
@@ -195,5 +203,17 @@
   .line.del { background: color-mix(in srgb, var(--bad) 14%, transparent); }
   .line.add .sign { color: var(--b-history); }
   .line.del .sign { color: var(--bad); }
+  .debug {
+    margin: 0;
+    padding: .8rem 1rem;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: none;
+  }
   .err { color: var(--bad); font-size: 12px; line-height: 1.5; }
 </style>

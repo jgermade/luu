@@ -3,22 +3,30 @@
   // column. Read-only: nothing here stages, commits or reverts — see
   // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` on why this panel is a
   // window and not a second way to change the workspace.
-  const { workspace, loadStatus, showDiff } = await import("./workspace.js")
+  const { workspace, loadStatus, showDiff, inside } = await import("./workspace.js")
 
   loadStatus()
 
   // Git's `XY` code is two positions, not one word: X is the index against
   // HEAD and Y the working tree against the index. Splitting them is what
   // decides which diff a click should ask for.
-  $: changes = Object.entries(workspace.status)
+  //
+  // Narrowed to the chosen folder here rather than by a second parameter on the
+  // endpoint: it is one `git status --porcelain` for a repository either way,
+  // and a parameter would be a second thing to keep consistent with the root.
+  // `where` is what the row *shows*, relative to that folder; `path` stays
+  // relative to the base, because that is what the diff is asked for by.
+  $: changes = (workspace.root, Object.entries(workspace.status))
+    .filter(([path]) => inside(path) !== null)
     .map(([path, code]) => {
       const padded = code.padEnd(2, " ")
       const untracked = code.trim() === "??"
+      const shown = inside(path) || ""
       return {
         path,
         code,
         name: path.split("/").pop(),
-        dir: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "",
+        dir: shown.includes("/") ? shown.slice(0, shown.lastIndexOf("/")) : "",
         untracked,
         staged: !untracked && padded[0] !== " ",
         unstaged: !untracked && padded[1] !== " ",

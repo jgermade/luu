@@ -9,6 +9,13 @@
   // computed values through three components that each want a different
   // subset of them.
   const { state, panel, selectTurn } = await import("./store.js")
+  const { showDebug } = await import("./workspace.js")
+
+  // The one thing a 20rem rail has never been able to show: a prompt, at the
+  // width it was written for. `showDebug` opens it as a tab in the content
+  // column, which also switches to it where there are only two columns. See
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  const readIt = (id, title, text) => showDebug(id, title, text)
 
   $: view = (state.selectedTurn, state.history, state.turn, state.budget,
              state.prefix, state.tools, state.extraCalls, state.prompt,
@@ -205,7 +212,18 @@
   on, and this is where what that cost goes.
 </p>
 
-<h2>Prompt sent to the model</h2>
+<h2>
+  Prompt sent to the model
+  <button
+    :if="view?.prompt"
+    type="button"
+    class="link open"
+    title="Open it in the content column, at the width it was written for"
+    @click="readIt(
+      `prompt:${state.selectedTurn === null ? 'live' : state.selectedTurn}`,
+      `prompt · turn ${view?.turn ?? 'live'}`,
+      view?.prompt)">open →</button>
+</h2>
 <pre :if="view?.prompt">{{ view?.prompt }}</pre>
 <p :if="!view?.prompt" class="dim">Nothing sent yet this session.</p>
 
@@ -218,6 +236,15 @@
     margin: 1.2rem 0 .5rem;
   }
   h2:first-child { margin-top: 0; }
+  /* A heading that carries one control: the word is the section, the button is
+     what to do with it, and they are the same line rather than two. */
+  h2 .open {
+    float: right;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: normal;
+    color: var(--accent);
+  }
   .turn-picker { display: flex; align-items: center; gap: .5rem; margin-bottom: .8rem; }
   .turn-picker select {
     background: var(--bg); color: inherit; border: 1px solid var(--line);

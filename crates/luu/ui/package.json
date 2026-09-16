@@ -1,0 +1,9 @@
+{
+  "name": "luu-ui",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Optional browser dependencies for the debug UI. Nothing here is required: the page draws every file itself, and `monaco-editor` is the opt-in the General settings offer where somebody installed it. Kept as a node dependency rather than vendored into the tree for the reason the icon themes are not vendored either — name what the machine has, ship nothing. See RECORD/2026-09-16.three-columns-that-each-have-a-footer.WIP.md.",
+  "dependencies": {
+    "monaco-editor": "^0.52.2"
+  }
+}

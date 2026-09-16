@@ -714,15 +714,21 @@ export const closeTask = closeJob
 export const reopenJob = job => act("reopen_job", job)
 export const reopenTask = reopenJob
 
-/// Opens the modal, reading both halves fresh.
+/// Opens the modal.
 ///
-/// A `config.toml` that does not load is not a reason to show nothing: it is
-/// the moment a person most needs to see the file and the message about it, so
-/// the error is state rather than a thrown exception.
-export async function openSettings() {
+/// **The flag, and nothing else.** Setting it mounts the modal, and the modal
+/// mounts whichever section is open — so a fetch here would be a fetch racing
+/// the component that draws its result. The section that needs the data awaits
+/// it in its own `:setup`, which jq79 runs before the template renders; see
+/// `settings-models.html`, where a reactive statement that rebuilt the draft
+/// instead was an effect writing what the component read, and jq79 gave up on
+/// it settling after 100 passes.
+///
+/// A `config.toml` that does not load is still not a reason to show nothing: it
+/// is the moment a person most needs to see the file and the message about it,
+/// so the error is state rather than a thrown exception.
+export function openSettings() {
   state.settingsOpen = true
-  await refreshSettings()
-  await loadProviders()
 }
 
 /// What a session may be started under, by name.
@@ -978,6 +984,34 @@ export async function resumeSession(id, choice) {
     return true
   } catch (e) {
     state.error = `Could not resume session: ${e}`
+    return false
+  }
+}
+
+/// Names a session.
+///
+/// The one thing this page may change about a stored session other than
+/// deleting it, and the smallest such thing on purpose: a title is a label a
+/// person put on a conversation, and nothing downstream reads it. The server
+/// refuses an empty one — a session with no name is a row nobody can pick out
+/// of the history. See `serve::rename_session`.
+export async function renameSession(id, title) {
+  const asked = title.trim()
+  if (!asked) return false
+  try {
+    const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ title: asked }),
+    })
+    if (!res.ok) {
+      state.error = `Could not rename session: ${await res.text()}`
+      return false
+    }
+    await refreshSessionsList()
+    return true
+  } catch (e) {
+    state.error = `Could not rename session: ${e}`
     return false
   }
 }

@@ -1,33 +1,57 @@
 // @ts-check
-/// The workspace panels' shared state: what the tree has open, what git says,
-/// and what the middle column is showing.
+/// The workspace panels' shared state: which folder is being looked at, what
+/// the tree has open, what git says, and what the content column is showing.
 ///
 /// A module rather than props threaded through `app.html`, for the reason
 /// `store.js` is one: the Files panel, the Git panel and the content viewer are
 /// siblings, and a parent whose only job is relaying between its children is a
-/// parent the state does not need. Both panels write `selected`; the viewer
-/// reads it. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+/// parent the state does not need. Both panels write tabs; the viewer reads
+/// them. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` and
+/// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
 import { $reactive } from "./vendor/jq79.js"
 import { apiHeaders } from "./store.js"
+import { setPane } from "./prefs.js"
 
 export const workspace = $reactive({
+  /// The absolute path `luu serve` was started in, as the server reports it.
+  /// Display only — nothing is ever asked for by absolute path, because an
+  /// absolute path in a URL is an invitation to send a different one.
+  base: "",
+  /// The chosen folder, relative to the base and `/`-separated. `""` is the
+  /// base itself. **`null` means nobody has chosen yet**, which is what opens
+  /// the picker over the whole window on a first visit — it is not the same
+  /// state as `""`, and collapsing the two would mean the picker either never
+  /// appears or appears every time.
+  root: null,
   /// One entry per directory that has been opened, keyed by its path relative
-  /// to the sandbox base. `""` is the base itself. Lazy, like every file tree:
-  /// a repository with a `target/` in it is not something to walk eagerly.
+  /// to the sandbox base — never to the root, so narrowing the root does not
+  /// invalidate a listing that is still correct. `""` is the base itself.
+  /// Lazy, like every file tree: a repository with a `target/` in it is not
+  /// something to walk eagerly.
   open: {},
   /// Directories currently expanded, in the order they were opened. A plain
   /// object beside `open` rather than a flag inside it: collapsing a directory
   /// should not throw away what was already fetched.
   expanded: {},
-  /// `{ kind: "file" | "diff", path, staged }`, or null for nothing selected.
+  /// What the content column is holding: `{ id, kind, title, path, staged }`,
+  /// where `kind` is `file`, `diff` or `debug`. One tab per open thing, so
+  /// looking at a diff no longer loses the file that was on screen.
+  tabs: [],
+  /// The active tab's id, or `null` for an empty column.
+  active: null,
+  /// The active tab itself. `picked` rather than `selected` in the components
+  /// that read it, and the name is load-bearing: a scope variable called
+  /// `selected` collides with the DOM property of that name, and jq79's render
+  /// effect ends up writing what it reads. See `content-viewer.html`.
   selected: null,
   /// What the viewer is showing, once it has arrived.
-  /// `{ kind: "file", path, text, truncated }` or
-  /// `{ kind: "diff", path, staged, hunks, note }`.
+  /// `{ kind: "file", path, lines, truncated }`,
+  /// `{ kind: "diff", path, staged, hunks, note }` or
+  /// `{ kind: "debug", text }`.
   content: null,
-  /// Set while a fetch for `selected` is in flight, so the viewer can say so
-  /// instead of showing the previous file under the new file's name.
+  /// Set while a fetch for the active tab is in flight, so the viewer can say
+  /// so instead of showing the previous file under the new file's name.
   loading: false,
   /// The file's rows, in the two blocks the viewer renders as two `:each`
   /// groups: `head` is the first screenful and `tail` is everything after it,
@@ -46,7 +70,11 @@ export const workspace = $reactive({
   /// the length of the file rather than the length of the first screen while
   /// the tail is still being built.
   pending: 0,
-  /// Every changed path, mapped to git's own two-letter code.
+  /// Every changed path in the whole base, mapped to git's own two-letter code.
+  /// Asked for the base and filtered to the root in the page rather than
+  /// parameterised: it is one `git status --porcelain` for a repository either
+  /// way, and a second parameter would be a second thing to keep consistent
+  /// with the prefix.
   status: {},
   /// Why git could not be asked, when it could not. A workspace that is not a
   /// git repository is an ordinary case and lands here as a plain sentence.
@@ -57,7 +85,100 @@ export const workspace = $reactive({
   /// machine named none. See `crate::icons` for why nothing is vendored, and
   /// `iconFor` for why the tree asks it per row rather than reading this flag.
   icons: { loaded: false },
+  /// The folder picker: whether it is open, and the directory it is showing.
+  /// `forced` is a first visit, where it covers the window and has no way out
+  /// other than choosing — there is nothing behind it to go back to.
+  picker: { open: false, forced: false, at: "" },
 })
+
+// ---- which folder ---------------------------------------------------------
+//
+// The folder `luu serve` was started in is the **ceiling**, and what is chosen
+// is a subdirectory of it. Nothing here widens anything: `/api/workspace/*`
+// resolves every path through `Sandbox::check_path` against that base, and a
+// chosen root is a prefix this page puts on what it asks for. A picker that
+// could climb above the base would be a browser control that moves the sandbox,
+// and that is the one thing the workspace surface has never been.
+
+/// Where the remembered root is kept, keyed by the base — two servers on one
+/// machine do not inherit each other's answer.
+const rootKey = base => `luu.root:${base}`
+
+/// A base-relative path as the panels *show* it — relative to the chosen root.
+/// Returns `null` for anything outside it, which is what filters git's status
+/// down to the folder somebody chose.
+///
+/// **Only the display goes through here.** Every path this module sends to the
+/// server stays relative to the base, exactly as the server hands it out: a
+/// second spelling for the same file is a second chance to get the prefix wrong,
+/// and the root is a narrowing of what is *listed*, not a second address space.
+export function inside(path) {
+  const root = workspace.root || ""
+  if (!root) return path
+  if (path === root) return ""
+  return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null
+}
+
+/// Reads the base off the settings the server already answers, and the root off
+/// what this browser remembered. Opens the picker when nothing was.
+export async function loadRoot(base) {
+  workspace.base = base || ""
+  let remembered = null
+  try {
+    remembered = localStorage.getItem(rootKey(workspace.base))
+  } catch {
+    // A private window. The picker opens; the choice is simply not kept.
+  }
+  if (remembered === null) {
+    workspace.picker = { open: true, forced: true, at: "" }
+    return false
+  }
+  workspace.root = remembered
+  return true
+}
+
+export function openPicker() {
+  workspace.picker = { open: true, forced: false, at: workspace.root || "" }
+  // The picker lists directories, which means listing them: a folder nobody has
+  // opened in the tree has never been fetched.
+  openDir(workspace.picker.at)
+}
+
+export function closePicker() {
+  // A first visit has nothing behind it to go back to, so the only way out of a
+  // forced picker is choosing.
+  if (workspace.picker.forced) return
+  workspace.picker = { open: false, forced: false, at: "" }
+}
+
+export function browseTo(path) {
+  workspace.picker = { ...workspace.picker, at: path }
+  openDir(path)
+}
+
+/// Takes the folder, and starts the panels over on it. Everything that was open
+/// was open relative to a different root, so none of it survives: a tab holding
+/// a file outside the new root would be a tab the tree cannot reach.
+export async function chooseRoot(path) {
+  workspace.root = path
+  try {
+    localStorage.setItem(rootKey(workspace.base), path)
+  } catch {
+    // Applied for this visit, and asked again next time.
+  }
+  workspace.picker = { open: false, forced: false, at: "" }
+  workspace.tabs = []
+  workspace.active = null
+  workspace.selected = null
+  workspace.content = null
+  workspace.head = []
+  workspace.tail = []
+  workspace.pending = 0
+  workspace.open = {}
+  workspace.expanded = {}
+  await openDir(path, true)
+  await loadStatus()
+}
 
 /// The icon id for one entry, by VSCode's own rules.
 ///
@@ -106,7 +227,7 @@ async function ask(url) {
 }
 
 /// Lists one directory, caching it. `force` re-reads one already listed, which
-/// is what the refresh button wants.
+/// is what the refresh button wants. `path` is relative to the base.
 export async function openDir(path = "", force = false) {
   const key = path || ""
   if (!force && workspace.open[key]) {
@@ -154,59 +275,152 @@ export async function loadStatus() {
   }
 }
 
+// ---- the content column's tabs --------------------------------------------
+//
+// **A tab holds its identity, not its bytes.** Activating one re-fetches. The
+// server answers the largest file in this repository in 20 ms and a small one in
+// 0.6; the 271 ms a file costs is building the rows, which a cache would not
+// save because the rows are rebuilt on activation either way. So a cache would
+// hold megabytes of JSON to save 20 ms of the 291 that switching a tab costs.
+// See `RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md`.
+
+const fileId = path => `file:${path}`
+// **One tab per file's diff, not one per side.** "Staged" and "working tree"
+// are two different answers about the same file, and the foot's toggle is how
+// you read the other one — a second tab with the same name in it would make the
+// strip say there are two files open when there is one.
+const diffId = path => `diff:${path}`
+
+const basename = path => path.split("/").pop() || path
+
+/// Opens a tab, or focuses the one already holding this thing, and points the
+/// second column at the content — the click already said which column the
+/// person wants, and in the two-column layout having nothing happen is the bug
+/// this rule exists to prevent.
+function openTab(tab) {
+  const found = workspace.tabs.find(open => open.id === tab.id)
+  // Replaced rather than mutated, the way every reactive list in this page is:
+  // jq79 does not wake an `:each` when a property of an object inside a
+  // reactive array is assigned from outside the component. See `store.js`.
+  workspace.tabs = found
+    ? workspace.tabs.map(open => open.id === tab.id ? { ...open, ...tab } : open)
+    : [...workspace.tabs, tab]
+  setPane("content")
+  return activate(tab.id)
+}
+
+export function closeTab(id) {
+  const at = workspace.tabs.findIndex(tab => tab.id === id)
+  if (at < 0) return
+  const left = workspace.tabs.filter(tab => tab.id !== id)
+  workspace.tabs = left
+  if (workspace.active !== id) return
+  // Falls to the neighbour on the right, then on the left: closing the tab you
+  // are looking at should land you next to it rather than at the far end.
+  const next = left[at] || left[at - 1] || null
+  if (next) {
+    activate(next.id)
+  } else {
+    workspace.active = null
+    workspace.selected = null
+    workspace.content = null
+    workspace.head = []
+    workspace.tail = []
+    workspace.pending = 0
+  }
+}
+
+export function activate(id) {
+  const tab = workspace.tabs.find(open => open.id === id)
+  if (!tab) return
+  workspace.active = id
+  // A **copy**, never the element out of `tabs`. Putting the same object at two
+  // paths in a reactive store means every read of `selected` re-wraps what is
+  // already wrapped under `tabs`, the identity changes on every pass, and jq79
+  // gives up after 100 of them with "an effect re-woke itself" — which names
+  // neither this line nor this file. Copying is what makes the two paths two
+  // values. See `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  workspace.selected = { ...tab }
+  if (tab.kind === "file") return loadFile(tab)
+  if (tab.kind === "diff") return loadDiff(tab)
+  // A debug tab carries its own text: there is nothing to fetch, because the
+  // context panel already had it.
+  workspace.content = { kind: "debug", text: tab.text, path: tab.title }
+  workspace.head = []
+  workspace.tail = []
+  workspace.pending = 0
+  workspace.loading = false
+}
+
 /// Rows in the first pass: a screenful with room to scroll into, and nothing
 /// to do with the window's real height — a viewer that measures itself has to
 /// decide again on every resize.
 const FIRST_ROWS = 200
 
 /// Fills the second block, one frame after the first one is on screen.
-function showTheRest(path, lines) {
+function showTheRest(id, lines) {
   if (lines.length <= FIRST_ROWS) return
   requestAnimationFrame(() => {
     // Dropped if the viewer moved on while this frame was waiting: these rows
-    // belong to the file on screen, never to the one that was.
-    if (workspace.selected?.kind !== "file" || workspace.selected?.path !== path) return
+    // belong to the tab on screen, never to the one that was.
+    if (workspace.active !== id) return
     workspace.tail = lines.slice(FIRST_ROWS)
     workspace.pending = 0
   })
 }
 
-export async function showFile(path) {
-  workspace.selected = { kind: "file", path, staged: false }
+export function showFile(path) {
+  return openTab({ id: fileId(path), kind: "file", path, title: basename(path), staged: false })
+}
+
+export function showDiff(path, staged = false) {
+  return openTab({ id: diffId(path), kind: "diff", path, staged, title: basename(path) })
+}
+
+/// A prompt, a trace, a tool's output: text the context panel already has, in
+/// the column that is wide enough to read it. The one thing a 20rem rail has
+/// never been able to show.
+export function showDebug(id, title, text) {
+  return openTab({ id: `debug:${id}`, kind: "debug", path: title, title, text })
+}
+
+async function loadFile(tab) {
   workspace.loading = true
   try {
-    const file = await ask(`./api/workspace/file?path=${encodeURIComponent(path)}`)
+    const file = await ask(`./api/workspace/file?path=${encodeURIComponent(tab.path)}`)
     // Dropped if the person clicked something else while this was in flight:
-    // the panel's title and its body have to be the same file.
-    if (workspace.selected?.path !== path || workspace.selected?.kind !== "file") return
+    // the column's tab and its body have to be the same file.
+    if (workspace.active !== tab.id) return
     workspace.content = { kind: "file", ...file }
     workspace.head = file.lines.slice(0, FIRST_ROWS)
     workspace.tail = []
     workspace.pending = Math.max(0, file.lines.length - FIRST_ROWS)
-    showTheRest(path, file.lines)
+    showTheRest(tab.id, file.lines)
     workspace.error = null
   } catch (e) {
     workspace.content = null
-    workspace.error = `Could not read ${path}: ${e.message}`
+    workspace.error = `Could not read ${tab.path}: ${e.message}`
   } finally {
-    workspace.loading = false
+    if (workspace.active === tab.id) workspace.loading = false
   }
 }
 
-export async function showDiff(path, staged = false) {
-  workspace.selected = { kind: "diff", path, staged }
+async function loadDiff(tab) {
   workspace.loading = true
   try {
     const diff = await ask(
-      `./api/workspace/git-diff?path=${encodeURIComponent(path)}&staged=${staged}`,
+      `./api/workspace/git-diff?path=${encodeURIComponent(tab.path)}&staged=${tab.staged}`,
     )
-    if (workspace.selected?.path !== path || workspace.selected?.kind !== "diff") return
+    if (workspace.active !== tab.id) return
     workspace.content = { kind: "diff", ...diff }
+    workspace.head = []
+    workspace.tail = []
+    workspace.pending = 0
     workspace.error = null
   } catch (e) {
     workspace.content = null
-    workspace.error = `Could not diff ${path}: ${e.message}`
+    workspace.error = `Could not diff ${tab.path}: ${e.message}`
   } finally {
-    workspace.loading = false
+    if (workspace.active === tab.id) workspace.loading = false
   }
 }
