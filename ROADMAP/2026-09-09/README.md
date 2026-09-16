@@ -67,7 +67,7 @@ rather than a sentence in a record nobody re-reads.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 6 | **Nothing in the page reads the trace's `pruned` lines** — `/ws/trace` has a consumer for `prompt`, `prefix_reuse`, `budget` and `step_call`, and none for the lines rule B added. The panel exists to watch the window give way, and the one rule that makes it give way without losing a turn is invisible in it | nothing | [`prune-behind`](../../RECORD/2026-09-08.prune-behind.completed.md) |
+| 6 | ~**Nothing in the page reads the trace's `pruned` lines** — `/ws/trace` has a consumer for `prompt`, `prefix_reuse`, `budget` and `step_call`, and none for the lines rule B added. The panel exists to watch the window give way, and the one rule that makes it give way without losing a turn is invisible in it~ **landed 2026-09-16, and the row's own claim about itself held: it was the smallest here and it found the most.** The panel names the turns that paid and what the window saved, the transcript marks a pruned turn without striking it through, and both halves come off the read API on a reload. Two neighbouring bugs came out with it, neither about pruning: the live panel had been copying the last eviction into every turn it kept afterwards, so a cut at turn 5 showed under turn 8's budget while a *reload* of the same session did not; and a resumed session was throwing away the eviction marks the API had been answering with all along — 0 marks against 20 on the same live session. The fixture that catches them is new too, and is the first recording in the tree with a `pruned` line in it | nothing | [`the-panel-reads-the-pruned-lines`](../../RECORD/2026-09-16.the-panel-reads-the-pruned-lines.completed.md), from [`prune-behind`](../../RECORD/2026-09-08.prune-behind.completed.md) |
 | 7 | **What a container start costs** — *the worker starts with the session* was chosen on the shape of the thing and not on a number. The `container` job already makes the same call on both sides and is where the number comes from | nothing | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 8 | **A session resumed under a different posture is refused by nothing** — it is visible in the header and enforced nowhere. The store keeps jobs and their approved plans; it does not keep what they were approved *under*, so an approval granted inside a container can be replayed on the host | nothing; wants a record first | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 9 | ~**Enforcement per job** — `network` and `egress` narrow per job; `enforcement` is still session-wide. **Ordered since 2026-09-05 and still unargued**: the next move on it is a record, not a diff. The honest guess is unchanged — a plan may only ever narrow, and "narrow" is not obviously defined on a scale~ **landed 2026-09-16, and the guess held in a way this row could not see: the scale runs backwards. Every other field a plan declares is a grant, where less is narrower and a plan naming nothing gets nothing; `enforcement` is a strictness whose permissive value is the reassuring one, so a plan asking for `kernel` needs no permission and one asking for `best-effort` inside a `kernel` session is refused at the gate like any other thing the policy does not grant. The record was not the next move after all — it and the diff are the same age, both written 2026-09-06 on a branch that was never merged, and ported here unchanged. `limits` is now the last field a plan cannot narrow** | nothing | [`enforcement-per-job`](../../RECORD/2026-09-06.enforcement-per-job.completed.md) |
@@ -96,7 +96,7 @@ gantt
     A probe for tool calls                 :done, probe, after worth, 3d
     A grammar for tool calls               :done, gbnf, after probe, 4d
     section What the night left open
-    The panel reads the pruned lines       :trace, after steps, 1d
+    The panel reads the pruned lines       :done, trace, after steps, 1d
     What a container start costs           :cost, after trace, 1d
     A posture on resume is refused         :posture, after cost, 2d
     Enforcement per job                    :done, enf, after posture, 2d
@@ -155,7 +155,13 @@ gantt
 - **Item 6 is the smallest row here and the one that would have found the most.**
   Three of the three bugs of 2026-09-08 were found by watching the surface act.
   A rule whose whole effect is invisible in the panel is a rule nobody will
-  notice going wrong.
+  notice going wrong. **Landed 2026-09-16, and it paid out exactly that way:**
+  the consumer itself is thirty lines, and writing it turned up two bugs in the
+  code beside it — one that had the live panel attributing a cut to turns that
+  made none, and one that dropped the eviction marks from every reopened
+  session. Both were invisible for the same reason the missing consumer was:
+  nothing in CI had ever replayed a cut and then *looked*. The fixture that does
+  is the lasting half of the row.
 - **Items 8 and 9 are both a record before they are a diff, and they are the
   same record's neighbourhood**: what an approval was granted under, and what a
   job may narrow. Whoever writes one should read the other first — that is a

@@ -41,6 +41,19 @@ done
   --mock-delay-ms 8 --context-limit 1024 --reserve 64 --evict turn \
   --record "$out/eviction-tasks.jsonl" >/dev/null
 
+# The other way the window gives way: rule B, where the oldest turns give up
+# their code and keep their exchange. The three above cut whole turns, so the
+# `pruned` trace line does not appear in any of them — which is how the page
+# went from 2026-09-08 to 2026-09-16 with no consumer for it and nothing to
+# notice. The arm is the one `RECORD/runs/2026-09-08.prune-behind/` measured,
+# minus the flag it was measured against, and it needs the real tree: the
+# selector has to have code to hand a turn before a turn has code to give up.
+"$luu" chat --script "$(dirname "$0")/tasks/grounded.txt" \
+  --mock-delay-ms 8 --select-tokens 1024 --context-limit 8192 \
+  --prune-behind --mock-reply "ok" \
+  --sandbox "$(dirname "$0")/../luu.toml" \
+  --record "$out/prune-behind.jsonl" >/dev/null
+
 # The tool loop, with the sandbox answering both ways: one call allowed and one
 # denied. Scripted replies rather than a model, so the recording is the same
 # every time — and the point of the pair is that the panel has to show *who*
@@ -102,6 +115,7 @@ done
   "$out/eviction-turn.jsonl" \
   "$out/eviction-block.jsonl" \
   "$out/eviction-tasks.jsonl" \
+  "$out/prune-behind.jsonl" \
   "$out/tool-calls.jsonl" \
   "$out/one-task.jsonl" \
   "$out/grounded-turn.jsonl" \

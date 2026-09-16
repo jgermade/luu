@@ -19,7 +19,7 @@
 
   $: view = (state.selectedTurn, state.history, state.turn, state.budget,
              state.prefix, state.tools, state.extraCalls, state.prompt,
-             state.evicted, panel())
+             state.evicted, state.pruned, panel())
   $: reading = state.selectedTurn !== null
 
   $: folds = (state.jobs || state.tasks)
@@ -51,6 +51,12 @@
   $: templateOverhead = view?.budget?.backendPrompt
     ? view.budget.backendPrompt - budgetSent - extraSent
     : null
+  // Named for the same reason the budget names its own: two counts measured
+  // differently are not comparable, and the pruned line is the one number on
+  // this panel that is a *difference* of two windows rather than a total.
+  $: citedCounter = view?.cited?.counter?.kind === "approximate"
+    ? "approximately, chars/4"
+    : view?.cited?.counter?.id || ""
   $: reusePercent = view?.prefix?.prompt_tokens
     ? Math.round((view.prefix.shared_tokens / view.prefix.prompt_tokens) * 100)
     : null
@@ -116,6 +122,18 @@
     {{ view?.dropped?.turns.join(", ") }} — {{ view?.dropped?.tokens }}
     tokens out of the window, for good, under the
     <b>{{ view?.dropped?.policy.policy }}</b> policy.
+  </p>
+  <!-- The other cut, and the clause that is the whole difference between them:
+       a pruned turn is still asked, still answered and still citable. Without
+       this line the only trace of `--prune-behind` on the page was the `code`
+       bucket being smaller than it was a turn ago, with nothing to say which
+       turns paid for it. -->
+  <p :if="view?.cited" class="dim">
+    Turn {{ view?.cited?.turn }} pruned turn(s)
+    {{ view?.cited?.turns.join(", ") }} — {{ view?.cited?.tokens }}
+    tokens of code out of the prompt<span :if="citedCounter">, counted
+    {{ citedCounter }}</span>. The turns themselves are still in the
+    conversation.
   </p>
 </div>
 <p :if="!view?.budget" class="dim">
