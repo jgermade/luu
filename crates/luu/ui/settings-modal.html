@@ -1,0 +1,87 @@
+<script :setup>
+  // Settings, as sections down the side rather than as one scroll.
+  //
+  // The shape every operating system's settings window has converged on, for
+  // the reason that the sections are **not steps**: a theme and a provider
+  // table have nothing to do with each other, and stacking them made the second
+  // one the reward for scrolling past the first. See
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  const { state, closeSettings } = await import("./store.js")
+  const { ui, showSection } = await import("./ui.js")
+
+  const SettingsGeneral = await import("./settings-general.html")
+  const SettingsModels = await import("./settings-models.html")
+</script>
+
+<div class="modal-backdrop" @click="closeSettings()">
+  <div class="modal wide" @click="$event.stopPropagation()">
+    <header class="modal-head">
+      <strong>Settings</strong>
+      <button type="button" class="link" @click="closeSettings()">close</button>
+    </header>
+
+    <div class="sections">
+      <!-- The rail. Two sections today, and the shape is what makes a third
+           free: a section is a name and a component, not a place in a scroll. -->
+      <nav class="rail">
+        <button
+          type="button"
+          :class.on="ui.section === 'general'"
+          @click="showSection('general')">
+          <svg class="ic"><use href="#i-sliders"/></svg>
+          <span>General</span>
+        </button>
+        <button
+          type="button"
+          :class.on="ui.section === 'models'"
+          @click="showSection('models')">
+          <svg class="ic"><use href="#i-server"/></svg>
+          <span>Models</span>
+        </button>
+      </nav>
+
+      <section class="modal-body pane">
+        <SettingsGeneral :if="ui.section === 'general'" />
+        <SettingsModels :if="ui.section === 'models'" />
+      </section>
+    </div>
+  </div>
+</div>
+
+<style scoped>
+  .modal.wide { width: min(76rem, 100%); }
+  .sections {
+    display: grid;
+    grid-template-columns: 12rem minmax(0, 1fr);
+    min-height: 0;
+    flex: 1;
+  }
+  .rail {
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+    padding: .6rem .4rem;
+    border-right: 1px solid var(--line);
+    background: var(--raised);
+    overflow-y: auto;
+  }
+  .rail button {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: .35rem .6rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .rail button:hover { color: var(--fg); background: var(--bg); }
+  .rail button.on { background: var(--accent); color: var(--on-accent); }
+  .pane { min-width: 0; }
+</style>

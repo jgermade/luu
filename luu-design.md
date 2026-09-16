@@ -701,21 +701,87 @@ access = "execute"
 A local web UI (chat, session browser, context inspector) is the fastest way to see what the
 context manager is actually doing — the CLI can't show a token budget or a prompt diff.
 
-**Three panes**: an inspector rail on the left, a content viewer in the middle, the agent chat
-on the right with one tab per session over it. The inspector switches between the workspace's
-file tree, its git changes, and the context-manager panel that used to be the whole right
-column; the viewer shows whatever the rail selected — a file, a diff, an expanded detail. The
-panes' contents are separate jq79 components (`inspector-{files,git,debug}.html`,
-`content-viewer.html`); `app.html` keeps the shell and the modals. Read-only throughout: the
-file tree and the git panel are a window onto the workspace, not a second way to change it —
-every write still goes through the job gate. A hamburger in the header opens preferences, whose
-one setting is a light/dark theme kept in `localStorage` — a fact about the screen somebody
-reads from, not about the run, so not in `config.toml`. A tab's × deletes that stored session,
-so it arms on the first click and deletes on the second, and it is not drawn on the live
-session or the active one, which the server refuses to delete either way.
+**Three columns, and each has a head, a body and a foot.** Inspector, content, chat — above
+1260px; below it, the inspector and *one* of the other two, with a toggle in that column's own
+head. Which of the two is a person's choice rather than the viewport's, and a click that opens
+something in the content column switches to it, because the click already said which column
+they want. `General → layout` pins the two-column mode at any width. The heads and feet are all
+40px, one token (`--chrome-h`), with one exception: the chat's foot is two rows, because what
+you are sending and what you are sending it *under* — manual or automatic confirmation, which
+provider and model — are two different questions, and the second was not on the page at all at
+the moment somebody typed a prompt.
+
+There is **no page-wide header**. There was, and every control on it belonged to a column: the
+two destination tags and the status word are the chat's session, the fixtures picker is its
+replay, the hamburger opened preferences about the browser. A strip of other columns' controls
+cost every column 3rem of height to say so, and it was the one thing on the page with a fixed
+height, so the grid was `calc(100vh - 3rem)` — a magic number that was wrong the moment it
+wrapped. What each 40px carries now: the inspector's head is the `luu` logo (which is a control
+— it means *back to the conversation*) and the panel tabs, its foot the chosen folder and the
+status word; the content column's head is one tab per open thing and its foot that thing's own
+facts; the chat's head is the session's name, editable in place, beside new-session, history
+and settings.
+
+The inspector switches between the workspace's file tree, its git changes, and the
+context-manager panel that used to be the whole right column. The content column holds **one tab
+per open thing** — a file, a diff, or a block of debug text such as a prompt at the width it was
+written for — so looking at a diff no longer loses the file on screen. A tab holds its identity
+and not its bytes: activating one re-fetches, because the server answers the largest file in
+this repository in 20 ms and the 271 ms a file costs is building the rows, which a cache would
+not save. Read-only throughout: the file tree and the git panel are a window onto the workspace,
+not a second way to change it — every write still goes through the job gate.
+
+The columns' contents and every dialog are separate jq79 components
+(`inspector-{files,git,debug}.html`, `content-viewer.html`, `settings-{modal,general,models}.html`,
+`session-starter.html`, `folder-picker.html`); `app.html` keeps the shell — the grid, the three
+columns' chrome, and the chat. Preferences live in `prefs.js` and in `localStorage`: theme
+(auto/light/dark, where auto is `prefers-color-scheme` resolved live in JS rather than a second
+copy of the light palette), which editor draws a file, the layout, and who answers the gate.
+None of it is in `config.toml`, which says where a run *sends* — a fact about the run, not about
+the screen somebody reads from. Dark stays the default for a browser with nothing remembered,
+because every screenshot and every record here was taken against it.
+
+**The chat has a name, not a tab strip.** One session is on screen, so a strip was spending a row
+to answer a question the head answers in words; the strip lives on as a history popover, and the
+name is editable in place — `PATCH /api/sessions/{id}`, the only thing the page may change about
+a stored session other than deleting it. It refuses an empty title, and it patches the two places
+a title lives (the listing's column and the fold's blob) rather than going through `save`, which
+replaces a whole row and would drop the `provider` the session picker starts from. Deleting is
+still the × that arms on the first click and deletes on the second, and it is not drawn on the
+live session or the active one, which the server refuses to delete either way.
+
+**Which folder, chosen under the one `serve` was started in.** On a first visit the page asks,
+over the whole window and with no way out but choosing — there is nothing behind it yet — and
+remembers the answer in `localStorage`, keyed by the base. What is chosen is a *subdirectory* of
+where `luu serve` started: nothing widens, because `/api/workspace/*` already resolves every path
+through `Sandbox::check_path` against that base and the root is a prefix the page narrows what it
+*lists* by. A picker that could climb above the base would be a browser control that moves the
+sandbox. Paths stay base-relative everywhere they are sent, and the root is applied to what is
+shown — a second spelling for the same file is a second chance to get the prefix wrong.
+
+**What is not there is said where it is missing.** No providers at all: the chat column's body is
+a placeholder with the one button that fixes it, opening Settings on Models — rather than a modal
+that opens itself over the folder question. A model the provider answered a list without: the
+composer is disabled and the foot says which, because that is certain and costs a whole turn at
+the far end to discover. A provider that did not answer at all: the foot says so and the composer
+stays enabled, because a provider that is starting up is an ordinary state and locking the
+composer over one would be wrong more often than right.
+
+**Settings is sections down the side**, not one scroll, because the sections are not steps:
+*General* (theme, editor, layout, which folder) and *Models* (what this server resolved, then the
+providers file the next run reads). The `editor` setting offers Monaco where somebody installed
+it — an **npm dependency of `crates/luu/ui`**, gitignored, excluded from the `rust_embed` folder
+and served from disk by one route, so a release binary does not carry several megabytes of an
+editor that is off by default. That does not reopen
+[`RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md`](RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md),
+which measured Monaco and kept this page's viewer as the default; it adds the things this viewer
+cannot do — folding, jumping to a symbol — as an opt-in that costs nothing when it is off. A
+checkout that ran `cargo build` and nothing else says so and stays on the viewer, the same shape
+`[ui] icon-theme` has.
 
 **The chrome is drawn, not typed.** `app.html` also carries one `<svg>` sprite — a caret, a
-refresh, a menu, a close, a plus and the file/folder pair — and every symbol on the page is a
+refresh, a menu, a close, a plus, the file/folder pair, and the chat head's and settings rail's
+own six (clock, cog, sliders, server, clip, speech bubble) — and every symbol on the page is a
 `<use>` of it, stroked in `currentColor` so it takes the colour of the control it sits in and
 needs no second set for the light theme. These were text glyphs (`↻`, `▾`/`▸`, `▪`/`▫`, `≡`),
 and a text glyph's size, weight and baseline belong to whichever font on the machine carries
@@ -762,7 +828,9 @@ toggle without acquiring a second theme system. The payload reads head-first —
 declaration order and the facts about a file have no business sitting behind 681 KB of it.
 `total_lines` is counted before the 512 KB cut, so a truncated file says *6255 of 20001 lines*
 rather than only that it was cut. See
-[`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`](RECORD/2026-09-15.a-three-pane-inspector.WIP.md).
+[`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`](RECORD/2026-09-15.a-three-pane-inspector.WIP.md)
+and
+[`RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`](RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md).
 
 **v1 of the message enums is frozen.** `ClientMessage` is `prompt`, `cancel`,
 `approve_task`, `reject_task`, `close_task`, `reopen_task`; `ServerMessage` is

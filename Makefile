@@ -12,13 +12,17 @@
 
 CARGO ?= cargo
 EXTENSION := editors/vscode
+# The debug UI's *optional* browser dependencies — today that is Monaco, which
+# the General settings offer only where it is installed. A checkout without npm
+# gets a page that draws every file itself, which is the default either way.
+WEBUI := crates/luu/ui
 BIND ?= 127.0.0.1:7878
 
 .DEFAULT_GOAL := help
 .PHONY: help install test build up fmt lint smoke
 
 help:
-	@echo "make install   fetch dependencies, Rust and the VS Code extension's"
+	@echo "make install   fetch dependencies: Rust, the VS Code extension, the UI's optional ones"
 	@echo "make test      cargo test --workspace, and the probes that need no model"
 	@echo "make build     release binary, and the extension if npm is here"
 	@echo "make up        the debug UI and the agent protocol on $(BIND)"
@@ -34,6 +38,12 @@ install:
 		cd $(EXTENSION) && npm ci; \
 	else \
 		echo "==> no npm on PATH: skipping $(EXTENSION)"; \
+	fi
+	@if command -v npm >/dev/null 2>&1; then \
+		echo "==> npm install in $(WEBUI) (optional: Monaco)"; \
+		cd $(WEBUI) && npm install --no-audit --no-fund; \
+	else \
+		echo "==> no npm on PATH: the debug UI keeps its own viewer"; \
 	fi
 
 # The whole workspace, which includes the selection probe — 38 questions scored

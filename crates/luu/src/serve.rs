@@ -44,8 +44,13 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
 /// `rust-embed` reads these from disk in debug builds and bakes them in for
 /// release, which is exactly the split we want: editing a component must not
 /// cost a `cargo build`, and a shipped binary must not need the files.
+/// `node_modules` is excluded because Monaco is a node dependency of `ui/` —
+/// gitignored like every other one, and served from disk by `monaco_asset`
+/// rather than baked in. Without this line a release binary would carry several
+/// megabytes of an editor that is off by default.
 #[derive(rust_embed::Embed)]
 #[folder = "ui/"]
+#[exclude = "node_modules/*"]
 struct Ui;
 
 struct Session {
@@ -250,6 +255,16 @@ pub struct Settings {
     select_tokens: u32,
     map_tokens: u32,
     sandbox: String,
+    /// The directory `serve` was started in — the sandbox's base, as an
+    /// absolute path.
+    ///
+    /// Display and *bounding*, never addressing: it is the ceiling the page's
+    /// folder picker chooses a subdirectory of, and nothing is ever asked for
+    /// by absolute path, because an absolute path in a URL is an invitation to
+    /// send a different one. Filled at the route, from the live session's own
+    /// sandbox, for the same reason `posture` is.
+    #[serde(default)]
+    base: String,
     /// What this session is allowed to do, by the name it was chosen under and
     /// the three facts a reader compares two runs on. Filled at the route from
     /// the *live* agency rather than carried in the destination: a posture is
@@ -488,7 +503,10 @@ impl App {
             select_tokens,
             map_tokens,
             sandbox: agency.describe(),
-            // Filled at the route, from whatever the live session is running.
+            // Both filled at the route, from whatever the live session is
+            // running: a posture is the session's, and so is the sandbox whose
+            // base the page roots its folder picker at.
+            base: String::new(),
             posture: None,
             store: store.as_ref().map(|path| path.display().to_string()),
             unconfigured: provider.unconfigured(),
@@ -880,7 +898,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/sessions.json", get(list_sessions))
         .route(
             "/api/sessions/{id}",
-            get(get_session).delete(delete_session_handler),
+            get(get_session)
+                .patch(rename_session)
+                .delete(delete_session_handler),
         )
         .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/turns", get(get_turns))
@@ -906,10 +926,19 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // out of the manifest and never a path — see `crate::icons`.
         .route("/api/icons/manifest", get(get_icons_manifest))
         .route("/api/icons/{id}", get(get_icon))
+        // Whether the optional editor is on this machine. A *question*, rather
+        // than the page probing `/vendor/monaco/loader.js` and reading the
+        // 404 — which works, and logs a console error on every visit of every
+        // checkout that has no Monaco, which is most of them.
+        .route("/api/monaco", get(get_monaco))
         .layer(middleware::from_fn_with_state(auth.clone(), require_token));
 
     let router = guarded
         .route("/", get(|| serve_asset("index.html")))
+        // Monaco, when this machine has it. Ungated for the same reason the
+        // embedded UI is: it is a third-party editor, the same bytes in every
+        // copy, and a `<script>` tag cannot carry an `Authorization` header.
+        .route("/vendor/monaco/{*path}", get(monaco_asset))
         .route("/{*path}", get(asset_handler))
         .with_state(AppRouterState {
             app: app.clone(),
@@ -957,6 +986,60 @@ async fn serve_asset(path: &str) -> Response {
             ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response()
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+/// Where Monaco lives when somebody installed it.
+///
+/// **A node dependency of `crates/luu/ui`, not a payload in this tree.** It is
+/// excluded from the `rust_embed` folder above, so a release binary does not
+/// gain several megabytes of an editor most runs will never open, and it is
+/// read from disk here instead. `LUU_UI_DIR` moves it, for a binary running
+/// away from the checkout it was built in; without it the answer is the
+/// checkout, which is where `luu serve` is run from in every case this panel
+/// exists for.
+///
+/// A 404 is the honest answer for a checkout that ran `cargo build` and nothing
+/// else, and it is the answer the page asks for before it offers the setting —
+/// the same shape `[ui] icon-theme` has, where the feature waits to be told it
+/// is there rather than shipping a copy of itself.
+fn monaco_root() -> PathBuf {
+    let ui = std::env::var_os("LUU_UI_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui"));
+    ui.join("node_modules/monaco-editor/min/vs")
+}
+
+/// Whether Monaco is installed, as an answer rather than as a missing file.
+async fn get_monaco() -> Response {
+    let installed = monaco_root().join("loader.js").is_file();
+    Json(serde_json::json!({ "installed": installed })).into_response()
+}
+
+async fn monaco_asset(Path(path): Path<String>) -> Response {
+    let root = match monaco_root().canonicalize() {
+        Ok(root) => root,
+        // Not installed. Nothing to say about it that the page does not already
+        // handle by staying on its own viewer.
+        Err(_) => return (StatusCode::NOT_FOUND, "monaco is not installed").into_response(),
+    };
+    // Canonicalised and then checked for containment, rather than trusted after
+    // a scan for `..`: the path arrives from a browser, and the only question
+    // worth asking about it is where it actually lands. `/api/icons/{id}` takes
+    // the stricter route for the same reason — there nothing client-supplied
+    // reaches the filesystem at all.
+    let Ok(asked) = root.join(&path).canonicalize() else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    if !asked.starts_with(&root) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    match tokio::fs::read(&asked).await {
+        Ok(bytes) => {
+            let mime = mime_guess::from_path(&asked).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime.as_ref())], bytes).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
 
@@ -2241,6 +2324,7 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     let name = app.posture.lock().await.clone();
     let agency = app.agency().await;
     settings.sandbox = agency.describe();
+    settings.base = agency.sandbox.base().display().to_string();
     settings.posture = Some(agency.posture(name));
     Json(settings).into_response()
 }
@@ -3064,6 +3148,60 @@ async fn resume_session(
     Json(summary).into_response()
 }
 
+/// What a rename asks for. One field, because one field is all a page may
+/// change about a session that is not deleting it.
+#[derive(serde::Deserialize)]
+struct Rename {
+    title: String,
+}
+
+/// Names a session.
+///
+/// The first thing the page can *change* about a stored session other than
+/// removing it, and deliberately the smallest such thing: a title is a label a
+/// person put on a conversation, and nothing downstream reads it. No stream is
+/// touched, no fold is rewritten, and the id — which is what everything else
+/// addresses a session by — does not move. See
+/// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+///
+/// An empty title is refused rather than stored: a session with no name is a
+/// row nobody can pick out of the history, and the default (the id) is a better
+/// name than nothing.
+async fn rename_session(
+    State(state): State<AppRouterState>,
+    Path(id): Path<String>,
+    Json(asked): Json<Rename>,
+) -> Response {
+    let id = bare(&id);
+    let title = asked.title.trim().to_string();
+    if title.is_empty() {
+        return (StatusCode::BAD_REQUEST, "a session's title cannot be empty").into_response();
+    }
+
+    // The live session is the one held in memory, and its fold is what the
+    // store is a cache of — so it is renamed there and checkpointed, never
+    // written straight into SQLite behind the view that would overwrite it on
+    // the next token.
+    let active_id = state.app.session_id.lock().await.clone();
+    if id == LIVE_SESSION || id == active_id {
+        state.app.view.lock().await.title = title.clone();
+        state.app.checkpoint().await;
+        return Json(serde_json::json!({ "id": active_id, "title": title })).into_response();
+    }
+
+    let Some(store_mutex) = &state.app.store else {
+        return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
+    };
+    // `retitle` rather than `save`: the title is the one column that is not
+    // part of the fold, and rebuilding the row from a view would drop the
+    // `provider` beside it. See `SessionStore::retitle`.
+    match store_mutex.lock().await.retitle(id, &title) {
+        Ok(true) => Json(serde_json::json!({ "id": id, "title": title })).into_response(),
+        Ok(false) => not_found("session"),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
 async fn delete_session_handler(
     State(state): State<AppRouterState>,
     Path(id): Path<String>,
@@ -3249,6 +3387,7 @@ mod tests {
                     select_tokens,
                     map_tokens: 0,
                     sandbox: String::new(),
+                    base: String::new(),
                     posture: None,
                     store: None,
                     unconfigured: true,
@@ -3371,6 +3510,7 @@ mod tests {
                 select_tokens: 0,
                 map_tokens: 0,
                 sandbox: String::new(),
+                base: String::new(),
                 posture: None,
                 store: None,
                 unconfigured: false,

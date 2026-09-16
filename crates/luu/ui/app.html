@@ -3,17 +3,19 @@
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approveJob, rejectJob, closeJob, reopenJob,
-          approveTask, rejectTask, closeTask, reopenTask,
-          newSession, resumeSession, deleteSession,
-          openSettings, closeSettings, saveProviders,
-          loadProviders, providerModels, checkConfigured,
-          loadPostures } = await import("./store.js")
+          resumeSession, deleteSession, renameSession,
+          loadProviders, refreshSettings } = await import("./store.js")
+  const { prefs, setPane, setInspector, setConfirm } = await import("./prefs.js")
+  const { workspace, loadRoot, openPicker, activate, closeTab, showFile, showDiff } =
+    await import("./workspace.js")
+  const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel } =
+    await import("./ui.js")
 
-  // The three panes' contents, each its own file — see
-  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`. `app.html` keeps the
-  // shell (header, the grid, the session tabs, the chat) and the modals;
-  // what fills a pane is the pane's own component, which is what jq79's
-  // runtime-loaded components are for.
+  // The panes' contents and the page's modals, each its own file — see
+  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` and
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  // `app.html` keeps the shell: the grid, the three columns' chrome, and the
+  // chat. What fills a column, and every dialog, is its own component.
   //
   // `await import` for the same reason the line above it uses one: a setup
   // script has no static `import`. jq79's loader answers an `.html`
@@ -23,65 +25,37 @@
   const InspectorFiles = await import("./inspector-files.html")
   const InspectorGit = await import("./inspector-git.html")
   const ContentViewer = await import("./content-viewer.html")
+  const FolderPicker = await import("./folder-picker.html")
+  const SettingsModal = await import("./settings-modal.html")
+  const SessionStarter = await import("./session-starter.html")
 
   connect()
 
-  // Which of the three the Inspector is showing. Remembered per browser, the
-  // way a person expects a panel they chose to still be chosen tomorrow —
-  // `localStorage` and not the server, because this is where somebody is
-  // looking from, not anything the session is.
-  let mode = (() => {
-    try {
-      const kept = localStorage.getItem("luu.inspector.mode")
-      return ["files", "git", "debug"].includes(kept) ? kept : "debug"
-    } catch {
-      // A private window, or site data blocked. The panel still works.
-      return "debug"
-    }
-  })()
-  const setMode = next => {
-    mode = next
-    try {
-      localStorage.setItem("luu.inspector.mode", next)
-    } catch {
-      // Same as above: remembering is a convenience, not a requirement.
-    }
+  // ---- the layout --------------------------------------------------------
+  //
+  // Three columns above 1260px and two below, and below it the second column
+  // switches between the content and the chat rather than one of them
+  // disappearing. A disappearance answers *which two columns* with the
+  // viewport; a toggle answers it with the person, and gives a way back to the
+  // one that is not showing. `General → layout` pins the two-column mode at any
+  // width, because a wide screen with a wide chat on it is a legitimate case
+  // the breakpoint cannot know about.
+  const WIDE = 1260
+  let wide = window.innerWidth >= WIDE
+  window.addEventListener("resize", () => { wide = window.innerWidth >= WIDE })
+
+  $: columns = prefs.layout === "two" || !wide ? 2 : 3
+  $: showContent = columns === 3 || prefs.pane === "content"
+  $: showChat = columns === 3 || prefs.pane === "chat"
+
+  // The logo means *take me back to the conversation* — a switch where there
+  // are two columns, a focus where there are three.
+  const toChat = () => {
+    setPane("chat")
+    document.querySelector(".composer input")?.focus()
   }
 
-  // ---- preferences -------------------------------------------------------
-  //
-  // Kept in the browser, not on the server and not in `config.toml`: a theme
-  // is a fact about the screen somebody is reading from, and the same server
-  // answers two people on two machines. `config.toml` is where a *destination*
-  // is written down, which is a fact about the run.
-  //
-  // The attribute goes on `<html>` rather than on this component's root
-  // because `app.css` defines both palettes on `:root`, and because `body`'s
-  // own background is painted from outside anything jq79 mounts.
-  let prefsOpen = false
-  let theme = (() => {
-    try {
-      return localStorage.getItem("luu.theme") === "light" ? "light" : "dark"
-    } catch {
-      return "dark"
-    }
-  })()
-  const applyTheme = which => {
-    // Dark is `:root`'s own palette, so it is the absence of the attribute
-    // rather than a value of it — one source for "what dark is", not two.
-    if (which === "light") document.documentElement.setAttribute("data-theme", "light")
-    else document.documentElement.removeAttribute("data-theme")
-  }
-  applyTheme(theme)
-  const setTheme = which => {
-    theme = which
-    applyTheme(which)
-    try {
-      localStorage.setItem("luu.theme", which)
-    } catch {
-      // Unremembered, still applied.
-    }
-  }
+  // ---- what the columns hold ---------------------------------------------
 
   let draft = ""
   // Which closed jobs are open in the transcript. Reassigned, never mutated.
@@ -111,15 +85,16 @@
   }
 
   const onSwitchSession = id => {
-    if (!id || id === "live" || id === state.currentSessionId) return
+    closeHistory()
+    if (!id || id === state.currentSessionId) return
     resumeSession(id)
   }
 
-  // Closing a tab here *is* deleting the stored session — its stream and its
-  // fold, out of SQLite, with nothing that undoes it. So the × arms on the
-  // first click and deletes on the second, and a click anywhere else in the
-  // strip disarms it. A `confirm()` would be one line and would also be the
-  // only browser dialog in a page that already has its own modals.
+  // Closing a session here *is* deleting it — its stream and its fold, out of
+  // SQLite, with nothing that undoes it. So the × arms on the first click and
+  // deletes on the second, and a click anywhere else in the list disarms it. A
+  // `confirm()` would be one line and would also be the only browser dialog in
+  // a page that already has its own modals.
   let armedClose = ""
   const onCloseSession = (id, event) => {
     event.stopPropagation()
@@ -136,189 +111,50 @@
     draft = ""
   }
 
+  const attach = () => {
+    if (!workspace.selected) return
+    const path = workspace.selected.path
+    draft = draft.includes(path) ? draft : `${draft}${draft && !draft.endsWith(" ") ? " " : ""}${path}`
+    document.querySelector(".composer input")?.focus()
+  }
 
-  // ---- the configuration modal -------------------------------------------
+  // ---- the session's name ------------------------------------------------
   //
-  // `config` is a *copy* of the providers file: typing into the server's own
-  // answer would make an unsaved change look saved. Rows carry an id because a
-  // row's name is editable and a new one has none, so neither is a key.
-  let config = null
-  let rowId = 0
-  // What the server asked to have typed back, when it refused a write: the one
-  // refusal a person can answer rather than only read. `{ profile, host }`.
-  let declaration = null
-  let typed = ""
-  let saving = false
-
-  const toDraft = view => ({
-    default: view?.default || "",
-    profiles: Object.entries(view?.providers || {}).map(([name, p]) => ({
-      id: ++rowId,
-      name,
-      backend: p.backend || "ollama",
-      url: p.url || "",
-      model: p.model || "",
-      contextLimit: p["context-limit"] ?? "",
-      keyFile: p["key-file"] || "",
-      // Carried through untouched. The editor never *invents* this word — the
-      // server asks for the host to be typed and only then does it go in.
-      remote: !!p.remote,
-    })),
-  })
-
-  const fromDraft = it => ({
-    default: it.default || null,
-    providers: Object.fromEntries(
-      it.profiles.filter(p => p.name.trim()).map(p => [p.name.trim(), {
-        ...(p.backend ? { backend: p.backend } : {}),
-        ...(p.url.trim() ? { url: p.url.trim() } : {}),
-        ...(p.model.trim() ? { model: p.model.trim() } : {}),
-        ...(String(p.contextLimit).trim() ? { "context-limit": Number(p.contextLimit) } : {}),
-        ...(p.keyFile.trim() ? { "key-file": p.keyFile.trim() } : {}),
-        ...(p.remote ? { remote: true } : {}),
-      }]),
-    ),
-  })
-
-  const openConfig = async () => {
-    await openSettings()
-    config = toDraft(state.providers)
-    declaration = null
-    typed = ""
+  // One session is on screen, so a tab strip was spending a row to answer a
+  // question — *which session* — that the column's head answers in words. The
+  // strip lives on as the history popover; this is the name, edited in place.
+  let renaming = false
+  let nameDraft = ""
+  const startRename = () => {
+    renaming = true
+    nameDraft = sessionName
   }
-  const closeConfig = () => { closeSettings(); config = null; declaration = null; typed = "" }
-  const edit = (id, field, value) => {
-    config = { ...config, profiles: config.profiles.map(p => p.id === id ? { ...p, [field]: value } : p) }
-  }
-  const addProfile = () => {
-    config = { ...config, profiles: [...config.profiles, {
-      id: ++rowId, name: "", backend: "ollama", url: "", model: "",
-      contextLimit: "", keyFile: "", remote: false,
-    }] }
-  }
-  const removeProfile = id => {
-    const gone = config.profiles.find(p => p.id === id)
-    config = {
-      ...config,
-      profiles: config.profiles.filter(p => p.id !== id),
-      default: gone && gone.name === config.default ? "" : config.default,
-    }
-  }
-  const chooseDefault = name => {
-    config = { ...config, default: name }
-    declaration = null
-    typed = ""
-  }
-  // `declaring` retries the same write with the word the person just typed the
-  // host to earn. Nothing else adds it.
-  const saveConfig = async declaring => {
-    saving = true
-    const body = fromDraft(declaring
-      ? { ...config, profiles: config.profiles.map(p =>
-          p.name.trim() === declaration.profile ? { ...p, remote: true } : p) }
-      : config)
-    const result = await saveProviders(body)
-    saving = false
-    if (result.ok) {
-      config = toDraft(state.providers)
-      declaration = null
-      typed = ""
-    } else {
-      declaration = result.declaration
-      typed = ""
-    }
+  const commitRename = async () => {
+    if (!renaming) return
+    renaming = false
+    const asked = nameDraft.trim()
+    if (!asked || asked === sessionName) return
+    await renameSession(state.currentSessionId, asked)
   }
 
-  // ---- starting a session ------------------------------------------------
+  // ---- the gate, answered once ------------------------------------------
   //
-  // `null` when the dialog is closed. A session picks where it sends and which
-  // model there; the destination becomes the *session's*, and this is the only
-  // moment it can be chosen — see
-  // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
-  let starter = null
-  let starting = false
-  // Which of the two things the dialog is doing, so the one that is running
-  // says so on its own button rather than on both.
-  let continuing = false
-
-  const openStarter = async provider => {
-    if (!state.providers) await loadProviders()
-    // What this session may be allowed to do, offered beside where it sends —
-    // and chosen at the same moment, because it is the only one there is: a
-    // posture is what a session's jobs are approved against, so it never moves.
-    if (!state.postures) await loadPostures()
-    continuing = false
-    const names = Object.keys(state.providers?.providers || {})
-    const chosen = provider
-      || state.providers?.running
-      || state.providers?.default
-      || names[0]
-      || ""
-    starter = {
-      provider: chosen,
-      model: "",
-      models: [],
-      reason: null,
-      from: null,
-      loading: false,
-      // "" is the server's own policy file, which is what every session got
-      // before a session could choose.
-      posture: "",
-    }
-    if (chosen) await loadModels(chosen)
-  }
-  // The list is fetched from the provider itself, so it is what is *pulled*
-  // rather than what somebody remembered. An empty one with a reason is the
-  // ordinary "that server is not running right now", and the field stays
-  // typable: a model not pulled yet is a legitimate thing to write down.
-  const loadModels = async name => {
-    starter = { ...starter, provider: name, loading: true, models: [], reason: null }
-    const answer = await providerModels(name)
-    starter = {
-      ...starter,
-      loading: false,
-      models: answer.models || [],
-      reason: answer.reason || null,
-      from: answer.suggested_from || null,
-      model: answer.suggested || "",
-    }
-  }
-  const closeStarter = () => { starter = null; continuing = false }
-  const startSession = async () => {
-    starting = true
-    const ok = await newSession({
-      provider: starter.provider,
-      model: starter.model,
-      posture: starter.posture || undefined,
-    })
-    starting = false
-    if (ok) {
-      starter = null
-      closeConfig()
-    }
-  }
-  // The same two answers, against the session already on screen. Its history
-  // comes along, and the server writes a header into its stream saying where
-  // it changed — so turn 8 on another model is not silently comparable with
-  // turn 7 on this one.
-  const continueHere = async () => {
-    starting = true
-    continuing = true
-    const ok = await resumeSession(state.session, {
-      provider: starter.provider,
-      model: starter.model,
-    })
-    starting = false
-    continuing = false
-    if (ok) {
-      starter = null
-      closeConfig()
-    }
+  // `auto` is a person deciding **once instead of per job**, and never the
+  // server running unapproved work: the proposal still arrives, and the
+  // approval is still an `approve_job` this page sends. The guard is what makes
+  // it once — a reactive statement re-runs, and without it every render would
+  // send another approval for the same proposal.
+  const maybeAnswer = job => {
+    if (!job || prefs.confirm !== "auto" || state.replay) return ""
+    if (ui.answered.includes(job.id)) return ""
+    ui.answered = [...ui.answered, job.id]
+    approve(job.id)
+    return job.id
   }
 
   // The first run, and the one thing a person can do on it. A server with
-  // nowhere to send opens on the editor rather than on a chat box that would
-  // answer them from a fixture without saying so.
+  // nowhere to send opens on the providers editor rather than on a chat box
+  // that would answer them from a fixture without saying so.
   //
   // Asked **only of a server that said hello**. The deployed page is a static
   // twin of the read API with no `/api/settings` behind it, and a 404 there
@@ -329,43 +165,48 @@
       await new Promise(resume => setTimeout(resume, 100))
     }
     if (!state.protocol || state.replay) return
-    if (await checkConfigured()) await openConfig()
+    // The settings first, because two things below read them: the folder the
+    // panels are rooted at, and the model this session names.
+    await refreshSettings()
+    // Which folder, before the panels list anything: a tree that listed the
+    // whole of what `serve` was started in and then moved would be two
+    // listings for one visit.
+    await loadRoot(state.settings?.base)
+    await loadProviders()
+    await checkModel()
+    // Nothing opens a modal here. A server with nowhere to send says so in the
+    // chat column itself — the column the answer is about — and the button
+    // there opens Settings on Models. A modal that opened itself over the
+    // folder question would be two dialogs deep on a first visit, and the
+    // folder one cannot be dismissed.
   })()
 
   $: profileNames = Object.keys(state.providers?.providers || {})
-  // Empty where nobody has written a posture down, and where a surface cannot
-  // choose one at all — over stdio the process is the session.
-  $: postureNames = state.postures?.choosable
-    ? Object.keys(state.postures?.postures || {})
-    : []
-  // What stands in the way of continuing the session on screen, or "" when
-  // nothing does. A control that cannot work says why rather than failing when
-  // it is pressed.
-  // What stands in the way of *either* action: the server refuses both while a
-  // turn is in flight or a proposal is unanswered, and a button that fails when
-  // pressed is worse than one that says why it will not.
-  $: busy = state.status === "running"
-    ? "a turn is running"
-    : proposed
-      ? "a proposal is waiting at the gate"
-      : ""
-  $: cannotContinue = busy
-    || (state.replay
-      ? "this is a recording"
-      : !state.session
-        ? "no session is open"
-        : !state.messages.length
-          ? "this session has no turns yet — start one instead"
-          : !state.settings?.store
-            ? "this server keeps no session store, so nothing can be resumed"
-            : "")
-  $: editable = !!state.providers?.editable
-  $: canDeclare = !!declaration && typed.trim() === declaration.host
-  $: windowSource = ({
-    flag: "--context-limit",
-    profile: "the profile's context-limit",
-    unset: "nothing said, so nothing is budgeted",
-  })[state.settings?.window_from] || ""
+  // Nowhere to send at all. The chat column says so in the column it is about,
+  // rather than in a modal that opens over everything — and the one control it
+  // offers is the one that fixes it.
+  $: noProviders = !!state.providers && !profileNames.length
+  // A model the provider does not have is certain and costs a whole turn to
+  // discover at the far end. A provider that did not answer is an ordinary
+  // state — one that is starting up — and does not disable anything.
+  $: unreachableModel = ui.reach?.verdict === "missing" ? ui.reach.detail : ""
+
+  // What a session is called, by the one rule: the name somebody gave it, and
+  // otherwise its id — except for the live session, whose id *is* the word
+  // "live" and reads as nothing. The history list and the head use the same
+  // function, or a renamed session is renamed in one of them.
+  const nameOf = s => {
+    if (s?.title && s.title !== "live") return s.title
+    return s?.id === "live" ? "Live session" : (s?.id || "")
+  }
+  $: sessionName = nameOf(
+    (state.sessions || []).find(s => s.id === state.currentSessionId)
+      || { id: state.currentSessionId },
+  )
+
+  $: rootLabel = workspace.root
+    ? workspace.root
+    : (workspace.base.split("/").pop() || "workspace")
 
   $: running = state.status === "running"
   // Whether this is a recording, which is not the same question as what the
@@ -375,6 +216,7 @@
   $: replaying = state.replay
   // The gate. While this is set the server is holding a prompt, unrun.
   $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
+  $: answeredFor = maybeAnswer(proposed)
   $: live = (state.jobs || state.tasks).find(j => j.state === "approved") || null
   $: planTasks = proposed ? (proposed.plan.tasks || proposed.plan.steps || []) : []
   $: declares = proposed
@@ -390,18 +232,24 @@
     : false
   $: entries = foldTranscript(state.messages, state.jobs || state.tasks, expanded)
 
+  // The content column's foot: the open tab's own facts. They were a head, and
+  // the head is tabs now — `path`, `language` and `cut at 512 KB` are what a
+  // status bar is for, and moving them is what freed the head to hold more than
+  // one file at a time.
+  $: picked = workspace.selected
+  $: shown = workspace.content
+
   // Everything the debug panel computes moved with it into
-  // `inspector-debug.html`, which reads the same store directly. See
-  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  // `inspector-debug.html`, which reads the same store directly.
 </script>
 
 <!-- The page's own chrome, drawn rather than typed. Every one of these was a
      text glyph — `↻`, `▾`/`▸`, `▪`/`▫`, `≡` — and a text glyph's size, weight
      and baseline belong to whichever font on the machine carries that
      codepoint, so none of them landed on the 16px box the theme's file icons
-     occupy. Seven symbols on a 24-unit grid, stroked in `currentColor` so each
-     takes the colour of the control it sits in, and one sprite because the
-     caret and the refresh are each used in two files. See
+     occupy. Stroked in `currentColor` so each takes the colour of the control
+     it sits in, and one sprite because the caret and the refresh are each used
+     in more than one file. See
      `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`. -->
 <svg class="sprite" aria-hidden="true" width="0" height="0">
   <!-- One caret for both states: `.ic.open` turns it, so what the screen shows
@@ -423,653 +271,694 @@
        what the first person to meet them read as a broken tree. -->
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zm0 0v5h5"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.8a2 2 0 0 1 1.7.9l1 1.6H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <!-- The chat's head and the settings rail. A clock for the sessions that
+       happened, a cog for the settings, two sliders for what is general about
+       this browser, a stack for what this server sends to, and a paperclip for
+       a file fused into one turn. -->
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.3 2"/></symbol>
+  <!-- Teeth, not rays: the first version had eight long thin spokes on a small
+       circle and read as a sun at 16px. The ring is what carries the shape and
+       the teeth only break its edge. -->
+  <symbol id="i-cog" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="3"/>
+    <circle cx="12" cy="12" r="7.2"/>
+    <path d="M12 3.2v1.6M12 19.2v1.6M20.8 12h-1.6M4.8 12H3.2M18.2 5.8l-1.1 1.1M6.9 17.1l-1.1 1.1M18.2 18.2l-1.1-1.1M6.9 6.9 5.8 5.8"/>
+  </symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24">
+    <path d="M4 8h10M18 8h2M4 16h4M12 16h8"/>
+    <circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>
+  </symbol>
+  <symbol id="i-server" viewBox="0 0 24 24">
+    <rect x="3.5" y="4.5" width="17" height="6" rx="2"/>
+    <rect x="3.5" y="13.5" width="17" height="6" rx="2"/>
+    <path d="M7 7.5h.01M7 16.5h.01"/>
+  </symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24">
+    <path d="M20 11.5 12.2 19.3a4.6 4.6 0 0 1-6.5-6.5l7.8-7.8a3 3 0 0 1 4.3 4.3l-7.8 7.8a1.5 1.5 0 0 1-2.1-2.1l7.2-7.2"/>
+  </symbol>
+  <!-- The two-column toggle: what the other column would be. A speech bubble
+       for the chat, a page for the content. -->
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.5 12a7.5 7.5 0 0 1-7.5 7.5H4.5l2.1-2.8A7.5 7.5 0 1 1 20.5 12Z"/></symbol>
 </svg>
 
-<header>
-  <strong>luu</strong>
-  <!-- The thing you click is the thing it is about: these two tags are what
-       the modal's first section explains at length. -->
-  <button type="button" class="tag tag-btn" @click="openConfig()" title="Configuration">
-    {{ state.backend || "—" }}
-  </button>
-  <button type="button" class="tag tag-btn" @click="openConfig()" title="Configuration">
-    {{ state.model || "—" }}
-  </button>
-  <select
-    :if="state.fixtures.length"
-    class="fixtures"
-    :value="state.fixture"
-    @change="playFixture($event.target.value)">
-    <option :each="fixture in state.fixtures" :key="fixture.file" :value="fixture.file">
-      {{ fixture.name }}
-    </option>
-  </select>
-  <span class="status" :class="state.status">{{ state.status }}</span>
-  <button
-    type="button"
-    class="hamburger"
-    title="Preferences"
-    @click="prefsOpen = true"><svg class="ic"><use href="#i-menu"/></svg></button>
-</header>
+<!-- Three columns that each have a head, a body and a foot, and the heads and
+     feet are the same height — one token, `--chrome-h`. The page-wide header
+     that used to sit above them was a strip of *other columns'* controls, and
+     it cost every column 3rem of height to say so. See
+     `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`. -->
+<div class="app" :attrs="{ 'data-columns': columns }">
 
-<!-- Preferences. Everything here is about the browser looking at the server,
-     which is why none of it is in `config.toml` and none of it is sent
-     anywhere. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`. -->
-<div :if="prefsOpen" class="modal-backdrop" @click="prefsOpen = false">
-  <div class="modal narrow" @click="$event.stopPropagation()">
-    <header class="modal-head">
-      <strong>Preferences</strong>
-      <button type="button" class="link" @click="prefsOpen = false">close</button>
+  <!-- The left rail. Three things a person looks at while an agent works —
+       the workspace, what changed in it, and what the context manager did —
+       behind one switch rather than three columns. -->
+  <aside class="col inspector">
+    <header class="col-head">
+      <!-- The corner a logo has always been in, and the column that is always
+           on screen. It is a control: it means *take me back to the
+           conversation*. -->
+      <button type="button" class="logo" title="Back to the chat" @click="toChat()">luu</button>
+      <nav class="tabs">
+        <button type="button" :class.on="prefs.inspector === 'files'" @click="setInspector('files')">Files</button>
+        <button type="button" :class.on="prefs.inspector === 'git'" @click="setInspector('git')">Git</button>
+        <button type="button" :class.on="prefs.inspector === 'debug'" @click="setInspector('debug')">Debug</button>
+      </nav>
     </header>
-    <section class="modal-body">
-      <dl class="settings">
-        <dt>Theme</dt>
-        <dd>
-          <div class="choice">
-            <button type="button" :class.on="theme === 'dark'" @click="setTheme('dark')">Dark</button>
-            <button type="button" :class.on="theme === 'light'" @click="setTheme('light')">Light</button>
+    <div class="col-main">
+      <InspectorFiles :if="prefs.inspector === 'files'" />
+      <InspectorGit :if="prefs.inspector === 'git'" />
+      <InspectorDebug :if="prefs.inspector === 'debug'" />
+    </div>
+    <footer class="col-foot">
+      <!-- Which folder, and the way to change it. The ceiling is where
+           `luu serve` was started; this chooses a subdirectory of it. -->
+      <button type="button" class="root" @click="openPicker()"
+              :attrs="{ title: `${workspace.base}${workspace.root ? '/' + workspace.root : ''} — click to change` }">
+        <svg class="ic"><use href="#i-folder"/></svg>
+        <span>{{ rootLabel }}</span>
+      </button>
+      <span class="status" :class="state.status">{{ state.status }}</span>
+    </footer>
+  </aside>
+
+  <!-- What the rail opened, at the width a file or a diff wants. One tab per
+       open thing, so looking at a diff no longer loses the file on screen. -->
+  <section class="col content" :if="showContent">
+    <header class="col-head">
+      <div class="tabs files">
+        <span
+          :each="tab in workspace.tabs"
+          :key="tab.id"
+          class="tab"
+          :class.on="tab.id === workspace.active">
+          <button type="button" class="pick" :attrs="{ title: tab.path }"
+                  @click="activate(tab.id)">
+            <svg class="ic kind"><use :attrs="{ href: tab.kind === 'diff' ? '#i-refresh' : (tab.kind === 'debug' ? '#i-sliders' : '#i-file') }"/></svg>
+            <span class="label">{{ tab.title }}</span>
+          </button>
+          <button type="button" class="close" title="Close this tab" @click="closeTab(tab.id)">
+            <svg class="ic"><use href="#i-close"/></svg>
+          </button>
+        </span>
+        <span :if="!workspace.tabs.length" class="none">Nothing open</span>
+      </div>
+      <!-- Only where there are two columns: with three, both are on screen and
+           a toggle would be a control with nothing to do. -->
+      <button
+        :if="columns === 2"
+        type="button"
+        class="swap"
+        title="Show the chat instead"
+        @click="setPane('chat')">
+        <svg class="ic"><use href="#i-chat"/></svg>
+      </button>
+    </header>
+
+    <div class="col-main"><ContentViewer /></div>
+
+    <footer class="col-foot">
+      <span :if="picked" class="path">{{ picked?.path }}</span>
+      <span :if="!picked" class="dim small">no file open</span>
+      <span :if="shown?.language" class="lang small dim">{{ shown?.language }}</span>
+      <!-- How much of the file this is, not just that it is not all of it: the
+           server counts the lines before it cuts, so the panel can say what it
+           is leaving out instead of leaving the reader to wonder. -->
+      <span :if="shown?.truncated" class="warn small">
+        cut at 512 KB — {{ shown?.lines.length }} of {{ shown?.total_lines }} lines
+      </span>
+      <!-- Both diffs of the same file, because "staged" and "unstaged" are two
+           different answers and a panel that shows one silently is a panel that
+           lies by omission when the other exists. -->
+      <span :if="picked?.kind === 'diff'" class="which">
+        <button type="button" :class.on="!picked?.staged" @click="showDiff(picked?.path, false)">working tree</button>
+        <button type="button" :class.on="picked?.staged" @click="showDiff(picked?.path, true)">staged</button>
+      </span>
+      <button :if="picked?.kind === 'diff'" type="button" class="link"
+              @click="showFile(picked?.path)">open the file</button>
+      <button :if="picked?.kind === 'file'" type="button" class="link"
+              @click="showDiff(picked?.path, false)">diff it</button>
+    </footer>
+  </section>
+
+  <!-- The conversation. No tabs: one session is on screen, and its name says
+       which one in words the head has room for. -->
+  <section class="col chat" :if="showChat">
+    <header class="col-head">
+      <button :if="!renaming" type="button" class="name" title="Rename this session"
+              @click="startRename()">{{ sessionName }}</button>
+      <input
+        :if="renaming"
+        class="name-edit"
+        :value="nameDraft"
+        autofocus
+        @input="nameDraft = $event.target.value"
+        @blur="commitRename()"
+        @keydown.enter="commitRename()">
+
+      <div class="acts">
+        <button type="button" title="New session — where it sends, and which model"
+                @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <button type="button" title="Earlier sessions"
+                @click="ui.history ? closeHistory() : openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+        <button type="button" title="Settings"
+                @click="openSettingsAt('general')"><svg class="ic"><use href="#i-cog"/></svg></button>
+        <button
+          :if="columns === 2"
+          type="button"
+          class="swap"
+          title="Show the content instead"
+          @click="setPane('content')"><svg class="ic"><use href="#i-file"/></svg></button>
+      </div>
+
+      <!-- The old tab strip, as a popover. Switching and deleting, which are
+           the two things the strip did. -->
+      <div :if="ui.history" class="history" @click="armedClose = ''">
+        <div :each="s in state.sessions" :key="s.id" class="row" :class.on="s.id === state.currentSessionId">
+          <button type="button" class="pick" :attrs="{ title: s.id }" @click="onSwitchSession(s.id)">
+            {{ nameOf(s) }}
+            <span class="dim">{{ s.turns }}t</span>
+          </button>
+          <!-- Only where the server would take it: `delete_session_handler`
+               refuses the live session and the active one, and a control that is
+               only ever refused is worse than no control at all. -->
+          <button
+            :if="s.id !== 'live' && s.id !== state.currentSessionId"
+            type="button"
+            class="close"
+            :class.armed="armedClose === s.id"
+            :attrs="{ title: armedClose === s.id
+              ? 'Click again to delete this session and its stream'
+              : 'Delete this session' }"
+            @click="onCloseSession(s.id, $event)">
+            <svg class="ic"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <p :if="!state.sessions.length" class="dim small">No sessions yet.</p>
+      </div>
+    </header>
+
+    <div class="chat-body">
+      <!-- Nowhere to send at all, said in the column it is about rather than in
+           a modal over everything — and the one control it offers is the one
+           that fixes it. -->
+      <div :if="noProviders" class="nothing">
+        <strong>No models are configured.</strong>
+        <p class="dim">
+          Nothing in <code>config.toml</code> says where this machine sends, so
+          there is nothing to send this conversation to. Name a provider and a
+          model, then start a session on it.
+        </p>
+        <button type="button" class="save" @click="openSettingsAt('models')">Configure models</button>
+      </div>
+
+      <div :if="!noProviders" class="transcript">
+        <div :each="entry in entries" :key="entry.id">
+          <article :if="entry.kind === 'message'" :class="entry.message.role" :class.evicted="entry.message.evicted">
+            <div class="who">
+              {{ entry.message.role }}
+              <!-- Kept and marked, never removed: the prompt no longer carries
+                   this and the transcript still has to be able to say so. -->
+              <span :if="entry.message.evicted" class="gone">
+                · out of the window since turn {{ entry.message.evicted }}
+              </span>
+            </div>
+            <div class="text">{{ entry.message.text }}</div>
+            <div :if="entry.message.reason" class="meta">
+              <span :class.warn="entry.message.reason !== 'stop'">{{ entry.message.reason }}</span>
+              <span :if="entry.message.usage">
+                {{ entry.message.usage.prompt_tokens }} prompt / {{ entry.message.usage.completion_tokens }} completion
+              </span>
+              <span :if="entry.message.reason && !entry.message.usage" class="dim">usage unknown</span>
+            </div>
+          </article>
+
+          <!-- A closed job, as the model now sees it: one summary where its
+               turns were. Opening it shows what the prompt no longer carries. -->
+          <div :if="entry.kind === 'fold'" class="fold">
+            <div class="fold-head">
+              <button type="button" class="link disclose" @click="toggle((entry.job || entry.task).id)">
+                <svg class="ic" :class.open="expanded.includes((entry.job || entry.task).id)"><use href="#i-caret"/></svg>
+                job {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
+              </button>
+              <!-- Which authority folded it. Shown rather than counted in
+                   private: the ladder above the person is only worth climbing if
+                   a reader can see which rung took each job. -->
+              <span :if="(entry.job || entry.task).closedBy === 'exit_code'" class="dim">closed by exit code</span>
+              <button type="button" class="link" :disabled="replaying" @click="reopenJob((entry.job || entry.task).id)">reopen</button>
+            </div>
+            <pre class="summary">{{ (entry.job || entry.task).summary }}</pre>
           </div>
-        </dd>
-        <dd class="caveat">
-          Remembered in this browser only — it is not written to
-          <code>config.toml</code>, which says where a run sends rather than
-          what it looks like.
-        </dd>
-      </dl>
-      <p class="small dim">
-        Where this server sends, and the providers it can be pointed at, are
-        in
-        <button type="button" class="link" @click="prefsOpen = false; openConfig()">Configuration</button>.
-      </p>
-    </section>
-  </div>
-</div>
+        </div>
 
-
-<!-- Configuration. Two sections and they are not the same kind of thing: the
-     first is what this server already resolved and cannot be changed while it
-     runs; the second is a file the next run reads. Saying so is the whole
-     difference between a form that works and one that looks like it did. -->
-<div :if="state.settingsOpen" class="modal-backdrop" @click="closeConfig()">
-  <div class="modal" @click="$event.stopPropagation()">
-    <header class="modal-head">
-      <strong>Configuration</strong>
-      <button type="button" class="link" @click="closeConfig()">close</button>
-    </header>
-
-    <section class="modal-body">
-      <!-- The first run. The server decides this (`unconfigured`), the page
-           only shows it: a browser working it out from the backend name would
-           be a second copy of a rule that already has one. -->
-      <div :if="state.settings?.unconfigured" class="first-run">
-        <strong>Nothing says where this machine sends.</strong>
-        <p>
-          There is no provider in <code>config.toml</code> and no destination was
-          typed on the command line, so this server fell back to the mock — which
-          answers in sentences and is nowhere. Write one below, then start a
-          session on it.
+        <p :if="!entries.length" class="empty">
+          Nothing yet. Send a prompt.
         </p>
       </div>
 
-      <h3>What this server is running</h3>
-      <p class="dim small">
-        Resolved when it started and fixed for its lifetime. Editing the
-        providers below changes what the <em>next</em> run reads, not this one.
-      </p>
+      <!-- Between the transcript and the composer, and outside the scroll: a
+           gate that scrolled away from the conversation it stopped is one
+           somebody answers without reading. -->
+      <div class="chat-pinned" :if="!noProviders">
+        <div :if="state.error" class="error">{{ state.error }}</div>
 
-      <dl class="settings" :if="state.settings">
-        <dt>Destination</dt>
-        <dd>
-          <span :if="state.settings.profile" class="tag">{{ state.settings.profile }}</span>
-          <span>{{ state.settings.backend }}</span>
-          <span :if="state.settings.destination" class="dim">{{ state.settings.destination }}</span>
-          <span :if="state.settings.remote" class="warn">remote — this leaves the machine</span>
-          <span :if="!state.settings.destination" class="dim">nowhere: the mock backend</span>
-        </dd>
+        <!-- The server declining to do something. Not an error: the session is
+             in a state where the ask does not apply, and before this existed the
+             ask simply vanished. -->
+        <div :if="state.refused" class="refused">
+          <b>{{ state.refused?.request }}</b> refused — {{ state.refused?.detail }}
+        </div>
 
-        <dt>Model</dt>
-        <dd>{{ state.settings.model }}</dd>
-
-        <dt>Window</dt>
-        <dd>
-          <span :if="state.settings.window">{{ state.settings.window }} tokens</span>
-          <span :if="!state.settings.window" class="dim">unknown</span>
-          <span class="dim">· {{ windowSource }}</span>
-          <span class="dim">· {{ state.settings.reserve }} reserved for the answer</span>
-        </dd>
-        <dd :if="state.settings.window_caveat" class="caveat">{{ state.settings.window_caveat }}</dd>
-
-        <dt>Counting</dt>
-        <dd>
-          <span>{{ state.settings.counter.kind === "model" ? state.settings.counter.id : "approximate" }}</span>
-          <span :if="state.settings.counter_warning" class="warn">{{ state.settings.counter_warning }}</span>
-        </dd>
-
-        <dt>Context</dt>
-        <dd>
-          <span>map {{ state.settings.map_tokens || 0 }}</span>
-          <span>· selection {{ state.settings.select_tokens || 0 }}</span>
-          <span :if="!state.settings.select_tokens" class="dim">· selection off</span>
-        </dd>
-
-        <dt>Sessions</dt>
-        <dd>
-          <span :if="state.settings.store">{{ state.settings.store }}</span>
-          <span :if="!state.settings.store" class="dim">in memory only</span>
-        </dd>
-
-        <dt>Posture</dt>
-        <dd>
-          <span :if="state.settings.posture?.name" class="tag">{{ state.settings.posture?.name }}</span>
-          <span :if="!state.settings.posture?.name" class="dim">this server's own policy file</span>
-          <span class="dim">{{ state.settings.posture?.runtime }}</span>
-          <span class="dim">· {{ state.settings.posture?.enforcement }}</span>
-          <span :if="state.settings.posture?.network" class="warn">· network allowed</span>
-        </dd>
-
-        <dt>Sandbox</dt>
-        <dd><pre class="sandbox">{{ state.settings.sandbox }}</pre></dd>
-      </dl>
-
-      <h3>Providers</h3>
-      <p class="dim small" :if="state.providers?.path">
-        {{ state.providers.path }}
-        <span :if="state.providers.running">· this server is running <strong>{{ state.providers.running }}</strong></span>
-      </p>
-      <p :if="state.providers && !state.providers.editable" class="refused">
-        {{ state.providers.refused }}
-      </p>
-      <p :if="state.providersError" class="error">{{ state.providersError }}</p>
-
-      <table class="providers" :if="config">
-        <thead>
-          <tr>
-            <th>Default</th><th>Name</th><th>Backend</th><th>URL</th>
-            <th>Model</th><th>Window</th><th>Key file</th><th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr :each="row in config?.profiles || []" :key="row.id">
-            <td>
-              <input type="radio" name="default" :disabled="!editable || !row.name"
-                     :checked="config.default === row.name"
-                     @change="chooseDefault(row.name)">
-            </td>
-            <td><input class="w-name" :value="row.name" :disabled="!editable"
-                       @input="edit(row.id, 'name', $event.target.value)"></td>
-            <td>
-              <select :value="row.backend" :disabled="!editable"
-                      @change="edit(row.id, 'backend', $event.target.value)">
-                <option value="ollama">ollama</option>
-                <option value="openai">openai</option>
-                <option value="mock">mock</option>
-              </select>
-            </td>
-            <td><input class="w-url" :value="row.url" :disabled="!editable"
-                       placeholder="http://127.0.0.1:11434"
-                       @input="edit(row.id, 'url', $event.target.value)"></td>
-            <td><input class="w-model" :value="row.model" :disabled="!editable"
-                       @input="edit(row.id, 'model', $event.target.value)"></td>
-            <td><input class="w-num" :value="row.contextLimit" :disabled="!editable"
-                       placeholder="—" title="The window the server was started with"
-                       @input="edit(row.id, 'contextLimit', $event.target.value)"></td>
-            <td>
-              <input class="w-key" :value="row.keyFile" :disabled="!editable"
-                     placeholder="~/.luu/that.key"
-                     title="A path. Never the key itself: a key in this file is a key in every backup."
-                     @input="edit(row.id, 'keyFile', $event.target.value)">
-            </td>
-            <td>
-              <span :if="row.remote" class="tag warn" title="Declared as off this machine">remote</span>
-              <!-- Only for a profile that is in the file: this starts a session
-                   against what the server can resolve, not against an unsaved
-                   row. -->
-              <button type="button" class="link" :if="profileNames.includes(row.name)"
-                      title="Start a session on this provider"
-                      @click="openStarter(row.name)">use →</button>
-              <button type="button" class="link" :disabled="!editable"
-                      @click="removeProfile(row.id)">remove</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div class="modal-foot">
-        <!-- The one refusal a person can answer. The browser never decides that a
-             URL is off the machine — the server refuses the write and names the
-             host, and typing it is the declaration, exactly as `-p` is on the
-             command line. -->
-        <div :if="declaration" class="declare">
-          <p>
-            <strong>{{ declaration.profile }}</strong> sends to
-            <strong>{{ declaration.host }}</strong>, which is not this machine, and
-            it is about to become the default — so every run that names no provider
-            goes there. Type the host to confirm.
+        <!-- Nothing has run under this job and nothing will until it is
+             answered: the prompt that caused it is held on the server, unrun. -->
+        <div :if="proposed" class="gate">
+          <div class="who">proposed job {{ proposed?.id }}</div>
+          <div class="objective">{{ proposed?.objective }}</div>
+          <ul :if="planTasks.length" class="plan">
+            <li :each="task in planTasks" :key="task">{{ task }}</li>
+          </ul>
+          <p :if="proposed?.plan.files.length" class="dim">reads: {{ proposed?.plan.files.join(" · ") }}</p>
+          <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
+          <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
+          <p :if="!declares" class="dim warn">
+            <span :if="prose">The planning call answered in prose, so the model
+            declared nothing.</span>
+            <span :if="!prose">The model declared an empty plan.</span>
+            The plan is the sandbox for its job, so approving as it stands runs a
+            job that may touch nothing — add what it needs below, up to what the
+            policy file grants.
           </p>
-          <input :value="typed" placeholder="{{ declaration.host }}"
-                 @input="typed = $event.target.value">
-          <button type="button" :disabled="!canDeclare || saving"
-                  @click="saveConfig(true)">Confirm and save</button>
+          <!-- The plan is the sandbox for this job, so what it forgot is denied
+               until someone adds it. Bounded by the policy file: an entry it does
+               not grant comes back missing from the approved plan. -->
+          <div class="amend" :if="!replaying">
+            <input
+              :value="addition"
+              @input="addition = $event.target.value"
+              :attrs="{ placeholder: 'a path or command the plan forgot' }">
+            <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add read</button>
+            <button type="button" class="link" :disabled="!addition.trim()" @click="add('writes')">add write</button>
+            <button type="button" class="link" :disabled="!addition.trim()" @click="add('commands')">add command</button>
+          </div>
+          <p :if="adding.files.length" class="dim">adding reads: {{ adding.files.join(" · ") }}</p>
+          <p :if="adding.writes.length" class="dim">adding writes: {{ adding.writes.join(" · ") }}</p>
+          <p :if="adding.commands.length" class="dim">adding commands: {{ adding.commands.join(" · ") }}</p>
+
+          <!-- The one part of the plan the model was never asked for. A person
+               is being asked what would convince them the work is finished,
+               which is the judgement the gate exists for. -->
+          <div class="amend" :if="!replaying">
+            <input
+              :value="closesOn"
+              @input="closesOn = $event.target.value"
+              :attrs="{ placeholder: 'closes itself when this command exits 0 (optional)' }">
+          </div>
+          <p :if="closesOn.trim()" class="dim warn">
+            this job folds itself when <code>{{ closesOn.trim() }}</code> exits 0,
+            with nobody watching — its summary is written either way
+          </p>
+
+          <div class="gate-buttons">
+            <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>
+            <button type="button" class="cancel" :disabled="replaying" @click="rejectJob(proposed?.id)">Reject</button>
+          </div>
         </div>
 
-        <div class="modal-actions" :if="config">
-          <button type="button" class="add" :disabled="!editable" @click="addProfile()">+ profile</button>
-          <button type="button" class="save" :disabled="!editable || saving"
-                  @click="saveConfig(false)">{{ saving ? "Saving…" : "Save" }}</button>
+        <div :if="live" class="live-job">
+          <span>job {{ live?.id }} · {{ live?.objective }}</span>
+          <button type="button" class="link" :disabled="running || replaying" @click="closeJob(live?.id)">
+            close &amp; fold
+          </button>
         </div>
       </div>
-
-    </section>
-  </div>
-</div>
-
-<!-- Starting a session: the one moment its destination is chosen. Nothing
-     switches inside a session — every per-turn number is backend-specific, and
-     one label over two backends is a comparison nobody can make. -->
-<div :if="starter" class="modal-backdrop" @click="closeStarter()">
-  <div class="modal narrow" @click="$event.stopPropagation()">
-    <header class="modal-head">
-      <strong>Where a session sends</strong>
-      <button type="button" class="link" @click="closeStarter()">close</button>
-    </header>
-    <section class="modal-body">
-      <p :if="!profileNames.length" class="refused">
-        There are no providers in <code>config.toml</code> yet. Write one in
-        Configuration first — a session can only be sent somewhere this machine
-        has already named.
-      </p>
-
-      <dl class="settings" :if="profileNames.length">
-        <dt>Provider</dt>
-        <dd>
-          <select :value="starter?.provider" @change="loadModels($event.target.value)">
-            <option :each="name in profileNames" :key="name" :value="name">{{ name }}</option>
-          </select>
-          <span :if="starter?.provider === state.providers?.default" class="dim">· the file's default</span>
-        </dd>
-
-        <dt>Model</dt>
-        <dd>
-          <input class="w-model" :value="starter?.model" list="starter-models"
-                 placeholder="{{ starter?.loading ? 'asking the provider…' : 'a model name' }}"
-                 @input="starter = { ...starter, model: $event.target.value }">
-          <datalist id="starter-models">
-            <option :each="name in starter?.models || []" :key="name" :value="name"></option>
-          </datalist>
-          <span :if="starter?.from" class="dim">· {{ starter?.from }}</span>
-        </dd>
-        <dd :if="starter?.reason" class="caveat">
-          Could not list this provider's models: {{ starter?.reason }}. Type one —
-          a model that is not pulled yet is still a name worth writing down.
-        </dd>
-
-        <!-- What the session may do, which is not where it sends. Offered only
-             where somebody has written one down: the names come from
-             `config.toml`, and a page cannot add to them. -->
-        <dt :if="postureNames.length">Posture</dt>
-        <dd :if="postureNames.length">
-          <select :value="starter?.posture"
-                  @change="starter = { ...starter, posture: $event.target.value }">
-            <option value="">this server's own policy file</option>
-            <option :each="name in postureNames" :key="name" :value="name">{{ name }}</option>
-          </select>
-        </dd>
-        <dd :if="postureNames.length && starter?.posture" class="dim small">
-          {{ state.postures?.postures[starter?.posture]?.policy }} — chosen now
-          and never moved: a session's jobs are approved against what it may do.
-        </dd>
-        <dd :if="!starter?.reason && !starter?.loading && !starter?.models?.length" class="dim">
-          This provider offers no list, so the model is whatever you type.
-        </dd>
-      </dl>
-
-      <p class="dim small" :if="profileNames.length">
-        <strong>Start session</strong> opens an empty one there.
-        <strong>Continue here</strong> keeps the history on screen and moves it —
-        the session's stream gains a header saying where it changed, so the turns
-        before it are not read as comparable with the ones after.
-        Neither changes the file, and neither touches a turn that is running.
-      </p>
-      <p class="dim small" :if="profileNames.length && cannotContinue">
-        Cannot continue: {{ cannotContinue }}.
-      </p>
-      <p class="dim small" :if="profileNames.length && busy">
-        Cannot start one either: {{ busy }}.
-      </p>
-
-      <div class="modal-foot">
-        <div class="modal-actions">
-          <button type="button" :disabled="!profileNames.length || starting || !!cannotContinue"
-                  title="Keep this session's history and move it to the chosen destination"
-                  @click="continueHere()">{{ starting && continuing ? "Moving…" : "Continue here" }}</button>
-          <button type="button" class="save" :disabled="!profileNames.length || starting || !!busy"
-                  @click="startSession()">{{ starting && !continuing ? "Starting…" : "Start session" }}</button>
-        </div>
-      </div>
-    </section>
-  </div>
-</div>
-
-<div class="split">
-  <!-- The left rail. Three things a person looks at while an agent works —
-       the workspace, what changed in it, and what the context manager did —
-       behind one switch rather than three columns. See
-       `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`. -->
-  <aside class="inspector">
-    <div class="modes">
-      <button type="button" :class.on="mode === 'files'" @click="setMode('files')">Files</button>
-      <button type="button" :class.on="mode === 'git'" @click="setMode('git')">Git</button>
-      <button type="button" :class.on="mode === 'debug'" @click="setMode('debug')">Debug</button>
-    </div>
-    <div class="mode-body">
-      <InspectorFiles :if="mode === 'files'" />
-      <InspectorGit :if="mode === 'git'" />
-      <InspectorDebug :if="mode === 'debug'" />
-    </div>
-  </aside>
-
-  <!-- What the rail selected, at the width a file or a diff wants. -->
-  <section class="viewer">
-    <ContentViewer />
-  </section>
-
-  <section class="chat">
-    <!-- Sessions, as tabs, over the column they are about. A dropdown
-         answered "which session am I on" only while open; this answers it,
-         and "how many are there", without a click. -->
-    <div :if="!state.replay" class="session-tabs" @click="armedClose = ''">
-      <!-- A tab is two controls, so it is not itself a button: one that
-           switches to the session and one that deletes it. -->
-      <span
-        :each="s in state.sessions"
-        :key="s.id"
-        class="tab"
-        :class.on="s.id === state.currentSessionId">
-        <button type="button" class="pick" :attrs="{ title: s.id }" @click="onSwitchSession(s.id)">
-          {{ s.id === 'live' ? 'Live session' : (s.title || s.id) }}
-          <span class="dim">{{ s.turns }}t</span>
-        </button>
-        <!-- Only where the server would take it: `delete_session_handler`
-             refuses the live session and the active one, and a control that is
-             only ever refused is worse than no control at all. -->
-        <button
-          :if="s.id !== 'live' && s.id !== state.currentSessionId"
-          type="button"
-          class="close"
-          :class.armed="armedClose === s.id"
-          :attrs="{ title: armedClose === s.id
-            ? 'Click again to delete this session and its stream'
-            : 'Delete this session' }"
-          @click="onCloseSession(s.id, $event)">
-          <svg class="ic"><use href="#i-close"/></svg>
-        </button>
-      </span>
-      <button
-        type="button"
-        class="tab new"
-        title="Start a new session — where it sends, and which model"
-        @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
     </div>
 
-    <div class="transcript">
-      <div :each="entry in entries" :key="entry.id">
-        <article :if="entry.kind === 'message'" :class="entry.message.role" :class.evicted="entry.message.evicted">
-          <div class="who">
-            {{ entry.message.role }}
-            <!-- Kept and marked, never removed: the prompt no longer carries
-                 this and the transcript still has to be able to say so. -->
-            <span :if="entry.message.evicted" class="gone">
-              · out of the window since turn {{ entry.message.evicted }}
-            </span>
-          </div>
-          <div class="text">{{ entry.message.text }}</div>
-          <div :if="entry.message.reason" class="meta">
-            <span :class.warn="entry.message.reason !== 'stop'">{{ entry.message.reason }}</span>
-            <span :if="entry.message.usage">
-              {{ entry.message.usage.prompt_tokens }} prompt / {{ entry.message.usage.completion_tokens }} completion
-            </span>
-            <span :if="entry.message.reason && !entry.message.usage" class="dim">usage unknown</span>
-          </div>
-        </article>
-
-        <!-- A closed job, as the model now sees it: one summary where its
-             turns were. Opening it shows what the prompt no longer carries. -->
-        <div :if="entry.kind === 'fold'" class="fold">
-          <div class="fold-head">
-            <button type="button" class="link disclose" @click="toggle((entry.job || entry.task).id)">
-              <svg class="ic" :class.open="expanded.includes((entry.job || entry.task).id)"><use href="#i-caret"/></svg>
-              job {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
-            </button>
-            <!-- Which authority folded it. Shown rather than counted in
-                 private: the ladder above the person is only worth climbing if
-                 a reader can see which rung took each job. -->
-            <span :if="(entry.job || entry.task).closedBy === 'exit_code'" class="dim">closed by exit code</span>
-            <button type="button" class="link" :disabled="replaying" @click="reopenJob((entry.job || entry.task).id)">reopen</button>
-          </div>
-          <pre class="summary">{{ (entry.job || entry.task).summary }}</pre>
-        </div>
-      </div>
-
-      <p :if="!entries.length" class="empty">
-        Nothing yet. Send a prompt.
-      </p>
-    </div>
-
-    <div :if="state.error" class="error">{{ state.error }}</div>
-
-    <!-- The server declining to do something. Not an error: the session is in
-         a state where the ask does not apply, and before this existed the ask
-         simply vanished. -->
-    <div :if="state.refused" class="refused">
-      <b>{{ state.refused?.request }}</b> refused — {{ state.refused?.detail }}
-    </div>
-
-    <!-- Nothing has run under this job and nothing will until it is answered:
-         the prompt that caused it is held on the server, unrun. -->
-    <div :if="proposed" class="gate">
-      <div class="who">proposed job {{ proposed?.id }}</div>
-      <div class="objective">{{ proposed?.objective }}</div>
-      <ul :if="planTasks.length" class="plan">
-        <li :each="task in planTasks" :key="task">{{ task }}</li>
-      </ul>
-      <p :if="proposed?.plan.files.length" class="dim">reads: {{ proposed?.plan.files.join(" · ") }}</p>
-      <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
-      <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
-      <p :if="!declares" class="dim warn">
-        <span :if="prose">The planning call answered in prose, so the model
-        declared nothing.</span>
-        <span :if="!prose">The model declared an empty plan.</span>
-        The plan is the sandbox for its job, so approving as it stands runs a
-        job that may touch nothing — add what it needs below, up to what the
-        policy file grants.
-      </p>
-      <!-- The plan is the sandbox for this job, so what it forgot is denied
-           until someone adds it. Bounded by the policy file: an entry it does
-           not grant comes back missing from the approved plan. -->
-      <div class="amend" :if="!replaying">
+    <!-- Two rows, and they are two different questions. The top is what you are
+         sending; the bottom is what you are sending it *under* — which were not
+         on the page at all, or only inside a modal, at the moment somebody
+         typed a prompt. -->
+    <footer class="col-foot chat-foot">
+      <form class="composer" @submit.prevent="submit()">
         <input
-          :value="addition"
-          @input="addition = $event.target.value"
-          :attrs="{ placeholder: 'a path or command the plan forgot' }">
-        <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add read</button>
-        <button type="button" class="link" :disabled="!addition.trim()" @click="add('writes')">add write</button>
-        <button type="button" class="link" :disabled="!addition.trim()" @click="add('commands')">add command</button>
+          :value="draft"
+          @input="draft = $event.target.value"
+          :attrs="{ placeholder: noProviders
+            ? 'No model is configured'
+            : unreachableModel
+              ? 'That model is not available'
+              : proposed ? 'Approve or reject the proposed job first'
+              : (replaying ? 'Replaying a recorded session — read only' : 'Ask something…'),
+            disabled: replaying || !!proposed || noProviders || !!unreachableModel }"
+          autofocus>
+        <button :if="!running" type="submit"
+                :disabled="!draft.trim() || replaying || !!proposed || noProviders || !!unreachableModel">Send</button>
+        <button :if="running" type="button" class="cancel" @click="cancel()">Cancel</button>
+      </form>
+
+      <div class="options">
+        <!-- Who answers the gate. A person deciding once instead of per job —
+             never the server running unapproved work, which is why this control
+             is here and not behind a modal somebody set and forgot. -->
+        <div class="choice tiny">
+          <button type="button" :class.on="prefs.confirm === 'manual'"
+                  title="Every job waits for you" @click="setConfirm('manual')">Manual</button>
+          <button type="button" :class.on="prefs.confirm === 'auto'"
+                  title="This page approves each proposal as it arrives" @click="setConfirm('auto')">Auto</button>
+        </div>
+
+        <!-- Where this session sends. Reported rather than switched: changing it
+             is `Continue here` in the session starter, and it is there for a
+             reason — every per-turn number is backend-specific. -->
+        <button type="button" class="dest" title="Where this session sends"
+                @click="openSettingsAt('models')">
+          <span :if="state.settings?.profile" class="tag">{{ state.settings?.profile }}</span>
+          <span class="tag">{{ state.model || state.settings?.model || "—" }}</span>
+        </button>
+        <span :if="unreachableModel" class="warn small">{{ unreachableModel }}</span>
+        <span :if="ui.reach?.verdict === 'unreachable'" class="dim small">provider not answering</span>
+
+        <select
+          :if="state.fixtures.length"
+          class="fixtures"
+          :value="state.fixture"
+          @change="playFixture($event.target.value)">
+          <option :each="fixture in state.fixtures" :key="fixture.file" :value="fixture.file">
+            {{ fixture.name }}
+          </option>
+        </select>
+
+        <!-- The file open in the content column, named in the prompt.
+             **Naming, not fusing**: `--fragment` reads a file through the
+             sandbox and puts its bytes in the turn, and the `prompt` message
+             has no field for that — adding one is a protocol version, which is
+             the pass after this one. What this does is put the path where the
+             model can ask for it with `read_file`, which is the thing the
+             person clicking already meant. See the record's *Still open*. -->
+        <button type="button" class="clip"
+                :attrs="{ title: picked
+                  ? `Name ${picked.path} in the prompt`
+                  : 'Open a file in the content column first',
+                  disabled: replaying || noProviders || !picked }"
+                @click="attach()">
+          <svg class="ic"><use href="#i-clip"/></svg>
+        </button>
       </div>
-      <p :if="adding.files.length" class="dim">adding reads: {{ adding.files.join(" · ") }}</p>
-      <p :if="adding.writes.length" class="dim">adding writes: {{ adding.writes.join(" · ") }}</p>
-      <p :if="adding.commands.length" class="dim">adding commands: {{ adding.commands.join(" · ") }}</p>
-
-      <!-- The one part of the plan the model was never asked for. A person is
-           being asked what would convince them the work is finished, which is
-           the judgement the gate exists for. -->
-      <div class="amend" :if="!replaying">
-        <input
-          :value="closesOn"
-          @input="closesOn = $event.target.value"
-          :attrs="{ placeholder: 'closes itself when this command exits 0 (optional)' }">
-      </div>
-      <p :if="closesOn.trim()" class="dim warn">
-        this job folds itself when <code>{{ closesOn.trim() }}</code> exits 0,
-        with nobody watching — its summary is written either way
-      </p>
-
-      <div class="gate-buttons">
-        <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>
-        <button type="button" class="cancel" :disabled="replaying" @click="rejectJob(proposed?.id)">Reject</button>
-      </div>
-    </div>
-
-    <div :if="live" class="live-task live-job">
-      <span>job {{ live?.id }} · {{ live?.objective }}</span>
-      <button type="button" class="link" :disabled="running || replaying" @click="closeJob(live?.id)">
-        close &amp; fold
-      </button>
-    </div>
-
-    <form class="composer" @submit.prevent="submit()">
-      <input
-        :value="draft"
-        @input="draft = $event.target.value"
-        :attrs="{ placeholder: proposed ? 'Approve or reject the proposed job first' : (replaying ? 'Replaying a recorded session — read only' : 'Ask something…'), disabled: replaying || !!proposed }"
-        autofocus>
-      <button :if="!running" type="submit" :disabled="!draft.trim() || replaying || !!proposed">Send</button>
-      <button :if="running" type="button" class="cancel" @click="cancel()">Cancel</button>
-    </form>
+    </footer>
   </section>
 
 </div>
+
+<!-- Which folder the panels look at. Over the whole window on a first visit,
+     with no way out other than choosing: there is nothing behind it yet. -->
+<FolderPicker :if="workspace.picker.open" />
+<SettingsModal :if="state.settingsOpen" />
+<SessionStarter :if="ui.starter" />
 
 <style>
-  :host, header, .split { display: block; }
+  :host, .app { display: block; }
 
-  header {
+  /* `--chrome-h` is in `app.css`, beside the palette: it is a token the whole
+     page is built on rather than one component's measurement. */
+  .app {
+    display: grid;
+    /* `dvh` rather than `vh`: a mobile browser's toolbar is the difference
+       between a page that fits and one whose foot is under the chrome. */
+    height: 100dvh;
+    grid-template-columns: minmax(0, 20rem) minmax(0, 1fr) minmax(0, 30rem);
+  }
+  /* Two columns: the inspector, and one of content or chat. Which one is the
+     person's choice rather than the viewport's — the toggle lives in that
+     column's own head. */
+  .app[data-columns="2"] { grid-template-columns: minmax(0, 20rem) minmax(0, 1fr); }
+
+  .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .col-head, .col-foot {
     display: flex;
     align-items: center;
     gap: .5rem;
-    padding: .6rem 1rem;
-    border-bottom: 1px solid var(--line);
+    flex: none;
+    height: var(--chrome-h);
+    padding: 0 .6rem;
     background: var(--panel);
+    /* The chrome is a bar, not a paragraph: nothing in it wraps into a second
+       row, because a second row is the page-wide header's mistake again. */
+    overflow: hidden;
   }
-  header strong { letter-spacing: .02em; }
-  .tag {
-    font-size: 12px;
-    color: var(--dim);
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    padding: 0 .5rem;
-  }
-  .status { margin-left: auto; font-size: 12px; color: var(--dim); }
-  /* Last in the header, after the status, because it is the one control here
-     that is about the page rather than about the run. */
-  .hamburger {
+  .col-head { border-bottom: 1px solid var(--line); }
+  .col-foot { border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); }
+  .col-main { flex: 1; min-height: 0; overflow: auto; }
+
+  .inspector { border-right: 1px solid var(--line); background: var(--panel); }
+  .inspector .col-main { padding: 1rem; }
+  .content { border-right: 1px solid var(--line); }
+  .app[data-columns="2"] .content { border-right: 0; }
+
+  /* ---- the inspector's head: the logo, then the panels ------------------ */
+  .logo {
     background: none;
-    color: var(--dim);
     border: 0;
     border-radius: 6px;
-    display: flex;
-    align-items: center;
-    padding: .35rem;
+    color: var(--fg);
+    font: inherit;
+    font-weight: 700;
+    letter-spacing: .02em;
+    padding: .15rem .35rem;
     cursor: pointer;
   }
-  .hamburger:hover { color: var(--fg); background: var(--bg); }
-  .status.running { color: var(--accent); }
-  .status.replay { color: var(--warn); }
-  .status.closed { color: var(--bad); }
-  .fixtures {
-    background: var(--bg);
-    color: inherit;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    font: inherit;
-    font-size: 12px;
-    padding: .15rem .4rem;
-  }
-  input:disabled { opacity: .6; }
+  .logo:hover { color: var(--accent); background: var(--bg); }
 
-  /* One tab per session, over the column they are about. The strip scrolls
-     sideways rather than wrapping: a tab bar that grows a second row moves
-     the conversation down the screen every time a session is started. */
-  .session-tabs {
-    display: flex;
-    align-items: stretch;
-    gap: .2rem;
-    padding: .4rem .5rem 0;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel);
-    overflow-x: auto;
-    scrollbar-width: thin;
-  }
-  .session-tabs .tab {
-    color: var(--dim);
-    border-bottom: 2px solid transparent;
-    font-size: 12px;
-    font-weight: 500;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-  }
-  .session-tabs .tab .pick,
-  .session-tabs .tab.new {
+  .tabs { display: flex; align-items: stretch; gap: .1rem; margin-left: auto; height: 100%; }
+  .tabs button {
     background: none;
-    color: inherit;
+    color: var(--dim);
     border: 0;
+    border-bottom: 2px solid transparent;
     border-radius: 0;
     font: inherit;
-    padding: .3rem .6rem .35rem;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 0 .5rem;
     cursor: pointer;
-    display: flex;
-    align-items: baseline;
-    gap: .35rem;
   }
-  .session-tabs .tab:hover { color: var(--fg); }
-  .session-tabs .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
-  .session-tabs .tab .dim { font-size: 11px; font-variant-numeric: tabular-nums; }
-  /* Quiet until the tab is under the pointer, because it is the destructive
-     half of a control whose other half is just "look at this session" — and
-     visible on focus, or it would be a button only a mouse can find. */
-  .session-tabs .tab .close {
+  .tabs button:hover { color: var(--fg); }
+  .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
+
+  /* ---- the content column's head: one tab per open thing ---------------- */
+  .tabs.files {
+    margin-left: 0;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabs.files .none { color: var(--dim); font-size: 12px; align-self: center; }
+  /* A tab is two controls, so it is not itself a button: one that shows the
+     thing and one that closes it. */
+  .tabs.files .tab {
+    display: flex;
+    align-items: center;
+    flex: none;
+    color: var(--dim);
+    border-bottom: 2px solid transparent;
+    max-width: 14rem;
+  }
+  .tabs.files .tab .pick {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    min-width: 0;
+    border-bottom: 0;
+    padding: 0 .2rem 0 .5rem;
+  }
+  .tabs.files .tab .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabs.files .tab .kind { width: 13px; height: 13px; opacity: .7; }
+  .tabs.files .tab:hover { color: var(--fg); }
+  .tabs.files .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
+  .tabs.files .tab .close {
     background: none;
     border: 0;
     border-radius: 4px;
     color: inherit;
-    padding: .15rem;
-    margin-right: .3rem;
+    padding: .1rem;
+    margin-right: .25rem;
     cursor: pointer;
     opacity: 0;
   }
-  .session-tabs .tab:hover .close,
-  .session-tabs .tab .close:focus-visible { opacity: .7; }
-  .session-tabs .tab .close:hover { opacity: 1; background: var(--bg); }
+  .tabs.files .tab:hover .close,
+  .tabs.files .tab .close:focus-visible { opacity: .7; }
+  .tabs.files .tab .close:hover { opacity: 1; background: var(--bg); }
+  .tabs.files .tab .close .ic { width: 12px; height: 12px; }
+
+  .swap {
+    flex: none;
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--dim);
+    display: flex;
+    align-items: center;
+    padding: .25rem;
+    cursor: pointer;
+  }
+  .swap:hover { color: var(--fg); border-color: var(--accent); }
+
+  /* ---- the content column's foot: the open thing's own facts ------------ */
+  .content .col-foot .path {
+    font-family: ui-monospace, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .which { display: flex; gap: .2rem; margin-left: auto; }
+  .which button {
+    background: none;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    padding: .05rem .4rem;
+    cursor: pointer;
+  }
+  .which button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .content .col-foot .link { font-size: 12px; flex: none; }
+  .content .col-foot > .link:not(.which ~ .link) { margin-left: auto; }
+
+  /* ---- the inspector's foot: which folder ------------------------------- */
+  .root {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    min-width: 0;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    font: inherit;
+    font-size: 12px;
+    padding: .15rem .3rem;
+    cursor: pointer;
+  }
+  .root:hover { color: var(--fg); background: var(--bg); }
+  .root .ic { width: 13px; height: 13px; flex: none; }
+  .root span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { margin-left: auto; flex: none; font-size: 12px; color: var(--dim); }
+  .status.running { color: var(--accent); }
+  .status.replay { color: var(--warn); }
+  .status.closed { color: var(--bad); }
+
+  /* ---- the chat's head: a name, and three things beside it -------------- */
+  .chat .col-head { position: relative; }
+  .name, .name-edit {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+  }
+  .name {
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--fg);
+    font: inherit;
+    font-weight: 600;
+    padding: .2rem .35rem;
+    cursor: text;
+  }
+  .name:hover { background: var(--bg); }
+  .name-edit {
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    color: var(--fg);
+    font: inherit;
+    font-weight: 600;
+    padding: .15rem .35rem;
+  }
+  .acts { display: flex; align-items: center; gap: .15rem; flex: none; }
+  .acts button {
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    display: flex;
+    align-items: center;
+    padding: .3rem;
+    cursor: pointer;
+  }
+  .acts button:hover { color: var(--fg); background: var(--bg); }
+  .acts .swap { border: 1px solid var(--line); margin-left: .2rem; }
+
+  /* The old tab strip, as a popover under the clock. */
+  .history {
+    position: absolute;
+    top: calc(var(--chrome-h) - 2px);
+    right: .4rem;
+    z-index: 20;
+    min-width: 18rem;
+    max-width: 26rem;
+    max-height: 60vh;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: .3rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  }
+  .history .row { display: flex; align-items: center; border-radius: 6px; }
+  .history .row:hover { background: var(--bg); }
+  .history .row.on .pick { color: var(--fg); font-weight: 600; }
+  .history .pick {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    font: inherit;
+    font-size: 13px;
+    padding: .3rem .5rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .history .pick .dim { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .history .close {
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: var(--dim);
+    padding: .2rem;
+    margin-right: .2rem;
+    cursor: pointer;
+    opacity: .5;
+  }
+  .history .close:hover { opacity: 1; background: var(--bg); }
   /* Armed: one more click deletes the session, and the colour is the page's
      own "this is the bad one". */
-  .session-tabs .tab .close.armed { opacity: 1; color: var(--bad); background: var(--bg); }
-  .session-tabs .tab .close .ic { width: 12px; height: 12px; }
-  .session-tabs .tab.new { color: var(--accent); align-items: center; padding: .3rem .55rem .35rem; }
+  .history .close.armed { opacity: 1; color: var(--bad); background: var(--bg); }
+  .history .close .ic { width: 12px; height: 12px; }
+  .history p { margin: .4rem .5rem; }
 
-  /* Inspector · content viewer · agent chat. The middle column is the
-     flexible one because a file and a diff are what want the width; the two
-     rails are what they are asked from and answered into. See
-     `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`. */
-  .split {
-    display: grid;
-    grid-template-columns: minmax(0, 20rem) minmax(0, 1fr) minmax(0, 30rem);
-    height: calc(100vh - 3rem);
-  }
-  /* Narrow: the chat is the column that cannot be dropped — it is the one
-     you are talking into — and the viewer is the first to go, because it is
-     the one that is empty until something is selected. 64rem is where the
-     two rails alone (20 + 30) stop leaving the middle a usable width. */
-  @media (max-width: 64rem) {
-    .split { grid-template-columns: minmax(0, 20rem) minmax(0, 1fr); }
-    .viewer { display: none; }
-  }
-  @media (max-width: 48rem) {
-    .split { grid-template-columns: minmax(0, 1fr); }
-    .inspector { display: none; }
-  }
+  /* ---- the chat's body ------------------------------------------------- */
+  .chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .transcript { flex: 1; overflow-y: auto; padding: 1rem; min-height: 0; }
+  .chat-pinned { flex: none; }
 
-  .chat { display: flex; flex-direction: column; min-width: 0; }
-  .transcript { flex: 1; overflow-y: auto; padding: 1rem; }
+  .nothing {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .7rem;
+    padding: 2rem;
+    text-align: center;
+  }
+  .nothing p { margin: 0; max-width: 26rem; line-height: 1.6; }
+  .nothing code { color: var(--fg); }
 
   article { margin-bottom: 1rem; }
   .who {
@@ -1089,9 +978,10 @@
   .meta .warn { color: var(--warn); }
 
   .empty, .dim { color: var(--dim); }
+  .small { font-size: 12px; }
   .warn { color: var(--warn); }
   .error {
-    margin: 0 1rem;
+    margin: 0 1rem .4rem;
     padding: .5rem .75rem;
     border: 1px solid var(--bad);
     border-radius: 6px;
@@ -1099,7 +989,69 @@
     font-size: 13px;
   }
 
-  .composer { display: flex; gap: .5rem; padding: 1rem; border-top: 1px solid var(--line); }
+  /* ---- the chat's foot: two rows --------------------------------------- */
+  .chat-foot {
+    height: calc(var(--chrome-h) * 2);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 0 .6rem;
+  }
+  .composer { display: flex; align-items: center; gap: .4rem; height: var(--chrome-h); }
+  .options {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    height: var(--chrome-h);
+    overflow: hidden;
+  }
+  /* The page's segmented control, at the size a status bar has room for. */
+  .choice.tiny button { font-size: 11px; padding: .1rem .5rem; }
+
+  .options .tag {
+    font-size: 11px;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0 .45rem;
+  }
+  .dest {
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    padding: .15rem .2rem;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .dest:hover .tag { border-color: var(--accent); color: var(--fg); }
+  .dest .tag { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .clip {
+    margin-left: auto;
+    flex: none;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    display: flex;
+    align-items: center;
+    padding: .25rem;
+    cursor: pointer;
+  }
+  .clip:hover { color: var(--fg); background: var(--bg); }
+  .fixtures {
+    background: var(--bg);
+    color: inherit;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    padding: .1rem .3rem;
+    max-width: 12rem;
+  }
+
   input {
     flex: 1;
     min-width: 0;
@@ -1108,8 +1060,9 @@
     border-radius: 6px;
     color: inherit;
     font: inherit;
-    padding: .5rem .75rem;
+    padding: .35rem .7rem;
   }
+  input:disabled { opacity: .6; }
   input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button {
     background: var(--accent);
@@ -1118,54 +1071,17 @@
     border-radius: 6px;
     font: inherit;
     font-weight: 600;
-    padding: .5rem 1rem;
+    padding: .35rem .9rem;
     cursor: pointer;
   }
   button:disabled { opacity: .4; cursor: default; }
   button.cancel { background: var(--warn); }
 
-  /* The shell owns the box — border, ground, scrolling — and each mode's
-     component owns only what is inside it. Three components that each set
-     their own padding are three chances for them to disagree. */
-  .inspector {
-    border-right: 1px solid var(--line);
-    background: var(--panel);
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .modes {
-    display: flex;
-    gap: .2rem;
-    padding: .5rem .5rem 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .modes button {
-    background: none;
-    color: var(--dim);
-    border: 0;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 500;
-    padding: .3rem .6rem .35rem;
-    cursor: pointer;
-  }
-  .modes button:hover { color: var(--fg); }
-  .modes button.on { color: var(--fg); border-bottom-color: var(--accent); }
-  .mode-body { flex: 1; overflow-y: auto; padding: 1rem; min-height: 0; }
-
-  .viewer {
-    border-right: 1px solid var(--line);
-    min-width: 0;
-    overflow: auto;
-  }
-
   /* The gate reads as a thing that stopped the conversation, because it is. */
   .gate {
     margin: 0 1rem .6rem; padding: .7rem .9rem;
     border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-bg);
+    max-height: 50vh; overflow-y: auto;
   }
   .gate .objective { font-weight: 600; margin: .2rem 0 .4rem; }
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
@@ -1185,12 +1101,12 @@
     background: var(--bg); color: var(--fg); font: inherit;
   }
 
-  .live-task, .live-job {
+  .live-job {
     display: flex; align-items: center; gap: .6rem;
     margin: 0 1rem .4rem; font-size: 13px; color: var(--dim);
   }
-  .live-task span, .live-job span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .live-task button, .live-job button { margin-left: auto; }
+  .live-job span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .live-job button { margin-left: auto; }
 
   /* A closed task: one entry, where its turns were. */
   .fold {

@@ -117,8 +117,18 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 # `--no-store` turns it off. The first run asks where that directory goes —
 # ~/.luu or ~/.config/luu — and LUU_HOME answers it without being asked.
 cargo run --bin luu -- serve --no-store
-# The page is three panes — an inspector (files, git, the context panel), a
-# viewer, and the chat with one tab per session. Files get VSCode icons if
+# The page is three columns, each with a 40px head and foot: an inspector
+# (files, git, the context panel), the content, and the chat. Below 1260px it is
+# two, and the second column toggles between content and chat from its own head.
+# The content column keeps one tab per open thing — a file, a diff, a prompt —
+# and the chat names its session instead of spending a row on tabs.
+# On a first visit it asks which folder to look at: a subdirectory of the one
+# `serve` was started in, which is the ceiling and is not negotiable from the
+# browser. Settings has sections down the side — General (theme, editor, layout,
+# folder) and Models — and everything in General is kept in `localStorage`,
+# because it is a fact about the screen rather than about the run.
+#
+# Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed
 # extension's directory, or its theme JSON); nothing is vendored, so without
 # it the tree draws its own two shapes. Source files are highlighted server-side
@@ -126,6 +136,14 @@ cargo run --bin luu -- serve --no-store
 #
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
+#
+# Monaco is the one optional dependency and it is a *node* one, in
+# `crates/luu/ui/package.json` rather than vendored into the tree: `make install`
+# fetches it, the binary serves it from disk, and `General → editor` offers it
+# only where it is installed. Without it the page draws every file itself, which
+# is the default either way — see
+# RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md for the
+# measurement that decided that.
 #
 cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 

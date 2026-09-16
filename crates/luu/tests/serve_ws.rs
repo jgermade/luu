@@ -400,6 +400,16 @@ async fn post(address: &str, path: &str) -> reqwest::Response {
         .expect("the request")
 }
 
+async fn patch(address: &str, path: &str, body: Value) -> reqwest::Response {
+    let client = reqwest::Client::new();
+    client
+        .patch(format!("http://{address}{path}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("the request")
+}
+
 async fn delete(address: &str, path: &str) -> reqwest::Response {
     let client = reqwest::Client::new();
     client
@@ -2165,4 +2175,123 @@ async fn the_providers_route_says_whether_this_surface_may_write() {
         "bound on loopback, so this surface may write the file"
     );
     assert!(view["refused"].is_null());
+}
+
+/// A session can be named, and the name survives the fold being rewritten.
+///
+/// The one thing the page may change about a stored session other than deleting
+/// it. Two halves are worth asserting and they are not the same half: the live
+/// session is renamed in memory and checkpointed, a stored one is patched in
+/// SQLite — and a rename that went through `save` would rebuild the row from a
+/// view and silently drop the `provider` column the session picker starts from.
+/// See `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+#[tokio::test]
+async fn a_session_can_be_named_and_keeps_the_name() {
+    let dir = std::env::temp_dir().join(format!("luu-test-rename-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("sessions.db");
+
+    let address = server_storing(vec![PLAN.into(), ANSWER.into()], &db).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("websocket connection");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // A turn, so the live session has something to be a fold of.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "name me"}),
+    )
+    .await;
+    until(&mut socket, "job_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "approve_job", "job": 1}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+
+    // The live one: renamed in memory, then checkpointed, so the listing the
+    // page reads says so.
+    let answer = patch(
+        &address,
+        "/api/sessions/live",
+        serde_json::json!({"title": "the one about naming"}),
+    )
+    .await;
+    assert_eq!(answer.status(), reqwest::StatusCode::OK);
+    let listed = get(&address, "/api/sessions").await;
+    let live = listed
+        .as_array()
+        .expect("a listing")
+        .iter()
+        .find(|row| row["turns"].as_u64() == Some(2))
+        .expect("the session that ran a turn");
+    assert_eq!(live["title"], "the one about naming");
+
+    // Empty is refused rather than stored: a session with no name is a row
+    // nobody can pick out of the history.
+    let refused = patch(
+        &address,
+        "/api/sessions/live",
+        serde_json::json!({"title": "   "}),
+    )
+    .await;
+    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // A second session, so the first one is stored rather than live. Its id is
+    // only settled at this moment — until another session starts, the live one
+    // is listed under the word `live` — so the id is read after the switch and
+    // not before it.
+    assert_eq!(
+        post(&address, "/api/sessions").await.status(),
+        reqwest::StatusCode::CREATED
+    );
+    until(&mut socket, "hello").await;
+
+    let listed = get(&address, "/api/sessions").await;
+    let stored = listed
+        .as_array()
+        .expect("a listing")
+        .iter()
+        .find(|row| row["turns"].as_u64() == Some(2))
+        .expect("the session that ran a turn");
+    // The name it was given as the live session came with it.
+    assert_eq!(stored["title"], "the one about naming");
+    let stored_id = stored["id"].as_str().expect("an id").to_string();
+    assert_ne!(stored_id, "live");
+
+    let answer = patch(
+        &address,
+        &format!("/api/sessions/{stored_id}"),
+        serde_json::json!({"title": "renamed while stored"}),
+    )
+    .await;
+    assert_eq!(answer.status(), reqwest::StatusCode::OK);
+
+    // Both places the title lives moved together: the column the listing reads
+    // and the blob the fold is loaded from. A rename that moved one would be a
+    // session whose name depends on which query found it.
+    let listed = get(&address, "/api/sessions").await;
+    let row = listed
+        .as_array()
+        .expect("a listing")
+        .iter()
+        .find(|row| row["id"] == stored_id.as_str())
+        .expect("the stored session");
+    assert_eq!(row["title"], "renamed while stored");
+    let view = get(&address, &format!("/api/sessions/{stored_id}")).await;
+    assert_eq!(view["title"], "renamed while stored");
+    assert_eq!(view["turns"].as_array().unwrap().len(), 2);
+
+    // And one that is not there is a 404 rather than a silent success.
+    let missing = patch(
+        &address,
+        "/api/sessions/no-such-session",
+        serde_json::json!({"title": "nothing"}),
+    )
+    .await;
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+
+    std::fs::remove_dir_all(&dir).ok();
 }

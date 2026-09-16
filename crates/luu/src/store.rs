@@ -248,6 +248,35 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Names a stored session, and nothing else.
+    ///
+    /// **The one patch this store has, and it is a patch on purpose.** [`save`]
+    /// replaces a whole row because the thing it writes is a cache of a fold,
+    /// and a half-updated cache of a fold is not a fold of anything. A title is
+    /// the one column that is *not* part of that fold's content — it is a label
+    /// somebody put on a conversation, and nothing downstream reads it — so
+    /// renaming through `save` would mean rebuilding a row out of a view that
+    /// does not carry the columns beside it, and silently dropping the
+    /// `provider` the session picker starts from.
+    ///
+    /// Both places the title lives move together: the column the listing reads
+    /// and the blob [`load`] reads. A rename that moved one would be a session
+    /// whose name depends on which query found it.
+    ///
+    /// [`save`]: Self::save
+    /// [`load`]: Self::load
+    pub fn retitle(&self, id: &str, title: &str) -> Result<bool> {
+        let Some(mut view) = self.load(id)? else {
+            return Ok(false);
+        };
+        view.title = title.to_string();
+        let changed = self.connection.execute(
+            "UPDATE sessions SET title = ?2, view = ?3 WHERE id = ?1",
+            rusqlite::params![id, title, serde_json::to_string(&view)?],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// The model last used with a profile, for the picker to start on.
     ///
     /// Read out of the sessions that happened rather than kept as a preference

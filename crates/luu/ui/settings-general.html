@@ -1,0 +1,109 @@
+<script :setup>
+  // Everything about the browser looking at the server, which is why none of it
+  // is in `config.toml` and none of it is sent anywhere: a theme, a layout and
+  // which editor draws a file are facts about the screen somebody is reading
+  // from, and one server answers two people on two machines. See
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  const { prefs, setTheme, setEditor, setLayout, monacoAvailable } =
+    await import("./prefs.js")
+  const { workspace, openPicker } = await import("./workspace.js")
+
+  // Whether Monaco is on this machine. Asked once — the answer is whether
+  // `npm install` was run in `crates/luu/ui`, and that does not change while
+  // the page is open.
+  let monacoHere = null
+  monacoAvailable().then(found => { monacoHere = found })
+</script>
+
+<h3>Theme</h3>
+<dl class="settings">
+  <dt>Appearance</dt>
+  <dd>
+    <div class="choice">
+      <button type="button" :class.on="prefs.theme === 'auto'" @click="setTheme('auto')">Auto</button>
+      <button type="button" :class.on="prefs.theme === 'light'" @click="setTheme('light')">Light</button>
+      <button type="button" :class.on="prefs.theme === 'dark'" @click="setTheme('dark')">Dark</button>
+    </div>
+  </dd>
+  <dd class="note">
+    <b>Auto</b> follows this machine, live — no reload. <b>Dark</b> is what a
+    browser with nothing remembered gets, and stays so on purpose: every
+    screenshot in this repository was taken against it.
+  </dd>
+</dl>
+
+<h3>Editor</h3>
+<dl class="settings">
+  <dt>Files are drawn by</dt>
+  <dd>
+    <div class="choice">
+      <button type="button" :class.on="prefs.editor === 'own'" @click="setEditor('own')">This page</button>
+      <button
+        type="button"
+        :class.on="prefs.editor === 'monaco'"
+        :disabled="monacoHere === false"
+        @click="setEditor('monaco')">Monaco</button>
+    </div>
+  </dd>
+  <dd :if="monacoHere === false" class="caveat">
+    Monaco is not installed. It is a node dependency of
+    <code>crates/luu/ui</code> rather than a copy in the tree — run
+    <code>make install</code> (or <code>npm install</code> there) and reload.
+  </dd>
+  <dd class="note" :if="monacoHere !== false">
+    This page's viewer is the default and it was measured, not guessed: at the
+    size this panel is asked for it paints in a third of Monaco's time over a
+    seventh of the bytes, and the whole file stays findable by the browser's own
+    Ctrl+F. Monaco is here for what it can do that the other cannot — folding,
+    and jumping to a symbol.
+  </dd>
+</dl>
+
+<h3>Layout</h3>
+<dl class="settings">
+  <dt>Columns</dt>
+  <dd>
+    <div class="choice">
+      <button
+        type="button"
+        :class.on="prefs.layout === 'responsive'"
+        @click="setLayout('responsive')">Responsive</button>
+      <button
+        type="button"
+        :class.on="prefs.layout === 'two'"
+        @click="setLayout('two')">Always two</button>
+    </div>
+  </dd>
+  <dd class="note">
+    <b>Responsive</b> is three columns — inspector, content, chat — above
+    1260px, and two below it, with the second column switching between content
+    and chat. <b>Always two</b> pins that at any width, which is what a wide
+    screen with a wide chat on it wants.
+  </dd>
+</dl>
+
+<h3>Workspace</h3>
+<dl class="settings">
+  <dt>Started in</dt>
+  <dd><span class="path">{{ workspace.base || "—" }}</span></dd>
+  <dt>Looking at</dt>
+  <dd>
+    <span class="path">{{ workspace.root ? workspace.root : "the whole workspace" }}</span>
+    <button type="button" class="link" @click="openPicker()">change</button>
+  </dd>
+  <dd class="note">
+    The folder <code>luu serve</code> was started in is the ceiling; what is
+    chosen is a subdirectory of it. Nothing here widens what the panels can
+    reach — the sandbox already decided that.
+  </dd>
+</dl>
+
+<style scoped>
+  h3:first-child { margin-top: 0; }
+  .path {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+  .note b, .caveat b { color: var(--fg); font-weight: 600; }
+</style>

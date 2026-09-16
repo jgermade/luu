@@ -6,7 +6,11 @@
   const { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor } =
     await import("./workspace.js")
 
-  openDir("")
+  // Rooted at the folder somebody chose, which is a subdirectory of the one
+  // `luu serve` was started in. Paths stay relative to *that* base throughout —
+  // the root decides where the tree starts, not how a file is addressed. See
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  openDir(workspace.root || "")
   loadStatus()
   loadIcons()
 
@@ -32,7 +36,8 @@
   // `workspace.icons` is in the list because the manifest arrives after the
   // first listing does — without it the tree would keep the shapes it resolved
   // in the moment before the theme loaded.
-  $: rows = (workspace.open, workspace.expanded, workspace.icons, flatten("", 0, []))
+  $: rows = (workspace.open, workspace.expanded, workspace.icons,
+             flatten(workspace.root || "", 0, []))
 
   $: selectedPath = workspace.selected?.kind === "file" ? workspace.selected.path : null
 </script>
