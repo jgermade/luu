@@ -52,13 +52,23 @@
 <p :if="workspace.error" class="err">{{ workspace.error }}</p>
 
 <ul class="tree">
-  <li :each="row in rows" :key="row.path">
+  <!-- The row is the `<li>`, not a button. It has to hold three controls — the
+       one that opens the thing, git's letter, and the edit icon — and a
+       `<button>` cannot hold another button: jq79 builds templates with
+       `createElement`, which nests them happily, and then one click fires both
+       handlers. See
+       `RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`. -->
+  <li
+    :each="row in rows"
+    :key="row.path"
+    class="node"
+    :class.on="row.path === selectedPath"
+    :class.ignored="row.ignored"
+    :attrs="{ style: `--depth:${row.depth}` }">
     <button
       type="button"
       class="row"
-      :class.on="row.path === selectedPath"
-      :class.ignored="row.ignored"
-      :attrs="{ style: `padding-left:${row.depth * 0.75 + 0.2}rem`, title: row.path }"
+      :attrs="{ title: row.path }"
       @click="row.dir ? toggleDir(row.path) : showFile(row.path)">
       <span class="twist">
         <svg :if="row.dir" class="ic" :class.open="row.open"><use href="#i-caret"/></svg>
@@ -74,9 +84,18 @@
         :attrs="{ alt: '', loading: 'lazy' }">
       <svg :if="!row.icon" class="ic glyph"><use :attrs="{ href: row.dir ? '#i-folder' : '#i-file' }"/></svg>
       <span class="name">{{ row.name }}</span>
-      <!-- Git's own letter, not a word: `M`, `??`, `A` are what `git status`
-           says, and a person reading this panel already knows them. -->
-      <span :if="row.status" class="status" :class="row.status.trim()">{{ row.status }}</span>
+    </button>
+    <!-- Git's own letter, not a word: `M`, `??`, `A` are what `git status`
+         says, and a person reading this panel already knows them. It no longer
+         needs `margin-left: auto` — the button beside it is `flex: 1`, so what
+         pushes these two right is the name's own greed. -->
+    <span :if="row.status" class="status" :class="row.status.trim()">{{ row.status }}</span>
+    <button
+      type="button"
+      class="edit"
+      :attrs="{ title: `Edit ${row.name}` }"
+      @click="showFile(row.path)">
+      <svg class="ic"><use href="#i-edit"/></svg>
     </button>
   </li>
 </ul>
@@ -97,29 +116,66 @@
   .head .link:hover { color: var(--fg); }
 
   .tree { list-style: none; margin: 0; padding: 0; }
+
+  /* The whole row: what is hovered, what is selected, and what the three
+     controls sit in. The background lives here rather than on the button, so
+     that the edit icon is inside the highlight rather than beside it. */
+  .node {
+    display: flex;
+    align-items: center;
+    border-radius: 4px;
+  }
+  .node:hover { background: var(--bg); }
+  .node.on { background: var(--accent); color: var(--on-accent); }
+  /* Selected *and* hovered used to be the selected colour exactly, so the
+     pointer stopped meaning anything over the one row it is most likely to be
+     on. */
+  .node.on:hover { background: color-mix(in srgb, var(--accent) 86%, var(--fg)); }
+
   .row {
     display: flex;
-    /* Centred, not baseline: most of this row is now a 16px box and an SVG's
+    /* Centred, not baseline: most of this row is a 16px box and an SVG's
        baseline is its bottom edge, which would hang every icon a few pixels
        below the name it belongs to. */
     align-items: center;
     gap: .25rem;
-    width: 100%;
+    /* Greedy, so the two controls after it are pushed to the right edge
+       without either of them having to claim it with `margin-left: auto` —
+       which is what the git letter used to do, and what an edit icon to its
+       right would then have had to fight. */
+    flex: 1;
+    /* Or the name cannot shrink below its text and the ellipsis never runs. */
+    min-width: 0;
     background: none;
     border: 0;
-    border-radius: 4px;
-    color: var(--fg);
+    /* Inherited, so `.node.on` recolours the text without a second rule. */
+    color: inherit;
     font: inherit;
     font-size: 13px;
     padding: .1rem .3rem;
+    /* The indent is a depth, and the arithmetic belongs here rather than in a
+       style attribute the template recomputes per row. */
+    padding-left: calc(var(--depth) * .75rem + .2rem);
     cursor: pointer;
     text-align: left;
   }
-  .row:hover { background: var(--bg); }
-  .row.on { background: var(--accent); color: var(--on-accent); }
+  /* There was no focus style at all: tabbing through the tree moved an
+     invisible cursor. */
+  .row:focus-visible, .edit:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: 4px;
+  }
+  .node.on .row:focus-visible, .node.on .edit:focus-visible { outline-color: var(--on-accent); }
+
   /* Dimmed, not hidden: somebody looking for `target/` wants to see that it is
-     there and ignored rather than wonder whether the tree is broken. */
-  .row.ignored .name { opacity: .45; }
+     there and ignored rather than wonder whether the tree is broken. The icon
+     dims with the name — dimming one and not the other read as a half-loaded
+     row. */
+  .node.ignored .name,
+  .node.ignored .icon,
+  .node.ignored .glyph { opacity: .45; }
+
   .twist { width: 14px; flex: none; display: flex; justify-content: center; color: var(--dim); }
   .twist .ic { width: 12px; height: 12px; }
   .icon { width: 16px; height: 16px; flex: none; }
@@ -127,20 +183,52 @@
      enough that an unconfigured tree reads as intentional. `[ui] icon-theme`
      in config.toml replaces them with any VSCode icon theme on this machine. */
   .glyph { color: var(--dim); }
-  .row.on .glyph { color: var(--on-accent); }
-  .row.on .twist { color: var(--on-accent); }
+  .node.on .glyph, .node.on .twist { color: var(--on-accent); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   .status {
-    margin-left: auto;
     flex: none;
     font-size: 11px;
     font-family: ui-monospace, monospace;
     color: var(--warn);
     white-space: pre;
+    padding: 0 .1rem;
   }
   /* Untracked is the one that reads differently from "changed": nothing of it
      is in git yet. */
   .status.\?\? { color: var(--b-history); }
-  .row.on .status { color: var(--on-accent); }
+  .node.on .status { color: var(--on-accent); }
+
+  /* **The slot is always there; only its contents come and go.** Letting the
+     icon in and out of the flow moves the name 241px → 221px, which re-runs
+     the ellipsis on the one row somebody is pointing at. Measured — see the
+     record. The cost is 20px of name on every row, which is the trade VSCode
+     makes too. */
+  .edit {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0;
+    /* Invisible *and* unclickable: an icon at 0 opacity that still takes
+       clicks is a control nobody can see being pressed by accident. */
+    pointer-events: none;
+  }
+  .edit .ic { width: 13px; height: 13px; }
+  /* The pointer reveals it — and so does the keyboard, because an action that
+     exists only on hover is an action a keyboard cannot find. */
+  .node:hover .edit,
+  .edit:focus-visible { opacity: 1; pointer-events: auto; }
+  .edit:hover { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+  .node.on .edit:hover { background: color-mix(in srgb, var(--on-accent) 18%, transparent); }
+
   .err { color: var(--bad); font-size: 12px; line-height: 1.5; }
 </style>

@@ -412,7 +412,7 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(13)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(14)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip. The live session cannot be deleted — the
@@ -465,6 +465,54 @@ test("under 1260px the second column switches between content and chat", async (
   // Three columns again the moment there is room.
   await page.setViewportSize({ width: 1440, height: 900 })
   await expect(page.locator(".app")).toHaveAttribute("data-columns", "3")
+})
+
+/**
+ * The tree's row: three controls in one highlight, and an edit icon that is
+ * only there under the pointer.
+ *
+ * The row stopped being a `<button>` to make room for it — jq79 builds
+ * templates with `createElement`, which nests a button inside a button
+ * happily, and then one click fires both handlers. See
+ * `RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`.
+ */
+test("the tree shows an edit icon on hover, and the name does not move", async ({ page }) => {
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .tabs button:has-text("Files")')
+  const node = page.locator('.inspector .tree .node:has-text("luu.toml")').first()
+  await expect(node).toBeVisible({ timeout: 15_000 })
+
+  // No nesting: the two buttons are siblings inside the row, not one in the
+  // other, which is what stops a click on the icon also opening the file.
+  await expect(node.locator("button.row button")).toHaveCount(0)
+  await expect(node.locator("> button")).toHaveCount(2)
+
+  const edit = node.locator("button.edit")
+  const name = node.locator(".name")
+
+  // Present but invisible, and — the part that matters — not clickable while
+  // invisible.
+  await expect(edit).toHaveCSS("opacity", "0")
+  await expect(edit).toHaveCSS("pointer-events", "none")
+
+  // The slot is reserved, so revealing the icon must not move the name.
+  const before = await name.boundingBox()
+  await node.hover()
+  await expect(edit).toHaveCSS("opacity", "1")
+  const after = await name.boundingBox()
+  expect(Math.round(after.width)).toBe(Math.round(before.width))
+
+  // And the icon is the rightmost thing in the row.
+  const nameBox = await name.boundingBox()
+  const editBox = await edit.boundingBox()
+  expect(editBox.x).toBeGreaterThan(nameBox.x + nameBox.width - 1)
+
+  // A keyboard can find it: hover is not the only way it appears.
+  await page.locator("button.row", { hasText: "luu.toml" }).first().focus()
+  await page.keyboard.press("Tab")
+  await expect(edit).toBeFocused()
+  await expect(edit).toHaveCSS("opacity", "1")
 })
 
 /**
@@ -561,7 +609,7 @@ test("the files panel lists the workspace, and a file opens in the viewer", asyn
   // `luu.toml` is in every checkout; `target/` is ignored in every checkout
   // that has been built, and this suite needs a built binary to run at all.
   await expect(rows.filter({ hasText: "luu.toml" })).toHaveCount(1)
-  await expect(page.locator(".inspector .tree .row.ignored").first()).toBeVisible()
+  await expect(page.locator(".inspector .tree .node.ignored").first()).toBeVisible()
 
   await page.click('.inspector .tree .row:has-text("luu.toml")')
   await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")

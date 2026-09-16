@@ -735,7 +735,14 @@ save. Those rows are **built in plain JS by `rows.js`, not by a template**: a `:
 already coloured, and never change. Dropping the renderer from that one subtree halves the time
 to the whole file and takes the tab's JS heap from hundreds of megabytes to about twelve. See
 [`RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`](RECORD/2026-09-16.the-viewer-in-plain-js.completed.md). Read-only throughout: the file tree and the git panel are a window onto the workspace,
-not a second way to change it — every write still goes through the job gate.
+not a second way to change it — every write still goes through the job gate. A tree row is an
+`<li>` holding three controls rather than one big `<button>` — the button that opens the thing,
+git's letter, and an **edit pencil that appears only under the pointer** (and under keyboard
+focus, because an action that exists only on hover is one a keyboard cannot find). Its slot is
+reserved rather than conjured, so revealing it does not reflow the name being pointed at. **The
+pencil opens the file today**: the write half is not decided, and deciding it means arguing with
+the sentence above rather than routing around it. See
+[`RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`](RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md).
 
 The columns' contents and every dialog are separate jq79 components
 (`inspector-{files,git,debug}.html`, `content-viewer.html`, `settings-{modal,general,models}.html`,
