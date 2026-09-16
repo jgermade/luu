@@ -1790,6 +1790,7 @@ async fn a_signed_approval_runs_the_held_prompt_and_says_who_approved() {
     let signature = signer
         .sign(
             &Approval {
+                enforcement: None,
                 session: &session,
                 job,
                 files: &files,
@@ -1850,6 +1851,7 @@ async fn a_grant_widened_after_the_signature_is_refused() {
     let signature = signer
         .sign(
             &Approval {
+                enforcement: None,
                 session: &session,
                 job,
                 files: &signed,
