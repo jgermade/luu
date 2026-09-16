@@ -1,0 +1,20 @@
+{
+  "twoPass": {
+    "head": 200,
+    "whole": 3947,
+    "scrollHeightBefore": 71062,
+    "scrollHeightAfter": 71062,
+    "rowStyle": { "display": "flex", "whiteSpace": "pre", "fontFamily": "ui-monospace, monosp" },
+    "gutter": "56px",
+    "spacerShownBeforeTail": true,
+    "spacerHiddenAfterTail": true,
+    "firstRowSurvived": true,
+    "selectedBefore": "//! refuses to hold the port without one — see [`crate::auth`].",
+    "selectedAfter": "//! refuses to hold the port without one — see [`crate::auth`].",
+    "scrolledBefore": 900,
+    "scrolledAfter": 900
+  },
+  "others": { "debugText": "hello from the probe", "diffKind": "diff", "diffHunks": 6, "diffAdds": 6, "diffDels": 49 },
+  "lightTheme": { "theme": "light", "display": "flex", "gutter": "56px", "hlKeyword": "rgb(122, 41, 184)" },
+  "problems": []
+}

@@ -7,7 +7,7 @@
 :root {
   /* One number for every column head and every column foot on the page. The
      chat's foot is twice it, and that is the only exception — see
-     RECORD/2026-09-16.three-columns-that-each-have-a-footer.WIP.md. */
+     RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md. */
   --chrome-h: 40px;
   --bg: #14161a;
   --panel: #1b1e24;
@@ -149,7 +149,7 @@ body {
    its lifetime) and the file the next run will read are styled apart on
    purpose — the first reads as a report, the second as a form. See
    RECORD/2026-09-07.configuring-from-the-browser.completed.md and
-   RECORD/2026-09-16.three-columns-that-each-have-a-footer.WIP.md. */
+   RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -313,6 +313,35 @@ body {
   border-color: var(--accent);
   color: var(--on-accent);
 }
+
+/* The file viewer's rows. Global rather than scoped to the viewer for a
+   stricter reason than the palette below: `<style scoped>` rewrites `.code li`
+   to `.code li[data-jq79="…"]`, and only elements jq79's compiler built carry
+   that attribute. These rows are built by `crates/luu/ui/rows.js`, because the
+   rows are 93% of the viewer's cost and none of them ever changes — see
+   `RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`. */
+.code { list-style: none; margin: 0; padding: .5rem 0; counter-reset: line; }
+.code li {
+  display: flex;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+.code li::before {
+  counter-increment: line;
+  content: counter(line);
+  flex: none;
+  width: 3.5rem;
+  padding-right: .8rem;
+  text-align: right;
+  color: var(--dim);
+  opacity: .6;
+  user-select: none;
+}
+.code code { white-space: pre; }
+/* Carries a row's own metrics, so `1lh` here is exactly one row. */
+.pending { font-size: 12px; line-height: 1.5; height: calc(var(--rows) * 1lh); }
 
 /* One class per capture `crate::highlight` emits. Global rather than scoped to
    the viewer because the chunks are plain `<code>` elements and a future panel

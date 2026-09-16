@@ -727,14 +727,20 @@ context-manager panel that used to be the whole right column. The content column
 per open thing** — a file, a diff, or a block of debug text such as a prompt at the width it was
 written for — so looking at a diff no longer loses the file on screen. A tab holds its identity
 and not its bytes: activating one re-fetches, because the server answers the largest file in
-this repository in 20 ms and the 271 ms a file costs is building the rows, which a cache would
-not save. Read-only throughout: the file tree and the git panel are a window onto the workspace,
+this repository in 20 ms and what a file costs is building the rows — which a cache would not
+save. Those rows are **built in plain JS by `rows.js`, not by a template**: a `:each` inside a
+`:each` charges a scope and two effects per coloured span, over spans that arrive whole,
+already coloured, and never change. Dropping the renderer from that one subtree halves the time
+to the whole file and takes the tab's JS heap from hundreds of megabytes to about twelve. See
+[`RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`](RECORD/2026-09-16.the-viewer-in-plain-js.completed.md). Read-only throughout: the file tree and the git panel are a window onto the workspace,
 not a second way to change it — every write still goes through the job gate.
 
 The columns' contents and every dialog are separate jq79 components
 (`inspector-{files,git,debug}.html`, `content-viewer.html`, `settings-{modal,general,models}.html`,
 `session-starter.html`, `folder-picker.html`); `app.html` keeps the shell — the grid, the three
-columns' chrome, and the chat. Preferences live in `prefs.js` and in `localStorage`: theme
+columns' chrome, and the chat. Two things inside `content-viewer.html` are attached to plain
+elements by id rather than drawn by the renderer, for the same reason and now with a number
+behind it: the optional Monaco editor, and the own viewer's rows. Preferences live in `prefs.js` and in `localStorage`: theme
 (auto/light/dark, where auto is `prefers-color-scheme` resolved live in JS rather than a second
 copy of the light palette), which editor draws a file, the layout, and who answers the gate.
 None of it is in `config.toml`, which says where a run *sends* — a fact about the run, not about

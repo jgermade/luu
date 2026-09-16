@@ -1,0 +1,44 @@
+{
+  "note": "Two full runs of bench.mjs, arms rotated round-robin, median of 14 after a warm-up. `string only` builds the whole HTML and touches no DOM, so the pair of string arms prices the escape pass on its own.",
+  "run-1": {
+    "crates/luu/src/serve.rs": {
+      "lines": 3947, "chunks": 21652, "chars": 155462,
+      "arms": {
+        "html": { "median": 188.6, "min": 178.0 },
+        "dom": { "median": 190.9, "min": 173.2 },
+        "string only": { "median": 2.5, "min": 2.1 },
+        "string only (no escape)": { "median": 1.2, "min": 1.0 }
+      }
+    },
+    "crates/luu/ui/store.js": {
+      "lines": 1036, "chunks": 6471, "chars": 37326,
+      "arms": {
+        "html": { "median": 54.2, "min": 48.0 },
+        "dom": { "median": 48.1, "min": 45.5 },
+        "string only": { "median": 0.7, "min": 0.4 },
+        "string only (no escape)": { "median": 0.4, "min": 0.2 }
+      }
+    }
+  },
+  "run-2": {
+    "crates/luu/src/serve.rs": {
+      "lines": 3947, "chunks": 21652, "chars": 155462,
+      "arms": {
+        "html": { "median": 212.7, "min": 186.6 },
+        "dom": { "median": 208.2, "min": 176.8 },
+        "string only": { "median": 3.2, "min": 2.1 },
+        "string only (no escape)": { "median": 1.3, "min": 1.0 }
+      }
+    },
+    "crates/luu/ui/store.js": {
+      "lines": 1036, "chunks": 6471, "chars": 37326,
+      "arms": {
+        "html": { "median": 52.1, "min": 49.7 },
+        "dom": { "median": 52.2, "min": 47.3 },
+        "string only": { "median": 0.7, "min": 0.5 },
+        "string only (no escape)": { "median": 0.4, "min": 0.4 }
+      }
+    }
+  },
+  "not-reported": "The heapMB figures for `html` and `dom` swapped between the two runs (13 MB / 45 MB, then 46 MB / 13 MB). That is GC timing, not a result, so it is left out rather than quoted."
+}
