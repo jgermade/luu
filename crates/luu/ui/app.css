@@ -21,6 +21,21 @@
      is the one colour that has to move *against* the theme: dark ink on a
      light-blue button, light ink on a dark-blue one. */
   --on-accent: #10131a;
+  /* A **selected row in a list**, which is not the same thing as a pressed
+     control. A control that is on says so with the accent filled in and
+     `--on-accent` over it; a row in the file tree or the git panel is content
+     somebody picked, and filling it turned a 20rem rail into a stack of
+     saturated bars.
+     **And it stays on its own theme's side of the scale**, which a filled
+     accent cannot: `--accent` is a pale blue on dark and a deep blue on light,
+     so the filled row was always the one thing crossing to the opposite end —
+     a near-white bar on a dark rail, a near-black one on a white rail. A tint
+     of the accent over `--panel` — 18% here, 12% there, the dark side needing
+     more to register — lands just off the panel instead. Measured, panel = 1:
+     hover 1.08, selected 1.38, both 1.61 on dark; 1.09, 1.19, 1.30 on light.
+     Small on purpose, monotone, and all four states distinct. */
+  --selected: #2c364a;
+  --selected-hover: #34405b;
   /* Wells — a bar's groove, a `pre`'s ground: below the page, not on it. */
   --sunken: #0e1014;
   /* Raised-but-quiet blocks: a panel that is about another turn, a fold. */
@@ -75,6 +90,8 @@
   --warn: #8a5d12;
   --bad: #b8253f;
   --on-accent: #ffffff;
+  --selected: #e6ebf7;
+  --selected-hover: #dae2f3;
   --sunken: #eaedf2;
   --raised: #f0f2f6;
   --warn-bg: #fdf7e9;

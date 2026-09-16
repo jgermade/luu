@@ -126,11 +126,18 @@
     border-radius: 4px;
   }
   .node:hover { background: var(--bg); }
-  .node.on { background: var(--accent); color: var(--on-accent); }
+  /* A tint rather than the accent filled in: the row is content somebody
+     picked, not a control that is pressed, and a 20rem rail of saturated bars
+     read as a toolbar. The token keeps the highlight on its own theme's side
+     of the scale instead of crossing to the opposite end the way a filled
+     `--accent` has to — see the token's own note in `app.css`. Text stays
+     `--fg`, which is what lets the glyph, the caret and git's letter keep
+     their own colours rather than all turning `--on-accent`. */
+  .node.on { background: var(--selected); }
   /* Selected *and* hovered used to be the selected colour exactly, so the
      pointer stopped meaning anything over the one row it is most likely to be
      on. */
-  .node.on:hover { background: color-mix(in srgb, var(--accent) 86%, var(--fg)); }
+  .node.on:hover { background: var(--selected-hover); }
 
   .row {
     display: flex;
@@ -166,7 +173,6 @@
     outline-offset: -2px;
     border-radius: 4px;
   }
-  .node.on .row:focus-visible, .node.on .edit:focus-visible { outline-color: var(--on-accent); }
 
   /* Dimmed, not hidden: somebody looking for `target/` wants to see that it is
      there and ignored rather than wonder whether the tree is broken. The icon
@@ -183,7 +189,6 @@
      enough that an unconfigured tree reads as intentional. `[ui] icon-theme`
      in config.toml replaces them with any VSCode icon theme on this machine. */
   .glyph { color: var(--dim); }
-  .node.on .glyph, .node.on .twist { color: var(--on-accent); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .status {
@@ -197,7 +202,6 @@
   /* Untracked is the one that reads differently from "changed": nothing of it
      is in git yet. */
   .status.\?\? { color: var(--b-history); }
-  .node.on .status { color: var(--on-accent); }
 
   /* **The slot is always there; only its contents come and go.** Letting the
      icon in and out of the flow moves the name 241px → 221px, which re-runs
@@ -228,7 +232,6 @@
   .node:hover .edit,
   .edit:focus-visible { opacity: 1; pointer-events: auto; }
   .edit:hover { background: color-mix(in srgb, var(--fg) 14%, transparent); }
-  .node.on .edit:hover { background: color-mix(in srgb, var(--on-accent) 18%, transparent); }
 
   .err { color: var(--bad); font-size: 12px; line-height: 1.5; }
 </style>

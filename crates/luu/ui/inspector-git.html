@@ -103,7 +103,11 @@
     text-align: left;
   }
   .row:hover { background: var(--bg); }
-  .row.on { background: var(--accent); color: var(--on-accent); }
+  /* The same tint the file tree uses, and for the same reason: a selected row
+     is content somebody picked, not a pressed control. See
+     `RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`. */
+  .row.on { background: var(--selected); }
+  .row.on:hover { background: var(--selected-hover); }
   .code {
     flex: none;
     font-family: ui-monospace, monospace;
@@ -112,7 +116,7 @@
     white-space: pre;
   }
   .code.new { color: var(--b-history); }
-  .row.on .code, .row.on .where { color: var(--on-accent); }
+
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The directory, after the filename and quieter: two files called `mod.rs`
      are told apart by it, and it is not what you read first. */
