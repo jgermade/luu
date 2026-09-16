@@ -749,7 +749,24 @@ The columns' contents and every dialog are separate jq79 components
 `session-starter.html`, `folder-picker.html`); `app.html` keeps the shell — the grid, the three
 columns' chrome, and the chat. Two things inside `content-viewer.html` are attached to plain
 elements by id rather than drawn by the renderer, for the same reason and now with a number
-behind it: the optional Monaco editor, and the own viewer's rows. Preferences live in `prefs.js` and in `localStorage`: theme
+behind it: the optional Monaco editor, and the own viewer's rows.
+
+**Every component's styles are `<style scoped>`, and what more than one needs is in `app.css`.**
+jq79 rewrites a scoped selector to also match `[data-jq79="…"]`, which only the elements that
+file's own template built carry, so `.name` in the chat and `.name` in the git panel are two
+different rules and both are right. `app.css` holds what that isolation would duplicate: the
+palette and the tokens, the controls (`input`, `button`, `button.link`, `pre`), `.ic` and the
+`.hl-*` captures, the modal chrome, and the three words that carry a volume — `.dim`, `.warn`,
+`.error`. Each rule there carries a comment saying why it is not in a component, because *global*
+is the exception on this page and has to argue for itself. Two consequences are load-bearing and
+easy to rediscover the hard way: a scoped rule is one specificity level above the plain class it
+was written as, so a shared rule that has to win anyway is written to outrank it
+(`button[disabled][disabled]`, not `button:disabled`); and a class that *cannot* be scoped — the
+viewer's `.code-rows`, built by `rows.js` rather than by the compiler — is named as though the
+whole page could reach for it, because it can. See
+[`RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md`](RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md).
+
+Preferences live in `prefs.js` and in `localStorage`: theme
 (auto/light/dark, where auto is `prefers-color-scheme` resolved live in JS rather than a second
 copy of the light palette), which editor draws a file, the layout, and who answers the gate.
 None of it is in `config.toml`, which says where a run *sends* — a fact about the run, not about

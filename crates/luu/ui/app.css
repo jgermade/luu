@@ -133,6 +133,91 @@ body {
    a page that fits and one whose footer is under the chrome. */
 #app { display: block; height: 100dvh; }
 
+/* ---- the page's controls ------------------------------------------------
+   A control looks the same in the chat's composer, in the folder picker and in
+   the settings modal, so its look is written once, here, rather than in
+   whichever component happened to need it first. It used to live in
+   `app.html`'s `<style>`, which was the page's *only* unscoped component
+   stylesheet and so doubled as this layer by accident: every other component
+   was quietly inheriting the shell's rules, and the shell could not be scoped
+   without them all losing their buttons. See
+   RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md. */
+input {
+  /* `flex: 1` because a text field is, everywhere on this page, the thing on
+     its row that takes the leftover width — the composer, the rename box, a
+     provider's cell. It is inert outside a flex row, which is why it can be a
+     base rather than a per-component override. */
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  padding: .35rem .7rem;
+}
+input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+button {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  padding: .35rem .9rem;
+  cursor: pointer;
+}
+button.cancel { background: var(--warn); }
+/* A button that reads as a link: the affordance for *go there* rather than
+   *do this*, and the page's most reused control after the plain button. */
+button.link {
+  background: none; border: 0; color: inherit; cursor: pointer;
+  padding: 0; font: inherit; text-decoration: underline dotted;
+}
+
+/* Disabled is a **state**, and a state has to outrank whatever skinned the
+   control it is on. `button:disabled` is one element and one pseudo-class,
+   which a component's own `.clip { cursor: pointer }` already ties with — and
+   `<style scoped>` rewrites that to `.clip[data-jq79="…"]`, one level higher
+   again, so the plain form lost to every scoped rule on the page and a
+   greyed-out button still offered a pointer. The attribute written twice is
+   the two levels back; it selects exactly what `:disabled` does and costs
+   nothing to match. */
+button[disabled][disabled] { opacity: .4; cursor: default; }
+button.link[disabled][disabled] { opacity: .5; }
+input[disabled][disabled] { opacity: .6; }
+
+/* A block of the machine's own words — a prompt, a tool's output, a sandbox
+   line. Every panel that shows one shows it the same way. */
+pre {
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .6rem;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+/* ---- the words' three volumes -------------------------------------------
+   `--dim` is *secondary*, `--warn` is *this may not be what you think*, and
+   `--bad` is *this failed*. They are one-word classes used in nine components,
+   which is exactly what a global utility is for — and what a component's
+   `<style scoped>` cannot be, because nine copies of `color: var(--dim)` is
+   nine chances for one of them to drift. */
+.empty, .dim { color: var(--dim); }
+.warn { color: var(--warn); }
+.error {
+  margin: 0 1rem .4rem;
+  padding: .5rem .75rem;
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  color: var(--bad);
+  font-size: 13px;
+}
+
 /* ---- the page's own symbols ---------------------------------------------
    One sprite of `<symbol>`s lives at the top of `app.html`; this is the box
    they are drawn into. Global rather than in any component's `<style scoped>`
@@ -342,20 +427,31 @@ dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
 }
 
 /* The file viewer's rows. Global rather than scoped to the viewer for a
-   stricter reason than the palette below: `<style scoped>` rewrites `.code li`
-   to `.code li[data-jq79="…"]`, and only elements jq79's compiler built carry
-   that attribute. These rows are built by `crates/luu/ui/rows.js`, because the
-   rows are 93% of the viewer's cost and none of them ever changes — see
-   `RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`. */
-.code { list-style: none; margin: 0; padding: .5rem 0; counter-reset: line; }
-.code li {
+   stricter reason than the palette below: `<style scoped>` rewrites
+   `.code-rows li` to `.code-rows li[data-jq79="…"]`, and only elements jq79's
+   compiler built carry that attribute. These rows are built by
+   `crates/luu/ui/rows.js`, because the rows are 93% of the viewer's cost and
+   none of them ever changes — see
+   `RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`.
+
+   **`.code-rows`, not `.code`**: a class that cannot be scoped has to be named
+   as though it were global, because it is. `.code` was not — the git panel
+   spells a two-letter status `<span class="code">` and the budget bar spells
+   its code bucket the same way, and both were being given a file's list box:
+   `list-style: none`, `counter-reset: line`, and `.5rem` of padding above and
+   below a span the size of two characters. The scoping pass that put every
+   other component's rules behind `[data-jq79]` could not reach this one, so it
+   got the other half of the same fix. See
+   RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md. */
+.code-rows { list-style: none; margin: 0; padding: .5rem 0; counter-reset: line; }
+.code-rows li {
   display: flex;
   font-family: ui-monospace, monospace;
   font-size: 12px;
   line-height: 1.5;
   white-space: pre;
 }
-.code li::before {
+.code-rows li::before {
   counter-increment: line;
   content: counter(line);
   flex: none;
@@ -366,7 +462,7 @@ dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
   opacity: .6;
   user-select: none;
 }
-.code code { white-space: pre; }
+.code-rows code { white-space: pre; }
 /* Carries a row's own metrics, so `1lh` here is exactly one row. */
 .pending { font-size: 12px; line-height: 1.5; height: calc(var(--rows) * 1lh); }
 

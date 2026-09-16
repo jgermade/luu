@@ -615,7 +615,7 @@ test("the files panel lists the workspace, and a file opens in the viewer", asyn
   await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")
   // The real file's first line, so this fails if the viewer renders someone
   // else's bytes under that name.
-  await expect(page.locator(".content .code li").first())
+  await expect(page.locator(".content .code-rows li").first())
     .toContainText("luu's own sandbox")
 
   // A directory opens in place rather than replacing the tree.
@@ -706,7 +706,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   const rows = await page.evaluate(async () =>
     (await import("./workspace.js")).workspace.content.lines.length)
   expect(rows, "this file is meant to outrun the first block").toBeGreaterThan(200)
-  await expect(page.locator(".content .code li")).toHaveCount(rows)
+  await expect(page.locator(".content .code-rows li")).toHaveCount(rows)
   // Three captures that any Rust file has, so this fails if the grammar stops
   // loading or the chunks stop carrying their kind.
   await expect(page.locator(".content code.hl-keyword").first()).toBeVisible()
@@ -720,7 +720,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   })
   await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
   await expect(page.locator(".content .col-foot .lang")).toHaveCount(0)
-  await expect(page.locator(".content .code li").first()).toBeVisible()
+  await expect(page.locator(".content .code-rows li").first()).toBeVisible()
 
   expect(errors, "the page logged errors").toEqual([])
 })
@@ -760,7 +760,7 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
   // And the first is still there to go back to, which is the whole point.
   await page.click('.content .tabs.files .tab:has-text("luu.toml") .pick')
   await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")
-  await expect(page.locator(".content .code li").first()).toContainText("luu's own sandbox")
+  await expect(page.locator(".content .code-rows li").first()).toContainText("luu's own sandbox")
 
   // Opening the same file again focuses the tab rather than adding a second.
   await page.click('.inspector .tree .row:has-text("luu.toml")')
@@ -875,7 +875,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
 
   // It draws instead of this page's viewer, not beside it.
   await expect(page.locator("#monaco-host .view-line").first()).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator(".content .code li")).toHaveCount(0)
+  await expect(page.locator(".content .code-rows li")).toHaveCount(0)
 
   // And switching back disposes it: an editor left attached to a detached
   // element is a leak that only shows up after twenty tab switches.
@@ -883,7 +883,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
   await page.click('.modal .choice button:has-text("This page")')
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
   await expect(page.locator("#monaco-host")).toHaveCount(0)
-  await expect(page.locator(".content .code li").first()).toBeVisible()
+  await expect(page.locator(".content .code-rows li").first()).toBeVisible()
 
   expect(errors, "the page logged errors").toEqual([])
 })

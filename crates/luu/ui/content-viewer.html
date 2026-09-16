@@ -130,9 +130,11 @@
      numbers the rows lives on the `<ol>`, so the rows number themselves
      whichever pass built them. Their rules are in `app.css` rather than in the
      `<style scoped>` below — a scoped rule is rewritten to match
-     `[data-jq79="…"]`, which only elements the compiler built carry. -->
+     `[data-jq79="…"]`, which only elements the compiler built carry, and the
+     class is `code-rows` rather than `code` because a rule nothing can scope
+     needs a name nothing else would reach for. -->
 <div :if="!monacoing && !workspace.loading && shown?.kind === 'file'" class="file">
-  <ol id="code-rows" class="code"></ol>
+  <ol id="code-rows" class="code-rows"></ol>
   <!-- The room the rows that have not arrived are going to take, so the
        scrollbar is the length of the file from the first frame rather than the
        length of its first screen. -->
@@ -174,7 +176,7 @@
      scrolling inside a scroll. */
   .monaco { height: 100%; min-height: 20rem; }
 
-  /* `.code`, its rows and `.pending` are in `app.css`, not here: `<style
+  /* `.code-rows`, its rows and `.pending` are in `app.css`, not here: `<style
      scoped>` rewrites every selector to match `[data-jq79="…"]`, and the rows
      are built by `rows.js` rather than by the compiler, so they carry no such
      attribute. The `hl-*` classes were already global for the neighbouring
