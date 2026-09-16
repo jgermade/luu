@@ -1349,6 +1349,15 @@ dropdown alongside a `+ New` button. See
   [`RECORD/2026-08-31.eviction-tombstones.completed.md`](RECORD/2026-08-31.eviction-tombstones.completed.md).
   Compaction's own tombstone already exists as `task_closed`; pruning tool results
   out of a live turn would need a third, and deliberately has none until it does.
+  **And the page reads both cuts, drawn differently on purpose.** Pruning's own
+  line is on the trace channel rather than the protocol — what a pruned turn lost
+  is a fact about the prompt, not about the conversation — and the panel names the
+  turns that paid and what the window saved beside eviction's sentence, while the
+  transcript marks a pruned turn *without* striking it through: it is still there
+  to be answered from, which is the whole of what rule B buys. Until 2026-09-16
+  the page had no consumer for that line at all, so the one rule that gives way
+  without losing a turn was the one cut with no mark anywhere on the screen. See
+  [`RECORD/2026-09-16.the-panel-reads-the-pruned-lines.completed.md`](RECORD/2026-09-16.the-panel-reads-the-pruned-lines.completed.md).
 - A stored turn keeps `code_context` separate from the prompt (per the fusion rule
   above) and its token count together with the counter that produced it. Store the
   fused rendering instead and a resumed session either recomputes everything or sums

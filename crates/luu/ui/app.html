@@ -529,6 +529,14 @@
               <span :if="entry.message.evicted" class="gone">
                 · out of the window since turn {{ entry.message.evicted }}
               </span>
+              <!-- The other cut: this turn is still asked and still answered,
+                   and what left the prompt is its code. Not struck through for
+                   that reason, and not shown at all on a turn that was
+                   afterwards evicted whole — there the stronger fact is the
+                   true one. -->
+              <span :if="entry.message.pruned && !entry.message.evicted" class="cited">
+                · code out of the prompt since turn {{ entry.message.pruned }}
+              </span>
             </div>
             <div class="text">{{ entry.message.text }}</div>
             <div :if="entry.message.reason" class="meta">
@@ -1051,6 +1059,7 @@
   article.evicted { opacity: .45; }
   article.evicted .text { text-decoration: line-through solid color-mix(in srgb, currentColor 35%, transparent); }
   .gone { color: var(--warn); text-transform: none; letter-spacing: 0; }
+  .cited { color: var(--dim); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   .meta { margin-top: .3rem; font-size: 12px; color: var(--dim); display: flex; gap: .6rem; }
   .meta .warn { color: var(--warn); }

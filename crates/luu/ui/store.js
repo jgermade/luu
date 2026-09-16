@@ -31,8 +31,9 @@ export const state = $reactive({
   session: null,
   turn: null,
   // `turn` is the session's number for the exchange, which is what an eviction
-  // names; `evicted` is the turn whose selection dropped this one, or null.
-  messages: [],           // { id, turn, role, text, task, reason, usage, evicted }
+  // names; `evicted` is the turn whose selection dropped this one, or null, and
+  // `pruned` is the turn that took this one's code and left the rest.
+  messages: [],           // { id, turn, role, text, task, reason, usage, evicted, pruned }
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
@@ -81,6 +82,12 @@ export const state = $reactive({
   // the buckets say what the prompt is worth, this says what stopped being in
   // it. Null in a session that never filled its window.
   evicted: null,          // { turn, turns, tokens, counter, policy }
+  // The last cut of the other kind. Eviction takes the turn; this takes its
+  // code and leaves the turn asked, answered and citable — which is why it
+  // arrives on the trace channel rather than the protocol, and why the sentence
+  // the panel prints for it is not eviction's. Null where nothing pruned, which
+  // is every session run without `--prune-behind`.
+  pruned: null,           // { turn, turns, tokens, counter }
   // Whether this session is a recording rather than a server. The status word
   // is not the same question: it says "running" while a recorded turn plays,
   // and a composer that reads the status is enabled over a recording nobody can
@@ -212,10 +219,20 @@ function onProtocol(message) {
       // The job it belongs to travels with the turn, so the transcript can
       // group without replaying the lifecycle to work out what was open.
       const turnJob = message.job ?? message.task ?? null
-      state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, job: turnJob, task: turnJob, reason: null, usage: null, evicted: null })
-      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", job: turnJob, task: turnJob, reason: null, usage: null, evicted: null })
+      state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, job: turnJob, task: turnJob, reason: null, usage: null, evicted: null, pruned: null })
+      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", job: turnJob, task: turnJob, reason: null, usage: null, evicted: null, pruned: null })
       state.tools = []
       state.extraCalls = []
+      // The two cuts describe something that *happened*, so they belong to the
+      // turn that did it and not to the ones after. Uncleared, `keepTurn` copied
+      // the last eviction into every turn it kept from then on, and the panel
+      // showed turn 5's cut under turn 8's budget — while a reload, which builds
+      // the same turns per-turn out of the read API, did not. The budget, the
+      // prompt and the prefix beside them are deliberately *not* cleared here:
+      // the budget is decided before the call, and blanking it would empty the
+      // panel for the length of every turn.
+      state.evicted = null
+      state.pruned = null
       break
     }
 
@@ -399,6 +416,20 @@ function onTrace(message) {
       shared_tokens: message.shared_tokens,
     }]
   }
+  // The other way the window gives way, and the one that leaves the
+  // conversation intact: these turns are still asked, still answered and still
+  // in the transcript — what left the prompt is their code. Marked rather than
+  // struck through for exactly that reason.
+  if (message.type === "pruned") {
+    const cited = new Set(message.turns)
+    state.messages = state.messages.map(m => cited.has(m.turn) ? { ...m, pruned: message.turn } : m)
+    state.pruned = {
+      turn: message.turn,
+      turns: message.turns,
+      tokens: message.tokens,
+      counter: message.counter,
+    }
+  }
   if (message.type === "budget") {
     // Arrives before the call now, so a cancelled turn has one too. The
     // backend's own count lands later, on `ended`.
@@ -549,6 +580,7 @@ export function panel() {
     extraCalls: state.extraCalls,
     prompt: state.prompt,
     dropped: state.evicted,
+    cited: state.pruned,
     usage: null,
     reason: null,
     live: true,
@@ -574,6 +606,7 @@ function keepTurn(turn, extra = {}) {
     extraCalls: state.extraCalls,
     prompt: state.prompt,
     dropped: state.evicted,
+    cited: state.pruned,
     usage: null,
     reason: null,
     ...extra,
@@ -584,9 +617,13 @@ function keepTurn(turn, extra = {}) {
 
 /// The same shape, out of what the read API stores per turn.
 ///
-/// `dropped` gains the turn that dropped it: the stored `Evicted` names the
-/// turns that left and not the cut that took them, which is the turn it is
-/// attached to.
+/// `dropped` and `cited` gain the turn that made the cut: the stored `Evicted`
+/// and `Pruned` name the turns that gave something up and not the selection that
+/// took it, which is the turn they are attached to.
+///
+/// `cited` is the API's name for what this turn pruned, kept here rather than
+/// the store's `pruned`, so that the panel reading the two shapes does not have
+/// to line up two spellings of one field.
 function fromStored(turn) {
   return {
     turn: turn.turn,
@@ -597,6 +634,7 @@ function fromStored(turn) {
     extraCalls: turn.extra_calls || [],
     prompt: turn.prompt_sent || "",
     dropped: turn.dropped ? { ...turn.dropped, turn: turn.turn } : null,
+    cited: turn.cited ? { ...turn.cited, turn: turn.turn } : null,
     usage: turn.usage || null,
     reason: turn.reason || null,
     error: turn.error || null,
@@ -617,6 +655,7 @@ function reset() {
   state.error = null
   state.refused = null
   state.evicted = null
+  state.pruned = null
   state.turn = null
   pending = ""
 }
@@ -864,7 +903,12 @@ export async function refreshLiveSession() {
           task: t.job,
           reason: null,
           usage: null,
-          evicted: null,
+          // Both marks come from the API and were being thrown away here, so a
+          // session reopened after an eviction showed every turn as if it were
+          // still in the window — while the inspector's own history, built from
+          // the same response a few lines below, had it right.
+          evicted: t.evicted_by ?? null,
+          pruned: t.pruned_by ?? null,
         })
       }
       if (t.text || (t.tools && t.tools.length)) {
@@ -877,7 +921,8 @@ export async function refreshLiveSession() {
           task: t.job,
           reason: null,
           usage: t.usage || null,
-          evicted: null,
+          evicted: t.evicted_by ?? null,
+          pruned: t.pruned_by ?? null,
         })
       }
     }

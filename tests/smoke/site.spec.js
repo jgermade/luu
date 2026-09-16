@@ -109,6 +109,46 @@ test("a replayed eviction marks the turns that left the window", async ({ page }
   expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
 })
 
+test("a replayed prune marks the turns whose code left the prompt", async ({ page }) => {
+  // The counterpart of the test above, and the distinction the whole rule is
+  // for: an evicted turn is gone from the conversation, a pruned one is still
+  // asked, still answered and still citable — what left is its code. A page
+  // that drew them the same way, or drew the second one not at all, is what
+  // this catches.
+  test.setTimeout(90_000)
+  const errors = watch(page)
+
+  await page.goto("/index.html")
+  await expect(page.locator("select.fixtures")).toBeVisible()
+  await page.locator("select.fixtures").selectOption("./fixtures/prune-behind.jsonl")
+
+  // The panel names the turns that paid and what the window saved by it. The
+  // `code` bucket shrinking is visible without this line and says neither.
+  await expect(page.locator(".inspector")).toContainText("tokens of code out of the prompt", {
+    timeout: 60_000,
+  })
+  await expect(page.locator(".inspector")).toContainText("still in the conversation")
+
+  // And the transcript marks them without striking them through: the turn is
+  // still there to be answered from.
+  const cited = page.locator(".transcript article .cited").first()
+  await expect(cited).toContainText("code out of the prompt since turn")
+  await expect(page.locator(".transcript article.evicted")).toHaveCount(0)
+
+  // And a cut belongs to the turn that made it. This arm prunes at turns 7, 8
+  // and 10 and not at 9, which is the one turn in any fixture that can tell the
+  // difference: the store used to carry the last cut forward into every turn it
+  // kept afterwards, so turn 9 showed turn 8's prune — and a reload, which
+  // builds each turn out of the read API instead, did not.
+  const picker = page.locator(".turn-picker select")
+  await expect(picker.locator("option[value='9']")).toHaveCount(1, { timeout: 60_000 })
+  await picker.selectOption("9")
+  await expect(page.locator(".inspector")).toContainText("Turn 9 as it was sent")
+  await expect(page.locator(".inspector")).not.toContainText("tokens of code out of the prompt")
+
+  expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
+})
+
 test("the repository map is a bucket of its own in the budget", async ({ page }) => {
   const errors = watch(page)
 
