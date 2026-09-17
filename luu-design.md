@@ -702,15 +702,21 @@ access = "execute"
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
 
-  **Half of that last rule is intent and not yet tree.** What is enforced is that
-  the resume endpoint takes no posture, so nobody can *ask* to move one. What is
-  not enforced is the sentence's actual meaning: a resume reads the posture out
-  of the live process, so a session approved under a container and picked back up
-  on a host runs on the host — and because the header is written only when the
-  *destination* moves, the stream does not say so either. The fold drops the
-  posture the header already carries, which is why nothing can compare. Argued,
-  with the fix, in
-  [`RECORD/2026-09-17.what-an-approval-was-granted-under.WIP.md`](RECORD/2026-09-17.what-an-approval-was-granted-under.WIP.md).
+  **What that rule compares, since 2026-09-17.** The fold keeps the posture its
+  stream's last header names, and a resume refuses — 409, naming both sides —
+  when the server is not in the same place: the **three facts**, never the name,
+  because the file behind a name can be edited tomorrow. A body may name a
+  posture and is admitted only when it resolves to those same three facts, so
+  the endpoint says *which one you mean* rather than *move this session*; the
+  page reads it off the session and says it back. It refuses rather than
+  rebuilding the posture itself, because building one can start a container and
+  a click on a row in the history is not a request to start one. A stored
+  posture of `None` is **unknown** — a recording from before format 10 — and is
+  let through rather than guessed at; the retarget header, which is now written
+  when the posture moves and not only when the destination does, is then the one
+  thing that says where the rest of those turns ran. Before this the endpoint
+  refused a *named* posture and inherited a different one silently. See
+  [`RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`](RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md).
 - Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
   concurrent sessions — one live session per `serve` is still the shape, so one
   container at a time is still the shape.

@@ -12,7 +12,7 @@ use crate::backend::Usage;
 use crate::context::{Counter, Evicted, Pruned};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource, Replaced};
 use crate::protocol::{ServerMessage, TurnId};
-use crate::record::RecordLine;
+use crate::record::{self, RecordLine};
 use crate::sandbox::Verdict;
 use crate::trace::{Bucket, TraceMessage};
 use crate::turn::EndReason;
@@ -227,6 +227,18 @@ pub struct SessionView {
     /// jobs, which is every session recorded before they existed.
     #[serde(default, alias = "tasks")]
     pub jobs: Vec<JobView>,
+    /// What this session was allowed to do, as the stream's **last** header
+    /// names it — the posture its jobs were approved against.
+    ///
+    /// `None` is *unknown*, and specifically not `host`: a recording made
+    /// before format 10 has no answer, and inventing the permissive one for it
+    /// would be a number this project does not hold. A resume compares this
+    /// against what the server is running and refuses the mismatch, which it
+    /// could not do while the fold was dropping the field the header already
+    /// carried. See
+    /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+    #[serde(default)]
+    pub posture: Option<record::Posture>,
     pub record: Option<String>,
 }
 
@@ -245,6 +257,7 @@ impl SessionView {
             started_at: 0,
             turns: Vec::new(),
             jobs: Vec::new(),
+            posture: None,
             record: None,
         }
     }
@@ -556,11 +569,17 @@ impl SessionView {
                     backend,
                     model,
                     started_at,
+                    posture,
                     ..
                 } => {
                     view.backend = backend.clone();
                     view.model = model.clone();
                     view.started_at = *started_at;
+                    // The last header wins, which is the point: a stream that
+                    // gained a second one was produced somewhere else from
+                    // there on, and what the session may do now is what that
+                    // line says.
+                    view.posture = posture.clone();
                 }
                 RecordLine::Protocol { at_ms, message } => view.apply_protocol(*at_ms, message),
                 RecordLine::Trace { at_ms, message } => view.apply_trace(*at_ms, message),
@@ -585,7 +604,12 @@ mod tests {
                 context_limit: Some(8192),
                 counter: Some(Counter::Model { id: "mock".into() }),
                 eviction: Some(crate::context::Eviction::Turn),
-                posture: None,
+                posture: Some(record::Posture {
+                    name: Some("container".into()),
+                    runtime: "docker (luu-worker:dev)".into(),
+                    enforcement: "kernel".into(),
+                    network: false,
+                }),
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {
@@ -715,13 +739,16 @@ mod tests {
         let recorded = SessionView::from_record("s", &all);
 
         // The same messages, applied one at a time the way the server does.
+        // The header's fields are the ones `serve` sets on the live view
+        // itself rather than by applying a line — the posture included, which
+        // is why it is mirrored here instead of ignored with the rest.
         let mut live = SessionView::new("s", "mock", "mock");
         live.started_at = 1_700_000_000_000;
         for line in all {
             match line {
                 RecordLine::Protocol { at_ms, message } => live.apply_protocol(at_ms, &message),
                 RecordLine::Trace { at_ms, message } => live.apply_trace(at_ms, &message),
-                RecordLine::Header { .. } => {}
+                RecordLine::Header { posture, .. } => live.posture = posture,
             }
         }
 

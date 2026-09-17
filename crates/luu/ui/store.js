@@ -999,13 +999,45 @@ export async function providerModels(name) {
   }
 }
 
+/// The posture a stored session ran under, by name, for the resume to say back.
+///
+/// The server refuses a resume whose posture is not the one the session's jobs
+/// were approved against, and it refuses rather than rebuilding it on its own —
+/// building one can start a container, and a click on a row in the history is
+/// not a request to start a container. So the page says which one it means, and
+/// the server still checks that the name resolves to the same three facts. See
+/// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+///
+/// `null` for a session recorded before the posture was in the header, for one
+/// that ran on the server's own policy file, and whenever the view cannot be
+/// read — all three mean *say nothing*, which is what every resume did before.
+async function storedPosture(id) {
+  try {
+    const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, { headers: apiHeaders() })
+    if (!res.ok) return null
+    const view = await res.json()
+    return view?.posture?.name ?? null
+  } catch {
+    return null
+  }
+}
+
 /// Picks a stored session back up, optionally somewhere else.
 ///
 /// `choice` is `POST /api/sessions`', and means the same thing — a profile out
 /// of the file and a model there. What differs is that the history comes along,
 /// and that the session's stream gains a header saying where it changed.
+///
+/// The posture is not part of that choice and never was: it is read off the
+/// session being resumed, because a destination is where a session sends and a
+/// posture is what it may do.
 export async function resumeSession(id, choice) {
-  const asked = choice && (choice.provider || choice.model) ? choice : null
+  const posture = await storedPosture(id)
+  const wanted = {
+    ...(choice && (choice.provider || choice.model) ? choice : {}),
+    ...(posture ? { posture } : {}),
+  }
+  const asked = Object.keys(wanted).length ? wanted : null
   try {
     const res = await fetch(`./api/sessions/${encodeURIComponent(id)}/resume`, {
       method: "POST",
