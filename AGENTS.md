@@ -125,8 +125,11 @@ cargo run --bin luu -- serve --no-store
 # On a first visit it asks which folder to look at: a subdirectory of the one
 # `serve` was started in, which is the ceiling and is not negotiable from the
 # browser. Settings has sections down the side — General (theme, editor, layout,
-# folder) and Models — and everything in General is kept in `localStorage`,
-# because it is a fact about the screen rather than about the run.
+# files, folder) and Models — and everything in General a person can *change* is
+# kept in `localStorage`, because it is a fact about the screen rather than about
+# the run. Files is the exception and is read-only: it names the icon theme that
+# drew the tree, or says the two shapes are a fallback and names the key below
+# that replaces them.
 #
 # Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed

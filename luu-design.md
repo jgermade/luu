@@ -100,7 +100,21 @@ at the gate, checked against the policy file exactly as the model's plan was —
 which is what stops an under-specified plan from being a dead run. It carries one
 more thing the plan never had: `closes_on`, below, checked against the plan as it
 will *be* rather than against the amendment alone, since the command it names is
-usually one the model already declared.
+usually one the model already declared. **And it carries the three that say what
+the job may reach**: `network`, `egress` and `enforcement`, each bounded the same
+way. Those had been on the protocol since 2026-09-06 and reachable only from a
+script or a client the person did not have — the debug UI's approve button sent
+four fields and the panel displayed three, so a plan declaring `"network": true`
+was signed off by somebody who was never shown it had asked. The gate panel now
+shows what a plan asks to reach (and says when the session's own policy denies
+it, because what a plan asks for is not what `Plan::narrow` will give it) and
+sends all six. **The refusal that comes back survives the turn it describes**:
+`not_granted` is the one refusal that does not stop anything — the approval went
+through without what the policy would not carry — and the turn it approved
+starts in the same breath, which used to erase it within a frame. It is the only
+place a person learns the policy file has a floor, so it now stays until the next
+gate opens. See
+[`RECORD/2026-09-17.the-gate-panel-narrows.completed.md`](RECORD/2026-09-17.the-gate-panel-narrows.completed.md).
 
 **A plan also decides how hard the kernel is asked to hold its children, and it
 is the one field that narrows backwards.** `enforcement` (`## enforcement:` in a
@@ -843,8 +857,10 @@ one cancellable thing whose undo costs work. See
 [`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md).
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps:
-*General* (theme, editor, layout, which folder) and *Models* (what this server resolved, then the
-providers file the next run reads). The `editor` setting offers Monaco where somebody installed
+*General* (theme, editor, layout, which icon theme drew the tree, which folder) and *Models*
+(what this server resolved, then the providers file the next run reads). The *Files* row is there
+for a reason worth keeping: nothing on the page named `[ui] icon-theme` at all, and the first
+person to meet an unconfigured tree read a working fallback as a broken panel. The `editor` setting offers Monaco where somebody installed
 it — an **npm dependency of `crates/luu/ui`**, gitignored, excluded from the `rust_embed` folder
 and served from disk by one route, so a release binary does not carry several megabytes of an
 editor that is off by default. That does not reopen

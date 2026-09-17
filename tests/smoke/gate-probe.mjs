@@ -181,7 +181,7 @@ async function run() {
         for (const f of item.expected.files) {
           if (!reads.includes(f)) {
             console.log(`Amending read: ${f}`);
-            await page.fill('.amend input[placeholder*="a path or command"]', f);
+            await page.fill('.amend input[placeholder*="the plan forgot"]', f);
             await page.click('.amend button:has-text("add read")');
             amendments.files.push(f);
           }
@@ -191,7 +191,7 @@ async function run() {
         for (const w of item.expected.writes) {
           if (!writes.includes(w)) {
             console.log(`Amending write: ${w}`);
-            await page.fill('.amend input[placeholder*="a path or command"]', w);
+            await page.fill('.amend input[placeholder*="the plan forgot"]', w);
             await page.click('.amend button:has-text("add write")');
             amendments.writes.push(w);
           }
@@ -201,7 +201,7 @@ async function run() {
         for (const c of item.expected.commands) {
           if (!commands.includes(c)) {
             console.log(`Amending command: ${c}`);
-            await page.fill('.amend input[placeholder*="a path or command"]', c);
+            await page.fill('.amend input[placeholder*="the plan forgot"]', c);
             await page.click('.amend button:has-text("add command")');
             amendments.commands.push(c);
           }

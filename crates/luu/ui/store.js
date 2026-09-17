@@ -214,8 +214,19 @@ function onProtocol(message) {
       state.turn = message.turn
       state.status = "running"
       state.error = null
-      // Whatever was refused, the answer to it is on screen now.
-      state.refused = null
+      // Whatever was refused, the answer to it is on screen now — with one
+      // exception, and it is the refusal a person most needs to read.
+      //
+      // `not_granted` is not about something that was *stopped*: the approval
+      // went through and this is the list of what the policy file would not let
+      // it carry — the file the job forgot, the domain nobody may reach, the
+      // enforcement nobody may loosen. The turn it describes starts in the same
+      // breath the refusal arrives, so clearing it here erased it within a
+      // frame, and the only surface that teaches where the policy's floor is
+      // taught nothing. Found by the test that drives the gate's three new
+      // controls, which is the point of driving a surface. See
+      // `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`.
+      if (state.refused?.reason !== "not_granted") state.refused = null
       // The job it belongs to travels with the turn, so the transcript can
       // group without replaying the lifecycle to work out what was open.
       const turnJob = message.job ?? message.task ?? null
@@ -241,6 +252,9 @@ function onProtocol(message) {
     // inside an array element.
     case "job_proposed":
     case "task_proposed": {
+      // A new gate is a new question, and what the last approval could not
+      // carry is not an answer to it.
+      state.refused = null
       const id = message.job ?? message.task
       const newJob = {
         id,
@@ -737,12 +751,32 @@ function act(type, id) {
 /// line whose exit code of 0 folds the job without anyone present. Empty
 /// leaves the person as the only authority, which is what every job did before
 /// the field existed.
-export function approveJob(job, files = [], writes = [], commands = [], closesOn = "") {
+///
+/// **One amendment object rather than seven positional arguments.** The last
+/// three are the fields this page could not reach until
+/// `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`, and every one of
+/// them is nullable in a different way — `network` has three states, `egress`
+/// is a list merged into the plan's own, `enforcement` is a strictness a person
+/// may tighten and not loosen. `approveJob(id, [], [], [], "", null, [], null)`
+/// is a call nobody can read.
+export function approveJob(job, amendment = {}) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
+  const {
+    files = [], writes = [], commands = [], closesOn = "",
+    // `null` leaves the plan's own answer, which is what an approval that does
+    // not care about the network wants to say. `true` asks and is bounded by
+    // the policy file; `false` takes it away from a plan that asked.
+    network = null,
+    egress = [],
+    // `"kernel"` or `"best-effort"`, kebab-case because that is how
+    // `agent_core::sandbox::Enforcement` is on the wire.
+    enforcement = null,
+  } = amendment
   socket.send(JSON.stringify({
     // `job` alone — see `act` for what naming it twice costs.
     type: "approve_job", job, files, writes, commands,
     closes_on: closesOn.trim() || null,
+    network, egress, enforcement,
   }))
 }
 export const approveTask = approveJob

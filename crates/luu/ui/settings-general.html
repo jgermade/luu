@@ -82,6 +82,28 @@
   </dd>
 </dl>
 
+<h3>Files</h3>
+<dl class="settings">
+  <dt>Icons</dt>
+  <dd :if="workspace.icons.loaded">
+    <span class="path">{{ workspace.icons.name || "a theme this machine names" }}</span>
+  </dd>
+  <dd :if="!workspace.icons.loaded">the tree's own two shapes</dd>
+  <!-- The whole of item 15 of `ROADMAP/2026-09-17`, and it is here because the
+       first person to meet an unconfigured tree read a working fallback as a
+       broken panel. Nothing else on the page says the key exists: `AGENTS.md`,
+       the design doc and `crate::icons` all do, and none of them is where
+       somebody looking at grey shapes is looking. See
+       `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`. -->
+  <dd class="note">
+    <code>[ui] icon-theme</code> in <code>config.toml</code> points at any VSCode
+    icon theme on this machine — an installed extension's directory, or its theme
+    JSON. Nothing is vendored, so with none named the tree draws its own two
+    shapes, which is a fallback rather than a failure. The server reads the theme
+    once, at startup.
+  </dd>
+</dl>
+
 <h3>Workspace</h3>
 <dl class="settings">
   <dt>Started in</dt>
