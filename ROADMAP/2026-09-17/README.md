@@ -22,6 +22,11 @@ roadmap that only lists what it predicted is a roadmap that flatters itself, so
 that fortnight gets a section of its own below, marked as what it was: the thing
 that actually happened.
 
+**What this revision's own day did to it** is gathered in
+[`RECORD/2026-09-17.state-of-play.completed.md`](../../RECORD/2026-09-17.state-of-play.completed.md),
+written after it: item 9 closed, record and diff together, and the housekeeping
+that produced this file is what found the work.
+
 **The one row that expires.** Section A is the only section here with a clock on
 it. [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) was
 written the night of 2026-09-16 specifically so that *the machines are available
