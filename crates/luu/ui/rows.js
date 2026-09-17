@@ -29,7 +29,7 @@ export const FIRST_ROWS = 200
 ///
 /// **Appending rather than re-rendering is the point.** The two-block shape
 /// this replaces existed because a reactive `:each` re-derives its list; the
-/// phase 8 sections of `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` bought
+/// phase 8 sections of `RECORD/2026-09-15.a-three-pane-inspector.completed.md` bought
 /// a surviving first block by binding it to an array that never changes again.
 /// Here nothing re-derives, so the first block survives for free — and the
 /// number of blocks stops being a shape the template has to spell out.

@@ -286,6 +286,7 @@ async fn server_everything(
         auth_token_file,
         approvers,
         Default::default(),
+        None,
     )
     .await
 }
@@ -304,6 +305,9 @@ async fn server_with_postures(
     auth_token_file: Option<std::path::PathBuf>,
     approvers: Approvers,
     postures: std::collections::BTreeMap<String, luu::provider::Posture>,
+    // A store, for the tests that need a session to outlive the one that is
+    // live — which is every test about what a *resume* is allowed to do.
+    store: Option<std::path::PathBuf>,
 ) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
@@ -335,7 +339,7 @@ async fn server_with_postures(
         select_weights: Default::default(),
         constrain: None,
         auth_token_file,
-        store: None,
+        store,
         agency_for: Some(agency_factory()),
         postures,
         postures_path: Some("config.toml".into()),
@@ -2008,6 +2012,7 @@ async fn a_session_started_on_a_posture_runs_under_it_and_says_which() {
         None,
         Approvers::default(),
         postures,
+        None,
     )
     .await;
     let client = reqwest::Client::new();
@@ -2069,15 +2074,112 @@ async fn a_session_started_on_a_posture_runs_under_it_and_says_which() {
         "the commands are the posture's: {after}",
     );
 
-    // A posture is chosen when a session starts and never moved: its jobs were
-    // approved against this one.
-    let moved = client
-        .post(format!("http://{address}/api/sessions/live/resume"))
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A posture is chosen when a session starts and a resume may not move it.
+///
+/// Which is what `luu-design.md` has said since 2026-09-08, and what the tree
+/// did not do: the endpoint refused a *named* posture and then inherited a
+/// different one silently, so a proposal left open under a container came back
+/// at the gate on whatever the server happened to be running. See
+/// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+#[tokio::test]
+async fn a_resume_keeps_the_posture_a_sessions_jobs_were_approved_under() {
+    let dir = std::env::temp_dir().join(format!("luu-resume-posture-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let policy = dir.join("wide.toml");
+    std::fs::write(&policy, "[sandbox]\nnetwork = true\ncommands = [\"ls\"]\n")
+        .expect("writing the posture's policy file");
+
+    let mut postures = std::collections::BTreeMap::new();
+    postures.insert(
+        "wide".to_string(),
+        luu::provider::Posture {
+            policy: policy.clone(),
+        },
+    );
+
+    let address = server_with_postures(
+        vec![PLAN.into(), ANSWER.into()],
+        Duration::ZERO,
+        SandboxPolicy::default(),
+        Budget::new(0, 0, Eviction::Turn),
+        None,
+        Approvers::default(),
+        postures,
+        Some(dir.join("sessions.db")),
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // One session on `wide`, and a second on nothing — which checkpoints the
+    // first into the store and leaves the server on its own policy file.
+    let created: serde_json::Value = client
+        .post(format!("http://{address}/api/sessions"))
         .json(&serde_json::json!({ "posture": "wide" }))
         .send()
         .await
-        .expect("asking to move a session to another posture");
-    assert_eq!(moved.status(), reqwest::StatusCode::CONFLICT);
+        .expect("starting a session on it")
+        .json()
+        .await
+        .expect("the summary is JSON");
+    let contained = created["id"].as_str().expect("an id").to_string();
+
+    let created = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .expect("starting a second session");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+    assert_eq!(
+        settings["posture"]["network"], false,
+        "the server is back on its own policy file: {settings}",
+    );
+
+    // The one this row exists for. Before this it answered 200 and handed the
+    // session's gate to a sandbox its jobs were never approved against.
+    let refused = client
+        .post(format!("http://{address}/api/sessions/{contained}/resume"))
+        .send()
+        .await
+        .expect("resuming a session stored under another posture");
+    assert_eq!(refused.status(), reqwest::StatusCode::CONFLICT);
+    let said = refused.text().await.expect("a reason");
+    assert!(
+        said.contains("wide") && said.contains("approved"),
+        "the refusal names the posture and why: {said}",
+    );
+
+    // And it is not a dead end: naming the posture the session ran under
+    // resumes it, because that is the one its jobs were approved against.
+    let resumed = client
+        .post(format!("http://{address}/api/sessions/{contained}/resume"))
+        .json(&serde_json::json!({ "posture": "wide" }))
+        .send()
+        .await
+        .expect("resuming it where it belongs");
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK);
+
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+    assert_eq!(settings["posture"]["name"], "wide");
+    assert_eq!(
+        settings["posture"]["network"], true,
+        "the resumed session runs under the posture it was approved against: {settings}",
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

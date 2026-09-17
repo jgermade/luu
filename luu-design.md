@@ -355,7 +355,7 @@ The model never executes anything directly — it only emits a structured reques
   a tool's own name, not a decision not to call — and never on a clean
   decline. Measured against `qwen2.5-coder:7b`: 7/15 unconstrained drifted
   replies recover to 13/15 executed calls
-  ([`a-grammar-for-tool-calls`](RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md)).
+  ([`a-grammar-for-tool-calls`](RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md)).
   A retry the backend refuses outright — a schema or grammar it will not
   compile — falls back to the pre-retry drifted answer instead of failing the
   turn, and reports the refusal once, loudly, on stderr rather than the wire:
@@ -479,7 +479,7 @@ access = "read-write"           # read | execute | read-write
   looks at the first word. (Until 2026-09-15 this was a `command` string
   beside an `args` list — the same information, but shaped like a call in its
   own right, which is why a model sometimes emitted it unwrapped instead of
-  inside `arguments`; see `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.)
+  inside `arguments`; see `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.)
 - **Allowing any command implies read+execute on the system roots** (`/usr`, `/bin`,
   `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt`), because a program cannot run without
   reading its own interpreter. **For the child only** — an in-process tool sees
@@ -701,6 +701,22 @@ access = "execute"
   jobs were approved against this one. `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
+
+  **What that rule compares, since 2026-09-17.** The fold keeps the posture its
+  stream's last header names, and a resume refuses — 409, naming both sides —
+  when the server is not in the same place: the **three facts**, never the name,
+  because the file behind a name can be edited tomorrow. A body may name a
+  posture and is admitted only when it resolves to those same three facts, so
+  the endpoint says *which one you mean* rather than *move this session*; the
+  page reads it off the session and says it back. It refuses rather than
+  rebuilding the posture itself, because building one can start a container and
+  a click on a row in the history is not a request to start one. A stored
+  posture of `None` is **unknown** — a recording from before format 10 — and is
+  let through rather than guessed at; the retarget header, which is now written
+  when the posture moves and not only when the destination does, is then the one
+  thing that says where the rest of those turns ran. Before this the endpoint
+  refused a *named* posture and inherited a different one silently. See
+  [`RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`](RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md).
 - Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
   concurrent sessions — one live session per `serve` is still the shape, so one
   container at a time is still the shape.
@@ -887,7 +903,7 @@ toggle without acquiring a second theme system. The payload reads head-first —
 declaration order and the facts about a file have no business sitting behind 681 KB of it.
 `total_lines` is counted before the 512 KB cut, so a truncated file says *6255 of 20001 lines*
 rather than only that it was cut. See
-[`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`](RECORD/2026-09-15.a-three-pane-inspector.WIP.md)
+[`RECORD/2026-09-15.a-three-pane-inspector.completed.md`](RECORD/2026-09-15.a-three-pane-inspector.completed.md)
 and
 [`RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`](RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md).
 

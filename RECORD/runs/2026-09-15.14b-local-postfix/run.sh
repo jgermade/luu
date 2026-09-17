@@ -6,7 +6,7 @@
 # i.e. after commit 82229cc ("run_command's argv: one array instead of
 # command+args closes the envelope collapse"), which that original run
 # predates (714eca7, 11:11 vs 82229cc, 11:38, same day). Exists to separate
-# two confounds that RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md's
+# two confounds that RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md's
 # "14B's two-GGUF check" section did not: the registry-vs-local file
 # difference, and the pre/post argv-schema-fix difference, since the
 # registry runs (both this one and 2026-09-15.14b-ollama-registry) were all

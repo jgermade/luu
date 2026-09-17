@@ -14,7 +14,7 @@
 //! [`compile`] rather than compiling to a grammar that accepts the wrong
 //! thing.
 //!
-//! See `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`, and
+//! See `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`, and
 //! `RECORD/2026-09-14.the-bare-grammar-field.completed.md` for why this is
 //! worth compiling at all: `llama-server`'s own `/v1/chat/completions` takes
 //! a bare `grammar` field and enforces it.

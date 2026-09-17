@@ -2,7 +2,7 @@
 
 The transcripts and verdicts behind the "does it hold on the 7B" section
 appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md).
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md).
 The official fifteen prompts,
 [`scripts/tasks/tool-call-probe.txt`](../../../scripts/tasks/tool-call-probe.txt),
 against `qwen2.5-coder-7b` (`qwen2.5-coder-7b-instruct-q4_k_m.gguf`) over

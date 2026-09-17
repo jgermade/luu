@@ -315,7 +315,7 @@ test("a session is started on a posture, and the page says which", async ({ page
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // The "+" in the chat's head. Sessions were a tab strip over the chat
-  // column (`RECORD/2026-09-15.a-three-pane-inspector.WIP.md`) and before that
+  // column (`RECORD/2026-09-15.a-three-pane-inspector.completed.md`) and before that
   // a `+ New` button beside a dropdown in the page header; one session is on
   // screen, so the head names it and the strip became the history popover.
   await page.click('.chat .acts button[title*="New session"]')
@@ -351,7 +351,7 @@ test("a session is started on a posture, and the page says which", async ({ page
  * The shell itself: the three columns, the switch that chooses what the left
  * one shows, and the chat's head. The layout carries the panels every later
  * phase of
- * `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` adds, so a column that
+ * `RECORD/2026-09-15.a-three-pane-inspector.completed.md` adds, so a column that
  * silently stopped rendering is worth catching here rather than in the
  * phase that builds against it.
  */
@@ -586,7 +586,7 @@ test("ESC closes what is open, and swaps the columns when nothing is", async ({ 
  * The workspace panels, against this repository itself: the tree the server
  * walks is the checkout the test runs from, so `.gitignore` and `git status`
  * have real answers to give. Phases 3 and 4 of
- * `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+ * `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
  *
  * Deliberately not asserting *which* files are changed — that depends on who
  * is running it and when. What is asserted is the shape: a tree that lists,
@@ -666,7 +666,7 @@ test("the git panel lists changes, and one opens as a diff of hunks", async ({ p
  * so this is the unconfigured half of phase 5 — that the tree draws its own
  * glyphs rather than nothing — and all of phase 6, which needs no
  * configuration at all. See
- * `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+ * `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
  */
 test("a source file arrives highlighted, and an unthemed tree still has glyphs", async ({ page }) => {
   const errors = []
@@ -702,7 +702,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   // asserting: the page renders a screenful and fills in the rest one frame
   // later, so a tail that never arrives leaves a file that looks whole and is
   // not. See the phase 8 sections of
-  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
   const rows = await page.evaluate(async () =>
     (await import("./workspace.js")).workspace.content.lines.length)
   expect(rows, "this file is meant to outrun the first block").toBeGreaterThan(200)

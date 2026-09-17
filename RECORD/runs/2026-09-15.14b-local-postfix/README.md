@@ -1,7 +1,7 @@
 # Evidence: the local 14B GGUF, re-run against the post-argv-fix binary
 
 The transcripts behind the new section appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)
 that separates a confound
 [`../2026-09-15.14b-registry-llama-server/`](../2026-09-15.14b-registry-llama-server/)
 found: the original local-file number

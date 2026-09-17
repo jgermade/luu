@@ -1,7 +1,7 @@
 # Evidence: Ollama's own qwen2.5-coder:14b, pulled from the registry
 
 The transcripts behind the 2026-09-15 section appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)
 that closes "whether the 14B has the same two-GGUF problem" — mirrors
 [`../2026-09-15.7b-ollama-registry/`](../2026-09-15.7b-ollama-registry/), one
 size up. `ollama pull qwen2.5-coder:14b`, machine 4, the same fifteen
@@ -46,7 +46,7 @@ substituted for the output directory).
 
 14/15 Parsed, 0/15 Drifted, 1/15 ContinuedPastFence, 0/15 NoCall — 93%
 clean-call, **higher** than
-[`the-same-corpus-same-scorer 14B number`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)'s
+[`the-same-corpus-same-scorer 14B number`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)'s
 12/15 = 80% on the local HuggingFace GGUF over `llama-server`, same machine,
 same corpus, same scorer. The one miss (prompt 9's `run_command` envelope,
 `NoCall`) that appeared on the local GGUF did not reproduce here — prompt 9

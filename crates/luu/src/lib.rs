@@ -401,7 +401,7 @@ enum Command {
         /// the session. Off, so a run made without it stays comparable to
         /// every recording on disk — same flag `chat` carries, see its own doc
         /// for what the two arms cost. See
-        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
         #[arg(long, value_enum)]
         constrain: Option<ConstrainKind>,
     },
@@ -590,7 +590,7 @@ enum Command {
         /// the session. Off, so a run made without it stays comparable to
         /// every recording on disk — same flag `chat` carries, see its own doc
         /// for what the two arms cost. See
-        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
         #[arg(long, value_enum)]
         constrain: Option<ConstrainKind>,
     },
@@ -1198,7 +1198,7 @@ impl EvictionKind {
     }
 }
 
-/// `--constrain` as the two bets `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`
+/// `--constrain` as the two bets `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`
 /// named. Neither is the default: unconstrained is what every recording on
 /// disk before this flag existed was measured under, and a flag that
 /// changed the default would make them incomparable retroactively.
@@ -1218,7 +1218,7 @@ pub enum ConstrainKind {
 impl ConstrainKind {
     // `pub`: `ServeOptions`/`StdioOptions` carry the raw flag and build it in
     // `App::create`, once, the same reason `chat` builds it once — see
-    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     pub fn build(self, tools: &Tools) -> anyhow::Result<Constraint> {
         Ok(match self {
             Self::Schema => Constraint::Schema(tools.call_schema()),
@@ -1824,7 +1824,7 @@ pub async fn run() -> Result<()> {
         // most of what opening a file cost. Beside the icon theme because it is
         // the same kind of decision — pay a fixed cost where somebody is
         // watching the process start. See the phase 8 section of
-        // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+        // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
         crate::highlight::warm();
         eprint!("{}", agency.describe());
         if approvers.required {
@@ -2144,7 +2144,7 @@ pub async fn run() -> Result<()> {
     // "just answer" branch (`Tools::call_schema`'s own doc), so it is never
     // the per-step constraint; it is offered to `run_agent_turn` as a
     // `SchemaRetry`, spent only on a reply that drifted. See
-    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     let (constraint, schema_retry) = match (constrain, built) {
         (Some(ConstrainKind::Grammar), Some(grammar)) => (Some(grammar), None),
         (Some(ConstrainKind::Schema), Some(Constraint::Schema(schema))) => (
@@ -2443,7 +2443,7 @@ pub async fn run() -> Result<()> {
                     // schema retry counts too, even at `step == 1`: it is a
                     // second call the tracker's own chain has not seen yet,
                     // and skipping it is the gap named in
-                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s
+                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s
                     // "the tool-call probe's own instrument cannot see a
                     // retry".
                     if let TurnEvent::ModelCall {

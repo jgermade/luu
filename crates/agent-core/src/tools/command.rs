@@ -15,7 +15,7 @@
 //! that pair reads as a call in its own right — a program name playing
 //! `name`'s part and an argument list playing `arguments`'s — and a model
 //! asked for the wrapped form sometimes emits the pair *unwrapped*, believing
-//! it already answered. See `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+//! it already answered. See `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

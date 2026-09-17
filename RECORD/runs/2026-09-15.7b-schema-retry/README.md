@@ -2,7 +2,7 @@
 
 The transcripts behind the 2026-09-15 "the retry shape, built" section
 appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md).
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md).
 `qwen2.5-coder-7b` over `llama-server`, machine 4, `--constrain schema` —
 now `agent_core::agent::SchemaRetry`: an unconstrained first attempt, and a
 second, schema-forced one only when the first scores `CallVerdict::Drifted`

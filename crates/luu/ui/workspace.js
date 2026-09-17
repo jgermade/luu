@@ -6,7 +6,7 @@
 /// `store.js` is one: the Files panel, the Git panel and the content viewer are
 /// siblings, and a parent whose only job is relaying between its children is a
 /// parent the state does not need. Both panels write tabs; the viewer reads
-/// them. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` and
+/// them. See `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
 import { $reactive } from "./vendor/jq79.js"

@@ -309,7 +309,7 @@ impl Tools {
     /// definition of a tool's shape, for the reason [`fenced`]'s own comment
     /// gives about two scanners drifting.
     ///
-    /// This is the *retry* arm `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`
+    /// This is the *retry* arm `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`
     /// names beside the grammar: sent as a server's `response_format`, every
     /// reply becomes a call — there is no "just answer" branch, unlike
     /// [`crate::grammar::compile`]'s. Sending it on a first attempt would

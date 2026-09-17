@@ -117,7 +117,7 @@ pub enum TraceMessage {
         /// the attempt it retries. That second case is why this is *not*
         /// simply "`step > 1`": before it was measured explicitly, a
         /// retry's own call was silently absent from this chain, the gap
-        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md` names as "the
+        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md` names as "the
         /// tool-call probe's own instrument cannot see a retry".
         step: u32,
         /// The exact string this call handed to the model.

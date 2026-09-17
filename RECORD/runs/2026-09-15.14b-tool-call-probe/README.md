@@ -1,7 +1,7 @@
 # Evidence: the tool-call probe, run against the 14B on machine 4
 
 The transcripts and verdicts behind the 2026-09-15 section appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md).
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md).
 Fifteen independent one-shot sessions — no shared history, one per line of
 [`scripts/tasks/tool-call-probe.txt`](../../../scripts/tasks/tool-call-probe.txt)
 — against `qwen2.5-coder-14b` (`qwen2.5-coder-14b-instruct-q4_k_m.gguf`) over

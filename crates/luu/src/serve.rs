@@ -163,7 +163,7 @@ struct App {
     /// for a value that is the same every time. `None` is unconstrained, the
     /// only case every recording made before `--constrain` reached `serve`
     /// and `stdio` was measured under. See
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     constraint: Option<Constraint>,
     /// The retry `Constraint::Schema` is honest for, spent once per turn on a
     /// reply that drifted rather than sent on every attempt. `None` when
@@ -371,7 +371,7 @@ pub struct StdioOptions {
     pub select_weights: agent_core::select::Weights,
     /// `schema` or `grammar`, for every turn of the session — the same flag
     /// `chat` carries, unbuilt here until now. See
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     pub constrain: Option<crate::ConstrainKind>,
     /// Where sessions are cached between restarts.
     pub store: Option<PathBuf>,
@@ -518,7 +518,7 @@ impl App {
         // Built once, here, for the same reason the map is: a constraint
         // compiled per turn would cost the compile every turn for a value
         // that is the same every time. Mirrors `chat`'s own handling exactly
-        // — see `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+        // — see `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
         let built = constrain
             .map(|kind| kind.build(&agency.tools))
             .transpose()?;
@@ -577,6 +577,12 @@ impl App {
             view: Mutex::new({
                 let mut view = SessionView::new(LIVE_SESSION, &backend_name, &model_name);
                 view.started_at = started_at;
+                // The same three fields the stream's first header carries, and
+                // set here for the same reason `started_at` is: the live view
+                // is not built by applying that line, so anything the fold
+                // would take out of it has to be put in by hand or the two
+                // disagree. `tests/store_parity.rs` is what notices.
+                view.posture = Some(agency.posture(None));
                 view
             }),
             session_started_at: Mutex::new(started_at),
@@ -765,7 +771,7 @@ pub struct ServeOptions {
     /// Which signals score a file, from the flags that switch them.
     pub select_weights: agent_core::select::Weights,
     /// `schema` or `grammar`, for every turn of the session. See
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     pub constrain: Option<crate::ConstrainKind>,
     /// The file holding the bearer token this server requires, if any.
     /// `None` on a loopback address means no auth; `None` on any other
@@ -2146,7 +2152,7 @@ async fn begin_turn(
             // step, the same as `chat`. `Schema` is never here: it has no
             // "just answer" branch, so it is spent once, as `schema_retry`,
             // only on a reply that drifted. See
-            // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+            // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
             constraint: app.constraint.clone(),
         },
         code,
@@ -2186,7 +2192,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                     // shows their cost as chat-template overhead. Measured into
                     // the same chain as the turns, from the second call on —
                     // and a schema retry counts too, even at `step == 1`. See
-                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s
+                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s
                     // "the tool-call probe's own instrument cannot see a
                     // retry".
                     if let TurnEvent::ModelCall {
@@ -2805,17 +2811,29 @@ async fn posture_for(
 /// `started_at` is the session's own, never the moment of the resume: every
 /// `at_ms` in a stream is relative to the first header's, which is what the
 /// field means.
+///
+/// **The posture is a third term and not a passenger.** It was one until
+/// 2026-09-17: a resume from a container onto a host, on the same model, moved
+/// nothing this function compared and so wrote nothing, and the rest of the
+/// stream then read as though it had stayed contained. `resume_session` now
+/// refuses that case outright, which leaves this reachable only where the
+/// stored posture is unknown — and a recording's honesty should not be a
+/// downstream consequence of an access check somebody may relax later. See
+/// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
 fn retarget_header(
     view: &SessionView,
     sending: &Destination,
     counter: agent_core::context::Counter,
     posture: record::Posture,
 ) -> Option<record::RecordLine> {
-    let same = view.backend == sending.backend.name() && view.model == sending.model;
+    let same = view.backend == sending.backend.name()
+        && view.model == sending.model
+        && view
+            .posture
+            .as_ref()
+            .is_some_and(|stored| stored.same_place(&posture));
     match same {
         true => None,
-        // The posture is the one already in place: a resume moves where a
-        // session *sends* and never what it may *do* — see `resume_session`.
         false => Some(crate::session::header(
             sending.backend.name(),
             &sending.model,
@@ -2955,6 +2973,10 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     let new_id = session_id(started_at);
     *app.session_id.lock().await = new_id.clone();
     *app.session_started_at.lock().await = started_at;
+    // Built once and used twice — the stream's header and the live view — for
+    // the reason `store_parity` exists: the view is not built by folding that
+    // line, so the two are only equal while every field is put in both places.
+    let posture = agency.posture(posture_name);
     // A new session is a new stream, and a stream starts with the header that
     // says what it is comparable with — which is why the destination is
     // swapped above this line and never below it.
@@ -2963,7 +2985,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         &sending.model,
         sending.budget,
         sending.counter.id(),
-        Some(agency.posture(posture_name)),
+        Some(posture.clone()),
         started_at,
     )];
 
@@ -2984,6 +3006,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         let mut view = app.view.lock().await;
         *view = SessionView::new(LIVE_SESSION, sending.backend.name(), &sending.model);
         view.started_at = started_at;
+        view.posture = Some(posture);
         let mut s = view.summary();
         s.id = new_id.clone();
         s
@@ -3020,21 +3043,6 @@ async fn resume_session(
         Ok(asked) => asked,
         Err((status, message)) => return (status, message).into_response(),
     };
-    // A destination may move under a history; a posture may not. What a session
-    // is allowed to do is what its jobs were approved against, and moving it
-    // under an open plan would widen or narrow a grant a person already
-    // answered for at the gate. See
-    // `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
-    if let Some(name) = &asked.posture {
-        return (
-            StatusCode::CONFLICT,
-            format!(
-                "a session cannot be moved to posture `{name}`: a destination is where a session                  sends and a posture is what it may do, and its jobs were approved against this                  one. Start a session on `{name}` instead."
-            ),
-        )
-            .into_response();
-    }
-
     {
         let session = app.session.lock().await;
         if session.current.is_some() || session.pending.is_some() {
@@ -3062,55 +3070,118 @@ async fn resume_session(
 
     app.checkpoint().await;
 
-    // Read before the store lock: the tool block is the same for every posture
-    // — the definitions never move, because they are the second half of the
-    // cached prefix — and asking for it inside the lock would be an await
-    // holding a guard that cannot cross a thread.
-    let definitions = app.agency().await.definitions();
-    let (loaded_view, resumed_context) = {
+    // The fold on its own, and before any posture is built: resolving a name
+    // can start a container, and an id nobody stored must not start one.
+    let loaded_view = {
         let store = store_mutex.lock().await;
-        let Some(view) = (match store.load(id) {
-            Ok(v) => v,
+        match store.load(id) {
+            Ok(Some(view)) => view,
+            Ok(None) => return not_found("session"),
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        }) else {
-            return not_found("session");
-        };
+        }
+    };
 
-        let Some(context) = (match store.resume(
+    // What this resume would run under. An absent name is the posture already
+    // in place and builds nothing; a name is resolved *here*, before anything
+    // is swapped, so a runtime that is not installed refuses the resume rather
+    // than ending the session that is running — the discipline
+    // `create_session` keeps for the same reason.
+    let (posture_name, agency) = match posture_for(app, asked.posture.as_deref()).await {
+        Ok(resolved) => resolved,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+    let posture = agency.posture(posture_name.clone());
+
+    // A destination may move under a history; a posture may not. What a session
+    // is allowed to do is what its jobs were approved against, and handing a
+    // person back a gate somewhere else replays an answer they gave about
+    // somewhere else — a proposal left open under a container comes back at the
+    // gate by design (`pending_proposal`), and before this it came back on
+    // whatever the server happened to be running.
+    //
+    // Compared on the three facts and never on the name, for the reason
+    // `record::Posture` carries three: the file behind a name can be edited
+    // tomorrow. A stored `None` is *unknown* — a recording from before format
+    // 10 — and is let through rather than guessed at, because inventing `host`
+    // for it would be a fact this project does not hold; the header below then
+    // says where the rest of it ran. See
+    // `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+    if let Some(stored) = &loaded_view.posture
+        && !stored.same_place(&posture)
+    {
+        // Whatever was built a few lines up is not going to be used, and it may
+        // be a container: ended rather than dropped, for `Agency::shutdown`'s
+        // own reason.
+        if !Arc::ptr_eq(&agency, &app.agency().await) {
+            agency.shutdown().await;
+        }
+        let named = match &stored.name {
+            Some(name) => format!(" `{name}`"),
+            None => String::new(),
+        };
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "session {id} ran under posture{named} ({}) and this server is on ({}); \
+                 its jobs were approved against the first one. Start a session on that \
+                 posture, or name it in this resume.",
+                stored.describe(),
+                posture.describe(),
+            ),
+        )
+            .into_response();
+    }
+
+    // Read once the posture is settled and before the store lock: the tool
+    // block is the same for every posture — the definitions never move, because
+    // they are the second half of the cached prefix — and asking for it inside
+    // the lock would be an await holding a guard that cannot cross a thread.
+    let definitions = agency.definitions();
+    let resumed_context = {
+        let store = store_mutex.lock().await;
+        match store.resume(
             id,
             SYSTEM,
             definitions,
             &app.map_rendered,
             sending.counter.as_ref(),
         ) {
-            Ok(c) => c,
+            Ok(Some(context)) => context,
+            Ok(None) => return not_found("session"),
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        }) else {
-            return not_found("session");
-        };
-
-        (view, context)
+        }
     };
 
     // After the fold is rebuilt and before anything runs on it.
     *app.destination.write().await = sending.clone();
+    // The posture the session keeps, which is its own. A no-op when the body
+    // named nothing — the resolver hands back the agency already in place, so
+    // the pointers are equal and nothing is ended.
+    let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
+    if !Arc::ptr_eq(&previous, &agency) {
+        previous.shutdown().await;
+    }
+    *app.posture.lock().await = posture_name;
 
     *app.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store
     // already holds rather than starting a second one under the same name.
     *app.session_started_at.lock().await = loaded_view.started_at;
-    // The posture is the one already in place — a resume moves where a session
-    // sends and never what it may do — and it is read before the stream lock,
-    // because nothing in this file holds two locks across an await.
-    let posture_name = app.posture.lock().await.clone();
-    let posture = app.agency().await.posture(posture_name);
+    // The one line this route writes. It says the rest of these turns were
+    // produced somewhere else, and it is absent when they were not — built
+    // before the stream lock, because nothing in this file holds two locks
+    // across an await.
+    let header = retarget_header(
+        &loaded_view,
+        &sending,
+        sending.counter.id(),
+        posture.clone(),
+    );
+    let moved = header.is_some();
     {
         let mut stream = app.stream.lock().await;
         stream.clear();
-        // The one line this route writes. It says the rest of these turns were
-        // produced somewhere else, and it is absent when they were not.
-        if let Some(header) = retarget_header(&loaded_view, &sending, sending.counter.id(), posture)
-        {
+        if let Some(header) = header {
             stream.push(header);
         }
     }
@@ -3139,6 +3210,14 @@ async fn resume_session(
         // which is where "what produced turn 4" is answered.
         live_view.backend = sending.backend.name().to_string();
         live_view.model = sending.model.clone();
+        // And the posture only where the stream gained a line carrying it:
+        // this view has to equal what folding that stream produces, and two
+        // postures that are the same place can still be spelled differently,
+        // so overwriting it unconditionally would put a name in the view that
+        // no header in the stream ever said.
+        if moved {
+            live_view.posture = Some(posture);
+        }
         *view = live_view;
         let mut s = view.summary();
         s.id = id.to_string();
@@ -3446,7 +3525,7 @@ mod tests {
     }
 
     /// The gap named in
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s "the tool-call
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s "the tool-call
     /// probe's own instrument cannot see a retry": before `ModelCall` carried
     /// `retry`, the interceptor's `step > 1` rule silently dropped the one
     /// extra call `SchemaRetry` spends on a drifted reply, because that call
@@ -3504,9 +3583,9 @@ mod tests {
     /// header folded to — so a resume that inherits a destination the session
     /// never ran on records that too, which it was doing silently before this
     /// line existed.
-    #[test]
-    fn a_resume_records_a_header_only_where_the_destination_moved() {
-        let sending = |backend: &str, model: &str| Destination {
+    /// One destination, for the tests that only care that two of them differ.
+    fn mock_destination(backend: &str, model: &str) -> Destination {
+        Destination {
             backend: Arc::new(Mock::default()),
             model: model.to_string(),
             budget: Budget::new(8192, 512, Eviction::Turn),
@@ -3531,24 +3610,29 @@ mod tests {
                 store: None,
                 unconfigured: false,
             },
-        };
+        }
+    }
 
-        let mut view = SessionView::new("s", "mock", "mock");
-        view.started_at = 1_700_000_000_000;
-        // The posture is carried, not compared: a resume moves where a session
-        // sends and never what it may do.
+    #[test]
+    fn a_resume_records_a_header_only_where_the_destination_moved() {
         let posture = || record::Posture {
             name: None,
             runtime: "host".into(),
             enforcement: "kernel".into(),
             network: false,
         };
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.started_at = 1_700_000_000_000;
+        // The posture the stream's last header named. It is a term of the
+        // comparison and not a passenger — see the test below.
+        view.posture = Some(posture());
 
-        // The same destination the stream already names: nothing to say.
+        // The same destination and the same posture the stream already names:
+        // nothing to say.
         assert!(
             retarget_header(
                 &view,
-                &sending("mock", "mock"),
+                &mock_destination("mock", "mock"),
                 agent_core::context::Counter::Approximate,
                 posture(),
             )
@@ -3560,7 +3644,7 @@ mod tests {
         // the numbers a header exists to make comparable are the model's.
         let moved = retarget_header(
             &view,
-            &sending("mock", "other"),
+            &mock_destination("mock", "other"),
             agent_core::context::Counter::Approximate,
             posture(),
         )
@@ -3578,6 +3662,103 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The case that wrote nothing, which is the one that mattered.
+    ///
+    /// A resume from a container onto a host on the same model moved nothing
+    /// `retarget_header` compared, so the stream gained no line and the rest of
+    /// the session read as though it had stayed contained. `resume_session`
+    /// refuses that now; this pins the recording's half of it, because a
+    /// recording's honesty should not depend on an access check.
+    ///
+    /// See `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+    #[test]
+    fn a_resume_records_a_header_where_only_the_posture_moved() {
+        let sending = mock_destination("mock", "mock");
+        let contained = record::Posture {
+            name: Some("container".into()),
+            runtime: "docker (luu-worker:dev)".into(),
+            enforcement: "kernel".into(),
+            network: false,
+        };
+        let host = record::Posture {
+            name: None,
+            runtime: "host".into(),
+            enforcement: "kernel".into(),
+            network: false,
+        };
+
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.started_at = 1_700_000_000_000;
+        view.posture = Some(contained.clone());
+
+        let moved = retarget_header(
+            &view,
+            &sending,
+            agent_core::context::Counter::Approximate,
+            host.clone(),
+        )
+        .expect("the posture moved, so the stream has to say so");
+        match moved {
+            record::RecordLine::Header { posture, model, .. } => {
+                assert_eq!(model, "mock", "the destination did not move");
+                assert_eq!(
+                    posture.expect("a header a resume writes always names one"),
+                    host,
+                    "the line says where the rest of these turns ran, not where they started",
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // And the name alone is not the comparison: the same three facts under
+        // two spellings is the same place, and a line saying otherwise would be
+        // recording an editor's habit as a move.
+        let renamed = record::Posture {
+            name: Some("contained".into()),
+            ..contained.clone()
+        };
+        assert!(
+            retarget_header(
+                &view,
+                &sending,
+                agent_core::context::Counter::Approximate,
+                renamed,
+            )
+            .is_none(),
+            "a posture compared on its name would write a line every time somebody \
+             renamed one in config.toml",
+        );
+    }
+
+    /// A session recorded before format 10 has no posture, and *unknown* is not
+    /// `host`: the resume is allowed through — refusing it would make a history
+    /// unreadable on the strength of a guess — and the stream gains the line
+    /// that says where the rest of it ran.
+    #[test]
+    fn a_session_with_no_recorded_posture_gains_a_header_rather_than_a_refusal() {
+        let sending = mock_destination("mock", "mock");
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.started_at = 1_700_000_000_000;
+        assert!(view.posture.is_none(), "what a pre-format-10 fold produces");
+
+        assert!(
+            retarget_header(
+                &view,
+                &sending,
+                agent_core::context::Counter::Approximate,
+                record::Posture {
+                    name: None,
+                    runtime: "host".into(),
+                    enforcement: "kernel".into(),
+                    network: false,
+                },
+            )
+            .is_some(),
+            "an unknown posture is the one case where the header is the only \
+             thing that will ever say where these turns ran",
+        );
     }
 
     /// A directory that removes itself, so a failing test does not leave one

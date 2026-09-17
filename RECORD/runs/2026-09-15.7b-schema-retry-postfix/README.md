@@ -2,7 +2,7 @@
 
 The transcripts and mechanically-scored verdicts behind the new section
 appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)
 that closes "the two real-model schema-retry runs made earlier today predate
 [the instrument] fix". Same fifteen prompts, same model
 (`qwen2.5-coder-7b`), same machine, backend and flags as

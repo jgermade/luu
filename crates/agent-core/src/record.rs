@@ -101,6 +101,37 @@ pub struct Posture {
     pub network: bool,
 }
 
+impl Posture {
+    /// Whether two runs were allowed to do the same things.
+    ///
+    /// The three facts, and **never the name** — for the reason the name is
+    /// `Option` in the first place: a name is a label and the file behind it
+    /// can be edited tomorrow, so two sessions that agree on it can disagree
+    /// about everything that matters, and two that disagree on it can be the
+    /// same place reached by two spellings.
+    ///
+    /// This is what a resume compares before it hands a person a gate. See
+    /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+    pub fn same_place(&self, other: &Self) -> bool {
+        self.runtime == other.runtime
+            && self.enforcement == other.enforcement
+            && self.network == other.network
+    }
+
+    /// The three facts, for a refusal that has to name both sides.
+    ///
+    /// The name is left out: the caller has it and knows whose it is, and a
+    /// message that put both names in would be inviting the comparison this
+    /// type refuses to make.
+    pub fn describe(&self) -> String {
+        let network = match self.network {
+            true => "network",
+            false => "no network",
+        };
+        format!("{}, {}, {network}", self.runtime, self.enforcement)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "channel", rename_all = "snake_case")]
 pub enum RecordLine {
@@ -193,5 +224,47 @@ mod tests {
             RecordLine::Header { format: FORMAT, .. }
         ));
         assert!(matches!(parsed[1], RecordLine::Protocol { at_ms: 12, .. }));
+    }
+
+    /// The comparison a resume makes before it hands a person a gate.
+    #[test]
+    fn two_postures_are_the_same_place_by_their_facts_and_never_by_their_name() {
+        let contained = Posture {
+            name: Some("container".into()),
+            runtime: "docker (luu-worker:dev)".into(),
+            enforcement: "kernel".into(),
+            network: false,
+        };
+
+        assert!(
+            contained.same_place(&Posture {
+                name: Some("sandboxed".into()),
+                ..contained.clone()
+            }),
+            "a name is a label and the file behind it can be edited tomorrow",
+        );
+        assert!(
+            contained.same_place(&Posture {
+                name: None,
+                ..contained.clone()
+            }),
+            "a session that named no posture can still be in the same place as one that did",
+        );
+
+        // The three that are not a label. Enforcement is the one worth spelling
+        // out: `kernel` on the host and `kernel` inside a container are the same
+        // four bytes and two very different places for a command to run.
+        assert!(!contained.same_place(&Posture {
+            runtime: "host".into(),
+            ..contained.clone()
+        }));
+        assert!(!contained.same_place(&Posture {
+            enforcement: "best-effort".into(),
+            ..contained.clone()
+        }));
+        assert!(!contained.same_place(&Posture {
+            network: true,
+            ..contained.clone()
+        }));
     }
 }
