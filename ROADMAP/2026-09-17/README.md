@@ -88,7 +88,7 @@ rows, three of them carried from the last revision where none of them moved.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 9 | **A session resumed under a different posture is refused by nothing** — it is visible in the header and enforced nowhere. The store keeps jobs and their approved plans; it does not keep what they were approved *under*, so an approval granted inside a container can be replayed on the host. **First in this section, and the record is the next move rather than the diff** — the same shape item 9 of the last revision turned out to have, where the argument and the code were the same age | nothing; wants a record first | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
+| 9 | **A session resumed under a different posture is refused by nothing** — it is visible in the header and enforced nowhere. The store keeps jobs and their approved plans; it does not keep what they were approved *under*, so an approval granted inside a container can be replayed on the host. **First in this section, and the record is the next move rather than the diff** — the same shape item 9 of the last revision turned out to have, where the argument and the code were the same age. **The record was written the day this revision was**, and the row's own sentence turned out to be right about the symptom and wrong about the mechanism: a resume reads the posture out of the *live process*, the fold drops the posture the header already carries, and a resume that changes only the posture writes no header at all — so the **recording** is wrong as well as the gate | nothing; the diff, now | [`what-an-approval-was-granted-under`](../../RECORD/2026-09-17.what-an-approval-was-granted-under.WIP.md), from [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 10 | **The gate panel exposes none of `network`, `egress` or `enforcement`** — all three are on the protocol and reachable from a script and from a client; the approve button sends files, writes, commands and `closes_on` and nothing else. A narrowing nobody can reach from the surface they actually use is a narrowing nobody applies | nothing | [`enforcement-per-job`](../../RECORD/2026-09-06.enforcement-per-job.completed.md) §Still open |
 | 11 | **What a container start costs** — *the worker starts with the session* was chosen on the shape of the thing and not on a number. The `container` job already makes the same call on both sides and is where the number comes from | nothing | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 12 | **Nothing counts how often a plan grants a file rather than a directory**, which is the number that would say how ordinary the 2026-09-08 regression was — and therefore how much of the gate's surface has no test | nothing | [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) |
@@ -160,7 +160,12 @@ gantt
   record and the diff turned out to be the same age — both written 2026-09-06 on
   a branch nobody merged. The lesson is not *skip the record*. It is that a row
   blocked on "wants a record first" is blocked on an afternoon, and eleven days
-  is not an afternoon.
+  is not an afternoon. **Written the same day this revision was, and it found a
+  second defect the row could not see**: not only is the gate unguarded, the
+  *stream* is wrong — `retarget_header` writes a line when the destination moves
+  and not when the posture does, so a session resumed from a container onto a
+  host is recorded as if it had stayed contained. A project whose whole method is
+  that a run can be re-read afterwards cannot leave that one where it is.
 - **The unordered fortnight is the calibration number this revision hands to the
   next one.** Twelve commits of UI, none of them predicted here, all of them
   recorded properly and three of them finding bugs that had nothing to do with

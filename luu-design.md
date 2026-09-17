@@ -701,6 +701,16 @@ access = "execute"
   jobs were approved against this one. `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
+
+  **Half of that last rule is intent and not yet tree.** What is enforced is that
+  the resume endpoint takes no posture, so nobody can *ask* to move one. What is
+  not enforced is the sentence's actual meaning: a resume reads the posture out
+  of the live process, so a session approved under a container and picked back up
+  on a host runs on the host — and because the header is written only when the
+  *destination* moves, the stream does not say so either. The fold drops the
+  posture the header already carries, which is why nothing can compare. Argued,
+  with the fix, in
+  [`RECORD/2026-09-17.what-an-approval-was-granted-under.WIP.md`](RECORD/2026-09-17.what-an-approval-was-granted-under.WIP.md).
 - Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
   concurrent sessions — one live session per `serve` is still the shape, so one
   container at a time is still the shape.
