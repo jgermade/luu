@@ -1,7 +1,7 @@
 # Evidence: the tool-call probe, re-run after run_command's argv schema change
 
 The transcripts and verdicts behind the second 2026-09-15 section appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md),
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md),
 comparing directly against
 [`../2026-09-15.14b-tool-call-probe/`](../2026-09-15.14b-tool-call-probe/).
 Same fifteen prompts, same model

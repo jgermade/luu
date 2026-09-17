@@ -86,7 +86,7 @@ pub struct CompletionRequest {
 }
 
 /// What a reply must satisfy, independent of which field any one server
-/// spells it in — `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`
+/// spells it in — `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`
 /// §The proposal.
 #[derive(Debug, Clone)]
 pub enum Constraint {

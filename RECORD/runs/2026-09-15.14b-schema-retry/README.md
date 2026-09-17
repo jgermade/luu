@@ -33,7 +33,7 @@ unconstrained run — the three that end `[tool limit reached]` (04, 09, 14)
 are the pre-existing `ContinuedPastFence` prompts where the call itself
 parsed fine and the model then guessed at `cargo` flag orderings after a
 real `exit 1`, the same pattern
-[`the-same-corpus-same-scorer 14B number`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)
+[`the-same-corpus-same-scorer 14B number`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)
 already named — not a schema-retry defect, since no retry ever fired on
 this run at all. The retry-only shape costs nothing when there is nothing
 to retry, which is the property the design was for.

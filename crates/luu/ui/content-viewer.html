@@ -6,7 +6,7 @@
   // The tabs above it and the facts below it are the column's chrome and belong
   // to `app.html`, which owns all three columns' heads and feet so that they
   // are the same 40px. This file draws what is inside the box. See
-  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md` and
+  // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const { workspace } = await import("./workspace.js")
   const { prefs, monacoAvailable } = await import("./prefs.js")
@@ -19,7 +19,7 @@
   // and the render effect ends up writing what it reads. jq79 gives up after
   // 100 passes with a console error that names neither the variable nor this
   // file, so this cost half an hour to find. See
-  // `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+  // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
   $: picked = workspace.selected
 
   // ---- the optional editor ----------------------------------------------

@@ -1,7 +1,7 @@
 # Eight prompts, each answerable with exactly one call to edit_file or
 # write_file — the two tools scripts/tasks/tool-call-probe.txt never
 # exercises (that corpus only reaches read_file, list_dir and run_command).
-# Built to answer RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md's open
+# Built to answer RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md's open
 # question of whether run_command's envelope collapse was a property of its
 # own schema or something any tool with a multi-key argument object risks.
 # Scored the same way: agent_core::tools::score_call, four verdicts, no

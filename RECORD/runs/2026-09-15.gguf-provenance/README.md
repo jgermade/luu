@@ -22,7 +22,7 @@ The registry blobs are named by the layer digest `ollama list` /
 resolve to — the same two files
 [`the-drift-was-never-the-backend`](../../2026-09-15.the-drift-was-never-the-backend.completed.md)
 and
-[`a-grammar-for-tool-calls`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)'s
+[`a-grammar-for-tool-calls`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)'s
 "the 14B's two-GGUF check" section (2026-09-15) measured against.
 
 ## Reproducing

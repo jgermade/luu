@@ -10,7 +10,7 @@
 //! read path that skips the gate — and then there are two ways to read a file
 //! and only one of them is audited. The read side of the session API
 //! (`/api/sessions/*`) already answers plain ungated `GET`s for the same
-//! reason. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+//! reason. See `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
 //!
 //! What still bounds it is the sandbox: every path is resolved through
 //! [`Sandbox::check_path`], so this surface can reach exactly what the session's

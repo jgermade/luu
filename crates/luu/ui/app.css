@@ -3,7 +3,7 @@
    arrived by making dark the special case would quietly reinterpret all of
    them. Light is a `[data-theme="light"]` override, set from the preferences
    menu and remembered in `localStorage` — see
-   RECORD/2026-09-15.a-three-pane-inspector.WIP.md. */
+   RECORD/2026-09-15.a-three-pane-inspector.completed.md. */
 :root {
   /* One number for every column head and every column foot on the page. The
      chat's foot is twice it, and that is the only exception — see
@@ -223,7 +223,7 @@ pre {
    they are drawn into. Global rather than in any component's `<style scoped>`
    because the caret and the refresh are each used in two files, and a scoped
    rule is rewritten per component. See
-   RECORD/2026-09-15.a-three-pane-inspector.WIP.md. */
+   RECORD/2026-09-15.a-three-pane-inspector.completed.md. */
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ic {
   display: block;

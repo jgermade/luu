@@ -68,7 +68,7 @@ The files directly inside the `RECORD/` directory are:
 - `2026-09-05.a-clock-where-there-is-no-seam.completed.md`
 - `2026-09-05.beneath-the-root.completed.md`
 - `2026-09-05.choosing-fragments.completed.md`
-- `2026-09-06.a-grammar-for-tool-calls.WIP.md`
+- `2026-09-06.a-grammar-for-tool-calls.completed.md`
 - `2026-09-06.does-the-model-read-it.completed.md`
 - `2026-09-06.selection-at-the-gate.completed.md`
 - `2026-09-06.what-leaves-the-history.completed.md`

@@ -4,7 +4,7 @@
 # RECORD/runs/2026-09-15.14b-tool-call-probe/run.sh, after run_command's
 # schema changed from {command, args, cwd, timeout_ms} to {argv, cwd,
 # timeout_ms} — see the 2026-09-15 "a schema restructuring, tried" section of
-# RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md. Same llama-server
+# RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md. Same llama-server
 # process, same --ctx-size 8192 / --n-gpu-layers 99 / --flash-attn on,
 # --temperature 0 --seed 7. One flag apart from the prior run: the binary,
 # rebuilt with the new schema, and nothing else.

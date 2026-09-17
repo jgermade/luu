@@ -18,7 +18,7 @@
 //! filesystem: the theme is read once into an id → absolute path table, and
 //! only ids in that table can be served. There is no traversal to get wrong
 //! because there is no path to traverse. See
-//! `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+//! `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

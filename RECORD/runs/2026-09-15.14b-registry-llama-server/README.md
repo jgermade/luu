@@ -1,7 +1,7 @@
 # Evidence: the registry's 14B GGUF, over `llama-server` directly
 
 The transcripts behind the new section appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)
 that re-runs the tool-call-format numbers against the Ollama registry pull's
 14B GGUF blob
 (`sha256-ac9bc7a69dab38da1c790838955f1293420b55ab555ef6b4615efa1c1507b1ed`),

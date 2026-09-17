@@ -1,7 +1,7 @@
 #!/bin/sh
 # The fifteen tool-call-probe prompts against qwen2.5-coder-14b over
 # llama-server, `--constrain schema` — now the retry-only arm
-# `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md` always meant it to be
+# `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md` always meant it to be
 # (agent_core::agent::SchemaRetry), not the always-on `response_format` that
 # `RECORD/2026-09-14.what-constrain-does.completed.md` found never answered
 # a single prompt. Same machine, model and settings as

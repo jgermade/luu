@@ -61,7 +61,7 @@ pub enum TurnEvent {
     /// first attempt's, both carrying `step == 1` — which is exactly why the
     /// interceptor's old `step > 1` rule to measure a `StepCall` missed the
     /// retry outright, a gap named in
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s "the tool-call
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s "the tool-call
     /// probe's own instrument cannot see a retry".
     ModelCall {
         step: u32,
@@ -90,7 +90,7 @@ pub enum TurnEvent {
     /// `run_agent_turn`'s schema retry was refused by the backend — a grammar
     /// or schema it would not compile, a transport error, whatever it said no
     /// to. The turn survives by falling back to the pre-retry answer
-    /// (`RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s "what a refused
+    /// (`RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s "what a refused
     /// retry does to a turn"); this is the loud, once-per-occurrence note that
     /// fallback needed and did not have. Debug data, like `ModelCall`: it
     /// explains the agent rather than driving it, and never becomes a

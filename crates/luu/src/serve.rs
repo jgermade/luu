@@ -163,7 +163,7 @@ struct App {
     /// for a value that is the same every time. `None` is unconstrained, the
     /// only case every recording made before `--constrain` reached `serve`
     /// and `stdio` was measured under. See
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     constraint: Option<Constraint>,
     /// The retry `Constraint::Schema` is honest for, spent once per turn on a
     /// reply that drifted rather than sent on every attempt. `None` when
@@ -371,7 +371,7 @@ pub struct StdioOptions {
     pub select_weights: agent_core::select::Weights,
     /// `schema` or `grammar`, for every turn of the session — the same flag
     /// `chat` carries, unbuilt here until now. See
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     pub constrain: Option<crate::ConstrainKind>,
     /// Where sessions are cached between restarts.
     pub store: Option<PathBuf>,
@@ -518,7 +518,7 @@ impl App {
         // Built once, here, for the same reason the map is: a constraint
         // compiled per turn would cost the compile every turn for a value
         // that is the same every time. Mirrors `chat`'s own handling exactly
-        // — see `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+        // — see `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
         let built = constrain
             .map(|kind| kind.build(&agency.tools))
             .transpose()?;
@@ -765,7 +765,7 @@ pub struct ServeOptions {
     /// Which signals score a file, from the flags that switch them.
     pub select_weights: agent_core::select::Weights,
     /// `schema` or `grammar`, for every turn of the session. See
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     pub constrain: Option<crate::ConstrainKind>,
     /// The file holding the bearer token this server requires, if any.
     /// `None` on a loopback address means no auth; `None` on any other
@@ -2146,7 +2146,7 @@ async fn begin_turn(
             // step, the same as `chat`. `Schema` is never here: it has no
             // "just answer" branch, so it is spent once, as `schema_retry`,
             // only on a reply that drifted. See
-            // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`.
+            // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
             constraint: app.constraint.clone(),
         },
         code,
@@ -2186,7 +2186,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                     // shows their cost as chat-template overhead. Measured into
                     // the same chain as the turns, from the second call on —
                     // and a schema retry counts too, even at `step == 1`. See
-                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s
+                    // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s
                     // "the tool-call probe's own instrument cannot see a
                     // retry".
                     if let TurnEvent::ModelCall {
@@ -3446,7 +3446,7 @@ mod tests {
     }
 
     /// The gap named in
-    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s "the tool-call
+    /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s "the tool-call
     /// probe's own instrument cannot see a retry": before `ModelCall` carried
     /// `retry`, the interceptor's `step > 1` rule silently dropped the one
     /// extra call `SchemaRetry` spends on a drifted reply, because that call

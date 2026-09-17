@@ -10,7 +10,7 @@
 //! `{start, end}` is a Rust *byte* index that JavaScript would read as a
 //! UTF-16 index, which agrees for ASCII and quietly stops agreeing at the
 //! first accented character in a comment. Sending the text already cut removes
-//! the question. See `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+//! the question. See `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -112,7 +112,7 @@ fn language_of(path: &str) -> Option<&'static str> {
 /// being rebuilt for — so thirteen bytes of Rust cost 15 ms and 153 KB cost 40.
 /// A configuration is immutable once `configure` has run, so one per language
 /// is all there ever needs to be. See the phase 8 section of
-/// `RECORD/2026-09-15.a-three-pane-inspector.WIP.md`.
+/// `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
 ///
 /// A grammar whose queries will not compile is dropped rather than panicking,
 /// which is what the `.ok()` was doing before: one bad grammar should not take

@@ -29,7 +29,7 @@ use crate::worker::Executor;
 
 /// The retry `Constraint::Schema` is honest for — see
 /// [`crate::tools::Tools::call_schema`]'s own doc and
-/// `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`. An unconstrained
+/// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`. An unconstrained
 /// first attempt keeps "just answer" reachable; only a reply that attempted
 /// a call and missed the shape (`CallVerdict::Drifted`) is retried, once,
 /// forced into this schema. A clean decline (`CallVerdict::NoCall`) is never
@@ -286,7 +286,7 @@ pub async fn run_agent_turn(
                 // retry couldn't fix" — which the ordinary `parse_call`
                 // check below already knows how to end a turn on — instead
                 // of failing the turn outright. See
-                // `RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md`'s own
+                // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`'s own
                 // "what a refused grammar does to a session". Reported once,
                 // here, the same rule `constrain_caveat` set for a known
                 // incompatibility at startup — this is the runtime half of
@@ -791,7 +791,7 @@ mod tests {
     async fn a_drifted_call_is_retried_once_under_the_schema_and_then_runs() {
         // The one retry `Constraint::Schema` is for: fenced under the tool's
         // own name instead of ```tool, the exact drift
-        // RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md names throughout.
+        // RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md names throughout.
         // The scripted retry reply is what a schema-constrained server is
         // supposed to guarantee — the correct envelope — and the loop should
         // execute it rather than giving up on the first, malformed attempt.
@@ -861,7 +861,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_retry_falls_back_to_the_drifted_answer_instead_of_failing_the_turn() {
         // What a refused grammar (or schema) does to a session, named still
-        // open throughout RECORD/2026-09-06.a-grammar-for-tool-calls.WIP.md:
+        // open throughout RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md:
         // the pre-retry attempt is a real reply the model produced, and
         // discarding it because the server would not compile the retry's
         // constraint would trade a working answer for nothing.

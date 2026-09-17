@@ -1,7 +1,7 @@
 # Evidence: the 14B schema-retry probe, re-run where the instrument can see the retry
 
 The transcripts and verdicts behind the new section appended to
-[`../../2026-09-06.a-grammar-for-tool-calls.WIP.md`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md),
+[`../../2026-09-06.a-grammar-for-tool-calls.completed.md`](../../2026-09-06.a-grammar-for-tool-calls.completed.md),
 the 14B half of closing "the two real-model schema-retry runs made earlier
 today predate [the instrument] fix" — see
 [`../2026-09-15.7b-schema-retry-postfix/README.md`](../2026-09-15.7b-schema-retry-postfix/README.md)
@@ -39,7 +39,7 @@ has anything to retry.
 (the same model, file, machine, binary and corpus, unconstrained) —
 expected, since `--constrain schema` never activates here: with no retry to
 spend, the flag costs nothing and changes nothing, the same reading
-[`the retry shape, built`](../../2026-09-06.a-grammar-for-tool-calls.WIP.md)
+[`the retry shape, built`](../../2026-09-06.a-grammar-for-tool-calls.completed.md)
 gave the original pre-fix 14B run.
 
 Raw artifacts: `stats.json`; `.jsonl` recordings are gitignored
