@@ -202,7 +202,8 @@ pub enum Eviction {
 /// smaller half of it: the `history` bucket of a selecting run is ~90% quoted
 /// code by turn 20, and 9.2% of the code tokens in the precision corpus are a
 /// span some earlier turn already put in the window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Repeat {
     /// Send it again, in every turn that selected it. Everything recorded
     /// before this enum existed, and the default, because a run made under a
@@ -232,7 +233,8 @@ pub enum Repeat {
 /// the spans a *later* turn selected again, and this reaches the ones nobody
 /// did — which by turn 20 of the precision run is most of a history block that
 /// is ~90% quoted code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Prune {
     /// An old turn carries its spans in full until it is evicted whole.
     /// Everything recorded before this enum existed, and the default.
@@ -264,7 +266,8 @@ pub enum Prune {
 /// It has no line of its own. [`Prune::Behind`] already decides which turns are
 /// old enough to give something up; this decides whether tool output is one of
 /// the things they give up, which is why it is inert on its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Results {
     /// A tool result is sent in full for as long as its turn is in the window.
     /// Everything recorded before this enum existed, and the default.

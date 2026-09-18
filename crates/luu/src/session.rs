@@ -297,6 +297,14 @@ pub fn header(
         counter: Some(counter),
         eviction: Some(budget.eviction),
         posture,
+        // The other three the budget is holding. This function took a whole
+        // `Budget` and wrote down two of its five fields until format 11, so a
+        // run under `--repeat-once` left nothing behind saying so — while the
+        // doc comments on the builders that set them gave the reason it should
+        // have. See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+        repeat: Some(budget.repeat),
+        prune: Some(budget.prune),
+        results: Some(budget.results),
         started_at,
     }
 }
@@ -376,5 +384,73 @@ impl Recorder {
     pub fn write(&self, event: &Event) {
         let at_ms = now_ms().saturating_sub(self.started_at);
         let _ = self.lines.send(line(event, at_ms));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_core::context::{Eviction, Prune, Repeat, Results};
+
+    /// The defect format 11 was taken for: this function is handed a whole
+    /// `Budget` and wrote down two of its five fields.
+    ///
+    /// It is pinned here rather than on the format, because the format only
+    /// makes the fields *possible*. Both places that start a stream come
+    /// through here — the recorder writing a `.jsonl` and the store keeping a
+    /// session's own — so a header that drops a field drops it everywhere, and
+    /// silently: every arm still reads back as a valid header. See
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+    #[test]
+    fn a_header_writes_down_every_rule_the_budget_is_holding() {
+        let budget = Budget::new(8192, 512, Eviction::Turn)
+            .repeating(Repeat::Once)
+            .pruning(Prune::Behind)
+            .citing(Results::Cited);
+
+        match header("mock", "mock", budget, Counter::Approximate, None, 0) {
+            RecordLine::Header {
+                repeat,
+                prune,
+                results,
+                ..
+            } => assert_eq!(
+                (repeat, prune, results),
+                (
+                    Some(Repeat::Once),
+                    Some(Prune::Behind),
+                    Some(Results::Cited)
+                ),
+                "the arm a run was is in this function's hand; it has to reach the stream",
+            ),
+            other => panic!("{other:?}"),
+        }
+
+        // And the other arm, because a function that hard-coded `Once` would
+        // pass the assertion above.
+        match header(
+            "mock",
+            "mock",
+            Budget::new(8192, 512, Eviction::Turn),
+            Counter::Approximate,
+            None,
+            0,
+        ) {
+            RecordLine::Header {
+                repeat,
+                prune,
+                results,
+                ..
+            } => assert_eq!(
+                (repeat, prune, results),
+                (
+                    Some(Repeat::Always),
+                    Some(Prune::Never),
+                    Some(Results::Kept)
+                ),
+                "a run under the defaults says so; only a file older than the format stays silent",
+            ),
+            other => panic!("{other:?}"),
+        }
     }
 }

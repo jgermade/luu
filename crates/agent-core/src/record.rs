@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::{Counter, Eviction};
+use crate::context::{Counter, Eviction, Prune, Repeat, Results};
 use crate::protocol::ServerMessage;
 use crate::trace::TraceMessage;
 
@@ -73,7 +73,21 @@ use crate::trace::TraceMessage;
 /// *not recorded* rather than zero. The protocol is untouched at 5: a client
 /// that ignores the field lacks a panel, it does not misread a conversation. See
 /// `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
-pub const FORMAT: u32 = 10;
+///
+/// 11: the header names the three **resend rules** a run rendered its window
+/// under — `repeat`, `prune` and `results`. They are in the header for the
+/// reason `context_limit`, `counter`, `eviction` and `posture` are, and the two
+/// builders that set them say it themselves: *"a recording made under it is not
+/// the same arm as one made without it"*. Until this, the only thing on the
+/// wire was the `pruned` trace line, which fires when rule B prunes something —
+/// so a `--prune-behind` run that pruned nothing was indistinguishable from a
+/// run without the flag, and a run under `--repeat-once` said nothing at all.
+/// `None` in every stream written before it, for the same reason `eviction` is
+/// `None` in one written before the policy was a choice: every one of those ran
+/// under the defaults, but the file does not say so, and inventing the field on
+/// the reader's behalf would put a claim in a record the record never made.
+/// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+pub const FORMAT: u32 = 11;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -169,6 +183,23 @@ pub enum RecordLine {
         /// a stream written before format 10, or by a run that named no posture.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         posture: Option<Posture>,
+        /// What a span already in the window cost the turn that selected it
+        /// again — rule A. Beside `eviction` and with the same `None`
+        /// semantics: a stream written before format 11 does not say.
+        #[serde(default)]
+        repeat: Option<Repeat>,
+        /// Whether an old turn gave up its spans once the window stopped
+        /// fitting — rule B. The `pruned` trace line says when the rule *fired*;
+        /// this says the run was under it, which is the difference between a
+        /// run that pruned nothing and a run that could not.
+        #[serde(default)]
+        prune: Option<Prune>,
+        /// Whether an old turn's tool output went with its spans — rule C.
+        /// Inert without `prune`, and recorded anyway: a reader comparing two
+        /// runs needs to know which arm it is holding, not which arm had an
+        /// effect.
+        #[serde(default)]
+        results: Option<Results>,
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
@@ -198,6 +229,9 @@ mod tests {
             counter: Some(Counter::Approximate),
             eviction: Some(Eviction::Turn),
             posture: None,
+            repeat: Some(Repeat::Once),
+            prune: Some(Prune::Behind),
+            results: Some(Results::Cited),
             started_at: 1_700_000_000_000,
         };
         let token = RecordLine::Protocol {
@@ -266,5 +300,102 @@ mod tests {
             network: true,
             ..contained.clone()
         }));
+    }
+
+    /// Each of the three rules, both ways, through JSON and back.
+    ///
+    /// One test per value rather than one header carrying all six, because what
+    /// this is pinning is that a reader can tell the arms apart — and a
+    /// round-trip of one arm proves nothing about that on its own.
+    #[test]
+    fn a_header_says_which_arm_of_each_rule_a_run_was() {
+        let header = |repeat, prune, results| RecordLine::Header {
+            format: FORMAT,
+            protocol: protocol::VERSION,
+            backend: "mock".into(),
+            model: "mock".into(),
+            context_limit: Some(8192),
+            counter: Some(Counter::Approximate),
+            eviction: Some(Eviction::Turn),
+            posture: None,
+            repeat: Some(repeat),
+            prune: Some(prune),
+            results: Some(results),
+            started_at: 1_700_000_000_000,
+        };
+        let arms =
+            |line: &RecordLine| match serde_json::from_str(&serde_json::to_string(line).unwrap())
+                .unwrap()
+            {
+                RecordLine::Header {
+                    repeat,
+                    prune,
+                    results,
+                    ..
+                } => (repeat, prune, results),
+                other => panic!("{other:?}"),
+            };
+
+        let off = header(Repeat::Always, Prune::Never, Results::Kept);
+        let on = header(Repeat::Once, Prune::Behind, Results::Cited);
+
+        assert_eq!(
+            arms(&off),
+            (
+                Some(Repeat::Always),
+                Some(Prune::Never),
+                Some(Results::Kept)
+            ),
+        );
+        assert_eq!(
+            arms(&on),
+            (
+                Some(Repeat::Once),
+                Some(Prune::Behind),
+                Some(Results::Cited)
+            ),
+        );
+        assert_ne!(
+            arms(&off),
+            arms(&on),
+            "two arms that read back the same are a header that cannot tell two runs apart, \
+             which is the only reason this format exists",
+        );
+    }
+
+    /// The `None` semantics `eviction` already has, on the three fields beside
+    /// it.
+    ///
+    /// A stream written before format 11 ran under the defaults — `Always`,
+    /// `Never`, `Kept` — and does not say so. Reading the default back would put
+    /// a claim in a record the record never made, so the absent key stays absent
+    /// all the way to the reader.
+    #[test]
+    fn a_format_10_header_does_not_say_which_rules_its_run_was_under() {
+        let before = serde_json::json!({
+            "channel": "header",
+            "format": 10,
+            "protocol": protocol::VERSION,
+            "backend": "mock",
+            "model": "mock",
+            "context_limit": 8192,
+            "counter": {"kind": "approximate"},
+            "eviction": {"policy": "turn"},
+            "started_at": 1_700_000_000_000_u64,
+        });
+
+        match serde_json::from_value(before).unwrap() {
+            RecordLine::Header {
+                repeat,
+                prune,
+                results,
+                ..
+            } => assert_eq!(
+                (repeat, prune, results),
+                (None, None, None),
+                "a file that does not say must not be read as one that does",
+            ),
+            other => panic!("{other:?}"),
+        }
     }
 }

@@ -610,6 +610,9 @@ mod tests {
                     enforcement: "kernel".into(),
                     network: false,
                 }),
+                repeat: Some(crate::context::Repeat::Always),
+                prune: Some(crate::context::Prune::Never),
+                results: Some(crate::context::Results::Kept),
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {
