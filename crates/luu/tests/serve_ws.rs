@@ -2534,3 +2534,60 @@ async fn two_sessions_in_one_process_render_their_windows_under_different_rules(
         .expect("asking for a rule that does not exist");
     assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
 }
+
+/// `GET /api/resend` answers two different questions and keeps them apart.
+///
+/// The file is *this machine's default* and outlives every session; `running`
+/// is what the live session is actually rendering under. They can disagree —
+/// a session started under a rule nobody wrote down is the ordinary case — and
+/// a page that showed one of them as though it were the other would be telling
+/// somebody their machine is set to something it is not. It is the relationship
+/// `ProvidersView::running` has with the file's `default`, one table along. See
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 3.
+#[tokio::test]
+async fn the_resend_route_keeps_this_machines_default_apart_from_what_is_running() {
+    let address = server().await;
+    let client = reqwest::Client::new();
+
+    let resend = get(&address, "/api/resend").await;
+    assert_eq!(
+        (
+            &resend["running"]["repeat"],
+            &resend["running"]["prune"],
+            &resend["running"]["results"]
+        ),
+        (
+            &serde_json::json!("always"),
+            &serde_json::json!("never"),
+            &serde_json::json!("kept")
+        ),
+        "what this server is under: {resend}",
+    );
+    assert!(
+        resend["editable"].as_bool().expect("a surface answers"),
+        "a test server is bound on loopback, so this one may write: {resend}",
+    );
+    assert_eq!(
+        resend["refused"],
+        serde_json::Value::Null,
+        "and there is nothing to refuse: {resend}",
+    );
+
+    // A session started under a rule moves `running` and leaves the file alone.
+    // Nothing was written down, so the machine's default is what it was.
+    let created = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({ "repeat": "once" }))
+        .send()
+        .await
+        .expect("starting a session under rule A");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+
+    let after = get(&address, "/api/resend").await;
+    assert_eq!(after["running"]["repeat"], "once", "{after}");
+    assert_eq!(
+        after["file"]["repeat"],
+        serde_json::Value::Null,
+        "a session's choice is not a machine's default: {after}",
+    );
+}

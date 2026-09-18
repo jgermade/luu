@@ -944,6 +944,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/providers", get(get_providers).put(put_providers))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/{name}/models", get(get_provider_models))
+        .route("/api/resend", get(get_resend).put(put_resend))
         .route("/api/postures", get(get_postures))
         .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
@@ -2757,6 +2758,213 @@ async fn put_providers(
     }
 }
 
+/// The `[resend]` table, as an editor sees it and as the live session is under.
+///
+/// Two halves because they can disagree and the disagreement is the point: the
+/// file is *this machine's default* and outlives every session, while a session
+/// may have been started under something else — the same relationship
+/// `ProvidersView::running` has with `default`, one table along.
+#[derive(serde::Serialize)]
+struct ResendView {
+    /// Where the file is, or would be written.
+    path: Option<String>,
+    editable: bool,
+    refused: Option<String>,
+    /// What the file says, key by key, with `None` on one it does not name.
+    file: crate::provider::Resend,
+    /// What the live session is actually rendering its window under.
+    running: RunningResend,
+    /// Rules the file now names that the **live** session was not moved onto,
+    /// with the reason. Empty where there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    waiting: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct RunningResend {
+    repeat: agent_core::context::Repeat,
+    prune: agent_core::context::Prune,
+    results: agent_core::context::Results,
+}
+
+impl RunningResend {
+    fn of(budget: Budget) -> Self {
+        Self {
+            repeat: budget.repeat,
+            prune: budget.prune,
+            results: budget.results,
+        }
+    }
+}
+
+async fn resend_view(state: &AppRouterState, waiting: Vec<String>) -> ResendView {
+    // A file that will not load is not a reason to refuse to say what the live
+    // session is under: that half is in memory and always answerable.
+    let (file, path) = match crate::provider::Config::load() {
+        Ok((config, path)) => (config.resend().unwrap_or_default(), path),
+        Err(_) => (Default::default(), None),
+    };
+    ResendView {
+        path: path
+            .or_else(crate::provider::Config::path_for_writing)
+            .map(|path| path.display().to_string()),
+        editable: state.providers_editable,
+        refused: match state.providers_editable {
+            true => None,
+            false => Some(
+                "this server is bound off loopback. A resend rule outlives the session, and \
+                 the bearer token says who may reach the port rather than who may decide what \
+                 this machine sends. Edit config.toml on the machine itself."
+                    .to_string(),
+            ),
+        },
+        file,
+        running: RunningResend::of(state.app.destination().await.budget),
+        waiting,
+    }
+}
+
+async fn get_resend(State(state): State<AppRouterState>) -> Response {
+    Json(resend_view(&state, Vec::new()).await).into_response()
+}
+
+/// Writes `[resend]`, and moves the live session onto what is safe to move it
+/// onto.
+///
+/// The two guards are the providers route's, because it is the same kind of
+/// write: a 403 off loopback, and the file rebuilt from what is on disk so that
+/// saving one table does not delete the others.
+///
+/// **What it applies live is narrower than what it writes, and that is the
+/// whole of §fourth.** The two ratchets in this window only move forward, so
+/// the three rules are not one case:
+///
+/// - **Rule A** stores nothing — its owner is chosen inside the window being
+///   rendered — so it is clean in both directions and is applied as asked.
+/// - **Rule B off** does not give back what is already behind the prune line:
+///   the policy gates the decision and the line gates the render, and they are
+///   not the same gate. Turning it off mid-session stops the line advancing and
+///   returns nothing, which is a control that reports a change it did not make.
+/// - **Rule C off** is worse than a no-op: handing tool output back makes the
+///   prompt bigger, and the way this window absorbs bigger is the floor — which
+///   drops turns with their questions and answers, and does not come back.
+///
+/// So B and C are applied live only when they are being turned **on**, and
+/// turning either off is written to the file and waits for the next session,
+/// which the response names rather than leaving to be discovered. See
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` §fourth.
+/// What a saved `[resend]` moves the **live** session onto, and what has to
+/// wait for the next one.
+///
+/// Split out of the route because it is the part with an argument behind it:
+/// the route writes a file, and this decides what a running conversation may be
+/// told about it without costing it turns. See [`put_resend`] for that
+/// argument, and `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+/// §fourth for where it was made.
+fn resend_live(asked: crate::provider::Resend, live: Budget) -> (Budget, Vec<String>) {
+    use agent_core::context::{Prune, Results};
+
+    let mut waiting = Vec::new();
+    let budget = Budget {
+        // Rule A stores nothing, so it moves both ways.
+        repeat: asked.repeat.unwrap_or(live.repeat),
+        prune: match asked.prune {
+            Some(Prune::Never) if live.prune == Prune::Behind => {
+                waiting.push(
+                    "prune: the line a prune moved is a ratchet, so turning it off now would \
+                     return nothing that is already behind it. The file says never; this \
+                     session keeps pruning until the next one starts."
+                        .to_string(),
+                );
+                live.prune
+            }
+            other => other.unwrap_or(live.prune),
+        },
+        results: match asked.results {
+            Some(Results::Kept) if live.results == Results::Cited => {
+                waiting.push(
+                    "results: handing tool output back mid-session makes the prompt bigger, and \
+                     what absorbs bigger is the floor — which drops whole turns and does not \
+                     come back. The file says kept; this session keeps citing until the next \
+                     one starts."
+                        .to_string(),
+                );
+                live.results
+            }
+            other => other.unwrap_or(live.results),
+        },
+        ..live
+    };
+    (budget, waiting)
+}
+
+async fn put_resend(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<crate::provider::Resend>,
+) -> Response {
+    let app = &state.app;
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "resend rules are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(path) = crate::provider::Config::path_for_writing() else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml. \
+             Run luu once on a terminal, or set LUU_HOME.",
+        )
+            .into_response();
+    };
+    // Built from the file as it is on disk, for the reason the providers writer
+    // is: the page writes one table and must not delete the rest.
+    let current = crate::provider::Config::load()
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    if let Err(error) = current.with_resend(asked).write(&path) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+
+    // And now the live session, which is the half §third added to this part:
+    // the mechanism for changing it mid-stream already existed and had never
+    // been handed these three.
+    let live = app.destination().await;
+    let (budget, waiting) = resend_live(asked, live.budget);
+
+    if budget != live.budget {
+        let sending = Arc::new(live.resending(budget));
+        *app.destination.write().await = sending.clone();
+        // The line that says the rest of this stream was rendered under
+        // something else. Built before the stream lock, because nothing in this
+        // file holds two locks across an await.
+        let posture = app.agency().await.posture(app.posture.lock().await.clone());
+        let header = {
+            let view = app.view.lock().await;
+            retarget_header(&view, &sending, sending.counter.id(), posture)
+        };
+        if let Some(header) = header {
+            // Appended rather than replacing: this is one session continuing
+            // under new terms, not a new one. `create_session` clears the
+            // stream because it is starting one.
+            if app.store.is_some() {
+                app.stream.lock().await.push(header);
+            }
+            let mut view = app.view.lock().await;
+            view.repeat = Some(budget.repeat);
+            view.prune = Some(budget.prune);
+            view.results = Some(budget.results);
+        }
+        // Written down now rather than at the next turn's checkpoint, for the
+        // reason a resume is: a session moved and then left alone would lose
+        // the fact.
+        app.checkpoint().await;
+    }
+
+    Json(resend_view(&state, waiting).await).into_response()
+}
+
 async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     let live = state.app.view.lock().await.summary();
     let mut sessions = vec![live];
@@ -2809,19 +3017,54 @@ struct NewSession {
 }
 
 impl NewSession {
-    /// The budget this session asked for, out of the one in place.
+    /// The budget this session asked for, out of this machine's table and the
+    /// one in place.
     ///
-    /// `None` where it named no rule at all, so that the destination already
-    /// resolved is handed on untouched rather than rebuilt into an equal one.
-    fn resend(&self, budget: Budget) -> Option<Budget> {
+    /// Three levels, and the middle one is what part 3 added: **what the
+    /// session asked for**, else **what `[resend]` says**, else **what is
+    /// already running**.
+    ///
+    /// The file in the middle rather than nowhere, because the table's whole
+    /// job is to be *what a session starts on unless it says otherwise* — and
+    /// because without it a rule turned off from the page could never take
+    /// effect. Turning rule B off does not move a running session (the line is
+    /// a ratchet), so if a new session then inherited the running session's
+    /// rules too, the only way to act on the write would be to restart the
+    /// binary, and `put_resend`'s *until the next one starts* would be a lie.
+    ///
+    /// Where the file says nothing about a rule, what is in place carries — the
+    /// part 2 behaviour, unchanged, because a machine that states no position
+    /// is not a machine stating the default.
+    ///
+    /// `None` where nothing moved, so that the destination already resolved is
+    /// handed on untouched rather than rebuilt into an equal one.
+    fn resend(&self, machine: crate::provider::Resend, budget: Budget) -> Option<Budget> {
         let asked = Budget {
-            repeat: self.repeat.unwrap_or(budget.repeat),
-            prune: self.prune.unwrap_or(budget.prune),
-            results: self.results.unwrap_or(budget.results),
+            repeat: self.repeat.or(machine.repeat).unwrap_or(budget.repeat),
+            prune: self.prune.or(machine.prune).unwrap_or(budget.prune),
+            results: self.results.or(machine.results).unwrap_or(budget.results),
             ..budget
         };
         (asked != budget).then_some(asked)
     }
+}
+
+/// This machine's `[resend]` table, re-read at a session start.
+///
+/// Read here rather than held from startup, and it is the posture's own
+/// precedent: `posture_for` re-resolves the policy file so that a new session
+/// picks up an edited `luu.toml`. The same applies with more force here,
+/// because this file is one the page itself writes — a table saved at turn 12
+/// that only reached sessions started before it would be a control that does
+/// nothing.
+///
+/// A file that will not load says nothing, which is not the same as a file that
+/// says the defaults: it is already reported where the providers are, and a
+/// machine with an unreadable config is not a machine that chose `always`.
+async fn machine_resend() -> crate::provider::Resend {
+    crate::provider::Config::load()
+        .map(|(config, _)| config.resend().unwrap_or_default())
+        .unwrap_or_default()
 }
 
 /// The body both session routes take, which is allowed to be absent.
@@ -3054,7 +3297,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // Until this they arrived once, at `serve`, and every session the process
     // ran shared them — which is what made them unchoosable from a page. See
     // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 2.
-    let sending = match asked.resend(sending.budget) {
+    let sending = match asked.resend(machine_resend().await, sending.budget) {
         Some(budget) => Arc::new(sending.resending(budget)),
         None => sending,
     };
@@ -3184,7 +3427,7 @@ async fn resume_session(
     // Until this they arrived once, at `serve`, and every session the process
     // ran shared them — which is what made them unchoosable from a page. See
     // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 2.
-    let sending = match asked.resend(sending.budget) {
+    let sending = match asked.resend(machine_resend().await, sending.budget) {
         Some(budget) => Arc::new(sending.resending(budget)),
         None => sending,
     };
@@ -4038,6 +4281,90 @@ mod tests {
             "a fold that says nothing cannot be *the same as* the defaults: reading \
              them back for it would put a claim in a record that never made one",
         );
+    }
+
+    /// §fourth, as code: what a saved table may do to a running conversation.
+    ///
+    /// The three rules are not one case, and the asymmetry is not about the
+    /// rules being different sizes — it is about which of them store state. A
+    /// control that reports a change it did not make is the cheap failure here;
+    /// the expensive one is rule C, where handing output back can spend the
+    /// conversation through the floor.
+    #[test]
+    fn a_saved_table_moves_a_running_session_only_where_moving_it_is_free() {
+        use agent_core::context::{Prune, Repeat, Results};
+
+        let off = Budget::new(8192, 512, Eviction::Turn);
+        let on = Budget {
+            repeat: Repeat::Once,
+            prune: Prune::Behind,
+            results: Results::Cited,
+            ..off
+        };
+        let asked = |repeat, prune, results| crate::provider::Resend {
+            repeat,
+            prune,
+            results,
+        };
+
+        // Everything turned on: all three move, nothing waits. Turning a rule
+        // on is clean for all three — the line starts moving, and rule A is
+        // chosen inside the window being rendered.
+        let (moved, waiting) = resend_live(
+            asked(
+                Some(Repeat::Once),
+                Some(Prune::Behind),
+                Some(Results::Cited),
+            ),
+            off,
+        );
+        assert_eq!(
+            (moved.repeat, moved.prune, moved.results),
+            (Repeat::Once, Prune::Behind, Results::Cited),
+        );
+        assert!(waiting.is_empty(), "{waiting:?}");
+
+        // Everything turned off, from a session that is under all three. Rule A
+        // moves; B and C do not, and each says why.
+        let (moved, waiting) = resend_live(
+            asked(
+                Some(Repeat::Always),
+                Some(Prune::Never),
+                Some(Results::Kept),
+            ),
+            on,
+        );
+        assert_eq!(
+            moved.repeat,
+            Repeat::Always,
+            "rule A stores nothing, so it is clean in both directions",
+        );
+        assert_eq!(
+            (moved.prune, moved.results),
+            (Prune::Behind, Results::Cited),
+            "the ratchet does not retreat and the floor does not give turns back",
+        );
+        assert_eq!(
+            waiting.len(),
+            2,
+            "both say why they did not move: {waiting:?}"
+        );
+        assert!(waiting.iter().any(|line| line.starts_with("prune:")));
+        assert!(waiting.iter().any(|line| line.starts_with("results:")));
+
+        // Turning off what is already off is not a refusal. Nothing moved and
+        // nothing waits, because there is nothing a ratchet could fail to give
+        // back — a control that warned here would be warning about a no-op.
+        let (moved, waiting) =
+            resend_live(asked(None, Some(Prune::Never), Some(Results::Kept)), off);
+        assert_eq!(moved, off);
+        assert!(waiting.is_empty(), "{waiting:?}");
+
+        // A key the table does not name leaves the live session where it is.
+        // The file is the machine's default and may say nothing about a rule.
+        let (moved, waiting) = resend_live(asked(None, None, None), on);
+        assert_eq!(moved, on);
+        assert!(waiting.is_empty(), "{waiting:?}");
     }
 
     /// A directory that removes itself, so a failing test does not leave one

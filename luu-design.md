@@ -1215,6 +1215,52 @@ field along. `None` in the fold is a recording from before format 11, which
 cannot be *the same as* the defaults and so gets the line. See
 [`RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`](RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md).
 
+**And the machine's own default is `[resend]` in `config.toml`.**
+
+```toml
+[resend]
+repeat  = "always"   # always | once
+prune   = "never"    # never | behind
+results = "kept"     # kept | cited
+```
+
+In that file rather than in `localStorage` because it changes the bytes a run
+sends, which is a fact about the run and not about the screen somebody reads
+from. Every key is optional, and an unnamed one means *this machine states no
+position* rather than *this machine chose off* — the same distinction the header
+draws between a file that says `always` and one written before the field
+existed. `luu chat` and `luu stdio` read it too: it sits beside this machine's
+default destination and is the same kind of fact. **A flag beats it, one way
+only** — a `bool` flag can only turn a rule on, so `--repeat-once` overrides a
+file that says `always` and a file that says `once` cannot be turned off from
+the command line; the `--no-repeat-once` that would close that is not here,
+because no default has flipped.
+
+A session resolves its rules in three levels: **what it asked for**, else **what
+the file says**, else **what is already running**. The file is re-read at every
+session start, which is `posture_for`'s rule and not the postures list's — a
+table the page itself writes has to reach the next session, or saving it does
+nothing.
+
+`GET`/`PUT /api/resend` is that table from the browser, under the providers
+route's two guards: **403 off loopback**, because a resend rule outlives the
+session and a bearer token says who may reach the port rather than what this
+machine sends; and **rebuilt from the file on disk**, because the page writes one
+table and must not delete the others. The view keeps `file` and `running` apart,
+since a session started under a rule nobody wrote down is the ordinary case.
+
+**What the write applies live is narrower than what it writes**, and that is the
+two ratchets. Rule A stores nothing, so it moves both ways. Rule B *off* does not
+move a running session — the policy gates the decision and the prune line gates
+the render, so turning it off would return nothing already behind the line. Rule
+C *off* is worse than a no-op: handing tool output back makes the prompt bigger,
+and what absorbs bigger is the floor, which drops whole turns and does not come
+back. So B and C are applied live only when turned **on**; either turned off is
+written to the file and waits for the next session, and the response says which
+and why rather than leaving it to be discovered. Where a rule does move, the
+stream gains a **second header** through `retarget_header`, so a session reads as
+one arm up to a point and another after it.
+
 **A session can be picked back up somewhere else, and the stream says where.**
 `POST /api/sessions/{id}/resume` takes the same `{ provider, model }` body, and
 the history comes with it — which is the difference between it and starting a

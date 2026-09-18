@@ -125,6 +125,13 @@ struct File {
     /// names a path that only exists on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ui: Option<Ui>,
+    /// `[resend]`: how much of the history a turn pays for again. In this file
+    /// and not in `localStorage` for the reason the providers are — it changes
+    /// the bytes a run sends, which is a fact about the run and not about the
+    /// screen somebody reads from. See
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resend: Option<Resend>,
 }
 
 /// `[ui]`. One setting so far.
@@ -136,6 +143,46 @@ pub struct Ui {
     /// page's own two glyphs — see `crate::icons`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_theme: Option<PathBuf>,
+}
+
+/// `[resend]`: the three rules a window is rendered under, as this machine's
+/// default.
+///
+/// The prompt is rebuilt whole every turn, so the entire history block is a
+/// resend — that is what the table is named after, and every rule in it acts
+/// only on something already sent at least once.
+///
+/// **The keys are the rules as they are today, and that is a decision taken
+/// knowingly.** The record settled a different cut — two keys by *content*,
+/// `file-read` and `cmd-output`, which would put a selected span and
+/// `read_file`'s result under one name because they are the same object — and
+/// that cut describes behaviour nothing implements yet: rule A reaches spans
+/// only, and tool output is reachable only through rule C, behind rule B's
+/// line. Writing those keys now would name a file after a capability that does
+/// not exist. So the mechanism lands first under the names the header already
+/// uses, and renaming them later is a migration of a file on somebody's
+/// machine — the cost of this order, accepted rather than overlooked. See
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` §sixth for
+/// the cut, and §eleventh for why it is not here.
+///
+/// Every key is optional and an absent one means *what the code defaults to*,
+/// so a hand-written table may name one rule without stating a position on the
+/// other two.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Resend {
+    /// What a span already in the window costs the turn that selects it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<agent_core::context::Repeat>,
+    /// What an old turn's spans cost once the window no longer fits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prune: Option<agent_core::context::Prune>,
+    /// What an old turn's tool output costs once its turn is behind the prune
+    /// line. Inert without `prune`, and written down anyway: a reader comparing
+    /// two machines needs to know which arm each was set to, not which arm had
+    /// an effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results: Option<agent_core::context::Results>,
 }
 
 /// One named posture: a policy file, and nothing else.
@@ -161,6 +208,7 @@ pub struct Config {
     providers: BTreeMap<String, Profile>,
     postures: BTreeMap<String, Posture>,
     ui: Option<Ui>,
+    resend: Option<Resend>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -251,6 +299,7 @@ impl Config {
             providers: file.provider,
             postures: file.posture,
             ui: file.ui,
+            resend: file.resend,
         };
         config.check_default(path)?;
         Ok(config)
@@ -350,6 +399,7 @@ impl Config {
             // postures would delete them the first time somebody saved a URL.
             posture: self.postures.clone(),
             ui: self.ui.clone(),
+            resend: self.resend,
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -400,7 +450,26 @@ impl Config {
             providers,
             postures: self.postures.clone(),
             ui: self.ui.clone(),
+            resend: self.resend,
         }
+    }
+
+    /// The file as the resend editor hands it back: one table, and everything
+    /// else this config already had.
+    ///
+    /// The mirror of [`Config::from_parts`] and for its reason — the page
+    /// writes one table at a time, and a writer that rebuilt the file from what
+    /// arrived would delete every table that did not.
+    pub fn with_resend(&self, resend: Resend) -> Self {
+        Self {
+            resend: Some(resend),
+            ..self.clone()
+        }
+    }
+
+    /// What this machine sets the three rules to, where it says anything.
+    pub fn resend(&self) -> Option<Resend> {
+        self.resend
     }
 
     /// What the page should look like, as the file asks for it.
@@ -1020,5 +1089,96 @@ mod tests {
         let error = config("[provider.local]\nbackedn = \"ollama\"\n")
             .expect_err("a typo that is silently ignored is a profile that does nothing");
         assert!(matches!(error, ConfigError::Parse { .. }));
+    }
+
+    /// `[resend]`, read by the same words the record's header writes.
+    ///
+    /// The wire word is the point rather than a convenience: a machine's table,
+    /// a session's request and the recording of the run all say the arm the
+    /// same way, so nobody has to hold a mapping in their head to read one
+    /// against another.
+    #[test]
+    fn the_resend_table_is_read_by_the_headers_own_words() {
+        let table =
+            config("[resend]\nrepeat = \"once\"\nprune = \"behind\"\nresults = \"cited\"\n")
+                .expect("the file loads")
+                .resend()
+                .expect("the table is there");
+        assert_eq!(
+            (table.repeat, table.prune, table.results),
+            (
+                Some(agent_core::context::Repeat::Once),
+                Some(agent_core::context::Prune::Behind),
+                Some(agent_core::context::Results::Cited)
+            ),
+        );
+
+        // A table that names one rule states nothing about the other two, and
+        // `None` is that and not a default: the same distinction the header
+        // draws between a file that says `always` and one written before the
+        // field existed.
+        let partial = config("[resend]\nrepeat = \"once\"\n")
+            .expect("the file loads")
+            .resend()
+            .expect("the table is there");
+        assert_eq!(partial.repeat, Some(agent_core::context::Repeat::Once));
+        assert_eq!((partial.prune, partial.results), (None, None));
+
+        // No table at all is a machine that says nothing, which is not the same
+        // object as a table that says the defaults.
+        assert_eq!(config("").expect("an empty file loads").resend(), None);
+
+        // And a typo is refused rather than ignored, for the reason above it:
+        // a rule silently dropped is a run under an arm nobody chose.
+        assert!(matches!(
+            config("[resend]\nrepaet = \"once\"\n")
+                .expect_err("a key nothing reads is a rule that does nothing"),
+            ConfigError::Parse { .. }
+        ));
+        assert!(matches!(
+            config("[resend]\nprune = \"aggressively\"\n")
+                .expect_err("a value outside the enum is not a rule this machine has"),
+            ConfigError::Parse { .. }
+        ));
+    }
+
+    /// Saving one table does not delete the others.
+    ///
+    /// The providers writer has this property under a comment saying why, and
+    /// this is the second table to need it — the moment there are two editable
+    /// tables, a writer that rebuilt the file from what arrived erases whichever
+    /// one the page was not editing.
+    #[test]
+    fn writing_the_resend_table_keeps_every_other_table_in_the_file() {
+        let before = config(
+            "default = \"local\"\n\
+             [provider.local]\nbackend = \"ollama\"\nurl = \"http://127.0.0.1:11434\"\n\
+             [posture.container]\npolicy = \"luu.container.toml\"\n\
+             [ui]\nicon-theme = \"/tmp/theme.json\"\n",
+        )
+        .expect("the file loads");
+
+        let rendered = before
+            .with_resend(Resend {
+                repeat: Some(agent_core::context::Repeat::Once),
+                prune: None,
+                results: None,
+            })
+            .render()
+            .expect("it renders");
+
+        let after = config(&rendered).expect("what it wrote loads back");
+        assert_eq!(after.default_name(), Some("local"));
+        assert!(after.profiles().contains_key("local"), "{rendered}");
+        assert!(after.postures().contains_key("container"), "{rendered}");
+        assert!(after.ui().is_some(), "{rendered}");
+        assert_eq!(
+            after.resend().expect("the table it wrote").repeat,
+            Some(agent_core::context::Repeat::Once),
+        );
+        // And the keys it was not given stay absent rather than being written
+        // as the defaults, which would turn *this machine says nothing* into
+        // *this machine chose off*.
+        assert!(!rendered.contains("prune"), "{rendered}");
     }
 }
