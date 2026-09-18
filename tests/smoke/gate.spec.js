@@ -20,12 +20,24 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const PORT = 7897
 const BASE = `http://127.0.0.1:${PORT}`
 
-/** The plan the model proposes. It does **not** declare README.md. */
+/**
+ * The plan the model proposes. It does **not** declare README.md.
+ *
+ * It **does** declare the network and a domain, which the gate could not show
+ * at all until `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`: a plan
+ * asking to reach crates.io was approved by a person who was never told it had
+ * asked. This session runs under the server's own policy, which grants no
+ * network, so it is also the case where what a plan *asks for* and what it will
+ * *get* differ — and the panel has to say so rather than report a grant that
+ * does not exist.
+ */
 const PLAN = `\`\`\`plan
 {"objective": "say what this repository is",
  "steps": ["read the readme"],
  "files": ["AGENTS.md"],
- "commands": []}
+ "commands": [],
+ "network": true,
+ "egress": ["crates.io"]}
 \`\`\``
 
 /**
@@ -188,12 +200,17 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(gate.locator(".objective")).toHaveText("say what this repository is")
   await expect(gate.locator(".plan li")).toHaveText(["read the readme"])
   await expect(gate.locator("p", { hasText: "reads:" })).toContainText("AGENTS.md")
+  // What it asks to reach, and what it will actually get: this session took the
+  // server's own policy file, which grants no network at all.
+  const reach = gate.locator("p", { hasText: "network: yes" })
+  await expect(reach).toContainText("egress: crates.io")
+  await expect(reach).toContainText("the session's policy denies it")
   // Held, and nothing has run under it: the composer is refused while it waits.
   await expect(composer).toBeDisabled()
 
   // What the model forgot, added by hand. The plan is the job's sandbox, so
   // this is the only moment the file the turn will actually read can get in.
-  await page.fill('.amend input[placeholder*="a path or command"]', "README.md")
+  await page.fill('.amend input[placeholder*="the plan forgot"]', "README.md")
   await page.click('.amend button:has-text("add read")')
   await expect(page.locator("p", { hasText: "adding reads:" })).toContainText("README.md")
 
@@ -691,6 +708,18 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   // And a directory row carries the caret that opens it.
   await expect(page.locator('.inspector .tree .twist use[href="#i-caret"]').first()).toBeVisible()
 
+  // And the panel says *why* the tree looks like that, which is item 15 of
+  // `ROADMAP/2026-09-17` and the reason it was a row at all: the first person
+  // to meet an unconfigured tree read a working fallback as a broken panel, and
+  // nothing on the page named the key that replaces it. See
+  // `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  const icons = page.locator(".settings dt", { hasText: "Icons" }).locator("xpath=..")
+  await expect(icons).toContainText("the tree's own two shapes")
+  await expect(icons).toContainText("[ui] icon-theme")
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+
   // A Rust file, opened through the store the way a click does, because this
   // one is several directories down and the point is the highlighting.
   await page.evaluate(async () => {
@@ -884,6 +913,148 @@ test("the editor setting offers Monaco where it is installed and says so where i
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
   await expect(page.locator("#monaco-host")).toHaveCount(0)
   await expect(page.locator(".content .code-rows li").first()).toBeVisible()
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * Starts a session on the wide posture and leaves a gate open on it. The two
+ * tests below each want their own, because approving one consumes it.
+ *
+ * **Its plan is empty, and that is not a shortcut.** A session started from the
+ * page builds its own backend out of `config.toml` (`crate::backend_for`), so
+ * it never sees the queue `--mock-reply` filled: the planning call gets the
+ * default mock's paragraph, no `plan` block parses, and the proposal falls back
+ * to the person's own ask declaring nothing — which is the ordinary case for a
+ * 7B and exactly the state the gate exists for. Everything the job may do is
+ * therefore typed at the gate, which is what these tests are about.
+ */
+async function gateOnWidePosture(page) {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  await page.click('.chat .acts button[title*="New session"]')
+  const starter = page.locator(".modal.narrow")
+  await expect(starter).toBeVisible()
+  await starter.locator("select").last().selectOption("wide")
+  await starter.locator('button:has-text("Start session")').click()
+  await expect(starter).toBeHidden({ timeout: 30_000 })
+
+  const composer = page.locator(".composer input")
+  await expect(composer).toBeEnabled()
+  await composer.fill("what is published?")
+  await page.click('.composer button[type="submit"]')
+
+  const gate = page.locator(".gate")
+  await expect(gate).toBeVisible({ timeout: 30_000 })
+  return gate
+}
+
+/** The plan the server is actually holding, as approved. */
+async function livePlan(page) {
+  return await page.evaluate(async () => {
+    const live = await (await fetch("./api/sessions/live")).json()
+    return live.jobs[live.jobs.length - 1].plan
+  })
+}
+
+/**
+ * What a job may reach, shown and then narrowed, from the only surface that
+ * approves anything.
+ *
+ * `network`, `egress` and `enforcement` have been on the protocol since
+ * 2026-09-06 and were reachable from a script and from a client — and from
+ * nothing a person uses. The panel did not even display them, so a plan asking
+ * for the network was signed off by somebody who was never told it had asked.
+ *
+ * Driven through the browser rather than the socket on purpose: `serve_ws.rs`
+ * already sends all three and passed throughout, because the protocol was never
+ * the thing that was wrong. See
+ * `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`.
+ */
+test("the gate shows what a plan may reach, and a person narrows it there", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  const gate = await gateOnWidePosture(page)
+  // The model declared nothing, so the whole of this job's sandbox is about to
+  // be typed by a person — which is what the panel says in so many words.
+  await expect(gate.locator("p", { hasText: "declared nothing" })).toBeVisible()
+
+  // Two domains and the network they imply, added by hand. `Plan::amend` merges
+  // lists into the plan's own rather than replacing them, and a domain grants
+  // the network to reach it.
+  const box = '.amend input[placeholder*="the plan forgot"]'
+  await page.fill(box, "crates.io")
+  await page.click('.amend button:has-text("add domain")')
+  await page.fill(box, "*.github.com")
+  await page.click('.amend button:has-text("add domain")')
+  await expect(gate.locator("p", { hasText: "adding egress:" })).toContainText("*.github.com")
+
+  const network = gate.locator(".narrow", { hasText: "network" })
+  await network.locator('button:has-text("grant")').click()
+  await expect(network.locator("button.on")).toHaveText("grant")
+
+  // And the kernel asked to hold this job's children, whatever the session
+  // settled on. A tightening: it needs no permission and cannot be refused.
+  const enforcement = gate.locator(".narrow", { hasText: "enforcement" })
+  await enforcement.locator('button:has-text("kernel")').click()
+  await expect(enforcement.locator("button.on")).toHaveText("kernel")
+
+  await page.click('.gate-buttons button:has-text("Approve")')
+  await expect(gate).toBeHidden({ timeout: 15_000 })
+
+  // The plan the job is held to, out of the read API — the assertion that says
+  // the amendment left the browser rather than that a button changed colour.
+  // The posture is `wide`, which grants the network and names no domains, so
+  // all three survive `Plan::unmet`.
+  const plan = await livePlan(page)
+  expect(plan.network).toBe(true)
+  expect(plan.egress).toEqual(["crates.io", "*.github.com"])
+  expect(plan.enforcement).toBe("kernel")
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The other direction, which is the one that has to be refused.
+ *
+ * `enforcement` is the only field at this gate whose permissive value is the
+ * one being asked for, so a person typing `best-effort` under a policy that
+ * requires `kernel` is asking the policy file to relax. `Plan::unmet` says no,
+ * the approval still goes through without it, and the refusal is where somebody
+ * learns the floor is there at all — which is why the button is offered rather
+ * than hidden.
+ */
+test("asking the gate to loosen enforcement is refused, and says by what", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  const gate = await gateOnWidePosture(page)
+  const enforcement = gate.locator(".narrow", { hasText: "enforcement" })
+  await enforcement.locator('button:has-text("best-effort")').click()
+  // The panel says what is about to happen before it happens.
+  await expect(gate.locator("p", { hasText: "refuses this" })).toBeVisible()
+
+  await page.click('.gate-buttons button:has-text("Approve")')
+  await expect(gate).toBeHidden({ timeout: 15_000 })
+
+  const refused = page.locator(".refused")
+  await expect(refused).toBeVisible()
+  await expect(refused).toContainText("approve_job")
+  await expect(refused).toContainText("enforcement best-effort")
+
+  // Refused at the gate means refused in the plan: the job runs under what the
+  // policy file said, not under what the browser asked for.
+  const plan = await livePlan(page)
+  expect(plan.enforcement ?? null).toBe(null)
 
   expect(errors, "the page logged errors").toEqual([])
 })

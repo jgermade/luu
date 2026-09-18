@@ -125,8 +125,11 @@ cargo run --bin luu -- serve --no-store
 # On a first visit it asks which folder to look at: a subdirectory of the one
 # `serve` was started in, which is the ceiling and is not negotiable from the
 # browser. Settings has sections down the side — General (theme, editor, layout,
-# folder) and Models — and everything in General is kept in `localStorage`,
-# because it is a fact about the screen rather than about the run.
+# files, folder) and Models — and everything in General a person can *change* is
+# kept in `localStorage`, because it is a fact about the screen rather than about
+# the run. Files is the exception and is read-only: it names the icon theme that
+# drew the tree, or says the two shapes are a fallback and names the key below
+# that replaces them.
 #
 # Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed
@@ -696,6 +699,27 @@ they are left alone rather than rewritten.
 
 This convention was itself written on a branch that was never merged, which is
 why it is arriving after the commits it describes rather than before them.
+
+**Every merge into `main` is a squash, and the session trailer is stripped by
+hand on the way in.** One commit per pull request, so a branch's own commits
+never become ancestors of `main`:
+
+```sh
+git merge-base --is-ancestor <branch-head> main   # says no, even when it landed
+git diff main..<branch>                           # empty, because it did
+```
+
+Ask the diff, not the history. Two things follow, and the first is the one that
+bites:
+
+- **Never stack follow-up work on a branch whose pull request merged.** Restart
+  it from `main` and put the new commits there. A branch that reads *five commits
+  ahead* after a merge is usually four commits of squashed history plus one real
+  change, and a pull request built on it asks a reviewer to re-read what they
+  already merged.
+- **The stripping is this rule being enforced, not a preference about it.** An
+  agent that adds a `Claude-Session:` trailer is making hand-work for whoever
+  merges, and nothing in `main` can be found by searching for one.
 
 ## Design commitments that are easy to erode
 

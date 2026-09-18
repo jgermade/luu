@@ -64,11 +64,20 @@
   // What the person is adding to the proposed plan before approving it. The
   // job's sandbox is built from the plan, so this is the only moment a file
   // the model forgot can still get in. Reassigned, never mutated.
-  let adding = { files: [], writes: [], commands: [] }
+  //
+  // `egress` is in the same object because the server merges it the same way —
+  // additive, into whatever the plan already named. See
+  // `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`.
+  let adding = { files: [], writes: [], commands: [], egress: [] }
   let addition = ""
   // What would close the job without anyone present. Typed rather than added
   // to a list: there is one closing condition, and the model never proposes it.
   let closesOn = ""
+  // The two that are answers rather than lists, and `null` is a real answer in
+  // both: *leave the plan's own*. A plan is approved unchanged far more often
+  // than it is narrowed, so the third state is the one most approvals send.
+  let network = null
+  let enforcement = null
   const add = kind => {
     const item = addition.trim()
     if (!item || adding[kind].includes(item)) return
@@ -76,10 +85,12 @@
     addition = ""
   }
   const approve = id => {
-    approveJob(id, adding.files, adding.writes, adding.commands, closesOn)
-    adding = { files: [], writes: [], commands: [] }
+    approveJob(id, { ...adding, closesOn, network, enforcement })
+    adding = { files: [], writes: [], commands: [], egress: [] }
     addition = ""
     closesOn = ""
+    network = null
+    enforcement = null
   }
   const toggle = id => {
     expanded = expanded.includes(id) ? expanded.filter(open => open !== id) : [...expanded, id]
@@ -595,6 +606,23 @@
           <p :if="proposed?.plan.files.length" class="dim">reads: {{ proposed?.plan.files.join(" · ") }}</p>
           <p :if="proposed?.plan.writes.length" class="dim warn">writes: {{ proposed?.plan.writes.join(" · ") }}</p>
           <p :if="proposed?.plan.commands.length" class="dim">commands: {{ proposed?.plan.commands.join(" · ") }}</p>
+          <!-- The three the panel used to leave out, which meant a plan asking
+               for the network was approved by somebody who was never told. On
+               the same rule as the lines above: a grant is shown when it is
+               asked for, and the absence of one is not a line. See
+               `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`. -->
+          <p :if="proposed?.plan.network" class="dim warn">
+            network: yes<span :if="proposed?.plan.egress?.length"> · egress: {{ proposed?.plan.egress.join(", ") }}</span>
+            <!-- What the plan *asks for* is not what it gets: `Plan::narrow`
+                 bounds the job by the session, so a plan declaring the network
+                 inside a session that has none reaches nothing. Saying only
+                 "network: yes" there would be the panel reporting a grant that
+                 does not exist, at the one moment somebody is deciding. -->
+            <span :if="state.settings?.posture && !state.settings.posture.network">
+              — the session's policy denies it, so this job reaches nothing
+            </span>
+          </p>
+          <p :if="proposed?.plan.enforcement" class="dim">enforcement: {{ proposed?.plan.enforcement }}</p>
           <p :if="!declares" class="dim warn">
             <span :if="prose">The planning call answered in prose, so the model
             declared nothing.</span>
@@ -610,14 +638,56 @@
             <input
               :value="addition"
               @input="addition = $event.target.value"
-              :attrs="{ placeholder: 'a path or command the plan forgot' }">
+              :attrs="{ placeholder: 'a path, command or domain the plan forgot' }">
             <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add read</button>
             <button type="button" class="link" :disabled="!addition.trim()" @click="add('writes')">add write</button>
             <button type="button" class="link" :disabled="!addition.trim()" @click="add('commands')">add command</button>
+            <button type="button" class="link" :disabled="!addition.trim()" @click="add('egress')">add domain</button>
           </div>
           <p :if="adding.files.length" class="dim">adding reads: {{ adding.files.join(" · ") }}</p>
           <p :if="adding.writes.length" class="dim">adding writes: {{ adding.writes.join(" · ") }}</p>
           <p :if="adding.commands.length" class="dim">adding commands: {{ adding.commands.join(" · ") }}</p>
+          <p :if="adding.egress.length" class="dim">adding egress: {{ adding.egress.join(" · ") }}</p>
+
+          <!-- What a job may reach, and how hard the kernel is asked to hold
+               it. Both have been on the protocol since 2026-09-06 and neither
+               could be reached from the surface that actually approves things,
+               which is a narrowing nobody applies.
+
+               `leave` is not a null option in a form: it is what almost every
+               approval means, and the two others are a person deciding this
+               job is not the session. -->
+          <div class="narrow" :if="!replaying">
+            <span class="dim">network</span>
+            <div class="choice tiny">
+              <button type="button" :class.on="network === null" @click="network = null">leave</button>
+              <button type="button" :class.on="network === true" @click="network = true">grant</button>
+              <button type="button" :class.on="network === false" @click="network = false">deny</button>
+            </div>
+          </div>
+          <div class="narrow" :if="!replaying">
+            <span class="dim">enforcement</span>
+            <div class="choice tiny">
+              <button type="button" :class.on="enforcement === null" @click="enforcement = null">leave</button>
+              <button type="button" :class.on="enforcement === 'kernel'" @click="enforcement = 'kernel'">kernel</button>
+              <button
+                type="button"
+                :class.on="enforcement === 'best-effort'"
+                @click="enforcement = 'best-effort'">best-effort</button>
+            </div>
+          </div>
+          <!-- The one field here that narrows backwards: `kernel` is a
+               tightening and needs no permission, `best-effort` asks the policy
+               file to relax and is refused at the gate unless it already does.
+               The button is offered rather than hidden, because the refusal
+               naming the policy is where a person learns the floor is there. -->
+          <p :if="enforcement === 'best-effort'" class="dim warn">
+            a policy file that requires <code>kernel</code> refuses this, and says so
+          </p>
+          <p :if="adding.egress.length && network === false" class="dim warn">
+            a domain grants the network to reach it — <b>deny</b> and a domain are
+            the same approval disagreeing with itself
+          </p>
 
           <!-- The one part of the plan the model was never asked for. A person
                is being asked what would convince them the work is finished,
@@ -1150,6 +1220,9 @@
     border: 1px solid var(--line); border-radius: 6px;
     background: var(--bg); color: var(--fg); font: inherit;
   }
+  /* A label and a choice, where `.amend` is an input and its buttons. */
+  .narrow { display: flex; align-items: center; gap: .5rem; margin: .35rem 0; font-size: 12px; }
+  .narrow > .dim { min-width: 5.5rem; }
 
   .live-job {
     display: flex; align-items: center; gap: .6rem;

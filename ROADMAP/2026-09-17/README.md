@@ -25,7 +25,12 @@ that actually happened.
 **What this revision's own day did to it** is gathered in
 [`RECORD/2026-09-17.state-of-play.completed.md`](../../RECORD/2026-09-17.state-of-play.completed.md),
 written after it: item 9 closed, record and diff together, and the housekeeping
-that produced this file is what found the work.
+that produced this file is what found the work. **Items 10 and 15 closed the
+same day, after it** — the gate panel that could narrow nothing, and the icon
+theme the page never mentioned — in
+[`RECORD/2026-09-17.the-gate-panel-narrows.completed.md`](../../RECORD/2026-09-17.the-gate-panel-narrows.completed.md).
+Three of this revision's sixteen rows are struck through on the day it was
+written, which says more about how they were estimated than about the day.
 
 **The one row that expires.** Section A is the only section here with a clock on
 it. [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) was
@@ -94,7 +99,7 @@ rows, three of them carried from the last revision where none of them moved.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 9 | ~**A session resumed under a different posture is refused by nothing** — it is visible in the header and enforced nowhere. The store keeps jobs and their approved plans; it does not keep what they were approved *under*, so an approval granted inside a container can be replayed on the host. **First in this section, and the record is the next move rather than the diff** — the same shape item 9 of the last revision turned out to have, where the argument and the code were the same age. **The record was written the day this revision was**, and the row's own sentence turned out to be right about the symptom and wrong about the mechanism: a resume reads the posture out of the *live process*, the fold drops the posture the header already carries, and a resume that changes only the posture writes no header at all — so the **recording** is wrong as well as the gate~ **landed the same day, record and diff both.** The fold keeps `Option<record::Posture>` (no format bump — the fact has been on the wire since format 10), the resume refuses a mismatch on the three facts and admits a body naming the session's own, `retarget_header` gained its third term, and the page says the posture back so a contained session stays resumable from the only surface that resumes one. Found while building it, and it is the row's real lesson: **the test that pinned this rule could never have caught the bug** — it asserted the 409 for a *named* posture against a server built with `store: None`, so there was no stored session, no posture to compare, and the refusal it read came from a branch that fired before any of that. Third time in ten days that the defect was in the thing nothing drove | nothing | [`what-an-approval-was-granted-under`](../../RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md), from [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
-| 10 | **The gate panel exposes none of `network`, `egress` or `enforcement`** — all three are on the protocol and reachable from a script and from a client; the approve button sends files, writes, commands and `closes_on` and nothing else. A narrowing nobody can reach from the surface they actually use is a narrowing nobody applies | nothing | [`enforcement-per-job`](../../RECORD/2026-09-06.enforcement-per-job.completed.md) §Still open |
+| 10 | ~**The gate panel exposes none of `network`, `egress` or `enforcement`** — all three are on the protocol and reachable from a script and from a client; the approve button sends files, writes, commands and `closes_on` and nothing else. A narrowing nobody can reach from the surface they actually use is a narrowing nobody applies~ **landed the same day this revision was written, and it was a page change and a test: no Rust moved.** The panel sends all six fields and — the half the row did not know about — *shows* the three it never displayed, so a plan declaring `"network": true` is no longer approved by somebody who was never told it had asked. It also says when the session's own policy denies what the plan asks, because `Plan::narrow` bounds a job by its session and a panel reporting the ask as a grant is a panel lying at the one moment somebody is deciding. **What driving it found**, which is the row's real return: the `not_granted` refusal — the only refusal in the protocol that does not *stop* anything, and the only place a person learns the policy file has a floor — was cleared by the turn it describes, within a frame, and had been since it was added | nothing | [`the-gate-panel-narrows`](../../RECORD/2026-09-17.the-gate-panel-narrows.completed.md), from [`enforcement-per-job`](../../RECORD/2026-09-06.enforcement-per-job.completed.md) §Still open |
 | 11 | **What a container start costs** — *the worker starts with the session* was chosen on the shape of the thing and not on a number. The `container` job already makes the same call on both sides and is where the number comes from | nothing | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 12 | **Nothing counts how often a plan grants a file rather than a directory**, which is the number that would say how ordinary the 2026-09-08 regression was — and therefore how much of the gate's surface has no test | nothing | [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) |
 
@@ -104,7 +109,7 @@ rows, three of them carried from the last revision where none of them moved.
 | --- | --- | --- | --- |
 | 13 | **A judge that is not the model under test** — every probe in this repository is scored by a key on disk or by a person reading replies. Scoring at corpus scale wants a judge, and a judge wants an argument before it wants an endpoint | needs a design argument | [`machines.md`](machines.md) P1 |
 | 14 | **Concurrency** — `serve` runs one live session at a time; sessions are switched, not run side by side. A per-session `Agency` is the first half of what it would need and the rest is not designed | needs a design argument | [`state-of-play`](../../RECORD/2026-09-09.state-of-play.completed.md) §Still open |
-| 15 | **Nothing on the page says `[ui] icon-theme` exists** — the first person to meet the unconfigured file tree read a working fallback as a broken panel. The preferences panel already shows the theme's name when one loads and says nothing when one does not. **The whole row is one sentence in a panel that already exists**, and it is here because it is the only debt of the unordered fortnight that a user can trip over | nothing | [`what-the-debug-ui-does-not-need`](../../RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md) §Still open |
+| 15 | ~**Nothing on the page says `[ui] icon-theme` exists** — the first person to meet the unconfigured file tree read a working fallback as a broken panel. The preferences panel already shows the theme's name when one loads and says nothing when one does not. **The whole row is one sentence in a panel that already exists**, and it is here because it is the only debt of the unordered fortnight that a user can trip over~ **landed, and the row was wrong about the panel.** General had Theme, Editor, Layout and Workspace, and the string `icons` appeared in none of them — the manifest has carried a `name` for the panel to show since the theme loader was written and no panel ever showed it. So it was the whole sentence rather than half of it: a *Files* section that names the theme that drew the tree, or says the two shapes are a fallback and names the key that replaces them | nothing | [`the-gate-panel-narrows`](../../RECORD/2026-09-17.the-gate-panel-narrows.completed.md) §last, from [`what-the-debug-ui-does-not-need`](../../RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md) §Still open |
 | 16 | **Rotating and revoking an approval key** — a compromised key is removed by editing `luu.toml` and restarting. Also: nothing signs a *recording*, so a reader that dropped lines is not detected | waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 
 ```mermaid
@@ -124,13 +129,13 @@ gantt
     The 7B schema-version audit            :audit, after drift, 1d
     section The gate
     A posture on resume is refused         :done, posture, 2026-09-17, 1d
-    The gate panel narrows nothing         :panel, after posture, 2d
+    The gate panel narrows nothing         :done, panel, 2026-09-17, 1d
     What a container start costs           :cost, after panel, 1d
     File-versus-directory grants counted   :grants, after cost, 1d
     section Arguments and debts
     A judge that is not the model          :judge, after audit, 3d
     Concurrency                            :conc, after judge, 4d
-    The icon theme is undiscoverable       :icon, after grants, 1d
+    The icon theme is undiscoverable       :done, icon, 2026-09-17, 1d
     Rotating and revoking an approval key  :keys, after conc, 3d
 ```
 
@@ -159,6 +164,13 @@ gantt
   Item 9 is about a grant outliving its posture; item 10 is about grants nobody
   can express in the first place. Whoever writes one should read the other, which
   is a suggestion about sequencing and not a claim that they are one item.
+  **Both closed on this revision's own day, and the adjacency paid**: item 10
+  took a page change, a test and no Rust — every bound it reaches was already
+  written and already tested — and reading the panel to write it is what turned
+  up the two halves nobody had ordered, that the gate never *displayed* what a
+  plan asks to reach, and that the one refusal teaching where the policy's floor
+  is was erased by the turn it describes. Same shape as item 9, one surface
+  along: the defect was in the thing nothing drove.
 - **Item 9 goes first in its section because of how item 9 of the last revision
   went.** *Enforcement per job* sat "ordered and unargued" for eleven days on the
   theory that the record was the expensive half; when it was finally done, the
