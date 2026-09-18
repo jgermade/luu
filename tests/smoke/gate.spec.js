@@ -429,7 +429,7 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(14)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(15)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip. The live session cannot be deleted — the

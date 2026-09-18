@@ -1,0 +1,167 @@
+// @ts-check
+import { expect, test } from "@playwright/test"
+import { spawn } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+
+/**
+ * Settings → Resend, driven from the browser against a live `luu serve`.
+ *
+ * The three rules that decide how much of the history a turn pays for again
+ * were built, measured, tested and reachable only by typing a flag and
+ * restarting the server. This is the surface that changes that, so this is the
+ * test that opens it and clicks it — for the reason `gate.spec.js` exists at
+ * all: two bugs in two days were found by a person opening this page and none
+ * by a test. See
+ * `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 4.
+ *
+ * What it is really here for is the half a unit test cannot reach: **what the
+ * page says after a save that did only part of what it was asked.** Turning
+ * rule B off does not move a running session, and the person who clicked it has
+ * to be told — by the server, reported by the page, and visible on screen.
+ */
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+const PORT = 7896
+const BASE = `http://127.0.0.1:${PORT}`
+
+function binary() {
+  const named = process.env.LUU_BIN
+  const candidates = named
+    ? [resolve(root, named)]
+    : [join(root, "target/release/luu"), join(root, "target/debug/luu")]
+  const found = candidates.find(path => existsSync(path))
+  if (!found) {
+    throw new Error(
+      `no luu binary at ${candidates.join(" or ")} — run \`cargo build --bin luu\`` +
+        " or point LUU_BIN at one",
+    )
+  }
+  return found
+}
+
+/** @type {import("node:child_process").ChildProcess | null} */
+let server = null
+/** @type {string} */
+let home
+
+test.beforeAll(async () => {
+  // Its own state directory: this suite *writes* `config.toml`, so running it
+  // against the config of the person running it would edit their machine.
+  home = mkdtempSync(join(tmpdir(), "luu-settings-"))
+  writeFileSync(
+    join(home, "config.toml"),
+    '[provider.here]\nbackend = "mock"\nmodel = "mock"\n',
+  )
+  server = spawn(
+    binary(),
+    [
+      "serve",
+      "--bind", `127.0.0.1:${PORT}`,
+      "--mock-delay-ms", "0",
+    ],
+    { cwd: root, env: { ...process.env, LUU_HOME: home }, stdio: "pipe" },
+  )
+  let output = ""
+  server.stdout?.on("data", chunk => (output += chunk))
+  server.stderr?.on("data", chunk => (output += chunk))
+
+  const deadline = Date.now() + 30_000
+  for (;;) {
+    if (server.exitCode !== null) {
+      throw new Error(`luu serve exited with ${server.exitCode}:\n${output}`)
+    }
+    try {
+      const answer = await fetch(`${BASE}/api/settings`)
+      if (answer.ok) return
+    } catch {
+      // Not listening yet.
+    }
+    if (Date.now() > deadline) throw new Error(`luu serve never answered:\n${output}`)
+    await new Promise(again => setTimeout(again, 200))
+  }
+})
+
+test.afterAll(() => {
+  server?.kill("SIGTERM")
+  rmSync(home, { recursive: true, force: true })
+})
+
+async function chooseFolder(page) {
+  const picker = page.locator("dialog.modal").first()
+  await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
+  if (await picker.isVisible()) {
+    await picker.locator('button:has-text("Use this folder")').click()
+    await expect(picker).toBeHidden()
+  }
+}
+
+test("the resend rules are chosen from the page, and a save says what it did not do", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await chooseFolder(page)
+
+  // The third section, which the modal's own comment said its shape made free.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Resend")')
+
+  const running = page.locator(".modal .settings").first()
+  await expect(running).toBeVisible()
+  // What the server was started under, which is every rule off — the arm every
+  // recording made before these rules existed is.
+  await expect(running.locator("dd").nth(0)).toContainText("always")
+  await expect(running.locator("dd").nth(1)).toContainText("never")
+  await expect(running.locator("dd").nth(2)).toContainText("kept")
+
+  // The editor below it: this machine's default, which says nothing yet.
+  const editor = page.locator(".modal .settings").nth(1)
+  await expect(editor.locator(".choice").first().locator("button.on")).toHaveText("unset")
+
+  // Rule A on. It stores nothing, so it is the one rule that moves a running
+  // session in both directions.
+  await editor.locator('button:has-text("once")').click()
+  await page.locator(".modal button.save").click()
+
+  await expect(running.locator("dd").nth(0)).toContainText("once")
+  const written = await (await fetch(`${BASE}/api/resend`)).json()
+  expect(written.file.repeat).toBe("once")
+  expect(written.running.repeat).toBe("once")
+  // And in the file, beside the provider it must not have deleted.
+  const onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain("[resend]")
+  expect(onDisk).toContain("[provider.here]")
+
+  // Rule B on, which is clean: the prune line starts moving.
+  await editor.locator('button:has-text("behind")').click()
+  await page.locator(".modal button.save").click()
+  await expect(running.locator("dd").nth(1)).toContainText("behind")
+
+  // And rule B off again, which is the case this whole spec is for. The line is
+  // a ratchet, so the running session keeps pruning; the file says never, and
+  // the page has to say both rather than reporting a change that did not
+  // happen.
+  await editor.locator('button:has-text("never")').click()
+  await page.locator(".modal button.save").click()
+
+  const waiting = page.locator(".modal .waiting")
+  await expect(waiting).toBeVisible()
+  await expect(waiting).toContainText("ratchet")
+  // The file moved and the session did not, and the panel above says so on the
+  // row it is about.
+  await expect(running.locator("dd").nth(1)).toContainText("behind")
+  await expect(running.locator("dd").nth(1)).toContainText("the file says never")
+
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})

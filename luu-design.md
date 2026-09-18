@@ -853,12 +853,28 @@ first visit refuses both, because there is nothing behind it to go back to. **ES
 — a modal cancels itself and the page does nothing else on that keypress, then the history
 popover, a rename in progress, an armed delete, and finally, with nothing left to cancel and two
 columns on screen, it swaps content and chat. A running turn is deliberately not on it: it is the
-one cancellable thing whose undo costs work. See
+one cancellable thing whose undo costs work. `asModal` is called from a component's `:setup`,
+which runs to completion *before* the template renders, so it **waits across frames** for the
+element rather than looking once: looking once made opening the settings modal a race against its
+own setup — one `await import` per section, and jq79 renders only after all of them resolve. Two
+sections won that race and a third lost it, and losing it was silent, because a `<dialog>` that
+was never shown is in the document and invisible. See
 [`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md).
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps:
-*General* (theme, editor, layout, which icon theme drew the tree, which folder) and *Models*
-(what this server resolved, then the providers file the next run reads). The *Files* row is there
+*General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
+(what this server resolved, then the providers file the next run reads) and *Resend* (the three
+rules that decide how much of the history a turn pays for again). *Resend* is beside *Models* and
+not inside *General* on the same rule that keeps `config.toml` and `localStorage` apart: General
+holds facts about the **screen** somebody is reading from, and one server answers two people on
+two machines, while these three change the bytes the model receives. A preference that changes
+the prompt is not a preference. It shows what the live session is rendering under, the machine's
+`[resend]` table below it, and says where the two disagree — a session started under a rule
+nobody wrote down is the ordinary case. It also carries what each rule *bought*, including that
+two of the three have no accuracy measurement at all, because this panel is where somebody
+decides whether to turn one on. A save that the running session was only partly moved onto says
+which rules it kept and why, in the server's own words rather than a rule re-derived in the
+browser. The *Files* row is there
 for a reason worth keeping: nothing on the page named `[ui] icon-theme` at all, and the first
 person to meet an unconfigured tree read a working fallback as a broken panel. The `editor` setting offers Monaco where somebody installed
 it — an **npm dependency of `crates/luu/ui`**, gitignored, excluded from the `rust_embed` folder
@@ -872,7 +888,7 @@ checkout that ran `cargo build` and nothing else says so and stays on the viewer
 
 **The chrome is drawn, not typed.** `app.html` also carries one `<svg>` sprite — a caret, a
 refresh, a menu, a close, a plus, the file/folder pair, and the chat head's and settings rail's
-own six (clock, cog, sliders, server, clip, speech bubble) — and every symbol on the page is a
+own seven (clock, cog, sliders, server, repeat, clip, speech bubble) — and every symbol on the page is a
 `<use>` of it, stroked in `currentColor` so it takes the colour of the control it sits in and
 needs no second set for the light theme. These were text glyphs (`↻`, `▾`/`▸`, `▪`/`▫`, `≡`),
 and a text glyph's size, weight and baseline belong to whichever font on the machine carries

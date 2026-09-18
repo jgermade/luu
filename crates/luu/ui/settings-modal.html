@@ -16,6 +16,7 @@
 
   const SettingsGeneral = await import("./settings-general.html")
   const SettingsModels = await import("./settings-models.html")
+  const SettingsResend = await import("./settings-resend.html")
 </script>
 
 <!-- `@click.self` is the backdrop: a click that lands on the dialog itself
@@ -28,8 +29,13 @@
   </header>
 
   <div class="sections">
-    <!-- The rail. Two sections today, and the shape is what makes a third
-         free: a section is a name and a component, not a place in a scroll. -->
+    <!-- The rail. The third section is the one the shape was said to make
+         free, and it was: a name and a component, no place in a scroll. It is
+         here rather than in General because General is facts about the
+         *screen* — a theme, a layout, which editor draws a file, all in
+         `localStorage` — and these three change the bytes a run sends. A
+         preference that changes the prompt is not a preference. See
+         `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`. -->
     <nav class="rail">
       <button
         type="button"
@@ -45,11 +51,19 @@
         <svg class="ic"><use href="#i-server"/></svg>
         <span>Models</span>
       </button>
+      <button
+        type="button"
+        :class.on="ui.section === 'resend'"
+        @click="showSection('resend')">
+        <svg class="ic"><use href="#i-repeat"/></svg>
+        <span>Resend</span>
+      </button>
     </nav>
 
     <section class="modal-body pane">
       <SettingsGeneral :if="ui.section === 'general'" />
       <SettingsModels :if="ui.section === 'models'" />
+      <SettingsResend :if="ui.section === 'resend'" />
     </section>
   </div>
 </dialog>
