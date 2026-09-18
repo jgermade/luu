@@ -1240,6 +1240,13 @@ impl ConstrainKind {
 /// and a flag that quietly starts meaning something else turns a recorded arm
 /// into an unrecorded one.
 ///
+/// That last sentence is why `--prune-results` still means `Results::Cited` now
+/// that there are three values and not two. `Results::CitedReads` — cite what
+/// could be read again, keep what a command found — is reachable from
+/// `[resend]` and from the page, and **not from this flag**, because the run on
+/// disk was made under the flag as it meant `Cited`. A seam between the two
+/// surfaces, named here rather than closed by widening a recorded arm.
+///
 /// **The precedence is one-way, and it is the flags' own shape that makes it
 /// so.** A flag can only turn a rule *on*, so *absent* and *off* are the same
 /// `false` here and nothing can tell them apart. `--repeat-once` therefore

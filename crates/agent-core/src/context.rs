@@ -272,6 +272,21 @@ pub enum Results {
     /// A tool result is sent in full for as long as its turn is in the window.
     /// Everything recorded before this enum existed, and the default.
     Kept,
+    /// Behind the prune line, a result that **could be asked for again**
+    /// becomes the line that cites it, and one that is a record of something
+    /// that happened stays.
+    ///
+    /// The cut is `could_be_read_again`, and the argument for it is that the
+    /// number rule C is justified by was never measured on the half this
+    /// keeps: every one of the 20 turns that freed 32 752 tokens called
+    /// `read_file` on a 136 KB file and hit the 8 KiB cap, and **no corpus in
+    /// this repository has ever pruned a command's output.** So this value
+    /// ships the whole measured saving while making none of the unmeasured
+    /// claim — which is what item 5 of `ROADMAP/2026-09-17` is open about, and
+    /// why it is a third value rather than a redefinition of the one below.
+    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+    /// §third.
+    CitedReads,
     /// Behind the prune line the output becomes the line that cites it, and the
     /// call that asked for it stays verbatim.
     ///
@@ -280,7 +295,33 @@ pub enum Results {
     /// re-rendered from the call. What is replaced is the result *whole*, head
     /// included, so the number in the citation is the cost of exactly what is
     /// no longer there.
+    ///
+    /// **Every result, a command's included.** Unchanged when `CitedReads`
+    /// landed beside it, deliberately: there is a run on disk under this arm,
+    /// and a value that quietly starts meaning something narrower turns a
+    /// recorded arm into an unrecorded one — the sentence rule C's own flag
+    /// exists because of.
     Cited,
+}
+
+/// Whether a tool's output could be had again by asking the same question.
+///
+/// The cut [`Results::CitedReads`] makes, and the whole of it. A file's bytes
+/// and a directory listing are a *view* — the thing they describe is still
+/// there, and the model can look again. A command's output is a **record of
+/// something that happened**: an exit code, a test run, the thing a closing
+/// condition reads. Replacing that with a line saying it cost 1 987 tokens
+/// tells the model the call was made and nothing about what it found.
+///
+/// **Unknown names are evidence.** A tool this function has not heard of keeps
+/// its output, because what it produces is exactly what nobody has decided yet
+/// — a sixth tool arriving as *cheap to lose* would be the failure rule C's
+/// own flag was split off to avoid, one level down. `write_file` and
+/// `edit_file` are in that group too and cost nothing to leave there: their
+/// results are confirmations, and `pruned_result_text`'s guard already refuses
+/// to cite anything a citation would not shrink.
+pub fn could_be_read_again(tool: &str) -> bool {
+    matches!(tool, "read_file" | "list_dir")
 }
 
 /// The window, what is held back from it, and how it gives way.
@@ -1005,10 +1046,16 @@ impl Context {
                             .sum();
                         let stored = stored.saturating_sub(full) + cited;
                         match results {
+                            // Left as its own arm rather than folded into the
+                            // one below, which would compute the same number by
+                            // subtracting a total and adding it back: identical
+                            // in arithmetic, and not identical where the stored
+                            // count is smaller than the results it contains,
+                            // because the subtraction saturates.
                             Results::Kept => stored,
-                            Results::Cited => {
+                            Results::Cited | Results::CitedReads => {
                                 stored.saturating_sub(results_tokens(&turn.steps, counter))
-                                    + pruned_results_tokens(&turn.steps, counter)
+                                    + sent_results_tokens(&turn.steps, results, counter)
                             }
                         }
                     }
@@ -1122,7 +1169,11 @@ impl Context {
                         .iter()
                         .filter(|turn| {
                             !turn.code_context.is_empty()
-                                || (budget.results == Results::Cited && !turn.steps.is_empty())
+                                || (budget.results != Results::Kept
+                                    && turn.steps.iter().any(|step| {
+                                        result_under(step, budget.results, counter)
+                                            != step.result_text()
+                                    }))
                         })
                         .map(|turn| turn.id)
                         .collect(),
@@ -1220,10 +1271,7 @@ impl Context {
                     // byte-identical under it.
                     for step in &turn.steps {
                         messages.push(Message::assistant(step.text.clone()));
-                        messages.push(Message::user(match budget.results {
-                            Results::Kept => step.result_text(),
-                            Results::Cited => pruned_result_text(step, counter),
-                        }));
+                        messages.push(Message::user(result_under(step, budget.results, counter)));
                     }
                     messages.push(Message::assistant(turn.answer.clone()));
                 }
@@ -1478,11 +1526,11 @@ fn results_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
         .sum()
 }
 
-/// The same half, as the lines that cite it.
-fn pruned_results_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
+/// The same half, as this policy will actually send it.
+fn sent_results_tokens(steps: &[ToolStep], results: Results, counter: &dyn TokenCounter) -> u32 {
     steps
         .iter()
-        .map(|step| counter.count(&pruned_result_text(step, counter)))
+        .map(|step| counter.count(&result_under(step, results, counter)))
         .sum()
 }
 
@@ -1500,6 +1548,26 @@ fn pruned_results_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 
 /// is cheaper than any line describing it, and a citation that is not cheaper is
 /// not a saving. Keeping the result there is also what keeps the window's cost
 /// monotone in the prune line.
+/// One tool result as a policy sends it, behind the prune line.
+///
+/// **One function, because two would be a bug waiting.** The render builds the
+/// messages and the accounting builds the number beside them, and this file's
+/// own rule is that `buckets` describes `messages` rather than estimating it.
+/// Under two values of [`Results`] that was one `match` each in two places;
+/// under three it is a per-tool question, and a second copy of it would be a
+/// window whose reported cost and actual cost drift apart by exactly one
+/// tool's output.
+fn result_under(step: &ToolStep, results: Results, counter: &dyn TokenCounter) -> String {
+    match results {
+        Results::Kept => step.result_text(),
+        Results::Cited => pruned_result_text(step, counter),
+        Results::CitedReads => match could_be_read_again(&step.call.name) {
+            true => pruned_result_text(step, counter),
+            false => step.result_text(),
+        },
+    }
+}
+
 fn pruned_result_text(step: &ToolStep, counter: &dyn TokenCounter) -> String {
     let full = step.result_text();
     let citation = format!(
@@ -2941,6 +3009,180 @@ mod tests {
             );
         }
         context
+    }
+
+    /// A step that read a file, beside `ran`'s, which ran a command.
+    fn read(output: &str) -> ToolStep {
+        ToolStep {
+            text: "let me look".into(),
+            call: ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({}),
+            },
+            outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
+            duration_ms: 1,
+        }
+    }
+
+    /// The cut `CitedReads` makes, over the registry that exists.
+    ///
+    /// **The count is asserted on purpose.** A sixth tool would otherwise land
+    /// on the safe side of this function in silence, which is the right
+    /// default and the wrong way to arrive at it: what a new tool's output *is*
+    /// is a decision, and this is where somebody is made to take it.
+    #[test]
+    fn a_tool_output_is_evidence_unless_it_could_be_read_again() {
+        let tools = crate::tools::Tools::standard();
+        let names: Vec<&'static str> = tools.names().collect();
+        assert_eq!(
+            names.len(),
+            5,
+            "a tool joined the registry: say whether its output could be read again, \
+             then move this number — {names:?}",
+        );
+
+        for name in ["read_file", "list_dir"] {
+            assert!(
+                could_be_read_again(name),
+                "{name} describes something that is still there, so the model can look again",
+            );
+        }
+        for name in ["run_command", "write_file", "edit_file"] {
+            assert!(
+                !could_be_read_again(name),
+                "{name} is not a view of something still there",
+            );
+        }
+        assert!(
+            !could_be_read_again("some_tool_nobody_has_written_yet"),
+            "an unknown tool keeps its output: arriving as cheap-to-lose is the failure \
+             rule C's own flag was split off to avoid, one level down",
+        );
+    }
+
+    /// The whole of part 5, in one window: the same prune line, the same turn,
+    /// and two results that are not the same kind of thing.
+    ///
+    /// The number rule C is justified by was measured on 20 `read_file` calls
+    /// against the 8 KiB cap and on no command output at all, so this value
+    /// ships that saving and makes none of the claim item 5 is open about.
+    #[test]
+    fn citing_reads_gives_up_the_file_and_keeps_what_the_command_found() {
+        let counter = WordCounter::default();
+        let bytes = "one two three four five six seven eight nine ten";
+        let found = "exit 0 all twenty tests passed in four seconds flat";
+
+        // Three turns, each of which read a file *and* ran a command.
+        let mut context = Context::new("system prompt here");
+        for n in 0..3 {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![],
+                vec![read(bytes), ran(found)],
+                &counter,
+            );
+        }
+
+        let budget = Budget::new(90, 0, Eviction::Turn)
+            .pruning(Prune::Behind)
+            .citing(Results::CitedReads);
+        let selection = context.select("now this", &[], budget, &counter);
+        assert!(selection.pruned > 0, "the point of the case");
+
+        let sent: String = selection
+            .messages
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            sent.contains("[read_file] output"),
+            "the file's bytes are behind the line and can be read again: {sent}",
+        );
+        assert!(
+            sent.contains(found),
+            "and what the command found is still in the prompt — an exit code and a test \
+             run are a record of something that happened, not a view of something still \
+             there: {sent}",
+        );
+        assert!(
+            !sent.contains("[run_command] output"),
+            "so nothing cites it: {sent}",
+        );
+
+        // And the arm beside it, on the same corpus, which is what makes this a
+        // choice rather than a refinement: `Cited` takes both.
+        let mut every = Context::new("system prompt here");
+        for n in 0..3 {
+            every.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![],
+                vec![read(bytes), ran(found)],
+                &counter,
+            );
+        }
+        let all = every.select("now this", &[], budget.citing(Results::Cited), &counter);
+        let sent: String = all
+            .messages
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            sent.contains("[run_command] output"),
+            "`Cited` is unchanged and still takes a command's output — there is a run on \
+             disk under it: {sent}",
+        );
+    }
+
+    /// The reason the render and the accounting go through one function.
+    ///
+    /// Under two values each site could carry its own `match` and stay honest.
+    /// Under three it is a per-tool question, and a second copy of it would be
+    /// a window whose reported cost and actual cost differ by exactly one
+    /// tool's output — silently, and only on a corpus that mixes the two.
+    #[test]
+    fn the_history_bucket_says_what_a_part_cited_window_actually_sent() {
+        let counter = WordCounter::default();
+        let bytes = "one two three four five six seven eight nine ten";
+        let found = "exit 0 all twenty tests passed in four seconds flat";
+
+        let mut context = Context::new("system prompt here");
+        for n in 0..3 {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n} padded out"),
+                format!("answer number {n} padded out"),
+                vec![],
+                vec![read(bytes), ran(found)],
+                &counter,
+            );
+        }
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(90, 0, Eviction::Turn)
+                .pruning(Prune::Behind)
+                .citing(Results::CitedReads),
+            &counter,
+        );
+        assert!(selection.pruned > 0, "the point of the case");
+
+        let history: u32 = selection.messages[1..selection.messages.len() - 1]
+            .iter()
+            .map(|m| counter.count(&m.content))
+            .sum();
+        let bucket = selection
+            .buckets
+            .iter()
+            .find(|b| b.name == "history")
+            .unwrap();
+        assert_eq!(bucket.tokens, history);
     }
 
     /// The rule, in one case: the call is the model's own words and stays, the

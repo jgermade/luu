@@ -2862,7 +2862,7 @@ async fn get_resend(State(state): State<AppRouterState>) -> Response {
 /// argument, and `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
 /// §fourth for where it was made.
 fn resend_live(asked: crate::provider::Resend, live: Budget) -> (Budget, Vec<String>) {
-    use agent_core::context::{Prune, Results};
+    use agent_core::context::Prune;
 
     let mut waiting = Vec::new();
     let budget = Budget {
@@ -2881,14 +2881,19 @@ fn resend_live(asked: crate::provider::Resend, live: Budget) -> (Budget, Vec<Str
             other => other.unwrap_or(live.prune),
         },
         results: match asked.results {
-            Some(Results::Kept) if live.results == Results::Cited => {
-                waiting.push(
+            // Any move that hands output *back* waits, not only the whole way
+            // to `Kept`: `Cited` to `CitedReads` returns every command's output
+            // to the prompt, which is the biggest single thing this rule was
+            // holding out of it.
+            Some(asked) if cites_less(asked, live.results) => {
+                waiting.push(format!(
                     "results: handing tool output back mid-session makes the prompt bigger, and \
                      what absorbs bigger is the floor — which drops whole turns and does not \
-                     come back. The file says kept; this session keeps citing until the next \
-                     one starts."
-                        .to_string(),
-                );
+                     come back. The file says {}; this session keeps citing at {} until the \
+                     next one starts.",
+                    spelled(asked),
+                    spelled(live.results),
+                ));
                 live.results
             }
             other => other.unwrap_or(live.results),
@@ -2896,6 +2901,33 @@ fn resend_live(asked: crate::provider::Resend, live: Budget) -> (Budget, Vec<Str
         ..live
     };
     (budget, waiting)
+}
+
+/// Whether moving to `asked` would put tool output back into the prompt.
+///
+/// The three values are a ladder on how much is cited — `Kept` cites nothing,
+/// `CitedReads` cites what could be read again, `Cited` cites everything — and
+/// only the way *down* it costs anything, because only that direction gives a
+/// running session something it then has to find room for.
+fn cites_less(asked: agent_core::context::Results, live: agent_core::context::Results) -> bool {
+    use agent_core::context::Results;
+
+    let rung = |results| match results {
+        Results::Kept => 0,
+        Results::CitedReads => 1,
+        Results::Cited => 2,
+    };
+    rung(asked) < rung(live)
+}
+
+/// A `Results` as the wire and the file spell it, for a message a person reads.
+fn spelled(results: agent_core::context::Results) -> &'static str {
+    use agent_core::context::Results;
+    match results {
+        Results::Kept => "kept",
+        Results::CitedReads => "cited_reads",
+        Results::Cited => "cited",
+    }
 }
 
 async fn put_resend(
@@ -4364,6 +4396,32 @@ mod tests {
         // The file is the machine's default and may say nothing about a rule.
         let (moved, waiting) = resend_live(asked(None, None, None), on);
         assert_eq!(moved, on);
+        assert!(waiting.is_empty(), "{waiting:?}");
+
+        // Rule C is three values now, and the rung between them is not free
+        // either: `Cited` to `CitedReads` hands every command's output back,
+        // which is the biggest single thing the rule was holding out of the
+        // prompt. A check written as `== Kept` would have let it straight
+        // through.
+        let (moved, waiting) = resend_live(asked(None, None, Some(Results::CitedReads)), on);
+        assert_eq!(
+            moved.results,
+            Results::Cited,
+            "a partial step down is still a step down",
+        );
+        assert_eq!(waiting.len(), 1, "{waiting:?}");
+        assert!(waiting[0].contains("cited_reads"), "{waiting:?}");
+
+        // And the way up is free, from either rung.
+        let reads = Budget {
+            results: Results::CitedReads,
+            ..off
+        };
+        let (moved, waiting) = resend_live(asked(None, None, Some(Results::Cited)), reads);
+        assert_eq!(moved.results, Results::Cited);
+        assert!(waiting.is_empty(), "{waiting:?}");
+        let (moved, waiting) = resend_live(asked(None, None, Some(Results::CitedReads)), off);
+        assert_eq!(moved.results, Results::CitedReads);
         assert!(waiting.is_empty(), "{waiting:?}");
     }
 

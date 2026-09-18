@@ -160,6 +160,25 @@ test("the resend rules are chosen from the page, and a save says what it did not
   await expect(running.locator("dd").nth(1)).toContainText("behind")
   await expect(running.locator("dd").nth(1)).toContainText("the file says never")
 
+  // Rule C is three values, not two, and the middle one is the point of part 5:
+  // the 32 752 tokens it was justified by came entirely from `read_file` calls
+  // and from no command output at all. Matched on an exact label, because
+  // `has-text` is a substring and "cited" is one of "cited_reads".
+  await editor.locator("button", { hasText: /^cited_reads$/ }).click()
+  await page.locator(".modal button.save").click()
+
+  await expect(running.locator("dd").nth(2)).toContainText("cited_reads")
+  const cited = await (await fetch(`${BASE}/api/resend`)).json()
+  expect(cited.file.results).toBe("cited_reads")
+  expect(cited.running.results).toBe("cited_reads")
+
+  // And stepping back down from it waits, for the same reason turning prune off
+  // does: what it hands back has to fit somewhere, and what pays is the floor.
+  await editor.locator("button", { hasText: /^kept$/ }).click()
+  await page.locator(".modal button.save").click()
+  await expect(page.locator(".modal .waiting")).toContainText("results:")
+  await expect(running.locator("dd").nth(2)).toContainText("cited_reads")
+
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
