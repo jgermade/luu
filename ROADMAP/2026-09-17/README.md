@@ -89,9 +89,10 @@ measured against a model on the axis that would justify turning it on.**
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 5 | **Whether a model minds losing tool output to a citation** — rule C was measured on the mock, which can say how many tokens came back and cannot say whether the turn still worked. This is the stronger version of the question rule B left open, because a citation where `cargo test` output stood replaces evidence a job's closing condition reads | a model; the corpus and the flag exist | [`what-rule-c-is-worth`](../../RECORD/2026-09-14.what-rule-c-is-worth.completed.md) §Still open |
-| 6 | **Whether any default flips** — three rules, three off switches, and one of them (rule A) has now cleared its bar: no verdict moved across 20 questions and the bucket fell 17.5%. That is a measurement, not a decision, and the decision has been sitting unmade since 2026-09-14. **It is a row rather than a sentence because a flag nobody ever turns on is a feature nobody has** | nothing; somebody has to decide | [`the-7b-does-not-miss-it`](../../RECORD/2026-09-14.the-7b-does-not-miss-it.completed.md) |
+| 6 | **Whether any default flips** — three rules, three off switches, and one of them (rule A) has now cleared its bar: no verdict moved across 20 questions and the bucket fell 17.5%. That is a measurement, not a decision, and the decision has been sitting unmade since 2026-09-14. **It is a row rather than a sentence because a flag nobody ever turns on is a feature nobody has** | a proposal now exists; somebody has to accept it | [`the-7b-does-not-miss-it`](../../RECORD/2026-09-14.the-7b-does-not-miss-it.completed.md), answered by [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) |
 | 7 | **Drift under a tool's own name** — `` ```list_dir ``, `` ```run_command ``: two of fifteen prompts, identical in the `off` and `grammar` arms, and genuinely a different trigger from the one the grammar closed. Needs `avoid_until_forced` run once per tool name, each forbidden outright rather than forced toward a completion | nothing | [`what-constrain-does`](../../RECORD/2026-09-14.what-constrain-does.completed.md) §Still open |
 | 8 | **The 7B's tool-call numbers may carry the schema-version confound** the registry-vs-local comparison had, and nobody has audited them. Cheap, unglamorous, and the kind of thing that quietly invalidates a table six weeks later | nothing | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md) §Still open, sixteenth update |
+| 17 | **The window rules are a session's fact and nothing treats them as one** — the three rules are process-wide flags at `serve`, unreachable from any surface a person uses, and **the recording does not say which of them a run ran under**: the header carries `eviction` and not `repeat`, `prune` or `results`. Grown on 2026-09-18 out of item 6, and the recording half is a defect that lands first and stands alone | nothing | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) |
 
 **Section C — the gate, which is the surface with the least test per line.** Four
 rows, three of them carried from the last revision where none of them moved.
@@ -127,6 +128,7 @@ gantt
     Whether any default flips              :flip, after cite, 1d
     Drift under a tool's own name          :drift, after flip, 2d
     The 7B schema-version audit            :audit, after drift, 1d
+    Window rules per session, recorded     :rules, 2026-09-18, 2d
     section The gate
     A posture on resume is refused         :done, posture, 2026-09-17, 1d
     The gate panel narrows nothing         :done, panel, 2026-09-17, 1d
