@@ -115,6 +115,30 @@ struct Destination {
     settings: Settings,
 }
 
+impl Destination {
+    /// The same destination, rendering its window under different rules.
+    ///
+    /// Everything that decides *where* a turn goes is kept — the backend, the
+    /// model, the counter — because none of it moved: what changed is how much
+    /// of the history is resent to it. The settings go with the budget, so the
+    /// page reads back the session it is watching rather than the one the
+    /// process was started as.
+    fn resending(&self, budget: Budget) -> Self {
+        Self {
+            backend: self.backend.clone(),
+            model: self.model.clone(),
+            budget,
+            counter: self.counter.clone(),
+            settings: Settings {
+                repeat: budget.repeat,
+                prune: budget.prune,
+                results: budget.results,
+                ..self.settings.clone()
+            },
+        }
+    }
+}
+
 struct App {
     /// The live session's destination. See [`Destination`].
     destination: RwLock<Arc<Destination>>,
@@ -250,6 +274,16 @@ pub struct Settings {
     /// silently differ.
     window_caveat: Option<String>,
     reserve: u32,
+    /// The three resend rules this session is rendering its window under, as
+    /// the header records them. Here rather than only in the recording because
+    /// a fact a session may *choose* and nothing can read back is a fact the
+    /// page can contradict — the same reason `posture` is on this struct. The
+    /// wire words are the header's, so a page and a recording of the same
+    /// session say the arm the same way. See
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+    repeat: agent_core::context::Repeat,
+    prune: agent_core::context::Prune,
+    results: agent_core::context::Results,
     counter: agent_core::context::Counter,
     counter_warning: Option<String>,
     select_tokens: u32,
@@ -309,6 +343,12 @@ impl Settings {
                 _ => None,
             },
             reserve: budget.reserve,
+            // From the budget this was handed rather than kept by `..self`:
+            // they are neither the destination's nor the process's, and a
+            // field carried by inheritance is one that is right by accident.
+            repeat: budget.repeat,
+            prune: budget.prune,
+            results: budget.results,
             counter,
             counter_warning,
             unconfigured: provider.unconfigured(),
@@ -498,6 +538,9 @@ impl App {
                 _ => None,
             },
             reserve: budget.reserve,
+            repeat: budget.repeat,
+            prune: budget.prune,
+            results: budget.results,
             counter: counter_id.clone(),
             counter_warning,
             select_tokens,
@@ -583,6 +626,9 @@ impl App {
                 // would take out of it has to be put in by hand or the two
                 // disagree. `tests/store_parity.rs` is what notices.
                 view.posture = Some(agency.posture(None));
+                view.repeat = Some(budget.repeat);
+                view.prune = Some(budget.prune);
+                view.results = Some(budget.results);
                 view
             }),
             session_started_at: Mutex::new(started_at),
@@ -2739,6 +2785,43 @@ struct NewSession {
     /// and an image, for the same reason `provider` is never a URL. See
     /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
     posture: Option<String>,
+    /// The three resend rules, each absent meaning *whatever this server is
+    /// already under* — its flags, or the rules the session before it chose.
+    ///
+    /// Named by the header's own words (`always`/`once`, `never`/`behind`,
+    /// `kept`/`cited`) so that the request that started a session and the
+    /// recording of it say the arm the same way. Bounded by the enum, which is
+    /// the same guard `provider` and `posture` get from being names out of a
+    /// file: what may be asked for is what this machine has.
+    ///
+    /// Not refused on a resume, deliberately. It was going to be — the posture
+    /// refuses one — and the refusal was withdrawn because it was borrowed
+    /// along with the shape: a posture may not move because *its jobs were
+    /// approved under it*, and these rules grant nothing and bound nothing.
+    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+    /// §third.
+    #[serde(default)]
+    repeat: Option<agent_core::context::Repeat>,
+    #[serde(default)]
+    prune: Option<agent_core::context::Prune>,
+    #[serde(default)]
+    results: Option<agent_core::context::Results>,
+}
+
+impl NewSession {
+    /// The budget this session asked for, out of the one in place.
+    ///
+    /// `None` where it named no rule at all, so that the destination already
+    /// resolved is handed on untouched rather than rebuilt into an equal one.
+    fn resend(&self, budget: Budget) -> Option<Budget> {
+        let asked = Budget {
+            repeat: self.repeat.unwrap_or(budget.repeat),
+            prune: self.prune.unwrap_or(budget.prune),
+            results: self.results.unwrap_or(budget.results),
+            ..budget
+        };
+        (asked != budget).then_some(asked)
+    }
 }
 
 /// The body both session routes take, which is allowed to be absent.
@@ -2831,7 +2914,20 @@ fn retarget_header(
         && view
             .posture
             .as_ref()
-            .is_some_and(|stored| stored.same_place(&posture));
+            .is_some_and(|stored| stored.same_place(&posture))
+        // The fourth term, and it is here for the reason the posture became the
+        // third: a resume may move these — nothing was approved under them — and
+        // a move this function does not compare is a move the stream does not
+        // record, which is exactly how a posture that changed on a resume wrote
+        // no line for a day. `None` is a stream from before format 11, which
+        // does not say what it ran under, so it cannot be *the same* as anything
+        // and the line is written.
+        && (view.repeat, view.prune, view.results)
+            == (
+                Some(sending.budget.repeat),
+                Some(sending.budget.prune),
+                Some(sending.budget.results),
+            );
     match same {
         true => None,
         false => Some(crate::session::header(
@@ -2951,6 +3047,17 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
             }
         }
     };
+    // And the rules the window is rendered under, which are the session's and
+    // neither the destination's nor the process's. Applied after the
+    // destination so that naming a rule alone needs no profile to go with it,
+    // and before anything is reset for the same reason everything else here is.
+    // Until this they arrived once, at `serve`, and every session the process
+    // ran shared them — which is what made them unchoosable from a page. See
+    // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 2.
+    let sending = match asked.resend(sending.budget) {
+        Some(budget) => Arc::new(sending.resending(budget)),
+        None => sending,
+    };
     // And the same rule for what it may do: built before anything is reset, so
     // a runtime that is not installed or an image that is not built refuses the
     // *new* session rather than ending the one that is running.
@@ -3007,6 +3114,9 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         *view = SessionView::new(LIVE_SESSION, sending.backend.name(), &sending.model);
         view.started_at = started_at;
         view.posture = Some(posture);
+        view.repeat = Some(sending.budget.repeat);
+        view.prune = Some(sending.budget.prune);
+        view.results = Some(sending.budget.results);
         let mut s = view.summary();
         s.id = new_id.clone();
         s
@@ -3066,6 +3176,17 @@ async fn resume_session(
                 Err((status, message)) => return (status, message).into_response(),
             }
         }
+    };
+    // And the rules the window is rendered under, which are the session's and
+    // neither the destination's nor the process's. Applied after the
+    // destination so that naming a rule alone needs no profile to go with it,
+    // and before anything is reset for the same reason everything else here is.
+    // Until this they arrived once, at `serve`, and every session the process
+    // ran shared them — which is what made them unchoosable from a page. See
+    // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 2.
+    let sending = match asked.resend(sending.budget) {
+        Some(budget) => Arc::new(sending.resending(budget)),
+        None => sending,
     };
 
     app.checkpoint().await;
@@ -3217,6 +3338,14 @@ async fn resume_session(
         // no header in the stream ever said.
         if moved {
             live_view.posture = Some(posture);
+            // The same line carries these, so they move with it. Where it did
+            // not move they already equal what is being sent — that is what
+            // `retarget_header` compared to decide — except in the one case it
+            // is right to leave alone: a stream from before format 11, which
+            // says nothing and whose fold must keep saying nothing.
+            live_view.repeat = Some(sending.budget.repeat);
+            live_view.prune = Some(sending.budget.prune);
+            live_view.results = Some(sending.budget.results);
         }
         *view = live_view;
         let mut s = view.summary();
@@ -3477,6 +3606,9 @@ mod tests {
                     window_from: crate::provider::WindowFrom::Unset,
                     window_caveat: None,
                     reserve: 0,
+                    repeat: agent_core::context::Repeat::Always,
+                    prune: agent_core::context::Prune::Never,
+                    results: agent_core::context::Results::Kept,
                     counter: agent_core::context::Counter::Approximate,
                     counter_warning: None,
                     select_tokens,
@@ -3583,6 +3715,17 @@ mod tests {
     /// header folded to — so a resume that inherits a destination the session
     /// never ran on records that too, which it was doing silently before this
     /// line existed.
+    /// The fold of a stream whose last header named this destination's rules.
+    ///
+    /// A fixture that leaves them `None` is a recording from before format 11,
+    /// which is a different case with a different answer — see
+    /// `a_resume_records_a_header_where_the_fold_cannot_say_what_it_ran_under`.
+    fn rendered_under(view: &mut SessionView, sending: &Destination) {
+        view.repeat = Some(sending.budget.repeat);
+        view.prune = Some(sending.budget.prune);
+        view.results = Some(sending.budget.results);
+    }
+
     /// One destination, for the tests that only care that two of them differ.
     fn mock_destination(backend: &str, model: &str) -> Destination {
         Destination {
@@ -3600,6 +3743,9 @@ mod tests {
                 window_from: crate::provider::WindowFrom::Unset,
                 window_caveat: None,
                 reserve: 512,
+                repeat: agent_core::context::Repeat::Always,
+                prune: agent_core::context::Prune::Never,
+                results: agent_core::context::Results::Kept,
                 counter: agent_core::context::Counter::Approximate,
                 counter_warning: None,
                 select_tokens: 0,
@@ -3626,6 +3772,10 @@ mod tests {
         // The posture the stream's last header named. It is a term of the
         // comparison and not a passenger — see the test below.
         view.posture = Some(posture());
+        // And the fourth term, which the mock destination is under. A fold that
+        // does not carry them is a stream from before format 11, and that case
+        // has a test of its own below.
+        rendered_under(&mut view, &mock_destination("mock", "mock"));
 
         // The same destination and the same posture the stream already names:
         // nothing to say.
@@ -3692,6 +3842,7 @@ mod tests {
         let mut view = SessionView::new("s", "mock", "mock");
         view.started_at = 1_700_000_000_000;
         view.posture = Some(contained.clone());
+        rendered_under(&mut view, &sending);
 
         let moved = retarget_header(
             &view,
@@ -3758,6 +3909,134 @@ mod tests {
             .is_some(),
             "an unknown posture is the one case where the header is the only \
              thing that will ever say where these turns ran",
+        );
+    }
+
+    /// The fourth term's own case: a resume where nothing moved but the rules
+    /// the window is rendered under.
+    ///
+    /// It is the posture's bug one field along. A resume may change these —
+    /// nothing was approved under them, which is why they are not refused — so
+    /// a resume that changes them and writes no line leaves the rest of the
+    /// stream reading as though it had stayed under the old ones. That is what
+    /// `a_resume_records_a_header_where_only_the_posture_moved` was written
+    /// about, and the reason this one exists the same day the rules became a
+    /// session's to choose.
+    #[test]
+    fn a_resume_records_a_header_where_only_the_resend_rules_moved() {
+        let host = record::Posture {
+            name: None,
+            runtime: "host".into(),
+            enforcement: "kernel".into(),
+            network: false,
+        };
+        let sending = mock_destination("mock", "mock");
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.started_at = 1_700_000_000_000;
+        view.posture = Some(host.clone());
+        rendered_under(&mut view, &sending);
+
+        // The same destination and the same posture, under rule A.
+        let once = Destination {
+            budget: Budget {
+                repeat: agent_core::context::Repeat::Once,
+                ..sending.budget
+            },
+            ..mock_destination("mock", "mock")
+        };
+        let moved = retarget_header(
+            &view,
+            &once,
+            agent_core::context::Counter::Approximate,
+            host.clone(),
+        )
+        .expect("the rules moved, so the stream has to say so");
+        match moved {
+            record::RecordLine::Header {
+                model,
+                repeat,
+                prune,
+                results,
+                ..
+            } => {
+                assert_eq!(model, "mock", "the destination did not move");
+                assert_eq!(
+                    (repeat, prune, results),
+                    (
+                        Some(agent_core::context::Repeat::Once),
+                        Some(agent_core::context::Prune::Never),
+                        Some(agent_core::context::Results::Kept)
+                    ),
+                    "the line says what the rest of these turns were rendered under",
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // And each of the other two on its own, because a comparison that read
+        // only the first field would pass everything above.
+        for under in [
+            Budget {
+                prune: agent_core::context::Prune::Behind,
+                ..sending.budget
+            },
+            Budget {
+                results: agent_core::context::Results::Cited,
+                ..sending.budget
+            },
+        ] {
+            assert!(
+                retarget_header(
+                    &view,
+                    &Destination {
+                        budget: under,
+                        ..mock_destination("mock", "mock")
+                    },
+                    agent_core::context::Counter::Approximate,
+                    host.clone(),
+                )
+                .is_some(),
+                "a rule that moved without a line is a recording describing two \
+                 windows under one header: {under:?}",
+            );
+        }
+    }
+
+    /// A fold from before format 11 cannot say what its turns were rendered
+    /// under, and *unknown* is not *the defaults*.
+    ///
+    /// Same answer as the posture's unknown one field along, and for the same
+    /// reason: the resume is allowed through, and the line is written because
+    /// it is the only thing that will ever say what the rest of the stream ran
+    /// under.
+    #[test]
+    fn a_resume_records_a_header_where_the_fold_cannot_say_what_it_ran_under() {
+        let host = record::Posture {
+            name: None,
+            runtime: "host".into(),
+            enforcement: "kernel".into(),
+            network: false,
+        };
+        let sending = mock_destination("mock", "mock");
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.started_at = 1_700_000_000_000;
+        view.posture = Some(host.clone());
+        assert_eq!(
+            (view.repeat, view.prune, view.results),
+            (None, None, None),
+            "what a pre-format-11 fold produces",
+        );
+
+        assert!(
+            retarget_header(
+                &view,
+                &sending,
+                agent_core::context::Counter::Approximate,
+                host,
+            )
+            .is_some(),
+            "a fold that says nothing cannot be *the same as* the defaults: reading \
+             them back for it would put a claim in a record that never made one",
         );
     }
 

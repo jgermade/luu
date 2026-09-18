@@ -2399,3 +2399,138 @@ async fn a_session_can_be_named_and_keeps_the_name() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The rules a window is rendered under are the **session's**, not the
+/// process's.
+///
+/// Until this they arrived once, at `serve`, as parameters beside
+/// `context_limit` and `evict`, and every session the process ran shared them —
+/// so the only way to change one was to restart the server with a different
+/// flag. That is what made them unreachable from the page, and the reason the
+/// record calls this part the real work rather than the modal.
+///
+/// The test is two sessions in one process under different rules, and it reads
+/// both surfaces that have to agree about which: `/api/settings`, which the page
+/// renders, and the live fold, which is what a resume compares before it writes
+/// a header. See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+/// part 2.
+#[tokio::test]
+async fn two_sessions_in_one_process_render_their_windows_under_different_rules() {
+    let address = server().await;
+    let client = reqwest::Client::new();
+
+    let settings = |address: String| async move {
+        reqwest::get(format!("http://{address}/api/settings"))
+            .await
+            .expect("asking for the settings")
+            .json::<serde_json::Value>()
+            .await
+            .expect("the settings are JSON")
+    };
+
+    // What the process was started under: every rule off, which is what every
+    // recording made before one of them existed is.
+    let before = settings(address.clone()).await;
+    assert_eq!(
+        (&before["repeat"], &before["prune"], &before["results"]),
+        (
+            &serde_json::json!("always"),
+            &serde_json::json!("never"),
+            &serde_json::json!("kept")
+        ),
+        "the flags this server was started with: {before}",
+    );
+
+    // A session that names one rule and nothing else. No provider, no model and
+    // no posture — naming a rule must not need a profile to go with it.
+    let created = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({ "repeat": "once" }))
+        .send()
+        .await
+        .expect("starting a session under rule A");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+
+    let after = settings(address.clone()).await;
+    assert_eq!(after["repeat"], "once", "{after}");
+    assert_eq!(
+        (&after["prune"], &after["results"]),
+        (&serde_json::json!("never"), &serde_json::json!("kept")),
+        "a rule named alone moves only itself: {after}",
+    );
+    assert_eq!(
+        after["model"], before["model"],
+        "and it moves nothing about where the session sends",
+    );
+
+    // The fold says the same thing, which is what makes it comparable on a
+    // resume: a session whose rules nothing can read back is one whose
+    // recording a resume cannot check itself against.
+    let live = get(&address, "/api/sessions/live").await;
+    assert_eq!(
+        (&live["repeat"], &live["prune"], &live["results"]),
+        (
+            &serde_json::json!("once"),
+            &serde_json::json!("never"),
+            &serde_json::json!("kept")
+        ),
+        "the live fold: {live}",
+    );
+
+    // A second session, in the same process, under all three. This is the whole
+    // claim of part 2 — it was impossible one commit ago without restarting the
+    // binary.
+    let created = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({
+            "repeat": "always",
+            "prune": "behind",
+            "results": "cited",
+        }))
+        .send()
+        .await
+        .expect("starting a second session under B and C");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+
+    let third = settings(address.clone()).await;
+    assert_eq!(
+        (&third["repeat"], &third["prune"], &third["results"]),
+        (
+            &serde_json::json!("always"),
+            &serde_json::json!("behind"),
+            &serde_json::json!("cited")
+        ),
+        "the second session is not the first one's: {third}",
+    );
+
+    // And a session that names none keeps what is in place rather than
+    // resetting to the flags. That is the destination's rule and not the
+    // posture's, deliberately: a posture is re-resolved every session because
+    // nothing may inherit a container, and these grant nothing — which is the
+    // same asymmetry that withdrew the refusal on a resume.
+    let created = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .expect("starting a session that names nothing");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+
+    let fourth = settings(address.clone()).await;
+    assert_eq!(
+        (&fourth["repeat"], &fourth["prune"], &fourth["results"]),
+        (&third["repeat"], &third["prune"], &third["results"]),
+        "naming no rule is not naming the default: {fourth}",
+    );
+
+    // A value the enum does not have is refused, for the reason a provider is a
+    // name out of a file and never a URL: what may be asked for is bounded by
+    // what this machine has.
+    let refused = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({ "prune": "aggressively" }))
+        .send()
+        .await
+        .expect("asking for a rule that does not exist");
+    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+}
