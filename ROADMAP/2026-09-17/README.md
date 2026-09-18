@@ -32,6 +32,16 @@ theme the page never mentioned — in
 Three of this revision's sixteen rows are struck through on the day it was
 written, which says more about how they were estimated than about the day.
 
+**Grown again on 2026-09-18, by six rows (17–22), and none of them came from a
+measurement.** Item 6 — *whether any default flips* — was picked up as a
+decision and turned into a conversation that moved every part of the proposal
+answering it: where the setting lives, what it is called, what it cuts by, and
+in the end whether every turn should belong to a job at all. The argument is one
+record, [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md),
+eight appended sections and no edits, because six of its own claims were
+corrected while it was being written. Three of the six rows below (19, 21, 22)
+are things nobody was looking for when the day started.
+
 **The one row that expires.** Section A is the only section here with a clock on
 it. [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) was
 written the night of 2026-09-16 specifically so that *the machines are available
@@ -92,7 +102,11 @@ measured against a model on the axis that would justify turning it on.**
 | 6 | **Whether any default flips** — three rules, three off switches, and one of them (rule A) has now cleared its bar: no verdict moved across 20 questions and the bucket fell 17.5%. That is a measurement, not a decision, and the decision has been sitting unmade since 2026-09-14. **It is a row rather than a sentence because a flag nobody ever turns on is a feature nobody has** | a proposal now exists; somebody has to accept it | [`the-7b-does-not-miss-it`](../../RECORD/2026-09-14.the-7b-does-not-miss-it.completed.md), answered by [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) |
 | 7 | **Drift under a tool's own name** — `` ```list_dir ``, `` ```run_command ``: two of fifteen prompts, identical in the `off` and `grammar` arms, and genuinely a different trigger from the one the grammar closed. Needs `avoid_until_forced` run once per tool name, each forbidden outright rather than forced toward a completion | nothing | [`what-constrain-does`](../../RECORD/2026-09-14.what-constrain-does.completed.md) §Still open |
 | 8 | **The 7B's tool-call numbers may carry the schema-version confound** the registry-vs-local comparison had, and nobody has audited them. Cheap, unglamorous, and the kind of thing that quietly invalidates a table six weeks later | nothing | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md) §Still open, sixteenth update |
-| 17 | **The window rules are a session's fact and nothing treats them as one** — the three rules are process-wide flags at `serve`, unreachable from any surface a person uses, and **the recording does not say which of them a run ran under**: the header carries `eviction` and not `repeat`, `prune` or `results`. Grown on 2026-09-18 out of item 6, and the recording half is a defect that lands first and stands alone | nothing | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) |
+| 17 | **The recording does not say which window rules a run ran under** — `session::header` is handed a whole `Budget` and writes down `limit` and `eviction` while `repeat`, `prune` and `results` sit unread in the same struct, under builder comments saying why they belong there. Format 10 → 11. **Lands first and stands alone**: it is a defect, and everything else in this neighbourhood needs a stream that can say what a turn was rendered under | nothing | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) §Problem, §2nd, §3rd |
+| 18 | **`[resend]`: the rules per session, written from the page** — process-wide flags become a session's fact, named in `config.toml`, changed live through a `PUT` beside the providers one and a header line through `retarget_header`, and reachable from a third Settings section. Two keys cut by content rather than by where the bytes sit in the struct: `file-read` (selected spans *and* `read_file`'s result — the same object by this project's own account) and `cmd-output`. Default `once` on the first: the most that has been earned, not the most that saves. **Supersedes item 6's decision** | item 17 | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) §5th, §6th |
+| 19 | **A span is read once and never re-read, so a live session already sends bytes that a later turn edited away** — `code_context` is written at `push_turn_with_steps` and nothing refreshes it. Found while arguing about what a resume should store; independent of all of it, and nothing in the tree detects it | nothing | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) §5th |
+| 20 | **Fragments across a resume: the reference, not the bytes** — `from_view` rebuilds every turn with an empty `code_context`, the only place in this system where something is lost rather than merely not sent. Store the turn and the file, re-read through the live job's sandbox. Not because bytes go stale (item 19 says a live session's already are) but because bytes in the store come back **without being re-read**, which walks 2026-09-17's defect back in through the store | nothing | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) §5th |
+| 21 | **A window that no longer fits is absorbed in silence** — `TurnView::dropped` carries the `Evicted` and the panel reads it, and nothing treats it as something a person is *told*. Replaced a proposed `when-full` knob: the answer is to make it visible, not to make it configurable. What an error means for a surface that must still answer the turn is unargued | needs a design argument | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) §6th |
 
 **Section C — the gate, which is the surface with the least test per line.** Four
 rows, three of them carried from the last revision where none of them moved.
@@ -103,6 +117,7 @@ rows, three of them carried from the last revision where none of them moved.
 | 10 | ~**The gate panel exposes none of `network`, `egress` or `enforcement`** — all three are on the protocol and reachable from a script and from a client; the approve button sends files, writes, commands and `closes_on` and nothing else. A narrowing nobody can reach from the surface they actually use is a narrowing nobody applies~ **landed the same day this revision was written, and it was a page change and a test: no Rust moved.** The panel sends all six fields and — the half the row did not know about — *shows* the three it never displayed, so a plan declaring `"network": true` is no longer approved by somebody who was never told it had asked. It also says when the session's own policy denies what the plan asks, because `Plan::narrow` bounds a job by its session and a panel reporting the ask as a grant is a panel lying at the one moment somebody is deciding. **What driving it found**, which is the row's real return: the `not_granted` refusal — the only refusal in the protocol that does not *stop* anything, and the only place a person learns the policy file has a floor — was cleared by the turn it describes, within a frame, and had been since it was added | nothing | [`the-gate-panel-narrows`](../../RECORD/2026-09-17.the-gate-panel-narrows.completed.md), from [`enforcement-per-job`](../../RECORD/2026-09-06.enforcement-per-job.completed.md) §Still open |
 | 11 | **What a container start costs** — *the worker starts with the session* was chosen on the shape of the thing and not on a number. The `container` job already makes the same call on both sides and is where the number comes from | nothing | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 12 | **Nothing counts how often a plan grants a file rather than a directory**, which is the number that would say how ordinary the 2026-09-08 regression was — and therefore how much of the gate's surface has no test | nothing | [`the-surfaces-first`](../../RECORD/2026-09-08.the-surfaces-first.completed.md) |
+| 22 | **Every turn belongs to a job, and a session is an alternation** — `Turn::job` stops being `Option`: a session opens with a `draft`, `approve` closes it and opens a `plan`, `complete` closes that and opens the next draft, and the negative decisions (`decline`, `more changes`) keep you in the job you are in. Approving *is* closing, so a draft folds at approval and the exploratory turns that today can only be pruned or dropped gain the one mechanism they never had. `JobState::Rejected` moves from a state to a decision event inside the draft. **The largest item in this revision and the one with the least code written against it** | item 18's division of labour | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md) §7th, §8th |
 
 **Section D — arguments, boxes, and one debt the fortnight left.**
 
@@ -128,12 +143,17 @@ gantt
     Whether any default flips              :flip, after cite, 1d
     Drift under a tool's own name          :drift, after flip, 2d
     The 7B schema-version audit            :audit, after drift, 1d
-    Window rules per session, recorded     :rules, 2026-09-18, 2d
+    The header carries the three rules     :hdr, 2026-09-18, 1d
+    [resend] per session and on the page   :resend, after hdr, 2d
+    Spans are never re-read                :stale, after resend, 1d
+    Fragments by reference on resume       :frag, after resend, 2d
+    A full window is said out loud         :full, after frag, 1d
     section The gate
     A posture on resume is refused         :done, posture, 2026-09-17, 1d
     The gate panel narrows nothing         :done, panel, 2026-09-17, 1d
     What a container start costs           :cost, after panel, 1d
     File-versus-directory grants counted   :grants, after cost, 1d
+    Every turn in a job, draft and plan    :jobs, after grants, 5d
     section Arguments and debts
     A judge that is not the model          :judge, after audit, 3d
     Concurrency                            :conc, after judge, 4d
@@ -203,6 +223,22 @@ gantt
   verdicts per reply, scored mechanically, across two models and five corpora —
   the tool-call probe is already past what a key on disk comfortably covers, and
   the next corpus is the one that makes a judge necessary rather than nice.
+- **Rows 17 to 22 are one neighbourhood and they have an order.** Item 17 is a
+  defect and goes first, alone: until the header says which rules a run ran
+  under, nothing else here can be recorded or resumed honestly. Item 18 is the
+  bulk of the diff and **supersedes item 6's decision** — the default flips
+  inside it, on one run's evidence, said as n=1. Items 19, 20 and 21 are each
+  independent of the other two and of everything above. **Item 22 is the largest
+  thing in this revision** and is ordered last on purpose: it changes what a turn
+  *is*, and the case for it rests on a division of labour (`[resend]` for what is
+  open, compaction for what is closed) that nothing has exercised yet.
+- **Not one of the six came from a run**, which is the calibration note this day
+  hands forward. The last revision's finding was that driving a surface finds
+  what ordering work does not; this one's is narrower and less comfortable:
+  **four of the six corrections inside the record were a borrowed shape, word,
+  seam or knob that brought an unchecked assumption with it.** The cheapest
+  instrument this project owns is still somebody asking what the thing actually
+  does.
 - **Nothing in section D blocks anything in A, B or C**, which is the same thing
   the last two revisions said about their own last section and is worth repeating
   because it is the section that keeps growing.
