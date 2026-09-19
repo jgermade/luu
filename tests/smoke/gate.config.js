@@ -13,7 +13,10 @@ import { defineConfig, devices } from "@playwright/test"
  */
 export default defineConfig({
   testDir: ".",
-  testMatch: "gate.spec.js",
+  // Both live-server specs: the gate's whole job, and Settings → Resend writing
+  // `config.toml` from the browser. Each spawns its own server on its own port
+  // and its own state directory, so they run side by side.
+  testMatch: /(gate|settings)\.spec\.js$/,
   // A whole job — plan, approval, tool call, fold — over a mock with no delay.
   timeout: 120_000,
   // A smoke test that passes on the second attempt is a smoke test that failed.

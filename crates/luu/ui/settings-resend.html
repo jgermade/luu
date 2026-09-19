@@ -1,0 +1,214 @@
+<script :setup>
+  // The three rules that decide how much of the history a turn pays for again.
+  //
+  // **Not in General**, and that is a decision rather than a layout: the
+  // sections there are facts about the *screen* — a theme, a layout, which
+  // editor draws a file — and live in `localStorage`, where a server answers
+  // two people on two machines and neither's preference changes what is sent.
+  // These three change the bytes the model receives, so they belong beside
+  // Models, which is the other section in this modal that is about the run
+  // rather than about the reader. See
+  // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 4.
+  //
+  // The section exists because the rules were built, measured, tested and off,
+  // reachable only by typing a flag and restarting the server — which is the
+  // sentence `the-gate-panel-narrows` wrote one surface along: a narrowing
+  // nobody can reach from the surface they actually use is a narrowing nobody
+  // applies.
+  const { state, loadResend, saveResend } = await import("./store.js")
+
+  // Asked here and awaited here, like the providers section: `openSettings`
+  // only mounts the component, and a `:setup` runs to completion before the
+  // template renders, so the draft below is a draft of something.
+  await loadResend()
+
+  // A *copy* of the file's table. Typing into the server's own answer would
+  // make an unsaved change look saved — and here it would look like something
+  // stronger than saved, because the panel beside it says what is running.
+  //
+  // `""` is the file saying nothing about a rule, which is not the same object
+  // as the file choosing the default: a machine that states no position leaves
+  // a session on whatever is already in place.
+  let draft = {
+    repeat: state.resend?.file?.repeat || "",
+    prune: state.resend?.file?.prune || "",
+    results: state.resend?.file?.results || "",
+  }
+  let saving = false
+
+  const set = (key, value) => { draft = { ...draft, [key]: value } }
+
+  const save = async () => {
+    saving = true
+    await saveResend({
+      ...(draft.repeat ? { repeat: draft.repeat } : {}),
+      ...(draft.prune ? { prune: draft.prune } : {}),
+      ...(draft.results ? { results: draft.results } : {}),
+    })
+    saving = false
+    draft = {
+      repeat: state.resend?.file?.repeat || "",
+      prune: state.resend?.file?.prune || "",
+      results: state.resend?.file?.results || "",
+    }
+  }
+
+  $: editable = !!state.resend?.editable
+  $: running = state.resend?.running || {}
+  $: waiting = state.resend?.waiting || []
+  // Whether the file and the live session disagree, which is ordinary rather
+  // than wrong: a session may have been started under a rule nobody wrote down.
+  $: differs = key => !!state.resend?.file?.[key]
+    && state.resend.file[key] !== running[key]
+</script>
+
+<h3>What this session is rendering under</h3>
+<p class="dim small">
+  The prompt is rebuilt whole every turn, so the entire history block is a
+  resend. These three decide how much of it is sent again.
+</p>
+
+<dl class="settings" :if="state.resend">
+  <dt>Repeat</dt>
+  <dd>
+    <span class="tag">{{ running.repeat }}</span>
+    <span class="dim">· a span already in the window</span>
+    <span :if="differs('repeat')" class="warn">· the file says {{ state.resend.file.repeat }}</span>
+  </dd>
+
+  <dt>Prune</dt>
+  <dd>
+    <span class="tag">{{ running.prune }}</span>
+    <span class="dim">· an old turn's code, once the window stops fitting</span>
+    <span :if="differs('prune')" class="warn">· the file says {{ state.resend.file.prune }}</span>
+  </dd>
+
+  <dt>Results</dt>
+  <dd>
+    <span class="tag">{{ running.results }}</span>
+    <span class="dim">· an old turn's tool output, behind the prune line</span>
+    <span :if="running.results !== 'kept' && running.prune === 'never'" class="dim">
+      · inert: nothing is behind a line that never moves
+    </span>
+    <span :if="differs('results')" class="warn">· the file says {{ state.resend.file.results }}</span>
+  </dd>
+</dl>
+
+<h3>This machine's default</h3>
+<p class="dim small" :if="state.resend?.path">
+  <span class="path">{{ state.resend.path }}</span>
+  · what a session starts on unless it asks for something else
+</p>
+<p :if="state.resend && !state.resend.editable" class="refused">{{ state.resend.refused }}</p>
+<p :if="state.resendError" class="error">{{ state.resendError }}</p>
+
+<dl class="settings" :if="state.resend">
+  <dt>Repeat</dt>
+  <dd>
+    <div class="choice">
+      <button type="button" :disabled="!editable" :class.on="draft.repeat === ''"
+              @click="set('repeat', '')">unset</button>
+      <button type="button" :disabled="!editable" :class.on="draft.repeat === 'always'"
+              @click="set('repeat', 'always')">always</button>
+      <button type="button" :disabled="!editable" :class.on="draft.repeat === 'once'"
+              @click="set('repeat', 'once')">once</button>
+    </div>
+  </dd>
+  <dd class="note">
+    <b>once</b> renders a span in the <b>oldest</b> turn of the window that
+    carries it and skips it in every turn after, the turn being asked included.
+    The one of the three that has been through a model: across 20 grounded
+    questions on a 7B, the <code>code</code> bucket fell <b>17.5%</b> and not one
+    verdict moved. One conversation, one model, one seed, run once.
+  </dd>
+
+  <dt>Prune</dt>
+  <dd>
+    <div class="choice">
+      <button type="button" :disabled="!editable" :class.on="draft.prune === ''"
+              @click="set('prune', '')">unset</button>
+      <button type="button" :disabled="!editable" :class.on="draft.prune === 'never'"
+              @click="set('prune', 'never')">never</button>
+      <button type="button" :disabled="!editable" :class.on="draft.prune === 'behind'"
+              @click="set('prune', 'behind')">behind</button>
+    </div>
+  </dd>
+  <dd class="note">
+    <b>behind</b> makes the oldest turns give up their code and keep their
+    exchange: the span becomes the line that cites it, the question and the
+    answer stay. What it buys is not tokens — on the same 20 turns the prompt
+    moves −0.3% and <b>nothing is evicted at all</b>, 0 turns dropped against
+    13. <b>No accuracy measurement.</b>
+  </dd>
+
+  <dt>Results</dt>
+  <dd>
+    <div class="choice">
+      <button type="button" :disabled="!editable" :class.on="draft.results === ''"
+              @click="set('results', '')">unset</button>
+      <button type="button" :disabled="!editable" :class.on="draft.results === 'kept'"
+              @click="set('results', 'kept')">kept</button>
+      <button type="button" :disabled="!editable" :class.on="draft.results === 'cited_reads'"
+              @click="set('results', 'cited_reads')">cited_reads</button>
+      <button type="button" :disabled="!editable" :class.on="draft.results === 'cited'"
+              @click="set('results', 'cited')">cited</button>
+    </div>
+  </dd>
+  <dd class="note">
+    Both replace a tool result behind the prune line with the line that cites
+    it, and both are <b>inert without prune</b>. What they differ on is which
+    results: <b>cited_reads</b> gives up what could be asked for again — a
+    file's bytes, a directory listing — and keeps what a command found.
+    <b>cited</b> gives up a command's output too.
+  </dd>
+  <dd class="note caveat">
+    The 32 752 tokens this rule freed over 20 turns were measured on a corpus
+    where every turn read a 136 KB file and hit the 8 KiB cap, and where
+    <b>no command output was ever pruned</b>. So <b>cited_reads</b> is the whole
+    of that measured saving, and <b>cited</b> is that saving plus a claim
+    nothing has checked: an exit code and a test run are a record of something
+    that happened, and a model reasoning about a <code>cargo test</code> it can
+    no longer see is the open question this rule has had since the day it
+    landed.
+  </dd>
+
+  <dd class="note caveat">
+    <b>unset</b> is this machine stating no position, which leaves a session on
+    whatever is already running. It is not the same as choosing the left-hand
+    value.
+  </dd>
+</dl>
+
+<!-- What the server withheld from the *running* session, and why. The page
+     reports it rather than predicting it: both ratchets in this window only
+     move forward, and a browser working out which of them would fail to
+     retreat would be a second copy of a rule that already has one. -->
+<div :if="waiting.length" class="waiting">
+  <strong>Saved, and this session keeps going as it was:</strong>
+  <ul><li :each="line in waiting">{{ line }}</li></ul>
+</div>
+
+<div class="modal-foot">
+  <div class="modal-actions" :if="state.resend">
+    <button type="button" class="save" :disabled="!editable || saving"
+            @click="save()">{{ saving ? "Saving…" : "Save" }}</button>
+  </div>
+</div>
+
+<style scoped>
+  h3:first-child { margin-top: 0; }
+  .path { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+  .note b, .caveat b { color: var(--fg); font-weight: 600; }
+  /* `--warn-bg` is the ground under anything bordered in `--warn` — the gate,
+     a refusal — and this is the third: a save that did part of what it said. */
+  .waiting {
+    border: 1px solid var(--warn);
+    border-radius: 6px;
+    background: var(--warn-bg);
+    padding: .6rem .8rem;
+    margin-top: 1rem;
+    font-size: 13px;
+  }
+  .waiting ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--dim); }
+  .waiting li + li { margin-top: .3rem; }
+</style>

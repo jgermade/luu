@@ -1230,34 +1230,75 @@ impl ConstrainKind {
     }
 }
 
-/// `--repeat-once` as the policy it sets. A `bool` at the flag because that is
-/// what a flag is; a named rule everywhere below it, because `true` at a call
-/// site says nothing about which of the two rules is on.
-fn repeat(once: bool) -> Repeat {
-    match once {
-        true => Repeat::Once,
-        false => Repeat::Always,
-    }
+/// The three rules a run starts on: this machine's `[resend]` table, with the
+/// flags a run was given on top of it.
+///
+/// A `bool` at each flag because that is what a flag is; a named rule
+/// everywhere below, because `true` at a call site says nothing about which of
+/// the two rules is on. `--prune-results` stays its own flag rather than a
+/// widening of `--prune-behind`: there is a run on disk made under that one,
+/// and a flag that quietly starts meaning something else turns a recorded arm
+/// into an unrecorded one.
+///
+/// That last sentence is why `--prune-results` still means `Results::Cited` now
+/// that there are three values and not two. `Results::CitedReads` — cite what
+/// could be read again, keep what a command found — is reachable from
+/// `[resend]` and from the page, and **not from this flag**, because the run on
+/// disk was made under the flag as it meant `Cited`. A seam between the two
+/// surfaces, named here rather than closed by widening a recorded arm.
+///
+/// **The precedence is one-way, and it is the flags' own shape that makes it
+/// so.** A flag can only turn a rule *on*, so *absent* and *off* are the same
+/// `false` here and nothing can tell them apart. `--repeat-once` therefore
+/// overrides a file that says `always`, and a file that says `once` cannot be
+/// turned off from the command line. Said out loud rather than left to be
+/// discovered; the off-switch is the `--no-repeat-once` that §What it costs
+/// says a flipped default will want, and it is not here because no default has
+/// flipped.
+///
+/// Read by `chat` and `stdio` as well as by `serve`. It is a fact about this
+/// machine, in the file that already holds this machine's default destination —
+/// not a session-start choice, which is the seam the record leaves open between
+/// the CLI and the page. See
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 3.
+fn resend_rules(
+    table: crate::provider::Resend,
+    once: bool,
+    behind: bool,
+    cited: bool,
+) -> (Repeat, Prune, Results) {
+    (
+        match once {
+            true => Repeat::Once,
+            false => table.repeat.unwrap_or(Repeat::Always),
+        },
+        match behind {
+            true => Prune::Behind,
+            false => table.prune.unwrap_or(Prune::Never),
+        },
+        match cited {
+            true => Results::Cited,
+            false => table.results.unwrap_or(Results::Kept),
+        },
+    )
 }
 
-/// `--prune-behind` as the policy it sets, for the same reason `repeat` is a
-/// function: `true` at a call site says nothing about which rule is on.
-fn prune(behind: bool) -> Prune {
-    match behind {
-        true => Prune::Behind,
-        false => Prune::Never,
-    }
+/// The `[resend]` table this machine names, for a surface that has not already
+/// loaded the file.
+///
+/// A config that will not load is not a reason to refuse to run — it is already
+/// reported where the providers are — so an unreadable file is the same as one
+/// that says nothing, which is the defaults.
+fn machine_resend() -> crate::provider::Resend {
+    crate::provider::Config::load()
+        .map(|(config, _)| config.resend().unwrap_or_default())
+        .unwrap_or_default()
 }
 
-/// `--prune-results` as the policy it sets, for the same reason again. Its own
-/// flag rather than a widening of `--prune-behind`: there is a run on disk made
-/// under that one, and a flag that quietly starts meaning something else turns
-/// a recorded arm into an unrecorded one.
-fn results(cited: bool) -> Results {
-    match cited {
-        true => Results::Cited,
-        false => Results::Kept,
-    }
+/// The three rules as a `Budget` takes them, for a call site that has the flags
+/// and wants one expression.
+fn budget_under(budget: Budget, (repeat, prune, results): (Repeat, Prune, Results)) -> Budget {
+    budget.repeating(repeat).pruning(prune).citing(results)
 }
 
 /// Everything a run needs to reach a model: what the flags said, and what the
@@ -1788,13 +1829,14 @@ pub async fn run() -> Result<()> {
         // same file. A config that will not load is not a reason to refuse to
         // serve: it is already reported where the providers are, and a machine
         // with none simply offers none.
-        let (postures, postures_path, ui) = match crate::provider::Config::load() {
+        let (postures, postures_path, ui, resend) = match crate::provider::Config::load() {
             Ok((config, path)) => (
                 config.postures().clone(),
                 path.map(|path| path.display().to_string()),
                 config.ui().cloned(),
+                config.resend().unwrap_or_default(),
             ),
-            Err(_) => (Default::default(), None, None),
+            Err(_) => (Default::default(), None, None, Default::default()),
         };
         // Read once, here, so a theme that will not load says so beside the
         // other startup lines rather than as a silent absence of icons in the
@@ -1859,10 +1901,13 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
-                .repeating(repeat(repeat_once))
-                .pruning(prune(prune_behind))
-                .citing(results(prune_results)),
+            // Read from the same config load the postures came from, and not
+            // a second one: what a run starts under should not change under the
+            // surface that is about to offer it.
+            budget: budget_under(
+                Budget::new(context_limit, reserve, evict.policy(low_water)),
+                resend_rules(resend, repeat_once, prune_behind, prune_results),
+            ),
             counter,
             tokenizer,
             agency,
@@ -1978,10 +2023,10 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            budget: Budget::new(context_limit, reserve, evict.policy(low_water))
-                .repeating(repeat(repeat_once))
-                .pruning(prune(prune_behind))
-                .citing(results(prune_results)),
+            budget: budget_under(
+                Budget::new(context_limit, reserve, evict.policy(low_water)),
+                resend_rules(machine_resend(), repeat_once, prune_behind, prune_results),
+            ),
             counter,
             tokenizer,
             agency,
@@ -2076,10 +2121,10 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
-    let budget = Budget::new(context_limit, reserve, evict.policy(low_water))
-        .repeating(repeat(repeat_once))
-        .pruning(prune(prune_behind))
-        .citing(results(prune_results));
+    let budget = budget_under(
+        Budget::new(context_limit, reserve, evict.policy(low_water)),
+        resend_rules(machine_resend(), repeat_once, prune_behind, prune_results),
+    );
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -2619,6 +2664,60 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    /// The machine's table, the run's flags, and which wins.
+    ///
+    /// One-way on purpose, and the shape of a `bool` flag is the whole reason:
+    /// it can only turn a rule on, so *not given* and *given off* arrive here as
+    /// the same `false`. The test pins both halves — including the one that is a
+    /// limitation rather than a feature — because a precedence nobody wrote down
+    /// is one somebody discovers by being surprised.
+    #[test]
+    fn a_flag_turns_a_rule_on_over_the_file_and_cannot_turn_one_off() {
+        let table = |repeat, prune, results| crate::provider::Resend {
+            repeat,
+            prune,
+            results,
+        };
+        let says_nothing = table(None, None, None);
+
+        // No file and no flags: the defaults, which is every recording made
+        // before any of these rules existed.
+        assert_eq!(
+            resend_rules(says_nothing, false, false, false),
+            (Repeat::Always, Prune::Never, Results::Kept),
+        );
+
+        // The file alone decides where no flag was typed.
+        assert_eq!(
+            resend_rules(
+                table(Some(Repeat::Once), Some(Prune::Behind), None),
+                false,
+                false,
+                false,
+            ),
+            (Repeat::Once, Prune::Behind, Results::Kept),
+            "an unnamed key is the code's default, not the file's silence read as off",
+        );
+
+        // A flag wins over a file that says otherwise.
+        assert_eq!(
+            resend_rules(table(Some(Repeat::Always), None, None), true, false, false).0,
+            Repeat::Once,
+            "a flag typed at the run is more specific than a machine's default",
+        );
+
+        // And the half that is a limitation: a file that turns a rule on cannot
+        // be turned off from the command line, because there is no flag that
+        // says off. This is the `--no-repeat-once` the record says a flipped
+        // default will want, and it is pinned as absent rather than left to be
+        // met by surprise.
+        assert_eq!(
+            resend_rules(table(Some(Repeat::Once), None, None), false, false, false).0,
+            Repeat::Once,
+            "nothing on the command line spells off, so this is what it does",
+        );
+    }
 
     #[test]
     fn a_script_without_tasks_parses_the_way_it_always_did() {

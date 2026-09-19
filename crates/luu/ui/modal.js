@@ -22,18 +22,39 @@
 ///
 /// Called straight from a component's `:setup`, which jq79 runs to completion
 /// *before* the template renders — so the element does not exist yet, and this
-/// waits a frame for it. The same seam `content-viewer.html` uses for Monaco
-/// and for `rows.js`, and for the same stated reason: the id is the one thing
-/// both sides can name.
+/// waits for it. The same seam `content-viewer.html` uses for Monaco and for
+/// `rows.js`, and for the same stated reason: the id is the one thing both
+/// sides can name.
+///
+/// **It waits across frames rather than for one, and that is a fix rather than
+/// a precaution.** It used to look once, on the next frame, and give up in
+/// silence if the element was not there — which made opening the settings modal
+/// a race against its own `:setup`: the call is followed by one `await import`
+/// per section, and jq79 renders the template only after all of them resolve.
+/// Two sections won the race. Adding a **third** — the one the modal's own
+/// comment says its shape makes free — lost it, and the dialog stopped opening
+/// at all, with nothing in the console, because a `<dialog>` that was never
+/// shown is in the document and invisible. Found by a browser test clicking the
+/// new section. See
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 4.
 ///
 /// `locked` is asked at dismissal time rather than read once. The folder picker
 /// on a first visit is the case: there is nothing behind it to go back to, so
 /// it refuses to close, and a dialog that let ESC through anyway would take the
 /// page somewhere it cannot leave.
-export function asModal(id, { close, locked = () => false }) {
+export function asModal(id, { close, locked = () => false }, frames = 120) {
   requestAnimationFrame(() => {
     const dialog = document.getElementById(id)
-    if (!dialog || dialog.open) return
+    // Not there yet: keep looking until it is, or until enough frames have
+    // passed that it is never going to be. The cap is what stops a caller that
+    // names an id nothing renders from leaving a callback running for the life
+    // of the page — about two seconds at 60Hz, which is far longer than a
+    // template takes and short enough to be over before anybody clicks twice.
+    if (!dialog) {
+      if (frames > 0) asModal(id, { close, locked }, frames - 1)
+      return
+    }
+    if (dialog.open) return
 
     // ESC — and anything else the browser counts as a dismissal — fires
     // `cancel` first, and `cancel` can be refused.

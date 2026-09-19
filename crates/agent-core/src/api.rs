@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::{Counter, Evicted, Pruned};
+use crate::context::{Counter, Evicted, Prune, Pruned, Repeat, Results};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource, Replaced};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::{self, RecordLine};
@@ -239,6 +239,22 @@ pub struct SessionView {
     /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
     #[serde(default)]
     pub posture: Option<record::Posture>,
+    /// The three resend rules the stream's **last** header names — what this
+    /// session's turns were rendered under.
+    ///
+    /// `None` is *unknown* for the reason `posture` is: a recording made before
+    /// format 11 has no answer, and reading the defaults back for it would be a
+    /// claim the record never made. Here rather than only in the header because
+    /// a resume compares the fold against what the server is about to run, and
+    /// it could not compare a field the fold was dropping — which is how a
+    /// posture that moved on a resume wrote no line for a day. See
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` §second.
+    #[serde(default)]
+    pub repeat: Option<Repeat>,
+    #[serde(default)]
+    pub prune: Option<Prune>,
+    #[serde(default)]
+    pub results: Option<Results>,
     pub record: Option<String>,
 }
 
@@ -258,6 +274,9 @@ impl SessionView {
             turns: Vec::new(),
             jobs: Vec::new(),
             posture: None,
+            repeat: None,
+            prune: None,
+            results: None,
             record: None,
         }
     }
@@ -570,6 +589,9 @@ impl SessionView {
                     model,
                     started_at,
                     posture,
+                    repeat,
+                    prune,
+                    results,
                     ..
                 } => {
                     view.backend = backend.clone();
@@ -580,6 +602,12 @@ impl SessionView {
                     // there on, and what the session may do now is what that
                     // line says.
                     view.posture = posture.clone();
+                    // And the same rule for the three beside it: a stream that
+                    // gained a second header was rendered under what that line
+                    // says from there on.
+                    view.repeat = *repeat;
+                    view.prune = *prune;
+                    view.results = *results;
                 }
                 RecordLine::Protocol { at_ms, message } => view.apply_protocol(*at_ms, message),
                 RecordLine::Trace { at_ms, message } => view.apply_trace(*at_ms, message),
@@ -610,6 +638,9 @@ mod tests {
                     enforcement: "kernel".into(),
                     network: false,
                 }),
+                repeat: Some(crate::context::Repeat::Always),
+                prune: Some(crate::context::Prune::Never),
+                results: Some(crate::context::Results::Kept),
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {
@@ -740,15 +771,27 @@ mod tests {
 
         // The same messages, applied one at a time the way the server does.
         // The header's fields are the ones `serve` sets on the live view
-        // itself rather than by applying a line — the posture included, which
-        // is why it is mirrored here instead of ignored with the rest.
+        // itself rather than by applying a line — the posture and the three
+        // resend rules included, which is why they are mirrored here instead of
+        // ignored with the rest.
         let mut live = SessionView::new("s", "mock", "mock");
         live.started_at = 1_700_000_000_000;
         for line in all {
             match line {
                 RecordLine::Protocol { at_ms, message } => live.apply_protocol(at_ms, &message),
                 RecordLine::Trace { at_ms, message } => live.apply_trace(at_ms, &message),
-                RecordLine::Header { posture, .. } => live.posture = posture,
+                RecordLine::Header {
+                    posture,
+                    repeat,
+                    prune,
+                    results,
+                    ..
+                } => {
+                    live.posture = posture;
+                    live.repeat = repeat;
+                    live.prune = prune;
+                    live.results = results;
+                }
             }
         }
 

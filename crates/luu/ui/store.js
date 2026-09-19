@@ -19,7 +19,7 @@ import { $reactive } from "./vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 5
-const FORMAT = 10
+const FORMAT = 11
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -61,6 +61,13 @@ export const state = $reactive({
   settings: null,         // GET /api/settings — see serve::Settings
   providers: null,        // GET /api/providers — { path, editable, refused, default, providers, running }
   providersError: null,   // a config.toml that does not load, said where it can be fixed
+  // GET /api/resend — { path, editable, refused, file, running, waiting }.
+  // `file` is this machine's `[resend]` table and `running` is what the live
+  // session is actually rendering under: they can disagree, and a page that
+  // showed one as the other would tell somebody their machine is set to
+  // something it is not.
+  resend: null,
+  resendError: null,
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
   refused: null,          // { request, reason, detail }
@@ -836,6 +843,55 @@ export async function loadProviders() {
     }
   } catch (e) {
     state.providersError = `${e}`
+  }
+}
+
+/// This machine's `[resend]` table, and what the live session is under.
+///
+/// Fetched by the section that draws it, like the providers: two questions with
+/// two answers, and the modal only mounts the component.
+export async function loadResend() {
+  state.resendError = null
+  try {
+    const res = await fetch("./api/resend", { headers: apiHeaders() })
+    if (res.ok) {
+      state.resend = await res.json()
+    } else {
+      state.resend = null
+      state.resendError = await res.text()
+    }
+  } catch (e) {
+    state.resendError = `${e}`
+  }
+}
+
+/// Writes `[resend]`, and takes the server's answer as the new truth.
+///
+/// The answer carries `waiting`: the rules the file now names that the running
+/// session was **not** moved onto, because moving them would cost it turns. The
+/// server decides that — a page working it out from the two ratchets would be a
+/// second copy of a rule that already has one, in the language least able to
+/// check it.
+export async function saveResend(body) {
+  state.resendError = null
+  try {
+    const res = await fetch("./api/resend", {
+      method: "PUT",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      state.resendError = await res.text()
+      return false
+    }
+    state.resend = await res.json()
+    // The settings carry the same three, so a page that refreshed one and not
+    // the other would have two panels disagreeing about the live session.
+    await refreshSettings()
+    return true
+  } catch (e) {
+    state.resendError = `${e}`
+    return false
   }
 }
 
