@@ -1,0 +1,33 @@
+{
+  "fix": "82229cc 2026-09-15 11:38:17 +0200",
+  "runs": [
+    { "run": "2026-09-14.constrain", "schema": "pre-argv", "command_args": 62, "argv": 0 },
+    { "run": "2026-09-14.grammar-probe", "schema": "pre-argv", "command_args": 1, "argv": 0 },
+    { "run": "2026-09-14.tool-call-probe", "schema": "pre-argv", "command_args": 2, "argv": 0 },
+    { "run": "2026-09-15.14b-argv-schema", "schema": "post-argv", "command_args": 0, "argv": 51 },
+    { "run": "2026-09-15.14b-local-postfix", "schema": "post-argv", "command_args": 0, "argv": 52 },
+    { "run": "2026-09-15.14b-ollama-registry", "schema": "post-argv", "command_args": 0, "argv": 55 },
+    { "run": "2026-09-15.14b-registry-llama-server", "schema": "post-argv", "command_args": 0, "argv": 56 },
+    { "run": "2026-09-15.14b-schema-retry-postfix", "schema": "post-argv", "command_args": 0, "argv": 51 },
+    { "run": "2026-09-15.14b-schema-retry", "schema": "post-argv", "command_args": 0, "argv": 51 },
+    { "run": "2026-09-15.14b-tool-call-probe", "schema": "pre-argv", "command_args": 36, "argv": 0 },
+    { "run": "2026-09-15.7b-argv-schema", "schema": "post-argv", "command_args": 0, "argv": 22 },
+    { "run": "2026-09-15.7b-ollama-registry", "schema": "post-argv", "command_args": 0, "argv": 24 },
+    { "run": "2026-09-15.7b-ollama-same-gguf", "schema": "post-argv", "command_args": 0, "argv": 21 },
+    { "run": "2026-09-15.7b-schema-retry-postfix", "schema": "post-argv", "command_args": 0, "argv": 44 },
+    { "run": "2026-09-15.7b-schema-retry", "schema": "post-argv", "command_args": 0, "argv": 44 }
+  ],
+  "no_run_command_call_committed": [
+    "2026-09-06.precision",
+    "2026-09-07.repeat-once",
+    "2026-09-08.prune-behind",
+    "2026-09-14.prune-results",
+    "2026-09-14.repeat-once-precision",
+    "2026-09-15.14b-kv-precision",
+    "2026-09-15.14b-tool-call-format",
+    "2026-09-15.14b-write-tools-probe",
+    "2026-09-15.gguf-provenance",
+    "2026-09-16.plain-js-rows",
+    "2026-09-19.edit-reread-mock"
+  ]
+}
