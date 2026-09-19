@@ -224,6 +224,96 @@ pub enum RecordLine {
     },
 }
 
+/// What a session's `diverged` lines add up to.
+///
+/// [`TraceMessage::Diverged`] is emitted per render and says nothing about the
+/// session it belongs to: a reader with a recording in front of them can see
+/// that turn 6's prompt contradicted itself and cannot see whether that
+/// happened once or in half the turns. **The second number is the one item 19's
+/// fix waits on** — newest body wins trades measured prefix reuse for
+/// truthfulness, and the trade turns on how often a window carries a path whose
+/// bytes moved, which nothing counted until this.
+///
+/// It lives here, beside the format, rather than in the probe that first wanted
+/// it: a tally computed by a test is a tally only that test can quote, and the
+/// next thing to want this number is a run against a model rather than against
+/// the mock.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Divergence {
+    /// Renders that carried at least one contradicted path.
+    ///
+    /// Not the same as `lines`: one render can contradict itself about several
+    /// paths at once, and a *rate* is per render, because the render is what
+    /// was sent to a model.
+    pub renders: usize,
+    /// Renders where at least one contradiction included the asking turn —
+    /// the history disagreeing with what is on disk right now, which is the
+    /// case [`TraceMessage::Diverged::asking`] exists to name.
+    pub asking: usize,
+    /// One entry per distinct path, in the order the session first reported it,
+    /// carrying the most bodies ever sent under it in a single render.
+    ///
+    /// A `Vec` of pairs and not a map, for [`crate::context::Selection`]'s own
+    /// reason one along: a session reports a handful of paths, the order is
+    /// part of the answer, and a map would spend an allocation to save
+    /// comparisons nobody can measure.
+    pub paths: Vec<(String, usize)>,
+    /// Every `diverged` line in the file, which is what a reader grepping for
+    /// them would count and is the number the other three are not.
+    pub lines: usize,
+}
+
+/// Folds a recording's `diverged` lines into one [`Divergence`].
+///
+/// Over [`RecordLine`]s rather than over a path, so that a caller holding a
+/// stream it recorded itself does not have to write it out to read it back —
+/// which is what the probe does, and is the difference between a test that
+/// proves the corpus and a test that proves the file system.
+pub fn divergence(lines: &[RecordLine]) -> Divergence {
+    let mut found = Divergence::default();
+    let mut current: Option<crate::protocol::TurnId> = None;
+    let mut already_asking = false;
+
+    for line in lines {
+        let RecordLine::Trace {
+            message:
+                TraceMessage::Diverged {
+                    turn,
+                    path,
+                    bodies,
+                    asking,
+                    ..
+                },
+            ..
+        } = line
+        else {
+            continue;
+        };
+        found.lines += 1;
+        // A render is one turn's worth of lines, and they are written together
+        // by the caller that emitted them — so the turn changing is the render
+        // changing, and a turn cannot be rendered twice in one stream.
+        if current != Some(*turn) {
+            current = Some(*turn);
+            already_asking = false;
+            found.renders += 1;
+        }
+        // Counted once per render however many of its paths are asking, for
+        // the reason `renders` is: the question is how many prompts went out
+        // contradicting the disk, not how many spans did.
+        if *asking && !already_asking {
+            already_asking = true;
+            found.asking += 1;
+        }
+        match found.paths.iter_mut().find(|(seen, _)| seen == path) {
+            Some((_, most)) => *most = (*most).max(*bodies),
+            None => found.paths.push((path.clone(), *bodies)),
+        }
+    }
+
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +497,64 @@ mod tests {
                 "a file that does not say must not be read as one that does",
             ),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// One line per path and one render per turn: the four numbers a reader
+    /// of `Divergence` has to be able to tell apart.
+    ///
+    /// Two paths in one render must not count as two renders, and two
+    /// `asking` paths in one render must not count as two prompts that
+    /// contradicted the disk — the rate is per prompt, because the prompt is
+    /// what went to a model.
+    #[test]
+    fn a_render_that_contradicts_itself_twice_is_still_one_render() {
+        let lines = vec![
+            diverged(6, "src/greeting.rs:1-11", 2, true),
+            diverged(6, "src/tally.rs:1-6", 2, true),
+            diverged(12, "src/greeting.rs:1-11", 3, true),
+            diverged(13, "src/greeting.rs:1-11", 3, false),
+        ];
+
+        let found = divergence(&lines);
+        assert_eq!(found.lines, 4);
+        assert_eq!(found.renders, 3, "three turns, four lines");
+        assert_eq!(found.asking, 2, "turn 13 attached nothing");
+        assert_eq!(
+            found.paths,
+            vec![
+                ("src/greeting.rs:1-11".to_string(), 3),
+                ("src/tally.rs:1-6".to_string(), 2),
+            ],
+            "first seen first, each carrying the most bodies it ever reached",
+        );
+    }
+
+    /// A session that never edits a file it has quoted reports nothing, and
+    /// the tally of nothing is zero rather than absent. The control in
+    /// `scripts/tasks/edit-reread.txt` exists to produce exactly this.
+    #[test]
+    fn a_session_with_nothing_to_report_tallies_to_zero() {
+        let quiet = vec![RecordLine::Protocol {
+            at_ms: 1,
+            message: ServerMessage::Token {
+                turn: 1,
+                text: "hola".into(),
+            },
+        }];
+        assert_eq!(divergence(&quiet), Divergence::default());
+    }
+
+    fn diverged(turn: u64, path: &str, bodies: usize, asking: bool) -> RecordLine {
+        RecordLine::Trace {
+            at_ms: turn,
+            message: TraceMessage::Diverged {
+                turn,
+                path: path.into(),
+                turns: Vec::new(),
+                asking,
+                bodies,
+            },
         }
     }
 }

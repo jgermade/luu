@@ -2946,11 +2946,23 @@ mod tests {
     /// It parses with `parse_script`, not with a second reader — a guard that
     /// reads the directives differently from the program guards a different
     /// file.
+    ///
+    /// **A script is checked against the tree it runs against, which is not
+    /// always this one.** `edit-reread.txt` edits the files it reads, so it
+    /// runs against a copy of `scripts/tasks/edit-reread/` and its paths are
+    /// relative to that; a directory beside a script and carrying its name is
+    /// that script's tree, and everything else resolves against the repository
+    /// root as it always has. The rule is a convention rather than a directive
+    /// because it changes only where a path is *looked up*: the script itself
+    /// is parsed by `parse_script` like every other, and inventing a `##
+    /// project:` the runner would have to ignore would put a line in a corpus
+    /// that means nothing at run time.
     #[test]
     fn every_script_names_a_file_that_exists() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dir = root.join("scripts/tasks");
         let mut checked = 0;
+        let mut rooted_elsewhere = 0;
 
         let mut scripts: Vec<PathBuf> = std::fs::read_dir(&dir)
             .expect("scripts/tasks")
@@ -2964,6 +2976,16 @@ mod tests {
             let name = script.file_name().unwrap().to_string_lossy().into_owned();
             let text = std::fs::read_to_string(script).expect(&name);
             let steps = parse_script(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
+
+            // The tree this script's paths are relative to: the directory
+            // beside it carrying its own name, or the repository.
+            let beside = script.with_extension("");
+            let root = if beside.is_dir() {
+                rooted_elsewhere += 1;
+                beside
+            } else {
+                root.clone()
+            };
 
             // A `## fragment:` carries a range, and a range past the end is an
             // error at run time — so it is one here too, where it is cheap.
@@ -3013,6 +3035,17 @@ mod tests {
         assert!(
             checked > 0,
             "the scripts named no paths at all — did the directives change?"
+        );
+        // Without this the convention could be deleted — the directory renamed,
+        // the corpus left pointing at it — and every remaining path would
+        // resolve against the repository root, where `src/greeting.rs` does not
+        // exist, so the failure would at least be loud. What it could *not*
+        // catch is the other direction: a script whose tree quietly stops being
+        // consulted because nothing here says one ever was.
+        assert!(
+            rooted_elsewhere > 0,
+            "no script has a tree of its own beside it — \
+             did `scripts/tasks/edit-reread/` move?"
         );
     }
 
