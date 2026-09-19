@@ -15,7 +15,7 @@ use agent_core::context::{
     Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat, Results,
 };
 use agent_core::fragment;
-use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
+use agent_core::protocol::{self, ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
 use agent_core::task::{ApprovedBy, ClosedBy, Plan, PlanSource};
@@ -1654,6 +1654,26 @@ fn load_fragment(sandbox: &Sandbox, spec: &str) -> Result<Fragment> {
         .with_context(|| format!("fragment {spec}"))
 }
 
+/// A turn's code as the wire carries it: the specs, and who chose each one.
+///
+/// `by_hand` is where the person's fragments end and the selector's spans
+/// begin — the two live in one `Vec<Fragment>` from the moment they are joined
+/// and nothing downstream can take them apart, so the boundary has to be
+/// handed in rather than inferred. See
+/// `RECORD/2026-09-19.fragments-by-reference.completed.md` §Two things.
+fn grounded_spans(code: &[Fragment], by_hand: usize) -> Vec<protocol::Grounding> {
+    code.iter()
+        .enumerate()
+        .map(|(at, fragment)| protocol::Grounding {
+            spec: fragment.path.clone(),
+            origin: match at < by_hand {
+                true => protocol::Origin::Attached,
+                false => protocol::Origin::Selected,
+            },
+        })
+        .collect()
+}
+
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
@@ -2401,6 +2421,13 @@ pub async fn run() -> Result<()> {
         // Taken, not copied: these fragments are this turn's, and the next turn
         // starts with none.
         let mut code = std::mem::take(&mut attached);
+        // Where the person's end and the selector's begin. The two are one
+        // `Vec<Fragment>` from here on and nothing downstream can take them
+        // apart, which is the finding
+        // `RECORD/2026-09-19.fragments-by-reference.completed.md` §Two things
+        // records — so the boundary is caught here, at the one moment it is
+        // still known, and carried on the wire.
+        let by_hand = code.len();
         // And the ones nobody typed: what this turn's own text points at, on
         // top of what was attached by hand. The person's `--fragment` goes
         // first and keeps its whole budget — a selector that could crowd out an
@@ -2475,6 +2502,16 @@ pub async fn run() -> Result<()> {
                 prompt: prompt.clone(),
                 job,
             }));
+            // What it was asked *with*, by reference, straight after what was
+            // asked — the two halves of the same question, and the only thing
+            // a resume can read again. The order is the order they are fused
+            // into the message, so the person's come first.
+            if !code.is_empty() {
+                recorder.write(&Event::Protocol(ServerMessage::Grounded {
+                    turn,
+                    spans: grounded_spans(&code, by_hand),
+                }));
+            }
             // Before the prompt it explains, so a file reads in the order the
             // session happened: the history was cut, then this is what was
             // sent.

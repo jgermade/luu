@@ -405,7 +405,14 @@ The rule that keeps it honest is a test: `fold(record) == load(store, id)`, over
 recordings produced by running the binary. **Resuming is the second fold**, which
 had to be argued before it was written: `SessionStore::resume` folds the view
 back into a `Context`, and `serve` lists, creates, resumes and deletes stored
-sessions. See
+sessions. **It takes a sandbox**, because a turn's code comes back by
+**reference**: the store holds each span's spec on a `grounded` protocol line
+and never its bytes, so a resume *reads it again* through the posture it is
+being resumed under. Bytes in a store come back without being re-read, which
+would hand a narrowed session a file it may no longer open; a span this posture
+cannot read comes back as a citation naming why, and the resume says which ones.
+See
+[`RECORD/2026-09-19.fragments-by-reference.completed.md`](RECORD/2026-09-19.fragments-by-reference.completed.md),
 [`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md),
 [`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md)
 and

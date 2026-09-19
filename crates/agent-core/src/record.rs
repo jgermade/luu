@@ -98,7 +98,20 @@ use crate::trace::TraceMessage;
 /// before this simply has no such line, which is not the same claim as a stream
 /// that has none because nothing diverged — the format number is what tells
 /// those two apart. See `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
-pub const FORMAT: u32 = 12;
+///
+/// 13: `grounded` lines, and the **protocol** moves with them to 6 — the first
+/// time since format 3 that a bump is a protocol bump rather than a trace one.
+/// A turn says what it was asked with, by reference: the specs, never the
+/// bytes, because bytes in a store come back without being re-read and a
+/// session resumed under a narrower posture would get back a file it is no
+/// longer allowed to open. Same rule as 3, 4 and 5 — a new variant of a tagged
+/// enum, and a format-12 reader chokes on it rather than skipping it. A stream
+/// written before this says no turn was grounded, which is indistinguishable
+/// from a session that grounded nothing; the format number is what tells the
+/// two apart, and it is why a resume of an older stream still comes back
+/// without code and is right to. See
+/// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
+pub const FORMAT: u32 = 13;
 
 /// The posture a session ran under, as a recording names it.
 ///
