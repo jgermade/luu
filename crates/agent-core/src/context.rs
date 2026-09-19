@@ -131,6 +131,34 @@ pub struct Fragment {
     pub text: String,
 }
 
+/// A context rebuilt from a stored view, and what could not be rebuilt with it.
+///
+/// Two fields rather than a bare `Context`, for the reason `Selection` carries
+/// `evicted` and `pruned` rather than logging them: the thing that knows a span
+/// could not be read is not the thing that knows who to tell. A resume that
+/// restored four spans of six and said nothing would be the 2026-09-17 finding
+/// one surface along — the refusal erased by the thing it describes.
+#[derive(Debug)]
+pub struct Restored {
+    pub context: Context,
+    /// One entry per span that was in the view and is not in the window,
+    /// oldest turn first. Empty is the ordinary case and means every span came
+    /// back.
+    pub unreadable: Vec<Unreadable>,
+}
+
+/// A span a resume could not read again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    pub turn: TurnId,
+    /// The spec, as the turn that was grounded named it.
+    pub spec: String,
+    /// The load error, whole: a denial that does not name the rule it broke is
+    /// unreadable the moment a symlink is involved, and this is the only place
+    /// the reason survives.
+    pub why: String,
+}
+
 /// One exchange. The unit of everything the context manager does: eviction
 /// drops a turn, compaction replaces one, relevance scores one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -631,13 +659,30 @@ impl Context {
     /// Rebuilds turns, jobs, summaries and eviction floor from the view,
     /// counting tokens with the supplied counter so the resumed context
     /// budgets identically to the original session.
+    ///
+    /// **`sandbox` is how a turn gets its code back**, and the only way it can:
+    /// the view carries each turn's spans by reference, so they are *read
+    /// again* here, through whatever this resume is allowed to read rather than
+    /// through whatever the original session was. `None` restores none of them
+    /// and is what a caller with no filesystem in hand gets. A span that cannot
+    /// be read comes back as a citation and is named in
+    /// [`Restored::unreadable`], because a resume that quietly restores four
+    /// spans of six is a refusal nobody can read.
+    ///
+    /// The re-read happens once, here, and not at every render: `Context` holds
+    /// no sandbox and this is the one moment where the caller already does. So
+    /// a resumed session's window is fresh at the moment it is resumed and goes
+    /// stale again from the next turn exactly as a live one does — see
+    /// `RECORD/2026-09-19.fragments-by-reference.completed.md`, which says so
+    /// rather than implying the defect is fixed.
     pub fn from_view(
         view: &crate::api::SessionView,
         system: impl Into<String>,
         tools: impl Into<String>,
         map: impl Into<String>,
         counter: &dyn TokenCounter,
-    ) -> Self {
+        sandbox: Option<&crate::sandbox::Sandbox>,
+    ) -> Restored {
         let mut jobs = Vec::with_capacity(view.jobs.len());
         for jv in &view.jobs {
             let summary = jv.summary.as_ref().map(|text| crate::job::Summary {
@@ -662,6 +707,7 @@ impl Context {
         }
 
         let mut turns = Vec::with_capacity(view.turns.len());
+        let mut unreadable = Vec::new();
         for tv in &view.turns {
             let mut steps = Vec::with_capacity(tv.tools.len());
             for call_view in &tv.tools {
@@ -690,17 +736,41 @@ impl Context {
                 });
             }
 
+            // Read again, never restored from bytes: there are none in the
+            // view, on purpose. A stream written before protocol 6 says a turn
+            // had no spans, which is indistinguishable from a turn that had
+            // none — and is why the format number is what tells a file that
+            // cannot say from a session that had nothing to say.
+            let mut code_context = Vec::with_capacity(tv.code.len());
+            for grounding in &tv.code {
+                let Some(sandbox) = sandbox else { continue };
+                let spec = crate::fragment::Spec::parse(&grounding.spec);
+                match crate::fragment::load(sandbox, &spec) {
+                    Ok(fragment) => code_context.push(fragment),
+                    Err(error) => {
+                        code_context.push(unreadable_fragment(&grounding.spec, &error));
+                        unreadable.push(Unreadable {
+                            turn: tv.turn,
+                            spec: grounding.spec.clone(),
+                            why: error.to_string(),
+                        });
+                    }
+                }
+            }
+
             let prompt = tv.prompt.clone();
             let answer = tv.text.clone();
-            let tokens =
-                counter.count(&prompt) + steps_tokens(&steps, counter) + counter.count(&answer);
+            let tokens = counter.count(&prompt)
+                + fragments_tokens(&code_context.iter().collect::<Vec<_>>(), counter)
+                + steps_tokens(&steps, counter)
+                + counter.count(&answer);
 
             turns.push(Turn {
                 id: tv.turn,
                 prompt,
                 answer,
                 steps,
-                code_context: Vec::new(),
+                code_context,
                 job: tv.job,
                 tokens,
                 counted_by: counter.id(),
@@ -713,25 +783,26 @@ impl Context {
             .take_while(|t| t.evicted_by.is_some())
             .count();
 
-        Self {
-            system: system.into(),
-            tools: tools.into(),
-            map: map.into(),
-            turns,
-            floor,
-            // Zero and not carried: the view has no fragments, so `from_view`
-            // rebuilds every turn with an empty `code_context` and a resumed
-            // session has nothing to prune. Restoring a line here would say a
-            // turn had given up spans it is not carrying.
-            //
-            // Its *steps* do come back, so under `Results::Cited` a resumed
-            // session is the one case where the line has something to take
-            // from turn 1 — the spans are gone and the tool output is not.
-            pruned: 0,
-            // The last render's rule, and a resumed session has not rendered:
-            // the next selection sets it from the budget it is given.
-            cited: Results::Kept,
-            jobs,
+        Restored {
+            context: Self {
+                system: system.into(),
+                tools: tools.into(),
+                map: map.into(),
+                turns,
+                floor,
+                // Zero and not carried, and this stays true now that the spans
+                // come back: the prune line is a fact about the *last render*,
+                // and a resumed session has not rendered. Restoring a line
+                // here would say a turn had given up spans that are, as of
+                // this moment, in its `code_context`.
+                pruned: 0,
+                // The last render's rule, and a resumed session has not
+                // rendered: the next selection sets it from the budget it is
+                // given.
+                cited: Results::Kept,
+                jobs,
+            },
+            unreadable,
         }
     }
 
@@ -1710,6 +1781,24 @@ fn pruned_fragment_text(fragment: &Fragment, counter: &dyn TokenCounter) -> Stri
     match counter.count(&citation) < fragment_tokens(fragment, counter) {
         true => citation,
         false => fragment_text(fragment),
+    }
+}
+
+/// A span that a resume could not read again, as the line that stands in for it.
+///
+/// A [`Fragment`] like any other, so the renderer, the dedup and the accounting
+/// need no special case — and a comment rather than prose, for the reason a
+/// pruned span's citation is one: the model is told the file was read and that
+/// it is not readable from here, and nothing in the region every later turn is
+/// built on is model text.
+///
+/// It carries the reason rather than only the fact, because *the policy refuses
+/// this path* and *this file is gone* mean opposite things about what to do
+/// next, and a reader who cannot tell them apart will guess.
+fn unreadable_fragment(spec: &str, error: &crate::fragment::LoadError) -> Fragment {
+    Fragment {
+        path: spec.to_string(),
+        text: format!("// not readable when this session was resumed: {error}"),
     }
 }
 
@@ -4168,5 +4257,232 @@ mod tool_turn_tests {
         assert!(!context.reopen_task(task));
         assert_eq!(context.task(task).unwrap().state, JobState::Rejected);
         assert!(context.live_task().is_none(), "nothing is live");
+    }
+}
+
+/// Resuming a stored session: what comes back, what cannot, and what is said
+/// about the difference.
+///
+/// Its own module because it is the only group here that needs a **filesystem**:
+/// a fragment restored by reference is one that was read again, so these are
+/// the tests that cannot be written against a `Vec<Fragment>` somebody made up.
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+
+    /// A tree, a sandbox over it, and a view of one turn grounded with one span.
+    ///
+    /// The view is built by folding the two protocol messages a grounded turn
+    /// produces, rather than by filling a `TurnView` in by hand: a fixture that
+    /// reaches past the fold proves the fold's consumer and not the fold.
+    struct ResumeFixture {
+        root: std::path::PathBuf,
+        sandbox: crate::sandbox::Sandbox,
+    }
+
+    impl ResumeFixture {
+        /// `now` is what is on disk when the resume runs. Nothing anywhere
+        /// holds what was on disk when the turn ran, which is the point.
+        fn new(name: &str, now: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "luu-resume-{name}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("greeting.txt"), now).unwrap();
+            let root = root.canonicalize().unwrap();
+            let sandbox = crate::sandbox::Sandbox::new(
+                &crate::sandbox::SandboxPolicy {
+                    paths: vec![crate::sandbox::PathRule::new(
+                        ".",
+                        crate::sandbox::Access::Read,
+                    )],
+                    ..crate::sandbox::SandboxPolicy::default()
+                },
+                &root,
+            )
+            .unwrap();
+            Self { root, sandbox }
+        }
+
+        fn view(&self, spec: &str, origin: crate::protocol::Origin) -> crate::api::SessionView {
+            let mut view = crate::api::SessionView::new("resumed", "mock", "mock");
+            view.apply_protocol(
+                0,
+                &crate::protocol::ServerMessage::TurnStarted {
+                    turn: 1,
+                    prompt: "what does it say?".into(),
+                    job: None,
+                },
+            );
+            view.apply_protocol(
+                0,
+                &crate::protocol::ServerMessage::Grounded {
+                    turn: 1,
+                    spans: vec![crate::protocol::Grounding {
+                        spec: spec.to_string(),
+                        origin,
+                    }],
+                },
+            );
+            view
+        }
+
+        fn restore(&self, view: &crate::api::SessionView, with: bool) -> Restored {
+            Context::from_view(
+                view,
+                "system",
+                "tools",
+                "",
+                &ApproximateCounter,
+                with.then_some(&self.sandbox),
+            )
+        }
+    }
+
+    impl Drop for ResumeFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// A resumed turn gets its code back by reading it again, never from a store.
+    ///
+    /// Item 20 in one assertion: the view carries the spec and no bytes, the
+    /// file on disk has changed since the turn that was grounded with it, and
+    /// what comes back is **what is there now**. A resume that restored bytes
+    /// would have put the old ones into a prompt built under a posture that
+    /// never approved reading them.
+    ///
+    /// The freshness is a consequence and not a fix: from the next turn on, the
+    /// session goes stale again exactly as a live one does. See
+    /// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
+    #[test]
+    fn a_resumed_turn_reads_its_spans_again_rather_than_getting_its_old_bytes() {
+        let fixture = ResumeFixture::new("fresh", "after\n");
+        let view = fixture.view("greeting.txt:1-1", crate::protocol::Origin::Selected);
+        let restored = fixture.restore(&view, true);
+
+        assert!(restored.unreadable.is_empty(), "{:?}", restored.unreadable);
+        let code = &restored.context.turns[0].code_context;
+        assert_eq!(code.len(), 1);
+        assert_eq!(
+            code[0].path, "greeting.txt:1-1",
+            "the spec, as the turn named it"
+        );
+        assert_eq!(
+            code[0].text, "after\n",
+            "the bytes on disk now, not the ones the turn saw",
+        );
+    }
+
+    /// No sandbox restores nothing, and that is the old behaviour on purpose.
+    ///
+    /// A caller with no filesystem in hand — the fold's own tests, a reader
+    /// folding a recording to look at it — gets turns without code, which is
+    /// what every resume did before this. It is not a fallback to *the bytes we
+    /// had*: there are none, and the whole point is that there never will be.
+    #[test]
+    fn a_resume_with_no_sandbox_restores_no_code_rather_than_stale_code() {
+        let fixture = ResumeFixture::new("nosandbox", "after\n");
+        let view = fixture.view("greeting.txt:1-1", crate::protocol::Origin::Selected);
+        let restored = fixture.restore(&view, false);
+
+        assert!(restored.context.turns[0].code_context.is_empty());
+        assert!(
+            restored.unreadable.is_empty(),
+            "not reading is not the same as failing to read: {:?}",
+            restored.unreadable,
+        );
+    }
+
+    /// A span this posture may not read comes back as a citation, and is named.
+    ///
+    /// The case that decided against storing bytes: a session resumed under a
+    /// narrower posture must not get back a file it is no longer allowed to
+    /// open. What it gets instead is the line saying the span was there, so the
+    /// turn keeps its exchange and the model is told that reading the file
+    /// again would be a decision rather than a discovery — and the resume says
+    /// so out loud, because a refusal nobody can read is 2026-09-17's finding.
+    #[test]
+    fn a_span_this_posture_cannot_read_is_a_citation_and_is_reported() {
+        let fixture = ResumeFixture::new("denied", "after\n");
+        let view = fixture.view("/etc/hostname", crate::protocol::Origin::Attached);
+        let restored = fixture.restore(&view, true);
+
+        let code = &restored.context.turns[0].code_context;
+        assert_eq!(code.len(), 1, "the turn keeps the fact that it read one");
+        assert!(
+            code[0]
+                .text
+                .starts_with("// not readable when this session was resumed:"),
+            "{}",
+            code[0].text,
+        );
+        assert_eq!(restored.unreadable.len(), 1);
+        assert_eq!(restored.unreadable[0].turn, 1);
+        assert_eq!(restored.unreadable[0].spec, "/etc/hostname");
+        assert!(
+            !restored.unreadable[0].why.is_empty(),
+            "a denial that does not name the rule it broke is unreadable",
+        );
+    }
+
+    /// A file that is simply gone is the other half, and has to read differently.
+    ///
+    /// *The policy refuses this path* and *this file is not there any more* mean
+    /// opposite things about what to do next, so the citation carries the reason
+    /// and not only the fact.
+    #[test]
+    fn a_span_whose_file_is_gone_says_that_rather_than_saying_denied() {
+        let fixture = ResumeFixture::new("gone", "after\n");
+        let view = fixture.view("vanished.txt", crate::protocol::Origin::Selected);
+        let restored = fixture.restore(&view, true);
+
+        assert_eq!(restored.unreadable.len(), 1);
+        let why = restored.unreadable[0].why.clone();
+        assert!(why.contains("vanished.txt"), "{why}");
+        assert!(
+            restored.context.turns[0].code_context[0]
+                .text
+                .contains(&why),
+            "the citation carries the reason the report carries",
+        );
+    }
+
+    /// A restored span is in the prompt, and is charged for.
+    ///
+    /// The turn's count is rebuilt over what it is carrying *now*, so a resumed
+    /// session budgets against the window it actually has. Counting the prompt
+    /// and the answer alone — which is all the count ever had to do while there
+    /// was never any code — would make the first selection after a resume
+    /// cheaper than the prompt it sends.
+    #[test]
+    fn a_restored_span_is_rendered_and_counted() {
+        let fixture = ResumeFixture::new("counted", "after\n");
+        let view = fixture.view("greeting.txt:1-1", crate::protocol::Origin::Selected);
+        let mut restored = fixture.restore(&view, true);
+        let bare = fixture.restore(&view, false);
+
+        assert!(
+            restored.context.turns[0].tokens > bare.context.turns[0].tokens,
+            "a turn carrying a span costs more than the same turn carrying none",
+        );
+
+        let selection = restored.context.select(
+            "and now?",
+            &[],
+            Budget::new(8192, 512, Eviction::Turn),
+            &ApproximateCounter,
+        );
+        assert!(
+            selection
+                .messages
+                .iter()
+                .any(|message| message.content.contains("// greeting.txt:1-1")),
+            "the restored span is in the prompt the resumed session sends",
+        );
     }
 }

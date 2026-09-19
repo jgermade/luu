@@ -1,0 +1,72 @@
+# Thirteen turns that edit a file and then ask about it again.
+#
+# Every other script in this directory either never writes (`grounded.txt`,
+# twenty questions over a tree nothing touches) or writes without re-reading
+# (`tool-call-probe-writes.txt`, eight one-shot calls scored on the call and
+# not on what comes after). So none of them can produce the one case where a
+# span genuinely needs re-reading, which is why item 19's defect survived every
+# run this project has made and why rule A's default flipped on evidence that
+# could not contain it. See
+# RECORD/2026-09-19.one-path-two-bodies.WIP.md for the defect and
+# RECORD/2026-09-19.a-corpus-that-edits.completed.md for this corpus.
+#
+# **It runs against `edit-reread/`, not against this repository**, and against a
+# copy of it rather than the directory itself — the paths below are relative to
+# that tree, the prompts change four of its files, and `edit-reread/README.md`
+# says what each file is for. A run is
+#
+#   cp -r scripts/tasks/edit-reread "$SCRATCH"
+#   cd "$SCRATCH" && luu chat --script <this file> --allow-write . \
+#     --context-limit 8192 --record run.jsonl
+#
+# and the second arm is the same line with `--select-tokens 1024`, which is one
+# flag apart and is the arm that matters most: relevance selection re-reads a
+# span without anybody typing its name, so the divergences it produces are ones
+# a session would have produced on its own. The gate is deliberately not in the
+# loop — `--allow-write .` and no `## job:` — because what is being measured is
+# the window, and a plan in the way would make every edit a second question.
+#
+# What the four groups are for, and what each is expected to produce:
+#
+#   greeting.rs  read, edited, read again, edited, read again — two divergences
+#                with `asking: true`, then a third with `asking: false` on the
+#                last turn, which attaches nothing and still carries all three
+#                bodies out of the history.
+#   format.rs    read twice, never edited — the control. Identical bodies, so
+#                rule A collapses them and nothing is reported. A detector that
+#                names this file is naming everything.
+#   banner.rs    read once, edited, never asked about again — the window keeps
+#                sending bytes that are no longer on disk and nothing
+#                contradicts them. Stale, invisible, and the case the detector
+#                cannot see by construction.
+#   tally.rs     grounded `1-6`, edited, grounded `1-16` — both ranges carry the
+#                line that changed, and the detector counts two paths rather
+#                than one path with two bodies. That is the §Still open of
+#                `one-path-two-bodies`, reproducible rather than only argued.
+#
+# The line ranges are checked by `every_script_names_a_file_that_exists`, which
+# resolves them against `edit-reread/` because that directory sits beside this
+# file and carries its name. A range past the end of a fixture is a build
+# failure here, the same way it is for the scripts that name this repository.
+
+## fragment: src/greeting.rs:1-10
+what string does greet return?
+## fragment: src/format.rs:1-13
+what does render do with a name that is longer than WIDTH?
+## fragment: src/banner.rs:1-10
+what does banner print?
+## fragment: src/tally.rs:1-6
+what is THRESHOLD set to?
+edit src/greeting.rs to change the string "Hello, " to "Hi, "
+## fragment: src/greeting.rs:1-10
+what string does greet return now?
+## fragment: src/format.rs:1-13
+and what does render do with an empty name?
+edit src/banner.rs to change the string "luu" to "luu 0.2"
+edit src/tally.rs to change THRESHOLD from 16 to 32
+## fragment: src/tally.rs:1-16
+what is THRESHOLD now, and what does worth_saying compare the count against?
+edit src/greeting.rs to change the string "Hi, " to "Hey, "
+## fragment: src/greeting.rs:1-10
+what string does greet return now?
+which of the four files in src/ have changed since this session started?

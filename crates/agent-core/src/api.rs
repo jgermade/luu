@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::backend::Usage;
 use crate::context::{Counter, Diverged, Evicted, Prune, Pruned, Repeat, Results};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource, Replaced};
-use crate::protocol::{ServerMessage, TurnId};
+use crate::protocol::{Grounding, ServerMessage, TurnId};
 use crate::record::{self, RecordLine};
 use crate::sandbox::Verdict;
 use crate::trace::{Bucket, TraceMessage};
@@ -163,6 +163,17 @@ pub struct TurnView {
     /// this is the other half of it.
     #[serde(default)]
     pub pruned_by: Option<TurnId>,
+    /// The spans this turn was asked with, by reference — the specs, never the
+    /// bytes.
+    ///
+    /// It is what makes a resume able to read them again instead of losing
+    /// them, and it is the first thing in this view that says a turn carried
+    /// code at all: `prompt_sent` has the bytes fused into it and nothing took
+    /// them apart. Empty on a turn that carried none, and on every turn of
+    /// every stream written before protocol 6. See
+    /// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
+    #[serde(default)]
+    pub code: Vec<Grounding>,
     /// Paths this turn's prompt sent under more than one body — the same file,
     /// twice, with different contents.
     ///
@@ -195,6 +206,7 @@ impl TurnView {
             evicted_by: None,
             cited: None,
             pruned_by: None,
+            code: Vec::new(),
             diverged: Vec::new(),
             started_at_ms,
             ended_at_ms: None,
@@ -345,6 +357,15 @@ impl SessionView {
                 if self.turn(*turn).is_none() {
                     self.turns
                         .push(TurnView::new(*turn, *job, prompt.clone(), at_ms));
+                }
+            }
+            // Assigned and not pushed, unlike `diverged`: a turn is grounded
+            // once, in one message, because the whole list is known before the
+            // call that the turn is. A second one would mean a turn was asked
+            // twice.
+            ServerMessage::Grounded { turn, spans } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.code = spans.clone();
                 }
             }
             ServerMessage::JobProposed {

@@ -316,6 +316,11 @@ impl SessionStore {
     }
 
     /// Resumes a stored session into an active context — the inverse fold.
+    ///
+    /// `sandbox` is passed straight through and is how each turn's spans come
+    /// back: the view holds them by reference, so they are read again through
+    /// whatever the session is being resumed *under*. A caller with none gets
+    /// turns without code, which is what every resume did before protocol 6.
     pub fn resume(
         &self,
         id: &str,
@@ -323,12 +328,13 @@ impl SessionStore {
         tools: impl Into<String>,
         map: impl Into<String>,
         counter: &dyn agent_core::context::TokenCounter,
-    ) -> Result<Option<agent_core::context::Context>> {
+        sandbox: Option<&agent_core::sandbox::Sandbox>,
+    ) -> Result<Option<agent_core::context::Restored>> {
         let Some(view) = self.load(id)? else {
             return Ok(None);
         };
         Ok(Some(agent_core::context::Context::from_view(
-            &view, system, tools, map, counter,
+            &view, system, tools, map, counter, sandbox,
         )))
     }
 
