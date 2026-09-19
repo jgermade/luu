@@ -301,7 +301,7 @@ pub fn header(
         // `Budget` and wrote down two of its five fields until format 11, so a
         // run under `--repeat-once` left nothing behind saying so — while the
         // doc comments on the builders that set them gave the reason it should
-        // have. See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+        // have. See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`.
         repeat: Some(budget.repeat),
         prune: Some(budget.prune),
         results: Some(budget.results),
@@ -400,7 +400,7 @@ mod tests {
     /// through here — the recorder writing a `.jsonl` and the store keeping a
     /// session's own — so a header that drops a field drops it everywhere, and
     /// silently: every arm still reads back as a valid header. See
-    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`.
     #[test]
     fn a_header_writes_down_every_rule_the_budget_is_holding() {
         let budget = Budget::new(8192, 512, Eviction::Turn)
@@ -426,12 +426,14 @@ mod tests {
             other => panic!("{other:?}"),
         }
 
-        // And the other arm, because a function that hard-coded `Once` would
-        // pass the assertion above.
+        // And the other arm, because a function that hard-coded one value would
+        // pass the assertion above. It is `Always` that has to be asked for by
+        // name since 2026-09-19 — the flip moved which of the two is the
+        // silent one, and this test is only interested in there being two.
         match header(
             "mock",
             "mock",
-            Budget::new(8192, 512, Eviction::Turn),
+            Budget::new(8192, 512, Eviction::Turn).repeating(Repeat::Always),
             Counter::Approximate,
             None,
             0,
@@ -448,7 +450,8 @@ mod tests {
                     Some(Prune::Never),
                     Some(Results::Kept)
                 ),
-                "a run under the defaults says so; only a file older than the format stays silent",
+                "a run says which arm it was, whichever arm that is; only a file \
+                 older than the format stays silent",
             ),
             other => panic!("{other:?}"),
         }

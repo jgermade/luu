@@ -19,7 +19,7 @@ import { $reactive } from "./vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 5
-const FORMAT = 11
+const FORMAT = 12
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay

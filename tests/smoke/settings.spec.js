@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url"
  * test that opens it and clicks it — for the reason `gate.spec.js` exists at
  * all: two bugs in two days were found by a person opening this page and none
  * by a test. See
- * `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 4.
+ * `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 4.
  *
  * What it is really here for is the half a unit test cannot reach: **what the
  * page says after a save that did only part of what it was asked.** Turning
@@ -116,18 +116,30 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   const running = page.locator(".modal .settings").first()
   await expect(running).toBeVisible()
-  // What the server was started under, which is every rule off — the arm every
-  // recording made before these rules existed is.
-  await expect(running.locator("dd").nth(0)).toContainText("always")
+  // What the server was started under with no flags: rule A on since
+  // 2026-09-19 and the other two off, because A is the only one of the three
+  // whose saving has been measured against a model.
+  await expect(running.locator("dd").nth(0)).toContainText("once")
   await expect(running.locator("dd").nth(1)).toContainText("never")
   await expect(running.locator("dd").nth(2)).toContainText("kept")
 
-  // The editor below it: this machine's default, which says nothing yet.
+  // The editor below it: this machine's default, which says nothing yet. Unset
+  // is not off — it is the code's default, which for this rule is now `once`.
   const editor = page.locator(".modal .settings").nth(1)
   await expect(editor.locator(".choice").first().locator("button.on")).toHaveText("unset")
 
-  // Rule A on. It stores nothing, so it is the one rule that moves a running
-  // session in both directions.
+  // Rule A off, which since the flip is the direction that is a change. It
+  // stores nothing, so it is the one rule that moves a running session in both
+  // directions, and this is the half that used to be unreachable.
+  await editor.locator('button:has-text("always")').click()
+  await page.locator(".modal button.save").click()
+
+  await expect(running.locator("dd").nth(0)).toContainText("always")
+  const off = await (await fetch(`${BASE}/api/resend`)).json()
+  expect(off.file.repeat).toBe("always")
+  expect(off.running.repeat).toBe("always")
+
+  // And back on, which is the other direction and the one the default takes.
   await editor.locator('button:has-text("once")').click()
   await page.locator(".modal button.save").click()
 

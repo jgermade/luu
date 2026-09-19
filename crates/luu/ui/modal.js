@@ -36,7 +36,7 @@
 /// at all, with nothing in the console, because a `<dialog>` that was never
 /// shown is in the document and invisible. Found by a browser test clicking the
 /// new section. See
-/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 4.
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 4.
 ///
 /// `locked` is asked at dismissal time rather than read once. The folder picker
 /// on a first visit is the case: there is nothing behind it to go back to, so

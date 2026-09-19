@@ -206,8 +206,15 @@ pub enum Eviction {
 #[serde(rename_all = "snake_case")]
 pub enum Repeat {
     /// Send it again, in every turn that selected it. Everything recorded
-    /// before this enum existed, and the default, because a run made under a
-    /// rule that did not exist is not comparable to one made under it.
+    /// before this enum existed, and what this was the default for as long as
+    /// the rule was unmeasured, because a run made under a rule that did not
+    /// exist is not comparable to one made under it.
+    ///
+    /// No longer the default, and that is a decision with a date on it rather
+    /// than a preference: `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
+    /// §fourteenth. Still reachable — from `[resend]`, from the page, and from
+    /// `--no-repeat-once` — because a recording made under it stays readable
+    /// only if the arm that made it can still be asked for.
     Always,
     /// Render it once, in the **oldest** turn of the window that carries it.
     ///
@@ -223,6 +230,14 @@ pub enum Repeat {
     /// Choosing an owner that may already be below the floor is
     /// `the-fold-fix-verified`'s failure with a different mechanism, and the
     /// precision corpus offers it 22 chances.
+    ///
+    /// **The default since 2026-09-19**, and the only one of the three rules
+    /// that has been through a model: 20 grounded questions on
+    /// `qwen2.5-coder:7b`, verdict for verdict identical to `always`, with the
+    /// `code` bucket down 17.5%. The criterion it wins under is *fewest tokens
+    /// without affecting the result*, not *fewest tokens* — that one selects
+    /// rule C, which has no accuracy measurement at all. It is n=1 and the
+    /// record says so where it decides it.
     Once,
 }
 
@@ -284,7 +299,7 @@ pub enum Results {
     /// ships the whole measured saving while making none of the unmeasured
     /// claim — which is what item 5 of `ROADMAP/2026-09-17` is open about, and
     /// why it is a third value rather than a redefinition of the one below.
-    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
     /// §third.
     CitedReads,
     /// Behind the prune line the output becomes the line that cites it, and the
@@ -345,19 +360,27 @@ pub struct Budget {
 
 impl Budget {
     /// The CLI spells "unknown" as 0, because a flag has to have a default.
+    ///
+    /// `repeat` is [`Repeat::Once`] and the other two are off, which is not
+    /// three rules ranked by what they save — ranked that way the winner would
+    /// be `results`, the one of the three that has never been put in front of a
+    /// model. `repeat` is here because it is the only one whose saving has been
+    /// shown to cost nothing, on n=1, which is stated where it is decided.
     pub fn new(limit: u32, reserve: u32, eviction: Eviction) -> Self {
         Self {
             limit: (limit > 0).then_some(limit),
             reserve,
             eviction,
-            repeat: Repeat::Always,
+            repeat: Repeat::Once,
             prune: Prune::Never,
             results: Results::Kept,
         }
     }
 
-    /// Off by default and turned on here, so that every recording made before
-    /// it stays readable as the arm it was.
+    /// The rule this budget renders spans under. **On** by default since
+    /// 2026-09-19, so this is as much the way back to [`Repeat::Always`] as the
+    /// way to [`Repeat::Once`] — every recording on disk was made under one of
+    /// the two, and the header says which since format 11.
     pub fn repeating(self, repeat: Repeat) -> Self {
         Self { repeat, ..self }
     }
@@ -401,6 +424,15 @@ pub struct Selection {
     /// What this selection pruned, if the line moved. `None` on a selection
     /// that pruned nothing, which is every one made under [`Prune::Never`].
     pub pruning: Option<Pruned>,
+    /// Paths this render sent under more than one body, in the order the window
+    /// first carried them.
+    ///
+    /// A `Vec` rather than the `Option<_>` the two fields above use, because
+    /// there is no single event here to be absent: each path is its own finding
+    /// and an empty vector is the ordinary case. Every other selection in this
+    /// session produces one too — it is the window that is being described, not
+    /// a thing that happened to it.
+    pub diverged: Vec<Diverged>,
 }
 
 /// What one selection dropped from the window — and it stays dropped: the
@@ -447,6 +479,47 @@ pub struct Pruned {
     pub tokens: u32,
     /// Which counter produced `tokens`.
     pub counter: Counter,
+}
+
+/// One path the rendered prompt carried with more than one body.
+///
+/// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`: `code_context`
+/// is written once at `push_turn_with_steps` and never refreshed, while every
+/// turn re-reads its own spans through the sandbox. So a file edited between two
+/// turns is sent twice under one `// path` header, with different contents and
+/// nothing saying which is true.
+///
+/// A report and not a repair. Nothing in the render behaves differently because
+/// this is populated — the fix is argued in that record and deliberately not
+/// taken, because it trades measured prefix reuse for truthfulness and the
+/// frequency it turns on has never been measured.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Diverged {
+    /// The span, as the fragment names it — the whole spec, line range
+    /// included. Two *overlapping* ranges of one file are two paths here and
+    /// their disagreement is not caught; see that record's §Still open.
+    pub path: String,
+    /// The turns of the *history* that carried it, oldest first, one entry per
+    /// turn and not per body: a reader wants to know where to look, and the
+    /// bodies themselves are in the prompt this selection just built.
+    pub turns: Vec<TurnId>,
+    /// Whether the turn being asked is one of the carriers.
+    ///
+    /// A `bool` beside the ids rather than an id among them, because
+    /// [`Context::select`] runs *before* the turn is pushed and it has no id
+    /// yet — inventing the next one would put a number in a report that the
+    /// caller had not handed out and may not hand out, since a turn that
+    /// produces nothing is never pushed.
+    ///
+    /// It is also the carrier that matters most, and the reason this is
+    /// reported at all rather than treated as a curiosity about old turns: the
+    /// turn being asked holds the bytes that were read *this* turn, so a
+    /// divergence including it is the history contradicting what is on disk
+    /// right now.
+    pub asking: bool,
+    /// How many *distinct* bodies went out under this path. Always at least
+    /// two, because one is not a divergence and is never recorded.
+    pub bodies: usize,
 }
 
 /// One unit of rendered history: a live turn, or a closed job folded to its
@@ -1247,6 +1320,12 @@ impl Context {
         // keeps the prefix: the block above the newest message is byte-identical
         // to the one the previous call sent, exactly as it was before this rule.
         let mut shown: HashSet<&Fragment> = HashSet::new();
+        // What actually went out, per path, in window order. Recorded beside
+        // the render rather than derived from `messages` afterwards, because
+        // parsing back the text we just wrote is the thing `code_context` is
+        // stored separately to avoid.
+        // `None` is the turn being asked, which has no id yet.
+        let mut sent: Vec<(&str, &str, Option<TurnId>)> = Vec::new();
         for item in &items {
             let tokens = self.item_tokens(item, counter, self.pruned, budget.results);
             match item {
@@ -1284,6 +1363,10 @@ impl Context {
                     // nothing costs exactly what it has always cost, and every
                     // recording made before `Repeat` reads unchanged.
                     history_tokens += tokens.saturating_sub(fragments_tokens(&dropped, counter));
+                    sent.extend(
+                        kept.iter()
+                            .map(|fragment| (&*fragment.path, &*fragment.text, Some(turn.id))),
+                    );
                     messages.push(Message::user(user_text(kept, &turn.prompt)));
                     // Each step is a real exchange, so the alternation holds and
                     // no chat template has to decide what two user messages in a
@@ -1321,7 +1404,13 @@ impl Context {
             true => code_tokens,
             false => counter.count(&fragments_text(kept.iter().copied())),
         };
+        sent.extend(
+            kept.iter()
+                .map(|fragment| (&*fragment.path, &*fragment.text, None)),
+        );
         messages.push(Message::user(user_text(kept, prompt)));
+
+        let diverged = diverged_paths(&sent);
 
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
@@ -1351,6 +1440,7 @@ impl Context {
             pruned: self.pruned,
             eviction,
             pruning,
+            diverged,
         }
     }
 
@@ -1656,6 +1746,67 @@ fn split_shown<'a>(
             .iter()
             .partition(|fragment| shown.insert(fragment)),
     }
+}
+
+/// Every path this render sent under more than one body, in the order the
+/// window first carried each one.
+///
+/// Over what was **sent**, not over what is stored. A turn below the prune line
+/// has given its span up and an evicted turn is gone, so a detector reading
+/// `code_context` would report contradictions the model was never shown — which
+/// is the same mistake `Pruned::tokens` documents one field along, where the
+/// saving is the difference of two windows rather than the sum of the spans.
+///
+/// `Vec` and a linear scan rather than a map: a window holds tens of fragments,
+/// the order is part of the answer, and a `HashMap` here would cost an
+/// allocation per path to save comparisons nobody can measure.
+fn diverged_paths(sent: &[(&str, &str, Option<TurnId>)]) -> Vec<Diverged> {
+    /// One path's tally while the scan runs. Named fields rather than a tuple
+    /// because three of the four are collections and `.1` against `.2` at a
+    /// call site is the kind of thing that reads fine when written.
+    struct Carried<'a> {
+        path: &'a str,
+        bodies: Vec<&'a str>,
+        turns: Vec<TurnId>,
+        asking: bool,
+    }
+
+    // One entry per path, in the order the window first carried it. Built in
+    // full and filtered after, because deciding as we go would have to go back
+    // for the carriers of the bodies that came before the disagreement did.
+    let mut carried: Vec<Carried> = Vec::new();
+    for (path, text, turn) in sent {
+        let entry = match carried.iter().position(|one| one.path == *path) {
+            Some(at) => &mut carried[at],
+            None => {
+                carried.push(Carried {
+                    path,
+                    bodies: Vec::new(),
+                    turns: Vec::new(),
+                    asking: false,
+                });
+                carried.last_mut().expect("just pushed")
+            }
+        };
+        if !entry.bodies.contains(text) {
+            entry.bodies.push(text);
+        }
+        match turn {
+            Some(id) => entry.turns.push(*id),
+            None => entry.asking = true,
+        }
+    }
+
+    carried
+        .into_iter()
+        .filter(|one| one.bodies.len() > 1)
+        .map(|one| Diverged {
+            path: one.path.to_string(),
+            turns: one.turns,
+            asking: one.asking,
+            bodies: one.bodies.len(),
+        })
+        .collect()
 }
 
 /// The fragments alone, as they are rendered inside a user message.
@@ -2478,6 +2629,265 @@ mod tests {
         context
     }
 
+    /// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`, pinned as
+    /// the behaviour it currently is rather than as the behaviour it should be.
+    ///
+    /// This asserts that the prompt **does** contain the contradiction, because
+    /// the fix is argued in that record and deliberately not taken: it trades
+    /// measured prefix reuse for truthfulness and the frequency it turns on has
+    /// never been measured. When the fix lands this test changes, and the diff
+    /// that changes it is the point — a defect nothing detects is one nobody
+    /// can decide about.
+    #[test]
+    fn an_edited_span_goes_out_twice_under_one_path_and_is_reported() {
+        let counter = WordCounter::default();
+        let before = fragment("src/lib.rs:1-4", "fn main () { old }");
+        let after = fragment("src/lib.rs:1-4", "fn main () { new }");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&before), std::slice::from_ref(&after)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        // Rule A is the default and does not collapse these, because a
+        // fragment's identity is its path *and* its bytes — so the dedup is
+        // working exactly as specified and the prompt is still wrong.
+        assert_eq!(occurrences(&selection, "src/lib.rs:1-4"), 2);
+        let users = user_messages(&selection);
+        assert!(
+            users[0].contains("old") && users[1].contains("new"),
+            "{users:?}"
+        );
+
+        assert_eq!(selection.diverged.len(), 1, "{:?}", selection.diverged);
+        let one = &selection.diverged[0];
+        assert_eq!(one.path, "src/lib.rs:1-4");
+        assert_eq!(one.bodies, 2);
+        assert_eq!(one.turns, vec![1, 2]);
+        assert!(!one.asking, "neither body belongs to the turn being asked");
+    }
+
+    /// The case the record calls the one that matters most: the history holds
+    /// the old bytes and the turn being asked holds what is on disk now.
+    #[test]
+    fn a_divergence_against_the_turn_being_asked_says_so() {
+        let counter = WordCounter::default();
+        let before = fragment("src/lib.rs:1-4", "fn main () { old }");
+        let after = fragment("src/lib.rs:1-4", "fn main () { new }");
+        let mut context = context_carrying(&[std::slice::from_ref(&before)], &counter);
+
+        let selection = context.select(
+            "now this",
+            std::slice::from_ref(&after),
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert_eq!(selection.diverged.len(), 1, "{:?}", selection.diverged);
+        let one = &selection.diverged[0];
+        assert_eq!(one.turns, vec![1], "the history's carrier, by id");
+        assert!(
+            one.asking,
+            "and the turn being asked, which has no id yet and is the reason \
+             this is a bool rather than an id among them",
+        );
+        assert_eq!(one.bodies, 2);
+    }
+
+    /// The three ways a window carries one path without contradicting itself.
+    /// A detector that fired on any of these would be noise, and the third is
+    /// the one that makes it a detector of *what was sent* rather than of what
+    /// is stored.
+    #[test]
+    fn an_unchanged_span_a_lone_span_and_a_pruned_one_are_not_divergences() {
+        let counter = WordCounter::default();
+        let same = fragment("src/lib.rs:1-4", "fn main () {}");
+
+        // Carried by two turns with the same bytes: one body, whichever rule
+        // renders it, so neither arm reports anything.
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&same), std::slice::from_ref(&same)],
+            &counter,
+        );
+        for repeat in [Repeat::Once, Repeat::Always] {
+            let selection = context.select(
+                "now this",
+                &[],
+                Budget::new(8192, 0, Eviction::Turn).repeating(repeat),
+                &counter,
+            );
+            assert!(
+                selection.diverged.is_empty(),
+                "{repeat:?}: {:?}",
+                selection.diverged,
+            );
+        }
+
+        // One turn, one span: nothing to disagree with.
+        let mut lone = context_carrying(&[std::slice::from_ref(&same)], &counter);
+        let selection = lone.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+        assert!(selection.diverged.is_empty());
+
+        // And the one that decides what the detector is reading. The old body
+        // is behind the prune line, so it is a citation rather than bytes — the
+        // model is shown one body and there is nothing to be wrong about, even
+        // though `code_context` still holds both.
+        let before = fragment(
+            "src/lib.rs:1-9",
+            "fn main () { let a = one two three four }",
+        );
+        let after = fragment(
+            "src/lib.rs:1-9",
+            "fn main () { let a = five six seven eight }",
+        );
+        let mut pruning = context_carrying(
+            &[
+                std::slice::from_ref(&before),
+                std::slice::from_ref(&before),
+                std::slice::from_ref(&after),
+            ],
+            &counter,
+        );
+        let selection = pruning.select(
+            "now this",
+            &[],
+            Budget::new(50, 0, Eviction::Turn).pruning(Prune::Behind),
+            &counter,
+        );
+        assert!(selection.pruned > 0, "the point of the case");
+        let rendered: usize = user_messages(&selection)
+            .iter()
+            .filter(|m| m.contains("one two three four"))
+            .count();
+        assert_eq!(
+            rendered, 0,
+            "the stale body was pruned to a citation, so it was never sent",
+        );
+        assert!(
+            selection.diverged.is_empty(),
+            "and a detector reading what was sent says nothing: {:?}",
+            selection.diverged,
+        );
+    }
+
+    /// Two files diverging at once are two findings, and a third file that did
+    /// not move is not one of them.
+    #[test]
+    fn each_diverging_path_is_its_own_finding() {
+        let counter = WordCounter::default();
+        let old_a = fragment("a.rs:1-2", "fn a () { old }");
+        let new_a = fragment("a.rs:1-2", "fn a () { new }");
+        let old_b = fragment("b.rs:1-2", "fn b () { old }");
+        let new_b = fragment("b.rs:1-2", "fn b () { new }");
+        let steady = fragment("c.rs:1-2", "fn c () {}");
+
+        let mut context = context_carrying(
+            &[
+                &[old_a.clone(), old_b.clone(), steady.clone()],
+                &[new_a.clone(), new_b.clone(), steady.clone()],
+            ],
+            &counter,
+        );
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        let paths: Vec<&str> = selection
+            .diverged
+            .iter()
+            .map(|one| one.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["a.rs:1-2", "b.rs:1-2"],
+            "in the order the window first carried them, and c.rs is not among them",
+        );
+    }
+
+    /// Three bodies is three, not two. The count is what a frequency
+    /// measurement will be built on, so it has to mean what it says.
+    #[test]
+    fn the_body_count_is_distinct_bodies_and_not_carriers() {
+        let counter = WordCounter::default();
+        let one = fragment("src/lib.rs:1-4", "fn main () { one }");
+        let two = fragment("src/lib.rs:1-4", "fn main () { two }");
+        let three = fragment("src/lib.rs:1-4", "fn main () { three }");
+
+        let mut context = context_carrying(
+            &[
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&two),
+                // The first body again: a file edited and put back. Four
+                // carriers, three bodies.
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&three),
+            ],
+            &counter,
+        );
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert_eq!(selection.diverged.len(), 1);
+        assert_eq!(selection.diverged[0].bodies, 3);
+        assert_eq!(
+            selection.diverged[0].turns,
+            vec![1, 2, 4],
+            "turn 3 agreed with turn 1 byte for byte, so rule A deduped it and \
+             it sent nothing — and a detector over what was sent does not name \
+             a carrier that carried nothing",
+        );
+    }
+
+    /// The same corpus under the other arm, which is the control for the
+    /// sentence above: `Repeat::Always` dedups nothing, so turn 3 does send its
+    /// body and is named. Three bodies either way — the count is of distinct
+    /// bodies and both arms sent all three.
+    #[test]
+    fn the_arm_decides_which_carriers_are_named_and_not_how_many_bodies() {
+        let counter = WordCounter::default();
+        let one = fragment("src/lib.rs:1-4", "fn main () { one }");
+        let two = fragment("src/lib.rs:1-4", "fn main () { two }");
+        let three = fragment("src/lib.rs:1-4", "fn main () { three }");
+
+        let mut context = context_carrying(
+            &[
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&two),
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&three),
+            ],
+            &counter,
+        );
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Always),
+            &counter,
+        );
+
+        assert_eq!(selection.diverged.len(), 1);
+        assert_eq!(selection.diverged[0].bodies, 3);
+        assert_eq!(selection.diverged[0].turns, vec![1, 2, 3, 4]);
+    }
+
     fn user_messages(selection: &Selection) -> Vec<&String> {
         selection
             .messages
@@ -2521,8 +2931,39 @@ mod tests {
         assert!(!users[1].contains("src/lib.rs:1-4"));
     }
 
+    /// The arm that was the default until 2026-09-19, asked for by name.
+    ///
+    /// It stopped being what a `Budget` says when asked nothing and it did not
+    /// stop being an arm: every recording made before that date was rendered
+    /// this way, and a reader that cannot reproduce the arm cannot check the
+    /// run. The test kept its assertion and gained one line — which is the
+    /// whole of what the flip did to this rule's behaviour.
     #[test]
-    fn the_default_sends_it_in_every_turn_that_selected_it() {
+    fn asking_for_always_sends_it_in_every_turn_that_selected_it() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&shared), std::slice::from_ref(&shared)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Always),
+            &counter,
+        );
+
+        assert_eq!(
+            occurrences(&selection, "src/lib.rs:1-4"),
+            2,
+            "every recording on disk was made under this arm and must stay readable as it",
+        );
+    }
+
+    /// And the same corpus under no instruction at all, which is the flip.
+    #[test]
+    fn a_budget_asked_nothing_now_sends_a_shared_span_once() {
         let counter = WordCounter::default();
         let shared = fragment("src/lib.rs:1-4", "fn main () {}");
         let mut context = context_carrying(
@@ -2539,8 +2980,8 @@ mod tests {
 
         assert_eq!(
             occurrences(&selection, "src/lib.rs:1-4"),
-            2,
-            "every recording on disk was made under this arm and must stay readable as it",
+            1,
+            "rule A is what a run gets without asking, since 2026-09-19",
         );
     }
 
@@ -2715,7 +3156,12 @@ mod tests {
         let mut kept_more = 0;
 
         for limit in 20..90 {
-            let budget = Budget::new(limit, 0, Eviction::Turn);
+            // The baseline says `Always` out loud now that it is no longer what
+            // `Budget::new` hands back. Without the line this compares the rule
+            // against itself and the sweep below proves nothing — which is the
+            // failure mode a flipped default has in every one-flag-apart test
+            // in this file.
+            let budget = Budget::new(limit, 0, Eviction::Turn).repeating(Repeat::Always);
             let mut plain = context_carrying(&carried, &counter);
             let mut once = context_carrying(&carried, &counter);
 
@@ -2780,7 +3226,12 @@ mod tests {
         // Narrow enough that the window does not fit, wide enough that the
         // conversation does once the code is a citation — which is the whole
         // trade: nothing is evicted here.
-        let budget = Budget::new(50, 0, Eviction::Turn).pruning(Prune::Behind);
+        // `Always` by name: this corpus is one span carried by three turns,
+        // which is exactly what rule A collapses, so leaving the default in
+        // place would measure the two rules together and call it rule B.
+        let budget = Budget::new(50, 0, Eviction::Turn)
+            .repeating(Repeat::Always)
+            .pruning(Prune::Behind);
         let selection = context.select("now this", &[], budget, &counter);
 
         assert!(selection.pruned > 0, "the point of the case");
@@ -2814,7 +3265,7 @@ mod tests {
         );
         let carried: Vec<&[Fragment]> = vec![std::slice::from_ref(&span); 3];
 
-        let plain = Budget::new(40, 0, Eviction::Turn);
+        let plain = Budget::new(40, 0, Eviction::Turn).repeating(Repeat::Always);
         let mut without = context_carrying(&carried, &counter);
         let without = without.select("now this", &[], plain, &counter);
 
@@ -2845,7 +3296,9 @@ mod tests {
         let narrow = context.select(
             "now this",
             &[],
-            Budget::new(40, 0, Eviction::Turn).pruning(Prune::Behind),
+            Budget::new(40, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
+                .pruning(Prune::Behind),
             &counter,
         );
         assert!(narrow.pruned > 0, "the point of the case");
@@ -2853,7 +3306,9 @@ mod tests {
         let wide = context.select(
             "now this",
             &[],
-            Budget::new(8192, 0, Eviction::Turn).pruning(Prune::Behind),
+            Budget::new(8192, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
+                .pruning(Prune::Behind),
             &counter,
         );
         assert_eq!(
@@ -2926,7 +3381,9 @@ mod tests {
         let selection = context.select(
             "now this",
             &[],
-            Budget::new(40, 0, Eviction::Turn).pruning(Prune::Behind),
+            Budget::new(40, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
+                .pruning(Prune::Behind),
             &counter,
         );
         assert!(selection.pruned > 0, "the point of the case");
@@ -3301,6 +3758,7 @@ mod tests {
             "now this",
             &[],
             Budget::new(60, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
                 .pruning(Prune::Behind)
                 .citing(Results::Cited),
             &counter,

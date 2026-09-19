@@ -280,7 +280,7 @@ pub struct Settings {
     /// page can contradict — the same reason `posture` is on this struct. The
     /// wire words are the header's, so a page and a recording of the same
     /// session say the arm the same way. See
-    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`.
     repeat: agent_core::context::Repeat,
     prune: agent_core::context::Prune,
     results: agent_core::context::Results,
@@ -2172,6 +2172,19 @@ async fn begin_turn(
         }))
         .await;
     }
+    // One line per path, because each is its own finding and a render that
+    // found three has three things to say. Empty on every turn of a session
+    // that never edits a file it has quoted.
+    for one in selection.diverged.clone() {
+        app.publish(Event::Trace(TraceMessage::Diverged {
+            turn,
+            path: one.path,
+            turns: one.turns,
+            asking: one.asking,
+            bodies: one.bodies,
+        }))
+        .await;
+    }
     // Published before the call: this is what we decided to send. A turn that
     // gets cancelled has a budget too, which the old after-the-fact version
     // could not report.
@@ -2852,14 +2865,14 @@ async fn get_resend(State(state): State<AppRouterState>) -> Response {
 /// So B and C are applied live only when they are being turned **on**, and
 /// turning either off is written to the file and waits for the next session,
 /// which the response names rather than leaving to be discovered. See
-/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` §fourth.
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` §fourth.
 /// What a saved `[resend]` moves the **live** session onto, and what has to
 /// wait for the next one.
 ///
 /// Split out of the route because it is the part with an argument behind it:
 /// the route writes a file, and this decides what a running conversation may be
 /// told about it without costing it turns. See [`put_resend`] for that
-/// argument, and `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+/// argument, and `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
 /// §fourth for where it was made.
 fn resend_live(asked: crate::provider::Resend, live: Budget) -> (Budget, Vec<String>) {
     use agent_core::context::Prune;
@@ -3038,7 +3051,7 @@ struct NewSession {
     /// refuses one — and the refusal was withdrawn because it was borrowed
     /// along with the shape: a posture may not move because *its jobs were
     /// approved under it*, and these rules grant nothing and bound nothing.
-    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
     /// §third.
     #[serde(default)]
     repeat: Option<agent_core::context::Repeat>,
@@ -3328,7 +3341,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // and before anything is reset for the same reason everything else here is.
     // Until this they arrived once, at `serve`, and every session the process
     // ran shared them — which is what made them unchoosable from a page. See
-    // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 2.
+    // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 2.
     let sending = match asked.resend(machine_resend().await, sending.budget) {
         Some(budget) => Arc::new(sending.resending(budget)),
         None => sending,
@@ -3458,7 +3471,7 @@ async fn resume_session(
     // and before anything is reset for the same reason everything else here is.
     // Until this they arrived once, at `serve`, and every session the process
     // ran shared them — which is what made them unchoosable from a page. See
-    // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 2.
+    // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 2.
     let sending = match asked.resend(machine_resend().await, sending.budget) {
         Some(budget) => Arc::new(sending.resending(budget)),
         None => sending,
@@ -3881,7 +3894,7 @@ mod tests {
                     window_from: crate::provider::WindowFrom::Unset,
                     window_caveat: None,
                     reserve: 0,
-                    repeat: agent_core::context::Repeat::Always,
+                    repeat: agent_core::context::Repeat::Once,
                     prune: agent_core::context::Prune::Never,
                     results: agent_core::context::Results::Kept,
                     counter: agent_core::context::Counter::Approximate,
@@ -4018,7 +4031,7 @@ mod tests {
                 window_from: crate::provider::WindowFrom::Unset,
                 window_caveat: None,
                 reserve: 512,
-                repeat: agent_core::context::Repeat::Always,
+                repeat: agent_core::context::Repeat::Once,
                 prune: agent_core::context::Prune::Never,
                 results: agent_core::context::Results::Kept,
                 counter: agent_core::context::Counter::Approximate,
@@ -4211,17 +4224,19 @@ mod tests {
         view.posture = Some(host.clone());
         rendered_under(&mut view, &sending);
 
-        // The same destination and the same posture, under rule A.
-        let once = Destination {
+        // The same destination and the same posture, with rule A turned off —
+        // which is the direction that is a *move* since the default flipped,
+        // and the whole of what this test needs from the rule.
+        let always = Destination {
             budget: Budget {
-                repeat: agent_core::context::Repeat::Once,
+                repeat: agent_core::context::Repeat::Always,
                 ..sending.budget
             },
             ..mock_destination("mock", "mock")
         };
         let moved = retarget_header(
             &view,
-            &once,
+            &always,
             agent_core::context::Counter::Approximate,
             host.clone(),
         )
@@ -4238,7 +4253,7 @@ mod tests {
                 assert_eq!(
                     (repeat, prune, results),
                     (
-                        Some(agent_core::context::Repeat::Once),
+                        Some(agent_core::context::Repeat::Always),
                         Some(agent_core::context::Prune::Never),
                         Some(agent_core::context::Results::Kept)
                     ),
@@ -4326,7 +4341,10 @@ mod tests {
     fn a_saved_table_moves_a_running_session_only_where_moving_it_is_free() {
         use agent_core::context::{Prune, Repeat, Results};
 
-        let off = Budget::new(8192, 512, Eviction::Turn);
+        // By name for rule A, because `Budget::new` turns it on since
+        // 2026-09-19 and a variable called `off` that is not off would make
+        // both directions below read as the same case.
+        let off = Budget::new(8192, 512, Eviction::Turn).repeating(Repeat::Always);
         let on = Budget {
             repeat: Repeat::Once,
             prune: Prune::Behind,
