@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::{Counter, Evicted, Prune, Pruned, Repeat, Results};
+use crate::context::{Counter, Diverged, Evicted, Prune, Pruned, Repeat, Results};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource, Replaced};
 use crate::protocol::{ServerMessage, TurnId};
 use crate::record::{self, RecordLine};
@@ -163,6 +163,15 @@ pub struct TurnView {
     /// this is the other half of it.
     #[serde(default)]
     pub pruned_by: Option<TurnId>,
+    /// Paths this turn's prompt sent under more than one body — the same file,
+    /// twice, with different contents.
+    ///
+    /// The other side of the sentence above: here the transcript and the prompt
+    /// do not merely differ, the prompt disagrees with *itself*. Empty on every
+    /// turn of a session that never edits a file it has quoted, which is every
+    /// recording made before `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+    #[serde(default)]
+    pub diverged: Vec<Diverged>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -186,6 +195,7 @@ impl TurnView {
             evicted_by: None,
             cited: None,
             pruned_by: None,
+            diverged: Vec::new(),
             started_at_ms,
             ended_at_ms: None,
         }
@@ -537,6 +547,24 @@ impl SessionView {
                     });
                 }
             }
+            TraceMessage::Diverged {
+                turn,
+                path,
+                turns,
+                asking,
+                bodies,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    // Pushed rather than assigned: one line per path, and a
+                    // render that found three of them sends three.
+                    view.diverged.push(Diverged {
+                        path: path.clone(),
+                        turns: turns.clone(),
+                        asking: *asking,
+                        bodies: *bodies,
+                    });
+                }
+            }
             TraceMessage::Pruned {
                 turn,
                 turns,
@@ -723,6 +751,63 @@ mod tests {
                 },
             },
         ]
+    }
+
+    /// A `diverged` trace reaches the turn it describes, one entry per path.
+    ///
+    /// The fold is where a debug client learns this: `Selection` carries the
+    /// finding out of `select`, the caller puts it on the wire, and this is the
+    /// step that puts it back together for a reader. See
+    /// `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+    #[test]
+    fn a_diverged_trace_lands_on_the_turn_whose_prompt_carried_it() {
+        let mut view = SessionView::from_record("completed", &lines());
+        assert!(
+            view.turn(1).unwrap().diverged.is_empty(),
+            "a recording that says nothing leaves it empty, which is every \
+             stream written before format 12",
+        );
+
+        view.apply_trace(
+            40,
+            &TraceMessage::Diverged {
+                turn: 1,
+                path: "src/lib.rs:1-4".into(),
+                turns: vec![1],
+                asking: true,
+                bodies: 2,
+            },
+        );
+        view.apply_trace(
+            40,
+            &TraceMessage::Diverged {
+                turn: 1,
+                path: "src/other.rs:9-20".into(),
+                turns: vec![1],
+                asking: false,
+                bodies: 3,
+            },
+        );
+
+        let turn = view.turn(1).unwrap();
+        assert_eq!(turn.diverged.len(), 2, "two paths, two findings");
+        assert_eq!(turn.diverged[0].path, "src/lib.rs:1-4");
+        assert!(turn.diverged[0].asking);
+        assert_eq!(turn.diverged[1].bodies, 3);
+
+        // A line naming a turn the view never saw is ignored rather than
+        // panicking, which is what every other arm of `apply_trace` does.
+        view.apply_trace(
+            40,
+            &TraceMessage::Diverged {
+                turn: 99,
+                path: "src/gone.rs:1-2".into(),
+                turns: vec![99],
+                asking: false,
+                bodies: 2,
+            },
+        );
+        assert_eq!(view.turn(1).unwrap().diverged.len(), 2);
     }
 
     #[test]

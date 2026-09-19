@@ -98,6 +98,37 @@ pub enum TraceMessage {
         tokens: u32,
         counter: Counter,
     },
+    /// A path the prompt just sent under more than one body: the same file,
+    /// twice, with different contents and nothing saying which is true.
+    ///
+    /// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+    /// `code_context` is written once when a turn closes and never refreshed,
+    /// while every turn re-reads its own spans, so a file edited between two
+    /// turns goes out as two blocks under one `// path` header.
+    ///
+    /// A trace and not protocol, on the same argument [`Self::Pruned`] is a
+    /// trace: nothing about the conversation is different — every turn is still
+    /// asked, answered and in the transcript. What is different is what the
+    /// prompt says, and facts about the prompt are what this channel is.
+    ///
+    /// Emitted per render and only where there is something to say, so a
+    /// session that never edits a file it has quoted never sees one. It reports
+    /// the defect; it does not repair it, and the record argues the repair and
+    /// deliberately does not take it.
+    Diverged {
+        turn: TurnId,
+        /// The span, as the fragment names it, line range included.
+        path: String,
+        /// The turns of the history that carried it, oldest first. The turn
+        /// being asked is `turn` above and is named by `asking` rather than
+        /// here, because it has no id until it is pushed.
+        turns: Vec<TurnId>,
+        /// Whether the turn being asked is one of the carriers — the case that
+        /// matters most, because its bytes are the ones read this turn.
+        asking: bool,
+        /// Distinct bodies sent under this path. At least two.
+        bodies: usize,
+    },
     /// A model call *after* the first one of a turn: the tool-use round trip,
     /// or a schema retry.
     ///

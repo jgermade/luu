@@ -2508,6 +2508,17 @@ pub async fn run() -> Result<()> {
                     counter: pruned.counter,
                 }));
             }
+            // One line per path, for the reason `serve` emits them the same
+            // way: each is its own finding.
+            for one in selection.diverged.clone() {
+                recorder.write(&Event::Trace(TraceMessage::Diverged {
+                    turn,
+                    path: one.path,
+                    turns: one.turns,
+                    asking: one.asking,
+                    bodies: one.bodies,
+                }));
+            }
             // Before the call, not after: this is what we decided to send, and
             // a cancelled turn has it too.
             recorder.write(&Event::Trace(TraceMessage::Budget {

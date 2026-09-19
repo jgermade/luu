@@ -87,7 +87,18 @@ use crate::trace::TraceMessage;
 /// under the defaults, but the file does not say so, and inventing the field on
 /// the reader's behalf would put a claim in a record the record never made.
 /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`.
-pub const FORMAT: u32 = 11;
+///
+/// 12: a `diverged` **trace** line, naming a path the prompt sent under more
+/// than one body. `code_context` is written once when a turn closes and never
+/// refreshed while every turn re-reads its own spans, so a file edited between
+/// two turns goes out as two blocks under one `// path` header — and until this
+/// line, nothing anywhere said so. A trace and not protocol, on the same
+/// argument the `pruned` line is a trace: every turn is still asked, answered
+/// and in the transcript, and what changed is the prompt. A stream written
+/// before this simply has no such line, which is not the same claim as a stream
+/// that has none because nothing diverged — the format number is what tells
+/// those two apart. See `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+pub const FORMAT: u32 = 12;
 
 /// The posture a session ran under, as a recording names it.
 ///

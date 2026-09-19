@@ -2172,6 +2172,19 @@ async fn begin_turn(
         }))
         .await;
     }
+    // One line per path, because each is its own finding and a render that
+    // found three has three things to say. Empty on every turn of a session
+    // that never edits a file it has quoted.
+    for one in selection.diverged.clone() {
+        app.publish(Event::Trace(TraceMessage::Diverged {
+            turn,
+            path: one.path,
+            turns: one.turns,
+            asking: one.asking,
+            bodies: one.bodies,
+        }))
+        .await;
+    }
     // Published before the call: this is what we decided to send. A turn that
     // gets cancelled has a budget too, which the old after-the-fact version
     // could not report.

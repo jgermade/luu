@@ -424,6 +424,15 @@ pub struct Selection {
     /// What this selection pruned, if the line moved. `None` on a selection
     /// that pruned nothing, which is every one made under [`Prune::Never`].
     pub pruning: Option<Pruned>,
+    /// Paths this render sent under more than one body, in the order the window
+    /// first carried them.
+    ///
+    /// A `Vec` rather than the `Option<_>` the two fields above use, because
+    /// there is no single event here to be absent: each path is its own finding
+    /// and an empty vector is the ordinary case. Every other selection in this
+    /// session produces one too — it is the window that is being described, not
+    /// a thing that happened to it.
+    pub diverged: Vec<Diverged>,
 }
 
 /// What one selection dropped from the window — and it stays dropped: the
@@ -470,6 +479,47 @@ pub struct Pruned {
     pub tokens: u32,
     /// Which counter produced `tokens`.
     pub counter: Counter,
+}
+
+/// One path the rendered prompt carried with more than one body.
+///
+/// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`: `code_context`
+/// is written once at `push_turn_with_steps` and never refreshed, while every
+/// turn re-reads its own spans through the sandbox. So a file edited between two
+/// turns is sent twice under one `// path` header, with different contents and
+/// nothing saying which is true.
+///
+/// A report and not a repair. Nothing in the render behaves differently because
+/// this is populated — the fix is argued in that record and deliberately not
+/// taken, because it trades measured prefix reuse for truthfulness and the
+/// frequency it turns on has never been measured.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Diverged {
+    /// The span, as the fragment names it — the whole spec, line range
+    /// included. Two *overlapping* ranges of one file are two paths here and
+    /// their disagreement is not caught; see that record's §Still open.
+    pub path: String,
+    /// The turns of the *history* that carried it, oldest first, one entry per
+    /// turn and not per body: a reader wants to know where to look, and the
+    /// bodies themselves are in the prompt this selection just built.
+    pub turns: Vec<TurnId>,
+    /// Whether the turn being asked is one of the carriers.
+    ///
+    /// A `bool` beside the ids rather than an id among them, because
+    /// [`Context::select`] runs *before* the turn is pushed and it has no id
+    /// yet — inventing the next one would put a number in a report that the
+    /// caller had not handed out and may not hand out, since a turn that
+    /// produces nothing is never pushed.
+    ///
+    /// It is also the carrier that matters most, and the reason this is
+    /// reported at all rather than treated as a curiosity about old turns: the
+    /// turn being asked holds the bytes that were read *this* turn, so a
+    /// divergence including it is the history contradicting what is on disk
+    /// right now.
+    pub asking: bool,
+    /// How many *distinct* bodies went out under this path. Always at least
+    /// two, because one is not a divergence and is never recorded.
+    pub bodies: usize,
 }
 
 /// One unit of rendered history: a live turn, or a closed job folded to its
@@ -1270,6 +1320,12 @@ impl Context {
         // keeps the prefix: the block above the newest message is byte-identical
         // to the one the previous call sent, exactly as it was before this rule.
         let mut shown: HashSet<&Fragment> = HashSet::new();
+        // What actually went out, per path, in window order. Recorded beside
+        // the render rather than derived from `messages` afterwards, because
+        // parsing back the text we just wrote is the thing `code_context` is
+        // stored separately to avoid.
+        // `None` is the turn being asked, which has no id yet.
+        let mut sent: Vec<(&str, &str, Option<TurnId>)> = Vec::new();
         for item in &items {
             let tokens = self.item_tokens(item, counter, self.pruned, budget.results);
             match item {
@@ -1307,6 +1363,10 @@ impl Context {
                     // nothing costs exactly what it has always cost, and every
                     // recording made before `Repeat` reads unchanged.
                     history_tokens += tokens.saturating_sub(fragments_tokens(&dropped, counter));
+                    sent.extend(
+                        kept.iter()
+                            .map(|fragment| (&*fragment.path, &*fragment.text, Some(turn.id))),
+                    );
                     messages.push(Message::user(user_text(kept, &turn.prompt)));
                     // Each step is a real exchange, so the alternation holds and
                     // no chat template has to decide what two user messages in a
@@ -1344,7 +1404,13 @@ impl Context {
             true => code_tokens,
             false => counter.count(&fragments_text(kept.iter().copied())),
         };
+        sent.extend(
+            kept.iter()
+                .map(|fragment| (&*fragment.path, &*fragment.text, None)),
+        );
         messages.push(Message::user(user_text(kept, prompt)));
+
+        let diverged = diverged_paths(&sent);
 
         let mut buckets = vec![
             Bucket::new("system", system_tokens),
@@ -1374,6 +1440,7 @@ impl Context {
             pruned: self.pruned,
             eviction,
             pruning,
+            diverged,
         }
     }
 
@@ -1679,6 +1746,67 @@ fn split_shown<'a>(
             .iter()
             .partition(|fragment| shown.insert(fragment)),
     }
+}
+
+/// Every path this render sent under more than one body, in the order the
+/// window first carried each one.
+///
+/// Over what was **sent**, not over what is stored. A turn below the prune line
+/// has given its span up and an evicted turn is gone, so a detector reading
+/// `code_context` would report contradictions the model was never shown — which
+/// is the same mistake `Pruned::tokens` documents one field along, where the
+/// saving is the difference of two windows rather than the sum of the spans.
+///
+/// `Vec` and a linear scan rather than a map: a window holds tens of fragments,
+/// the order is part of the answer, and a `HashMap` here would cost an
+/// allocation per path to save comparisons nobody can measure.
+fn diverged_paths(sent: &[(&str, &str, Option<TurnId>)]) -> Vec<Diverged> {
+    /// One path's tally while the scan runs. Named fields rather than a tuple
+    /// because three of the four are collections and `.1` against `.2` at a
+    /// call site is the kind of thing that reads fine when written.
+    struct Carried<'a> {
+        path: &'a str,
+        bodies: Vec<&'a str>,
+        turns: Vec<TurnId>,
+        asking: bool,
+    }
+
+    // One entry per path, in the order the window first carried it. Built in
+    // full and filtered after, because deciding as we go would have to go back
+    // for the carriers of the bodies that came before the disagreement did.
+    let mut carried: Vec<Carried> = Vec::new();
+    for (path, text, turn) in sent {
+        let entry = match carried.iter().position(|one| one.path == *path) {
+            Some(at) => &mut carried[at],
+            None => {
+                carried.push(Carried {
+                    path,
+                    bodies: Vec::new(),
+                    turns: Vec::new(),
+                    asking: false,
+                });
+                carried.last_mut().expect("just pushed")
+            }
+        };
+        if !entry.bodies.contains(text) {
+            entry.bodies.push(text);
+        }
+        match turn {
+            Some(id) => entry.turns.push(*id),
+            None => entry.asking = true,
+        }
+    }
+
+    carried
+        .into_iter()
+        .filter(|one| one.bodies.len() > 1)
+        .map(|one| Diverged {
+            path: one.path.to_string(),
+            turns: one.turns,
+            asking: one.asking,
+            bodies: one.bodies.len(),
+        })
+        .collect()
 }
 
 /// The fragments alone, as they are rendered inside a user message.
@@ -2499,6 +2627,265 @@ mod tests {
             );
         }
         context
+    }
+
+    /// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`, pinned as
+    /// the behaviour it currently is rather than as the behaviour it should be.
+    ///
+    /// This asserts that the prompt **does** contain the contradiction, because
+    /// the fix is argued in that record and deliberately not taken: it trades
+    /// measured prefix reuse for truthfulness and the frequency it turns on has
+    /// never been measured. When the fix lands this test changes, and the diff
+    /// that changes it is the point — a defect nothing detects is one nobody
+    /// can decide about.
+    #[test]
+    fn an_edited_span_goes_out_twice_under_one_path_and_is_reported() {
+        let counter = WordCounter::default();
+        let before = fragment("src/lib.rs:1-4", "fn main () { old }");
+        let after = fragment("src/lib.rs:1-4", "fn main () { new }");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&before), std::slice::from_ref(&after)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        // Rule A is the default and does not collapse these, because a
+        // fragment's identity is its path *and* its bytes — so the dedup is
+        // working exactly as specified and the prompt is still wrong.
+        assert_eq!(occurrences(&selection, "src/lib.rs:1-4"), 2);
+        let users = user_messages(&selection);
+        assert!(
+            users[0].contains("old") && users[1].contains("new"),
+            "{users:?}"
+        );
+
+        assert_eq!(selection.diverged.len(), 1, "{:?}", selection.diverged);
+        let one = &selection.diverged[0];
+        assert_eq!(one.path, "src/lib.rs:1-4");
+        assert_eq!(one.bodies, 2);
+        assert_eq!(one.turns, vec![1, 2]);
+        assert!(!one.asking, "neither body belongs to the turn being asked");
+    }
+
+    /// The case the record calls the one that matters most: the history holds
+    /// the old bytes and the turn being asked holds what is on disk now.
+    #[test]
+    fn a_divergence_against_the_turn_being_asked_says_so() {
+        let counter = WordCounter::default();
+        let before = fragment("src/lib.rs:1-4", "fn main () { old }");
+        let after = fragment("src/lib.rs:1-4", "fn main () { new }");
+        let mut context = context_carrying(&[std::slice::from_ref(&before)], &counter);
+
+        let selection = context.select(
+            "now this",
+            std::slice::from_ref(&after),
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert_eq!(selection.diverged.len(), 1, "{:?}", selection.diverged);
+        let one = &selection.diverged[0];
+        assert_eq!(one.turns, vec![1], "the history's carrier, by id");
+        assert!(
+            one.asking,
+            "and the turn being asked, which has no id yet and is the reason \
+             this is a bool rather than an id among them",
+        );
+        assert_eq!(one.bodies, 2);
+    }
+
+    /// The three ways a window carries one path without contradicting itself.
+    /// A detector that fired on any of these would be noise, and the third is
+    /// the one that makes it a detector of *what was sent* rather than of what
+    /// is stored.
+    #[test]
+    fn an_unchanged_span_a_lone_span_and_a_pruned_one_are_not_divergences() {
+        let counter = WordCounter::default();
+        let same = fragment("src/lib.rs:1-4", "fn main () {}");
+
+        // Carried by two turns with the same bytes: one body, whichever rule
+        // renders it, so neither arm reports anything.
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&same), std::slice::from_ref(&same)],
+            &counter,
+        );
+        for repeat in [Repeat::Once, Repeat::Always] {
+            let selection = context.select(
+                "now this",
+                &[],
+                Budget::new(8192, 0, Eviction::Turn).repeating(repeat),
+                &counter,
+            );
+            assert!(
+                selection.diverged.is_empty(),
+                "{repeat:?}: {:?}",
+                selection.diverged,
+            );
+        }
+
+        // One turn, one span: nothing to disagree with.
+        let mut lone = context_carrying(&[std::slice::from_ref(&same)], &counter);
+        let selection = lone.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+        assert!(selection.diverged.is_empty());
+
+        // And the one that decides what the detector is reading. The old body
+        // is behind the prune line, so it is a citation rather than bytes — the
+        // model is shown one body and there is nothing to be wrong about, even
+        // though `code_context` still holds both.
+        let before = fragment(
+            "src/lib.rs:1-9",
+            "fn main () { let a = one two three four }",
+        );
+        let after = fragment(
+            "src/lib.rs:1-9",
+            "fn main () { let a = five six seven eight }",
+        );
+        let mut pruning = context_carrying(
+            &[
+                std::slice::from_ref(&before),
+                std::slice::from_ref(&before),
+                std::slice::from_ref(&after),
+            ],
+            &counter,
+        );
+        let selection = pruning.select(
+            "now this",
+            &[],
+            Budget::new(50, 0, Eviction::Turn).pruning(Prune::Behind),
+            &counter,
+        );
+        assert!(selection.pruned > 0, "the point of the case");
+        let rendered: usize = user_messages(&selection)
+            .iter()
+            .filter(|m| m.contains("one two three four"))
+            .count();
+        assert_eq!(
+            rendered, 0,
+            "the stale body was pruned to a citation, so it was never sent",
+        );
+        assert!(
+            selection.diverged.is_empty(),
+            "and a detector reading what was sent says nothing: {:?}",
+            selection.diverged,
+        );
+    }
+
+    /// Two files diverging at once are two findings, and a third file that did
+    /// not move is not one of them.
+    #[test]
+    fn each_diverging_path_is_its_own_finding() {
+        let counter = WordCounter::default();
+        let old_a = fragment("a.rs:1-2", "fn a () { old }");
+        let new_a = fragment("a.rs:1-2", "fn a () { new }");
+        let old_b = fragment("b.rs:1-2", "fn b () { old }");
+        let new_b = fragment("b.rs:1-2", "fn b () { new }");
+        let steady = fragment("c.rs:1-2", "fn c () {}");
+
+        let mut context = context_carrying(
+            &[
+                &[old_a.clone(), old_b.clone(), steady.clone()],
+                &[new_a.clone(), new_b.clone(), steady.clone()],
+            ],
+            &counter,
+        );
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        let paths: Vec<&str> = selection
+            .diverged
+            .iter()
+            .map(|one| one.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["a.rs:1-2", "b.rs:1-2"],
+            "in the order the window first carried them, and c.rs is not among them",
+        );
+    }
+
+    /// Three bodies is three, not two. The count is what a frequency
+    /// measurement will be built on, so it has to mean what it says.
+    #[test]
+    fn the_body_count_is_distinct_bodies_and_not_carriers() {
+        let counter = WordCounter::default();
+        let one = fragment("src/lib.rs:1-4", "fn main () { one }");
+        let two = fragment("src/lib.rs:1-4", "fn main () { two }");
+        let three = fragment("src/lib.rs:1-4", "fn main () { three }");
+
+        let mut context = context_carrying(
+            &[
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&two),
+                // The first body again: a file edited and put back. Four
+                // carriers, three bodies.
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&three),
+            ],
+            &counter,
+        );
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        assert_eq!(selection.diverged.len(), 1);
+        assert_eq!(selection.diverged[0].bodies, 3);
+        assert_eq!(
+            selection.diverged[0].turns,
+            vec![1, 2, 4],
+            "turn 3 agreed with turn 1 byte for byte, so rule A deduped it and \
+             it sent nothing — and a detector over what was sent does not name \
+             a carrier that carried nothing",
+        );
+    }
+
+    /// The same corpus under the other arm, which is the control for the
+    /// sentence above: `Repeat::Always` dedups nothing, so turn 3 does send its
+    /// body and is named. Three bodies either way — the count is of distinct
+    /// bodies and both arms sent all three.
+    #[test]
+    fn the_arm_decides_which_carriers_are_named_and_not_how_many_bodies() {
+        let counter = WordCounter::default();
+        let one = fragment("src/lib.rs:1-4", "fn main () { one }");
+        let two = fragment("src/lib.rs:1-4", "fn main () { two }");
+        let three = fragment("src/lib.rs:1-4", "fn main () { three }");
+
+        let mut context = context_carrying(
+            &[
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&two),
+                std::slice::from_ref(&one),
+                std::slice::from_ref(&three),
+            ],
+            &counter,
+        );
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Always),
+            &counter,
+        );
+
+        assert_eq!(selection.diverged.len(), 1);
+        assert_eq!(selection.diverged[0].bodies, 3);
+        assert_eq!(selection.diverged[0].turns, vec![1, 2, 3, 4]);
     }
 
     fn user_messages(selection: &Selection) -> Vec<&String> {
