@@ -15,7 +15,7 @@ use agent_core::context::{
     Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat, Results,
 };
 use agent_core::fragment;
-use agent_core::protocol::{ClientMessage as ServerBoundMessage, ServerMessage};
+use agent_core::protocol::{self, ClientMessage as ServerBoundMessage, ServerMessage};
 use agent_core::repo_map::{Order, RepoMap};
 use agent_core::sandbox::{Access, Enforcement, Sandbox, SandboxPolicy};
 use agent_core::task::{ApprovedBy, ClosedBy, Plan, PlanSource};
@@ -1654,6 +1654,26 @@ fn load_fragment(sandbox: &Sandbox, spec: &str) -> Result<Fragment> {
         .with_context(|| format!("fragment {spec}"))
 }
 
+/// A turn's code as the wire carries it: the specs, and who chose each one.
+///
+/// `by_hand` is where the person's fragments end and the selector's spans
+/// begin — the two live in one `Vec<Fragment>` from the moment they are joined
+/// and nothing downstream can take them apart, so the boundary has to be
+/// handed in rather than inferred. See
+/// `RECORD/2026-09-19.fragments-by-reference.completed.md` §Two things.
+fn grounded_spans(code: &[Fragment], by_hand: usize) -> Vec<protocol::Grounding> {
+    code.iter()
+        .enumerate()
+        .map(|(at, fragment)| protocol::Grounding {
+            spec: fragment.path.clone(),
+            origin: match at < by_hand {
+                true => protocol::Origin::Attached,
+                false => protocol::Origin::Selected,
+            },
+        })
+        .collect()
+}
+
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
@@ -2401,6 +2421,13 @@ pub async fn run() -> Result<()> {
         // Taken, not copied: these fragments are this turn's, and the next turn
         // starts with none.
         let mut code = std::mem::take(&mut attached);
+        // Where the person's end and the selector's begin. The two are one
+        // `Vec<Fragment>` from here on and nothing downstream can take them
+        // apart, which is the finding
+        // `RECORD/2026-09-19.fragments-by-reference.completed.md` §Two things
+        // records — so the boundary is caught here, at the one moment it is
+        // still known, and carried on the wire.
+        let by_hand = code.len();
         // And the ones nobody typed: what this turn's own text points at, on
         // top of what was attached by hand. The person's `--fragment` goes
         // first and keeps its whole budget — a selector that could crowd out an
@@ -2475,6 +2502,16 @@ pub async fn run() -> Result<()> {
                 prompt: prompt.clone(),
                 job,
             }));
+            // What it was asked *with*, by reference, straight after what was
+            // asked — the two halves of the same question, and the only thing
+            // a resume can read again. The order is the order they are fused
+            // into the message, so the person's come first.
+            if !code.is_empty() {
+                recorder.write(&Event::Protocol(ServerMessage::Grounded {
+                    turn,
+                    spans: grounded_spans(&code, by_hand),
+                }));
+            }
             // Before the prompt it explains, so a file reads in the order the
             // session happened: the history was cut, then this is what was
             // sent.
@@ -2946,11 +2983,23 @@ mod tests {
     /// It parses with `parse_script`, not with a second reader — a guard that
     /// reads the directives differently from the program guards a different
     /// file.
+    ///
+    /// **A script is checked against the tree it runs against, which is not
+    /// always this one.** `edit-reread.txt` edits the files it reads, so it
+    /// runs against a copy of `scripts/tasks/edit-reread/` and its paths are
+    /// relative to that; a directory beside a script and carrying its name is
+    /// that script's tree, and everything else resolves against the repository
+    /// root as it always has. The rule is a convention rather than a directive
+    /// because it changes only where a path is *looked up*: the script itself
+    /// is parsed by `parse_script` like every other, and inventing a `##
+    /// project:` the runner would have to ignore would put a line in a corpus
+    /// that means nothing at run time.
     #[test]
     fn every_script_names_a_file_that_exists() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dir = root.join("scripts/tasks");
         let mut checked = 0;
+        let mut rooted_elsewhere = 0;
 
         let mut scripts: Vec<PathBuf> = std::fs::read_dir(&dir)
             .expect("scripts/tasks")
@@ -2964,6 +3013,16 @@ mod tests {
             let name = script.file_name().unwrap().to_string_lossy().into_owned();
             let text = std::fs::read_to_string(script).expect(&name);
             let steps = parse_script(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
+
+            // The tree this script's paths are relative to: the directory
+            // beside it carrying its own name, or the repository.
+            let beside = script.with_extension("");
+            let root = if beside.is_dir() {
+                rooted_elsewhere += 1;
+                beside
+            } else {
+                root.clone()
+            };
 
             // A `## fragment:` carries a range, and a range past the end is an
             // error at run time — so it is one here too, where it is cheap.
@@ -3013,6 +3072,17 @@ mod tests {
         assert!(
             checked > 0,
             "the scripts named no paths at all — did the directives change?"
+        );
+        // Without this the convention could be deleted — the directory renamed,
+        // the corpus left pointing at it — and every remaining path would
+        // resolve against the repository root, where `src/greeting.rs` does not
+        // exist, so the failure would at least be loud. What it could *not*
+        // catch is the other direction: a script whose tree quietly stops being
+        // consulted because nothing here says one ever was.
+        assert!(
+            rooted_elsewhere > 0,
+            "no script has a tree of its own beside it — \
+             did `scripts/tasks/edit-reread/` move?"
         );
     }
 

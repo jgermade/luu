@@ -1,0 +1,16 @@
+{"channel":"trace","at_ms":104,"message":{"type":"diverged","turn":6,"path":"src/greeting.rs:1-10","turns":[1],"asking":true,"bodies":2}}
+{"channel":"trace","at_ms":104,"message":{"type":"diverged","turn":6,"path":"src/greeting.rs:8-10","turns":[1],"asking":true,"bodies":2}}
+{"channel":"trace","at_ms":106,"message":{"type":"diverged","turn":7,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":106,"message":{"type":"diverged","turn":7,"path":"src/greeting.rs:8-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":107,"message":{"type":"diverged","turn":8,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":107,"message":{"type":"diverged","turn":8,"path":"src/greeting.rs:8-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":129,"message":{"type":"diverged","turn":9,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":129,"message":{"type":"diverged","turn":9,"path":"src/greeting.rs:8-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":151,"message":{"type":"diverged","turn":10,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":151,"message":{"type":"diverged","turn":10,"path":"src/greeting.rs:8-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":153,"message":{"type":"diverged","turn":11,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":153,"message":{"type":"diverged","turn":11,"path":"src/greeting.rs:8-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":173,"message":{"type":"diverged","turn":12,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":true,"bodies":3}}
+{"channel":"trace","at_ms":173,"message":{"type":"diverged","turn":12,"path":"src/greeting.rs:8-10","turns":[1,6],"asking":true,"bodies":3}}
+{"channel":"trace","at_ms":175,"message":{"type":"diverged","turn":13,"path":"src/greeting.rs:1-10","turns":[1,6,12],"asking":false,"bodies":3}}
+{"channel":"trace","at_ms":175,"message":{"type":"diverged","turn":13,"path":"src/greeting.rs:8-10","turns":[1,6,12],"asking":false,"bodies":3}}

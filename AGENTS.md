@@ -248,6 +248,14 @@ for script in grounded grounded-tasks; do
     --context-limit 8192 --reserve 512 --record $script.jsonl
 done
 
+# the one corpus that edits what it reads, against a copy of its own committed
+# tree rather than this one — thirteen turns, four files, and `diverged` lines
+# in the recording wherever a prompt ends up carrying one path under two bodies.
+# The second arm is the same line with `--select-tokens 1024`.
+SCRATCH=$(mktemp -d) && cp -r scripts/tasks/edit-reread/src "$SCRATCH/src"
+(cd "$SCRATCH" && luu chat --script "$OLDPWD/scripts/tasks/edit-reread.txt" \
+  --allow-write . --context-limit 8192 --record "$SCRATCH/run.jsonl")
+
 ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures   # record the replay fixtures
 ```
 
@@ -397,7 +405,14 @@ The rule that keeps it honest is a test: `fold(record) == load(store, id)`, over
 recordings produced by running the binary. **Resuming is the second fold**, which
 had to be argued before it was written: `SessionStore::resume` folds the view
 back into a `Context`, and `serve` lists, creates, resumes and deletes stored
-sessions. See
+sessions. **It takes a sandbox**, because a turn's code comes back by
+**reference**: the store holds each span's spec on a `grounded` protocol line
+and never its bytes, so a resume *reads it again* through the posture it is
+being resumed under. Bytes in a store come back without being re-read, which
+would hand a narrowed session a file it may no longer open; a span this posture
+cannot read comes back as a citation naming why, and the resume says which ones.
+See
+[`RECORD/2026-09-19.fragments-by-reference.completed.md`](RECORD/2026-09-19.fragments-by-reference.completed.md),
 [`RECORD/2026-09-02.sessions-in-sqlite.completed.md`](RECORD/2026-09-02.sessions-in-sqlite.completed.md),
 [`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md)
 and
@@ -469,8 +484,22 @@ wrongly, and pay for it every turn. A path the sandbox refuses is an error, not
 a warning: a run that quietly dropped its grounding answers out of the model's
 training and looks like it worked. This is what fills the `code` bucket, which
 was zero in every recording before the surface existed — and why every script in
-`scripts/tasks/` except the grounded pair is ungrounded Q&A that a 7B will answer
-from training. See `RECORD/2026-08-27.grounded-fold-probe.completed.md`.
+`scripts/tasks/` except the grounded pair and `edit-reread.txt` is ungrounded Q&A
+that a 7B will answer from training. See
+`RECORD/2026-08-27.grounded-fold-probe.completed.md`.
+
+**`edit-reread.txt` is the one that edits what it grounds**, and it is the only
+script here whose paths are relative to a tree that is not this one: it runs
+against a copy of `scripts/tasks/edit-reread/`, because every prompt that
+changes a file changes it for the rest of the session and a corpus that rewrites
+its own fixture in place is a corpus that measures the last run. A directory
+beside a script and carrying its name is that script's tree — a convention and
+not a directive, so `every_script_names_a_file_that_exists` checks its ranges
+there while `parse_script` reads the script exactly like every other one. It is
+also why that tree is four leaf files and has no `lib.rs`: a fixture inside this
+repository is inside this repository's own map, and the module root that was
+there first cost `select_probe`'s graph-hop arm two first-place hits. See
+`RECORD/2026-09-19.a-corpus-that-edits.completed.md`.
 
 `--context-limit` is the model's window (`0` means unknown: no budget, no
 eviction), `--reserve` is what is held back for the answer, `--evict` is how the

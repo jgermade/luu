@@ -261,10 +261,22 @@ fn a_resumed_context_produces_matching_budget_and_prompt_selection() {
     store.save(&folded, None).expect("saving");
 
     let counter = ApproximateCounter;
-    let mut resumed = store
-        .resume(&id, "system preamble", "tool definitions", "", &counter)
+    // No sandbox: this asks whether the *fold* comes back, and `one-task`
+    // grounds nothing. What a sandbox restores is `edit_reread_probe.rs`'s and
+    // `context.rs`'s question.
+    let restored = store
+        .resume(
+            &id,
+            "system preamble",
+            "tool definitions",
+            "",
+            &counter,
+            None,
+        )
         .expect("resuming")
         .expect("session exists");
+    assert!(restored.unreadable.is_empty(), "nothing to read back");
+    let mut resumed = restored.context;
 
     assert_eq!(resumed.turns().len(), folded.turns.len());
     assert_eq!(resumed.jobs().len(), folded.jobs.len());
@@ -313,13 +325,161 @@ fn a_resumed_context_produces_matching_budget_and_prompt_selection() {
     store.save(&ev_folded, None).expect("saving eviction");
 
     let resumed_ev = store
-        .resume(&ev_id, "sys", "", "", &counter)
+        .resume(&ev_id, "sys", "", "", &counter, None)
         .expect("resuming eviction")
         .expect("eviction session exists");
 
     assert!(
-        resumed_ev.floor() > 0,
+        resumed_ev.context.floor() > 0,
         "eviction floor survived resume: {}",
-        resumed_ev.floor()
+        resumed_ev.context.floor()
+    );
+}
+
+/// A grounded turn says so on the wire, and a resume reads its span again.
+///
+/// End to end, through the real binary: `grounded-turn` is recorded with
+/// `--fragment crates/agent-core/src/context.rs:1-15`, so the stream carries a
+/// `grounded` line naming that spec and **not** its bytes. Folding, saving,
+/// loading and resuming brings the span back by reading the file as it is
+/// now — which is the whole of item 20, and the reason the assertion compares
+/// against the disk rather than against a string in this file.
+///
+/// The pair with `a_resumed_context_produces_matching_budget_and_prompt_selection`
+/// one test up: that one resumes with no sandbox and asks whether the *fold*
+/// comes back, this one resumes with one and asks whether the *code* does. See
+/// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
+#[test]
+fn a_resumed_turn_gets_its_span_back_by_reading_it_again() {
+    use agent_core::context::ApproximateCounter;
+    use agent_core::sandbox::{Access, PathRule, Sandbox, SandboxPolicy};
+
+    let spec = "crates/agent-core/src/context.rs:1-15";
+    let (id, lines) = recordings()
+        .into_iter()
+        .find(|(id, _)| id == "grounded-turn")
+        .expect("the grounded recording");
+
+    // The emitter, before the fold: a stream that does not say a turn was
+    // grounded is a stream no resume can restore from, and it would fail this
+    // test one indirection further along where the cause is harder to read.
+    assert!(
+        lines.iter().any(|line| matches!(
+            line,
+            agent_core::record::RecordLine::Protocol {
+                message: agent_core::protocol::ServerMessage::Grounded { spans, .. },
+                ..
+            } if spans.iter().any(|one| one.spec == spec)
+        )),
+        "the recording carries no `grounded` line naming {spec}",
+    );
+
+    let store = SessionStore::in_memory().expect("a store");
+    let folded = SessionView::from_record(id.clone(), &lines);
+    store.save(&folded, None).expect("saving");
+    assert_eq!(
+        folded.turns[0].code.len(),
+        1,
+        "the fold carries the reference",
+    );
+
+    let sandbox = Sandbox::new(
+        &SandboxPolicy {
+            paths: vec![PathRule::new(".", Access::Read)],
+            ..SandboxPolicy::default()
+        },
+        &root(),
+    )
+    .expect("a sandbox over the repository");
+
+    let restored = store
+        .resume(
+            &id,
+            "system",
+            "tools",
+            "",
+            &ApproximateCounter,
+            Some(&sandbox),
+        )
+        .expect("resuming")
+        .expect("session exists");
+    assert!(restored.unreadable.is_empty(), "{:?}", restored.unreadable);
+
+    let code = &restored.context.turns()[0].code_context;
+    assert_eq!(code.len(), 1, "one span, restored");
+    assert_eq!(code[0].path, spec, "the spec, as the turn named it");
+
+    let on_disk: String = std::fs::read_to_string(root().join("crates/agent-core/src/context.rs"))
+        .expect("the file the fragment names")
+        .lines()
+        .take(15)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        code[0].text.trim_end(),
+        on_disk.trim_end(),
+        "restored by reading the file again, not from anything the store held",
+    );
+}
+
+/// The person's spans and the selector's are told apart, once, where it is
+/// still possible.
+///
+/// `chat` joins them into one `Vec<Fragment>` — the person's first, keeping
+/// their whole budget — and from that line on nothing downstream can take them
+/// apart. So the boundary is caught at the join and carried on the wire, and
+/// this is what says it still is: one run with both a typed `--fragment` and
+/// `--select-tokens` on, and the `grounded` line naming which is which.
+///
+/// It matters because the two have different claims on being restored across a
+/// resume — see `RECORD/2026-09-19.fragments-by-reference.completed.md`
+/// §Two things — and because in `serve` there is no `--fragment` at all, so
+/// every span in a session the store holds is `Selected`. A reader who cannot
+/// tell would have to guess which of those two worlds a recording came from.
+#[test]
+fn a_typed_fragment_and_a_chosen_span_are_not_the_same_kind_of_thing() {
+    use agent_core::protocol::{Origin, ServerMessage};
+    use agent_core::record::RecordLine;
+
+    let policy = root().join("luu.toml");
+    let lines = record(
+        "grounded-origins",
+        &[
+            "which two commitments does this file open with?",
+            "--fragment",
+            "crates/agent-core/src/context.rs:1-15",
+            "--select-tokens",
+            "1024",
+            "--context-limit",
+            "8192",
+            "--sandbox",
+            policy.to_str().expect("a utf-8 path"),
+        ],
+    );
+
+    let spans = lines
+        .iter()
+        .find_map(|line| match line {
+            RecordLine::Protocol {
+                message: ServerMessage::Grounded { spans, .. },
+                ..
+            } => Some(spans.clone()),
+            _ => None,
+        })
+        .expect("a grounded line");
+
+    assert_eq!(
+        spans[0].origin,
+        Origin::Attached,
+        "the person's goes first and is named as theirs: {spans:?}",
+    );
+    assert_eq!(spans[0].spec, "crates/agent-core/src/context.rs:1-15");
+    assert!(
+        spans[1..].iter().all(|one| one.origin == Origin::Selected),
+        "everything after the boundary is the selector's: {spans:?}",
+    );
+    assert!(
+        spans.len() > 1,
+        "the selector found nothing, so this run proves only half of what it is for",
     );
 }

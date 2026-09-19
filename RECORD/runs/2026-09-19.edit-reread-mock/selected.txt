@@ -1,0 +1,127 @@
+warning: no tokenizer for mock: counting approximately (chars/4). Pass --tokenizer <tokenizer.json> for real numbers.
+
+== fragment src/greeting.rs:1-10 — 332 bytes into the next prompt
+
+> what string does greet return?
+
+greet returns a greeting.
+
+[stop] 0 prompt / 4 completion
+
+== fragment src/format.rs:1-13 — 462 bytes into the next prompt
+
+> what does render do with a name that is longer than WIDTH?
+
+render pads to WIDTH.
+
+[stop] 0 prompt / 4 completion
+
+== fragment src/banner.rs:1-10 — 353 bytes into the next prompt
+
+> what does banner print?
+
+banner prints a line.
+
+[stop] 0 prompt / 4 completion
+
+== fragment src/tally.rs:1-6 — 214 bytes into the next prompt
+
+> what is THRESHOLD set to?
+
+THRESHOLD is 16.
+
+[stop] 0 prompt / 3 completion
+
+> edit src/greeting.rs to change the string "Hello, " to "Hi, "
+
+Let me change it.
+```tool
+{"name":"edit_file","arguments":{"path":"src/greeting.rs","old_string":"Hello, {name}","new_string":"Hi, {name}"}}
+```
+
+  [1] → edit_file {"new_string":"Hi, {name}","old_string":"Hello, {name}","path":"src/greeting.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+Edited.
+
+[stop] 0 prompt / 7 completion
+
+== fragment src/greeting.rs:1-10 — 329 bytes into the next prompt
+
+> what string does greet return now?
+
+greet returns a greeting.
+
+[stop] 0 prompt / 4 completion
+
+== fragment src/format.rs:1-13 — 462 bytes into the next prompt
+
+> and what does render do with an empty name?
+
+render pads to WIDTH.
+
+[stop] 0 prompt / 4 completion
+
+> edit src/banner.rs to change the string "luu" to "luu 0.2"
+
+Let me change it.
+```tool
+{"name":"edit_file","arguments":{"path":"src/banner.rs","old_string":"\"luu\"","new_string":"\"luu 0.2\""}}
+```
+
+  [1] → edit_file {"new_string":"\"luu 0.2\"","old_string":"\"luu\"","path":"src/banner.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 1 ms
+
+Edited.
+
+[stop] 0 prompt / 6 completion
+
+> edit src/tally.rs to change THRESHOLD from 16 to 32
+
+Let me change it.
+```tool
+{"name":"edit_file","arguments":{"path":"src/tally.rs","old_string":"THRESHOLD: usize = 16","new_string":"THRESHOLD: usize = 32"}}
+```
+
+  [1] → edit_file {"new_string":"THRESHOLD: usize = 32","old_string":"THRESHOLD: usize = 16","path":"src/tally.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+Edited.
+
+[stop] 0 prompt / 11 completion
+
+== fragment src/tally.rs:1-16 — 526 bytes into the next prompt
+
+> what is THRESHOLD now, and what does worth_saying compare the count against?
+
+THRESHOLD is 32.
+
+[stop] 0 prompt / 3 completion
+
+> edit src/greeting.rs to change the string "Hi, " to "Hey, "
+
+Let me change it.
+```tool
+{"name":"edit_file","arguments":{"path":"src/greeting.rs","old_string":"Hi, {name}","new_string":"Hey, {name}"}}
+```
+
+  [1] → edit_file {"new_string":"Hey, {name}","old_string":"Hi, {name}","path":"src/greeting.rs"}
+  [1] ← ok · . (read-write) · held by openat2(RESOLVE_BENEATH|RESOLVE_NO_MAGICLINKS) · 0 ms
+
+Edited.
+
+[stop] 0 prompt / 7 completion
+
+== fragment src/greeting.rs:1-10 — 330 bytes into the next prompt
+
+> what string does greet return now?
+
+greet returns a greeting.
+
+[stop] 0 prompt / 4 completion
+
+> which of the four files in src/ have changed since this session started?
+
+greeting, banner and tally have changed.
+
+[stop] 0 prompt / 6 completion

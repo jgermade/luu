@@ -2142,6 +2142,25 @@ async fn begin_turn(
         job,
     }))
     .await;
+    // What it was asked *with*, by reference, straight after what was asked.
+    // Every span here is `Selected`: this surface has no `--fragment`, so
+    // nothing in a session the store holds was attached by hand — which is the
+    // half of `RECORD/2026-09-19.fragments-by-reference.completed.md` §Two
+    // things that decides how much the resume is restoring on the person's
+    // behalf rather than on the selector's.
+    if !code.is_empty() {
+        app.publish(Event::Protocol(ServerMessage::Grounded {
+            turn,
+            spans: code
+                .iter()
+                .map(|fragment| protocol::Grounding {
+                    spec: fragment.path.clone(),
+                    origin: protocol::Origin::Selected,
+                })
+                .collect(),
+        }))
+        .await;
+    }
     // Before the prompt it explains: this is what the turn no longer carries,
     // and a client reading in order should learn that the history was cut
     // before it is handed the prompt that was cut from.
@@ -3546,7 +3565,7 @@ async fn resume_session(
     // they are the second half of the cached prefix — and asking for it inside
     // the lock would be an await holding a guard that cannot cross a thread.
     let definitions = agency.definitions();
-    let resumed_context = {
+    let resumed = {
         let store = store_mutex.lock().await;
         match store.resume(
             id,
@@ -3554,12 +3573,29 @@ async fn resume_session(
             definitions,
             &app.map_rendered,
             sending.counter.as_ref(),
+            // The posture this session is being resumed **under**, which is the
+            // one settled above and not the one it ran under. A span the new
+            // posture may not read is exactly the case storing bytes would have
+            // walked past, so it is the sandbox to ask.
+            Some(agency.sandbox.as_ref()),
         ) {
-            Ok(Some(context)) => context,
+            Ok(Some(restored)) => restored,
             Ok(None) => return not_found("session"),
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
         }
     };
+    // Said out loud, once per span, because the alternative is a session that
+    // came back with a citation where a file was and nothing anywhere saying
+    // why. The turn keeps its exchange either way; what it has lost is bytes
+    // this posture may not read, which is a fact about the policy and not
+    // about the session.
+    for one in &resumed.unreadable {
+        eprintln!(
+            "warning: turn {} was grounded with {}, which is not readable here: {}",
+            one.turn, one.spec, one.why,
+        );
+    }
+    let resumed_context = resumed.context;
 
     // After the fold is rebuilt and before anything runs on it.
     *app.destination.write().await = sending.clone();

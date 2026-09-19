@@ -1,0 +1,8 @@
+{"channel":"trace","at_ms":8,"message":{"type":"diverged","turn":6,"path":"src/greeting.rs:1-10","turns":[1],"asking":true,"bodies":2}}
+{"channel":"trace","at_ms":9,"message":{"type":"diverged","turn":7,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":11,"message":{"type":"diverged","turn":8,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":13,"message":{"type":"diverged","turn":9,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":16,"message":{"type":"diverged","turn":10,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":17,"message":{"type":"diverged","turn":11,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":false,"bodies":2}}
+{"channel":"trace","at_ms":19,"message":{"type":"diverged","turn":12,"path":"src/greeting.rs:1-10","turns":[1,6],"asking":true,"bodies":3}}
+{"channel":"trace","at_ms":20,"message":{"type":"diverged","turn":13,"path":"src/greeting.rs:1-10","turns":[1,6,12],"asking":false,"bodies":3}}

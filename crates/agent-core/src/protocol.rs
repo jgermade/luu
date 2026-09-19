@@ -58,7 +58,18 @@ use crate::turn::{EndReason, TurnEvent};
 /// bump was un-made rather than left standing — a number whose whole job is to
 /// tell two peers what they can parse must not carry a variant that no longer
 /// exists. See `RECORD/2026-09-04.sessions-stay-home.completed.md`.
-pub const VERSION: u32 = 5;
+///
+/// **6, taken this time: [`ServerMessage::Grounded`]**, which says what a turn
+/// was asked with by reference, so that a resume can read it again instead of
+/// losing it. Same rule as 2, 3 and 4 — a new variant of a tagged enum — and
+/// the number is the one the paragraph above un-made, free for exactly the
+/// reason `record::FORMAT` reused its own un-made 8: no peer ever spoke it, so
+/// there is nobody to disagree with about what it meant. It is the first bump
+/// since 5, which is where a client started saying its version and being
+/// refused out loud rather than failing to parse — so this is also the first
+/// one an older client learns about by being told. See
+/// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
+pub const VERSION: u32 = 6;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -175,6 +186,41 @@ pub enum ClientMessage {
     },
 }
 
+/// Where a span in a turn's prompt came from.
+///
+/// The distinction exists in the tree and until now could be seen from
+/// nowhere: `chat` builds a turn's code out of the fragments a person typed
+/// and then the spans relevance selection chose, in that order, into one
+/// `Vec<Fragment>` that nothing afterwards can take apart. `serve` has no
+/// `--fragment` at all, so every span in a session the store holds is
+/// `Selected`. Both are restored across a resume, for the reason
+/// `RECORD/2026-09-19.fragments-by-reference.completed.md` §Two things gives;
+/// this is here so that the next decision about them is a decision rather than
+/// a rediscovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    /// A person typed it — `--fragment`, or `## fragment:` in a script.
+    Attached,
+    /// Relevance selection chose it, scored against this turn's own text.
+    Selected,
+}
+
+/// One span a turn was asked with, **by reference**.
+///
+/// The spec and not the bytes, and that is the whole of the decision: bytes in
+/// the store come back without being re-read, so a session resumed under a
+/// narrower posture would get back a file it is no longer allowed to open.
+/// The spec is enough to read it again through whatever sandbox the resume is
+/// under, and reading it again is the only thing that can be honest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grounding {
+    /// The spec as it was written — `src/lib.rs:12-40` — which is the string
+    /// [`crate::context::Fragment::path`] carries.
+    pub spec: String,
+    pub origin: Origin,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
@@ -200,6 +246,25 @@ pub enum ServerMessage {
         /// The job it was asked inside, when there is one.
         #[serde(default, alias = "task")]
         job: Option<JobId>,
+    },
+    /// What this turn was asked with, beside what was asked: the spans fused
+    /// into its user message, by reference.
+    ///
+    /// **Here and not on the trace channel**, which is the opposite of where
+    /// `pruned` and `diverged` went, and the line is between the reference and
+    /// the bytes: that a turn was asked with a file in front of it is a thing
+    /// that happened, and for an `Attached` span it is what the person typed.
+    /// The bytes are the prompt fact, they are already on the trace channel
+    /// inside `prompt`, and they are what this refuses to carry. Without it a
+    /// resumed session comes back with turns that never had code — the one
+    /// place in this system where something was lost rather than merely not
+    /// sent. See `RECORD/2026-09-19.fragments-by-reference.completed.md`.
+    ///
+    /// Absent on a turn that carried none, and on every turn of every stream
+    /// written before protocol 6.
+    Grounded {
+        turn: TurnId,
+        spans: Vec<Grounding>,
     },
     /// A piece of work, with the plan that is about to be approved or refused.
     /// Nothing runs between this and `JobApproved`.
@@ -385,7 +450,10 @@ impl ServerMessage {
             | Self::ToolResult { turn, .. }
             // The turn that cut, not the turns that left: this is a thing the
             // selection for `turn` did.
-            | Self::Evicted { turn, .. } => Some(*turn),
+            | Self::Evicted { turn, .. }
+            // And the turn that was grounded, which is the same shape: what
+            // this turn was asked with.
+            | Self::Grounded { turn, .. } => Some(*turn),
             // A task spans turns and its lifecycle happens between them, and a
             // refusal is about the ask rather than about a turn — three of the
             // four happen when there is no turn to name.

@@ -166,9 +166,21 @@ async fn server_full(
 /// assert what a posture *does* without a container in the way. See
 /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
 fn agency_factory() -> luu::serve::AgencyFactory {
-    Arc::new(|policy: Option<std::path::PathBuf>| {
+    agency_factory_rooted(std::env::current_dir().expect("the working directory"))
+}
+
+/// The same, over a tree the caller names.
+///
+/// A resume resolves a **fresh** agency rather than keeping the one the server
+/// was built with, so a test whose server selects over a scratch tree has to
+/// say so twice — here and in `ServeOptions`. Found by the resume warning
+/// naming a file that was right there: the session came back looking for
+/// `window.rs` under this package instead of under the tree it had read it
+/// from.
+fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory {
+    Arc::new(move |policy: Option<std::path::PathBuf>| {
+        let base = base.clone();
         Box::pin(async move {
-            let base = std::env::current_dir()?;
             let policy = match policy {
                 Some(path) => SandboxPolicy::from_file(&path)?,
                 None => SandboxPolicy::default(),
@@ -186,7 +198,34 @@ fn agency_factory() -> luu::serve::AgencyFactory {
 /// A server that caches its fold into the store at `path`, so a second one
 /// pointed at the same file can be asked what the first one did.
 async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String {
-    let base = std::env::current_dir().expect("the working directory");
+    server_storing_selecting(
+        replies,
+        path,
+        0,
+        &std::env::current_dir().expect("the working directory"),
+    )
+    .await
+}
+
+/// The same, with relevance selection on over a tree the caller names.
+///
+/// Its own entry point rather than a parameter on every caller: exactly one
+/// test needs a session whose turns carry spans, because `serve` has no
+/// `--fragment` and selection is the only way code gets into a turn here.
+///
+/// **`base` is a parameter and not this package's directory**, which is what
+/// every other server here uses. Selection walks the sandbox root and parses
+/// what it finds, and `crates/luu` is two files of five thousand lines: the
+/// first version of this pointed a selecting server at it and the turn after
+/// an approval did not answer inside ten seconds. A tree of three small files
+/// is the same code path and a test that finishes.
+async fn server_storing_selecting(
+    replies: Vec<String>,
+    path: &std::path::Path,
+    select_tokens: u32,
+    base: &std::path::Path,
+) -> String {
+    let base = base.to_path_buf();
     let agency = Agency {
         tools: Arc::new(Tools::standard()),
         sandbox: Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("the sandbox")),
@@ -212,12 +251,12 @@ async fn server_storing(replies: Vec<String>, path: &std::path::Path) -> String 
         map_tokens: 0,
         map_order: Default::default(),
         map_fill: Default::default(),
-        select_tokens: 0,
+        select_tokens,
         select_weights: Default::default(),
         constrain: None,
         auth_token_file: None,
         store: Some(path.to_path_buf()),
-        agency_for: Some(agency_factory()),
+        agency_for: Some(agency_factory_rooted(base.clone())),
         postures: Default::default(),
         postures_path: None,
     })
@@ -432,10 +471,13 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
 
     let hello = next_message(&mut socket).await;
     assert_eq!(hello["type"], "hello");
-    // 5 since the handshake, 4 since `jobs`, 3 since `evicted`, 2 since `refused`: a new
-    // variant of a tagged enum is a change an older reader cannot parse, which is what this
-    // number is for.
-    assert_eq!(hello["protocol"], 5);
+    // 6 since `grounded`, 5 since the handshake, 4 since `jobs`, 3 since
+    // `evicted`, 2 since `refused`: a new variant of a tagged enum is a change
+    // an older reader cannot parse, which is what this number is for. The
+    // constant and not the literal, for the reason
+    // `a_matching_client_is_greeted_and_then_ignored` gives one screen down: a
+    // number typed here makes every bump look like a broken handshake.
+    assert_eq!(hello["protocol"], agent_core::protocol::VERSION);
     assert_eq!(hello["backend"], "mock");
     assert!(hello["turn"].is_null(), "nothing is running yet");
     assert!(
@@ -1663,7 +1705,7 @@ async fn a_client_that_speaks_another_protocol_is_refused_out_loud() {
         refused["detail"]
             .as_str()
             .expect("a detail")
-            .contains("protocol 5"),
+            .contains(&format!("protocol {}", agent_core::protocol::VERSION)),
         "the refusal says what this host speaks: {refused}",
     );
     let closed = tokio::time::timeout(PATIENCE, socket.next())
@@ -1685,7 +1727,12 @@ async fn a_newer_client_is_refused_in_the_other_direction_too() {
 
     send(
         &mut socket,
-        serde_json::json!({"type": "hello", "protocol": 6}),
+        // One past whatever this host speaks, rather than a number that was one
+        // past it when this was written: the literal became *this host's own
+        // version* the day `grounded` landed, and a test asserting a refusal of
+        // the version it speaks would have been asserting the opposite of its
+        // own name.
+        serde_json::json!({"type": "hello", "protocol": agent_core::protocol::VERSION + 1}),
     )
     .await;
 
@@ -2594,4 +2641,148 @@ async fn the_resend_route_keeps_this_machines_default_apart_from_what_is_running
         serde_json::Value::Null,
         "a session's choice is not a machine's default: {after}",
     );
+}
+
+/// A resumed session's turns get their code back, and get it on the turn that
+/// had it.
+///
+/// The surface item 20 is about, driven rather than argued. A first server
+/// answers one prompt with relevance selection on, so its turns are grounded
+/// with spans nobody typed; a second server over the same store resumes the
+/// session and asks another.
+///
+/// **The assertion is a position, not a substring.** Under rule A a span is
+/// rendered by the *oldest* turn of the window that carries it, so finding
+/// `// <spec>` before the first prompt means an early turn is carrying it —
+/// which only re-reading it at the resume can do. A session that lost its
+/// fragments would either not have the span at all, or have it in the message
+/// of the turn that selected it *now*, after that prompt. See
+/// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
+#[tokio::test]
+async fn a_resumed_session_renders_its_spans_on_the_turn_that_was_grounded_with_them() {
+    let dir = std::env::temp_dir().join(format!("luu-resume-spans-{}", std::process::id()));
+    let tree = dir.join("tree");
+    std::fs::create_dir_all(&tree).expect("a scratch directory");
+    // Small and on purpose: see `server_storing_selecting`. One of these three
+    // is what the selector will choose, and which one is its decision.
+    std::fs::write(
+        tree.join("window.rs"),
+        "/// The window a turn is budgeted against.\npub fn window() -> u32 {\n    8192\n}\n",
+    )
+    .expect("a source file");
+    std::fs::write(
+        tree.join("clock.rs"),
+        "/// What a seam waits on.\npub fn clock() -> u64 {\n    0\n}\n",
+    )
+    .expect("a source file");
+    std::fs::write(
+        tree.join("greeting.rs"),
+        "/// Something the prompt does not ask about.\npub fn greet() -> &'static str {\n    \"hola\"\n}\n",
+    )
+    .expect("a source file");
+    let db = dir.join("sessions.db");
+    let asked = "where does a turn get its window from?";
+    // Two model calls per prompt — the planning call and the one that answers —
+    // and plain text in both, because a plan block would put the gate in the
+    // way of a test that is not about the gate.
+    let plain = || vec!["an answer".to_string(), "an answer".to_string()];
+
+    let first = server_storing_selecting(plain(), &db, 1024, &tree).await;
+    {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{first}/ws"))
+            .await
+            .expect("the websocket handshake");
+        assert_eq!(next_message(&mut socket).await["type"], "hello");
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": asked}),
+        )
+        .await;
+        // The planning call proposes a job whatever it answers, so the turn
+        // that answers is behind the gate — approved here because this test is
+        // not about the gate.
+        until(&mut socket, "job_proposed").await;
+        send(
+            &mut socket,
+            serde_json::json!({"type": "approve_job", "job": 1}),
+        )
+        .await;
+        until(&mut socket, "ended").await;
+    }
+
+    let live = get(&first, "/api/sessions/live").await;
+    let grounded = live["turns"]
+        .as_array()
+        .expect("the turns")
+        .iter()
+        .find_map(|turn| {
+            turn["code"]
+                .as_array()
+                .and_then(|code| code.first().cloned())
+        })
+        .expect("a turn was grounded with something — otherwise this proves nothing");
+    let spec = grounded["spec"].as_str().expect("its spec").to_string();
+    assert_eq!(
+        grounded["origin"], "selected",
+        "this surface has no --fragment, so nothing here was attached by hand",
+    );
+
+    // A second server, same file, nothing shared but the store — which is what
+    // makes this a resume rather than a session that never went away.
+    let second = server_storing_selecting(plain(), &db, 1024, &tree).await;
+    let listed = get(&second, "/api/sessions").await;
+    let id = listed
+        .as_array()
+        .expect("a listing")
+        .iter()
+        .find(|row| row["id"] != "live")
+        .expect("the session the first server ran")["id"]
+        .as_str()
+        .expect("its id")
+        .to_string();
+
+    let resumed = post(&second, &format!("/api/sessions/{id}/resume")).await;
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK, "resuming {id}");
+
+    {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{second}/ws"))
+            .await
+            .expect("the websocket handshake");
+        assert_eq!(next_message(&mut socket).await["type"], "hello");
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": "and now?"}),
+        )
+        .await;
+        // No gate this time, and that is not an oversight: the job approved
+        // before the resume is still open, so this turn is *inside* it and
+        // nothing is proposed. It is the same reason the resumed session has a
+        // history at all.
+        until(&mut socket, "ended").await;
+    }
+
+    let after = get(&second, "/api/sessions/live").await;
+    let last = after["turns"]
+        .as_array()
+        .expect("the turns")
+        .last()
+        .expect("a turn after the resume")["turn"]
+        .as_u64()
+        .expect("its number");
+    let prompt = get(&second, &format!("/api/sessions/live/turns/{last}/prompt")).await;
+    let text = prompt["text"].as_str().expect("the prompt as sent");
+
+    let span_at = text
+        .find(&format!("// {spec}"))
+        .unwrap_or_else(|| panic!("the resumed window carries no {spec}:\n{text}"));
+    let asked_at = text
+        .find(asked)
+        .expect("the first prompt is still in the window");
+    assert!(
+        span_at < asked_at,
+        "the span is rendered by the turn that was grounded with it, not by the one \
+         that selected it again: {spec}\n{text}",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
