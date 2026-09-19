@@ -1289,7 +1289,9 @@ names, the stream gains a **second `Header` line**: no new variant and no format
 bump, because a header is already *the terms these lines were produced under*,
 and both readers that fold a stream apply one by overwriting backend and model.
 It carries **the session's own `started_at`**, never the moment of the resume,
-since every `at_ms` in a stream is relative to the first one. The context is
+since every `at_ms` in a stream is relative to **the header above it** — which
+within one session's stream is the same number as the first one, and across a
+`--record` file holding several sessions is not. The context is
 re-folded with the new destination's counter, so a history counted with one
 tokenizer is not budgeted with another. The line is checkpointed where it is
 written rather than at the next turn, so a session moved and then left alone
@@ -1301,7 +1303,16 @@ of running under a header that names another. See
 ### Record and replay
 
 `luu serve --record <file>` dumps the JSON-lines stream to disk, and the UI can load such a file
-instead of a live socket. Sessions become replayable offline — useful for bug reports and for
+instead of a live socket. **The file carries one header per session, not one per process.** Until
+2026-09-19 it carried one, written at startup, so a run where somebody pressed *New* — or resumed
+onto another posture — produced a file whose first line named the first session's backend, model,
+window, counter, eviction, posture and resend rules for turns it did not describe. `create_session`
+and the resume route now write the header they were already building for the store's stream into
+the recorder as well, and **re-base it**: a header declares what the lines under it are counted
+from, so writing one without moving the base leaves the timestamps counted from a moment the file
+no longer names. A resume re-bases to the resumed session's *own* start, so the base can move
+backwards, and the wall-clock time of any line stays `that header's started_at + at_ms`. See
+[`RECORD/2026-09-19.a-header-per-session.completed.md`](RECORD/2026-09-19.a-header-per-session.completed.md). Sessions become replayable offline — useful for bug reports and for
 comparing context strategies across runs without re-running inference. What the run *forgot* is in
 there too: the recorded fixtures make the two policies visible as what they are — ten small cuts
 under `turn` against two deep ones under `block`, over the same twenty prompts, and none at all in

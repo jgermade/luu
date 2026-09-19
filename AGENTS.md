@@ -425,6 +425,16 @@ not be replayed at all. A session stored before schema 2 has no stream, and that
 is reported rather than repaired: folding a view back into a stream would invent
 line orders and timings the session never had.
 
+**A `--record` file carries one header per session, not one per process**, and a
+line's `at_ms` is relative to **the header above it** — the same rule the store's
+streams follow, and the one `SessionView::from_record`'s *last header wins* was
+written for. `create_session` and the resume route write the header they already
+build for the stream into the recorder too, and re-base it, because a header
+declares what the lines under it are counted from. A resume re-bases to the
+resumed session's own start, so the base can move backwards; the wall-clock time
+of any line stays `that header's started_at + at_ms`. See
+[`RECORD/2026-09-19.a-header-per-session.completed.md`](RECORD/2026-09-19.a-header-per-session.completed.md).
+
 **A session stays on the host that made it.** There is no transfer and no
 portal: the model you want on a bigger machine is reached with `--backend openai
 --openai-url http://other-box:8080/v1`, the tree moves by git, and what a session

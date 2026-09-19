@@ -326,6 +326,7 @@ async fn server_everything(
         approvers,
         Default::default(),
         None,
+        None,
     )
     .await
 }
@@ -347,6 +348,9 @@ async fn server_with_postures(
     // A store, for the tests that need a session to outlive the one that is
     // live — which is every test about what a *resume* is allowed to do.
     store: Option<std::path::PathBuf>,
+    // And a `--record` file, for the one test about what a *file* says when it
+    // holds more than one session.
+    record: Option<std::path::PathBuf>,
 ) -> String {
     let base = std::env::current_dir().expect("the working directory");
     let agency = Agency {
@@ -364,7 +368,7 @@ async fn server_with_postures(
         address: "127.0.0.1:0".parse().expect("a loopback address"),
         backend: Arc::new(Mock::replies(replies).delay(delay)),
         model: "mock".into(),
-        record: None,
+        record,
         budget,
         counter: Arc::new(ApproximateCounter),
         tokenizer: None,
@@ -2060,6 +2064,7 @@ async fn a_session_started_on_a_posture_runs_under_it_and_says_which() {
         Approvers::default(),
         postures,
         None,
+        None,
     )
     .await;
     let client = reqwest::Client::new();
@@ -2156,6 +2161,7 @@ async fn a_resume_keeps_the_posture_a_sessions_jobs_were_approved_under() {
         Approvers::default(),
         postures,
         Some(dir.join("sessions.db")),
+        None,
     )
     .await;
     let client = reqwest::Client::new();
@@ -2782,6 +2788,201 @@ async fn a_resumed_session_renders_its_spans_on_the_turn_that_was_grounded_with_
         span_at < asked_at,
         "the span is rendered by the turn that was grounded with it, not by the one \
          that selected it again: {spec}\n{text}",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `--record` file says which session each stretch of it belongs to.
+///
+/// Item 23, driven: until this, one header at process start named the **first**
+/// session's backend, model, window, counter, eviction, posture and three
+/// resend rules for every session after it — so a run where somebody pressed
+/// *New* onto a different posture produced a file whose first line is a claim
+/// about turns it does not describe.
+///
+/// Two assertions and they are the two halves of the decision. The **metadata**:
+/// the second header names the posture the second session was started on, and
+/// the first still names the one the first ran under. The **base**: a header
+/// declares what the lines under it are counted from, so the second one's
+/// `started_at` is the second session's own, and the lines after it are
+/// relative to *that* — which is why the run waits before switching. Before the
+/// re-base those lines carried the offset from process start, and the wait is
+/// what makes the difference bigger than any turn this mock can take. See
+/// `RECORD/2026-09-19.a-header-per-session.completed.md`.
+#[tokio::test]
+async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
+    use agent_core::record::RecordLine;
+
+    let dir = std::env::temp_dir().join(format!("luu-record-headers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let policy = dir.join("wide.toml");
+    std::fs::write(&policy, "[sandbox]\nnetwork = true\ncommands = [\"ls\"]\n")
+        .expect("writing the posture's policy file");
+    let record = dir.join("run.jsonl");
+
+    let mut postures = std::collections::BTreeMap::new();
+    postures.insert(
+        "wide".to_string(),
+        luu::provider::Posture {
+            policy: policy.clone(),
+        },
+    );
+
+    let address = server_with_postures(
+        vec!["an answer".into(), "an answer".into()],
+        Duration::ZERO,
+        SandboxPolicy::default(),
+        Budget::new(0, 0, Eviction::Turn),
+        None,
+        Approvers::default(),
+        postures,
+        Some(dir.join("sessions.db")),
+        Some(record.clone()),
+    )
+    .await;
+
+    // Long enough that a line counted from the process's start could not be
+    // mistaken for one counted from the second session's: the mock answers in
+    // microseconds, so anything under this bound was re-based.
+    const WAITED: u64 = 400;
+    tokio::time::sleep(Duration::from_millis(WAITED)).await;
+
+    let client = reqwest::Client::new();
+    let created: serde_json::Value = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({ "posture": "wide" }))
+        .send()
+        .await
+        .expect("starting a session on the other posture")
+        .json()
+        .await
+        .expect("the summary is JSON");
+    let started_at = created["started_at"].as_u64().expect("its start");
+
+    {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+            .await
+            .expect("the websocket handshake");
+        assert_eq!(next_message(&mut socket).await["type"], "hello");
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": "after the switch"}),
+        )
+        .await;
+        // Approved rather than left hanging: a session with a proposal waiting
+        // at the gate refuses to be replaced, and the next thing this test does
+        // is start a third one.
+        until(&mut socket, "job_proposed").await;
+        send(
+            &mut socket,
+            serde_json::json!({"type": "approve_job", "job": 1}),
+        )
+        .await;
+        until(&mut socket, "ended").await;
+    }
+
+    let lines = luu::export::read_record(&record).expect("reading the recording back");
+    let headers: Vec<&RecordLine> = lines
+        .iter()
+        .filter(|line| matches!(line, RecordLine::Header { .. }))
+        .collect();
+    assert_eq!(
+        headers.len(),
+        2,
+        "one header per session, and this file holds two",
+    );
+
+    let network_of = |line: &RecordLine| match line {
+        RecordLine::Header { posture, .. } => posture.as_ref().map(|one| one.network),
+        _ => None,
+    };
+    assert_eq!(
+        network_of(headers[0]),
+        Some(false),
+        "the first session ran under the server's own policy file",
+    );
+    assert_eq!(
+        network_of(headers[1]),
+        Some(true),
+        "and the second under the posture it was started on",
+    );
+
+    let RecordLine::Header {
+        started_at: second, ..
+    } = headers[1]
+    else {
+        unreachable!("filtered above")
+    };
+    assert_eq!(
+        *second, started_at,
+        "the base a header declares is the session's own start",
+    );
+
+    let after = lines
+        .iter()
+        .skip_while(
+            |line| !matches!(line, RecordLine::Header { started_at, .. } if started_at == second),
+        )
+        .filter_map(|line| match line {
+            RecordLine::Protocol { at_ms, .. } | RecordLine::Trace { at_ms, .. } => Some(*at_ms),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!after.is_empty(), "the second session recorded nothing");
+    assert!(
+        after.iter().all(|at_ms| *at_ms < WAITED),
+        "every line under the second header is counted from it: {after:?}",
+    );
+
+    // And the other call site, where the base goes **backwards**. A third
+    // session checkpoints the second, and resuming the second re-bases the file
+    // to a `started_at` that has already been in it — so the lines after that
+    // header carry the offset from a moment further back than the one above
+    // them. That is the shape of the sentence the record makes a point of: a
+    // resumed session started when it started.
+    let third = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({ "posture": "wide" }))
+        .send()
+        .await
+        .expect("a third session, which checkpoints the second");
+    assert_eq!(third.status(), reqwest::StatusCode::CREATED);
+
+    let id = created["id"].as_str().expect("the second session's id");
+    let resumed = client
+        .post(format!("http://{address}/api/sessions/{id}/resume"))
+        // Named here and not inherited: a resume resolves its own posture, and
+        // one that named nothing would be resuming onto the policy file — which
+        // is the refusal item 9 landed.
+        .json(&serde_json::json!({ "posture": "wide" }))
+        .send()
+        .await
+        .expect("resuming it");
+    let status = resumed.status();
+    let body = resumed.text().await.unwrap_or_default();
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+
+    let lines = luu::export::read_record(&record).expect("reading the recording back");
+    let bases: Vec<u64> = lines
+        .iter()
+        .filter_map(|line| match line {
+            RecordLine::Header { started_at, .. } => Some(*started_at),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bases.len(),
+        4,
+        "two sessions, a third, and a resume: {bases:?}"
+    );
+    assert_eq!(
+        bases[3], started_at,
+        "a resume re-bases to the session's own start, not to now: {bases:?}",
+    );
+    assert!(
+        bases[3] < bases[2],
+        "which means the base moved backwards, and that is not a bug: {bases:?}",
     );
 
     let _ = std::fs::remove_dir_all(&dir);

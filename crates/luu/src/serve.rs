@@ -3402,6 +3402,20 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         Some(posture.clone()),
         started_at,
     )];
+    // And the `--record` file gets the same line, which until now it did not:
+    // one header at process start named the first session's model, posture and
+    // rules for every session after it. See
+    // `RECORD/2026-09-19.a-header-per-session.completed.md`.
+    if let Some(recorder) = &app.recorder {
+        recorder.session(
+            sending.backend.name(),
+            &sending.model,
+            sending.budget,
+            sending.counter.id(),
+            Some(posture.clone()),
+            started_at,
+        );
+    }
 
     {
         let mut session = app.session.lock().await;
@@ -3623,6 +3637,23 @@ async fn resume_session(
         posture.clone(),
     );
     let moved = header.is_some();
+    // The `--record` file gets one **unconditionally**, which is the one place
+    // this route and the stream disagree on purpose. `retarget_header` asks
+    // whether anything moved *since the session was stored*, and answers no for
+    // a resume onto the same destination and posture. A file asks a different
+    // question: what changed since the line above, and what is the base for the
+    // lines below — and both changed, because the session did. See
+    // `RECORD/2026-09-19.a-header-per-session.completed.md`.
+    if let Some(recorder) = &app.recorder {
+        recorder.session(
+            sending.backend.name(),
+            &sending.model,
+            sending.budget,
+            sending.counter.id(),
+            Some(posture.clone()),
+            loaded_view.started_at,
+        );
+    }
     {
         let mut stream = app.stream.lock().await;
         stream.clear();

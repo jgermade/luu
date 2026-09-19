@@ -329,7 +329,16 @@ pub fn line(event: &Event, at_ms: u64) -> RecordLine {
 /// turn.
 pub struct Recorder {
     lines: mpsc::UnboundedSender<RecordLine>,
-    started_at: u64,
+    /// What every line's `at_ms` is counted from — **the header above it**, not
+    /// the process.
+    ///
+    /// Atomic because it moves: a `serve` that starts or resumes a session
+    /// writes a second header through [`Self::session`], and a header declares
+    /// the base the lines after it are relative to. It was a plain `u64` while
+    /// a file could only ever hold one session's worth of header, which is the
+    /// state item 23 describes. See
+    /// `RECORD/2026-09-19.a-header-per-session.completed.md`.
+    started_at: std::sync::atomic::AtomicU64,
 }
 
 impl Recorder {
@@ -378,11 +387,45 @@ impl Recorder {
             }
         });
 
-        Ok(Self { lines, started_at })
+        Ok(Self {
+            lines,
+            started_at: std::sync::atomic::AtomicU64::new(started_at),
+        })
+    }
+
+    /// Starts recording a different session: writes its header and re-bases.
+    ///
+    /// The two are one call because they are one decision. A header without the
+    /// re-base leaves every line after it counted from a moment the file no
+    /// longer names, and a re-base without a header shifts every timestamp with
+    /// nothing saying why — so neither half is reachable on its own.
+    ///
+    /// `started_at` is the **session's** and not now: a resumed session started
+    /// when it started, so the lines after its header carry the offset from
+    /// that, which can be hours. Correct, and the same number the store's
+    /// stream for that session already carries.
+    pub fn session(
+        &self,
+        backend: &str,
+        model: &str,
+        budget: Budget,
+        counter: Counter,
+        posture: Option<record::Posture>,
+        started_at: u64,
+    ) {
+        // Stored before the line is sent, so a turn published between the two
+        // is counted from the header it will be read under rather than from the
+        // one it is replacing.
+        self.started_at
+            .store(started_at, std::sync::atomic::Ordering::Relaxed);
+        let _ = self
+            .lines
+            .send(header(backend, model, budget, counter, posture, started_at));
     }
 
     pub fn write(&self, event: &Event) {
-        let at_ms = now_ms().saturating_sub(self.started_at);
+        let at_ms =
+            now_ms().saturating_sub(self.started_at.load(std::sync::atomic::Ordering::Relaxed));
         let _ = self.lines.send(line(event, at_ms));
     }
 }
