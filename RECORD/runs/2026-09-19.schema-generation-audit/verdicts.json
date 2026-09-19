@@ -1,0 +1,281 @@
+{
+ "fix": "82229cc 2026-09-15 11:38:17 +0200",
+ "run_command_prompts": [
+  4,
+  9,
+  14
+ ],
+ "pairs": [
+  {
+   "model": "14B",
+   "pre": "2026-09-15.14b-tool-call-probe",
+   "post": "2026-09-15.14b-local-postfix",
+   "held_constant": [
+    "weights (qwen2.5-coder-14b-instruct-q4_k_m.gguf)",
+    "llama-server",
+    "machine 4",
+    "corpus",
+    "flags",
+    "the day"
+   ],
+   "also_differs": [],
+   "one_flag_apart": true,
+   "prompts": [
+    {
+     "n": 1,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 2,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 3,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 4,
+     "calls_run_command": true,
+     "pre_argv": "ContinuedPastFence",
+     "post_argv": "ContinuedPastFence",
+     "changed": false
+    },
+    {
+     "n": 5,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 6,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 7,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 8,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 9,
+     "calls_run_command": true,
+     "pre_argv": "NoCall",
+     "post_argv": "ContinuedPastFence",
+     "changed": true
+    },
+    {
+     "n": 10,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 11,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 12,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 13,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 14,
+     "calls_run_command": true,
+     "pre_argv": "ContinuedPastFence",
+     "post_argv": "ContinuedPastFence",
+     "changed": false
+    },
+    {
+     "n": 15,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    }
+   ],
+   "changed": [
+    9
+   ],
+   "changed_that_call_run_command": [
+    9
+   ],
+   "changed_that_cannot_have_been_the_schema": []
+  },
+  {
+   "model": "7B",
+   "pre": "2026-09-14.tool-call-probe",
+   "post": "2026-09-15.7b-ollama-registry",
+   "held_constant": [
+    "weights (sha256-60e05f21\u2026)",
+    "Ollama",
+    "corpus",
+    "--context-limit 8192",
+    "--temperature 0",
+    "--seed 7"
+   ],
+   "also_differs": [
+    "machine 1 \u2192 4",
+    "Ollama version",
+    "the day"
+   ],
+   "one_flag_apart": false,
+   "prompts": [
+    {
+     "n": 1,
+     "calls_run_command": false,
+     "pre_argv": "NoCall",
+     "post_argv": "NoCall",
+     "changed": false
+    },
+    {
+     "n": 2,
+     "calls_run_command": false,
+     "pre_argv": "Drifted",
+     "post_argv": "Drifted",
+     "changed": false
+    },
+    {
+     "n": 3,
+     "calls_run_command": false,
+     "pre_argv": "ContinuedPastFence",
+     "post_argv": "ContinuedPastFence",
+     "changed": false
+    },
+    {
+     "n": 4,
+     "calls_run_command": true,
+     "pre_argv": "NoCall",
+     "post_argv": "Drifted",
+     "changed": true
+    },
+    {
+     "n": 5,
+     "calls_run_command": false,
+     "pre_argv": "NoCall",
+     "post_argv": "NoCall",
+     "changed": false
+    },
+    {
+     "n": 6,
+     "calls_run_command": false,
+     "pre_argv": "NoCall",
+     "post_argv": "NoCall",
+     "changed": false
+    },
+    {
+     "n": 7,
+     "calls_run_command": false,
+     "pre_argv": "NoCall",
+     "post_argv": "NoCall",
+     "changed": false
+    },
+    {
+     "n": 8,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 9,
+     "calls_run_command": true,
+     "pre_argv": "Drifted",
+     "post_argv": "Drifted",
+     "changed": false
+    },
+    {
+     "n": 10,
+     "calls_run_command": false,
+     "pre_argv": "NoCall",
+     "post_argv": "NoCall",
+     "changed": false
+    },
+    {
+     "n": 11,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "Parsed",
+     "changed": false
+    },
+    {
+     "n": 12,
+     "calls_run_command": false,
+     "pre_argv": "NoCall",
+     "post_argv": "Drifted",
+     "changed": true
+    },
+    {
+     "n": 13,
+     "calls_run_command": false,
+     "pre_argv": "Parsed",
+     "post_argv": "ContinuedPastFence",
+     "changed": true
+    },
+    {
+     "n": 14,
+     "calls_run_command": true,
+     "pre_argv": "NoCall",
+     "post_argv": "ContinuedPastFence",
+     "changed": true
+    },
+    {
+     "n": 15,
+     "calls_run_command": false,
+     "pre_argv": "ContinuedPastFence",
+     "post_argv": "Parsed",
+     "changed": true
+    }
+   ],
+   "changed": [
+    4,
+    12,
+    13,
+    14,
+    15
+   ],
+   "changed_that_call_run_command": [
+    4,
+    14
+   ],
+   "changed_that_cannot_have_been_the_schema": [
+    12,
+    13,
+    15
+   ]
+  }
+ ]
+}
