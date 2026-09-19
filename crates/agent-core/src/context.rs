@@ -206,8 +206,15 @@ pub enum Eviction {
 #[serde(rename_all = "snake_case")]
 pub enum Repeat {
     /// Send it again, in every turn that selected it. Everything recorded
-    /// before this enum existed, and the default, because a run made under a
-    /// rule that did not exist is not comparable to one made under it.
+    /// before this enum existed, and what this was the default for as long as
+    /// the rule was unmeasured, because a run made under a rule that did not
+    /// exist is not comparable to one made under it.
+    ///
+    /// No longer the default, and that is a decision with a date on it rather
+    /// than a preference: `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
+    /// §fourteenth. Still reachable — from `[resend]`, from the page, and from
+    /// `--no-repeat-once` — because a recording made under it stays readable
+    /// only if the arm that made it can still be asked for.
     Always,
     /// Render it once, in the **oldest** turn of the window that carries it.
     ///
@@ -223,6 +230,14 @@ pub enum Repeat {
     /// Choosing an owner that may already be below the floor is
     /// `the-fold-fix-verified`'s failure with a different mechanism, and the
     /// precision corpus offers it 22 chances.
+    ///
+    /// **The default since 2026-09-19**, and the only one of the three rules
+    /// that has been through a model: 20 grounded questions on
+    /// `qwen2.5-coder:7b`, verdict for verdict identical to `always`, with the
+    /// `code` bucket down 17.5%. The criterion it wins under is *fewest tokens
+    /// without affecting the result*, not *fewest tokens* — that one selects
+    /// rule C, which has no accuracy measurement at all. It is n=1 and the
+    /// record says so where it decides it.
     Once,
 }
 
@@ -284,7 +299,7 @@ pub enum Results {
     /// ships the whole measured saving while making none of the unmeasured
     /// claim — which is what item 5 of `ROADMAP/2026-09-17` is open about, and
     /// why it is a third value rather than a redefinition of the one below.
-    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+    /// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
     /// §third.
     CitedReads,
     /// Behind the prune line the output becomes the line that cites it, and the
@@ -345,19 +360,27 @@ pub struct Budget {
 
 impl Budget {
     /// The CLI spells "unknown" as 0, because a flag has to have a default.
+    ///
+    /// `repeat` is [`Repeat::Once`] and the other two are off, which is not
+    /// three rules ranked by what they save — ranked that way the winner would
+    /// be `results`, the one of the three that has never been put in front of a
+    /// model. `repeat` is here because it is the only one whose saving has been
+    /// shown to cost nothing, on n=1, which is stated where it is decided.
     pub fn new(limit: u32, reserve: u32, eviction: Eviction) -> Self {
         Self {
             limit: (limit > 0).then_some(limit),
             reserve,
             eviction,
-            repeat: Repeat::Always,
+            repeat: Repeat::Once,
             prune: Prune::Never,
             results: Results::Kept,
         }
     }
 
-    /// Off by default and turned on here, so that every recording made before
-    /// it stays readable as the arm it was.
+    /// The rule this budget renders spans under. **On** by default since
+    /// 2026-09-19, so this is as much the way back to [`Repeat::Always`] as the
+    /// way to [`Repeat::Once`] — every recording on disk was made under one of
+    /// the two, and the header says which since format 11.
     pub fn repeating(self, repeat: Repeat) -> Self {
         Self { repeat, ..self }
     }
@@ -2521,8 +2544,39 @@ mod tests {
         assert!(!users[1].contains("src/lib.rs:1-4"));
     }
 
+    /// The arm that was the default until 2026-09-19, asked for by name.
+    ///
+    /// It stopped being what a `Budget` says when asked nothing and it did not
+    /// stop being an arm: every recording made before that date was rendered
+    /// this way, and a reader that cannot reproduce the arm cannot check the
+    /// run. The test kept its assertion and gained one line — which is the
+    /// whole of what the flip did to this rule's behaviour.
     #[test]
-    fn the_default_sends_it_in_every_turn_that_selected_it() {
+    fn asking_for_always_sends_it_in_every_turn_that_selected_it() {
+        let counter = WordCounter::default();
+        let shared = fragment("src/lib.rs:1-4", "fn main () {}");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&shared), std::slice::from_ref(&shared)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Always),
+            &counter,
+        );
+
+        assert_eq!(
+            occurrences(&selection, "src/lib.rs:1-4"),
+            2,
+            "every recording on disk was made under this arm and must stay readable as it",
+        );
+    }
+
+    /// And the same corpus under no instruction at all, which is the flip.
+    #[test]
+    fn a_budget_asked_nothing_now_sends_a_shared_span_once() {
         let counter = WordCounter::default();
         let shared = fragment("src/lib.rs:1-4", "fn main () {}");
         let mut context = context_carrying(
@@ -2539,8 +2593,8 @@ mod tests {
 
         assert_eq!(
             occurrences(&selection, "src/lib.rs:1-4"),
-            2,
-            "every recording on disk was made under this arm and must stay readable as it",
+            1,
+            "rule A is what a run gets without asking, since 2026-09-19",
         );
     }
 
@@ -2715,7 +2769,12 @@ mod tests {
         let mut kept_more = 0;
 
         for limit in 20..90 {
-            let budget = Budget::new(limit, 0, Eviction::Turn);
+            // The baseline says `Always` out loud now that it is no longer what
+            // `Budget::new` hands back. Without the line this compares the rule
+            // against itself and the sweep below proves nothing — which is the
+            // failure mode a flipped default has in every one-flag-apart test
+            // in this file.
+            let budget = Budget::new(limit, 0, Eviction::Turn).repeating(Repeat::Always);
             let mut plain = context_carrying(&carried, &counter);
             let mut once = context_carrying(&carried, &counter);
 
@@ -2780,7 +2839,12 @@ mod tests {
         // Narrow enough that the window does not fit, wide enough that the
         // conversation does once the code is a citation — which is the whole
         // trade: nothing is evicted here.
-        let budget = Budget::new(50, 0, Eviction::Turn).pruning(Prune::Behind);
+        // `Always` by name: this corpus is one span carried by three turns,
+        // which is exactly what rule A collapses, so leaving the default in
+        // place would measure the two rules together and call it rule B.
+        let budget = Budget::new(50, 0, Eviction::Turn)
+            .repeating(Repeat::Always)
+            .pruning(Prune::Behind);
         let selection = context.select("now this", &[], budget, &counter);
 
         assert!(selection.pruned > 0, "the point of the case");
@@ -2814,7 +2878,7 @@ mod tests {
         );
         let carried: Vec<&[Fragment]> = vec![std::slice::from_ref(&span); 3];
 
-        let plain = Budget::new(40, 0, Eviction::Turn);
+        let plain = Budget::new(40, 0, Eviction::Turn).repeating(Repeat::Always);
         let mut without = context_carrying(&carried, &counter);
         let without = without.select("now this", &[], plain, &counter);
 
@@ -2845,7 +2909,9 @@ mod tests {
         let narrow = context.select(
             "now this",
             &[],
-            Budget::new(40, 0, Eviction::Turn).pruning(Prune::Behind),
+            Budget::new(40, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
+                .pruning(Prune::Behind),
             &counter,
         );
         assert!(narrow.pruned > 0, "the point of the case");
@@ -2853,7 +2919,9 @@ mod tests {
         let wide = context.select(
             "now this",
             &[],
-            Budget::new(8192, 0, Eviction::Turn).pruning(Prune::Behind),
+            Budget::new(8192, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
+                .pruning(Prune::Behind),
             &counter,
         );
         assert_eq!(
@@ -2926,7 +2994,9 @@ mod tests {
         let selection = context.select(
             "now this",
             &[],
-            Budget::new(40, 0, Eviction::Turn).pruning(Prune::Behind),
+            Budget::new(40, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
+                .pruning(Prune::Behind),
             &counter,
         );
         assert!(selection.pruned > 0, "the point of the case");
@@ -3301,6 +3371,7 @@ mod tests {
             "now this",
             &[],
             Budget::new(60, 0, Eviction::Turn)
+                .repeating(Repeat::Always)
                 .pruning(Prune::Behind)
                 .citing(Results::Cited),
             &counter,

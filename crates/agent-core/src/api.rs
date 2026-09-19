@@ -248,7 +248,7 @@ pub struct SessionView {
     /// a resume compares the fold against what the server is about to run, and
     /// it could not compare a field the fold was dropping — which is how a
     /// posture that moved on a resume wrote no line for a day. See
-    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` §second.
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` §second.
     #[serde(default)]
     pub repeat: Option<Repeat>,
     #[serde(default)]

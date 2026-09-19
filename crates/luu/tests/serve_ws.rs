@@ -2412,7 +2412,7 @@ async fn a_session_can_be_named_and_keeps_the_name() {
 /// The test is two sessions in one process under different rules, and it reads
 /// both surfaces that have to agree about which: `/api/settings`, which the page
 /// renders, and the live fold, which is what a resume compares before it writes
-/// a header. See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`
+/// a header. See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
 /// part 2.
 #[tokio::test]
 async fn two_sessions_in_one_process_render_their_windows_under_different_rules() {
@@ -2428,13 +2428,17 @@ async fn two_sessions_in_one_process_render_their_windows_under_different_rules(
             .expect("the settings are JSON")
     };
 
-    // What the process was started under: every rule off, which is what every
-    // recording made before one of them existed is.
+    // What the process was started under, with no flags and no `[resend]`
+    // table: rule A on and the other two off, which is the default as it has
+    // stood since 2026-09-19. This is the end of the chain the flip travels —
+    // `Budget::new` to a session's settings to the wire — and the assertion is
+    // here rather than only in a unit test because every link between the two
+    // is a place it could have been dropped.
     let before = settings(address.clone()).await;
     assert_eq!(
         (&before["repeat"], &before["prune"], &before["results"]),
         (
-            &serde_json::json!("always"),
+            &serde_json::json!("once"),
             &serde_json::json!("never"),
             &serde_json::json!("kept")
         ),
@@ -2543,7 +2547,7 @@ async fn two_sessions_in_one_process_render_their_windows_under_different_rules(
 /// a page that showed one of them as though it were the other would be telling
 /// somebody their machine is set to something it is not. It is the relationship
 /// `ProvidersView::running` has with the file's `default`, one table along. See
-/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 3.
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 3.
 #[tokio::test]
 async fn the_resend_route_keeps_this_machines_default_apart_from_what_is_running() {
     let address = server().await;
@@ -2557,7 +2561,7 @@ async fn the_resend_route_keeps_this_machines_default_apart_from_what_is_running
             &resend["running"]["results"]
         ),
         (
-            &serde_json::json!("always"),
+            &serde_json::json!("once"),
             &serde_json::json!("never"),
             &serde_json::json!("kept")
         ),

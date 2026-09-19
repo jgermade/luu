@@ -8,7 +8,7 @@
   // These three change the bytes the model receives, so they belong beside
   // Models, which is the other section in this modal that is about the run
   // rather than about the reader. See
-  // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 4.
+  // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 4.
   //
   // The section exists because the rules were built, measured, tested and off,
   // reachable only by typing a flag and restarting the server — which is the
@@ -99,6 +99,13 @@
   <span class="path">{{ state.resend.path }}</span>
   · what a session starts on unless it asks for something else
 </p>
+<p class="dim small">
+  <b>unset</b> is this machine stating no position, which is not the same as
+  choosing off: the rule falls back to the code's own default, and that is
+  <b>repeat once</b>, <b>prune never</b>, <b>results kept</b>. Rule A is the
+  one that is on, because it is the only one of the three whose saving has been
+  measured against a model.
+</p>
 <p :if="state.resend && !state.resend.editable" class="refused">{{ state.resend.refused }}</p>
 <p :if="state.resendError" class="error">{{ state.resendError }}</p>
 
@@ -119,7 +126,10 @@
     carries it and skips it in every turn after, the turn being asked included.
     The one of the three that has been through a model: across 20 grounded
     questions on a 7B, the <code>code</code> bucket fell <b>17.5%</b> and not one
-    verdict moved. One conversation, one model, one seed, run once.
+    verdict moved. One conversation, one model, one seed, run once — and that
+    single run is what <b>once</b> became the default on, 2026-09-19.
+    <b>always</b> is the arm every recording made before that date was rendered
+    under, and it is here so that one can still be reproduced.
   </dd>
 
   <dt>Prune</dt>

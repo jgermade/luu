@@ -129,7 +129,7 @@ struct File {
     /// and not in `localStorage` for the reason the providers are — it changes
     /// the bytes a run sends, which is a fact about the run and not about the
     /// screen somebody reads from. See
-    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resend: Option<Resend>,
 }
@@ -162,7 +162,7 @@ pub struct Ui {
 /// not exist. So the mechanism lands first under the names the header already
 /// uses, and renaming them later is a migration of a file on somebody's
 /// machine — the cost of this order, accepted rather than overlooked. See
-/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` §sixth for
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` §sixth for
 /// the cut, and §eleventh for why it is not here.
 ///
 /// Every key is optional and an absent one means *what the code defaults to*,

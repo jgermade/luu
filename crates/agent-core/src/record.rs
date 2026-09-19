@@ -86,7 +86,7 @@ use crate::trace::TraceMessage;
 /// `None` in one written before the policy was a choice: every one of those ran
 /// under the defaults, but the file does not say so, and inventing the field on
 /// the reader's behalf would put a claim in a record the record never made.
-/// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md`.
+/// See `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`.
 pub const FORMAT: u32 = 11;
 
 /// The posture a session ran under, as a recording names it.

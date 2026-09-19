@@ -323,15 +323,25 @@ enum Command {
         low_water: f32,
 
         /// Render a span once, in the oldest turn of the window that carries
-        /// it, instead of in every turn that selected it. Off, so that a run
-        /// made without it stays comparable to every recording on disk.
+        /// it, instead of in every turn that selected it. **On by default**
+        /// since 2026-09-19 — the flag is kept because a `[resend]` table that
+        /// says `always` is still a thing a run may want to override.
         #[arg(long)]
         repeat_once: bool,
+
+        /// Send a span again in every turn that selected it: the rule above,
+        /// off. The arm every recording made before 2026-09-19 was made under,
+        /// and the only way to ask for it from a command line now that it is
+        /// no longer what you get by saying nothing.
+        #[arg(long, conflicts_with = "repeat_once")]
+        no_repeat_once: bool,
 
         /// Under pressure, let the oldest turns of the window give up their
         /// spans and keep their exchange: the code becomes the line that cites
         /// it, and a turn is evicted whole only when pruning the window is not
-        /// enough. Off, for the same reason.
+        /// enough. Off, and it stayed off when rule A's default flipped: what
+        /// it buys is measured in tokens and what it costs is not measured at
+        /// all, which is item 5 of `ROADMAP/2026-09-17`.
         #[arg(long)]
         prune_behind: bool,
 
@@ -512,15 +522,25 @@ enum Command {
         low_water: f32,
 
         /// Render a span once, in the oldest turn of the window that carries
-        /// it, instead of in every turn that selected it. Off, so that a run
-        /// made without it stays comparable to every recording on disk.
+        /// it, instead of in every turn that selected it. **On by default**
+        /// since 2026-09-19 — the flag is kept because a `[resend]` table that
+        /// says `always` is still a thing a run may want to override.
         #[arg(long)]
         repeat_once: bool,
+
+        /// Send a span again in every turn that selected it: the rule above,
+        /// off. The arm every recording made before 2026-09-19 was made under,
+        /// and the only way to ask for it from a command line now that it is
+        /// no longer what you get by saying nothing.
+        #[arg(long, conflicts_with = "repeat_once")]
+        no_repeat_once: bool,
 
         /// Under pressure, let the oldest turns of the window give up their
         /// spans and keep their exchange: the code becomes the line that cites
         /// it, and a turn is evicted whole only when pruning the window is not
-        /// enough. Off, for the same reason.
+        /// enough. Off, and it stayed off when rule A's default flipped: what
+        /// it buys is measured in tokens and what it costs is not measured at
+        /// all, which is item 5 of `ROADMAP/2026-09-17`.
         #[arg(long)]
         prune_behind: bool,
 
@@ -709,15 +729,25 @@ enum Command {
         low_water: f32,
 
         /// Render a span once, in the oldest turn of the window that carries
-        /// it, instead of in every turn that selected it. Off, so that a run
-        /// made without it stays comparable to every recording on disk.
+        /// it, instead of in every turn that selected it. **On by default**
+        /// since 2026-09-19 — the flag is kept because a `[resend]` table that
+        /// says `always` is still a thing a run may want to override.
         #[arg(long)]
         repeat_once: bool,
+
+        /// Send a span again in every turn that selected it: the rule above,
+        /// off. The arm every recording made before 2026-09-19 was made under,
+        /// and the only way to ask for it from a command line now that it is
+        /// no longer what you get by saying nothing.
+        #[arg(long, conflicts_with = "repeat_once")]
+        no_repeat_once: bool,
 
         /// Under pressure, let the oldest turns of the window give up their
         /// spans and keep their exchange: the code becomes the line that cites
         /// it, and a turn is evicted whole only when pruning the window is not
-        /// enough. Off, for the same reason.
+        /// enough. Off, and it stayed off when rule A's default flipped: what
+        /// it buys is measured in tokens and what it costs is not measured at
+        /// all, which is item 5 of `ROADMAP/2026-09-17`.
         #[arg(long)]
         prune_behind: bool,
 
@@ -1247,30 +1277,53 @@ impl ConstrainKind {
 /// disk was made under the flag as it meant `Cited`. A seam between the two
 /// surfaces, named here rather than closed by widening a recorded arm.
 ///
-/// **The precedence is one-way, and it is the flags' own shape that makes it
-/// so.** A flag can only turn a rule *on*, so *absent* and *off* are the same
-/// `false` here and nothing can tell them apart. `--repeat-once` therefore
-/// overrides a file that says `always`, and a file that says `once` cannot be
-/// turned off from the command line. Said out loud rather than left to be
-/// discovered; the off-switch is the `--no-repeat-once` that §What it costs
-/// says a flipped default will want, and it is not here because no default has
-/// flipped.
+/// **The precedence is one-way for two of the three rules, and both ways for
+/// the one whose default moved.** A `bool` flag can only turn a rule *on*, so
+/// for `prune` and `results` *absent* and *off* arrive here as the same `false`
+/// and nothing can tell them apart: a flag beats a file that says otherwise, and
+/// a file that turns one of those two on cannot be turned off from a command
+/// line. That is a limitation and it is pinned as one in the test.
+///
+/// `repeat` is the exception because its default flipped, which is exactly the
+/// condition §What it costs said would owe an off-switch: `--no-repeat-once` is
+/// that switch, so this argument is an `Option<bool>` where the other two are
+/// `bool` — `Some` is *a flag was typed and this is which*, `None` is *nothing
+/// was typed*, and the file is asked only in the `None` case. Without it, the
+/// flip would make `always` unreachable from any command line for the first
+/// time, which is the arm every recording before 2026-09-19 was made under.
 ///
 /// Read by `chat` and `stdio` as well as by `serve`. It is a fact about this
 /// machine, in the file that already holds this machine's default destination —
 /// not a session-start choice, which is the seam the record leaves open between
 /// the CLI and the page. See
-/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.WIP.md` part 3.
+/// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 3.
+/// The two halves of `--repeat-once` as the one answer they are: `None` where
+/// neither flag was typed, and that is what lets the file be asked.
+///
+/// Two `bool`s arrive rather than one `Option<bool>` because that is the shape
+/// clap gives a pair of flags. `conflicts_with` makes typing both a parse
+/// error, so the disagreeing arm is unreachable — it is written as the
+/// off-switch winning rather than left to fall out of the order the arms happen
+/// to be in.
+fn repeat_asked(once: bool, off: bool) -> Option<bool> {
+    match (once, off) {
+        (false, false) => None,
+        (_, true) => Some(false),
+        (true, false) => Some(true),
+    }
+}
+
 fn resend_rules(
     table: crate::provider::Resend,
-    once: bool,
+    once: Option<bool>,
     behind: bool,
     cited: bool,
 ) -> (Repeat, Prune, Results) {
     (
         match once {
-            true => Repeat::Once,
-            false => table.repeat.unwrap_or(Repeat::Always),
+            Some(true) => Repeat::Once,
+            Some(false) => Repeat::Always,
+            None => table.repeat.unwrap_or(Repeat::Once),
         },
         match behind {
             true => Prune::Behind,
@@ -1791,6 +1844,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        no_repeat_once,
         prune_behind,
         prune_results,
         temperature,
@@ -1906,7 +1960,12 @@ pub async fn run() -> Result<()> {
             // surface that is about to offer it.
             budget: budget_under(
                 Budget::new(context_limit, reserve, evict.policy(low_water)),
-                resend_rules(resend, repeat_once, prune_behind, prune_results),
+                resend_rules(
+                    resend,
+                    repeat_asked(repeat_once, no_repeat_once),
+                    prune_behind,
+                    prune_results,
+                ),
             ),
             counter,
             tokenizer,
@@ -1965,6 +2024,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        no_repeat_once,
         prune_behind,
         prune_results,
         temperature,
@@ -2025,7 +2085,12 @@ pub async fn run() -> Result<()> {
             record,
             budget: budget_under(
                 Budget::new(context_limit, reserve, evict.policy(low_water)),
-                resend_rules(machine_resend(), repeat_once, prune_behind, prune_results),
+                resend_rules(
+                    machine_resend(),
+                    repeat_asked(repeat_once, no_repeat_once),
+                    prune_behind,
+                    prune_results,
+                ),
             ),
             counter,
             tokenizer,
@@ -2071,6 +2136,7 @@ pub async fn run() -> Result<()> {
         evict,
         low_water,
         repeat_once,
+        no_repeat_once,
         prune_behind,
         prune_results,
         temperature,
@@ -2123,7 +2189,12 @@ pub async fn run() -> Result<()> {
 
     let budget = budget_under(
         Budget::new(context_limit, reserve, evict.policy(low_water)),
-        resend_rules(machine_resend(), repeat_once, prune_behind, prune_results),
+        resend_rules(
+            machine_resend(),
+            repeat_asked(repeat_once, no_repeat_once),
+            prune_behind,
+            prune_results,
+        ),
     );
     let started_at = now_ms();
     let recorder = match &record {
@@ -2667,13 +2738,16 @@ mod tests {
 
     /// The machine's table, the run's flags, and which wins.
     ///
-    /// One-way on purpose, and the shape of a `bool` flag is the whole reason:
-    /// it can only turn a rule on, so *not given* and *given off* arrive here as
-    /// the same `false`. The test pins both halves — including the one that is a
-    /// limitation rather than a feature — because a precedence nobody wrote down
-    /// is one somebody discovers by being surprised.
+    /// One-way for `prune` and `results`, both ways for `repeat`, and the
+    /// difference is which defaults have moved: a `bool` flag can only turn a
+    /// rule on, so for the two that are still off *not given* and *given off*
+    /// arrive as the same `false`. `repeat` got `--no-repeat-once` when its
+    /// default flipped, because otherwise the flip would have made `always`
+    /// unreachable from a command line. The test pins all of it — including the
+    /// half that is a limitation rather than a feature — because a precedence
+    /// nobody wrote down is one somebody discovers by being surprised.
     #[test]
-    fn a_flag_turns_a_rule_on_over_the_file_and_cannot_turn_one_off() {
+    fn a_flag_beats_the_file_and_only_repeat_can_be_turned_off_again() {
         let table = |repeat, prune, results| crate::provider::Resend {
             repeat,
             prune,
@@ -2681,42 +2755,94 @@ mod tests {
         };
         let says_nothing = table(None, None, None);
 
-        // No file and no flags: the defaults, which is every recording made
-        // before any of these rules existed.
+        // No file and no flags: the defaults as they stand after 2026-09-19 —
+        // rule A on because it is the one that has been measured against a
+        // model, B and C off because they have not.
         assert_eq!(
-            resend_rules(says_nothing, false, false, false),
-            (Repeat::Always, Prune::Never, Results::Kept),
+            resend_rules(says_nothing, None, false, false),
+            (Repeat::Once, Prune::Never, Results::Kept),
         );
 
         // The file alone decides where no flag was typed.
         assert_eq!(
             resend_rules(
-                table(Some(Repeat::Once), Some(Prune::Behind), None),
-                false,
+                table(Some(Repeat::Always), Some(Prune::Behind), None),
+                None,
                 false,
                 false,
             ),
-            (Repeat::Once, Prune::Behind, Results::Kept),
+            (Repeat::Always, Prune::Behind, Results::Kept),
             "an unnamed key is the code's default, not the file's silence read as off",
         );
 
-        // A flag wins over a file that says otherwise.
+        // A flag wins over a file that says otherwise, in both directions for
+        // the rule that has a flag in both directions.
         assert_eq!(
-            resend_rules(table(Some(Repeat::Always), None, None), true, false, false).0,
+            resend_rules(
+                table(Some(Repeat::Always), None, None),
+                Some(true),
+                false,
+                false
+            )
+            .0,
             Repeat::Once,
             "a flag typed at the run is more specific than a machine's default",
         );
-
-        // And the half that is a limitation: a file that turns a rule on cannot
-        // be turned off from the command line, because there is no flag that
-        // says off. This is the `--no-repeat-once` the record says a flipped
-        // default will want, and it is pinned as absent rather than left to be
-        // met by surprise.
         assert_eq!(
-            resend_rules(table(Some(Repeat::Once), None, None), false, false, false).0,
-            Repeat::Once,
-            "nothing on the command line spells off, so this is what it does",
+            resend_rules(
+                table(Some(Repeat::Once), None, None),
+                Some(false),
+                false,
+                false
+            )
+            .0,
+            Repeat::Always,
+            "--no-repeat-once is the way back, and a file saying `once` does not outrank it",
         );
+        assert_eq!(
+            resend_rules(says_nothing, Some(false), false, false).0,
+            Repeat::Always,
+            "and it reaches past the code's own default, which is the case it exists for",
+        );
+
+        // And the half that is still a limitation: B and C have no flag that
+        // says off, so a file that turns one of them on is the end of it.
+        assert_eq!(
+            resend_rules(table(None, Some(Prune::Behind), None), None, false, false).1,
+            Prune::Behind,
+            "nothing on the command line spells off for this one, so this is what it does",
+        );
+    }
+
+    /// The two flags as one answer, including the arm clap makes unreachable.
+    #[test]
+    fn neither_flag_is_the_only_way_to_ask_the_file() {
+        assert_eq!(repeat_asked(false, false), None, "the file gets asked");
+        assert_eq!(repeat_asked(true, false), Some(true));
+        assert_eq!(repeat_asked(false, true), Some(false));
+        assert_eq!(
+            repeat_asked(true, true),
+            Some(false),
+            "`conflicts_with` makes this a parse error; if it ever stops being \
+             one, the flag that says off is the one a person typed on purpose",
+        );
+    }
+
+    /// The default itself, pinned so that moving it again is a diff somebody
+    /// reads rather than a number that drifts.
+    ///
+    /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
+    /// §What it costs asks for exactly this test, and it asks for it because
+    /// the decision it pins is **n=1**: one conversation, one 7B, one
+    /// quantization, one window, one seed, run once. A second corpus that
+    /// contradicts the 2026-09-14 run flips this back, and that is a line in
+    /// this file rather than a rediscovery.
+    #[test]
+    fn a_budget_that_is_asked_nothing_renders_each_span_once() {
+        let budget = Budget::new(8192, 512, agent_core::context::Eviction::Turn);
+        assert_eq!(budget.repeat, Repeat::Once);
+        assert_eq!(budget.prune, Prune::Never, "unmeasured, so off");
+        assert_eq!(budget.results, Results::Kept, "unmeasured, so off");
     }
 
     #[test]

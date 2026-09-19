@@ -477,11 +477,15 @@ eviction), `--reserve` is what is held back for the answer, `--evict` is how the
 history gives way (`turn` drops the minimum, `block` cuts to `--low-water` and
 then holds still), and `--tokenizer` points at the model's `tokenizer.json`.
 `--repeat-once` renders a span in the **oldest** turn of the window that carries
-it instead of in every turn that selected it — off, because it changes numbers
-every recording on disk was made without, and oldest rather than newest because
-that is what leaves the block above the newest message byte-identical. See
-[`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md).
-`--prune-behind` is the other rule and is also off: under pressure the oldest
+it instead of in every turn that selected it — **on by default since
+2026-09-19**, and oldest rather than newest because that is what leaves the
+block above the newest message byte-identical. It is the only one of the three
+window rules that has been through a model without moving a verdict, which is
+the whole of why it is the one that is on; `--no-repeat-once` is the way back to
+the arm every recording before that date was made under. See
+[`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md)
+and [`RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`](RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md).
+`--prune-behind` is the second rule and is off: under pressure the oldest
 turns give up their spans and keep their exchange — the code becomes a line
 citing it, and a turn is dropped whole only when pruning the window is not
 enough. The prune line moves to whatever target `--evict` chose, so it is
