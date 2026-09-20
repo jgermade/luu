@@ -72,6 +72,10 @@ pub fn export(sessions: &[Session], out: &Path) -> Result<Vec<SessionSummary>> {
             &view,
         )?;
         write_json(&root.join("turns.json"), &view.turns)?;
+        // The static twin answers this too, because the numbers this project
+        // quotes in records come off recordings rather than off a live socket.
+        // A mirror with a hole in it is the thing this module exists to avoid.
+        write_json(&root.join("counts.json"), &view.counts())?;
         write_json(
             &root.join("context.json"),
             &serde_json::json!({

@@ -452,6 +452,10 @@ pub struct Selection {
     /// What this selection pruned, if the line moved. `None` on a selection
     /// that pruned nothing, which is every one made under [`Prune::Never`].
     pub pruning: Option<Pruned>,
+    /// What rule A kept out of this render. `None` when it kept nothing out,
+    /// which is every selection made under [`Repeat::Always`] and every one
+    /// under [`Repeat::Once`] whose window carries no span twice.
+    pub repeating: Option<Repeated>,
     /// Paths this render sent under more than one body, in the order the window
     /// first carried them.
     ///
@@ -504,6 +508,50 @@ pub struct Pruned {
     /// What the window saved by it — the difference of two windows, not the sum
     /// of the spans, because under [`Repeat::Once`] a span the pruned turn
     /// owned passes to a younger turn instead of leaving.
+    pub tokens: u32,
+    /// Which counter produced `tokens`.
+    pub counter: Counter,
+}
+
+/// What rule A kept out of one render: the spans a turn owns and did not send,
+/// because something else in this same prompt is already showing them.
+///
+/// Beside [`Pruned`] and shaped like it, because it is the same kind of fact —
+/// a turn gave up code and stayed in the conversation. What makes it a separate
+/// report is which rule did it and what the number means, below.
+///
+/// It exists because rule A is the **default** and was the only one of the
+/// three window rules that reported nothing: `split_shown` computed this and
+/// the render subtracted it from a bucket, so a run that collapsed forty spans
+/// and one that collapsed none left the same evidence. That is, one field
+/// along, what `record::FORMAT` 11 was bumped to fix for `--prune-behind`. See
+/// `RECORD/2026-09-19.one-counting-surface.completed.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Repeated {
+    /// The turns of the history that gave up spans, oldest first. Only the ones
+    /// that gave up any, for [`Pruned::turns`]' reason: naming a turn that lost
+    /// nothing reports a saving that did not happen.
+    pub turns: Vec<TurnId>,
+    /// Whether the turn being asked gave one up too — the case where the
+    /// history is showing a span and the *fresh* read of it is the one that is
+    /// dropped.
+    ///
+    /// A `bool` and not an id, for [`Diverged::asking`]'s reason: this runs
+    /// before the turn is pushed and it has no id yet.
+    pub asking: bool,
+    /// How many fragments went unsent across the whole render.
+    pub spans: usize,
+    /// What those fragments would have cost, summed, by the counter below.
+    ///
+    /// **The sum of the spans, and deliberately not what [`Pruned::tokens`]
+    /// is.** That field is the difference of two windows precisely because
+    /// under [`Repeat::Once`] a span a pruned turn owned passes to a younger
+    /// turn instead of leaving; this is the other side of that same passing
+    /// down, so it is what the render did not resend and **not** what the
+    /// window would have been under [`Repeat::Always`] — where the younger turn
+    /// would not have been holding the span in the first place. A reader who
+    /// wants the counterfactual runs the arm, which is what one flag apart is
+    /// for.
     pub tokens: u32,
     /// Which counter produced `tokens`.
     pub counter: Counter,
@@ -1397,6 +1445,17 @@ impl Context {
         // stored separately to avoid.
         // `None` is the turn being asked, which has no id yet.
         let mut sent: Vec<(&str, &str, Option<TurnId>)> = Vec::new();
+        // What rule A kept out, accumulated as the render walks. Collected here
+        // rather than recomputed afterwards for `sent`'s own reason: the answer
+        // is a by-product of the walk, and deriving it again would be a second
+        // implementation of the rule sitting beside the rule.
+        let mut repeated = Repeated {
+            turns: Vec::new(),
+            asking: false,
+            spans: 0,
+            tokens: 0,
+            counter: counter.id(),
+        };
         for item in &items {
             let tokens = self.item_tokens(item, counter, self.pruned, budget.results);
             match item {
@@ -1433,7 +1492,13 @@ impl Context {
                     // Subtracted rather than recounted so that a turn repeating
                     // nothing costs exactly what it has always cost, and every
                     // recording made before `Repeat` reads unchanged.
-                    history_tokens += tokens.saturating_sub(fragments_tokens(&dropped, counter));
+                    let unsent = fragments_tokens(&dropped, counter);
+                    history_tokens += tokens.saturating_sub(unsent);
+                    if !dropped.is_empty() {
+                        repeated.turns.push(turn.id);
+                        repeated.spans += dropped.len();
+                        repeated.tokens += unsent;
+                    }
                     sent.extend(
                         kept.iter()
                             .map(|fragment| (&*fragment.path, &*fragment.text, Some(turn.id))),
@@ -1470,11 +1535,20 @@ impl Context {
         // already showing, it does not show again. `code_tokens` above was
         // counted before the floor moved, so it is the whole bucket; this is
         // what of it is actually sent.
-        let (kept, _) = split_shown(code_context, &mut shown, budget.repeat);
+        let (kept, dropped) = split_shown(code_context, &mut shown, budget.repeat);
         let code_tokens = match kept.len() == code_context.len() {
             true => code_tokens,
             false => counter.count(&fragments_text(kept.iter().copied())),
         };
+        // The one case where the *fresh* read of a span is the one dropped,
+        // because an older turn in this same prompt is already showing it —
+        // which is the direction `Repeat::Once` was chosen for and the reason
+        // item 19's defect is invisible to it.
+        if !dropped.is_empty() {
+            repeated.asking = true;
+            repeated.spans += dropped.len();
+            repeated.tokens += fragments_tokens(&dropped, counter);
+        }
         sent.extend(
             kept.iter()
                 .map(|fragment| (&*fragment.path, &*fragment.text, None)),
@@ -1511,6 +1585,12 @@ impl Context {
             pruned: self.pruned,
             eviction,
             pruning,
+            // `None` and not a zeroed struct, on `eviction`'s and `pruning`'s
+            // own semantics: a selection that collapsed nothing has nothing to
+            // report, and a report of zero would put a `repeated` line in every
+            // recording made under `Repeat::Always` saying the rule that is off
+            // saved nothing.
+            repeating: (repeated.spans > 0).then_some(repeated),
             diverged,
         }
     }

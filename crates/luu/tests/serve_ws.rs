@@ -930,6 +930,79 @@ async fn an_amendment_the_policy_refuses_is_reported_not_only_dropped() {
     assert_eq!(approved["plan"]["files"], serde_json::json!(["Cargo.toml"]));
 }
 
+/// The refusal reaches the tally, which is the whole of why the fold keeps
+/// refusals at all.
+///
+/// `not_granted` is the only refusal in the protocol that stops nothing and the
+/// only place a person learns the policy file has a floor —
+/// `RECORD/2026-09-17.the-gate-panel-narrows.completed.md` found it being
+/// cleared from the page within a frame of arriving. It was also being dropped
+/// by the fold, under a comment reserving the right to keep it *until something
+/// wants to count them*. Driven end to end rather than folded from a fixture,
+/// because what is being checked is that a real refusal off a real gate reaches
+/// a route, and both halves of that had been true separately for weeks.
+#[tokio::test]
+async fn a_refusal_the_page_clears_in_a_frame_is_still_in_the_count() {
+    let address = server_with(vec![
+        PLAN_FOR_CARGO_TOML.into(),
+        "Read it.".into(),
+        "Read it.".into(),
+    ])
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    assert_eq!(
+        get(&address, "/api/sessions/live/counts").await["refused"],
+        serde_json::json!([]),
+        "nothing refused yet, and an empty list rather than no field",
+    );
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "read the manifest"}),
+    )
+    .await;
+    until(&mut socket, "job_proposed").await;
+    send(
+        &mut socket,
+        serde_json::json!({
+            "type": "approve_job",
+            "job": 1,
+            "files": ["/etc/passwd"],
+            "commands": [],
+        }),
+    )
+    .await;
+    until(&mut socket, "refused").await;
+    until(&mut socket, "job_approved").await;
+
+    let counts = get(&address, "/api/sessions/live/counts").await;
+    assert_eq!(
+        counts["refused"],
+        serde_json::json!([{"reason": "not_granted", "count": 1}]),
+    );
+    assert_eq!(
+        counts["jobs"]["approved"], 1,
+        "and the job it did not stop is counted as approved",
+    );
+    // The grant is a count of path *strings*: which of them is a directory is
+    // a question about a disk, and item 12 of ROADMAP/2026-09-17 is taken this
+    // far and no further. See RECORD/2026-09-19.one-counting-surface.completed.md.
+    assert_eq!(
+        counts["jobs"]["reads"], 1,
+        "Cargo.toml, /etc/passwd dropped"
+    );
+
+    assert_eq!(
+        get(&address, "/api/sessions/live/counts.json").await,
+        counts,
+        "both spellings, as every route here answers",
+    );
+}
+
 /// The lifecycle is a state machine and the socket is open to anyone: closing
 /// a job that was only *proposed* used to succeed, which took the gate off
 /// the screen with its prompt still held and left the session with no way to
