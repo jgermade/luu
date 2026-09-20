@@ -7,7 +7,7 @@
 # span genuinely needs re-reading, which is why item 19's defect survived every
 # run this project has made and why rule A's default flipped on evidence that
 # could not contain it. See
-# RECORD/2026-09-19.one-path-two-bodies.WIP.md for the defect and
+# RECORD/2026-09-19.one-path-two-bodies.completed.md for the defect and
 # RECORD/2026-09-19.a-corpus-that-edits.completed.md for this corpus.
 #
 # **It runs against `edit-reread/`, not against this repository**, and against a

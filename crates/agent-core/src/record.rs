@@ -97,7 +97,7 @@ use crate::trace::TraceMessage;
 /// and in the transcript, and what changed is the prompt. A stream written
 /// before this simply has no such line, which is not the same claim as a stream
 /// that has none because nothing diverged — the format number is what tells
-/// those two apart. See `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+/// those two apart. See `RECORD/2026-09-19.one-path-two-bodies.completed.md`.
 ///
 /// 13: `grounded` lines, and the **protocol** moves with them to 6 — the first
 /// time since format 3 that a bump is a protocol bump rather than a trace one.
@@ -125,7 +125,27 @@ use crate::trace::TraceMessage;
 /// same claim as a stream whose rule collapsed nothing; the format number is
 /// what tells the two apart. See
 /// `RECORD/2026-09-19.one-counting-surface.completed.md`.
-pub const FORMAT: u32 = 14;
+/// 15: a `superseded` **trace** line, and with it rule A stops sending bytes it
+/// knows are stale. Format 12 landed the detector and the record that argued
+/// the repair deliberately did not take it, because the repair trades measured
+/// prefix reuse for truthfulness and nothing had ever counted how often the
+/// trade would fire. Format 14 and the corpus behind it produced the number —
+/// **8 of 13 renders**, off two edits — and this is the decision that number
+/// was waiting for: the newest body of a path wins and the older ones go out as
+/// the line that cites them. Same rule as 3, 4 and 5 — a new variant of a
+/// tagged enum — and the protocol stays at 6, because what a superseded span
+/// changes is the prompt and not the conversation.
+///
+/// It is the one bump here that makes an *older* line mean something new: a
+/// stream at 12, 13 or 14 carries `diverged` lines because the defect was
+/// reported and not repaired, and a stream at 15 carries `superseded` where
+/// those would have been. So `diverged` empty at 15 is *nothing was stale*
+/// **or** *everything stale was replaced*, and the two are told apart by the
+/// line beside it rather than by the absence of one. A run under
+/// `--no-repeat-once` still reports `diverged` and never `superseded`, which is
+/// what keeps the two arms one flag apart. See
+/// `RECORD/2026-09-20.the-newest-body-wins.completed.md`.
+pub const FORMAT: u32 = 15;
 
 /// The posture a session ran under, as a recording names it.
 ///

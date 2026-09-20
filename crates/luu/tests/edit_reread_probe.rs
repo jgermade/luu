@@ -10,12 +10,20 @@
 //! rather than of a reply.
 //!
 //! What it proves is that the corpus produces what it was built to produce:
-//! **eight of the session's thirteen prompts** go out contradicting themselves
-//! about `src/greeting.rs`, off two edits, and **nothing at all** is said about
-//! the three files that are there to stay quiet. The two silences are the point
+//! **eight of the session's thirteen prompts** carry two bodies of
+//! `src/greeting.rs`, off two edits, and **nothing at all** is said about the
+//! three files that are there to stay quiet.
+//!
+//! Those eight are now the `--no-repeat-once` arm's, and the default's eight
+//! are the same renders *repaired*: one body goes out and the stale ones are
+//! the line that cites them. The two arms are read together on purpose — a
+//! session with no divergences and no supersessions never edited a file it had
+//! quoted, and telling that apart from a session where the fix did its job is
+//! what the pair is for. See
+//! `RECORD/2026-09-20.the-newest-body-wins.completed.md`. The two silences are the point
 //! as much as the noise is — a corpus whose control also fires is a corpus that
 //! measures nothing, and the two blind spots
-//! [`one-path-two-bodies`](../../../RECORD/2026-09-19.one-path-two-bodies.WIP.md)
+//! [`one-path-two-bodies`](../../../RECORD/2026-09-19.one-path-two-bodies.completed.md)
 //! §Still open names are only named there. Here they are reproducible.
 //!
 //! This is *not* a claim about a model. The edits are scripted, so the number
@@ -144,6 +152,12 @@ fn run(name: &str, extra: &[&str]) -> (Counts, PathBuf) {
 
 /// The corpus produces the case, and the count is the thing worth reading.
 ///
+/// **Under `--no-repeat-once`, which is where this number lives now.** Rule A
+/// off is where a prompt carrying one path twice is the documented behaviour:
+/// every turn re-sends what it selected, and the blocks read as per-turn
+/// snapshots. The default repairs it, which the test below pins, and keeping
+/// both arms is what makes the repair a measurement rather than an assertion.
+///
 /// **Eight renders, not two.** Turn 6 is the first — two bodies of
 /// `src/greeting.rs`, the stale one from turn 1 and the fresh one it just read
 /// — and turn 12 is the second read after the second edit, three bodies by
@@ -160,7 +174,7 @@ fn run(name: &str, extra: &[&str]) -> (Counts, PathBuf) {
 /// anywhere.
 #[test]
 fn the_corpus_contradicts_itself_about_one_file_and_no_other() {
-    let (found, dir) = run("fragments", &[]);
+    let (found, dir) = run("fragments", &["--no-repeat-once"]);
 
     assert_eq!(
         found.diverged.paths,
@@ -176,6 +190,10 @@ fn the_corpus_contradicts_itself_about_one_file_and_no_other() {
         "only turns 6 and 12 re-read the file they contradicted",
     );
     assert_eq!(found.diverged.lines, 8, "one path per render");
+    assert_eq!(
+        found.superseded.renders, 0,
+        "rule A's repair cannot reach an arm rule A is off in: {found:?}",
+    );
 
     // The edits happened. Without this the three silences below would be
     // indistinguishable from a run whose tool calls all failed, which is
@@ -194,6 +212,58 @@ fn the_corpus_contradicts_itself_about_one_file_and_no_other() {
     );
 }
 
+/// The fix, on the corpus that produced the number it was waiting for.
+///
+/// The same eight renders as the arm above, and **nothing left to contradict**:
+/// `diverged` is 0 because one body goes out per path, and `superseded` is what
+/// the render did instead. Ten spans over eight renders and not eight, because
+/// after the second edit a single prompt carries two stale bodies — turn 1's
+/// and turn 6's — and replaces both.
+///
+/// The cost, measured against this same corpus on the binary one commit back
+/// and recorded rather than asserted here: session prefix reuse 93.96% →
+/// 87.11%, **all of it in turns 6 and 12** (90.5% → 47.6% and 93.6% → 62.9%),
+/// with every other turn inside 0.3 points of where it was. The break is one
+/// per *edit* and not one per render, because the citation that replaces a
+/// stale block is itself stable — which is the ratchet, and the reason the
+/// feared cost did not arrive. The prompt also got *smaller*: the history
+/// bucket over the session fell 7 238 → 6 470 tokens, since a citation is
+/// cheaper than the bytes nobody could trust. See
+/// `RECORD/runs/2026-09-20.the-newest-body-wins/`.
+#[test]
+fn the_default_arm_sends_one_body_and_cites_the_rest() {
+    let (found, _) = run("superseded", &[]);
+
+    assert_eq!(
+        found.diverged.renders, 0,
+        "the fix leaves nothing for the detector to report: {found:?}",
+    );
+    assert_eq!(
+        found.superseded.renders, 8,
+        "the same eight renders the other arm contradicts itself on: {found:?}",
+    );
+    assert_eq!(found.superseded.lines, 8, "one path per render");
+    assert_eq!(
+        found.superseded.spans, 10,
+        "two of the eight renders carry two stale bodies, not one",
+    );
+    assert_eq!(
+        found.superseded.paths,
+        vec![("src/greeting.rs:1-10".to_string(), 10)],
+        "one path, and nothing else replaced",
+    );
+    assert!(
+        found.superseded.tokens.tokens > 0,
+        "a repair with no tokens in it is a repair nobody can weigh: {:?}",
+        found.superseded.tokens,
+    );
+    assert_eq!(
+        found.superseded.tokens.counters.len(),
+        1,
+        "one session, one counter — a mixed total would mean a resume",
+    );
+}
+
 /// Rule A's own number, on the corpus that was built for a different question.
 ///
 /// Nothing could produce this before `record::FORMAT` 14: `split_shown`
@@ -207,7 +277,7 @@ fn the_corpus_contradicts_itself_about_one_file_and_no_other() {
 /// contradiction, and it cannot — a fragment's identity is its path *and* its
 /// bytes, so the one case where a span genuinely needs re-reading is precisely
 /// the case the dedup cannot see. See
-/// `RECORD/2026-09-19.one-path-two-bodies.WIP.md` §Why it happens.
+/// `RECORD/2026-09-19.one-path-two-bodies.completed.md` §Why it happens.
 ///
 /// `asking` is 1: exactly one render had its *fresh* read dropped because an
 /// older turn in the same prompt was already showing that body — which is the
@@ -233,8 +303,10 @@ fn rule_a_collapses_the_spans_it_can_see_and_not_the_ones_that_moved() {
         "one session, one counter — a mixed total would mean a resume",
     );
     assert!(
-        found.diverged.renders > found.repeated.renders,
-        "rule A cannot collapse the bodies that moved, which is the defect: {found:?}",
+        found.superseded.renders > found.repeated.renders,
+        "rule A cannot collapse the bodies that moved — it replaces them \
+         instead, which is the fix and is why this is the pair to read: \
+         {found:?}",
     );
 }
 
@@ -250,19 +322,29 @@ fn rule_a_collapses_the_spans_it_can_see_and_not_the_ones_that_moved() {
 /// detector counts as two paths.
 #[test]
 fn the_control_stays_quiet_and_so_do_the_two_blind_spots() {
-    let (found, _) = run("silences", &[]);
-    let named: Vec<&str> = found
-        .diverged
-        .paths
-        .iter()
-        .map(|(path, _)| path.as_str())
-        .collect();
+    // Both arms, because a silence that only holds on one of them is a fact
+    // about the flag and not about the corpus. The blind spots are blind to
+    // the repair for exactly the reason they are blind to the detector: it
+    // only ever reads what the window carries twice.
+    for (arm, extra) in [
+        ("silences", &[][..]),
+        ("silences-always", &["--no-repeat-once"]),
+    ] {
+        let (found, _) = run(arm, extra);
+        let named: Vec<&str> = found
+            .diverged
+            .paths
+            .iter()
+            .chain(found.superseded.paths.iter())
+            .map(|(path, _)| path.as_str())
+            .collect();
 
-    for quiet in ["src/format.rs", "src/banner.rs", "src/tally.rs"] {
-        assert!(
-            !named.iter().any(|path| path.starts_with(quiet)),
-            "{quiet} was reported: {named:?}",
-        );
+        for quiet in ["src/format.rs", "src/banner.rs", "src/tally.rs"] {
+            assert!(
+                !named.iter().any(|path| path.starts_with(quiet)),
+                "{arm}: {quiet} was reported: {named:?}",
+            );
+        }
     }
 }
 
@@ -284,7 +366,7 @@ fn the_control_stays_quiet_and_so_do_the_two_blind_spots() {
 /// `RECORD/runs/2026-09-19.edit-reread-mock/selected.diverged.txt`.
 #[test]
 fn selection_is_an_arm_and_not_a_different_corpus() {
-    let (found, _) = run("selected", &["--select-tokens", "1024"]);
+    let (found, _) = run("selected", &["--select-tokens", "1024", "--no-repeat-once"]);
 
     assert!(
         found.diverged.renders >= 8,
@@ -301,6 +383,28 @@ fn selection_is_an_arm_and_not_a_different_corpus() {
             .iter()
             .any(|(path, bodies)| path.starts_with("src/greeting.rs") && *bodies >= 3),
         "the file the corpus edits twice is still reported: {found:?}",
+    );
+
+    // And under the default, where the same spans the selector found are the
+    // spans the repair has to reach. Sixteen lines over the same eight
+    // renders, because `src/greeting.rs:8-10` — `greet` itself, a span nobody
+    // typed — is chosen beside the `1-10` the corpus attaches, and both moved.
+    let (found, _) = run("selected-default", &["--select-tokens", "1024"]);
+    assert_eq!(
+        found.diverged.renders, 0,
+        "a span the selector found is repaired like any other: {found:?}",
+    );
+    assert!(
+        found.superseded.lines >= found.superseded.renders,
+        "at least one path per render: {found:?}",
+    );
+    assert!(
+        found
+            .superseded
+            .paths
+            .iter()
+            .any(|(path, _)| path == "src/greeting.rs:8-10"),
+        "the span nobody typed is one of them: {found:?}",
     );
 }
 

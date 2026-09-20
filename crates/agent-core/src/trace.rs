@@ -132,7 +132,7 @@ pub enum TraceMessage {
     /// A path the prompt just sent under more than one body: the same file,
     /// twice, with different contents and nothing saying which is true.
     ///
-    /// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+    /// The defect of `RECORD/2026-09-19.one-path-two-bodies.completed.md`.
     /// `code_context` is written once when a turn closes and never refreshed,
     /// while every turn re-reads its own spans, so a file edited between two
     /// turns goes out as two blocks under one `// path` header.
@@ -159,6 +159,38 @@ pub enum TraceMessage {
         asking: bool,
         /// Distinct bodies sent under this path. At least two.
         bodies: usize,
+    },
+    /// A path whose stale bytes this render replaced with the line that cites
+    /// them, because a later turn read the same span and got different bytes.
+    ///
+    /// The repair of the line above, and the two are read as a pair: under
+    /// `Repeat::Once` a render that supersedes is a render that no longer
+    /// diverges, so a session carrying these and no `diverged` is the fix
+    /// working rather than a session that never edited anything. The format
+    /// number is what tells *that* apart from a stream written before the fix.
+    ///
+    /// A trace and not protocol, for [`Self::Diverged`]'s reason and more
+    /// plainly: the conversation is untouched — every turn is still asked,
+    /// answered and in the transcript — and what changed is which bytes the
+    /// prompt carried for a path it had read twice.
+    ///
+    /// No `asking` beside [`Self::Diverged::asking`], and its absence is the
+    /// invariant: the turn being asked holds the newest read of every span it
+    /// carries and is never the turn superseded. See
+    /// `RECORD/2026-09-20.the-newest-body-wins.completed.md`.
+    Superseded {
+        turn: TurnId,
+        /// The span, as the fragment names it, line range included.
+        path: String,
+        /// The turns of the history whose body was replaced, oldest first.
+        turns: Vec<TurnId>,
+        /// Fragments replaced across the render.
+        spans: usize,
+        /// What their **bytes** would have cost, summed — the sum of the spans,
+        /// as [`Self::Repeated::tokens`] is. Not the saving: a citation stands
+        /// where each one stood and costs something of its own.
+        tokens: u32,
+        counter: Counter,
     },
     /// A model call *after* the first one of a turn: the tool-use round trip,
     /// or a schema retry.

@@ -1,0 +1,18 @@
+always — mock / mock, 13 turn(s)
+rules: repeat = always, prune = never, results = kept
+
+window, of 13 render(s)
+  repeated     0 render(s)    0 turn(s), 0 asking, 0 span(s)
+  pruned       0 render(s)    0 turn(s) gave up spans
+  evicted      0 render(s)    0 turn(s) left
+  diverged     8 render(s)    2 asking, 8 line(s), 1 path(s)
+               src/greeting.rs:1-10  up to 3 bodies
+  superseded   0 render(s)    0 line(s), 0 span(s) replaced
+
+tools: 4 call(s), 4 allowed, 0 denied, 0 undecided
+  . (read-write)           4 allowed, 0 denied
+
+jobs: 0 proposed, 0 approved, 0 rejected, 0 closed
+  granted: 0 readable path(s), 0 writable
+
+refused: nothing

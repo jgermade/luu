@@ -1,0 +1,18 @@
+after — mock / mock, 13 turn(s)
+rules: repeat = once, prune = never, results = kept
+
+window, of 13 render(s)
+  repeated     7 render(s)    6 turn(s), 1 asking, 7 span(s), 854 tokens by approximate
+  pruned       0 render(s)    0 turn(s) gave up spans
+  evicted      0 render(s)    0 turn(s) left
+  diverged     0 render(s)    0 asking, 0 line(s), 0 path(s)
+  superseded   8 render(s)    8 line(s), 10 span(s) replaced, 898 tokens by approximate
+               src/greeting.rs:1-10  10 span(s)
+
+tools: 4 call(s), 4 allowed, 0 denied, 0 undecided
+  . (read-write)           4 allowed, 0 denied
+
+jobs: 0 proposed, 0 approved, 0 rejected, 0 closed
+  granted: 0 readable path(s), 0 writable
+
+refused: nothing
