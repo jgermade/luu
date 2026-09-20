@@ -98,6 +98,37 @@ pub enum TraceMessage {
         tokens: u32,
         counter: Counter,
     },
+    /// What rule A kept out of this render: spans a turn owns and did not send,
+    /// because something else in this same prompt is already showing them.
+    ///
+    /// Beside [`Self::Pruned`] and for the same reason it is a trace — nothing
+    /// about the conversation is different, every turn is still asked, answered
+    /// and in the transcript, and what changed is the prompt.
+    ///
+    /// It is here because rule A became the **default** on 2026-09-19 and was
+    /// the only one of the three window rules that said nothing: the number
+    /// below is computed inside the render and was subtracted from the
+    /// `history` bucket, and a difference is not a measurement of what made it.
+    /// A run that collapsed forty spans and one that collapsed none left the
+    /// same evidence — which is, one field along, what `record::FORMAT` 11 was
+    /// bumped to fix for a `--prune-behind` run that pruned nothing. See
+    /// `RECORD/2026-09-19.one-counting-surface.completed.md`.
+    Repeated {
+        turn: TurnId,
+        /// The turns of the history that gave up spans, oldest first.
+        turns: Vec<TurnId>,
+        /// Whether the turn being asked gave one up to the history too. Named
+        /// rather than listed for [`Self::Diverged::asking`]'s reason: it has no
+        /// id when the render is made.
+        asking: bool,
+        /// Fragments unsent across the render.
+        spans: usize,
+        /// What they would have cost, summed. **The sum of the spans**, which
+        /// is deliberately not what [`Self::Pruned::tokens`] is — see
+        /// [`crate::context::Repeated::tokens`], which carries the argument.
+        tokens: u32,
+        counter: Counter,
+    },
     /// A path the prompt just sent under more than one body: the same file,
     /// twice, with different contents and nothing saying which is true.
     ///

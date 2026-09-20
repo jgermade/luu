@@ -7,12 +7,13 @@
 use std::time::Duration;
 
 use agent_core::agent::{DEFAULT_MAX_STEPS, SchemaRetry, run_agent_turn};
+use agent_core::api::{Counts, SessionView, Tokens};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{
     Backend, CompletionRequest, Constraint, mock::Mock, ollama::Ollama, openai::OpenAi,
 };
 use agent_core::context::{
-    Budget, Context as AgentContext, Eviction, Fragment, Prune, Repeat, Results,
+    Budget, Context as AgentContext, Counter, Eviction, Fragment, Prune, Repeat, Results,
 };
 use agent_core::fragment;
 use agent_core::protocol::{self, ClientMessage as ServerBoundMessage, ServerMessage};
@@ -75,6 +76,23 @@ enum Command {
         /// How the page reaches the recordings, relative to the site root.
         #[arg(long, default_value = "./fixtures")]
         record_base: String,
+    },
+
+    /// Add a recording up: what its window rules, its gate and its tools did
+    /// over the whole session, rather than per render.
+    ///
+    /// The family `luu tools`, `luu map` and `luu select` are in — print what a
+    /// thing resolves to, so it can be looked at rather than inferred. This is
+    /// the one that replaces a `grep` for a trace line and a `wc -l`, which is
+    /// how `RECORD/runs/2026-09-19.edit-reread-mock` got three of its four
+    /// columns. See `RECORD/2026-09-19.one-counting-surface.completed.md`.
+    Count {
+        /// A recorded `.jsonl` session.
+        record: std::path::PathBuf,
+
+        /// The whole tally as JSON, for a script rather than a reader.
+        #[arg(long)]
+        json: bool,
     },
 
     /// The executor half of the worker IPC: read tool calls on stdin, run them,
@@ -1674,6 +1692,171 @@ fn grounded_spans(code: &[Fragment], by_hand: usize) -> Vec<protocol::Grounding>
         .collect()
 }
 
+/// A tally, for a person.
+///
+/// Every rate is *of renders*, and every line that has a token total names the
+/// counter that produced it — a total over a session resumed onto another model
+/// mixes two measurements, and this is the surface that has to say so rather
+/// than the one that gets to assume.
+///
+/// A rule that never fired prints as a line saying zero rather than as no line
+/// at all. The two are different claims about a session and the difference is
+/// the whole reason the window's rules carry `None` semantics in the header:
+/// *off* and *on and quiet* are not the same run.
+fn describe_counts(view: &SessionView, counts: &Counts) -> String {
+    use std::fmt::Write;
+
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{} — {} / {}, {} turn(s)",
+        view.id, view.backend, view.model, counts.turns,
+    );
+    let _ = writeln!(
+        out,
+        "rules: repeat = {}, prune = {}, results = {}",
+        rule_name(view.repeat.as_ref()),
+        rule_name(view.prune.as_ref()),
+        rule_name(view.results.as_ref()),
+    );
+
+    let _ = writeln!(
+        out,
+        "\nwindow, of {} render(s)",
+        counts.turns.max(counts.diverged.renders),
+    );
+    let _ = writeln!(
+        out,
+        "  repeated   {:>3} render(s)  {:>3} turn(s), {} asking, {} span(s){}",
+        counts.repeated.renders,
+        counts.repeated.turns,
+        counts.repeated.asking,
+        counts.repeated.spans,
+        tokens_suffix(&counts.repeated.tokens),
+    );
+    let _ = writeln!(
+        out,
+        "  pruned     {:>3} render(s)  {:>3} turn(s) gave up spans{}",
+        counts.pruned.renders,
+        counts.pruned.turns,
+        tokens_suffix(&counts.pruned.tokens),
+    );
+    let _ = writeln!(
+        out,
+        "  evicted    {:>3} render(s)  {:>3} turn(s) left{}",
+        counts.evicted.renders,
+        counts.evicted.turns,
+        tokens_suffix(&counts.evicted.tokens),
+    );
+    let _ = writeln!(
+        out,
+        "  diverged   {:>3} render(s)  {:>3} asking, {} line(s), {} path(s)",
+        counts.diverged.renders,
+        counts.diverged.asking,
+        counts.diverged.lines,
+        counts.diverged.paths.len(),
+    );
+    // Named rather than counted, on the tombstone's rule: a reader months later
+    // cannot recover *which* path from a number, and there are never many.
+    for (path, bodies) in &counts.diverged.paths {
+        let _ = writeln!(out, "               {path}  up to {bodies} bodies");
+    }
+
+    let _ = writeln!(
+        out,
+        "\ntools: {} call(s), {} allowed, {} denied, {} undecided",
+        counts.calls.total, counts.calls.allowed, counts.calls.denied, counts.calls.undecided,
+    );
+    for rule in &counts.calls.rules {
+        let _ = writeln!(
+            out,
+            "  {:<24} {} allowed, {} denied",
+            rule.rule, rule.allowed, rule.denied,
+        );
+    }
+
+    let _ = writeln!(
+        out,
+        "\njobs: {} proposed, {} approved, {} rejected, {} closed",
+        counts.jobs.proposed, counts.jobs.approved, counts.jobs.rejected, counts.jobs.closed,
+    );
+    // "path(s)" and not "file(s)", deliberately: which of `src/` and
+    // `src/lib.rs` is a directory is a question about a disk that a fold has no
+    // business asking. Item 12 of ROADMAP/2026-09-17 is taken this far and no
+    // further.
+    let _ = writeln!(
+        out,
+        "  granted: {} readable path(s), {} writable",
+        counts.jobs.reads, counts.jobs.writes,
+    );
+
+    match counts.refused.is_empty() {
+        true => {
+            let _ = writeln!(out, "\nrefused: nothing");
+        }
+        false => {
+            let _ = writeln!(out, "\nrefused");
+            for refusal in &counts.refused {
+                let _ = writeln!(
+                    out,
+                    "  {:<12} {}",
+                    wire_name(&refusal.reason),
+                    refusal.count,
+                );
+            }
+        }
+    }
+
+    out
+}
+
+/// The counter beside a total, or nothing when there is no total to qualify.
+///
+/// Two counters on one line is not a formatting accident: it means the session
+/// was resumed onto another model and the sum mixes measurements, which is the
+/// one thing a reader must not have to work out for themselves.
+fn tokens_suffix(tokens: &Tokens) -> String {
+    match tokens.counters.as_slice() {
+        [] => String::new(),
+        [one] => format!(", {} tokens by {}", tokens.tokens, counter_name(one)),
+        many => format!(
+            ", {} tokens mixing {}",
+            tokens.tokens,
+            many.iter()
+                .map(counter_name)
+                .collect::<Vec<_>>()
+                .join(" + "),
+        ),
+    }
+}
+
+/// A rule as the header names it, or `?` where the header does not name it.
+///
+/// `?` and not the default, which is the header's own `None` semantics: a
+/// stream written before format 11 does not say what it ran under, every one of
+/// those ran under the defaults, and reading them back for it would put a claim
+/// in a record the record never made.
+fn rule_name<T: serde::Serialize>(rule: Option<&T>) -> String {
+    rule.map(wire_name).unwrap_or_else(|| "?".to_string())
+}
+
+/// A tagged enum's own wire spelling, which is the one the header, the page and
+/// the flags all already use. Naming them a second time in a `match` here is
+/// how two spellings for one value get into a tree.
+fn wire_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string()
+}
+
+fn counter_name(counter: &Counter) -> String {
+    match counter {
+        Counter::Approximate => "approximate".to_string(),
+        Counter::Model { id } => id.clone(),
+    }
+}
+
 pub async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
@@ -1711,6 +1894,23 @@ pub async fn run() -> Result<()> {
             println!("{} — {} turn(s)", summary.id, summary.turns);
         }
         println!("written to {}", out.display());
+        return Ok(());
+    }
+
+    if let Command::Count { record, json } = &command {
+        let id = record
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("a record file needs a name")?;
+        // Through the fold and not over the lines: the tally is arithmetic over
+        // what a reader of the session can see, and the fold is the structure
+        // both the live server and `luu export` already read it through.
+        let view = SessionView::from_record(id, &export::read_record(record)?);
+        let counts = view.counts();
+        match json {
+            true => println!("{}", serde_json::to_string_pretty(&counts)?),
+            false => print!("{}", describe_counts(&view, &counts)),
+        }
         return Ok(());
     }
 
@@ -2543,6 +2743,19 @@ pub async fn run() -> Result<()> {
                     turns: pruned.turns,
                     tokens: pruned.tokens,
                     counter: pruned.counter,
+                }));
+            }
+            // Beside the prune it is the counterpart of, and before the
+            // divergence, because a render that collapsed spans is what the
+            // contradiction below is a contradiction *within*.
+            if let Some(repeated) = selection.repeating.clone() {
+                recorder.write(&Event::Trace(TraceMessage::Repeated {
+                    turn,
+                    turns: repeated.turns,
+                    asking: repeated.asking,
+                    spans: repeated.spans,
+                    tokens: repeated.tokens,
+                    counter: repeated.counter,
                 }));
             }
             // One line per path, for the reason `serve` emits them the same

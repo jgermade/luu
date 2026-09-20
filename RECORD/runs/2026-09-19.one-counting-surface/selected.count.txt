@@ -1,0 +1,18 @@
+selected — mock / mock, 13 turn(s)
+rules: repeat = once, prune = never, results = kept
+
+window, of 13 render(s)
+  repeated    11 render(s)   31 turn(s), 5 asking, 43 span(s), 2466 tokens by approximate
+  pruned       0 render(s)    0 turn(s) gave up spans
+  evicted      0 render(s)    0 turn(s) left
+  diverged     8 render(s)    2 asking, 16 line(s), 2 path(s)
+               src/greeting.rs:1-10  up to 3 bodies
+               src/greeting.rs:8-10  up to 3 bodies
+
+tools: 4 call(s), 4 allowed, 0 denied, 0 undecided
+  . (read-write)           4 allowed, 0 denied
+
+jobs: 0 proposed, 0 approved, 0 rejected, 0 closed
+  granted: 0 readable path(s), 0 writable
+
+refused: nothing

@@ -966,6 +966,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/sessions/{id}/context", get(get_context))
         .route("/api/sessions/{id}/context.json", get(get_context))
+        .route("/api/sessions/{id}/counts", get(get_counts))
+        .route("/api/sessions/{id}/counts.json", get(get_counts))
         // The workspace, for the person rather than for the model: a file
         // tree, what git says changed, one file, one diff. Read-only and
         // deliberately not behind the job gate — see `crate::workspace`'s own
@@ -2188,6 +2190,19 @@ async fn begin_turn(
             turns: pruned.turns,
             tokens: pruned.tokens,
             counter: pruned.counter,
+        }))
+        .await;
+    }
+    // Beside the prune it is the counterpart of: rule A kept spans out of this
+    // render, and until format 14 the only trace of that was a smaller bucket.
+    if let Some(repeated) = selection.repeating.clone() {
+        app.publish(Event::Trace(TraceMessage::Repeated {
+            turn,
+            turns: repeated.turns,
+            asking: repeated.asking,
+            spans: repeated.spans,
+            tokens: repeated.tokens,
+            counter: repeated.counter,
         }))
         .await;
     }
@@ -3894,6 +3909,19 @@ async fn get_context(Path(id): Path<String>, State(state): State<AppRouterState>
         "budget": latest.and_then(|t| t.budget.clone()),
     }))
     .into_response()
+}
+
+/// What the session did, added up — the whole of it, not the newest turn.
+///
+/// The one route here whose answer is over the session rather than over a turn,
+/// which is why it is a route of its own rather than a field on the view: the
+/// arithmetic is the answer, and a client that wants it does not want the
+/// transcript with it. See `RECORD/2026-09-19.one-counting-surface.completed.md`.
+async fn get_counts(Path(id): Path<String>, State(state): State<AppRouterState>) -> Response {
+    match view_for(&state, &id).await {
+        Some(view) => Json(view.counts()).into_response(),
+        None => not_found("session"),
+    }
 }
 
 #[cfg(test)]

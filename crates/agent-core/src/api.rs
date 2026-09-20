@@ -9,9 +9,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::{Counter, Diverged, Evicted, Prune, Pruned, Repeat, Results};
+use crate::context::{Counter, Diverged, Evicted, Prune, Pruned, Repeat, Repeated, Results};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource, Replaced};
-use crate::protocol::{Grounding, ServerMessage, TurnId};
+use crate::protocol::{Grounding, Refusal, ServerMessage, TurnId};
 use crate::record::{self, RecordLine};
 use crate::sandbox::Verdict;
 use crate::trace::{Bucket, TraceMessage};
@@ -174,6 +174,15 @@ pub struct TurnView {
     /// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
     #[serde(default)]
     pub code: Vec<Grounding>,
+    /// What rule A kept out of this turn's render: spans a turn owns and did
+    /// not send, because something else in the same prompt already shows them.
+    ///
+    /// `None` on every turn of every stream written before `record::FORMAT` 14,
+    /// and on every turn rendered under `Repeat::Always` — which are two
+    /// different claims, and the format number is what tells them apart. See
+    /// `RECORD/2026-09-19.one-counting-surface.completed.md`.
+    #[serde(default)]
+    pub repeated: Option<Repeated>,
     /// Paths this turn's prompt sent under more than one body — the same file,
     /// twice, with different contents.
     ///
@@ -207,6 +216,7 @@ impl TurnView {
             cited: None,
             pruned_by: None,
             code: Vec::new(),
+            repeated: None,
             diverged: Vec::new(),
             started_at_ms,
             ended_at_ms: None,
@@ -221,6 +231,230 @@ impl TurnView {
     pub fn is_running(&self) -> bool {
         self.ended_at_ms.is_none()
     }
+}
+
+/// One thing the server declined to do.
+///
+/// Kept because something wanted to count them, which is the condition the fold
+/// itself named when it started dropping them: *"it stays out of the view until
+/// something wants to count them"*. The clause that survives is the other one —
+/// *not session state* — and this does not make a refusal into a turn. It makes
+/// it countable.
+///
+/// Additive to the view and **no format bump**: `refused` lines have been in
+/// the record since format 4 and were widened by format 7, so every recording
+/// on disk already carries the ones it saw. This is `posture`'s rule on
+/// 2026-09-17 exactly, one structure along. See
+/// `RECORD/2026-09-19.one-counting-surface.completed.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusalView {
+    /// Milliseconds since the session started, the same clock every line uses.
+    pub at_ms: u64,
+    /// The `type` of the client message that was refused.
+    pub request: String,
+    pub reason: Refusal,
+    /// The same thing in words. Kept rather than dropped for the count's sake:
+    /// a `not_granted` tally that cannot say *which* grant is the bug report
+    /// `Verdict::rule` exists to avoid being.
+    pub detail: String,
+}
+
+/// A total in tokens, and every counter that produced part of it.
+///
+/// Every number in this system says who counted it, because two runs measured
+/// differently are not comparable and nothing else would say so. A *sum* has to
+/// say it harder: a session resumed onto another model keeps its turns and
+/// changes its counter — which is the whole reason `retarget_header` exists —
+/// so a total over such a session mixes two measurements. One entry is the
+/// ordinary case; more than one means the sum mixes, and the reader is told
+/// rather than left to assume it did not.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tokens {
+    pub tokens: u32,
+    /// Distinct counters that contributed, in the order first seen.
+    pub counters: Vec<Counter>,
+}
+
+impl Tokens {
+    fn add(&mut self, tokens: u32, counter: &Counter) {
+        self.tokens += tokens;
+        if !self.counters.contains(counter) {
+            self.counters.push(counter.clone());
+        }
+    }
+}
+
+/// What one window rule took out of a session, summed over its renders.
+///
+/// `renders` and not `turns` is the distinction [`Divergence::renders`] draws
+/// and for its reason: a rate is per render, because the render is what was
+/// sent to a model. `turns` beside it is the other question — how much of the
+/// conversation was touched at all — and the two differ whenever one render
+/// cuts several turns, which is exactly what `Eviction::Block` does.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cut {
+    /// Renders that cut something.
+    pub renders: usize,
+    /// Distinct turns named across all of them.
+    pub turns: usize,
+    pub tokens: Tokens,
+}
+
+/// What rule A kept out of a session.
+///
+/// Beside [`Cut`] and not one, because it counts a third thing the other two
+/// have no equivalent of: `asking`, the renders where the *fresh* read of a
+/// span was the one dropped because an older turn in the same prompt was
+/// already showing it.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Repeats {
+    pub renders: usize,
+    /// Distinct history turns that gave up spans.
+    pub turns: usize,
+    /// Renders where the turn being asked gave one up too.
+    pub asking: usize,
+    /// Fragments unsent, summed over the session.
+    pub spans: usize,
+    /// What they would have cost. **The sum of the spans**, which is
+    /// deliberately not what [`Cut::tokens`] is under a prune — see
+    /// [`crate::context::Repeated::tokens`], which carries the argument.
+    pub tokens: Tokens,
+}
+
+/// What a session's `diverged` lines add up to.
+///
+/// [`TraceMessage::Diverged`] is emitted per render and says nothing about the
+/// session it belongs to: a reader with a recording in front of them can see
+/// that turn 6's prompt contradicted itself and cannot see whether that
+/// happened once or in half the turns. **The second number is the one item 19's
+/// fix waits on** — newest body wins trades measured prefix reuse for
+/// truthfulness, and the trade turns on how often a window carries a path whose
+/// bytes moved, which nothing counted until this.
+///
+/// It was a `record::divergence` over `&[RecordLine]` for one day, which is
+/// where its four numbers and their reasons come from. It is here now because
+/// four more findings wanted the same treatment and a `prunes()` beside a
+/// `divergence()` is the per-call reporter one abstraction higher. See
+/// `RECORD/2026-09-19.one-counting-surface.completed.md`.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Divergence {
+    /// Renders that carried at least one contradicted path.
+    ///
+    /// Not the same as `lines`: one render can contradict itself about several
+    /// paths at once, and a *rate* is per render, because the render is what
+    /// was sent to a model.
+    pub renders: usize,
+    /// Renders where at least one contradiction included the asking turn —
+    /// the history disagreeing with what is on disk right now, which is the
+    /// case [`TraceMessage::Diverged::asking`] exists to name.
+    pub asking: usize,
+    /// One entry per distinct path, in the order the session first reported it,
+    /// carrying the most bodies ever sent under it in a single render.
+    ///
+    /// A `Vec` of pairs and not a map, for [`crate::context::Selection`]'s own
+    /// reason one along: a session reports a handful of paths, the order is
+    /// part of the answer, and a map would spend an allocation to save
+    /// comparisons nobody can measure.
+    pub paths: Vec<(String, usize)>,
+    /// Every `diverged` line the session produced, which is what a reader
+    /// grepping for them would count and is the number the other three are not.
+    pub lines: usize,
+}
+
+/// One sandbox rule, and what it decided.
+///
+/// Both answers, for [`crate::sandbox::Verdict::rule`]'s own reason: *denied
+/// without which rule denied is a bug report nobody can act on, and allowed
+/// without which rule allowed hides the grant that was wider than someone
+/// thought*. A tally that counted only denials would report the second half as
+/// silence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleCount {
+    pub rule: String,
+    pub allowed: usize,
+    pub denied: usize,
+}
+
+/// What a session asked of its tools and what the sandbox said.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Calls {
+    pub total: usize,
+    pub allowed: usize,
+    pub denied: usize,
+    /// Calls with no verdict yet — one that is still running, and one recorded
+    /// without the line that carries the answer. A real state and not a zero:
+    /// `total` is the other two plus this.
+    pub undecided: usize,
+    /// One entry per rule that decided anything, in the order first seen.
+    pub rules: Vec<RuleCount>,
+}
+
+/// How often the server said no, by reason.
+///
+/// `not_granted` is the one this was wanted for: it is the only refusal in the
+/// protocol that stops nothing and the only place a person learns the policy
+/// file has a floor, and
+/// `RECORD/2026-09-17.the-gate-panel-narrows.completed.md` found it being
+/// cleared within a frame of arriving.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusalCount {
+    pub reason: Refusal,
+    pub count: usize,
+}
+
+/// What the gate saw, and how wide the grants were.
+///
+/// **`reads` and `writes` are counts of path *strings*, not of files.** Which
+/// of `src/` and `src/lib.rs` is a directory is a question about a disk; the
+/// sandbox answers it with `is_dir()` when it resolves a root at approval, and
+/// a fold running on another machine six weeks later has no business asking. So
+/// item 12 of `ROADMAP/2026-09-17` — *how often a plan grants a file rather
+/// than a directory* — is taken here as far as a recording allows and no
+/// further; closing it needs a field on `job_approved` written where the answer
+/// is known. See `RECORD/2026-09-19.one-counting-surface.completed.md` §What is
+/// rejected.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Jobs {
+    pub proposed: usize,
+    pub approved: usize,
+    pub rejected: usize,
+    pub closed: usize,
+    /// Paths named as readable across every approved plan, summed.
+    pub reads: usize,
+    /// Paths named as writable across the same.
+    pub writes: usize,
+}
+
+/// What a session did, added up.
+///
+/// **Derived, never emitted.** Every number here is arithmetic over lines the
+/// session already put on the wire — which is what keeps it from drifting from
+/// what it counts, on `luu export`'s own founding argument one structure along:
+/// *a static mirror generated by separate code would drift, and a mirror that
+/// drifts is worse than none*. A counter incremented at each site is a second
+/// implementation of the finding, printed beside the finding, and believed over
+/// it the day the two disagree.
+///
+/// It is one structure and not six for the reason that made it worth building:
+/// the window rules, the divergence, the grants and the `not_granted` refusal
+/// each arrived with their own per-call report and no home, and the fifth was
+/// going to as well. Here a sixth finding is a field.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Counts {
+    /// Turns the session holds, evicted ones included: the transcript's length
+    /// and the denominator every rate here is over. *8 of 13* is this and
+    /// [`Divergence::renders`].
+    pub turns: usize,
+    pub evicted: Cut,
+    pub pruned: Cut,
+    pub repeated: Repeats,
+    pub diverged: Divergence,
+    pub calls: Calls,
+    /// One entry per reason that was used, in the order first seen. Empty is a
+    /// session nothing was refused in — or one folded before anything kept
+    /// them, which is every fold written before this.
+    pub refused: Vec<RefusalCount>,
+    pub jobs: Jobs,
 }
 
 /// What `GET /api/sessions` lists: enough to choose one, without its turns.
@@ -277,6 +511,11 @@ pub struct SessionView {
     pub prune: Option<Prune>,
     #[serde(default)]
     pub results: Option<Results>,
+    /// Everything the server declined to do, in order. Empty in a session that
+    /// was refused nothing — and in every view folded before anything kept
+    /// them, which the stream cannot distinguish and nothing pretends to.
+    #[serde(default)]
+    pub refusals: Vec<RefusalView>,
     pub record: Option<String>,
 }
 
@@ -299,6 +538,7 @@ impl SessionView {
             repeat: None,
             prune: None,
             results: None,
+            refusals: Vec::new(),
             record: None,
         }
     }
@@ -313,6 +553,129 @@ impl SessionView {
             turns: self.turns.len(),
             record: self.record.clone(),
         }
+    }
+
+    /// What this session did, added up.
+    ///
+    /// Arithmetic over the fold and nothing else: no field read here was
+    /// written for the sake of being counted, which is what keeps the tally
+    /// from being a second opinion about its own inputs. See [`Counts`].
+    pub fn counts(&self) -> Counts {
+        let mut counts = Counts {
+            turns: self.turns.len(),
+            ..Counts::default()
+        };
+
+        for turn in &self.turns {
+            if let Some(evicted) = &turn.dropped {
+                counts.evicted.renders += 1;
+                counts.evicted.turns += evicted.turns.len();
+                counts.evicted.tokens.add(evicted.tokens, &evicted.counter);
+            }
+            if let Some(pruned) = &turn.cited {
+                counts.pruned.renders += 1;
+                counts.pruned.turns += pruned.turns.len();
+                counts.pruned.tokens.add(pruned.tokens, &pruned.counter);
+            }
+            if let Some(repeated) = &turn.repeated {
+                counts.repeated.renders += 1;
+                counts.repeated.turns += repeated.turns.len();
+                counts.repeated.asking += usize::from(repeated.asking);
+                counts.repeated.spans += repeated.spans;
+                counts
+                    .repeated
+                    .tokens
+                    .add(repeated.tokens, &repeated.counter);
+            }
+
+            // A render and not a line, which is the distinction this whole
+            // structure was shaped around: one prompt that contradicts itself
+            // about three paths went out once.
+            if !turn.diverged.is_empty() {
+                counts.diverged.renders += 1;
+                counts.diverged.lines += turn.diverged.len();
+                // Counted once per render however many of its paths are
+                // asking: the question is how many prompts went out
+                // contradicting the disk, not how many spans did.
+                if turn.diverged.iter().any(|one| one.asking) {
+                    counts.diverged.asking += 1;
+                }
+                for one in &turn.diverged {
+                    match counts
+                        .diverged
+                        .paths
+                        .iter_mut()
+                        .find(|(seen, _)| *seen == one.path)
+                    {
+                        Some((_, most)) => *most = (*most).max(one.bodies),
+                        None => counts.diverged.paths.push((one.path.clone(), one.bodies)),
+                    }
+                }
+            }
+
+            for call in &turn.tools {
+                counts.calls.total += 1;
+                let Some(verdict) = &call.verdict else {
+                    counts.calls.undecided += 1;
+                    continue;
+                };
+                match verdict.allowed {
+                    true => counts.calls.allowed += 1,
+                    false => counts.calls.denied += 1,
+                }
+                let rule = match counts
+                    .calls
+                    .rules
+                    .iter_mut()
+                    .find(|seen| seen.rule == verdict.rule)
+                {
+                    Some(seen) => seen,
+                    None => {
+                        counts.calls.rules.push(RuleCount {
+                            rule: verdict.rule.clone(),
+                            allowed: 0,
+                            denied: 0,
+                        });
+                        counts.calls.rules.last_mut().expect("just pushed")
+                    }
+                };
+                match verdict.allowed {
+                    true => rule.allowed += 1,
+                    false => rule.denied += 1,
+                }
+            }
+        }
+
+        for refusal in &self.refusals {
+            match counts
+                .refused
+                .iter_mut()
+                .find(|seen| seen.reason == refusal.reason)
+            {
+                Some(seen) => seen.count += 1,
+                None => counts.refused.push(RefusalCount {
+                    reason: refusal.reason,
+                    count: 1,
+                }),
+            }
+        }
+
+        for job in &self.jobs {
+            match job.state {
+                JobState::Proposed => counts.jobs.proposed += 1,
+                JobState::Approved => counts.jobs.approved += 1,
+                JobState::Rejected => counts.jobs.rejected += 1,
+                JobState::Closed => counts.jobs.closed += 1,
+            }
+            // The plan as it stands, which is the approved one once there is
+            // one and the proposal until then — so a job the gate never saw
+            // contributes what it *asked* for and is counted under `proposed`
+            // beside it, rather than being silently absent from both.
+            counts.jobs.reads += job.plan.files.len();
+            counts.jobs.writes += job.plan.writes.len();
+        }
+
+        counts
     }
 
     pub fn turn(&self, turn: TurnId) -> Option<&TurnView> {
@@ -413,11 +776,23 @@ impl SessionView {
                     }
                 }
             }
-            // Transient feedback to whoever asked, not session state: a
-            // refusal is a thing the server declined to do, and there is
-            // nothing about the session afterwards that is different for it.
-            // It stays out of the view until something wants to count them.
-            ServerMessage::Refused { .. } => {}
+            // Still not session state — a refusal is a thing the server
+            // declined to do, and there is nothing about the session afterwards
+            // that is different for it. It is kept because the clause this
+            // comment used to end on came due: something wants to count them,
+            // and a tally cannot count a line the fold discards. Beside the
+            // turns rather than on one, because a refusal need not belong to a
+            // turn: `approve_job` and `hello` are refused outside any.
+            ServerMessage::Refused {
+                request,
+                reason,
+                detail,
+            } => self.refusals.push(RefusalView {
+                at_ms,
+                request: request.clone(),
+                reason: *reason,
+                detail: detail.clone(),
+            }),
             ServerMessage::JobApproved {
                 job,
                 plan,
@@ -583,6 +958,24 @@ impl SessionView {
                         turns: turns.clone(),
                         asking: *asking,
                         bodies: *bodies,
+                    });
+                }
+            }
+            TraceMessage::Repeated {
+                turn,
+                turns,
+                asking,
+                spans,
+                tokens,
+                counter,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.repeated = Some(Repeated {
+                        turns: turns.clone(),
+                        asking: *asking,
+                        spans: *spans,
+                        tokens: *tokens,
+                        counter: counter.clone(),
                     });
                 }
             }
@@ -1029,5 +1422,230 @@ mod tests {
             },
         );
         assert!(view.turns.is_empty());
+    }
+
+    /// One line per path and one render per turn: the four numbers a reader of
+    /// [`Divergence`] has to be able to tell apart.
+    ///
+    /// Two paths in one render must not count as two renders, and two `asking`
+    /// paths in one render must not count as two prompts that contradicted the
+    /// disk — the rate is per prompt, because the prompt is what went to a
+    /// model.
+    ///
+    /// Moved here from `record::divergence` with its numbers unchanged, which
+    /// is the point of moving it: the substrate went from `&[RecordLine]` to
+    /// the fold and the answers did not.
+    #[test]
+    fn a_render_that_contradicts_itself_twice_is_still_one_render() {
+        let mut lines = vec![header()];
+        for turn in [6, 12, 13] {
+            lines.push(started(turn));
+        }
+        lines.extend([
+            diverged(6, "src/greeting.rs:1-11", 2, true),
+            diverged(6, "src/tally.rs:1-6", 2, true),
+            diverged(12, "src/greeting.rs:1-11", 3, true),
+            diverged(13, "src/greeting.rs:1-11", 3, false),
+        ]);
+
+        let found = SessionView::from_record("s", &lines).counts().diverged;
+        assert_eq!(found.lines, 4);
+        assert_eq!(found.renders, 3, "three turns, four lines");
+        assert_eq!(found.asking, 2, "turn 13 attached nothing");
+        assert_eq!(
+            found.paths,
+            vec![
+                ("src/greeting.rs:1-11".to_string(), 3),
+                ("src/tally.rs:1-6".to_string(), 2),
+            ],
+            "first seen first, each carrying the most bodies it ever reached",
+        );
+    }
+
+    /// A session that never edits a file it has quoted reports nothing, and the
+    /// tally of nothing is zero rather than absent. The control in
+    /// `scripts/tasks/edit-reread.txt` exists to produce exactly this.
+    #[test]
+    fn a_session_with_nothing_to_report_tallies_to_zero() {
+        let quiet = vec![header(), started(1)];
+        let counts = SessionView::from_record("s", &quiet).counts();
+        assert_eq!(counts.diverged, Divergence::default());
+        assert_eq!(counts.repeated, Repeats::default());
+        assert_eq!(counts.turns, 1, "the denominator is not zero");
+    }
+
+    /// The gap the substrate move gives up, pinned rather than described.
+    ///
+    /// `record::divergence` counted every line in the file; the fold counts the
+    /// ones that landed on a turn. Both emitters publish `TurnStarted` before
+    /// any line about that turn, so the two agree in every stream this tree
+    /// writes — but that is a property of two call sites and not of the format,
+    /// which is why it is asserted here rather than trusted. See
+    /// `RECORD/2026-09-19.one-counting-surface.completed.md` §The substrate moves.
+    #[test]
+    fn a_finding_about_a_turn_nobody_started_is_not_counted() {
+        let orphan = vec![header(), diverged(9, "src/lib.rs:1-4", 2, true)];
+        let counts = SessionView::from_record("s", &orphan).counts();
+        assert_eq!(
+            counts.diverged,
+            Divergence::default(),
+            "a finding no reader of the session can see is one nobody can act on",
+        );
+    }
+
+    /// Rule A's own saving, which until format 14 was subtracted from a bucket
+    /// and never reported.
+    #[test]
+    fn what_rule_a_kept_out_is_summed_over_the_session() {
+        let mut lines = vec![header(), started(1), started(2)];
+        lines.extend([
+            repeated(1, &[], true, 1, 40),
+            repeated(2, &[1], false, 3, 120),
+        ]);
+
+        let found = SessionView::from_record("s", &lines).counts().repeated;
+        assert_eq!(found.renders, 2);
+        assert_eq!(found.turns, 1, "only turn 2 named a history turn");
+        assert_eq!(found.asking, 1, "turn 1's own fresh read lost one");
+        assert_eq!(found.spans, 4);
+        assert_eq!(found.tokens.tokens, 160);
+        assert_eq!(
+            found.tokens.counters,
+            vec![Counter::Model { id: "mock".into() }],
+            "one counter, named, because a sum has to say who measured it",
+        );
+    }
+
+    /// A session resumed onto another model keeps its turns and changes its
+    /// counter, so a total over it mixes two measurements. The sum still adds
+    /// up; what must not happen is it adding up *silently*.
+    #[test]
+    fn a_total_that_mixes_counters_says_so() {
+        let mut lines = vec![header(), started(1), started(2)];
+        lines.push(repeated(1, &[], true, 1, 40));
+        lines.push(RecordLine::Trace {
+            at_ms: 2,
+            message: TraceMessage::Repeated {
+                turn: 2,
+                turns: Vec::new(),
+                asking: true,
+                spans: 1,
+                tokens: 60,
+                counter: Counter::Approximate,
+            },
+        });
+
+        let found = SessionView::from_record("s", &lines).counts().repeated;
+        assert_eq!(found.tokens.tokens, 100);
+        assert_eq!(
+            found.tokens.counters,
+            vec![Counter::Model { id: "mock".into() }, Counter::Approximate],
+            "two counters in the total, in the order they contributed",
+        );
+    }
+
+    /// The bill the fold wrote down for itself: refusals were dropped *until
+    /// something wants to count them*, and this is that something.
+    ///
+    /// They are kept beside the turns rather than on one, because a refusal
+    /// need not belong to a turn — `approve_job` and `hello` are refused
+    /// outside any, and `not_granted` is the one this was wanted for.
+    #[test]
+    fn refusals_are_kept_so_that_they_can_be_counted() {
+        let lines = vec![
+            header(),
+            refused("approve_job", Refusal::NotGranted, "src/ is not granted"),
+            refused("approve_job", Refusal::NotGranted, "curl is not granted"),
+            refused("prompt", Refusal::Busy, "a turn is running"),
+        ];
+
+        let view = SessionView::from_record("s", &lines);
+        assert_eq!(view.refusals.len(), 3, "kept in order, detail included");
+        assert_eq!(view.turns.len(), 0, "and still not session state");
+        assert_eq!(
+            view.counts().refused,
+            vec![
+                RefusalCount {
+                    reason: Refusal::NotGranted,
+                    count: 2
+                },
+                RefusalCount {
+                    reason: Refusal::Busy,
+                    count: 1
+                },
+            ],
+        );
+    }
+
+    fn header() -> RecordLine {
+        RecordLine::Header {
+            format: record::FORMAT,
+            protocol: crate::protocol::VERSION,
+            backend: "mock".into(),
+            model: "mock".into(),
+            context_limit: Some(8192),
+            counter: Some(Counter::Model { id: "mock".into() }),
+            eviction: Some(crate::context::Eviction::Turn),
+            posture: None,
+            repeat: Some(crate::context::Repeat::Once),
+            prune: Some(crate::context::Prune::Never),
+            results: Some(crate::context::Results::Kept),
+            started_at: 1_700_000_000_000,
+        }
+    }
+
+    fn started(turn: TurnId) -> RecordLine {
+        RecordLine::Protocol {
+            at_ms: turn,
+            message: ServerMessage::TurnStarted {
+                turn,
+                prompt: "hola".into(),
+                job: None,
+            },
+        }
+    }
+
+    fn diverged(turn: TurnId, path: &str, bodies: usize, asking: bool) -> RecordLine {
+        RecordLine::Trace {
+            at_ms: turn,
+            message: TraceMessage::Diverged {
+                turn,
+                path: path.into(),
+                turns: Vec::new(),
+                asking,
+                bodies,
+            },
+        }
+    }
+
+    fn repeated(
+        turn: TurnId,
+        turns: &[TurnId],
+        asking: bool,
+        spans: usize,
+        tokens: u32,
+    ) -> RecordLine {
+        RecordLine::Trace {
+            at_ms: turn,
+            message: TraceMessage::Repeated {
+                turn,
+                turns: turns.to_vec(),
+                asking,
+                spans,
+                tokens,
+                counter: Counter::Model { id: "mock".into() },
+            },
+        }
+    }
+
+    fn refused(request: &str, reason: Refusal, detail: &str) -> RecordLine {
+        RecordLine::Protocol {
+            at_ms: 1,
+            message: ServerMessage::Refused {
+                request: request.into(),
+                reason,
+                detail: detail.into(),
+            },
+        }
     }
 }

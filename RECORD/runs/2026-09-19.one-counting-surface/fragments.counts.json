@@ -1,0 +1,66 @@
+{
+  "turns": 13,
+  "evicted": {
+    "renders": 0,
+    "turns": 0,
+    "tokens": {
+      "tokens": 0,
+      "counters": []
+    }
+  },
+  "pruned": {
+    "renders": 0,
+    "turns": 0,
+    "tokens": {
+      "tokens": 0,
+      "counters": []
+    }
+  },
+  "repeated": {
+    "renders": 7,
+    "turns": 6,
+    "asking": 1,
+    "spans": 7,
+    "tokens": {
+      "tokens": 854,
+      "counters": [
+        {
+          "kind": "approximate"
+        }
+      ]
+    }
+  },
+  "diverged": {
+    "renders": 8,
+    "asking": 2,
+    "paths": [
+      [
+        "src/greeting.rs:1-10",
+        3
+      ]
+    ],
+    "lines": 8
+  },
+  "calls": {
+    "total": 4,
+    "allowed": 4,
+    "denied": 0,
+    "undecided": 0,
+    "rules": [
+      {
+        "rule": ". (read-write)",
+        "allowed": 4,
+        "denied": 0
+      }
+    ]
+  },
+  "refused": [],
+  "jobs": {
+    "proposed": 0,
+    "approved": 0,
+    "rejected": 0,
+    "closed": 0,
+    "reads": 0,
+    "writes": 0
+  }
+}

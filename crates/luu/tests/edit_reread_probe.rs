@@ -26,7 +26,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use agent_core::record::{Divergence, divergence};
+use agent_core::api::{Counts, SessionView};
 use luu::export::read_record;
 
 fn root() -> PathBuf {
@@ -104,8 +104,15 @@ fn replies() -> Vec<String> {
     ]
 }
 
-/// One run of the corpus, returning the tally and the tree it left behind.
-fn run(name: &str, extra: &[&str]) -> (Divergence, PathBuf) {
+/// One run of the corpus, returning the whole tally and the tree it left
+/// behind.
+///
+/// Through the fold rather than over the lines, which is where this tally moved
+/// on 2026-09-19: a recording read back through `SessionView` is what both the
+/// live server and `luu export` see, and it carries the other five findings
+/// beside the one this probe was written for. See
+/// `RECORD/2026-09-19.one-counting-surface.completed.md`.
+fn run(name: &str, extra: &[&str]) -> (Counts, PathBuf) {
     let dir = scratch(name);
     let record = dir.join("run.jsonl");
     let corpus = root().join("scripts/tasks/edit-reread.txt");
@@ -132,7 +139,7 @@ fn run(name: &str, extra: &[&str]) -> (Divergence, PathBuf) {
     assert!(status.success(), "{name} exited with {status}");
 
     let lines = read_record(&record).expect("reading the recording back");
-    (divergence(&lines), dir)
+    (SessionView::from_record(name, &lines).counts(), dir)
 }
 
 /// The corpus produces the case, and the count is the thing worth reading.
@@ -156,19 +163,19 @@ fn the_corpus_contradicts_itself_about_one_file_and_no_other() {
     let (found, dir) = run("fragments", &[]);
 
     assert_eq!(
-        found.paths,
+        found.diverged.paths,
         vec![("src/greeting.rs:1-10".to_string(), 3)],
         "one path, three bodies at its worst — and nothing else reported",
     );
     assert_eq!(
-        found.renders, 8,
+        found.diverged.renders, 8,
         "turns 6 to 13: the contradiction enters the history and stays — {found:?}",
     );
     assert_eq!(
-        found.asking, 2,
+        found.diverged.asking, 2,
         "only turns 6 and 12 re-read the file they contradicted",
     );
-    assert_eq!(found.lines, 8, "one path per render");
+    assert_eq!(found.diverged.lines, 8, "one path per render");
 
     // The edits happened. Without this the three silences below would be
     // indistinguishable from a run whose tool calls all failed, which is
@@ -187,6 +194,50 @@ fn the_corpus_contradicts_itself_about_one_file_and_no_other() {
     );
 }
 
+/// Rule A's own number, on the corpus that was built for a different question.
+///
+/// Nothing could produce this before `record::FORMAT` 14: `split_shown`
+/// computed it, the render subtracted it from the `history` bucket, and a
+/// difference is not a measurement of what made it.
+///
+/// Read beside `the_corpus_contradicts_itself_about_one_file_and_no_other`, the
+/// two numbers are item 19's mechanism as two figures rather than as a
+/// paragraph: **rule A collapsed 7 spans on 7 renders of the same session in
+/// which 8 renders carried a path under two bodies.** It is not collapsing the
+/// contradiction, and it cannot — a fragment's identity is its path *and* its
+/// bytes, so the one case where a span genuinely needs re-reading is precisely
+/// the case the dedup cannot see. See
+/// `RECORD/2026-09-19.one-path-two-bodies.WIP.md` §Why it happens.
+///
+/// `asking` is 1: exactly one render had its *fresh* read dropped because an
+/// older turn in the same prompt was already showing that body — which is the
+/// control file, read twice and never edited.
+#[test]
+fn rule_a_collapses_the_spans_it_can_see_and_not_the_ones_that_moved() {
+    let (found, _) = run("repeats", &[]);
+
+    assert_eq!(found.repeated.renders, 7);
+    assert_eq!(found.repeated.spans, 7, "one span per render it fired on");
+    assert_eq!(
+        found.repeated.asking, 1,
+        "the control, whose two reads are one body",
+    );
+    assert!(
+        found.repeated.tokens.tokens > 0,
+        "a saving with no tokens in it is a saving nobody can weigh: {:?}",
+        found.repeated.tokens,
+    );
+    assert_eq!(
+        found.repeated.tokens.counters.len(),
+        1,
+        "one session, one counter — a mixed total would mean a resume",
+    );
+    assert!(
+        found.diverged.renders > found.repeated.renders,
+        "rule A cannot collapse the bodies that moved, which is the defect: {found:?}",
+    );
+}
+
 /// The three files that must stay quiet, and the three different reasons.
 ///
 /// `format.rs` is read twice and never edited, so the two renders are one body
@@ -200,7 +251,12 @@ fn the_corpus_contradicts_itself_about_one_file_and_no_other() {
 #[test]
 fn the_control_stays_quiet_and_so_do_the_two_blind_spots() {
     let (found, _) = run("silences", &[]);
-    let named: Vec<&str> = found.paths.iter().map(|(path, _)| path.as_str()).collect();
+    let named: Vec<&str> = found
+        .diverged
+        .paths
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect();
 
     for quiet in ["src/format.rs", "src/banner.rs", "src/tally.rs"] {
         assert!(
@@ -231,15 +287,16 @@ fn selection_is_an_arm_and_not_a_different_corpus() {
     let (found, _) = run("selected", &["--select-tokens", "1024"]);
 
     assert!(
-        found.renders >= 8,
+        found.diverged.renders >= 8,
         "selection may add divergences and may not take one away: {found:?}",
     );
     assert!(
-        found.lines >= found.renders,
+        found.diverged.lines >= found.diverged.renders,
         "at least one path per render: {found:?}",
     );
     assert!(
         found
+            .diverged
             .paths
             .iter()
             .any(|(path, bodies)| path.starts_with("src/greeting.rs") && *bodies >= 3),
