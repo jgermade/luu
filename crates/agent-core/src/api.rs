@@ -9,7 +9,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Usage;
-use crate::context::{Counter, Diverged, Evicted, Prune, Pruned, Repeat, Repeated, Results};
+use crate::context::{
+    Counter, Diverged, Evicted, Prune, Pruned, Repeat, Repeated, Results, Superseded,
+};
 use crate::job::{ApprovedBy, ClosedBy, JobId, JobState, Plan, PlanSource, Replaced};
 use crate::protocol::{Grounding, Refusal, ServerMessage, TurnId};
 use crate::record::{self, RecordLine};
@@ -189,9 +191,21 @@ pub struct TurnView {
     /// The other side of the sentence above: here the transcript and the prompt
     /// do not merely differ, the prompt disagrees with *itself*. Empty on every
     /// turn of a session that never edits a file it has quoted, which is every
-    /// recording made before `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+    /// recording made before `RECORD/2026-09-19.one-path-two-bodies.completed.md`.
     #[serde(default)]
     pub diverged: Vec<Diverged>,
+    /// Paths this turn's prompt sent a stale body for as a citation rather than
+    /// as bytes, because a later turn had read the same span differently.
+    ///
+    /// The repair of the field above, and read with it: under `Repeat::Once`
+    /// these two are never both non-empty about the same path, because
+    /// replacing the stale body is what leaves the render one body to send.
+    /// Empty on every turn of every stream written before `record::FORMAT` 15,
+    /// and on every turn rendered under `Repeat::Always` — which are two
+    /// different claims, and the format number is what tells them apart. See
+    /// `RECORD/2026-09-20.the-newest-body-wins.completed.md`.
+    #[serde(default)]
+    pub superseded: Vec<Superseded>,
     pub started_at_ms: u64,
     pub ended_at_ms: Option<u64>,
 }
@@ -218,6 +232,7 @@ impl TurnView {
             code: Vec::new(),
             repeated: None,
             diverged: Vec::new(),
+            superseded: Vec::new(),
             started_at_ms,
             ended_at_ms: None,
         }
@@ -361,6 +376,37 @@ pub struct Divergence {
     pub lines: usize,
 }
 
+/// What a session's `superseded` lines add up to: the repair, counted the way
+/// [`Divergence`] counts the defect.
+///
+/// **Read the two together or neither means anything.** At `record::FORMAT` 15
+/// a session under rule A reports supersessions and no divergences, because
+/// replacing the stale body is what leaves one body to send; at 12 to 14 it
+/// reports divergences and no supersessions, because the detector shipped a day
+/// before the repair. So `diverged.renders` of 0 is *nothing went stale* on an
+/// old stream and *everything stale was replaced* on a new one, and this
+/// number is which.
+///
+/// It has no `asking` beside [`Divergence::asking`]: the turn being asked
+/// carries the newest read of its own spans and is never the turn superseded,
+/// which is the invariant [`crate::context::Superseded`] states.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Supersession {
+    /// Renders that replaced at least one stale body.
+    pub renders: usize,
+    /// One entry per distinct path, in the order the session first reported it,
+    /// carrying how many of its spans were replaced across the session.
+    pub paths: Vec<(String, usize)>,
+    /// Fragments replaced, summed over the session.
+    pub spans: usize,
+    /// What their bytes would have cost. **The sum of the spans**, as
+    /// [`Repeats::tokens`] is: what the window paid back for the citations that
+    /// stand in their place is in the `history` bucket, not here.
+    pub tokens: Tokens,
+    /// Every `superseded` line the session produced.
+    pub lines: usize,
+}
+
 /// One sandbox rule, and what it decided.
 ///
 /// Both answers, for [`crate::sandbox::Verdict::rule`]'s own reason: *denied
@@ -449,6 +495,7 @@ pub struct Counts {
     pub pruned: Cut,
     pub repeated: Repeats,
     pub diverged: Divergence,
+    pub superseded: Supersession,
     pub calls: Calls,
     /// One entry per reason that was used, in the order first seen. Empty is a
     /// session nothing was refused in — or one folded before anything kept
@@ -609,6 +656,27 @@ impl SessionView {
                     {
                         Some((_, most)) => *most = (*most).max(one.bodies),
                         None => counts.diverged.paths.push((one.path.clone(), one.bodies)),
+                    }
+                }
+            }
+
+            // A render and not a line, for `diverged`'s reason directly above:
+            // one prompt that replaced stale bodies for three paths went out
+            // once.
+            if !turn.superseded.is_empty() {
+                counts.superseded.renders += 1;
+                counts.superseded.lines += turn.superseded.len();
+                for one in &turn.superseded {
+                    counts.superseded.spans += one.spans;
+                    counts.superseded.tokens.add(one.tokens, &one.counter);
+                    match counts
+                        .superseded
+                        .paths
+                        .iter_mut()
+                        .find(|(seen, _)| *seen == one.path)
+                    {
+                        Some((_, spans)) => *spans += one.spans,
+                        None => counts.superseded.paths.push((one.path.clone(), one.spans)),
                     }
                 }
             }
@@ -961,6 +1029,27 @@ impl SessionView {
                     });
                 }
             }
+            TraceMessage::Superseded {
+                turn,
+                path,
+                turns,
+                spans,
+                tokens,
+                counter,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    // Pushed rather than assigned, for the line above's reason:
+                    // one per path, and a render that replaced bodies for three
+                    // of them sends three.
+                    view.superseded.push(Superseded {
+                        path: path.clone(),
+                        turns: turns.clone(),
+                        spans: *spans,
+                        tokens: *tokens,
+                        counter: counter.clone(),
+                    });
+                }
+            }
             TraceMessage::Repeated {
                 turn,
                 turns,
@@ -1172,7 +1261,7 @@ mod tests {
     /// The fold is where a debug client learns this: `Selection` carries the
     /// finding out of `select`, the caller puts it on the wire, and this is the
     /// step that puts it back together for a reader. See
-    /// `RECORD/2026-09-19.one-path-two-bodies.WIP.md`.
+    /// `RECORD/2026-09-19.one-path-two-bodies.completed.md`.
     #[test]
     fn a_diverged_trace_lands_on_the_turn_whose_prompt_carried_it() {
         let mut view = SessionView::from_record("completed", &lines());

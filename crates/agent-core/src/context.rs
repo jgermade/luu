@@ -465,6 +465,14 @@ pub struct Selection {
     /// session produces one too — it is the window that is being described, not
     /// a thing that happened to it.
     pub diverged: Vec<Diverged>,
+    /// Paths this render sent a stale body for as a citation rather than as
+    /// bytes, in the order the window first carried them.
+    ///
+    /// Empty under [`Repeat::Always`], always and by construction: there a
+    /// prompt carrying one path twice is the documented behaviour — every turn
+    /// re-sends what it selected and the blocks read as per-turn snapshots — so
+    /// a run made without rule A cannot be quietly changed by rule A's repair.
+    pub superseded: Vec<Superseded>,
 }
 
 /// What one selection dropped from the window — and it stays dropped: the
@@ -559,7 +567,7 @@ pub struct Repeated {
 
 /// One path the rendered prompt carried with more than one body.
 ///
-/// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`: `code_context`
+/// The defect of `RECORD/2026-09-19.one-path-two-bodies.completed.md`: `code_context`
 /// is written once at `push_turn_with_steps` and never refreshed, while every
 /// turn re-reads its own spans through the sandbox. So a file edited between two
 /// turns is sent twice under one `// path` header, with different contents and
@@ -596,6 +604,39 @@ pub struct Diverged {
     /// How many *distinct* bodies went out under this path. Always at least
     /// two, because one is not a divergence and is never recorded.
     pub bodies: usize,
+}
+
+/// One path whose stale bodies this render replaced with the line that cites
+/// them, because a later turn read the same span and got different bytes.
+///
+/// The repair [`Diverged`] reports the need for, and the two are read together:
+/// under [`Repeat::Once`] a session that supersedes is a session that no longer
+/// diverges, so `diverged` empty beside this non-empty is the fix working
+/// rather than nothing happening. See
+/// `RECORD/2026-09-20.the-newest-body-wins.completed.md`.
+///
+/// There is no `asking` field beside [`Diverged::asking`], and its absence is
+/// the invariant: the turn being asked holds the newest read of every span it
+/// carries, so it is never the turn that is superseded. Only the history is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Superseded {
+    /// The span, as the fragment names it — the whole spec, line range
+    /// included, exactly as [`Diverged::path`] carries it.
+    pub path: String,
+    /// The turns of the history whose body was replaced, oldest first. One
+    /// entry per turn however many of its spans moved, because a reader wants
+    /// to know where to look.
+    pub turns: Vec<TurnId>,
+    /// How many fragments were replaced across the render.
+    pub spans: usize,
+    /// What their **bytes** would have cost, summed — the sum of the spans, as
+    /// [`Repeated::tokens`] is and for its reason. It is not the saving: a
+    /// citation stands where each one stood and costs something of its own,
+    /// which the `history` bucket carries because that bucket describes the
+    /// messages rather than estimating them.
+    pub tokens: u32,
+    /// Which counter produced `tokens`.
+    pub counter: Counter,
 }
 
 /// One unit of rendered history: a live turn, or a closed job folded to its
@@ -652,6 +693,12 @@ pub struct Context {
     /// Set on every selection rather than only on the ones that prune, because
     /// it describes the render and not the decision.
     cited: Results,
+    /// Rule A as the last render ran it, kept here for [`Self::cited`]'s reason
+    /// and no other: a fold has to cost its turns the way the prompt it is
+    /// leaving actually carried them, and under [`Repeat::Once`] that means
+    /// knowing whether a stale span went out as bytes or as the line that cites
+    /// it. Also set on every selection, because it too describes the render.
+    resending: Repeat,
     /// The session's jobs, in order. Closed ones fold their turns at
     /// selection time; nothing here rewrites the history.
     jobs: Vec<Job>,
@@ -667,6 +714,7 @@ impl Context {
             floor: 0,
             pruned: 0,
             cited: Results::Kept,
+            resending: Repeat::Always,
             jobs: Vec::new(),
         }
     }
@@ -848,6 +896,7 @@ impl Context {
                 // rendered: the next selection sets it from the budget it is
                 // given.
                 cited: Results::Kept,
+                resending: Repeat::Always,
                 jobs,
             },
             unreadable,
@@ -1070,6 +1119,11 @@ impl Context {
         // is fixed here. See
         // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md` and
         // `RECORD/2026-09-09.what-a-result-costs.completed.md`.
+        // No asking turn: a fold happens between renders, so what the session
+        // knows about a path is what its turns say. Under `Repeat::Always` this
+        // is empty and the arithmetic below is unchanged, which is the
+        // property every one of rule A's costs is built to keep.
+        let current = Current::of(&self.turns, &[], self.resending);
         let replaced = Replaced {
             turns: self.turns.iter().filter(mine).map(|turn| turn.id).collect(),
             tokens: self
@@ -1078,7 +1132,13 @@ impl Context {
                 .enumerate()
                 .filter(|(_, turn)| turn.job == Some(id))
                 .map(|(index, _)| {
-                    self.item_tokens(&Item::Turn(index), counter, self.pruned, self.cited)
+                    self.item_tokens(
+                        &Item::Turn(index),
+                        counter,
+                        self.pruned,
+                        self.cited,
+                        &current,
+                    )
                 })
                 .sum(),
             // Filled by the close, which is where the summary is written and
@@ -1214,19 +1274,36 @@ impl Context {
     /// rather than recounted, which is rule A's rule for rule A's reason: a
     /// turn that gives up nothing costs exactly what it has always cost, and
     /// every recording made before this reads unchanged.
+    ///
+    /// A turn *above* the line pays the same arithmetic for a different reason:
+    /// a span whose bytes a later turn has read differently goes out as a
+    /// citation too. `current` is empty under [`Repeat::Always`], so that arm
+    /// is the stored count exactly as it always was.
     fn item_tokens(
         &self,
         item: &Item,
         counter: &dyn TokenCounter,
         pruned: usize,
         results: Results,
+        current: &Current,
     ) -> u32 {
         match item {
             Item::Turn(index) => {
                 let turn = &self.turns[*index];
                 let stored = self.tokens_of(turn, counter);
                 match *index < pruned {
-                    false => stored,
+                    // Above the line the turn sends its spans, except the ones
+                    // the session has since read differently: those are the
+                    // line that cites them, and the same subtract-and-add-back
+                    // this function does one arm along.
+                    false => turn
+                        .code_context
+                        .iter()
+                        .filter(|fragment| current.superseded(fragment))
+                        .fold(stored, |total, fragment| {
+                            total.saturating_sub(fragment_tokens(fragment, counter))
+                                + superseded_fragment_tokens(fragment, counter)
+                        }),
                     true => {
                         let carried = turn.code_context.iter();
                         let full: u32 = carried
@@ -1289,6 +1366,12 @@ impl Context {
         counter: &dyn TokenCounter,
     ) -> Selection {
         self.cited = budget.results;
+        self.resending = budget.repeat;
+        // Before anything is decided, because every cost below is a cost of the
+        // render and the render sends a superseded span as its citation. Owned
+        // rather than borrowed for the reason [`Current`] gives: the floor and
+        // the prune line move between here and the walk.
+        let current = Current::of(&self.turns, code_context, budget.repeat);
         let system_tokens = counter.count(&self.system);
         let tools_tokens = counter.count(&self.tools);
         let map_tokens = counter.count(&self.map);
@@ -1346,12 +1429,20 @@ impl Context {
                     budget.repeat,
                     self.pruned,
                     budget.results,
+                    &current,
                 ) > self.floor
             {
                 let before = self.pruned;
-                let held =
-                    self.window_tokens(self.floor, counter, budget.repeat, before, budget.results);
-                self.pruned = self.prune_to(target, counter, budget.repeat, budget.results);
+                let held = self.window_tokens(
+                    self.floor,
+                    counter,
+                    budget.repeat,
+                    before,
+                    budget.results,
+                    &current,
+                );
+                self.pruned =
+                    self.prune_to(target, counter, budget.repeat, budget.results, &current);
                 pruning = (self.pruned > before).then(|| Pruned {
                     // A turn is named here because it gave something up, and
                     // under `Results::Cited` there is a second thing to give:
@@ -1375,6 +1466,7 @@ impl Context {
                         budget.repeat,
                         self.pruned,
                         budget.results,
+                        &current,
                     )),
                     counter: counter.id(),
                 });
@@ -1386,6 +1478,7 @@ impl Context {
                 budget.repeat,
                 self.pruned,
                 budget.results,
+                &current,
             ) > self.floor
             {
                 // Taken before the floor moves: this is the window the cut
@@ -1395,11 +1488,23 @@ impl Context {
                 // already in force, so that what pruning saved is not reported
                 // as what the cut freed.
                 let before = self.floor;
-                let held =
-                    self.window_tokens(before, counter, budget.repeat, self.pruned, budget.results);
+                let held = self.window_tokens(
+                    before,
+                    counter,
+                    budget.repeat,
+                    self.pruned,
+                    budget.results,
+                    &current,
+                );
 
-                self.floor =
-                    self.fits_from(target, counter, budget.repeat, self.pruned, budget.results);
+                self.floor = self.fits_from(
+                    target,
+                    counter,
+                    budget.repeat,
+                    self.pruned,
+                    budget.results,
+                    &current,
+                );
 
                 // What the cut freed, and not what the dropped turns were
                 // counted at. Under `Repeat::Once` those are two different
@@ -1418,6 +1523,7 @@ impl Context {
                         budget.repeat,
                         self.pruned,
                         budget.results,
+                        &current,
                     )),
                     counter: counter.id(),
                     policy: budget.eviction,
@@ -1456,8 +1562,13 @@ impl Context {
             tokens: 0,
             counter: counter.id(),
         };
+        // What went out as a citation because the session has read it again
+        // since. Accumulated on the walk for `sent`'s own reason: the answer is
+        // a by-product of rendering, and deriving it afterwards would be a
+        // second implementation of the rule sitting beside the rule.
+        let mut superseded: Vec<Superseded> = Vec::new();
         for item in &items {
-            let tokens = self.item_tokens(item, counter, self.pruned, budget.results);
+            let tokens = self.item_tokens(item, counter, self.pruned, budget.results, &current);
             match item {
                 Item::Turn(index) if *index < self.pruned => {
                     // Below the prune line: the exchange stays, the code does
@@ -1491,19 +1602,33 @@ impl Context {
                     // The stored count, less what this render will not send.
                     // Subtracted rather than recounted so that a turn repeating
                     // nothing costs exactly what it has always cost, and every
-                    // recording made before `Repeat` reads unchanged.
-                    let unsent = fragments_tokens(&dropped, counter);
+                    // recording made before `Repeat` reads unchanged. What a
+                    // dropped span would have cost *here* is its citation where
+                    // the session has since read it differently, which is the
+                    // same number `item_tokens` charged the turn above.
+                    let unsent = shown_fragments_tokens(&dropped, &current, counter);
                     history_tokens += tokens.saturating_sub(unsent);
                     if !dropped.is_empty() {
                         repeated.turns.push(turn.id);
                         repeated.spans += dropped.len();
                         repeated.tokens += unsent;
                     }
-                    sent.extend(
-                        kept.iter()
-                            .map(|fragment| (&*fragment.path, &*fragment.text, Some(turn.id))),
-                    );
-                    messages.push(Message::user(user_text(kept, &turn.prompt)));
+                    // Bodies, and a citation is not one: a turn whose stale span
+                    // was replaced sent no body for that path, so the detector
+                    // one block down has nothing to report about it. That is
+                    // the fix, stated where it takes effect.
+                    for fragment in &kept {
+                        match current.superseded(fragment) {
+                            true => note_superseded(&mut superseded, fragment, turn.id, counter),
+                            false => sent.push((&fragment.path, &fragment.text, Some(turn.id))),
+                        }
+                    }
+                    messages.push(Message::user(shown_user_text(
+                        kept,
+                        &turn.prompt,
+                        &current,
+                        counter,
+                    )));
                     // Each step is a real exchange, so the alternation holds and
                     // no chat template has to decide what two user messages in a
                     // row mean.
@@ -1547,7 +1672,7 @@ impl Context {
         if !dropped.is_empty() {
             repeated.asking = true;
             repeated.spans += dropped.len();
-            repeated.tokens += fragments_tokens(&dropped, counter);
+            repeated.tokens += shown_fragments_tokens(&dropped, &current, counter);
         }
         sent.extend(
             kept.iter()
@@ -1592,6 +1717,7 @@ impl Context {
             // saved nothing.
             repeating: (repeated.spans > 0).then_some(repeated),
             diverged,
+            superseded,
         }
     }
 
@@ -1616,6 +1742,7 @@ impl Context {
         repeat: Repeat,
         pruned: usize,
         results: Results,
+        current: &Current,
     ) -> usize {
         let available = i64::from(available);
         let mut spent: i64 = 0;
@@ -1626,7 +1753,7 @@ impl Context {
         // and cannot stand in for anything.
         let mut rendered: HashSet<&Fragment> = HashSet::new();
         for item in self.items().iter().rev() {
-            let mut tokens = i64::from(self.item_tokens(item, counter, pruned, results));
+            let mut tokens = i64::from(self.item_tokens(item, counter, pruned, results, current));
             if let (Repeat::Once, Item::Turn(index)) = (repeat, item) {
                 // A pruned turn is not rendering its spans, so it neither owns
                 // one nor makes a younger copy redundant: `item_tokens` has
@@ -1635,7 +1762,11 @@ impl Context {
                 if *index >= pruned {
                     for fragment in &self.turns[*index].code_context {
                         if !rendered.insert(fragment) {
-                            tokens -= i64::from(fragment_tokens(fragment, counter));
+                            // What the copy would have cost *here*, which for a
+                            // superseded span is its citation and not its
+                            // bytes: the decision has to be made against the
+                            // render it is deciding.
+                            tokens -= i64::from(shown_fragment_tokens(fragment, current, counter));
                         }
                     }
                 }
@@ -1664,17 +1795,18 @@ impl Context {
         repeat: Repeat,
         pruned: usize,
         results: Results,
+        current: &Current,
     ) -> u32 {
         let mut total: i64 = 0;
         let mut shown: HashSet<&Fragment> = HashSet::new();
         for item in &self.items_from(floor) {
-            let mut tokens = i64::from(self.item_tokens(item, counter, pruned, results));
+            let mut tokens = i64::from(self.item_tokens(item, counter, pruned, results, current));
             if let (Repeat::Once, Item::Turn(index)) = (repeat, item)
                 && *index >= pruned
             {
                 for fragment in &self.turns[*index].code_context {
                     if !shown.insert(fragment) {
-                        tokens -= i64::from(fragment_tokens(fragment, counter));
+                        tokens -= i64::from(shown_fragment_tokens(fragment, current, counter));
                     }
                 }
             }
@@ -1710,18 +1842,19 @@ impl Context {
         counter: &dyn TokenCounter,
         repeat: Repeat,
         results: Results,
+        current: &Current,
     ) -> usize {
         // Never below the floor: a turn nobody renders has nothing to give up,
         // and starting here is what keeps the line moving forward as the floor
         // does.
         let start = self.pruned.max(self.floor);
         let mut best = start;
-        let mut smallest = self.window_tokens(self.floor, counter, repeat, start, results);
+        let mut smallest = self.window_tokens(self.floor, counter, repeat, start, results, current);
 
         let mut line = start;
         while smallest > target && line < self.turns.len() {
             line += 1;
-            let cost = self.window_tokens(self.floor, counter, repeat, line, results);
+            let cost = self.window_tokens(self.floor, counter, repeat, line, results, current);
             if cost < smallest {
                 best = line;
                 smallest = cost;
@@ -1839,6 +1972,66 @@ fn fragments_tokens(fragments: &[&Fragment], counter: &dyn TokenCounter) -> u32 
         .sum()
 }
 
+/// One fragment, as the line that stands in for bytes a later turn has read
+/// differently.
+///
+/// Shaped like [`pruned_fragment_text`] and deliberately **unguarded**, which
+/// is the one place the two part company. A pruned span's citation is a
+/// *saving*, so it is not taken where it would cost more than the span it
+/// replaces — a citation that is not cheaper is not a saving. This one is a
+/// *correction*: what it replaces is not expensive, it is untrue, and a
+/// two-line fragment being cheap to send is not a reason to send a body the
+/// session knows is stale. The window pays a few tokens for it and the
+/// `history` bucket says so.
+fn superseded_fragment_text(fragment: &Fragment, counter: &dyn TokenCounter) -> String {
+    format!(
+        "// {} — {} tokens, superseded\n\n",
+        fragment.path,
+        fragment_tokens(fragment, counter)
+    )
+}
+
+fn superseded_fragment_tokens(fragment: &Fragment, counter: &dyn TokenCounter) -> u32 {
+    counter.count(&superseded_fragment_text(fragment, counter))
+}
+
+/// One fragment, as this render actually sends it: its bytes, or the line that
+/// cites them where a later turn has read the same span differently.
+///
+/// One function, for [`result_under`]'s reason: the render builds the messages
+/// and the accounting builds the number beside them, and two copies of this
+/// `match` would be a window whose reported cost and actual cost drift apart by
+/// exactly one superseded span.
+fn shown_fragment_text(
+    fragment: &Fragment,
+    current: &Current,
+    counter: &dyn TokenCounter,
+) -> String {
+    match current.superseded(fragment) {
+        true => superseded_fragment_text(fragment, counter),
+        false => fragment_text(fragment),
+    }
+}
+
+fn shown_fragment_tokens(
+    fragment: &Fragment,
+    current: &Current,
+    counter: &dyn TokenCounter,
+) -> u32 {
+    counter.count(&shown_fragment_text(fragment, current, counter))
+}
+
+fn shown_fragments_tokens(
+    fragments: &[&Fragment],
+    current: &Current,
+    counter: &dyn TokenCounter,
+) -> u32 {
+    fragments
+        .iter()
+        .map(|fragment| shown_fragment_tokens(fragment, current, counter))
+        .sum()
+}
+
 /// One fragment, as the line that stands in for it once its turn has been
 /// pruned.
 ///
@@ -1897,6 +2090,71 @@ fn pruned_user_text(code_context: &[Fragment], prompt: &str, counter: &dyn Token
     text
 }
 
+/// What the session knows each path's bytes to be: the body carried by the
+/// **newest** turn that read it, with the turn being asked ahead of all of them.
+///
+/// Over every turn the session holds, the evicted ones included, and that is
+/// the ratchet rather than a field that remembers. `turns` only ever grows by
+/// appending a younger turn, so the newest turn carrying a path only ever moves
+/// forward — which means a body this says is stale cannot become current again
+/// by anything *leaving* the window. The floor and the prune line both needed a
+/// stored ratchet to get that property; here it falls out of the derivation,
+/// which is `SessionView::counts()`'s own argument one structure along: a fact
+/// derived from what the session already holds cannot drift from it.
+///
+/// The one thing that *does* move it back is a file edited back to what it was,
+/// which a later turn then reads. That is not the ratchet failing — the body it
+/// names is current, because somebody read it and it was there.
+///
+/// Empty under [`Repeat::Always`], which is what keeps supersession rule A's
+/// repair rather than a fourth window rule: see [`Selection::superseded`].
+///
+/// The current body per path is cloned rather than borrowed, and it is the one
+/// allocation this costs. [`Context::select`] takes `&mut self` and moves the
+/// floor and the prune line between building this and rendering with it, so a
+/// borrow of `turns` cannot live across the decision; a handful of distinct
+/// paths cloned once per render is the cheaper half of that trade, and the
+/// render already clones every message it builds.
+struct Current {
+    /// One entry per path, in the order the session first carried it.
+    ///
+    /// A `Vec` and a linear scan, for [`diverged_paths`]' reason: a window
+    /// holds tens of fragments over a handful of paths, and a `HashMap` would
+    /// spend an allocation per path to save comparisons nobody can measure.
+    bodies: Vec<(String, String)>,
+}
+
+impl Current {
+    fn of(turns: &[Turn], asking: &[Fragment], repeat: Repeat) -> Self {
+        let mut bodies: Vec<(String, String)> = Vec::new();
+        if matches!(repeat, Repeat::Always) {
+            return Self { bodies };
+        }
+        // Oldest first and last-wins, so the body that survives the walk is the
+        // one the newest reader of that path got. The turn being asked comes
+        // last because it is the youngest there is: its spans were loaded
+        // through the sandbox in this very call.
+        let carried = turns
+            .iter()
+            .flat_map(|turn| turn.code_context.iter())
+            .chain(asking);
+        for fragment in carried {
+            match bodies.iter_mut().find(|(path, _)| *path == fragment.path) {
+                Some(one) => one.1.clone_from(&fragment.text),
+                None => bodies.push((fragment.path.clone(), fragment.text.clone())),
+            }
+        }
+        Self { bodies }
+    }
+
+    /// Whether this fragment's bytes are ones a later turn has read differently.
+    fn superseded(&self, fragment: &Fragment) -> bool {
+        self.bodies
+            .iter()
+            .any(|(path, body)| *path == fragment.path && *body != fragment.text)
+    }
+}
+
 /// What this turn renders, and what a turn already rendered in this same call
 /// is showing for it.
 ///
@@ -1914,6 +2172,36 @@ fn split_shown<'a>(
         Repeat::Once => code_context
             .iter()
             .partition(|fragment| shown.insert(fragment)),
+    }
+}
+
+/// One replaced span, folded into the report for its path.
+///
+/// One entry per path and one `turns` entry per turn, however many of that
+/// turn's spans moved: the report answers *where do I look*, and the spans and
+/// tokens beside it answer *how much*.
+fn note_superseded(
+    into: &mut Vec<Superseded>,
+    fragment: &Fragment,
+    turn: TurnId,
+    counter: &dyn TokenCounter,
+) {
+    let tokens = fragment_tokens(fragment, counter);
+    match into.iter_mut().find(|one| one.path == fragment.path) {
+        Some(one) => {
+            if one.turns.last() != Some(&turn) {
+                one.turns.push(turn);
+            }
+            one.spans += 1;
+            one.tokens += tokens;
+        }
+        None => into.push(Superseded {
+            path: fragment.path.clone(),
+            turns: vec![turn],
+            spans: 1,
+            tokens,
+            counter: counter.id(),
+        }),
     }
 }
 
@@ -1990,6 +2278,25 @@ fn fragments_text<'a>(code_context: impl IntoIterator<Item = &'a Fragment>) -> S
 /// disagree about what that means.
 fn user_text<'a>(code_context: impl IntoIterator<Item = &'a Fragment>, prompt: &str) -> String {
     let mut text = fragments_text(code_context);
+    text.push_str(prompt);
+    text
+}
+
+/// The same, with each span rendered as this call will send it.
+///
+/// [`user_text`] stays beside it and is not a special case of it: the stored
+/// count of a turn is what that turn's own text weighs, and it is taken once
+/// when the turn closes, before there is any later turn to supersede anything.
+fn shown_user_text<'a>(
+    code_context: impl IntoIterator<Item = &'a Fragment>,
+    prompt: &str,
+    current: &Current,
+    counter: &dyn TokenCounter,
+) -> String {
+    let mut text: String = code_context
+        .into_iter()
+        .map(|fragment| shown_fragment_text(fragment, current, counter))
+        .collect();
     text.push_str(prompt);
     text
 }
@@ -2798,17 +3105,17 @@ mod tests {
         context
     }
 
-    /// The defect of `RECORD/2026-09-19.one-path-two-bodies.WIP.md`, pinned as
-    /// the behaviour it currently is rather than as the behaviour it should be.
+    /// The fix of `RECORD/2026-09-20.the-newest-body-wins.completed.md`, which
+    /// is the same corpus this test pinned the *defect* on for one day.
     ///
-    /// This asserts that the prompt **does** contain the contradiction, because
-    /// the fix is argued in that record and deliberately not taken: it trades
-    /// measured prefix reuse for truthfulness and the frequency it turns on has
-    /// never been measured. When the fix lands this test changes, and the diff
-    /// that changes it is the point — a defect nothing detects is one nobody
-    /// can decide about.
+    /// Until format 15 this asserted that the prompt **does** contain the
+    /// contradiction, because the repair was argued and deliberately not taken
+    /// while the frequency it turns on had no number. The corpus produced the
+    /// number — 8 of 13 renders — and this is the other side of that diff: one
+    /// body goes out, it is the newest one, and the stale block is the line
+    /// that cites it.
     #[test]
-    fn an_edited_span_goes_out_twice_under_one_path_and_is_reported() {
+    fn an_edited_span_goes_out_once_and_the_stale_body_is_cited() {
         let counter = WordCounter::default();
         let before = fragment("src/lib.rs:1-4", "fn main () { old }");
         let after = fragment("src/lib.rs:1-4", "fn main () { new }");
@@ -2824,16 +3131,69 @@ mod tests {
             &counter,
         );
 
-        // Rule A is the default and does not collapse these, because a
-        // fragment's identity is its path *and* its bytes — so the dedup is
-        // working exactly as specified and the prompt is still wrong.
-        assert_eq!(occurrences(&selection, "src/lib.rs:1-4"), 2);
+        let users = user_messages(&selection);
+        assert!(
+            !users[0].contains("old"),
+            "the body nothing on disk agrees with: {users:?}",
+        );
+        assert!(
+            users[0].contains("src/lib.rs:1-4") && users[0].contains("superseded"),
+            "the turn is still told it read the file, and which one: {users:?}",
+        );
+        assert!(
+            users[1].contains("new"),
+            "the newest body, in full: {users:?}"
+        );
+
+        assert!(
+            selection.diverged.is_empty(),
+            "one body is not a divergence: {:?}",
+            selection.diverged,
+        );
+        assert_eq!(selection.superseded.len(), 1, "{:?}", selection.superseded);
+        let one = &selection.superseded[0];
+        assert_eq!(one.path, "src/lib.rs:1-4");
+        assert_eq!(one.turns, vec![1], "the turn whose body was replaced");
+        assert_eq!(one.spans, 1);
+        assert!(one.tokens > 0, "the bytes it stood in for");
+        assert_eq!(one.counter, counter.id(), "a count says who counted it");
+    }
+
+    /// The arm one flag apart, and the reason the repair is rule A's and not a
+    /// fourth window rule.
+    ///
+    /// Under `Repeat::Always` a prompt carrying one path twice is the
+    /// *documented* behaviour — every turn re-sends what it selected and the
+    /// blocks read as per-turn snapshots — so nothing is superseded and the
+    /// detector reports what it always did. This is the same corpus as above,
+    /// and it is what a run made before format 15 still reads as.
+    #[test]
+    fn the_arm_without_rule_a_still_sends_both_bodies_and_reports_them() {
+        let counter = WordCounter::default();
+        let before = fragment("src/lib.rs:1-4", "fn main () { old }");
+        let after = fragment("src/lib.rs:1-4", "fn main () { new }");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&before), std::slice::from_ref(&after)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Always),
+            &counter,
+        );
+
         let users = user_messages(&selection);
         assert!(
             users[0].contains("old") && users[1].contains("new"),
             "{users:?}"
         );
-
+        assert!(
+            selection.superseded.is_empty(),
+            "rule A's repair cannot reach an arm rule A is off in: {:?}",
+            selection.superseded,
+        );
         assert_eq!(selection.diverged.len(), 1, "{:?}", selection.diverged);
         let one = &selection.diverged[0];
         assert_eq!(one.path, "src/lib.rs:1-4");
@@ -2844,8 +3204,14 @@ mod tests {
 
     /// The case the record calls the one that matters most: the history holds
     /// the old bytes and the turn being asked holds what is on disk now.
+    ///
+    /// It is also where the invariant behind [`Superseded`]'s missing `asking`
+    /// field is visible. The turn being asked loaded its span through the
+    /// sandbox in this very call, so it holds the newest read there is and is
+    /// never the turn superseded — the history is. `Diverged` needs the `bool`
+    /// because either side can be a carrier; this report never does.
     #[test]
-    fn a_divergence_against_the_turn_being_asked_says_so() {
+    fn the_turn_being_asked_supersedes_what_the_history_holds() {
         let counter = WordCounter::default();
         let before = fragment("src/lib.rs:1-4", "fn main () { old }");
         let after = fragment("src/lib.rs:1-4", "fn main () { new }");
@@ -2858,15 +3224,40 @@ mod tests {
             &counter,
         );
 
-        assert_eq!(selection.diverged.len(), 1, "{:?}", selection.diverged);
-        let one = &selection.diverged[0];
-        assert_eq!(one.turns, vec![1], "the history's carrier, by id");
         assert!(
-            one.asking,
-            "and the turn being asked, which has no id yet and is the reason \
-             this is a bool rather than an id among them",
+            selection.diverged.is_empty(),
+            "the prompt no longer disagrees with the disk: {:?}",
+            selection.diverged,
         );
-        assert_eq!(one.bodies, 2);
+        assert_eq!(selection.superseded.len(), 1, "{:?}", selection.superseded);
+        assert_eq!(
+            selection.superseded[0].turns,
+            vec![1],
+            "the history's carrier, and only it",
+        );
+
+        let users = user_messages(&selection);
+        assert!(!users[0].contains("old"), "{users:?}");
+        assert!(
+            users.last().expect("the asking turn").contains("new"),
+            "what was read this turn goes out in full: {users:?}",
+        );
+
+        // And the arm one flag apart, where the same window is the defect the
+        // detector was built for.
+        let mut always = context_carrying(&[std::slice::from_ref(&before)], &counter);
+        let selection = always.select(
+            "now this",
+            std::slice::from_ref(&after),
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Always),
+            &counter,
+        );
+        assert_eq!(selection.diverged.len(), 1, "{:?}", selection.diverged);
+        assert!(
+            selection.diverged[0].asking,
+            "the turn being asked, which has no id yet and is the reason \
+             that is a bool rather than an id among them",
+        );
     }
 
     /// The three ways a window carries one path without contradicting itself.
@@ -2950,10 +3341,10 @@ mod tests {
         );
     }
 
-    /// Two files diverging at once are two findings, and a third file that did
-    /// not move is not one of them.
+    /// Two files moving at once are two findings, and a third file that did
+    /// not move is not one of them — on both sides of the flag.
     #[test]
-    fn each_diverging_path_is_its_own_finding() {
+    fn each_moved_path_is_its_own_finding() {
         let counter = WordCounter::default();
         let old_a = fragment("a.rs:1-2", "fn a () { old }");
         let new_a = fragment("a.rs:1-2", "fn a () { new }");
@@ -2976,7 +3367,7 @@ mod tests {
         );
 
         let paths: Vec<&str> = selection
-            .diverged
+            .superseded
             .iter()
             .map(|one| one.path.as_str())
             .collect();
@@ -2985,12 +3376,43 @@ mod tests {
             vec!["a.rs:1-2", "b.rs:1-2"],
             "in the order the window first carried them, and c.rs is not among them",
         );
+        assert!(selection.diverged.is_empty(), "{:?}", selection.diverged);
+
+        let mut always = context_carrying(
+            &[&[old_a, old_b, steady.clone()], &[new_a, new_b, steady]],
+            &counter,
+        );
+        let selection = always.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn).repeating(Repeat::Always),
+            &counter,
+        );
+        let paths: Vec<&str> = selection
+            .diverged
+            .iter()
+            .map(|one| one.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["a.rs:1-2", "b.rs:1-2"],
+            "the same two paths, as the defect rather than as the repair",
+        );
+        assert!(selection.superseded.is_empty());
     }
 
-    /// Three bodies is three, not two. The count is what a frequency
-    /// measurement will be built on, so it has to mean what it says.
+    /// A file edited, put back, and edited again — four carriers, three
+    /// bodies, and after the fix exactly one of them goes out.
+    ///
+    /// The edit-back is why [`Current`] names the *newest body of a path* and
+    /// not *every body ever found stale*. Turn 1's bytes were stale the moment
+    /// turn 2 read something else and were true again at turn 3; a ratchet over
+    /// bodies would have kept citing them, and cited the only body in the
+    /// window that was on disk. What ratchets here is the reader — the newest
+    /// turn carrying a path only ever moves forward, because turns are only
+    /// ever appended.
     #[test]
-    fn the_body_count_is_distinct_bodies_and_not_carriers() {
+    fn the_edit_and_the_edit_back_are_both_superseded_by_the_newest_read() {
         let counter = WordCounter::default();
         let one = fragment("src/lib.rs:1-4", "fn main () { one }");
         let two = fragment("src/lib.rs:1-4", "fn main () { two }");
@@ -3014,14 +3436,151 @@ mod tests {
             &counter,
         );
 
-        assert_eq!(selection.diverged.len(), 1);
-        assert_eq!(selection.diverged[0].bodies, 3);
+        assert!(selection.diverged.is_empty(), "{:?}", selection.diverged);
+        assert_eq!(selection.superseded.len(), 1, "{:?}", selection.superseded);
         assert_eq!(
-            selection.diverged[0].turns,
-            vec![1, 2, 4],
+            selection.superseded[0].turns,
+            vec![1, 2],
             "turn 3 agreed with turn 1 byte for byte, so rule A deduped it and \
-             it sent nothing — and a detector over what was sent does not name \
-             a carrier that carried nothing",
+             it rendered nothing to supersede — and turn 4 is the newest read, \
+             which is the one body that goes out",
+        );
+        assert_eq!(selection.superseded[0].spans, 2);
+
+        let users = user_messages(&selection);
+        for stale in ["{ one }", "{ two }"] {
+            assert!(
+                !users.iter().any(|text| text.contains(stale)),
+                "{stale} is not what the newest read found: {users:?}",
+            );
+        }
+        assert!(
+            users.iter().any(|text| text.contains("{ three }")),
+            "{users:?}",
+        );
+    }
+
+    /// The ratchet, stated as the case that would break without one: a fresh
+    /// read leaving the window does not put the stale bytes back.
+    ///
+    /// [`Current`] is derived over every turn the session holds, the evicted
+    /// ones included, so what a turn *observed* outlives whether that turn is
+    /// still being sent. The floor and the prune line each needed a stored
+    /// field to get this; here it falls out of the derivation.
+    #[test]
+    fn an_evicted_fresh_read_does_not_put_the_stale_body_back() {
+        let counter = WordCounter::default();
+        let stale = fragment("src/lib.rs:1-4", "fn main () { old }");
+        let fresh = fragment("src/lib.rs:1-4", "fn main () { new }");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&stale), std::slice::from_ref(&fresh)],
+            &counter,
+        );
+
+        // Wide enough for both turns: the newest body goes out and the oldest
+        // is cited.
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+        assert!(user_messages(&selection)[1].contains("new"));
+        assert_eq!(selection.superseded.len(), 1);
+
+        // Then a prompt that will not fit both, so the turn holding the fresh
+        // read is the one that leaves. Only the stale carrier is left in the
+        // window, and it is still not the truth.
+        let long: String = std::iter::repeat_n("pad", 40).collect::<Vec<_>>().join(" ");
+        let selection = context.select(&long, &[], Budget::new(60, 0, Eviction::Turn), &counter);
+        assert!(selection.evicted > 0, "the point of the case");
+        let users = user_messages(&selection);
+        assert!(
+            !users.iter().any(|text| text.contains("{ old }")),
+            "a body the session watched go stale came back when its reader \
+             left the window: {users:?}",
+        );
+    }
+
+    /// The one place supersession and rule B's prune part company.
+    ///
+    /// A pruned span's citation is a *saving* and is not taken where it costs
+    /// more than the span — a citation that is not cheaper is not a saving. A
+    /// superseded span's citation is a *correction*: what it replaces is not
+    /// expensive, it is untrue, and being cheap to send is not a reason to send
+    /// bytes the session knows are stale.
+    #[test]
+    fn a_superseded_citation_is_taken_even_where_it_costs_more_than_the_span() {
+        let counter = WordCounter::default();
+        // Two words, so the citation naming the path and a token count is
+        // dearer than the body it replaces.
+        let stale = fragment("x.rs:1", "old");
+        let fresh = fragment("x.rs:1", "new");
+        assert!(
+            counter.count(&superseded_fragment_text(&stale, &counter))
+                > fragment_tokens(&stale, &counter),
+            "the case only means something where the citation is the dearer half",
+        );
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&stale), std::slice::from_ref(&fresh)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+        let users = user_messages(&selection);
+        assert!(!users[0].contains("old"), "{users:?}");
+        assert!(users[0].contains("superseded"), "{users:?}");
+    }
+
+    /// `buckets` describes `messages` rather than estimating them, which is
+    /// this file's own rule and the one a second render path would break.
+    ///
+    /// The history bucket has to carry the citations that went out, not the
+    /// bytes they replaced — and the two differ by design, because the
+    /// correction above is unguarded and can cost more than the span.
+    #[test]
+    fn the_history_bucket_counts_the_citations_and_not_the_bytes() {
+        let counter = WordCounter::default();
+        let stale = fragment("src/lib.rs:1-9", "fn main () { one two three four }");
+        let fresh = fragment("src/lib.rs:1-9", "fn main () { five six seven eight }");
+        let mut context = context_carrying(
+            &[std::slice::from_ref(&stale), std::slice::from_ref(&fresh)],
+            &counter,
+        );
+
+        let selection = context.select(
+            "now this",
+            &[],
+            Budget::new(8192, 0, Eviction::Turn),
+            &counter,
+        );
+
+        let history = selection
+            .buckets
+            .iter()
+            .find(|bucket| bucket.name == "history")
+            .expect("a history bucket")
+            .tokens;
+        let rendered: u32 = user_messages(&selection)
+            .iter()
+            .take(2)
+            .map(|text| counter.count(text))
+            .sum::<u32>()
+            + selection
+                .messages
+                .iter()
+                .filter(|m| m.role == Role::Assistant)
+                .map(|m| counter.count(&m.content))
+                .sum::<u32>();
+        assert_eq!(
+            history, rendered,
+            "the bucket and the messages disagree, which is the drift this \
+             file keeps one render path to avoid",
         );
     }
 
@@ -4039,9 +4598,16 @@ mod tests {
             .filter(|turn| turn.job == Some(job))
             .map(|turn| context.tokens_of(turn, &counter))
             .sum();
+        let current = Current::of(&context.turns, &[], context.resending);
         let sent: u32 = (0..context.turns.len())
             .map(|index| {
-                context.item_tokens(&Item::Turn(index), &counter, context.pruned, context.cited)
+                context.item_tokens(
+                    &Item::Turn(index),
+                    &counter,
+                    context.pruned,
+                    context.cited,
+                    &current,
+                )
             })
             .sum();
         assert!(

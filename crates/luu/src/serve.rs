@@ -2219,6 +2219,19 @@ async fn begin_turn(
         }))
         .await;
     }
+    // The repair, beside the finding and never about the same path in the same
+    // render: replacing the stale body is what leaves one body to send.
+    for one in selection.superseded.clone() {
+        app.publish(Event::Trace(TraceMessage::Superseded {
+            turn,
+            path: one.path,
+            turns: one.turns,
+            spans: one.spans,
+            tokens: one.tokens,
+            counter: one.counter,
+        }))
+        .await;
+    }
     // Published before the call: this is what we decided to send. A turn that
     // gets cancelled has a budget too, which the old after-the-fact version
     // could not report.

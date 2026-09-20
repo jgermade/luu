@@ -10,7 +10,7 @@ machine with a model on it.
 Argued in
 [`a-corpus-that-edits`](../../2026-09-19.a-corpus-that-edits.completed.md); the
 defect it produces is
-[`one-path-two-bodies`](../../2026-09-19.one-path-two-bodies.WIP.md).
+[`one-path-two-bodies`](../../2026-09-19.one-path-two-bodies.completed.md).
 
 | arm | `diverged` lines | renders | paths | asking |
 | --- | ---: | ---: | --- | ---: |
@@ -29,7 +29,7 @@ every later prompt renders it beside turn 6's.
 
 So a divergence is not an event at the turn that causes it. It is a state the
 window enters and does not leave until eviction takes the stale turn out. The
-frequency [`one-path-two-bodies`](../../2026-09-19.one-path-two-bodies.WIP.md)
+frequency [`one-path-two-bodies`](../../2026-09-19.one-path-two-bodies.completed.md)
 §What is built says the fix waits on is therefore not *how many edits a session
 makes*; it is *what share of a session's prompts go out after the first one*.
 

@@ -1723,7 +1723,10 @@ fn describe_counts(view: &SessionView, counts: &Counts) -> String {
     let _ = writeln!(
         out,
         "\nwindow, of {} render(s)",
-        counts.turns.max(counts.diverged.renders),
+        counts
+            .turns
+            .max(counts.diverged.renders)
+            .max(counts.superseded.renders),
     );
     let _ = writeln!(
         out,
@@ -1760,6 +1763,17 @@ fn describe_counts(view: &SessionView, counts: &Counts) -> String {
     // cannot recover *which* path from a number, and there are never many.
     for (path, bodies) in &counts.diverged.paths {
         let _ = writeln!(out, "               {path}  up to {bodies} bodies");
+    }
+    let _ = writeln!(
+        out,
+        "  superseded {:>3} render(s)  {:>3} line(s), {} span(s) replaced{}",
+        counts.superseded.renders,
+        counts.superseded.lines,
+        counts.superseded.spans,
+        tokens_suffix(&counts.superseded.tokens),
+    );
+    for (path, spans) in &counts.superseded.paths {
+        let _ = writeln!(out, "               {path}  {spans} span(s)");
     }
 
     let _ = writeln!(
@@ -2767,6 +2781,16 @@ pub async fn run() -> Result<()> {
                     turns: one.turns,
                     asking: one.asking,
                     bodies: one.bodies,
+                }));
+            }
+            for one in selection.superseded.clone() {
+                recorder.write(&Event::Trace(TraceMessage::Superseded {
+                    turn,
+                    path: one.path,
+                    turns: one.turns,
+                    spans: one.spans,
+                    tokens: one.tokens,
+                    counter: one.counter,
                 }));
             }
             // Before the call, not after: this is what we decided to send, and
