@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Message;
-use crate::job::{ApprovedBy, ClosedBy, Job, JobId, JobState, Plan, Replaced, TaskId};
+use crate::job::{ApprovedBy, ClosedBy, Job, JobId, Plan, Replaced, TaskId};
 use crate::protocol::TurnId;
 use crate::tools::ToolStep;
 use crate::trace::Bucket;
@@ -183,9 +183,19 @@ pub struct Turn {
     /// Rendered fused into the user message, stored apart so that pruning can
     /// reach it later without parsing back what we already wrote.
     pub code_context: Vec<Fragment>,
-    /// The job this turn was asked inside, if any.
-    #[serde(default, alias = "task")]
-    pub job: Option<JobId>,
+    /// The job this turn was asked inside.
+    ///
+    /// Total, and that is the whole of item 22 in one field: every turn belongs
+    /// to a job from the session's first turn, because a turn landing where
+    /// nothing is open **opens a draft** to land in. What used to be `None` was
+    /// the turns before an approval, and the opening draft holds them now.
+    ///
+    /// It stays `Option` on the wire — see [`crate::api::TurnView::job`] —
+    /// because *absent* there means *written before this existed*, which is a
+    /// different claim from *this turn was in a draft*, and inventing one for
+    /// the other is the conversion's business rather than this type's.
+    #[serde(alias = "task")]
+    pub job: JobId,
     /// Counted once, when the turn closed. A closed turn does not change, and
     /// re-counting every turn on every turn is quadratic over a session.
     pub tokens: u32,
@@ -196,7 +206,7 @@ pub struct Turn {
 
 impl Turn {
     /// Backwards compatibility accessor for callers that called `turn.task`.
-    pub fn task(&self) -> Option<JobId> {
+    pub fn task(&self) -> JobId {
         self.job
     }
 }
@@ -702,6 +712,63 @@ pub struct Context {
     /// The session's jobs, in order. Closed ones fold their turns at
     /// selection time; nothing here rewrites the history.
     jobs: Vec<Job>,
+    /// Every plan that was put up, and what answered it, in order.
+    ///
+    /// Where `JobState::Proposed` and `JobState::Rejected` went. A plan is
+    /// offered inside a draft and an **id is what approval hands out**, so a
+    /// refused plan is not a job in a state — it is a round, and how many
+    /// rounds a plan takes before it is approved is the number §seventh kept
+    /// `Rejected` for. Kept beside the jobs rather than on one, because a round
+    /// can be answered before any draft has opened: the decline is what runs
+    /// the held prompt that opens it.
+    rounds: Vec<Round>,
+}
+
+/// What an approval did: the job it opened, and the draft it closed on the way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Approved {
+    /// The job the approved plan opened. Turns land here from now on.
+    pub job: JobId,
+    /// The draft this approval closed and what it folded to, when a draft was
+    /// open to close. `None` on the happy path — propose, approve, work — where
+    /// no turn ever landed in the draft, so no draft was ever opened.
+    pub folded: Option<(JobId, String)>,
+}
+
+/// What a reconstructed draft is called, so a reader of a resumed window can
+/// tell it from one a person's prompt opened.
+pub const RESTORED_DRAFT: &str =
+    "turns resumed from a recording written before every turn had a job";
+
+/// A plan put up at the gate, and what a person answered.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Round {
+    /// What the job would have been called, as the proposal named it.
+    pub objective: String,
+    /// The plan as it was put up — never as it was amended at the gate. The
+    /// amendment belongs to the approval and is on the job it opened; keeping
+    /// the proposal here is what makes the difference between them countable,
+    /// which is [`crate::api::JobView::proposed`]'s whole argument one
+    /// structure along.
+    pub plan: Plan,
+    /// Whether a planning call produced it, or the model answered in prose.
+    pub source: crate::job::PlanSource,
+    /// What answered it, or `None` while it is still on the table — which a
+    /// live session never holds (the pending proposal lives beside the session,
+    /// not in its history) and a recording that stops mid-gate does.
+    #[serde(default)]
+    pub answer: Option<Answer>,
+}
+
+/// The two answers a proposal can get. The negative one ends nothing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "answer", rename_all = "snake_case")]
+pub enum Answer {
+    /// Approved: it closed whatever draft was open and opened this job.
+    Approved { job: JobId },
+    /// Declined — or *more changes*, which is the same answer. Nothing closed,
+    /// nothing folded, and the conversation continued in the draft.
+    Declined,
 }
 
 impl Context {
@@ -716,6 +783,7 @@ impl Context {
             cited: Results::Kept,
             resending: Repeat::Always,
             jobs: Vec::new(),
+            rounds: Vec::new(),
         }
     }
 
@@ -804,6 +872,9 @@ impl Context {
 
         let mut turns = Vec::with_capacity(view.turns.len());
         let mut unreadable = Vec::new();
+        // Made once and only if a jobless turn turns up, so a recording written
+        // under the alternation gains nothing at all.
+        let mut restored: Option<JobId> = None;
         for tv in &view.turns {
             let mut steps = Vec::with_capacity(tv.tools.len());
             for call_view in &tv.tools {
@@ -861,13 +932,35 @@ impl Context {
                 + steps_tokens(&steps, counter)
                 + counter.count(&answer);
 
+            // Where the claim is made, or refused. `None` on the wire means
+            // *written before jobs were total*, which is emphatically not the
+            // same claim as *this turn was in a draft* — so the turns are given
+            // one reconstructed draft between them and it says so in its
+            // objective, rather than being quietly folded into a job they were
+            // never asked inside.
+            let job = match tv.job {
+                Some(job) => job,
+                None => *restored.get_or_insert_with(|| {
+                    let id = jobs.iter().map(|job| job.id).max().unwrap_or(0) + 1;
+                    // At the front, because these turns come before every job
+                    // the view carries, and open, because nothing ever folded
+                    // them and a resume must not invent a summary that was
+                    // never written. It is therefore an open job that is not
+                    // `current_job` — the one place the alternation's *at most
+                    // one job is open* does not hold, and it holds for every
+                    // stream written under it.
+                    jobs.insert(0, Job::draft(id, RESTORED_DRAFT));
+                    id
+                }),
+            };
+
             turns.push(Turn {
                 id: tv.turn,
                 prompt,
                 answer,
                 steps,
                 code_context,
-                job: tv.job,
+                job,
                 tokens,
                 counted_by: counter.id(),
             });
@@ -898,6 +991,11 @@ impl Context {
                 cited: Results::Kept,
                 resending: Repeat::Always,
                 jobs,
+                // Carried, because a round is history and not a render: how
+                // many times a plan was put up before one was approved is a
+                // fact about the session, and a resume that dropped it would
+                // make every resumed session look like a first-round approval.
+                rounds: view.rounds.clone(),
             },
             unreadable,
         }
@@ -952,96 +1050,132 @@ impl Context {
         let tokens = counter.count(&user_text(&code_context, &prompt))
             + steps_tokens(&steps, counter)
             + counter.count(&answer);
+        // Where the draft is born. A turn with nowhere to land opens one and
+        // lands in it, which is the derivation that answers both of §eighth's
+        // leftovers at once: a draft nobody asked anything inside never exists,
+        // so it cannot fold to an empty summary, and a reopen is unambiguous
+        // exactly when nothing has been asked since the close.
+        //
+        // The objective is the prompt as the user typed it, because that is
+        // what a draft's objective *is* — the plan is the part nobody has
+        // written yet.
+        let job = match self.current_job() {
+            Some(job) => job,
+            None => self.open_draft(prompt.clone()),
+        };
         self.turns.push(Turn {
             id,
             prompt,
             answer,
             steps,
             code_context,
-            job: self.live_job(),
+            job,
             tokens,
             counted_by: counter.id(),
         });
     }
 
-    /// Proposes a job. Nothing runs in this state — approval is a separate
-    /// act, because that is the entire point of the boundary.
-    pub fn propose_job(&mut self, objective: impl Into<String>, plan: Plan) -> JobId {
-        let id = self.jobs.len() as JobId + 1;
-        self.jobs.push(Job::new(id, objective, plan));
+    /// Opens a draft to hold a turn that has nowhere else to go.
+    ///
+    /// Private on purpose: **a job opens when a turn lands in it**, so the only
+    /// caller is [`Self::push_turn_with_steps`]. Exposing it would let a caller
+    /// open a draft that never receives a turn, which is exactly the zero-turn
+    /// fold this rule exists to make unreachable.
+    fn open_draft(&mut self, objective: impl Into<String>) -> JobId {
+        let id = self.next_job_id();
+        self.jobs.push(Job::draft(id, objective));
         id
     }
 
-    pub fn propose_task(&mut self, objective: impl Into<String>, plan: Plan) -> TaskId {
-        self.propose_job(objective, plan)
+    /// Ids are handed out by position and never reused, rejections included —
+    /// except that a rejection no longer takes one, which is what retired the
+    /// reason `Rejected` was kept as a state.
+    pub fn next_job_id(&self) -> JobId {
+        self.jobs.len() as JobId + 1
     }
 
-    /// Adds to a proposed job's plan what a person put in at the gate, and
-    /// answers with the plan as it now stands.
+    /// The job turns are currently attributed to: the last one not closed.
     ///
-    /// The amendment arrives with the approval, so this happens while the job
-    /// is still `Proposed`: the plan a job is approved with is the one it
-    /// keeps, and the one its sandbox is built from.
-    #[allow(clippy::too_many_arguments)]
-    pub fn amend_plan(
+    /// **Derived, never stored.** A field beside the jobs would disagree with
+    /// them the first time a resume rebuilt one and not the other, which is
+    /// [`crate::api::SessionView::counts`]'s argument taken as read. `None` is
+    /// a session whose last job is closed (or which has none yet), and the next
+    /// turn opens a draft rather than finding one.
+    pub fn current_job(&self) -> Option<JobId> {
+        self.jobs
+            .last()
+            .filter(|job| job.is_open())
+            .map(|job| job.id)
+    }
+
+    /// Approves a plan: **closes whatever draft is open, and opens the job that
+    /// plan describes.**
+    ///
+    /// Approving *is* closing, which is the sentence the whole alternation rests
+    /// on — see `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`
+    /// §seventh. The draft folds here and its summary becomes the new job's
+    /// context: *this is what we looked at, this is what we decided, this is
+    /// what we are now doing*, in that order and in one window.
+    ///
+    /// `plan` is the plan **as approved** — amended at the gate and checked
+    /// against the policy file before it arrives here. `proposed` is what the
+    /// model put up, kept in the round so the difference between them stays
+    /// countable.
+    pub fn approve_plan(
         &mut self,
-        id: JobId,
-        files: &[String],
-        writes: &[String],
-        commands: &[String],
-        closes_on: Option<&str>,
-        network: Option<bool>,
-        egress: Option<&[String]>,
-        enforcement: Option<crate::sandbox::Enforcement>,
-    ) -> Option<Plan> {
-        let job = self.job_mut(id)?;
-        job.plan.amend(
-            files,
-            writes,
-            commands,
-            closes_on,
-            network,
-            egress,
-            enforcement,
-        );
-        Some(job.plan.clone())
+        objective: impl Into<String>,
+        proposed: Plan,
+        plan: Plan,
+        source: crate::job::PlanSource,
+        by: ApprovedBy,
+        counter: &dyn TokenCounter,
+    ) -> Approved {
+        let objective = objective.into();
+        // The draft closes first, so the id arithmetic below counts it. A draft
+        // that never received a turn was never opened and there is nothing to
+        // fold — which is the happy path, and why `folded` is an `Option`.
+        let folded = match self.current_job() {
+            Some(draft) => self
+                .close_job_by(draft, counter, ClosedBy::User)
+                .map(|summary| (draft, summary)),
+            None => None,
+        };
+        let id = self.next_job_id();
+        self.jobs
+            .push(Job::planned(id, objective.clone(), plan, by));
+        self.rounds.push(Round {
+            objective,
+            plan: proposed,
+            source,
+            answer: Some(Answer::Approved { job: id }),
+        });
+        Approved { job: id, folded }
     }
 
-    /// Approves it. Turns pushed from here on belong to it.
+    /// Refuses a proposal. Nothing closes and nothing folds — *decline* and
+    /// *more changes* are the same answer, **not yet**, and both keep you in
+    /// the job you are in.
     ///
-    /// Only a proposal can be approved. The lifecycle is a state machine and
-    /// every one of these is a guard on it: without them `reopen_job` on a
-    /// *rejected* job sets it approved, which reinstates a plan a person
-    /// turned down and hands the next prompt a live job to run inside — the
-    /// gate leaking through the message meant for unfolding a fold.
-    pub fn approve_job(&mut self, id: JobId, by: ApprovedBy) -> bool {
-        match self.job_mut(id) {
-            Some(job) if job.state == JobState::Proposed => {
-                job.approve(by);
-                true
-            }
-            _ => false,
-        }
+    /// The prompt that was held runs after this rather than being dropped,
+    /// which is the one behaviour a person can observe changing in item 22: it
+    /// is what opens the draft the conversation continues in.
+    pub fn decline_plan(
+        &mut self,
+        objective: impl Into<String>,
+        plan: Plan,
+        source: crate::job::PlanSource,
+    ) {
+        self.rounds.push(Round {
+            objective: objective.into(),
+            plan,
+            source,
+            answer: Some(Answer::Declined),
+        });
     }
 
-    pub fn approve_task(&mut self, id: TaskId, by: ApprovedBy) -> bool {
-        self.approve_job(id, by)
-    }
-
-    /// Refuses a proposal. Nothing ran under it, so nothing folds; the job
-    /// stays in the session as the record of what was turned down.
-    pub fn reject_job(&mut self, id: JobId) -> bool {
-        match self.job_mut(id) {
-            Some(job) if job.state == JobState::Proposed => {
-                job.reject();
-                true
-            }
-            _ => false,
-        }
-    }
-
-    pub fn reject_task(&mut self, id: TaskId) -> bool {
-        self.reject_job(id)
+    /// Every plan put up at the gate, in order, and what answered it.
+    pub fn rounds(&self) -> &[Round] {
+        &self.rounds
     }
 
     /// Closes it because a person said so. The rung below
@@ -1064,7 +1198,7 @@ impl Context {
     /// the field arrives at the gate and never from the planning call.
     pub fn close_if_met(&mut self, counter: &dyn TokenCounter) -> Option<(JobId, String)> {
         let id = self.live_job()?;
-        let mine = |turn: &&Turn| turn.job == Some(id);
+        let mine = |turn: &&Turn| turn.job == id;
         let steps: Vec<&ToolStep> = self
             .turns
             .iter()
@@ -1072,7 +1206,14 @@ impl Context {
             .flat_map(|turn| turn.steps.iter())
             .collect();
         let job = self.jobs.iter().find(|job| job.id == id)?;
-        if !job.plan.met_by(&steps) {
+        // A draft has no plan, so it has no closing condition and nothing here
+        // can fire for one. That is the rung staying where it was: `closes_on`
+        // arrives at the gate, and a job that never went through the gate never
+        // acquired one.
+        let Some(plan) = &job.plan else {
+            return None;
+        };
+        if !plan.met_by(&steps) {
             return None;
         }
         let summary = self.close_job_by(id, counter, ClosedBy::ExitCode)?;
@@ -1090,7 +1231,7 @@ impl Context {
         counter: &dyn TokenCounter,
         by: ClosedBy,
     ) -> Option<String> {
-        let mine = |turn: &&Turn| turn.job == Some(id);
+        let mine = |turn: &&Turn| turn.job == id;
         let steps: Vec<&ToolStep> = self
             .turns
             .iter()
@@ -1130,7 +1271,7 @@ impl Context {
                 .turns
                 .iter()
                 .enumerate()
-                .filter(|(_, turn)| turn.job == Some(id))
+                .filter(|(_, turn)| turn.job == id)
                 .map(|(index, _)| {
                     self.item_tokens(
                         &Item::Turn(index),
@@ -1178,7 +1319,18 @@ impl Context {
 
     /// Reopens it: the fold stops applying and its turns are sent verbatim
     /// again. Nothing is recovered, because nothing was deleted.
+    ///
+    /// **Only the last job, and only while nothing is open after it.** Under an
+    /// alternation any other reopen is ambiguous the moment anything has
+    /// happened since: reopening job 2 while 3 and 4 exist either gives the
+    /// session two open jobs or obliges the reopen to close them, and neither
+    /// is a thing anyone asked for. The case that survives is the one where
+    /// there is nothing after the close to conflict with — which is the same
+    /// derivation that kills the zero-turn draft, taken from the other end.
     pub fn reopen_job(&mut self, id: JobId) -> bool {
+        if self.jobs.last().map(|job| job.id) != Some(id) {
+            return false;
+        }
         match self.job_mut(id) {
             Some(job) if job.is_closed() => {
                 job.reopen();
@@ -1212,14 +1364,16 @@ impl Context {
         self.jobs.iter_mut().find(|job| job.id == id)
     }
 
-    /// The job turns are currently attributed to: the last one approved and
-    /// not closed. One level, deliberately — see the jobs record.
+    /// The job turns are currently attributed to. One level, deliberately —
+    /// see the jobs record.
+    ///
+    /// The older name for [`Self::current_job`], and the same answer: at most
+    /// one job is open, everything behind it is a fold. It used to scan for the
+    /// last open job because several could be open at once; under the
+    /// alternation only the last one can be, and a scan that can only find the
+    /// last element is a scan that hides its own invariant.
     pub fn live_job(&self) -> Option<JobId> {
-        self.jobs
-            .iter()
-            .rev()
-            .find(|job| job.is_open())
-            .map(|job| job.id)
+        self.current_job()
     }
 
     pub fn live_task(&self) -> Option<TaskId> {
@@ -1244,13 +1398,12 @@ impl Context {
         let mut items = Vec::new();
         let mut index = floor;
         while index < self.turns.len() {
-            let folded = self.turns[index]
-                .job
-                .filter(|id| self.job(*id).is_some_and(Job::is_closed));
+            let folded =
+                Some(self.turns[index].job).filter(|id| self.job(*id).is_some_and(Job::is_closed));
             match folded {
                 Some(id) => {
                     let first = index;
-                    while index < self.turns.len() && self.turns[index].job == Some(id) {
+                    while index < self.turns.len() && self.turns[index].job == id {
                         index += 1;
                     }
                     items.push(Item::Folded { job: id, first });
@@ -2301,6 +2454,27 @@ fn shown_user_text<'a>(
     text
 }
 
+/// The two-call lifecycle the tests below were written against, in one call.
+///
+/// Test-only, and deliberately not on the public surface: approving *is*
+/// closing, so a caller that wants an approved job wants
+/// [`Context::approve_plan`] and everything it does on the way. This exists so
+/// that a test about eviction or selection does not have to restate the gate.
+#[cfg(test)]
+impl Context {
+    fn approved_job(&mut self, objective: impl Into<String>, plan: Plan) -> JobId {
+        self.approve_plan(
+            objective,
+            plan.clone(),
+            plan,
+            crate::job::PlanSource::Written,
+            ApprovedBy::Operator,
+            &ApproximateCounter,
+        )
+        .job
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2609,8 +2783,7 @@ mod tests {
     /// A task with turns in it, closed or not, for the fold cases below.
     fn context_with_closed_task(live: usize, counter: &dyn TokenCounter) -> (Context, TaskId) {
         let mut context = Context::new("system prompt here");
-        let task = context.propose_task("explain the context manager", Plan::default());
-        context.approve_task(task, ApprovedBy::Operator);
+        let task = context.approved_job("explain the context manager", Plan::default());
         for n in 0..3 {
             context.push_turn(
                 n as TurnId + 1,
@@ -2675,7 +2848,7 @@ mod tests {
         let by_hand: u32 = context
             .turns
             .iter()
-            .filter(|turn| turn.job == Some(task))
+            .filter(|turn| turn.job == task)
             .map(|turn| context.tokens_of(turn, &counter))
             .sum();
         assert_eq!(replaced.tokens, by_hand);
@@ -2702,8 +2875,7 @@ mod tests {
         // `RECORD/2026-08-30.the-fold-probe-run.completed.md`.
         let counter = WordCounter::default();
         let mut context = Context::new("system prompt here");
-        let task = context.propose_task("work out what the policy grants", Plan::default());
-        context.approve_task(task, ApprovedBy::Operator);
+        let task = context.approved_job("work out what the policy grants", Plan::default());
         context.push_turn(
             1,
             "which programs does this policy allow?",
@@ -2811,21 +2983,29 @@ mod tests {
         }
     }
 
+    /// Every turn belongs to a job, from the first one. What this test used to
+    /// assert was that the turns before an approval belonged to nothing; the
+    /// draft they open is what holds them now, and the approval between them is
+    /// where the session changes jobs rather than acquires one.
     #[test]
-    fn turns_are_attributed_to_the_task_that_was_open_when_they_were_pushed() {
+    fn turns_are_attributed_to_the_job_that_was_open_when_they_were_pushed() {
         let counter = WordCounter::default();
         let mut context = Context::new("system");
-        context.push_turn(1, "before any task", "a", vec![], &counter);
-        let task = context.propose_task("do the thing", Plan::default());
-        context.push_turn(2, "proposed, not approved", "b", vec![], &counter);
-        context.approve_task(task, ApprovedBy::Operator);
-        context.push_turn(3, "inside the task", "c", vec![], &counter);
+        context.push_turn(1, "before any plan", "a", vec![], &counter);
+        context.push_turn(2, "still drafting", "b", vec![], &counter);
+        let job = context.approved_job("do the thing", Plan::default());
+        context.push_turn(3, "inside the job", "c", vec![], &counter);
 
-        let attributed: Vec<Option<JobId>> = context.turns().iter().map(|turn| turn.job).collect();
+        let attributed: Vec<JobId> = context.turns().iter().map(|turn| turn.job).collect();
         assert_eq!(
             attributed,
-            vec![None, None, Some(task)],
-            "nothing runs inside a proposal, so nothing is attributed to one",
+            vec![1, 1, job],
+            "the drafting turns share the draft they opened, and the last one is work",
+        );
+        assert_eq!(job, 2, "the draft took id 1, and the approval handed out 2");
+        assert!(
+            context.job(1).unwrap().is_draft(),
+            "a draft is a job whose plan nobody has written",
         );
     }
 
@@ -3803,8 +3983,7 @@ mod tests {
         let counter = WordCounter::default();
         let shared = fragment("src/lib.rs:1-4", "fn main () {}");
         let mut context = Context::new("system prompt here");
-        let job = context.propose_job("read it", Plan::default());
-        context.approve_job(job, ApprovedBy::Operator);
+        let job = context.approved_job("read it", Plan::default());
         context.push_turn(1, "look at this", "looked", vec![shared.clone()], &counter);
         context.close_job_by(job, &counter, ClosedBy::User);
         context.push_turn(2, "and again", "again", vec![shared.clone()], &counter);
@@ -4566,8 +4745,7 @@ mod tests {
         let counter = WordCounter::default();
         let output = "one two three four five six seven eight nine ten";
         let mut context = Context::new("system prompt here");
-        let job = context.propose_job("run the tests", Plan::default());
-        context.approve_job(job, ApprovedBy::Operator);
+        let job = context.approved_job("run the tests", Plan::default());
         for n in 0..3 {
             context.push_turn_with_steps(
                 n as TurnId + 1,
@@ -4595,7 +4773,7 @@ mod tests {
         let stored: u32 = context
             .turns
             .iter()
-            .filter(|turn| turn.job == Some(job))
+            .filter(|turn| turn.job == job)
             .map(|turn| context.tokens_of(turn, &counter))
             .sum();
         let current = Current::of(&context.turns, &[], context.resending);
@@ -4627,6 +4805,7 @@ mod tests {
 mod tool_turn_tests {
     use super::*;
     use crate::backend::Role;
+    use crate::job::{JobState, PlanSource};
     use crate::sandbox::{Applied, Verdict};
     use crate::tools::{ToolCall, ToolOutcome, ToolStep};
 
@@ -4665,7 +4844,7 @@ mod tool_turn_tests {
     fn task_that_ran(exit_code: Option<i32>) -> (Context, TaskId) {
         let counter = ApproximateCounter;
         let mut context = Context::new("system");
-        let task = context.propose_task(
+        let task = context.approved_job(
             "make the tests pass",
             Plan {
                 commands: vec!["cargo".into()],
@@ -4673,7 +4852,6 @@ mod tool_turn_tests {
                 ..Plan::default()
             },
         );
-        context.approve_task(task, ApprovedBy::Operator);
         context.push_turn_with_steps(
             1,
             "fix the failing test",
@@ -4721,7 +4899,7 @@ mod tool_turn_tests {
         let (mut context, first) = task_that_ran(Some(0));
         context.close_if_met(&counter);
 
-        let second = context.propose_task(
+        let second = context.approved_job(
             "something else",
             Plan {
                 commands: vec!["cargo".into()],
@@ -4729,7 +4907,6 @@ mod tool_turn_tests {
                 ..Plan::default()
             },
         );
-        context.approve_task(second, ApprovedBy::Operator);
         context.push_turn(2, "and now this", "Looking.", vec![], &counter);
 
         assert!(
@@ -4858,51 +5035,166 @@ mod tool_turn_tests {
     /// be refused rather than performed — found by driving the real page:
     /// closing a *proposed* task took the gate off the screen with its prompt
     /// still held, and the session had no way back.
+    ///
+    /// Half the illegal transitions of the old shape are gone because the
+    /// states they targeted are: there is no proposal to close and no rejection
+    /// to reopen, because neither is a job. What is left is the pair that still
+    /// exists, and the alternation's own new one.
     #[test]
-    fn only_the_legal_task_transitions_happen() {
+    fn only_the_legal_job_transitions_happen() {
         let counter = ApproximateCounter;
         let mut context = Context::new("system");
-        let task = context.propose_task("add a flag", Plan::default());
-
+        context.push_turn(1, "have a look", "looking", Vec::new(), &counter);
+        let draft = context.current_job().expect("a turn opens a draft");
         assert!(
-            context.close_task(task, &counter).is_none(),
-            "a proposal has nothing to fold: nothing was approved and no turn ran",
-        );
-        assert!(!context.reopen_task(task), "it was never closed");
-        assert_eq!(context.task(task).unwrap().state, JobState::Proposed);
-
-        assert!(context.approve_task(task, ApprovedBy::Operator));
-        assert!(
-            !context.approve_task(task, ApprovedBy::Operator),
-            "approving twice is not a state"
-        );
-        assert!(
-            !context.reject_task(task),
-            "an approved task is past refusing"
+            context.job(draft).unwrap().is_draft(),
+            "a session opens with a draft, and its plan is the part nobody has written",
         );
 
-        assert!(context.close_task(task, &counter).is_some());
+        assert!(!context.reopen_job(draft), "it was never closed");
+        assert!(context.close_job(draft, &counter).is_some());
         assert!(
-            context.close_task(task, &counter).is_none(),
-            "closing a closed task would rewrite the summary the model already has",
+            context.close_job(draft, &counter).is_none(),
+            "closing a closed job would rewrite the summary the model already has",
         );
-        assert!(context.reopen_task(task));
-        assert_eq!(context.task(task).unwrap().state, JobState::Approved);
+        assert!(context.reopen_job(draft));
+        assert_eq!(context.job(draft).unwrap().state, JobState::Open);
     }
 
-    /// The sharp one: a refused plan must not come back through the message
-    /// that exists for unfolding a fold. Reopening a rejected task used to set
-    /// it approved, which makes it the live task — and the next prompt then
-    /// runs inside a plan a person turned down, with no gate in front of it.
+    /// Approving *is* closing: one call, two jobs, and the draft folds on the
+    /// way through. The whole alternation in one assertion block.
     #[test]
-    fn a_rejected_plan_cannot_be_reopened_into_a_live_task() {
+    fn approving_closes_the_draft_and_opens_the_plan() {
+        let counter = ApproximateCounter;
         let mut context = Context::new("system");
-        let task = context.propose_task("delete everything", Plan::default());
-        assert!(context.reject_task(task));
+        context.push_turn(
+            1,
+            "what would it take",
+            "this and that",
+            Vec::new(),
+            &counter,
+        );
+        let draft = context.current_job().expect("a draft");
 
-        assert!(!context.reopen_task(task));
-        assert_eq!(context.task(task).unwrap().state, JobState::Rejected);
-        assert!(context.live_task().is_none(), "nothing is live");
+        let approved = context.approve_plan(
+            "add a flag",
+            Plan::default(),
+            Plan::default(),
+            PlanSource::Model,
+            ApprovedBy::Operator,
+            &counter,
+        );
+        assert_eq!(approved.folded.as_ref().map(|(job, _)| *job), Some(draft));
+        assert!(context.job(draft).unwrap().is_closed());
+        assert_eq!(context.current_job(), Some(approved.job));
+        assert!(
+            !context.job(approved.job).unwrap().is_draft(),
+            "the job an approval opens is the plan, and it has one",
+        );
+
+        context.push_turn(2, "do it", "doing it", Vec::new(), &counter);
+        assert_eq!(
+            context.turns()[1].job,
+            approved.job,
+            "a turn after the approval is work, not drafting",
+        );
+    }
+
+    /// The happy path never makes a zero-turn draft, because a draft that
+    /// receives no turn is never opened. Two messages of noise in the window,
+    /// which §eighth of the window-rules record named and this rule removes.
+    #[test]
+    fn a_draft_nobody_asked_anything_in_is_never_opened() {
+        let counter = ApproximateCounter;
+        let mut context = Context::new("system");
+        let approved = context.approve_plan(
+            "add a flag",
+            Plan::default(),
+            Plan::default(),
+            PlanSource::Written,
+            ApprovedBy::Operator,
+            &counter,
+        );
+        assert_eq!(approved.folded, None, "there was no draft to fold");
+        assert_eq!(approved.job, 1, "and no draft took an id either");
+        assert_eq!(context.jobs().len(), 1);
+    }
+
+    /// A declined plan never becomes a job, and never takes an id — which is
+    /// what retired the reason `Rejected` was kept as a state. The round it
+    /// leaves behind is the number that reason was about.
+    #[test]
+    fn a_declined_plan_is_a_round_and_not_a_job() {
+        let counter = ApproximateCounter;
+        let mut context = Context::new("system");
+        context.push_turn(
+            1,
+            "delete everything",
+            "that seems unwise",
+            Vec::new(),
+            &counter,
+        );
+        let draft = context.current_job().expect("a draft");
+
+        context.decline_plan("delete everything", Plan::default(), PlanSource::Model);
+        assert_eq!(context.jobs().len(), 1, "nothing was opened by a refusal");
+        assert_eq!(
+            context.current_job(),
+            Some(draft),
+            "declining ends nothing: you are still in the draft",
+        );
+
+        let approved = context.approve_plan(
+            "delete one thing",
+            Plan::default(),
+            Plan::default(),
+            PlanSource::Model,
+            ApprovedBy::Operator,
+            &counter,
+        );
+        assert_eq!(
+            approved.job, 2,
+            "the approval hands out the id the refusal did not"
+        );
+        assert_eq!(context.rounds().len(), 2, "both rounds are kept");
+        assert_eq!(context.rounds()[0].answer, Some(Answer::Declined));
+        assert_eq!(
+            context.rounds()[1].answer,
+            Some(Answer::Approved { job: 2 }),
+        );
+    }
+
+    /// The sharp one, and it survives its cause: a reopen must not be able to
+    /// make a job live that the alternation has moved past. It used to be a
+    /// *rejected* job coming back as approved; there are no rejected jobs now,
+    /// so what is left is reopening behind the front — job 1 while job 2 is
+    /// open — which would give the session two open jobs and the next prompt a
+    /// choice of two plans to run under.
+    #[test]
+    fn a_job_behind_the_front_cannot_be_reopened_into_a_live_one() {
+        let counter = ApproximateCounter;
+        let mut context = Context::new("system");
+        context.push_turn(1, "have a look", "looking", Vec::new(), &counter);
+        let draft = context.current_job().expect("a draft");
+        let approved = context.approve_plan(
+            "add a flag",
+            Plan::default(),
+            Plan::default(),
+            PlanSource::Model,
+            ApprovedBy::Operator,
+            &counter,
+        );
+
+        assert!(
+            !context.reopen_job(draft),
+            "the draft is closed, but job 2 is open in front of it",
+        );
+        assert!(context.job(draft).unwrap().is_closed());
+        assert_eq!(
+            context.current_job(),
+            Some(approved.job),
+            "and the front is still the only thing that is live",
+        );
     }
 }
 

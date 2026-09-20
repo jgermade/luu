@@ -86,9 +86,13 @@ pub struct ToolCallView {
 pub struct JobView {
     pub id: JobId,
     pub objective: String,
-    /// The plan the job is held to: as approved once it has been, as proposed
-    /// until then.
-    pub plan: Plan,
+    /// The plan it is held to, or `None` while it is a draft — a job whose
+    /// objective is known and whose plan is not.
+    ///
+    /// `None` is never read as *no restriction*: nothing narrows a sandbox from
+    /// this field. See [`crate::job::Job::plan`], where the argument lives.
+    #[serde(default)]
+    pub plan: Option<Plan>,
     /// The plan as it was *proposed*, kept beside the one above because the
     /// difference between them is the cost of the gate.
     #[serde(default)]
@@ -459,16 +463,56 @@ pub struct RefusalCount {
 /// further; closing it needs a field on `job_approved` written where the answer
 /// is known. See `RECORD/2026-09-19.one-counting-surface.completed.md` §What is
 /// rejected.
+/// **Every number here changed meaning at format 16, so it says which shape it
+/// counts.** Under the alternation a session closes roughly twice as many jobs
+/// as it used to, because half of them are drafts, and `proposed` and
+/// `declined` stop counting jobs at all — they count rounds at the gate, which
+/// is where a plan that was put up and turned down now lives. A reader
+/// comparing a September session against an October one would otherwise find
+/// the numbers doubling and conclude the sessions got busier, which is the
+/// failure [`crate::context::Supersession`]'s doc comment was written to head
+/// off one structure along, given the same treatment.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Jobs {
+    /// Which shape the rest of this structure counts.
+    pub shape: Shape,
+    /// Jobs opened by a turn landing in them and not yet closed. At most one,
+    /// under the alternation — and any number of them in a `Shape::Gated`
+    /// session, where several could be approved at once.
+    pub open: usize,
+    pub closed: usize,
+    /// Of every job, how many are drafts — objective known, plan not. Always
+    /// zero under `Shape::Gated`, where a job without a plan could not exist.
+    pub drafts: usize,
+    /// Plans put up at the gate, however answered. **Rounds, not jobs**, under
+    /// `Shape::Alternation`: a plan is offered inside a draft, so counting one
+    /// here does not mean a job exists.
     pub proposed: usize,
     pub approved: usize,
-    pub rejected: usize,
-    pub closed: usize,
+    /// Rounds answered *not yet*. The number §seventh of the window-rules
+    /// record kept `JobState::Rejected` in order to be able to produce, and it
+    /// survives the move from a state to a round.
+    pub declined: usize,
     /// Paths named as readable across every approved plan, summed.
     pub reads: usize,
     /// Paths named as writable across the same.
     pub writes: usize,
+}
+
+/// Which job model a set of counts was taken over.
+///
+/// Stored beside the numbers rather than left to the reader, because the
+/// numbers are comparable within a shape and are not across one.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Shape {
+    /// Format 16 and up: a session opens with a draft, approving closes it and
+    /// opens a plan, and every turn belongs to one of them.
+    #[default]
+    Alternation,
+    /// Before format 16: a job was proposed, approved or refused, and the turns
+    /// before the first approval belonged to nothing.
+    Gated,
 }
 
 /// What a session did, added up.
@@ -530,6 +574,22 @@ pub struct SessionView {
     /// jobs, which is every session recorded before they existed.
     #[serde(default, alias = "tasks")]
     pub jobs: Vec<JobView>,
+    /// Every plan put up at the gate and what answered it, in order.
+    ///
+    /// Where a proposal and a decline live under the alternation, and the only
+    /// place they live: neither is a job, so neither is in `jobs`. Filled for a
+    /// pre-format-16 recording too, out of its `job_proposed` and
+    /// `job_rejected` lines — which is what lets the gate's numbers be read
+    /// across the change even though nothing else about them survives it.
+    #[serde(default)]
+    pub rounds: Vec<crate::context::Round>,
+    /// The record format the stream's **last** header names, when it named one.
+    ///
+    /// Kept because the numbers over jobs mean different things on either side
+    /// of 16 and a reader needs to be told which — see [`Jobs`] and
+    /// [`SessionView::shape`].
+    #[serde(default)]
+    pub format: Option<u32>,
     /// What this session was allowed to do, as the stream's **last** header
     /// names it — the posture its jobs were approved against.
     ///
@@ -581,6 +641,13 @@ impl SessionView {
             started_at: 0,
             turns: Vec::new(),
             jobs: Vec::new(),
+            rounds: Vec::new(),
+            // What this binary writes. A view folded from live events never
+            // meets a header, so without this the live fold and the replay of
+            // the recording it is writing would disagree about the one field
+            // that says how to read the rest — and `from_record` overwrites it
+            // with the stream's own number the moment a header arrives.
+            format: Some(record::FORMAT),
             posture: None,
             repeat: None,
             prune: None,
@@ -728,19 +795,40 @@ impl SessionView {
             }
         }
 
+        counts.jobs.shape = self.shape();
         for job in &self.jobs {
             match job.state {
-                JobState::Proposed => counts.jobs.proposed += 1,
-                JobState::Approved => counts.jobs.approved += 1,
-                JobState::Rejected => counts.jobs.rejected += 1,
+                JobState::Open => counts.jobs.open += 1,
                 JobState::Closed => counts.jobs.closed += 1,
             }
+            if job.plan.is_none() {
+                counts.jobs.drafts += 1;
+            }
             // The plan as it stands, which is the approved one once there is
-            // one and the proposal until then — so a job the gate never saw
-            // contributes what it *asked* for and is counted under `proposed`
-            // beside it, rather than being silently absent from both.
-            counts.jobs.reads += job.plan.files.len();
-            counts.jobs.writes += job.plan.writes.len();
+            // one and the proposal until then. A draft contributes nothing to
+            // either, and that is the honest answer rather than a zero standing
+            // in for one: a draft was never granted anything, so there is no
+            // width to add.
+            if let Some(plan) = &job.plan {
+                counts.jobs.reads += plan.files.len();
+                counts.jobs.writes += plan.writes.len();
+            }
+        }
+
+        // The rounds, which is where a proposal and a decline went. A
+        // `Shape::Gated` view has none and its `proposed`/`approved` are folded
+        // from the job states above, so the two shapes each fill these from the
+        // place their own recording put them.
+        for round in &self.rounds {
+            counts.jobs.proposed += 1;
+            match round.answer {
+                Some(crate::context::Answer::Approved { .. }) => counts.jobs.approved += 1,
+                Some(crate::context::Answer::Declined) => counts.jobs.declined += 1,
+                // Still on the table when the recording stopped. Counted under
+                // `proposed` above and under neither answer, which is the only
+                // honest place for it.
+                None => {}
+            }
         }
 
         counts
@@ -752,6 +840,38 @@ impl SessionView {
 
     fn turn_mut(&mut self, turn: TurnId) -> Option<&mut TurnView> {
         self.turns.iter_mut().find(|t| t.turn == turn)
+    }
+
+    /// Which job model this view's numbers were taken over.
+    ///
+    /// The format number answers it, and **absent is an answer too**: the field
+    /// arrived with format 16, so a stored row that has none was written by a
+    /// binary from before the alternation. Reading that as the current shape
+    /// would be the one mistake [`Jobs`] exists to prevent — the numbers
+    /// doubling and a reader concluding the sessions got busier.
+    pub fn shape(&self) -> Shape {
+        match self.format {
+            Some(format) if format >= 16 => Shape::Alternation,
+            _ => Shape::Gated,
+        }
+    }
+
+    /// Answers the plan on the table — the last round nobody has answered.
+    ///
+    /// By order rather than by id, because the message that answers one carries
+    /// none: at most one plan is ever on the table, which is what makes the
+    /// pairing unambiguous. A stream whose answer arrives with no proposal
+    /// before it is a stream that lost a line, and inventing a round for it
+    /// would turn a gap into a number.
+    fn answer_round(&mut self, answer: crate::context::Answer) {
+        if let Some(round) = self
+            .rounds
+            .iter_mut()
+            .rev()
+            .find(|round| round.answer.is_none())
+        {
+            round.answer = Some(answer);
+        }
     }
 
     pub fn job(&self, job: JobId) -> Option<&JobView> {
@@ -799,20 +919,24 @@ impl SessionView {
                     view.code = spans.clone();
                 }
             }
-            ServerMessage::JobProposed {
+            ServerMessage::DraftOpened {
                 job,
+                turn,
                 objective,
-                plan,
-                source,
             } => {
+                // The turn that opened it was started before the draft existed,
+                // so it went out unattributed. This is where it gets its job.
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.job = Some(*job);
+                }
                 if self.job(*job).is_none() {
                     self.jobs.push(JobView {
                         id: *job,
                         objective: objective.clone(),
-                        plan: plan.clone(),
-                        proposed: Some(plan.clone()),
-                        source: *source,
-                        state: JobState::Proposed,
+                        plan: None,
+                        proposed: None,
+                        source: None,
+                        state: JobState::Open,
                         summary: None,
                         closed_by: None,
                         approved_by: None,
@@ -820,6 +944,33 @@ impl SessionView {
                     });
                 }
             }
+            ServerMessage::PlanProposed {
+                objective,
+                plan,
+                source,
+            } => self.rounds.push(crate::context::Round {
+                objective: objective.clone(),
+                plan: plan.clone(),
+                source: source.unwrap_or(PlanSource::Prose),
+                answer: None,
+            }),
+            ServerMessage::PlanDeclined => self.answer_round(crate::context::Answer::Declined),
+            // A stream from before the alternation. The job it names is not one
+            // under this model, so it becomes the round it always was — the
+            // proposal, and whatever answered it — and no `JobView` is made.
+            // `job_approved` below finds none and makes the job there, which is
+            // exactly where an id is handed out now.
+            ServerMessage::JobProposed {
+                job: _,
+                objective,
+                plan,
+                source,
+            } => self.rounds.push(crate::context::Round {
+                objective: objective.clone(),
+                plan: plan.clone(),
+                source: source.unwrap_or(PlanSource::Prose),
+                answer: None,
+            }),
             ServerMessage::Evicted {
                 turn,
                 turns,
@@ -863,18 +1014,57 @@ impl SessionView {
             }),
             ServerMessage::JobApproved {
                 job,
+                from: _,
+                objective,
                 plan,
                 approved_by,
             } => {
-                if let Some(view) = self.job_mut(*job) {
-                    view.state = JobState::Approved;
-                    if plan != &Plan::default() {
-                        view.plan = plan.clone();
+                // Absent means the operator: every approval recorded before
+                // signatures existed was one.
+                let by = approved_by.clone().unwrap_or(ApprovedBy::Operator);
+                let proposed = self
+                    .rounds
+                    .last()
+                    .filter(|round| round.answer.is_none())
+                    .map(|round| round.plan.clone());
+                match self.job_mut(*job) {
+                    // A pre-16 stream, where the job existed as a proposal
+                    // before this line and this only moved it along.
+                    Some(view) => {
+                        view.state = JobState::Open;
+                        if plan != &Plan::default() {
+                            view.plan = Some(plan.clone());
+                        }
+                        view.approved_by = Some(by);
                     }
-                    // Absent means the operator: every approval recorded before
-                    // signatures existed was one.
-                    view.approved_by = Some(approved_by.clone().unwrap_or(ApprovedBy::Operator));
+                    // The alternation: the approval is what hands out the id,
+                    // so this line is where the job comes into existence. The
+                    // draft it closed arrived as its own `job_closed` before
+                    // this one, and needs nothing here.
+                    None => {
+                        let objective = match objective.is_empty() {
+                            true => self
+                                .rounds
+                                .last()
+                                .map(|round| round.objective.clone())
+                                .unwrap_or_default(),
+                            false => objective.clone(),
+                        };
+                        self.jobs.push(JobView {
+                            id: *job,
+                            objective,
+                            plan: Some(plan.clone()),
+                            proposed,
+                            source: self.rounds.last().map(|round| round.source),
+                            state: JobState::Open,
+                            summary: None,
+                            closed_by: None,
+                            approved_by: Some(by),
+                            replaced: None,
+                        });
+                    }
                 }
+                self.answer_round(crate::context::Answer::Approved { job: *job });
             }
             ServerMessage::JobClosed {
                 job,
@@ -892,14 +1082,16 @@ impl SessionView {
                     view.replaced = replaced.clone();
                 }
             }
-            ServerMessage::JobRejected { job } => {
-                if let Some(view) = self.job_mut(*job) {
-                    view.state = JobState::Rejected;
-                }
+            // Pre-16, and the same move as `job_proposed` above: the refusal
+            // answers the round rather than putting a job into a state that no
+            // longer exists. The `JobView` was never made, so there is none to
+            // leave behind in it.
+            ServerMessage::JobRejected { job: _ } => {
+                self.answer_round(crate::context::Answer::Declined)
             }
             ServerMessage::JobReopened { job } => {
                 if let Some(view) = self.job_mut(*job) {
-                    view.state = JobState::Approved;
+                    view.state = JobState::Open;
                     view.summary = None;
                     // With the summary, and for its reason: a reopened job's
                     // turns are being sent again, so nothing has been saved.
@@ -1116,6 +1308,7 @@ impl SessionView {
         for line in lines {
             match line {
                 RecordLine::Header {
+                    format,
                     backend,
                     model,
                     started_at,
@@ -1125,6 +1318,10 @@ impl SessionView {
                     results,
                     ..
                 } => {
+                    // The last header wins here too, and it is what tells a
+                    // reader which job model the numbers below were taken
+                    // over — see [`SessionView::shape`].
+                    view.format = Some(*format);
                     view.backend = backend.clone();
                     view.model = model.clone();
                     view.started_at = *started_at;

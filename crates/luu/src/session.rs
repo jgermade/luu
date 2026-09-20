@@ -50,6 +50,22 @@ The person will read this and approve it or refuse it before you run anything.
 The work:
 ";
 
+/// What the planning call is asked *over*, now that it is not asked over a held
+/// prompt.
+///
+/// [`PLANNING`] ends on "The work:" and something has to follow it. Before item
+/// 22 that was the prompt a person had just typed, unexplored; under the
+/// alternation it is the draft — **the plan is what the draft compacts to** —
+/// so this names the window rather than restating a question, and says which
+/// half of the draft to keep. See
+/// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md` §third.
+///
+/// Kept beside [`PLANNING`] and not inlined at the call site for that
+/// constant's own reason: what the model is asked is a thing this project
+/// changes deliberately and measures, and a prompt written inline in a handler
+/// is a prompt nobody diffs.
+pub const PLAN_OVER_DRAFT: &str = "The conversation above is the draft: what was asked, what was read, and what was worked out. Plan the work it arrived at. Keep what was decided and leave out what was tried and dropped — the plan replaces the draft, so anything it does not name is not carried forward.";
+
 /// The sandbox and the tool set, resolved once and shared by `chat` and
 /// `serve`. Here for the same reason the prompt assembly is: two call sites
 /// resolving a policy differently is two sandboxes.

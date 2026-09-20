@@ -145,7 +145,27 @@ use crate::trace::TraceMessage;
 /// `--no-repeat-once` still reports `diverged` and never `superseded`, which is
 /// what keeps the two arms one flag apart. See
 /// `RECORD/2026-09-20.the-newest-body-wins.completed.md`.
-pub const FORMAT: u32 = 15;
+/// 16: the session is an **alternation**, and the **protocol** moves with it to
+/// 7 — the third time a bump here is a protocol bump rather than a trace one.
+/// `draft_opened`, `plan_proposed` and `plan_declined` are new lines, and
+/// `job_approved` gains the draft it closed. Same rule as 3, 4 and 5 — new
+/// variants of a tagged enum, and a format-15 reader chokes on them rather than
+/// skipping them.
+///
+/// It is the first bump that makes a line **stop being written**: `job_proposed`
+/// and `job_rejected` still parse and a stream at 16 never contains one,
+/// because the thing they describe — a plan that is a job in a state — does not
+/// exist under the alternation. So a reader meeting one is reading a stream from
+/// before this, which is the same service the format number does for `diverged`
+/// at 15, and the reason neither line could simply be deleted.
+///
+/// A stream written before 16 has turns with no job. That is *written before
+/// jobs were total* and not *asked inside a draft*: a resume gives them one
+/// reconstructed draft that says so in its objective rather than folding them
+/// into a job they were never asked inside — see
+/// [`crate::context::RESTORED_DRAFT`]. See
+/// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`.
+pub const FORMAT: u32 = 16;
 
 /// The posture a session ran under, as a recording names it.
 ///

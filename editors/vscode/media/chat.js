@@ -44,7 +44,12 @@
     return el;
   }
 
-  function renderJobGate(job, objective, plan, source) {
+  // The gate is keyed on a constant and not on an id: a proposal is offered
+  // inside the open draft and an id is what approval hands out, so there is
+  // nothing to name until it is answered. At most one plan is ever on the
+  // table, which is what makes one key enough.
+  function renderPlanGate(objective, plan, source) {
+    const job = 'plan';
     const card = document.createElement('div');
     card.className = 'gate-card';
     card.id = `gate-job-${job}`;
@@ -64,7 +69,7 @@
 
     card.innerHTML = `
       <div class="gate-title">
-        <span>Job #${job}: ${escapeHtml(objective)}</span>
+        <span>Plan: ${escapeHtml(objective)}</span>
         <span class="gate-source">${escapeHtml(source || 'model')}</span>
       </div>
       <div class="gate-section">
@@ -84,9 +89,9 @@
         <span class="gate-section-title">Closes on:</span> ${closesOn}
       </div>
       <div class="gate-actions" id="gate-actions-${job}">
-        <button class="primary" id="approve-job-${job}">Approve Job</button>
+        <button class="primary" id="approve-job-${job}">Approve Plan</button>
         <button class="secondary" id="amend-job-${job}">Amend & Approve</button>
-        <button class="danger" id="reject-job-${job}">Reject</button>
+        <button class="danger" id="reject-job-${job}">Decline</button>
       </div>
     `;
 
@@ -95,8 +100,7 @@
 
     document.getElementById(`approve-job-${job}`).onclick = () => {
       vscode.postMessage({
-        command: 'approve_job',
-        job: job,
+        command: 'approve_plan',
         amendment: {
           files: files,
           writes: writes,
@@ -117,8 +121,7 @@
         });
       }
       vscode.postMessage({
-        command: 'approve_job',
-        job: job,
+        command: 'approve_plan',
         amendment: {
           files: files,
           writes: parsedWrites,
@@ -130,8 +133,8 @@
     };
 
     document.getElementById(`reject-job-${job}`).onclick = () => {
-      vscode.postMessage({ command: 'reject_job', job: job });
-      disableGateActions(job, 'Rejected');
+      vscode.postMessage({ command: 'decline_plan' });
+      disableGateActions(job, 'Declined');
     };
   }
 
@@ -205,19 +208,28 @@
         break;
       }
 
+      case 'draft_opened':
+        statusIndicator.innerText = `Draft #${message.job}: ${message.objective}`;
+        break;
+
+      // Both spellings reach the same card: `job_proposed` is what a recording
+      // from before the alternation carries, and the thing it described is a
+      // plan on the table rather than a job.
+      case 'plan_proposed':
       case 'job_proposed':
-        renderJobGate(message.job, message.objective, message.plan, message.source);
-        statusIndicator.innerText = `Job #${message.job} proposed. Awaiting approval.`;
+        renderPlanGate(message.objective, message.plan, message.source);
+        statusIndicator.innerText = 'A plan is on the table. Awaiting approval.';
         break;
 
       case 'job_approved':
-        disableGateActions(message.job, 'Approved');
+        disableGateActions('plan', 'Approved');
         statusIndicator.innerText = `Job #${message.job} approved.`;
         break;
 
+      case 'plan_declined':
       case 'job_rejected':
-        disableGateActions(message.job, 'Rejected');
-        statusIndicator.innerText = `Job #${message.job} rejected.`;
+        disableGateActions('plan', 'Declined');
+        statusIndicator.innerText = 'Plan declined. Still drafting.';
         break;
 
       case 'job_closed': {

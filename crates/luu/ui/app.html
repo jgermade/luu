@@ -2,7 +2,7 @@
   // A setup script takes `await import(...)`; a static `import` statement is
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
-          approveJob, rejectJob, closeJob, reopenJob,
+          approvePlan, declinePlan, requestPlan, closeJob, reopenJob,
           resumeSession, deleteSession, renameSession,
           loadProviders, refreshSettings } = await import("./store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("./prefs.js")
@@ -84,8 +84,8 @@
     adding = { ...adding, [kind]: [...adding[kind], item] }
     addition = ""
   }
-  const approve = id => {
-    approveJob(id, { ...adding, closesOn, network, enforcement })
+  const approve = () => {
+    approvePlan({ ...adding, closesOn, network, enforcement })
     adding = { files: [], writes: [], commands: [], egress: [] }
     addition = ""
     closesOn = ""
@@ -187,17 +187,23 @@
 
   // ---- the gate, answered once ------------------------------------------
   //
-  // `auto` is a person deciding **once instead of per job**, and never the
+  // `auto` is a person deciding **once instead of per plan**, and never the
   // server running unapproved work: the proposal still arrives, and the
-  // approval is still an `approve_job` this page sends. The guard is what makes
-  // it once — a reactive statement re-runs, and without it every render would
-  // send another approval for the same proposal.
-  const maybeAnswer = job => {
-    if (!job || prefs.confirm !== "auto" || state.replay) return ""
-    if (ui.answered.includes(job.id)) return ""
-    ui.answered = [...ui.answered, job.id]
-    approve(job.id)
-    return job.id
+  // approval is still an `approve_plan` this page sends. The guard is what
+  // makes it once — a reactive statement re-runs, and without it every render
+  // would send another approval for the same proposal.
+  //
+  // Keyed on the **objective** rather than on an id, because a proposal has no
+  // id: it is offered inside the draft and an id is what approval hands out.
+  // Two identical objectives in one session answer as one, which is the same
+  // trade the id made when two proposals could not share a number.
+  const maybeAnswer = plan => {
+    if (!plan || prefs.confirm !== "auto" || state.replay) return ""
+    const key = plan.objective
+    if (ui.answered.includes(key)) return ""
+    ui.answered = [...ui.answered, key]
+    approve()
+    return key
   }
 
   // The first run, and the one thing a person can do on it. A server with
@@ -262,10 +268,15 @@
   // composer that asked the status was enabled over a recording nobody can
   // send into.
   $: replaying = state.replay
-  // The gate. While this is set the server is holding a prompt, unrun.
-  $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
+  // The gate. While this is set a plan is on the table and nobody has answered
+  // it — nothing is being *held*, though: the draft's turns already ran, and a
+  // prompt sent now is the answer *more changes*.
+  $: proposed = state.pending
   $: answeredFor = maybeAnswer(proposed)
-  $: live = (state.jobs || state.tasks).find(j => j.state === "approved") || null
+  // The job turns land in: the last one not closed. It is a draft until a plan
+  // is approved, which is the alternation on the screen.
+  $: live = (state.jobs || state.tasks).filter(j => j.state === "open").slice(-1)[0] || null
+  $: drafting = !!live && !live.plan
   $: planTasks = proposed ? (proposed.plan.tasks || proposed.plan.steps || []) : []
   $: declares = proposed
     ? planTasks.length + proposed.plan.files.length + proposed.plan.commands.length
@@ -604,7 +615,7 @@
         <!-- Nothing has run under this job and nothing will until it is
              answered: the prompt that caused it is held on the server, unrun. -->
         <div :if="proposed" class="gate">
-          <div class="who">proposed job {{ proposed?.id }}</div>
+          <div class="who">proposed plan</div>
           <div class="objective">{{ proposed?.objective }}</div>
           <ul :if="planTasks.length" class="plan">
             <li :each="task in planTasks" :key="task">{{ task }}</li>
@@ -710,13 +721,26 @@
           </p>
 
           <div class="gate-buttons">
-            <button type="button" :disabled="replaying" @click="approve(proposed?.id)">Approve</button>
-            <button type="button" class="cancel" :disabled="replaying" @click="rejectJob(proposed?.id)">Reject</button>
+            <button type="button" :disabled="replaying" @click="approve()">Approve</button>
+            <button type="button" class="cancel" :disabled="replaying" @click="declinePlan()">Decline</button>
           </div>
         </div>
 
-        <div :if="live" class="live-job">
-          <span>job {{ live?.id }} · {{ live?.objective }}</span>
+        <!-- The open job, and which half of the alternation it is. A draft
+             offers the other door to the gate: ask for a plan over what has
+             been drafted so far. A plan job is work that was approved, and the
+             only thing left to do with it is fold it. -->
+        <div :if="live &amp;&amp; !proposed" class="live-job">
+          <span :if="drafting">draft {{ live?.id }} · {{ live?.objective }}</span>
+          <span :if="!drafting">job {{ live?.id }} · {{ live?.objective }}</span>
+          <button
+            :if="drafting"
+            type="button"
+            class="link"
+            :disabled="running || replaying"
+            @click="requestPlan()">
+            plan this
+          </button>
           <button type="button" class="link" :disabled="running || replaying" @click="closeJob(live?.id)">
             close &amp; fold
           </button>
