@@ -1937,7 +1937,11 @@ async fn approve_plan(
         app.publish(Event::Protocol(ServerMessage::JobClosed {
             job: draft,
             summary,
-            by: Some(ClosedBy::User),
+            // The same value `approve_plan` wrote on the job itself: the line
+            // and the stored job are read by the same page, one live and one
+            // after a reload, and a panel that says different things in the two
+            // is the defect `the-panel-reads-the-pruned-lines` found twice.
+            by: Some(ClosedBy::Approval),
             replaced,
         }))
         .await;
@@ -2239,14 +2243,32 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
             return;
         }
         if !session.context.reopen_job(job) {
+            // Which of the two reasons, because they send a person to different
+            // places. `reopen_job` takes only the last job — reopening an
+            // earlier one would either leave two open or oblige this to close
+            // what came after — and under the alternation that is the case
+            // people actually hit, since every prompt opens a draft. Saying
+            // *not closed* there is telling them something false about a job
+            // they just watched fold. See
+            // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+            // Which of the two reasons, because they send a person to different
+            // places. `reopen_job` takes only the last job — reopening an
+            // earlier one would either leave two open or oblige this to close
+            // what came after — and under the alternation that is the case
+            // people actually hit, since every prompt opens a draft. Saying
+            // *not closed* there is telling them something false about a job
+            // they just watched fold. See
+            // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+            let last = session.context.jobs().last().map(|job| job.id);
+            let detail = match last {
+                Some(last) if last != job => format!(
+                    "job {job} is not the last one: job {last} was opened after it, \
+                     and reopening an earlier job would leave two open"
+                ),
+                _ => format!("job {job} is not closed"),
+            };
             drop(session);
-            refuse(
-                &app,
-                "reopen_job",
-                Refusal::Job,
-                format!("job {job} is not closed"),
-            )
-            .await;
+            refuse(&app, "reopen_job", Refusal::Job, detail).await;
             return;
         }
         // Live again, so its plan is the authority again. Rebuilt rather than

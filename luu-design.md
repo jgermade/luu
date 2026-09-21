@@ -64,6 +64,31 @@ plan is what the draft compacts to*. It used to read a held prompt, before
 anything had been looked at, which is a small model's worst case. No prompt is
 held any more: a prompt runs, in the draft, always.
 
+**And the page reads the alternation, on both surfaces.** A fold says which
+half it was — *draft 3* or *job 4*, from the same `!plan` rule the live-job
+block uses — and why it ended, which is now three rungs and not two:
+`ClosedBy::Approval` beside `User` and `ExitCode`, because under the alternation
+most drafts end by having a plan approved out of them and a recording that
+called that *a person folded it* could not count either. `protocol::VERSION` 8
+and `record::FORMAT` 17 carry it, the first bump of each taken for a **value**
+rather than a line. The transcript keeps both halves rather than merging a
+draft's fold into the job it became: a draft's turns happened, they are what the
+plan was written from, and hiding them would be shortest exactly where somebody
+is auditing what was approved.
+
+Two things the page was getting wrong fell out of writing that. **A draft's
+turns were loose**: `draft_opened` carries the turn it was opened to hold —
+deliberately, because a turn that opens a draft is in a job that did not exist
+when it started — and the page dropped it, so live, a draft's turns belonged to
+nothing and its fold never appeared, while the same session reloaded got them
+back from the store with their job on them. **And `reopen` was offered
+everywhere**: `Context::reopen_job` takes the last job and no other, and item 22
+shrank that window to *before your next prompt*, since every prompt opens a
+draft. The page now offers it only where the server would take it, and the
+refusal — which said *job N is not closed* about a job the person had just
+watched fold — says which of the two reasons it is. See
+[`RECORD/2026-09-21.the-alternation-on-the-page.completed.md`](RECORD/2026-09-21.the-alternation-on-the-page.completed.md).
+
 **A proposal is not a job and has no id**, because an id is what approval hands
 out — so a plan that is declined never acquires one, and `JobState` is `Open` and
 `Closed` with nothing else in it. Where `Proposed` and `Rejected` went is

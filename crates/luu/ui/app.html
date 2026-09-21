@@ -276,7 +276,23 @@
   // The job turns land in: the last one not closed. It is a draft until a plan
   // is approved, which is the alternation on the screen.
   $: live = (state.jobs || state.tasks).filter(j => j.state === "open").slice(-1)[0] || null
-  $: drafting = !!live && !live.plan
+  // Which half of the alternation a job is, asked in one place. A draft is a
+  // job with no plan and that is the whole of what a draft is — the live block
+  // below and the transcript's folds both read this, because the page calling
+  // the same job a draft in one panel and a job in another is what
+  // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md` found.
+  const isDraft = job => !!job && !job.plan
+  $: drafting = isDraft(live)
+  // Whether the server would take a reopen of this one: `Context::reopen_job`
+  // succeeds for the **last** job and no other, because reopening an earlier
+  // one either gives the session two open jobs or obliges the reopen to close
+  // what came after. Item 22 is what made that bite — every prompt now opens a
+  // draft, so the next prompt is what ends the window — and the button had gone
+  // on being offered on every fold in the transcript.
+  const reopenable = job => {
+    const list = state.jobs || state.tasks
+    return !!job && !!list.length && list[list.length - 1].id === job.id
+  }
   // What the turn in front of the gate may already do — the other term of the
   // decision the panel asks for. Resolved by the server from the session's own
   // floor and never worked out here: a page that derived it would be a second
@@ -588,13 +604,27 @@
             <div class="fold-head">
               <button type="button" class="link disclose" @click="toggle((entry.job || entry.task).id)">
                 <svg class="ic" :class.open="expanded.includes((entry.job || entry.task).id)"><use href="#i-caret"/></svg>
-                job {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
+                <!-- Which half of the alternation this was. Exploration nobody
+                     approved and work somebody signed for read the same in a
+                     transcript otherwise, which is the one thing the gate
+                     exists to record. -->
+                {{ isDraft(entry.job || entry.task) ? "draft" : "job" }} {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
               </button>
               <!-- Which authority folded it. Shown rather than counted in
                    private: the ladder above the person is only worth climbing if
-                   a reader can see which rung took each job. -->
+                   a reader can see which rung took each job. **Three rungs since
+                   the alternation**, and the third is the common one: most
+                   drafts end because a plan was approved out of them. -->
               <span :if="(entry.job || entry.task).closedBy === 'exit_code'" class="dim">closed by exit code</span>
-              <button type="button" class="link" :disabled="replaying" @click="reopenJob((entry.job || entry.task).id)">reopen</button>
+              <span :if="(entry.job || entry.task).closedBy === 'approval'" class="dim">closed by approving its plan</span>
+              <!-- Offered only where the server would take it. A control that is
+                   refused wherever it is clicked teaches nothing about why. -->
+              <button
+                :if="reopenable(entry.job || entry.task)"
+                type="button"
+                class="link"
+                :disabled="replaying"
+                @click="reopenJob((entry.job || entry.task).id)">reopen</button>
             </div>
             <pre class="summary">{{ (entry.job || entry.task).summary }}</pre>
           </div>

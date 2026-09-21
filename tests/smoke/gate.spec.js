@@ -253,7 +253,25 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(live).toBeVisible()
   await live.locator("button", { hasText: "close & fold" }).click()
   await expect(live).toBeHidden({ timeout: 15_000 })
-  await expect(page.locator(".fold .summary")).toBeVisible()
+  await expect(page.locator(".fold .summary").first()).toBeVisible()
+
+  // The transcript now says which half of the alternation each fold was, and
+  // why it ended. Before
+  // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md` both folds
+  // read "job N · objective" and a reader could not tell exploration nobody
+  // approved from work somebody signed for.
+  const folds = page.locator(".chat .fold")
+  await expect(folds).toHaveCount(2)
+  await expect(folds.first()).toContainText("draft 1")
+  await expect(folds.first()).toContainText("closed by approving its plan")
+  await expect(folds.last()).toContainText("job 2")
+
+  // And `reopen` is offered only where the server would take it: the last job
+  // and no other. It is on the job that was just folded, and not on the draft
+  // the approval closed before it — which the route refuses, and used to
+  // refuse by saying the job was not closed.
+  await expect(folds.first().locator("button", { hasText: "reopen" })).toHaveCount(0)
+  await expect(folds.last().locator("button", { hasText: "reopen" })).toHaveCount(1)
 
   // The fold, with what it cost: the compaction log is the fourth of the four
   // panels the design says justify building this client, and the numbers in it

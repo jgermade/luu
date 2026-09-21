@@ -884,6 +884,82 @@ async fn a_file_added_at_the_gate_is_in_the_task_sandbox() {
     assert_eq!(session["jobs"][1]["plan"]["files"][1], "src/serve.rs");
 }
 
+/// A reopen the alternation put out of reach says *that*, and not something
+/// false.
+///
+/// Row 33. `Context::reopen_job` takes the **last** job and no other, which is
+/// argued where it is written: reopening an earlier one either leaves two open
+/// or obliges the reopen to close what came after. Item 22 is what made the
+/// rule bite — every prompt opens a draft, so the next prompt is what ends the
+/// window — and until this the refusal said *job N is not closed* about a job
+/// the person had just watched fold.
+///
+/// The page stopped offering the button here at the same time, which is the
+/// half a browser test asserts; this is the half that matters if somebody
+/// reaches the route another way. See
+/// `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+#[tokio::test]
+async fn a_reopen_of_anything_but_the_last_job_says_which() {
+    // Two replies for two turns: the first answers with a plan block, which is
+    // what puts the gate up, and the second is the prompt that opens a draft
+    // after the job is folded. **Approving runs nothing** — under the
+    // alternation the prompt that proposed is already answered, and a turn
+    // waiting behind the gate is what item 22 removed.
+    let address = server_with(vec![PLAN.into(), ANSWER.into()]).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // A plan, approved: draft 1 closes and job 2 opens, which is the whole
+    // alternation in one message pair.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    until(&mut socket, "plan_proposed").await;
+    send(&mut socket, serde_json::json!({"type": "approve_plan"})).await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
+    let job = approved["job"].as_u64().expect("the job it opened");
+
+    // Fold it, and then open a draft after it with one more prompt. Without
+    // that prompt the reopen would succeed — which is the window item 22 left.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "close_job", "job": job}),
+    )
+    .await;
+    until(&mut socket, "job_closed").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "anything else?"}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+    let (opened, _) = until(&mut socket, "draft_opened").await;
+    let draft = opened["job"].as_u64().expect("the draft after it");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "reopen_job", "job": job}),
+    )
+    .await;
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["request"], "reopen_job");
+    assert_eq!(refused["reason"], "job", "{refused}");
+    let detail = refused["detail"].as_str().expect("a detail");
+    assert!(
+        detail.contains("not the last one") && detail.contains(&draft.to_string()),
+        "the refusal names the job that came after it, because that is what a \
+         person can act on: {detail}",
+    );
+    assert!(
+        !detail.contains("is not closed"),
+        "and does not say the opposite of what the transcript shows: {detail}",
+    );
+}
+
 /// The three other silences, each of which used to be an early return.
 #[tokio::test]
 async fn the_server_says_why_it_did_not_do_something() {
@@ -1713,10 +1789,13 @@ async fn a_green_command_closes_the_task_with_nobody_at_the_gate() {
     assert_eq!(session["jobs"][1]["state"], "closed");
     assert_eq!(
         session["jobs"][1]["closed_by"], "exit_code",
-        "the job's own close; `jobs[0]` is the draft, which a person folded at \
-         the gate",
+        "the job's own close; `jobs[0]` is the draft the plan was approved out of",
     );
-    assert_eq!(session["jobs"][0]["closed_by"], "user");
+    // **`approval` and not `user`**, which is what this line said until
+    // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`: nobody
+    // folded that draft — a plan was approved out of it, and the two are
+    // different rungs of the same ladder `ClosedBy` exists to count.
+    assert_eq!(session["jobs"][0]["closed_by"], "approval");
 }
 
 #[tokio::test]

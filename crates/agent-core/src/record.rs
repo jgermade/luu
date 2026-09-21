@@ -165,7 +165,15 @@ use crate::trace::TraceMessage;
 /// into a job they were never asked inside — see
 /// [`crate::context::RESTORED_DRAFT`]. See
 /// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`.
-pub const FORMAT: u32 = 16;
+///
+/// **17 carries `closed_by: "approval"`**, the third rung of a close, which a
+/// format-16 reader chokes on for the reason every other bump here exists: a
+/// plain enum's unknown value is a parse error and not a field to skip. It is
+/// the first bump this file has taken for a **value** rather than for a line,
+/// and the thing it makes countable is how often exploration led to approved
+/// work — which nothing could ask before. See
+/// `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+pub const FORMAT: u32 = 17;
 
 /// The posture a session ran under, as a recording names it.
 ///
