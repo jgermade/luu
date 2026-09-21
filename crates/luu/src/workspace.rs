@@ -172,7 +172,13 @@ fn resolve(sandbox: &Sandbox, relative: &str) -> Result<PathBuf, Error> {
 }
 
 /// The path an entry is known by: relative to the base, `/`-separated.
-fn relative_of(base: &Path, path: &Path) -> String {
+///
+/// `pub(crate)` for the gate panel's floor line, which shows the same paths to
+/// the same person and must spell them the same way — see
+/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`. It
+/// answers `""` for the base itself, and a caller wanting a word for *here*
+/// supplies it.
+pub(crate) fn relative_of(base: &Path, path: &Path) -> String {
     path.strip_prefix(base)
         .unwrap_or(path)
         .components()

@@ -1249,6 +1249,77 @@ async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
     let _ = std::fs::remove_file(&scratch);
 }
 
+/// And the refusal names *which* draft, one turn in.
+///
+/// Row 32, and it is the sibling above with one prompt in front of it. On the
+/// first prompt of a session there is no draft to name — `open_draft` runs when
+/// the turn lands, after the sandbox is chosen — so that one reads *the draft's
+/// floor*, which is what the test above asserts. Every prompt after it has a
+/// draft open in the same context `serve` already reads, and the denial
+/// denormalises it the way `Authority::Plan` always has.
+///
+/// The job id is read from the wire rather than assumed to be 1: it is the
+/// draft the first prompt opened, and a test that hard-coded it would pass on
+/// the wrong number the day a session opens with anything else. See
+/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+#[tokio::test]
+async fn a_refusal_in_a_draft_names_the_draft_it_was_refused_in() {
+    let scratch = std::env::temp_dir().join(format!("luu-draft-named-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&scratch);
+    let call = format!(
+        "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by a draft\"}}}}\n```",
+        serde_json::to_string(&scratch.display().to_string()).expect("a path"),
+    );
+    let address = server_writable(
+        vec![
+            "Still drafting.".into(),
+            call,
+            "I am drafting, so I may not change that.".into(),
+        ],
+        &scratch,
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // The first prompt, which opens the draft and asks for nothing.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "what is here"}),
+    )
+    .await;
+    // `draft_opened` lands *after* the turn it was opened to hold — a job
+    // opens when a turn lands in it — so the two waits are in that order and
+    // not the reading one.
+    until(&mut socket, "ended").await;
+    let (opened, _) = until(&mut socket, "draft_opened").await;
+    let draft = opened["job"].as_u64().expect("the draft it opened");
+
+    // The second, inside the draft the first one opened.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
+    )
+    .await;
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["verdict"]["allowed"], false);
+    assert!(
+        result["verdict"]["rule"]
+            .as_str()
+            .expect("a rule")
+            .contains(&format!("the floor for draft {draft}")),
+        "a refusal inside a draft names it, like one inside a plan: {}",
+        result["verdict"]["rule"],
+    );
+    assert!(
+        !scratch.exists(),
+        "naming the draft is a change to the words, not to the floor",
+    );
+    let _ = std::fs::remove_file(&scratch);
+}
+
 /// The other half of the floor, and the half that says it is a floor rather
 /// than a wall: **a draft still reads.** Exploration is what it is for.
 #[tokio::test]
@@ -2321,6 +2392,60 @@ async fn the_settings_route_reports_what_the_run_resolved() {
             .is_some_and(|text| text.contains("read-write")),
         "the sandbox this run resolved is on the page, not only on stderr"
     );
+}
+
+/// The settings carry the floor, which is what the gate shows beside a plan.
+///
+/// Row 31: the panel had always shown what a plan *asks for* and never what the
+/// turn in front of it may already do, so approving looked like a yes to a list
+/// rather than a decision about what to add. The page never derives this — a
+/// second resolution of a policy in another language is a second sandbox — so
+/// the assertion is that the route hands it over, resolved.
+///
+/// The two halves that make it a *floor*: the tree is there, and it is there
+/// **read-only**, under a policy file that grants it read-write. See
+/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+#[tokio::test]
+async fn the_settings_route_carries_the_floor_a_draft_runs_on() {
+    let address = server().await;
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+
+    let floor = &settings["floor"];
+    assert!(
+        !floor.is_null(),
+        "the floor is the other term of the gate's question"
+    );
+    let reads: Vec<&str> = floor["reads"]
+        .as_array()
+        .expect("the paths it may read")
+        .iter()
+        .map(|path| path.as_str().expect("a path"))
+        .collect();
+    assert!(
+        reads.contains(&"."),
+        "the base is spelled the way a policy file spells it: {reads:?}",
+    );
+    // The sandbox line beside it says read-write on the same tree, which is
+    // what makes this a subtraction rather than a second description of the
+    // same grant.
+    assert!(
+        settings["sandbox"]
+            .as_str()
+            .is_some_and(|text| text.contains("read-write")),
+        "the session grants writes; the floor is what takes them away",
+    );
+    // No `writes` key at all, deliberately: an always-empty list is a question
+    // mark where the panel says a sentence.
+    assert!(
+        floor.get("writes").is_none(),
+        "the floor grants no writes by construction and says so in words",
+    );
+    assert_eq!(floor["network"], false, "the mock server reaches nothing");
 }
 
 /// A server that fell into the mock says so, in the one field a page is

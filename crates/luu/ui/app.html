@@ -277,6 +277,12 @@
   // is approved, which is the alternation on the screen.
   $: live = (state.jobs || state.tasks).filter(j => j.state === "open").slice(-1)[0] || null
   $: drafting = !!live && !live.plan
+  // What the turn in front of the gate may already do — the other term of the
+  // decision the panel asks for. Resolved by the server from the session's own
+  // floor and never worked out here: a page that derived it would be a second
+  // sandbox, disagreeing with the first at the one moment somebody is deciding.
+  // Absent in a recording, whose settings are the ones it was replayed with.
+  $: floor = state.settings?.floor || null
   $: planTasks = proposed ? (proposed.plan.tasks || proposed.plan.steps || []) : []
   $: declares = proposed
     ? planTasks.length + proposed.plan.files.length + proposed.plan.commands.length
@@ -640,6 +646,18 @@
             </span>
           </p>
           <p :if="proposed?.plan.enforcement" class="dim">enforcement: {{ proposed?.plan.enforcement }}</p>
+          <!-- The floor, which is what *not* approving leaves in place. Every
+               line above says what the plan asks for; this one says what the
+               turn that asked already has, so approving is visibly a decision
+               about what to add rather than a yes to a list. Writes are a
+               sentence and not a field: the floor grants none, by construction.
+               See
+               `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`. -->
+          <p :if="floor" class="dim floor">
+            unapproved, a turn reads {{ floor?.reads.length ? floor.reads.join(" · ") : "nothing" }}<span
+              :if="floor?.commands.length"> · runs {{ floor?.commands.join(" · ") }}</span><span
+              :if="floor?.network"> · reaches the network</span> — and writes nothing
+          </p>
           <p :if="!declares" class="dim warn">
             <span :if="prose">The planning call answered in prose, so the model
             declared nothing.</span>
@@ -1235,6 +1253,9 @@
   }
   .gate .objective { font-weight: 600; margin: .2rem 0 .4rem; }
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
+  /* The floor reads as the ground the plan is measured against, so it sits
+     apart from the asks above it rather than as one more of them. */
+  .gate .floor { border-top: 1px solid var(--line); margin-top: .4rem; padding-top: .3rem; }
   .gate p { margin: .2rem 0; }
   .gate-buttons { display: flex; gap: .5rem; margin-top: .6rem; }
   .refused {

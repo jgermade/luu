@@ -93,6 +93,27 @@ and have no write bit to take — and stamps `Authority::Draft`, so a refusal sa
 the floor refused rather than sending someone to edit `luu.toml`. `chat` keeps
 the policy file: a floor is the gate's shadow, and `chat` has no gate.
 
+**The refusal names the draft, one turn in.** `Authority::Draft` carries an
+`Option<JobId>`: `None` on the first prompt of a session, where the sandbox is
+chosen before `open_draft` runs and there is genuinely nothing to name, and the
+draft's id on every prompt after it — stamped by `serve` from the context it is
+already reading, and only where the live job really is a draft. So a denial
+reads *the floor for draft 3, which grants no writes*, the way one inside an
+approved job has always read *the approved plan for job 7*, and a reader stops
+having to join the refusal's turn to the line that opened its job.
+
+**And the gate shows it.** The panel had always shown what a plan *asks for* —
+reads, writes, commands, network, egress, enforcement — and never what the turn
+in front of it may already do, which made approving read as a yes to a list
+rather than a decision about what to **add**. `/api/settings` carries the
+session's floor beside its posture (`reads`, `commands`, `network`, resolved in
+Rust and never re-derived in the page, because a second resolution of a policy
+is a second sandbox), and the gate prints it under the asks: *unapproved, a turn
+reads `.` · runs `rg`, `ls` — and writes nothing*. There is no `writes` field on
+the wire: the floor grants none by construction, so it is a sentence rather than
+an always-empty list. See
+[`RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`](RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md).
+
 It is only as strong as `enforcement`: under `best-effort` there is no Landlock,
 so a subprocess started by a draft turn can write anyway — true of every path
 grant here, and worth saying because the floor is the first one whose entire

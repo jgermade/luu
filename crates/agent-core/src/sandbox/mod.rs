@@ -199,11 +199,21 @@ pub enum Authority {
     /// grant downgraded to a read. See [`Sandbox::read_only`] and
     /// `RECORD/2026-09-21.the-drafts-floor.completed.md`.
     ///
-    /// **It carries no [`JobId`] on purpose.** The floor is derived from the
-    /// session and not from the job, and a draft's id does not exist when the
-    /// sandbox is chosen — `Context::open_draft` runs when a turn lands, so on
-    /// the first prompt of a session there is no draft to name yet.
-    Draft,
+    /// **`None` is the first prompt of a session and nothing else.** The floor
+    /// is derived from the session and not from the job, and a draft's id does
+    /// not exist when the sandbox is chosen — `Context::open_draft` runs when a
+    /// turn lands, so on the *first* prompt there is no draft to name. Every
+    /// turn after it has one open, sitting in the context the caller already
+    /// reads, and `serve` stamps it here so a refusal denormalises its job the
+    /// way [`Authority::Plan`] always has.
+    ///
+    /// It is stamped only when the live job really is a draft: a job with a
+    /// plan reaching the floor is the widening
+    /// `RECORD/2026-09-21.the-drafts-floor.completed.md` §The second finding
+    /// closed, and naming it a draft would be a recording agreeing with a
+    /// panel about something false. See
+    /// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+    Draft(Option<JobId>),
 }
 
 impl std::fmt::Display for Authority {
@@ -211,7 +221,10 @@ impl std::fmt::Display for Authority {
         match self {
             Self::Policy => write!(f, "the sandbox policy"),
             Self::Plan(job) => write!(f, "the approved plan for job {job}"),
-            Self::Draft => write!(f, "the draft's floor, which grants no writes"),
+            Self::Draft(Some(job)) => {
+                write!(f, "the floor for draft {job}, which grants no writes")
+            }
+            Self::Draft(None) => write!(f, "the draft's floor, which grants no writes"),
         }
     }
 }
@@ -414,7 +427,7 @@ impl Sandbox {
         for root in floor.roots.iter_mut().filter(|root| !root.implicit) {
             root.access = Access::Read;
         }
-        floor.authority = Authority::Draft;
+        floor.authority = Authority::Draft(None);
         floor
     }
 
@@ -674,7 +687,7 @@ impl Sandbox {
                 // is not a grant but the thing holding the child *to* reads.
                 // Approving a plan is the way forward, and it is also the way
                 // the loosening becomes somebody's decision.
-                Authority::Draft => format!(
+                Authority::Draft(_) => format!(
                     "the kernel cannot hold this child ({missing}); \
                      a draft runs on the floor, which grants no writes — \
                      approve a plan to run this"
@@ -956,7 +969,16 @@ mod tests {
         // Adjacently tagged, because `Plan(TaskId)` is a newtype variant and an
         // internal tag has nowhere to put the number — which serde discovers at
         // runtime rather than at compile time, so it is worth a test.
-        for authority in [Authority::Policy, Authority::Plan(12), Authority::Draft] {
+        // Both `Draft` arms: the stamped one is a second newtype variant on the
+        // same adjacent tag, and the unstamped one puts `null` in the content
+        // field — which is the case a `skip_serializing_if` would have quietly
+        // turned into a missing key.
+        for authority in [
+            Authority::Policy,
+            Authority::Plan(12),
+            Authority::Draft(None),
+            Authority::Draft(Some(3)),
+        ] {
             let text = serde_json::to_string(&authority).unwrap();
             assert_eq!(
                 serde_json::from_str::<Authority>(&text).unwrap(),
@@ -1004,7 +1026,10 @@ mod tests {
         assert_eq!(floor.egress(), session.egress());
         assert_eq!(floor.enforcement(), session.enforcement());
         assert_eq!(floor.base(), session.base());
-        assert_eq!(floor.authority(), &Authority::Draft);
+        // Unstamped: `read_only` is the session's floor and knows no job. What
+        // names a draft is `serve`, one turn in — see
+        // `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+        assert_eq!(floor.authority(), &Authority::Draft(None));
         assert_eq!(
             floor.roots().len(),
             session.roots().len(),
