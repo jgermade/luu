@@ -1260,7 +1260,7 @@ plans granted. Two things about that list are decisions rather than coverage:
 `src/lib.rs` is a directory is a question about a disk; the sandbox answers it
 with `is_dir()` when it resolves a root at approval, and a fold running
 elsewhere six weeks later has no business asking. So item 12 of
-`ROADMAP/2026-09-17` is taken this far and no further, and closing it needs a
+`ROADMAP/2026-09-21` is taken this far and no further, and closing it needs a
 field written where the answer is known.
 
 There is **no panel** for any of it yet, deliberately: a number on a page is a
