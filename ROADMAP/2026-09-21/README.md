@@ -105,7 +105,7 @@ third revision running in which driving a surface is where the defects were.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 34 | **A test whose bound is wall-clock time** — `a_recording_that_spans_sessions_carries_a_header_for_each` asserts `at_ms < 400` where 400 is also a `sleep`, so a loaded machine fails it. Twice in one afternoon and not in ten runs since. First in this section because a load-flaky test is what makes every other row's *all green* worth less | nothing | [`the-drafts-floor`](../../RECORD/2026-09-21.the-drafts-floor.completed.md) §Still open, after building it |
+| 34 | ~**A test whose bound is wall-clock time** — `a_recording_that_spans_sessions_carries_a_header_for_each` asserts `at_ms < 400` where 400 is also a `sleep`, so a loaded machine fails it. Twice in one afternoon and not in ten runs since. First in this section because a load-flaky test is what makes every other row's *all green* worth less~ **closed 2026-09-21: the number did not want raising, it wanted removing** — a line is checked against how long the session had actually been alive, on the recorder's own clock, so load moves the bound and the lines it bounds together. **And the row was half a row**: the same test held a second, unnamed race — it reads a recording out from under a live server, alone in this suite, and the recorder writes on its own task. Old bound under 48 busy loops on four cores: 6 runs, 6 failures; both fixes under the same load: 6 green | nothing | [`a-bound-that-is-not-a-clock`](../../RECORD/2026-09-21.a-bound-that-is-not-a-clock.completed.md) |
 | 31 | **The gate panel does not show the floor** — it shows what a plan asks for and never what an unapproved turn may reach, which is now a different and smaller thing than the policy file. Same shape as item 10, one field along | nothing | [`the-drafts-floor`](../../RECORD/2026-09-21.the-drafts-floor.completed.md) §Still open |
 | 33 | **What the debug UI does with an alternation** — approving now closes a draft and opens a plan in one action, and the folded history above it is twice as long and half as uniform. Unargued, and the page is the one place the alternation is visible to a person | needs a design argument | [`every-turn-belongs-to-a-job`](../../RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md) §Still open |
 | 32 | **`Authority::Draft` has no job** — a recording says a refusal came from the floor and not *which* draft was refused. Cheap the moment somebody asks the question | nothing | [`the-drafts-floor`](../../RECORD/2026-09-21.the-drafts-floor.completed.md) §Still open |
@@ -148,7 +148,13 @@ nothing in it blocks anything above.
   that fails under load and passes ten times after is the thing that makes the
   next real failure arguable, and every row in section C ends in *the workspace
   is green*. Raising a bound written for somebody else's reason is a small diff
-  and an argument to have on purpose rather than at 2am.
+  and an argument to have on purpose rather than at 2am. **Closed the day this
+  file was written, and it paid the way the last two revisions said small rows
+  do**: the row named one race and the test had two, the second found only by
+  putting the machine under load rather than by reading the code. The
+  calibration note is that *twice in one afternoon and not in ten runs since*
+  was describing two different failures the whole time, and nobody could have
+  told them apart from the frequency.
 - **Item 12 and row 29 are the same arithmetic complaint one field apart**, and
   both are downstream of the surface item 25 landed. Neither is blocked on a
   model; both are worth less than they look until row 27 says what the numbers

@@ -3237,6 +3237,53 @@ async fn a_resumed_session_renders_its_spans_on_the_turn_that_was_grounded_with_
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The recording once it holds what the caller is about to assert over.
+///
+/// **The recorder writes on its own task** — `Recorder::create` spawns it, one
+/// `write_all` and one flush per line — so a line is not in the file the moment
+/// the request or the message that produced it returns. Every other
+/// `read_record` in the suite reads a file a `luu` process has already exited
+/// from; this is the only test that reads one out from under a live server, and
+/// it had been assuming the writer had run.
+///
+/// Waiting is not a wall-clock claim about how fast that task is, and `ready`
+/// is deliberately the caller's own shape rather than a line count: under load
+/// the headers landed and the turn's lines had not, which is the same race one
+/// level down. The assertions stay exact and stay at the call site; a writer
+/// that never runs fails here after the deadline rather than passing early. A
+/// parse error counts as *not yet* for the same reason — a line half-written is
+/// a line not written — and is reported if it survives the deadline.
+async fn recording_once(
+    path: &std::path::Path,
+    what: &str,
+    ready: impl Fn(&[agent_core::record::RecordLine]) -> bool,
+) -> Vec<agent_core::record::RecordLine> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match luu::export::read_record(path) {
+            Ok(lines) if ready(&lines) => return lines,
+            Ok(lines) => assert!(
+                std::time::Instant::now() < deadline,
+                "ten seconds and the recording still does not hold {what}: {} lines",
+                lines.len(),
+            ),
+            Err(error) => assert!(
+                std::time::Instant::now() < deadline,
+                "ten seconds and the recording never parsed: {error}",
+            ),
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// How many headers a recording holds, and where the last one starts.
+fn headers_of(lines: &[agent_core::record::RecordLine]) -> Vec<&agent_core::record::RecordLine> {
+    lines
+        .iter()
+        .filter(|line| matches!(line, agent_core::record::RecordLine::Header { .. }))
+        .collect()
+}
+
 /// A `--record` file says which session each stretch of it belongs to.
 ///
 /// Item 23, driven: until this, one header at process start named the **first**
@@ -3252,8 +3299,16 @@ async fn a_resumed_session_renders_its_spans_on_the_turn_that_was_grounded_with_
 /// `started_at` is the second session's own, and the lines after it are
 /// relative to *that* — which is why the run waits before switching. Before the
 /// re-base those lines carried the offset from process start, and the wait is
-/// what makes the difference bigger than any turn this mock can take. See
-/// `RECORD/2026-09-19.a-header-per-session.completed.md`.
+/// what separates the two bases by more than nothing.
+///
+/// **What a line is checked against is measured, not assumed.** The wait used to
+/// be the bound as well as the separation, which made the test assert that a
+/// handshake, a prompt and a mock reply all fit in 400 ms of wall clock — true
+/// on an idle machine and a claim about nothing this test is for. It is now
+/// checked against how long the session had been alive, on the recorder's own
+/// clock, which load moves in the same direction as the lines themselves. See
+/// `RECORD/2026-09-19.a-header-per-session.completed.md` and
+/// `RECORD/2026-09-21.a-bound-that-is-not-a-clock.completed.md`.
 #[tokio::test]
 async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     use agent_core::record::RecordLine;
@@ -3287,10 +3342,13 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     .await;
 
     // Long enough that a line counted from the process's start could not be
-    // mistaken for one counted from the second session's: the mock answers in
-    // microseconds, so anything under this bound was re-based.
-    const WAITED: u64 = 400;
-    tokio::time::sleep(Duration::from_millis(WAITED)).await;
+    // mistaken for one counted from the second session's. It is a separation
+    // between two bases and nothing else — what a line is checked against is
+    // measured below, on the recorder's own clock, so this number is never a
+    // claim about how fast a turn runs. See
+    // `RECORD/2026-09-21.a-bound-that-is-not-a-clock.completed.md`.
+    const APART: u64 = 400;
+    tokio::time::sleep(Duration::from_millis(APART)).await;
 
     let client = reqwest::Client::new();
     let created: serde_json::Value = client
@@ -3321,7 +3379,32 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
         until(&mut socket, "draft_opened").await;
     }
 
-    let lines = luu::export::read_record(&record).expect("reading the recording back");
+    // How long the second session had been alive when the last line this test
+    // waits for was written. Every `at_ms` is stamped when its event is handled
+    // (`serve.rs`), against this same clock and this same base, so a re-based
+    // line cannot exceed it and a line counted from process start is exactly
+    // one `APART` over it. Read here rather than turned into a constant: a
+    // loaded machine moves this and the lines it bounds together.
+    let alive = luu::session::now_ms().saturating_sub(started_at);
+
+    // Two headers *and* a line under the second: the turn is what the bound
+    // below is about, and a file holding only the headers is a file the writer
+    // has not caught up with.
+    let lines = recording_once(
+        &record,
+        "two headers and a line under the second",
+        |lines| {
+            let headers = headers_of(lines);
+            headers.len() == 2
+                && lines
+                    .iter()
+                    .skip_while(|line| !std::ptr::eq(*line, headers[1]))
+                    .any(|line| {
+                        matches!(line, RecordLine::Protocol { .. } | RecordLine::Trace { .. })
+                    })
+        },
+    )
+    .await;
     let headers: Vec<&RecordLine> = lines
         .iter()
         .filter(|line| matches!(line, RecordLine::Header { .. }))
@@ -3348,6 +3431,12 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     );
 
     let RecordLine::Header {
+        started_at: first, ..
+    } = headers[0]
+    else {
+        unreachable!("filtered above")
+    };
+    let RecordLine::Header {
         started_at: second, ..
     } = headers[1]
     else {
@@ -3356,6 +3445,11 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     assert_eq!(
         *second, started_at,
         "the base a header declares is the session's own start",
+    );
+    assert!(
+        second.saturating_sub(*first) >= APART,
+        "the two bases are far enough apart that a line counted from the wrong one \
+         says so: {first} then {second}",
     );
 
     let after = lines
@@ -3370,8 +3464,9 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
         .collect::<Vec<_>>();
     assert!(!after.is_empty(), "the second session recorded nothing");
     assert!(
-        after.iter().all(|at_ms| *at_ms < WAITED),
-        "every line under the second header is counted from it: {after:?}",
+        after.iter().all(|at_ms| *at_ms <= alive),
+        "every line under the second header is counted from it, so none of them can \
+         be older than the session: {after:?} against {alive}",
     );
 
     // And the other call site, where the base goes **backwards**. A third
@@ -3402,7 +3497,10 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     let body = resumed.text().await.unwrap_or_default();
     assert_eq!(status, reqwest::StatusCode::OK, "{body}");
 
-    let lines = luu::export::read_record(&record).expect("reading the recording back");
+    let lines = recording_once(&record, "four headers", |lines| {
+        headers_of(lines).len() == 4
+    })
+    .await;
     let bases: Vec<u64> = lines
         .iter()
         .filter_map(|line| match line {
