@@ -1226,17 +1226,17 @@ impl SandboxArgs {
             }
         };
 
-        Ok(Agency {
-            tools: std::sync::Arc::new(match self.no_tools {
+        Ok(Agency::new(
+            std::sync::Arc::new(match self.no_tools {
                 true => Tools::new(Vec::new()),
                 false => Tools::standard(),
             }),
-            sandbox: std::sync::Arc::new(sandbox),
-            limits: agent_core::agent::Limits::default()
+            std::sync::Arc::new(sandbox),
+            agent_core::agent::Limits::default()
                 .with_max_steps(self.max_tool_steps)
                 .with_tool_timeout(std::time::Duration::from_millis(worker_config.timeout_ms)),
             worker,
-        })
+        ))
     }
 }
 

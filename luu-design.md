@@ -21,7 +21,7 @@ A session is an **alternation of jobs** (historically called tasks), not a mode 
 
 ```
 job 1  draft   objective: what the user asked, as they asked it
-               turns: exploring, under the session's own policy file
+               turns: exploring, on the floor — the policy file, reads only
                approve → close and fold, and open job 2
 
 job 2  plan    objective: the approved plan
@@ -37,6 +37,8 @@ a job whose objective is known and whose plan is not** — `Job::plan` is the
 but the strictest plan there is, so a draft carrying `Plan::default()` through
 `Plan::narrow` would be refused its first `read_file`. Nothing narrows a sandbox
 from a draft; a draft is a job for the window and is not a job for the gate.
+What holds a draft's turns is therefore not a plan but **the floor**, which is
+the session's own sandbox minus the write bit — see below.
 
 **Approving *is* closing.** It is not a transition inside a job — it ends one and
 opens the next, whose objective is the approved plan. So the draft folds at the
@@ -71,15 +73,34 @@ is approved*. See
 [`RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`](RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md)
 and [`RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`](RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §7th–8th.
 
-**What this costs, and it is written down rather than discovered:** a drafting
-turn runs under the session's own policy file, and on this repository that file
-grants `.` at `read-write` plus `cargo`, `rustc` and `git`. So an exploratory
-turn may edit the tree and run the build with nobody having approved anything,
-where before item 22 the first prompt of a session waited behind the gate. The
-sandbox itself did not move — a draft sets no narrowing — but what reaches the
-unnarrowed sandbox did. Narrowing a draft to the session's floor *minus the write
-bit* is the obvious next row and is deliberately not taken in the same change as
-the window fold.
+**A drafting turn runs on the floor: the policy file with every grant it made
+downgraded to a read.** For one day it ran on the policy file itself — on this
+repository `.` at `read-write` plus `cargo`, `rustc` and `git` — so an
+exploratory turn could edit the tree and run the build with nobody having
+approved anything, where before item 22 the first prompt of a session waited
+behind the gate. The floor closes that: **exploration is exploration, and the
+gate is what unlocks the write bit.** A draft still reads everything the policy
+grants and still runs `rg` and `ls`, because what a command may *do* is decided
+by the paths it may touch; `cargo test` in a draft now fails when it writes
+`target/`, which is the intended answer and not a gap.
+
+Mechanically it is one expression: `serve` picks the live job's narrowed sandbox
+when a plan is open and **the floor** otherwise, so every place that clears the
+narrowing means the floor without being edited. The floor is
+`Sandbox::read_only`, which downgrades the *explicit* roots in place — the
+implicit ones (`SYSTEM_ROOTS` and `/dev/null`) exist so a subprocess can start
+and have no write bit to take — and stamps `Authority::Draft`, so a refusal says
+the floor refused rather than sending someone to edit `luu.toml`. `chat` keeps
+the policy file: a floor is the gate's shadow, and `chat` has no gate.
+
+It is only as strong as `enforcement`: under `best-effort` there is no Landlock,
+so a subprocess started by a draft turn can write anyway — true of every path
+grant here, and worth saying because the floor is the first one whose entire
+content is a subtraction. The same change found that **a session resumed inside
+an approved job was coming back held by the policy file rather than by the plan
+it was approved with** — a silent widening, item 9's shape one field along,
+which the resume route now re-narrows. See
+[`RECORD/2026-09-21.the-drafts-floor.completed.md`](RECORD/2026-09-21.the-drafts-floor.completed.md).
 
 Approval is per piece of work, so there is no autonomy setting to remember and no
 mode that can be left open. `plan`/`run`/`auto` used to live here; they were

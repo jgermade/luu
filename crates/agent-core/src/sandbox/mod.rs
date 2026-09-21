@@ -195,6 +195,15 @@ pub enum Authority {
     Policy,
     /// The plan a person approved, which narrows the policy for one job.
     Plan(JobId),
+    /// The floor a turn nobody approved runs on: the policy file with every
+    /// grant downgraded to a read. See [`Sandbox::read_only`] and
+    /// `RECORD/2026-09-21.the-drafts-floor.completed.md`.
+    ///
+    /// **It carries no [`JobId`] on purpose.** The floor is derived from the
+    /// session and not from the job, and a draft's id does not exist when the
+    /// sandbox is chosen — `Context::open_draft` runs when a turn lands, so on
+    /// the first prompt of a session there is no draft to name yet.
+    Draft,
 }
 
 impl std::fmt::Display for Authority {
@@ -202,6 +211,7 @@ impl std::fmt::Display for Authority {
         match self {
             Self::Policy => write!(f, "the sandbox policy"),
             Self::Plan(job) => write!(f, "the approved plan for job {job}"),
+            Self::Draft => write!(f, "the draft's floor, which grants no writes"),
         }
     }
 }
@@ -372,7 +382,44 @@ impl Sandbox {
         self
     }
 
-    /// Which authority answers here — the policy file, or a task's plan.
+    /// The same sandbox with every grant downgraded to a read: the floor a turn
+    /// nobody approved runs on.
+    ///
+    /// **Infallible, and that is why it downgrades in place** rather than going
+    /// back through [`SandboxPolicy`] and [`Sandbox::new`] the way
+    /// [`crate::job::Plan::narrow`] does. That route re-canonicalises every
+    /// path, re-adds the implicit [`SYSTEM_ROOTS`], and can fail — and a floor
+    /// that can fail needs a fallback, whose only safe value is *nothing
+    /// granted*, which turns one missing path into a session that cannot read
+    /// its own tree. Nothing here can fail, so the question does not arise.
+    ///
+    /// Commands, network, egress, proxy, enforcement and limits are the
+    /// session's, unchanged. What a command may *do* is decided by the paths it
+    /// may touch, and subtracting the allowlist as well would take `rg` and
+    /// `ls` — the two things exploration is for — to restate a bound the roots
+    /// already hold. See `RECORD/2026-09-21.the-drafts-floor.completed.md`
+    /// §What is rejected.
+    ///
+    /// **The implicit roots are left alone**, and that is not an optimisation.
+    /// [`SYSTEM_ROOTS`] and [`NULL_DEVICE`] are granted so a *subprocess can
+    /// start* — they are excluded from [`Sandbox::check_path`], from
+    /// [`Sandbox::access_for`] and from [`Sandbox::to_policy`], so they were
+    /// never part of what the agent may reach and there is no write bit in them
+    /// to take. Downgrading them anyway takes `/dev/null` read-write with it,
+    /// and a `git` that cannot open `/dev/null` exits 128 before `main` — see
+    /// `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md`, which is
+    /// the test that caught this.
+    pub fn read_only(&self) -> Self {
+        let mut floor = self.clone();
+        for root in floor.roots.iter_mut().filter(|root| !root.implicit) {
+            root.access = Access::Read;
+        }
+        floor.authority = Authority::Draft;
+        floor
+    }
+
+    /// Which authority answers here — the policy file, a job's plan, or the
+    /// floor a turn nobody approved runs on.
     pub fn authority(&self) -> &Authority {
         &self.authority
     }
@@ -621,6 +668,16 @@ impl Sandbox {
                     "the kernel cannot hold this child ({missing}); \
                      job {job} runs under kernel enforcement — loosen it in the \
                      plan if the policy allows it, in the policy otherwise"
+                ),
+                // The floor is a subtraction, so a gap in it is the one case
+                // where "grant it anyway" is the wrong advice: what is missing
+                // is not a grant but the thing holding the child *to* reads.
+                // Approving a plan is the way forward, and it is also the way
+                // the loosening becomes somebody's decision.
+                Authority::Draft => format!(
+                    "the kernel cannot hold this child ({missing}); \
+                     a draft runs on the floor, which grants no writes — \
+                     approve a plan to run this"
                 ),
             }));
         }
@@ -899,7 +956,7 @@ mod tests {
         // Adjacently tagged, because `Plan(TaskId)` is a newtype variant and an
         // internal tag has nowhere to put the number — which serde discovers at
         // runtime rather than at compile time, so it is worth a test.
-        for authority in [Authority::Policy, Authority::Plan(12)] {
+        for authority in [Authority::Policy, Authority::Plan(12), Authority::Draft] {
             let text = serde_json::to_string(&authority).unwrap();
             assert_eq!(
                 serde_json::from_str::<Authority>(&text).unwrap(),
@@ -907,6 +964,77 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// The floor: every grant downgraded to a read, and nothing else moved.
+    ///
+    /// The second assertion is the one worth having. A floor that also dropped
+    /// the commands would pass a test that only checked the write bit, and it
+    /// would take `rg` and `ls` — the two things exploration is for — with it.
+    #[test]
+    fn the_floor_subtracts_the_write_bit_and_nothing_else() {
+        let mut policy = read_write_here();
+        policy.allow_command("rg");
+        policy.network = true;
+        let session = Sandbox::new(&policy, &std::env::current_dir().unwrap()).unwrap();
+        assert!(
+            session
+                .check_path(std::path::Path::new("Cargo.toml"), Access::ReadWrite)
+                .verdict
+                .allowed,
+            "the session has to grant the write, or the floor subtracts nothing",
+        );
+
+        let floor = session.read_only();
+        assert!(
+            !floor
+                .check_path(std::path::Path::new("Cargo.toml"), Access::ReadWrite)
+                .verdict
+                .allowed,
+        );
+        assert!(
+            floor
+                .check_path(std::path::Path::new("Cargo.toml"), Access::Read)
+                .verdict
+                .allowed,
+            "a floor is a floor and not a wall",
+        );
+        assert_eq!(floor.commands(), session.commands());
+        assert_eq!(floor.network(), session.network());
+        assert_eq!(floor.egress(), session.egress());
+        assert_eq!(floor.enforcement(), session.enforcement());
+        assert_eq!(floor.base(), session.base());
+        assert_eq!(floor.authority(), &Authority::Draft);
+        assert_eq!(
+            floor.roots().len(),
+            session.roots().len(),
+            "downgrading in place must not add or drop a root — which going back \
+             through `Sandbox::new` would, by re-adding the implicit ones",
+        );
+
+        // And the one the first version of this got wrong. The implicit grants
+        // exist so a subprocess can *start*, not so the agent can reach
+        // anything, and `/dev/null` is the one of them that is read-write: a
+        // floor that takes it leaves a `git` that exits 128 before `main`. See
+        // `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md`.
+        let null_device = floor
+            .roots()
+            .iter()
+            .find(|root| root.path == std::path::Path::new(NULL_DEVICE));
+        assert_eq!(
+            null_device.map(|root| root.access),
+            Some(Access::ReadWrite),
+            "the floor took the null device with it, so no command can start",
+        );
+        assert!(
+            floor
+                .roots()
+                .iter()
+                .filter(|root| root.implicit)
+                .eq(session.roots().iter().filter(|root| root.implicit)),
+            "the floor subtracts what the policy file granted and nothing the \
+             sandbox adds for a child to be able to run at all",
+        );
     }
 
     fn read_write_here() -> SandboxPolicy {
