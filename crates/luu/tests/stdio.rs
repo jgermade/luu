@@ -26,12 +26,12 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
     let backend = Arc::new(Mock::replies(replies).delay(Duration::ZERO));
     let base = std::env::current_dir().expect("current dir");
     let sandbox = Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("open sandbox"));
-    let agency = Agency {
-        tools: Arc::new(Tools::standard()),
+    let agency = Agency::new(
+        Arc::new(Tools::standard()),
         sandbox,
-        limits: agent_core::agent::Limits::default().with_max_steps(4),
-        worker: None,
-    };
+        agent_core::agent::Limits::default().with_max_steps(4),
+        None,
+    );
     let counter = Arc::new(ApproximateCounter);
     let budget = Budget::new(0, 512, Eviction::Turn);
     StdioOptions {

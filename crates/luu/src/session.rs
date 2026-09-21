@@ -73,6 +73,25 @@ pub const PLAN_OVER_DRAFT: &str = "The conversation above is the draft: what was
 pub struct Agency {
     pub tools: Arc<Tools>,
     pub sandbox: Arc<Sandbox>,
+    /// The same policy with every grant downgraded to a read — what holds a
+    /// turn that no approved plan holds.
+    ///
+    /// **Private, which is the whole of how it is kept honest.** It is derived
+    /// from `sandbox` in [`Agency::new`] and nowhere else, so a second call
+    /// site cannot resolve it differently and a seventh cannot forget it: with
+    /// one private field a struct literal no longer compiles outside this
+    /// module, and `new` is the only door. That is this struct's own doc
+    /// comment — *two call sites resolving a policy differently is two
+    /// sandboxes* — enforced by the type rather than asserted in prose, after
+    /// **six** literals had accumulated under it. Two of the six were found by
+    /// making the field private and not by the search that preceded it, which
+    /// is the argument for the type doing the remembering.
+    ///
+    /// **Read by `serve` and not by `chat`**, because a floor is the gate's
+    /// shadow and `chat` has no gate — the policy file is its standing approval
+    /// and the operator who ran the command is who that was. See
+    /// `RECORD/2026-09-21.the-drafts-floor.completed.md`.
+    floor: Arc<Sandbox>,
     /// What bounds a turn: how many tool calls, and how long any one of them
     /// may take. The timeout is the *loop's*, so it holds under
     /// `runtime = "host"` as much as behind a container — which is the whole
@@ -94,6 +113,29 @@ pub struct Agency {
 }
 
 impl Agency {
+    /// The only way to build one, so the floor is derived exactly once.
+    ///
+    /// See [`Agency::floor`] for why that matters and why the field is private.
+    pub fn new(
+        tools: Arc<Tools>,
+        sandbox: Arc<Sandbox>,
+        limits: agent_core::agent::Limits,
+        worker: Option<Arc<Worker>>,
+    ) -> Self {
+        Self {
+            tools,
+            floor: Arc::new(sandbox.read_only()),
+            sandbox,
+            limits,
+            worker,
+        }
+    }
+
+    /// What holds a turn no approved plan holds. See [`Agency::floor`].
+    pub fn floor(&self) -> &Arc<Sandbox> {
+        &self.floor
+    }
+
     /// This posture, as a recording names it — the three facts a reader compares
     /// two runs on, and the name of the file they came from when a session
     /// chose one. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.

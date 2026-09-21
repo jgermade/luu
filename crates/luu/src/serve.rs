@@ -2202,8 +2202,11 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
         // what the session keeps.
         let agency = reopening;
         // A draft has no plan and therefore no narrowing — reopening one puts
-        // its turns back in the window verbatim and changes nothing about what
-        // may be touched, which is the invariant this whole item is held to.
+        // its turns back in the window verbatim and puts what may be touched
+        // back on the floor, which is where a draft's turns ran in the first
+        // place. `None` here is the floor and not the policy file; see the
+        // fallback in `run_turn` and
+        // `RECORD/2026-09-21.the-drafts-floor.completed.md`.
         let plan = session.context.job(job).and_then(|job| job.plan.clone());
         session.narrowed = plan
             .and_then(|plan| plan.narrow(agency.sandbox.as_ref(), job).ok())
@@ -2262,16 +2265,21 @@ async fn begin_turn(
         };
         // The fragments this turn's own text points at, read through the
         // sandbox the *live job* was granted — `session.narrowed` when a plan
-        // is open, the policy file otherwise. That is not a detail: the gate
+        // is open, the floor otherwise. That is not a detail: the gate
         // exists so a person decides what a job may touch, and a selector
         // reading outside the approved plan would put files into the prompt
         // that the person refused.
         let code: Vec<Fragment> = match app.select_tokens {
             0 => Vec::new(),
             tokens => {
+                // The floor rather than the policy file on the `None` arm, so
+                // this reads the same sandbox the turn below will run under.
+                // A no-op for what is *selected* — the floor differs from the
+                // policy file only in the write bit, and selecting reads — but
+                // the two arms of one decision written twice is how they drift.
                 let sandbox = match &session.narrowed {
                     Some((_, sandbox)) => sandbox.clone(),
-                    None => agency.sandbox.clone(),
+                    None => agency.floor().clone(),
                 };
                 // Re-stamped before it is scored, because the walk is a cache
                 // of line numbers and this turn may be answering after an edit
@@ -2474,13 +2482,24 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     // starts, so it is read once here rather than per lock.
     let agency = app.agency().await;
 
-    // Inside a task, the plan it was approved with is what holds this turn;
-    // outside one, the policy file. A turn is never checked against both.
+    // Inside an approved job, the plan it was approved with is what holds this
+    // turn; outside one, **the floor** — the policy file with every grant
+    // downgraded to a read. A turn is never checked against both.
+    //
+    // The fallback arm is what holds a turn nobody approved, and until item 22
+    // it was unreachable in a served session: the gate held the first prompt,
+    // so there was never an open session without an open job. The alternation
+    // made it the normal case — a draft has no plan — and with it the policy
+    // file, which on this repository grants `.` at `read-write` plus `cargo`
+    // and `git`. So exploration could edit the tree and run the build with
+    // nobody having approved anything. The floor is that one expression
+    // changed, and every site that sets `narrowed = None` means it without
+    // being touched. See `RECORD/2026-09-21.the-drafts-floor.completed.md`.
     let sandbox = {
         let session = app.session.lock().await;
         match (session.context.live_task(), &session.narrowed) {
             (Some(live), Some((task, sandbox))) if live == *task => sandbox.clone(),
-            _ => agency.sandbox.clone(),
+            _ => agency.floor().clone(),
         }
     };
 
@@ -3959,7 +3978,32 @@ async fn resume_session(
         // the next prompt quietly proposed a second one beside it — a question
         // nobody answered, and a second one asked over it.
         session.pending = pending_proposal(&loaded_view);
-        session.narrowed = None;
+        // A session resumed **inside an approved job** comes back holding the
+        // plan it was approved with, rebuilt against the posture it is being
+        // resumed *under* — the same two sentences the reopen route above is
+        // written from, and for the same reason: the sandbox is a resolution of
+        // the plan, and the plan is what the session keeps.
+        //
+        // This line was `= None` until 2026-09-21, and that was a widening
+        // nothing caught: the live job stayed open across the resume, so the
+        // turn's fallback arm answered, and the session came back able to touch
+        // everything the policy file grants rather than what the person
+        // approved. Item 9's shape one field along — a grant outliving what it
+        // was granted under. The floor is what turned it from a quiet widening
+        // into a loud narrowing (a resumed job that suddenly cannot write),
+        // which is the only reason it was found. See
+        // `RECORD/2026-09-21.the-drafts-floor.completed.md` §The second finding.
+        //
+        // A draft is `None` here exactly as before, and `None` is now the floor
+        // rather than the policy file.
+        let live = session.context.live_job().and_then(|job| {
+            let plan = session.context.job(job).and_then(|job| job.plan.clone())?;
+            Some((job, plan))
+        });
+        session.narrowed = live.and_then(|(job, plan)| {
+            let sandbox = plan.narrow(agency.sandbox.as_ref(), job).ok()?;
+            Some((job, Arc::new(sandbox)))
+        });
     }
 
     let summary = {
@@ -4224,14 +4268,12 @@ mod tests {
     /// into the checkout: a test that edited this repository to prove a point
     /// about staleness would be the worst possible way to prove it.
     fn app_selecting_in(replies: &[&str], select_tokens: u32, base: PathBuf) -> Arc<App> {
-        let agency = Agency {
-            tools: Arc::new(agent_core::tools::Tools::standard()),
-            sandbox: Arc::new(
-                agent_core::sandbox::Sandbox::new(&SandboxPolicy::default(), &base).unwrap(),
-            ),
-            limits: agent_core::agent::Limits::default().with_max_steps(4),
-            worker: None,
-        };
+        let agency = Agency::new(
+            Arc::new(agent_core::tools::Tools::standard()),
+            Arc::new(agent_core::sandbox::Sandbox::new(&SandboxPolicy::default(), &base).unwrap()),
+            agent_core::agent::Limits::default().with_max_steps(4),
+            None,
+        );
         let agency_walk = agency.sandbox.clone();
         Arc::new(App {
             approvers: Approvers::default(),

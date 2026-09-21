@@ -185,12 +185,12 @@ fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory 
                 Some(path) => SandboxPolicy::from_file(&path)?,
                 None => SandboxPolicy::default(),
             };
-            Ok(Agency {
-                tools: Arc::new(Tools::standard()),
-                sandbox: Arc::new(Sandbox::new(&policy, &base)?),
-                limits: agent_core::agent::Limits::default().with_max_steps(4),
-                worker: None,
-            })
+            Ok(Agency::new(
+                Arc::new(Tools::standard()),
+                Arc::new(Sandbox::new(&policy, &base)?),
+                agent_core::agent::Limits::default().with_max_steps(4),
+                None,
+            ))
         })
     })
 }
@@ -226,12 +226,12 @@ async fn server_storing_selecting(
     base: &std::path::Path,
 ) -> String {
     let base = base.to_path_buf();
-    let agency = Agency {
-        tools: Arc::new(Tools::standard()),
-        sandbox: Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("the sandbox")),
-        limits: agent_core::agent::Limits::default().with_max_steps(4),
-        worker: None,
-    };
+    let agency = Agency::new(
+        Arc::new(Tools::standard()),
+        Arc::new(Sandbox::new(&SandboxPolicy::default(), &base).expect("the sandbox")),
+        agent_core::agent::Limits::default().with_max_steps(4),
+        None,
+    );
     let serving = bind(ServeOptions {
         // No icon theme in a test: the page is not what is under test.
         icons: std::sync::Arc::new(luu::icons::Theme::default()),
@@ -353,12 +353,12 @@ async fn server_with_postures(
     record: Option<std::path::PathBuf>,
 ) -> String {
     let base = std::env::current_dir().expect("the working directory");
-    let agency = Agency {
-        tools: Arc::new(Tools::standard()),
-        sandbox: Arc::new(Sandbox::new(&policy, &base).expect("the sandbox")),
-        limits: agent_core::agent::Limits::default().with_max_steps(4),
-        worker: None,
-    };
+    let agency = Agency::new(
+        Arc::new(Tools::standard()),
+        Arc::new(Sandbox::new(&policy, &base).expect("the sandbox")),
+        agent_core::agent::Limits::default().with_max_steps(4),
+        None,
+    );
     let serving = bind(ServeOptions {
         // No icon theme in a test: the page is not what is under test.
         icons: std::sync::Arc::new(luu::icons::Theme::default()),
@@ -1183,6 +1183,94 @@ async fn a_turn_may_not_write_a_file_its_plan_only_reads() {
     assert!(
         manifest.contains("[package]"),
         "the file was written anyway"
+    );
+}
+
+/// The floor, which is the same assertion one job earlier: **a draft turn may
+/// not write what the policy file grants.**
+///
+/// The sibling above narrows an approved job against its plan. This one has no
+/// plan to narrow against — it is the first prompt of a session, so it runs in
+/// a draft — and the thing that refuses is the floor. The policy file here is
+/// `SandboxPolicy::default()`, read-write on the tree, and between item 22 and
+/// `RECORD/2026-09-21.the-drafts-floor.completed.md` this write went through.
+#[tokio::test]
+async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
+    // A path **outside the checkout** that the policy file explicitly grants
+    // at read-write, rather than a file in the tree. The distinction is not
+    // fussiness: this test's failure mode *is* a successful write, so pointing
+    // it at the checkout means a red run that also edits the repository. That
+    // is how this test was first written and the first failing run replaced
+    // `crates/luu/Cargo.toml` with the word `broken`.
+    let scratch = std::env::temp_dir().join(format!("luu-draft-floor-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&scratch);
+    let call = format!(
+        "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by a draft\"}}}}\n```",
+        serde_json::to_string(&scratch.display().to_string()).expect("a path"),
+    );
+    let address = server_writable(
+        vec![call, "I am drafting, so I may not change that.".into()],
+        &scratch,
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // No approval anywhere in this test, which is the whole point: the turn
+    // runs in the draft the prompt opens.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
+    )
+    .await;
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["name"], "write_file");
+    assert_eq!(result["verdict"]["allowed"], false);
+    assert!(
+        result["verdict"]["rule"]
+            .as_str()
+            .expect("a rule")
+            .contains("the draft's floor"),
+        "a denial has to say which authority refused, and the floor is not the \
+         policy file: {}",
+        result["verdict"]["rule"],
+    );
+
+    // The only assertion that would notice a check running *after* the write,
+    // and the one that says the policy file was not what refused: the same
+    // path, granted read-write by the very policy this server was built with.
+    assert!(
+        !scratch.exists(),
+        "the file was written anyway, so the floor is not holding",
+    );
+    let _ = std::fs::remove_file(&scratch);
+}
+
+/// The other half of the floor, and the half that says it is a floor rather
+/// than a wall: **a draft still reads.** Exploration is what it is for.
+#[tokio::test]
+async fn a_draft_turn_still_reads_what_the_policy_file_grants() {
+    let address = server_with(vec![READS_SERVE_RS.into(), "That is what it says.".into()]).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "what does serve do"}),
+    )
+    .await;
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["name"], "read_file");
+    assert_eq!(
+        result["verdict"]["allowed"], true,
+        "the floor subtracts the write bit and nothing else: {}",
+        result["verdict"]["rule"],
     );
 }
 
@@ -2911,6 +2999,104 @@ async fn the_resend_route_keeps_this_machines_default_apart_from_what_is_running
         serde_json::Value::Null,
         "a session's choice is not a machine's default: {after}",
     );
+}
+
+/// A session resumed **inside an approved job** comes back holding the plan it
+/// was approved with.
+///
+/// Found while giving the draft a floor, and it predates it: the resume route
+/// wrote `session.narrowed = None`, the live job stayed open across the resume,
+/// so the turn's fallback arm answered and the session came back able to touch
+/// everything the policy file grants. A **widening**, silent, and nothing
+/// caught it — the floor is what turned the same line into a loud narrowing and
+/// is the only reason it was found. Item 9's shape one field along.
+///
+/// The plan grants a read of `Cargo.toml` and nothing else. The turn after the
+/// resume reads `src/serve.rs`, which the policy file grants and the plan does
+/// not. Reading rather than writing on purpose: this test's failure mode is a
+/// call that *goes through*, and the one that goes through must not be able to
+/// edit the checkout.
+#[tokio::test]
+async fn a_resumed_session_is_still_held_by_the_plan_its_job_was_approved_with() {
+    let dir = std::env::temp_dir().join(format!("luu-resume-narrowed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let db = dir.join("sessions.db");
+
+    // One session, one approval, and nothing after it: the job is open and the
+    // plan is what holds it when the process goes away.
+    let first = server_storing(vec![PLAN_FOR_CARGO_TOML.into()], &db).await;
+    {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{first}/ws"))
+            .await
+            .expect("the websocket handshake");
+        assert_eq!(next_message(&mut socket).await["type"], "hello");
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": "read the manifest"}),
+        )
+        .await;
+        until(&mut socket, "plan_proposed").await;
+        send(&mut socket, serde_json::json!({"type": "approve_plan"})).await;
+        until(&mut socket, "job_approved").await;
+    }
+
+    // A second server, same store, nothing else shared.
+    let second = server_storing(
+        vec![
+            READS_SERVE_RS.into(),
+            "I was not approved to read that.".into(),
+        ],
+        &db,
+    )
+    .await;
+    let listed = get(&second, "/api/sessions").await;
+    let id = listed
+        .as_array()
+        .expect("a listing")
+        .iter()
+        .find(|row| row["id"] != "live")
+        .expect("the session the first server ran")["id"]
+        .as_str()
+        .expect("its id")
+        .to_string();
+    let resumed = post(&second, &format!("/api/sessions/{id}/resume")).await;
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK, "resuming {id}");
+
+    let live = get(&second, "/api/sessions/live").await;
+    assert_eq!(
+        live["jobs"][1]["state"], "open",
+        "the approved job has to still be open, or this test proves nothing",
+    );
+
+    {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{second}/ws"))
+            .await
+            .expect("the websocket handshake");
+        assert_eq!(next_message(&mut socket).await["type"], "hello");
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": "now read something else"}),
+        )
+        .await;
+
+        let (result, _) = until(&mut socket, "tool_result").await;
+        assert_eq!(result["name"], "read_file");
+        assert_eq!(
+            result["verdict"]["allowed"], false,
+            "the resume handed the job back the policy file: {}",
+            result["verdict"]["rule"],
+        );
+        assert!(
+            result["verdict"]["rule"]
+                .as_str()
+                .expect("a rule")
+                .contains("the approved plan for job 2"),
+            "and it has to be the plan that refused, not the floor: {}",
+            result["verdict"]["rule"],
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A resumed session's turns get their code back, and get it on the turn that
