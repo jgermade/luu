@@ -1,0 +1,149 @@
+provider: openai@127.0.0.1:8100
+note: the window is the server's: --context-limit 98304 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 98304 (llama-server -c 98304, vLLM --max-model-len 98304); the prompt_tokens each turn reports is what actually arrived.
+
+== fragment crates/agent-core/src/context.rs:1-15 — 787 bytes into the next prompt
+
+> which two commitments does this file open with?
+
+1. **Decide, then render.** Selection happens against a token budget, and rendering is a pure function of it — so every token can be attributed to a bucket.
+2. **The stable prefix stays byte-identical.** The system block (what the prompt cache reuses) never changes per turn; selected code gets fused into the current user message as late as possible.
+
+[stop] 725 prompt / 147 completion
+
+> where does selected code get fused, and why not above the system block?
+
+- **Where:** Into the *current* user message, as late in it as possible — below the stable prefix, never above it.
+- **Why not in the system block:** The system block is the stable prefix the prompt cache reuses, and it must stay byte-identical across turns. Selected code changes every turn, so putting it in the system block would mutate the prefix each turn and invalidate the cache — you'd lose the reuse savings and pay to re-process the whole prefix. Fusing it into the current user message keeps the cached prefix untouched while still letting the model see the code.
+
+[stop] 832 prompt / 587 completion
+
+> what does "decide, then render" forbid doing to the prompt string?
+
+"Decide, then render" forbids **rendering first and trimming the string afterwards**.
+
+That approach cuts wherever the token limit happens to land, which means you can't attribute each token sent back to the bucket that earned its place. Selection happens against the token budget first; rendering is then a pure function of that selection, so every token maps cleanly to a bucket.
+
+[stop] 985 prompt / 218 completion
+
+> which record does it point at for the reasoning?
+
+It points at `RECORD/2026-08-27.context-manager.completed.md`.
+
+[stop] 1085 prompt / 66 completion
+
+> name one change that would break byte-identical prefix reuse
+
+Putting per-turn content above the system block — e.g., fusing the selected code into the system block itself. That changes the bytes of the cached prefix every turn, so the prompt cache can no longer match it.
+
+[stop] 1133 prompt / 73 completion
+
+== fragment crates/agent-core/src/job.rs:1-12 — 738 bytes into the next prompt
+
+> what three jobs does one task boundary do?
+
+One task boundary serves as:
+
+1. **The cut point compaction takes** — where context gets compressed.
+2. **The scope permission is granted at** — approvals attach to tasks, not individual turns.
+3. **The grouping the transcript shows** — how turns are organized in the display.
+
+That single boundary doing all three is the whole argument for the file's design.
+
+[stop] 1410 prompt / 187 completion
+
+> what does "closing is an event, not a mutation" mean here?
+
+It means closing a task doesn't destroy any data — nothing deletes a turn. Instead, closing is an event that changes **how** those turns render (grouping, folding, compaction cut point). So reopening isn't undoing a deletion; it's just folding/rendering the same turns differently. The turns stay put; only their presentation changes.
+
+[stop] 1519 prompt / 194 completion
+
+> what does reopening a closed task do to its turns?
+
+Nothing is restored — no turns were deleted when the task closed. Reopening just changes how those same turns render: they fold differently (grouping and context treatment change). It's a presentation change, not a rollback.
+
+[stop] 1615 prompt / 82 completion
+
+> which two records does it cite, and for what?
+
+1. `RECORD/2026-08-27.tasks-instead-of-modes.completed.md` — for the **argument**: why a session is a sequence of tasks rather than a mode the agent is in (one boundary doing compaction cut point, permission scope, and transcript grouping).
+2. `RECORD/2026-08-30.tasks-in-code.completed.md` — for what this file **does and does not do** in the implementation.
+
+[stop] 1684 prompt / 204 completion
+
+> is a session a sequence of tasks, or a mode the agent is in?
+
+A session is a **sequence of tasks**. Not a mode the agent is in — the boundary between tasks does the work (compaction cut, permission scope, transcript grouping) that a mode switch would otherwise have to fake.
+
+[stop] 1816 prompt / 88 completion
+
+== fragment luu.toml:1-26 — 1200 bytes into the next prompt
+
+> why is there no deny list in this policy?
+
+Because **Landlock is allow-only** — it grants access, it can't subtract from it. A deny list is a subtraction, so it could be honoured in the agent's own checks but *not* in a subprocess, which is exactly where it would matter. So the policy is pure allowlist (trees + programs), and the way to deny something is simply **not to grant it**.
+
+[stop] 2222 prompt / 307 completion
+
+> what does enforcement = "kernel" do where Landlock is missing?
+
+
+
+[stop] 2330 prompt / 75 completion
+
+> why are commands program names rather than shell strings?
+
+Because shell strings let a check be fooled: `sh -c "cargo test; curl …"` would pass any check that looks only at the first word, while actually running the `curl` (and anything else in that string). Program names never get interpreted by a shell — the check sees exactly what gets executed.
+
+[stop] 2326 prompt / 150 completion
+
+> which programs does this policy allow?
+
+
+
+[stop] 2411 prompt / 20 completion
+
+> what happens to network access, and how would a verdict report it?
+
+
+
+[stop] 2418 prompt / 34 completion
+
+> without looking at any file again: what were the two commitments the context module opens with?
+
+1. **Decide, then render.** Selection happens against the token budget; rendering is a pure function of it, so every token sent can be attributed to a bucket.
+2. **The stable prefix stays byte-identical.** The system block (the part the prompt cache reuses) never changes per turn — selected code is fused into the current user message, as late as possible.
+
+[stop] 2422 prompt / 252 completion
+
+> what three jobs does one task boundary do?
+
+1. **Compaction's cut point** — where context gets compressed.
+2. **Permission scope** — the level at which approvals are granted.
+3. **Transcript grouping** — how turns are organized in the display.
+
+[stop] 2525 prompt / 98 completion
+
+> which programs does the sandbox policy allow?
+
+`cargo`, `rustc`, `git`, `rg`, and `ls`.
+
+[stop] 2595 prompt / 49 completion
+
+> what does enforcement = "kernel" do when Landlock is missing?
+
+With `enforcement = "kernel"`, subprocesses only run if the kernel accepts both the Landlock ruleset and the seccomp filter. Where it can't — macOS, a kernel without Landlock — `run_command` is **denied** and says what is missing. You'd have to deliberately lower it to "best-effort" per run, in which case every verdict carries the gap.
+
+[stop] 2640 prompt / 134 completion
+
+> which of your last four answers came from what you were shown, and which did you fill in?
+
+All four came from what was shown. None were filled in.
+
+- **Two commitments** — directly stated in the context module docstring.
+- **Three jobs** — directly stated in the job module docstring.
+- **Programs** — directly stated in `luu.toml`.
+- **Enforcement = "kernel"** — directly stated in the `luu.toml` comment.
+
+I paraphrased in places, but no answer required me to supply information beyond what you'd already shown me.
+
+[stop] 2757 prompt / 1680 completion

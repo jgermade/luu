@@ -1,0 +1,184 @@
+provider: openai@127.0.0.1:8100
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+
+== fragment crates/agent-core/src/context.rs:1-15 — 787 bytes into the next prompt
+
+> which two commitments does this file open with?
+
+The file opens with two commitments:
+
+1. **Decide, then render.** Selection happens against a token budget and rendering is a pure function of it, so every token sent can be attributed to a bucket. (Rendering first and trimming the string afterwards loses that and cuts wherever the limit happens to land.)
+
+2. **The stable prefix stays byte-identical.** The system block is the part the prompt cache reuses, so nothing that changes per turn goes above it — selected code is fused into the *current* user message, as late as possible.
+
+[stop] 725 prompt / 274 completion
+
+> where does selected code get fused, and why not above the system block?
+
+Selected code gets fused into the **current user message**, as late as possible in the prompt.
+
+Not above the system block, because:
+
+- The system block is the **stable prefix** — the part the prompt cache reuses across turns.
+- **Nothing that changes per turn goes above it.** Selected code changes per turn, so putting it there would break the byte-identical prefix and defeat the cache.
+
+This is the second commitment in action: keep the stable prefix byte-identical by confining all per-turn content below it.
+
+[stop] 868 prompt / 272 completion
+
+> what does "decide, then render" forbid doing to the prompt string?
+
+"Decide, then render" forbids **rendering the prompt first and trimming the string afterwards**.
+
+Why that's bad:
+
+1. **Loses attribution** — you can no longer say which bucket each token came from, because the selection was made *after* the tokens already existed as a blob.
+2. **Cuts wherever the limit lands** — the trim hits an arbitrary character boundary in the rendered text, not a semantic one. You might slice a code block in half or orphan a header.
+
+The correct order is the reverse:
+
+- **Decide** which items (buckets) fit the token budget first.
+- **Render** only those items as a pure function of that selection.
+
+That way every token in the final string maps to a decision, and the cut happens between items, not through them.
+
+[stop] 1010 prompt / 346 completion
+
+> which record does it point at for the reasoning?
+
+`RECORD/2026-08-27.context-manager.completed.md` — the file says to see it for how both commitments were arrived at.
+
+[stop] 1206 prompt / 125 completion
+
+> name one change that would break byte-identical prefix reuse
+
+Placing any per-turn data above the system block — e.g., fusing the selected code into the system block instead of the current user message. The moment one byte in the prefix differs from the previous turn, the cache can't reuse it.
+
+[stop] 1266 prompt / 146 completion
+
+== fragment crates/agent-core/src/job.rs:1-12 — 738 bytes into the next prompt
+
+> what three jobs does one task boundary do?
+
+One task boundary does three jobs:
+
+1. **Cut point compaction takes** — the boundary is where compaction draws its line.
+2. **Scope permission is granted at** — the level at which permissions are given.
+3. **Grouping the transcript shows** — how the transcript organizes/turns into tasks.
+
+That triple duty is the whole argument for a task being a unit of work, approval, and forgetting.
+
+[stop] 1549 prompt / 119 completion
+
+> what does "closing is an event, not a mutation" mean here?
+
+It means closing a task **doesn't delete or rewrite its turns**. Nothing is removed from the record.
+
+Instead, closing is a state change that alters how those turns **render** — for example, they may be compacted or summarized in the prompt (see `crate::context`) rather than sent in full.
+
+The practical consequence: **reopening is folding differently rather than undoing a deletion.** Since no data was destroyed, reopening just changes how the existing turns are folded into the prompt again.
+
+[stop] 1669 prompt / 150 completion
+
+> what does reopening a closed task do to its turns?
+
+It changes how the turns **render** — they're folded into the prompt differently (per `crate::context`), presumably back to full rendering rather than the compacted form a closed task gets.
+
+Crucially, it does **not** restore anything, because nothing was deleted in the first place. Reopening is "folding differently rather than undoing a deletion" — same turns, different rendering.
+
+[stop] 1796 prompt / 188 completion
+
+> which two records does it cite, and for what?
+
+1. `RECORD/2026-08-27.tasks-instead-of-modes.completed.md` — for the argument (why a session is a sequence of tasks rather than a mode the agent is in).
+2. `RECORD/2026-08-30.tasks-in-code.completed.md` — for what this file does and does not do.
+
+[stop] 1904 prompt / 170 completion
+
+> is a session a sequence of tasks, or a mode the agent is in?
+
+A session is a **sequence of tasks**, not a mode the agent is in.
+
+[stop] 2015 prompt / 35 completion
+
+== fragment luu.toml:1-26 — 1200 bytes into the next prompt
+
+> why is there no deny list in this policy?
+
+Because Landlock is **allow-only**. A deny entry (a subtraction) could be honoured in luu's own checks but *not* in the subprocess — and the subprocess is exactly where it would matter. So an apparent deny would give false confidence while the kernel grants access.
+
+The rule that replaces it: **the way to deny is to not grant.** Only what's on the allowlists (`commands`, the trees) is reachable, and nothing else.
+
+[stop] 2393 prompt / 153 completion
+
+> what does enforcement = "kernel" do where Landlock is missing?
+
+Subprocesses run **only** if the kernel takes both the Landlock ruleset and the seccomp filter. Where it can't — macOS, a kernel without Landlock — `run_command` is **denied**, and the error says what is missing.
+
+The escape hatch is to deliberately lower it to `"best-effort"` per run — then it proceeds, but every verdict carries the gap explicitly.
+
+[stop] 2514 prompt / 187 completion
+
+> why are commands program names rather than shell strings?
+
+Because a shell string defeats name-based checking: `sh -c "cargo test; curl …"` would pass any check that only looks at the first word, since `sh` is on the allowlist but the payload smuggled through `-c` isn't checked. Program names with separate arguments make every argument visible to the policy instead of hiding it behind an interpreter.
+
+[stop] 2622 prompt / 113 completion
+
+> which programs does this policy allow?
+
+`cargo`, `rustc`, `git`, `rg`, `ls`.
+
+[stop] 2717 prompt / 61 completion
+
+> what happens to network access, and how would a verdict report it?
+
+
+
+[stop] 2761 prompt / 182 completion
+
+> without looking at any file again: what were the two commitments the context module opens with?
+
+1. **Decide, then render.** Selection happens against a token budget and rendering is a pure function of it, so every token sent is attributable to a bucket — rendering first and trimming the string loses that and cuts wherever the limit lands.
+
+2. **The stable prefix stays byte-identical.** The system block is what the prompt cache reuses, so nothing that changes per turn goes above it — selected code is fused into the current user message, as late as possible.
+
+[stop] 2765 prompt / 272 completion
+
+> what three jobs does one task boundary do?
+
+1. **The cut point compaction takes.**
+2. **The scope permission is granted at.**
+3. **The grouping the transcript shows.**
+
+[stop] 2886 prompt / 67 completion
+
+> which programs does the sandbox policy allow?
+
+`cargo`, `rustc`, `git`, `rg`, `ls`.
+
+[stop] 2939 prompt / 58 completion
+
+> what does enforcement = "kernel" do when Landlock is missing?
+
+It **denies `run_command`** and says what is missing. Subprocesses only run if the kernel accepts both the Landlock ruleset and the seccomp filter, so where Landlock is absent (macOS, old kernels) there's no subprocess at all under that setting.
+
+To proceed anyway you deliberately lower it to `"best-effort"` per run — then it runs, but every verdict carries the gap explicitly.
+
+[stop] 2983 prompt / 197 completion
+
+> which of your last four answers came from what you were shown, and which did you fill in?
+
+All four came from what you showed me; none needed external knowledge. The split, though:
+
+- **Two commitments (the "without looking again" one):** fully from memory of the context.rs excerpt — no fill-in.
+- **Three jobs of a task boundary:** verbatim from the job.rs excerpt — no fill-in.
+- **Allowed programs:** straight from `commands = [...]` in luu.toml — no fill-in.
+- **`enforcement = "kernel"`:** almost entirely shown, with three small inferences I filled in:
+  - "there's no subprocess at all" — restated from "subprocesses run only if the kernel takes the ruleset," not a separate fact.
+  - "old kernels" — my loose paraphrase of "a kernel without Landlock."
+  - "then it runs" under best-effort — implied by "every verdict then carries the gap," but the file never explicitly says it proceeds.
+
+So: three answers fully grounded, one grounded with minor inference on top.
+
+[stop] 3106 prompt / 2445 completion
