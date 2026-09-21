@@ -22,7 +22,9 @@ use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
 use crate::auth::Auth;
-use crate::session::{Agency, Event, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered};
+use crate::session::{
+    Agency, Event, PLAN_OVER_DRAFT, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered,
+};
 use crate::store::SessionStore;
 use crate::workspace;
 use anyhow::{Context, Result};
@@ -83,9 +85,18 @@ struct Session {
 /// call is long gone. Inventing one to give the gate something to release would
 /// put words in a person's mouth, so approving such a job opens it and starts
 /// nothing — the next prompt is a turn inside it.
+/// The one plan on the table, while a person decides.
+///
+/// It holds **no job id and no held prompt**, and both absences are the shape
+/// rather than a simplification. A proposal is offered inside the open draft
+/// and an id is what approval hands out, so there is nothing to name until it
+/// is answered; and no prompt is held any more, because a prompt runs in the
+/// draft the moment it arrives. See
+/// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md` §third.
 struct Pending {
-    job: JobId,
-    prompt: Option<String>,
+    objective: String,
+    plan: Plan,
+    source: PlanSource,
 }
 
 /// The id the live session is served under. There is one until sessions are
@@ -761,6 +772,13 @@ fn is_checkpoint(event: &Event) -> bool {
             message,
             ServerMessage::Ended { .. }
                 | ServerMessage::Failed { .. }
+                // The alternation's own three. A draft opening and a plan
+                // reaching the table are both moments the session's shape
+                // changed, and a server that died between a proposal and the
+                // next turn used to come back with the question gone.
+                | ServerMessage::DraftOpened { .. }
+                | ServerMessage::PlanProposed { .. }
+                | ServerMessage::PlanDeclined
                 | ServerMessage::JobProposed { .. }
                 | ServerMessage::JobApproved { .. }
                 | ServerMessage::JobClosed { .. }
@@ -1274,7 +1292,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 let _ = cancel.send(true);
             }
         }
-        ClientMessage::ApproveJob {
+        ClientMessage::ApprovePlan {
             job,
             files,
             writes,
@@ -1285,7 +1303,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             egress,
             signature,
         } => {
-            approve_job(
+            approve_plan(
                 app.clone(),
                 job,
                 files,
@@ -1299,8 +1317,11 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             )
             .await;
         }
-        ClientMessage::RejectJob { job } => {
-            reject_job(app.clone(), job).await;
+        ClientMessage::DeclinePlan => {
+            decline_plan(app.clone()).await;
+        }
+        ClientMessage::RequestPlan => {
+            request_plan(app.clone()).await;
         }
         ClientMessage::CloseJob { job } => {
             close_job(app.clone(), job).await;
@@ -1484,51 +1505,103 @@ async fn refuse(app: &Arc<App>, request: &str, reason: Refusal, detail: impl Int
     .await;
 }
 
-/// A prompt either starts a job or belongs to one.
+/// A prompt always belongs to a job, and runs.
 ///
-/// The gate is here and nowhere else: with no job open, the prompt buys a
-/// planning call and is then held until a person answers it. With one open, it
-/// is a turn inside work that was already approved — confirmation is per piece
-/// of work, not per message.
+/// **The gate is no longer here.** Before item 22 a prompt with nothing open
+/// bought a planning call and was then held until a person answered it; under
+/// the alternation there is always a job to land in — a draft, if nothing else
+/// is open — so the prompt runs, and the gate is opened by
+/// [`request_plan`] or by the model suggesting one. See
+/// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md` §third.
 async fn on_prompt(app: Arc<App>, prompt: String) {
-    let propose = {
+    // A prompt arriving while a plan is on the table **is** the answer *more
+    // changes*, which is the same answer as decline: the person is typing the
+    // change they want instead of pressing a button. Refusing it here would be
+    // the old `Pending` refusal outliving the held prompt it protected, and
+    // making somebody approve a plan before they may speak is the gate running
+    // the conversation.
+    let declined = {
+        let mut session = app.session.lock().await;
+        match session.pending.take() {
+            Some(pending) => {
+                session
+                    .context
+                    .decline_plan(pending.objective, pending.plan, pending.source);
+                true
+            }
+            None => false,
+        }
+    };
+    if declined {
+        app.publish(Event::Protocol(ServerMessage::PlanDeclined))
+            .await;
+    }
+
+    start_turn(app, prompt).await;
+}
+
+/// Asks the agent for a plan over the draft as it stands.
+///
+/// **The explicit door**, beside the model's own suggestion, and the reason the
+/// automatic one could be retired. The planning call is a turn: a prompt goes
+/// in, tokens come out, it costs a window, and every panel that explains a turn
+/// explains this one too. It is the one turn that is **not** remembered — what
+/// survives it is the plan, and a plan block in the history would be paid for
+/// on every later call.
+///
+/// What changed under the alternation is not the call but **what it reads**. It
+/// used to answer over a held prompt, before anything had been looked at, which
+/// is a 7B's worst case: plan work you have not seen. Now it runs over the open
+/// draft — *the plan is the compaction of the draft* — so it is the call in
+/// this system with the most context rather than the least. Nothing here
+/// measures that; it is a row, not a claim.
+///
+/// It runs through [`run_turn`] rather than the agent loop, so it has no tools:
+/// a planning call that could execute something would be the gate leaking.
+async fn request_plan(app: Arc<App>) {
+    // Nothing to compact, and nothing to plan over. A person who asks for a
+    // plan before saying anything is asking the model to invent the objective,
+    // which is the case the held prompt used to cover and nothing should now.
+    {
         let session = app.session.lock().await;
-        // A second prompt during a confirmation is a second thing nobody
-        // approved. The composer is disabled client-side; this is the half that
-        // does not depend on the client behaving.
-        if let Some(pending) = &session.pending {
-            let job = pending.job;
+        if session.pending.is_some() {
             drop(session);
             refuse(
                 &app,
-                "prompt",
+                "request_plan",
                 Refusal::Pending,
-                format!("job {job} is waiting to be approved or refused"),
+                "a plan is already on the table",
             )
             .await;
             return;
         }
-        session.context.live_job().is_none()
+        if session.context.current_job().is_none() {
+            drop(session);
+            refuse(
+                &app,
+                "request_plan",
+                Refusal::Job,
+                "nothing has been asked yet, so there is no draft to plan over",
+            )
+            .await;
+            return;
+        }
+    }
+
+    // The objective of the draft being compacted, which is what the plan is
+    // called if the model does not name one of its own.
+    let objective = {
+        let session = app.session.lock().await;
+        session
+            .context
+            .current_job()
+            .and_then(|job| session.context.job(job))
+            .map(|job| job.objective.clone())
+            .unwrap_or_default()
     };
 
-    match propose {
-        true => propose_job(app, prompt).await,
-        false => start_turn(app, prompt).await,
-    }
-}
-
-/// Asks the agent what it is about to do, then holds the prompt until someone
-/// answers.
-///
-/// The planning call is a turn: a prompt goes in, tokens come out, it costs a
-/// window, and every panel that explains a turn explains this one too. It is
-/// the one turn that is **not** remembered — what survives it is the job, and
-/// a plan block in the history would be paid for on every later call.
-///
-/// It runs through [`run_turn`] rather than the agent loop, so it has no tools:
-/// a planning call that could execute something would be the gate leaking.
-async fn propose_job(app: Arc<App>, prompt: String) {
-    let Some((turn, cancel_rx, request, _code)) = begin_turn(&app, &prompt, Some(PLANNING)).await
+    let Some((turn, cancel_rx, request, _code)) =
+        begin_turn(&app, PLAN_OVER_DRAFT, Some(PLANNING)).await
     else {
         return;
     };
@@ -1562,8 +1635,9 @@ async fn propose_job(app: Arc<App>, prompt: String) {
         }
 
         // A small model answering in prose is the ordinary case, and it must
-        // not cost the gate. Then the proposal is the ask itself, declaring
-        // nothing, and the panel says the model did not declare a plan.
+        // not cost the gate. Then the proposal is the draft's own objective,
+        // declaring nothing, and the panel says the model did not declare a
+        // plan.
         //
         // Which of the two happened travels with the proposal. It is the gate's
         // headline number — how often a 7B plans at all — and the panel used to
@@ -1573,36 +1647,64 @@ async fn propose_job(app: Arc<App>, prompt: String) {
             Some(proposal) => (proposal, PlanSource::Model),
             None => (
                 Proposal {
-                    objective: prompt.clone(),
+                    objective: objective.clone(),
                     plan: Plan::default(),
                 },
                 PlanSource::Prose,
             ),
         };
 
-        let job = {
-            let mut session = app.session.lock().await;
-            let job = session
-                .context
-                .propose_job(proposal.objective.clone(), proposal.plan.clone());
-            session.pending = Some(Pending {
-                job,
-                prompt: Some(prompt),
-            });
-            job
-        };
-        app.publish(Event::Protocol(ServerMessage::JobProposed {
-            job,
-            objective: proposal.objective,
-            plan: proposal.plan,
-            source: Some(source),
-        }))
-        .await;
+        offer(&app, proposal, source).await;
     });
 }
 
-/// Approves it — with whatever the person added to the plan — and runs the
-/// prompt that was held.
+/// Puts a plan on the table, from either door.
+///
+/// One function because the two doors differ only in what produced the plan,
+/// and the thing a person then sees must not: a plan the model volunteered and
+/// a plan somebody asked for are answered by the same two buttons, and
+/// `PlanSource` is where the difference is recorded.
+async fn offer(app: &Arc<App>, proposal: Proposal, source: PlanSource) {
+    {
+        let mut session = app.session.lock().await;
+        // Nothing to offer inside. A suggestion that arrives after the draft
+        // closed belongs to no draft, and a second one while a plan is already
+        // up would replace a question a person is in the middle of answering.
+        //
+        // And a plan job is not a draft: work that was approved does not get to
+        // propose more of itself. A model that emits a plan block mid-job is
+        // answering in the format it was taught, not asking for anything, and
+        // putting that in front of a person as a gate would make the gate
+        // meaningless by firing where nothing was decided.
+        let drafting = session
+            .context
+            .current_job()
+            .and_then(|job| session.context.job(job))
+            .is_some_and(|job| job.is_draft());
+        if session.pending.is_some() || !drafting {
+            return;
+        }
+        session.pending = Some(Pending {
+            objective: proposal.objective.clone(),
+            plan: proposal.plan.clone(),
+            source,
+        });
+    }
+    app.publish(Event::Protocol(ServerMessage::PlanProposed {
+        objective: proposal.objective,
+        plan: proposal.plan,
+        source: Some(source),
+    }))
+    .await;
+}
+
+/// Approves the plan on the table — with whatever the person added to it —
+/// which **closes the open draft and opens the job that plan describes**.
+///
+/// Approving *is* closing, so this is one transition and not two: the draft
+/// folds here and its summary becomes the new job's context, in the order a
+/// reader wants it — this is what we looked at, this is what we decided, this
+/// is what we are now doing.
 ///
 /// The amendment is checked against the policy file exactly as the model's plan
 /// was: an entry the file does not grant is dropped rather than approved, and
@@ -1610,9 +1712,9 @@ async fn propose_job(app: Arc<App>, prompt: String) {
 /// That is the whole feedback: a client that adds a path nobody may touch sees
 /// it missing from the plan it gets back, rather than being told nothing.
 #[allow(clippy::too_many_arguments)]
-async fn approve_job(
+async fn approve_plan(
     app: Arc<App>,
-    job: JobId,
+    signed_for: Option<JobId>,
     files: Vec<String>,
     writes: Vec<String>,
     commands: Vec<String>,
@@ -1622,9 +1724,52 @@ async fn approve_job(
     egress: Option<Vec<String>>,
     signature: Option<Signature>,
 ) {
-    // Before the state machine, and before anything is held or dropped: an
+    // The id this approval is about to hand out. Computed before the signature
+    // is checked because that is what the signature is bound to: an approval
+    // names no job on the wire any more, but it is still an approval *of* a
+    // particular job in a particular session, and a grant that could be
+    // replayed against a different one is not bound to anything.
+    //
+    // It is the id the approval will assign, not one that exists: closing the
+    // draft does not add a job, so nothing between here and the push can move
+    // it.
+    let job = {
+        let session = app.session.lock().await;
+        match session.pending.is_some() {
+            true => session.context.next_job_id(),
+            false => {
+                drop(session);
+                refuse(
+                    &app,
+                    "approve_plan",
+                    Refusal::Job,
+                    "no plan is on the table",
+                )
+                .await;
+                return;
+            }
+        }
+    };
+    // A signature is bound to a job id, so a client that signed for a different
+    // one signed for something this session is not about to open — which is the
+    // replay the binding exists to prevent. Checked before the signature rather
+    // than inside it, so the refusal says which of the two went wrong.
+    if let Some(signed_for) = signed_for
+        && signed_for != job
+    {
+        refuse(
+            &app,
+            "approve_plan",
+            Refusal::Job,
+            format!("approval names job {signed_for}; the next job is {job}"),
+        )
+        .await;
+        return;
+    }
+
+    // Before the state machine, and before anything is closed or opened: an
     // approval nobody can prove the authorship of is not an approval, and the
-    // job stays exactly as it was.
+    // draft stays exactly as it was.
     let approved_by = {
         let session = app.session_id.lock().await;
         let approval = Approval {
@@ -1645,7 +1790,7 @@ async fn approve_job(
         Err(error) => {
             refuse(
                 &app,
-                "approve_job",
+                "approve_plan",
                 Refusal::Signature,
                 format!("job {job}: {error}"),
             )
@@ -1656,12 +1801,11 @@ async fn approve_job(
 
     let approved = {
         let mut session = app.session.lock().await;
-        // Nothing can be running here — a prompt behind the gate is refused, so
-        // the planning turn is the last one there was. Checked anyway, because
-        // the alternative to being wrong about it is a held prompt taken out of
-        // `pending` and then silently dropped by a turn that could not start.
-        match session.current.is_none() && session.pending.as_ref().is_some_and(|p| p.job == job) {
+        // Nothing may be running: approving mid-turn would fold a draft out
+        // from under a turn that is still writing into it.
+        match session.current.is_none() && session.pending.is_some() {
             true => {
+                let pending = session.pending.take().expect("checked just above");
                 let (granted, mut dropped) = permitted(
                     &app.agency().await.sandbox,
                     files,
@@ -1677,47 +1821,75 @@ async fn approve_job(
                 // they are adding in the same breath.
                 let (closes_on, refused) = closing_condition(
                     &app.agency().await.sandbox,
-                    session.context.job(job).map(|t| &t.plan),
+                    Some(&pending.plan),
                     &granted,
                     closes_on,
                 );
                 dropped.extend(refused);
-                let plan = session
-                    .context
-                    .amend_plan(
-                        job,
-                        &granted.files,
-                        &granted.writes,
-                        &granted.commands,
-                        closes_on.as_deref(),
-                        network.map(|_| granted.network),
-                        Some(&granted.egress),
-                        granted.enforcement,
-                    )
-                    .unwrap_or_default();
-                session.context.approve_job(job, approved_by.clone());
-                session
-                    .pending
-                    .take()
-                    .map(|pending| (pending.prompt, plan, dropped))
+                // Amended on the proposal itself rather than through the
+                // context: the plan is not stored anywhere until the approval
+                // stores it, which is what *an id is what approval hands out*
+                // costs and buys.
+                let mut plan = pending.plan.clone();
+                plan.amend(
+                    &granted.files,
+                    &granted.writes,
+                    &granted.commands,
+                    closes_on.as_deref(),
+                    network.map(|_| granted.network),
+                    Some(&granted.egress),
+                    granted.enforcement,
+                );
+                let counter = app.destination().await.counter.clone();
+                let approved = session.context.approve_plan(
+                    pending.objective.clone(),
+                    pending.plan,
+                    plan.clone(),
+                    pending.source,
+                    approved_by.clone(),
+                    counter.as_ref(),
+                );
+                debug_assert_eq!(approved.job, job, "the signature is bound to this id");
+                // The draft's own sandbox was never narrowed, so there is
+                // nothing to drop here — the narrowing below is the first one
+                // this pair of jobs has had.
+                Some((approved, pending.objective, plan, dropped))
             }
-            // An approval for something else, or for a second time. Not an
-            // error — two clients watching the same session can both press it —
-            // but not silence either: the second one's button did nothing and
-            // this is what says so.
+            // An approval for something that is no longer on the table, or a
+            // second one. Not an error — two clients watching the same session
+            // can both press it — but not silence either: the second one's
+            // button did nothing and this is what says so.
             false => None,
         }
     };
-    let Some((prompt, plan, dropped)) = approved else {
+    let Some((approved, objective, plan, dropped)) = approved else {
         refuse(
             &app,
-            "approve_job",
+            "approve_plan",
             Refusal::Job,
-            format!("job {job} is not waiting to be approved"),
+            "no plan is on the table, or a turn is running",
         )
         .await;
         return;
     };
+
+    // The draft closed on the way in, and its fold is announced before the job
+    // it opened: the two messages are one transition and a client that drew
+    // them the other way round would show work starting inside a draft that is
+    // still open.
+    if let Some((draft, summary)) = approved.folded.clone() {
+        let replaced = {
+            let session = app.session.lock().await;
+            session.context.replaced_by(draft)
+        };
+        app.publish(Event::Protocol(ServerMessage::JobClosed {
+            job: draft,
+            summary,
+            by: Some(ClosedBy::User),
+            replaced,
+        }))
+        .await;
+    }
 
     // What the person added that the policy file does not grant. It was left
     // out of the plan, and until now that was the whole feedback: a path
@@ -1725,7 +1897,7 @@ async fn approve_job(
     if !dropped.is_empty() {
         refuse(
             &app,
-            "approve_job",
+            "approve_plan",
             Refusal::NotGranted,
             format!(
                 "approved without what the sandbox policy does not grant: {}",
@@ -1756,16 +1928,15 @@ async fn approve_job(
 
     app.publish(Event::Protocol(ServerMessage::JobApproved {
         job,
+        from: approved.folded.map(|(draft, _)| draft),
+        objective,
         plan,
         approved_by: Some(approved_by),
     }))
     .await;
-    // A proposal restored by a resume has no held prompt — the process that
-    // took it is gone. Approving it opens the job, and the next prompt is a
-    // turn inside work that has now been approved.
-    if let Some(prompt) = prompt {
-        start_turn(app, prompt).await;
-    }
+    // No held prompt to run. The work starts on the next prompt, which lands in
+    // the job this approval just opened — and the draft that preceded it is
+    // already a summary by then.
 }
 
 /// The half of an amendment the policy file grants, and the half it does not —
@@ -1902,26 +2073,35 @@ fn closing_condition(
     }
 }
 
-/// Refuses it. The held prompt goes with it: a prompt whose plan was turned
-/// down is not a prompt that was approved on its own.
-async fn reject_job(app: Arc<App>, job: JobId) {
+/// Turns down the plan on the table. **Nothing closes and nothing folds.**
+///
+/// *Decline* and *more changes* are the same answer — not yet — and both keep
+/// you in the job you are in, which under the alternation is the draft the plan
+/// was offered inside. The held prompt that this used to drop on the floor does
+/// not exist any more: prompts run when they arrive, so there is nothing here
+/// to discard and the conversation simply continues.
+///
+/// The round is kept, because how many times a plan was put up before one was
+/// approved is the number this event exists to produce.
+async fn decline_plan(app: Arc<App>) {
     {
         let mut session = app.session.lock().await;
-        if session.pending.as_ref().is_none_or(|p| p.job != job) {
+        let Some(pending) = session.pending.take() else {
             drop(session);
             refuse(
                 &app,
-                "reject_job",
+                "decline_plan",
                 Refusal::Job,
-                format!("job {job} is not waiting to be approved"),
+                "no plan is on the table",
             )
             .await;
             return;
-        }
-        session.pending = None;
-        session.context.reject_job(job);
+        };
+        session
+            .context
+            .decline_plan(pending.objective, pending.plan, pending.source);
     }
-    app.publish(Event::Protocol(ServerMessage::JobRejected { job }))
+    app.publish(Event::Protocol(ServerMessage::PlanDeclined))
         .await;
 }
 
@@ -1942,11 +2122,27 @@ async fn close_job(app: Arc<App>, job: JobId) {
             .await;
             return;
         }
+        // Not while a plan is on the table either. The proposal was offered
+        // *inside* the open draft, and closing that draft would take the gate
+        // off the screen with the question still up — the same defect the old
+        // shape had one state along, where closing a proposal left the session
+        // with a held prompt and no way to answer it.
+        if session.pending.is_some() && session.context.current_job() == Some(job) {
+            drop(session);
+            refuse(
+                &app,
+                "close_job",
+                Refusal::Pending,
+                format!("a plan is on the table, offered inside job {job}"),
+            )
+            .await;
+            return;
+        }
         let counter = app.destination().await.counter.clone();
         let summary = session.context.close_job(job, counter.as_ref());
         // The job's sandbox goes with the job. Outside one, the policy file
-        // is the whole answer again — and the next prompt proposes a new job
-        // before it runs anything.
+        // is the whole answer again — and the next prompt opens a draft under
+        // it, which is where the alternation picks up.
         if summary.is_some() && session.narrowed.as_ref().is_some_and(|(id, _)| *id == job) {
             session.narrowed = None;
         }
@@ -1973,7 +2169,6 @@ async fn close_job(app: Arc<App>, job: JobId) {
     .await;
 }
 
-/// Unfolds it. Nothing is recovered, because nothing was deleted.
 async fn reopen_job(app: Arc<App>, job: JobId) {
     // Taken before the session lock, because the two are never held in the same
     // order anywhere else either.
@@ -2006,7 +2201,10 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
         // remembered: the sandbox is a resolution of the plan, and the plan is
         // what the session keeps.
         let agency = reopening;
-        let plan = session.context.job(job).map(|job| job.plan.clone());
+        // A draft has no plan and therefore no narrowing — reopening one puts
+        // its turns back in the window verbatim and changes nothing about what
+        // may be touched, which is the invariant this whole item is held to.
+        let plan = session.context.job(job).and_then(|job| job.plan.clone());
         session.narrowed = plan
             .and_then(|plan| plan.narrow(agency.sandbox.as_ref(), job).ok())
             .map(|sandbox| (job, Arc::new(sandbox)));
@@ -2364,6 +2562,19 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         .await;
         let _ = forwarder.await;
 
+        // Read before the turn is pushed, because pushing it is what opens a
+        // draft when nothing is open — and the message that announces one has
+        // to be able to tell the two apart.
+        let opened_before = {
+            let session = app.session.lock().await;
+            session.context.current_job()
+        };
+        // Kept for the suggestion check below, which runs after the lock is
+        // dropped: a plan block the model volunteered is a proposal, and
+        // parsing it under the session lock would parse it for nothing on every
+        // turn that has none.
+        let answered = outcome.text.clone();
+
         let closed = {
             let mut session = app.session.lock().await;
             // A cancelled turn keeps its partial answer: the user saw it, so
@@ -2401,6 +2612,30 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             closed.map(|(job, summary)| (job, summary, session.context.replaced_by(job)))
         };
 
+        // The draft this turn opened, if it opened one. Announced *after* the
+        // turn rather than before it because a draft opens by receiving a turn:
+        // there is nothing to announce until one has landed, and a turn that
+        // produced nothing at all never pushed and never opened one.
+        let drafted = {
+            let session = app.session.lock().await;
+            match session.context.current_job() {
+                Some(job) if Some(job) != opened_before => session
+                    .context
+                    .job(job)
+                    .filter(|job| job.is_draft())
+                    .map(|job| (job.id, job.objective.clone())),
+                _ => None,
+            }
+        };
+        if let Some((job, objective)) = drafted {
+            app.publish(Event::Protocol(ServerMessage::DraftOpened {
+                job,
+                turn,
+                objective,
+            }))
+            .await;
+        }
+
         if let Some((job, summary, replaced)) = closed {
             app.publish(Event::Protocol(ServerMessage::JobClosed {
                 job,
@@ -2410,19 +2645,41 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             }))
             .await;
         }
+
+        // **The model's own door to the gate.** An ordinary draft turn whose
+        // answer carries a plan block is a suggestion, and it reaches the
+        // person as exactly what `request_plan` would have produced — same
+        // message, same two buttons. What differs is recorded where it belongs:
+        // `PlanSource::Model` on a plan nobody asked for.
+        //
+        // Nothing is approved by it and nothing runs under it. A suggestion is
+        // the model asking to be let through the gate, which is the opposite of
+        // opening it. `offer` drops it if a plan is already on the table or the
+        // draft has closed since.
+        if let Some(proposal) = parse_plan(&answered) {
+            offer(&app, proposal, PlanSource::Model).await;
+        }
     });
 }
 
-/// The job a resumed session has to be held at, if there is one.
+/// The plan a resumed session comes back holding, if a person never answered it.
 ///
-/// The *last* one, not any one: ids are handed out by position and a proposal
-/// that was refused or approved long ago is answered. Only a trailing proposal
-/// is a question still waiting on a person.
-fn pending_proposal(view: &SessionView) -> Option<JobId> {
-    view.jobs
+/// The *last* round, not any one, and only while nothing has answered it: a
+/// proposal refused or approved long ago is answered, and only a trailing
+/// unanswered one is a question still waiting on a person.
+///
+/// It is read out of the rounds rather than out of the jobs because that is
+/// where a proposal lives now — it never was a job, and under the alternation
+/// it never becomes one unless it is approved.
+fn pending_proposal(view: &SessionView) -> Option<Pending> {
+    view.rounds
         .last()
-        .filter(|job| job.state == agent_core::job::JobState::Proposed)
-        .map(|job| job.id)
+        .filter(|round| round.answer.is_none())
+        .map(|round| Pending {
+            objective: round.objective.clone(),
+            plan: round.plan.clone(),
+            source: round.source,
+        })
 }
 
 /// Strips the `.json` a static mirror needs, so both spellings reach one handler.
@@ -3701,7 +3958,7 @@ async fn resume_session(
         // Without this the job sat in `proposed` with nothing holding it, and
         // the next prompt quietly proposed a second one beside it — a question
         // nobody answered, and a second one asked over it.
-        session.pending = pending_proposal(&loaded_view).map(|job| Pending { job, prompt: None });
+        session.pending = pending_proposal(&loaded_view);
         session.narrowed = None;
     }
 
@@ -4591,161 +4848,228 @@ mod tests {
         false
     }
 
+    /// A helper for the tests below: the gate's approval, which names no job
+    /// and whose one `Option` is the id it is about to hand out.
+    async fn approve(app: &Arc<App>) {
+        approve_plan(
+            app.clone(),
+            None,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+    }
+
+    /// The change a person can observe, in one test: a prompt with nothing open
+    /// **runs**, in the draft it opens, instead of buying a planning call and
+    /// waiting behind the gate.
     #[tokio::test]
-    async fn a_prompt_with_no_task_open_is_planned_and_then_held() {
-        let app = app(&[PLAN, "the answer"]);
+    async fn a_prompt_with_nothing_open_runs_in_the_draft_it_opens() {
+        let app = app(&["looked around"]);
+        on_prompt(app.clone(), "have a look".into()).await;
+        assert!(
+            until(&app, |s| s.context.turns().len() == 1).await,
+            "the prompt never ran",
+        );
+
+        let session = app.session.lock().await;
+        assert!(session.pending.is_none(), "nothing was proposed");
+        let job = session.context.job(1).expect("a draft opened");
+        assert!(job.is_draft(), "its objective is known and its plan is not");
+        assert_eq!(job.objective, "have a look");
+        assert_eq!(
+            session.context.turns()[0].job,
+            1,
+            "the turn belongs to the draft it opened",
+        );
+    }
+
+    /// The model's own door. An ordinary draft turn whose answer carries a plan
+    /// block is a suggestion, and it reaches the person as a proposal — nothing
+    /// is approved by it and nothing runs under it.
+    #[tokio::test]
+    async fn a_plan_the_model_suggests_reaches_the_gate() {
+        let app = app(&[PLAN]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
 
         let session = app.session.lock().await;
-        let job = session.context.job(1).unwrap();
-        assert_eq!(job.state, JobState::Proposed);
-        assert_eq!(job.plan.files, ["Cargo.toml"]);
-        assert_eq!(
-            session.context.turns().len(),
-            0,
-            "the planning call is not remembered, and nothing has run under the task",
-        );
-    }
-
-    #[tokio::test]
-    async fn approving_runs_the_prompt_that_was_held() {
-        let app = app(&[PLAN, "the answer"]);
-        on_prompt(app.clone(), "add a flag".into()).await;
-        assert!(until(&app, |s| s.pending.is_some()).await);
-
-        approve_job(
-            app.clone(),
-            1,
-            vec![],
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
-        assert!(
-            until(&app, |s| s.context.turns().len() == 1).await,
-            "the held prompt never ran",
-        );
-
-        let session = app.session.lock().await;
-        assert!(session.pending.is_none());
-        assert_eq!(session.context.job(1).unwrap().state, JobState::Approved);
-        assert_eq!(session.context.turns()[0].prompt, "add a flag");
-        assert_eq!(
-            session.context.turns()[0].job,
-            Some(1),
-            "the turn belongs to the job it was approved under",
-        );
-    }
-
-    #[tokio::test]
-    async fn rejecting_drops_the_prompt_with_the_plan() {
-        let app = app(&[PLAN, "the answer"]);
-        on_prompt(app.clone(), "add a flag".into()).await;
-        assert!(until(&app, |s| s.pending.is_some()).await);
-
-        reject_job(app.clone(), 1).await;
-        let session = app.session.lock().await;
-        assert!(session.pending.is_none());
-        assert_eq!(session.context.job(1).unwrap().state, JobState::Rejected);
-        assert!(
-            session.context.turns().is_empty(),
-            "a prompt whose plan was turned down is not a prompt that was approved on its own",
-        );
-    }
-
-    #[tokio::test]
-    async fn a_second_prompt_behind_the_gate_does_not_run() {
-        let app = app(&[PLAN, "the answer"]);
-        on_prompt(app.clone(), "add a flag".into()).await;
-        assert!(until(&app, |s| s.pending.is_some()).await);
-
-        on_prompt(app.clone(), "and also this".into()).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let session = app.session.lock().await;
-        assert_eq!(
-            session.pending.as_ref().unwrap().prompt.as_deref(),
-            Some("add a flag"),
-        );
-        assert!(session.context.turns().is_empty());
+        let pending = session.pending.as_ref().expect("a plan on the table");
+        assert_eq!(pending.plan.files, ["Cargo.toml"]);
+        assert_eq!(pending.source, PlanSource::Model);
         assert_eq!(
             session.context.jobs().len(),
             1,
-            "a second prompt during a confirmation is a second thing nobody approved",
+            "a suggestion is not a job: the draft is the only one",
         );
+        assert!(session.context.job(1).unwrap().is_draft());
     }
 
+    /// The explicit door, and it plans over the draft rather than over a held
+    /// prompt — the planning call is not remembered, so the draft's turn count
+    /// does not move.
     #[tokio::test]
-    async fn a_prompt_inside_a_live_task_is_a_turn_and_not_another_gate() {
+    async fn request_plan_asks_for_one_over_the_draft() {
+        let app = app(&["looked around", PLAN]);
+        on_prompt(app.clone(), "have a look".into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+
+        request_plan(app.clone()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
+
+        let session = app.session.lock().await;
+        assert_eq!(
+            session.context.turns().len(),
+            1,
+            "the planning call is the one turn that is not remembered",
+        );
+        assert_eq!(session.pending.as_ref().unwrap().plan.files, ["Cargo.toml"]);
+    }
+
+    /// Approving *is* closing: the draft folds and the job the plan describes
+    /// opens, in one action and with the id the approval hands out.
+    #[tokio::test]
+    async fn approving_closes_the_draft_and_opens_the_job() {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_job(
-            app.clone(),
+
+        approve(&app).await;
+        assert!(until(&app, |s| s.context.jobs().len() == 2).await, "no job");
+
+        let session = app.session.lock().await;
+        assert!(session.pending.is_none());
+        let draft = session.context.job(1).unwrap();
+        assert!(draft.is_closed(), "approving closed the draft");
+        assert!(
+            draft
+                .summary
+                .as_ref()
+                .unwrap()
+                .text
+                .starts_with("[draft closed]"),
+            "and a draft's fold says which half of the alternation it is",
+        );
+        let job = session.context.job(2).unwrap();
+        assert!(!job.is_draft(), "the job an approval opens holds the plan");
+        assert_eq!(job.plan.as_ref().unwrap().files, ["Cargo.toml"]);
+        assert_eq!(
+            session.context.current_job(),
+            Some(2),
+            "and the work is what is live now",
+        );
+        assert!(
+            session.narrowed.as_ref().is_some_and(|(id, _)| *id == 2),
+            "the sandbox narrows at the approval, and only there",
+        );
+    }
+
+    /// Declining ends nothing. The prompt this used to drop on the floor does
+    /// not exist any more — the conversation simply continues in the draft.
+    #[tokio::test]
+    async fn declining_keeps_the_draft_open_and_keeps_its_turns() {
+        let app = app(&[PLAN, "still looking"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+
+        decline_plan(app.clone()).await;
+        {
+            let session = app.session.lock().await;
+            assert!(session.pending.is_none());
+            assert_eq!(session.context.jobs().len(), 1, "a refusal opens nothing");
+            assert_eq!(
+                session.context.current_job(),
+                Some(1),
+                "declining keeps you in the job you are in",
+            );
+            assert_eq!(session.context.rounds().len(), 1, "the round is kept");
+        }
+
+        on_prompt(app.clone(), "what about this".into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
+        let session = app.session.lock().await;
+        assert_eq!(
+            session.context.turns()[1].job,
             1,
-            vec![],
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
-        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+            "the conversation continues in the same draft",
+        );
+    }
+
+    /// *More changes* said out loud: a prompt arriving while a plan is on the
+    /// table is the same answer as decline, and it runs.
+    #[tokio::test]
+    async fn a_prompt_while_a_plan_is_on_the_table_is_more_changes() {
+        let app = app(&[PLAN, "adjusted"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+
+        on_prompt(app.clone(), "make it two flags".into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
+
+        let session = app.session.lock().await;
+        assert!(session.pending.is_none(), "the plan came off the table");
+        assert_eq!(
+            session.context.rounds().len(),
+            1,
+            "and it was answered rather than forgotten",
+        );
+        assert_eq!(session.context.jobs().len(), 1, "still the one draft");
+    }
+
+    #[tokio::test]
+    async fn a_prompt_inside_a_live_job_is_a_turn_and_not_another_gate() {
+        let app = app(&[PLAN, "the answer", "and the tests"]);
+        on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve(&app).await;
+        assert!(until(&app, |s| s.context.jobs().len() == 2).await);
 
         on_prompt(app.clone(), "now the tests".into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
         let session = app.session.lock().await;
-        assert_eq!(session.context.jobs().len(), 1, "no second proposal");
-        assert!(session.pending.is_none());
+        assert_eq!(session.context.jobs().len(), 2, "no third job");
+        assert!(session.pending.is_none(), "and no second gate");
+        assert_eq!(
+            session.context.turns()[1].job,
+            2,
+            "it is work, not drafting"
+        );
     }
 
     #[tokio::test]
-    async fn closing_folds_the_task_and_reopening_unfolds_it() {
+    async fn closing_folds_the_job_and_reopening_unfolds_it() {
         let app = app(&[PLAN, "the answer"]);
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_job(
-            app.clone(),
-            1,
-            vec![],
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
-        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+        approve(&app).await;
+        assert!(until(&app, |s| s.context.jobs().len() == 2).await);
+        on_prompt(app.clone(), "do it".into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
-        close_job(app.clone(), 1).await;
+        close_job(app.clone(), 2).await;
         {
             let session = app.session.lock().await;
-            let job = session.context.job(1).unwrap();
+            let job = session.context.job(2).unwrap();
             assert_eq!(job.state, JobState::Closed);
             assert!(job.summary.as_ref().unwrap().text.contains("add a flag"));
             assert_eq!(
                 session.context.turns().len(),
-                1,
-                "closing is an event: the turn is still there",
+                2,
+                "closing is an event: the turns are still there",
             );
         }
 
-        reopen_job(app.clone(), 1).await;
+        reopen_job(app.clone(), 2).await;
         let session = app.session.lock().await;
-        assert_eq!(session.context.job(1).unwrap().state, JobState::Approved);
-        assert!(session.context.job(1).unwrap().summary.is_none());
+        assert_eq!(session.context.job(2).unwrap().state, JobState::Open);
+        assert!(session.context.job(2).unwrap().summary.is_none());
     }
 
     /// The test that would have caught the stale walk, at the seam it was on.
@@ -4794,20 +5118,12 @@ mod tests {
 
         on_prompt(app.clone(), ASK.into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_job(
-            app.clone(),
-            1,
-            vec![],
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
-        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+        approve(&app).await;
+        assert!(until(&app, |s| s.context.jobs().len() == 2).await);
+        // The drafting turn ran before the gate; the turn the plan confines is
+        // the one after it.
+        on_prompt(app.clone(), ASK.into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
         let held = |session: &Session, turn: usize| -> String {
             session.context.turns()[turn]
@@ -4888,23 +5204,15 @@ mod tests {
 
         on_prompt(app.clone(), ASK.into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await);
-        approve_job(
-            app.clone(),
-            1,
-            vec![],
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
-        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+        approve(&app).await;
+        assert!(until(&app, |s| s.context.jobs().len() == 2).await);
+        // The drafting turn ran before the gate; the turn the plan confines is
+        // the one after it.
+        on_prompt(app.clone(), ASK.into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
         let session = app.session.lock().await;
-        let code = &session.context.turns()[0].code_context;
+        let code = &session.context.turns()[1].code_context;
         assert!(
             !code.is_empty(),
             "the selector chose nothing, so the confinement below is vacuous",
@@ -4921,18 +5229,33 @@ mod tests {
         }
     }
 
+    /// A small model answering in prose is the ordinary case and it must not
+    /// cost the gate. What it cannot do any more is open one by itself: prose
+    /// in a draft turn is an answer, and the gate is opened by asking.
     #[tokio::test]
     async fn a_model_that_answers_in_prose_still_gets_a_gate() {
-        let app = app(&["I'll read the CLI and add it.", "the answer"]);
+        let app = app(&["I'll read the CLI and add it.", "still prose, I'm afraid"]);
         on_prompt(app.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.context.turns().len() == 1).await);
+        assert!(
+            app.session.lock().await.pending.is_none(),
+            "prose is not a suggestion: there is no plan block in it to put up",
+        );
+
+        request_plan(app.clone()).await;
         assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
 
         let session = app.session.lock().await;
-        let job = session.context.job(1).unwrap();
+        let pending = session.pending.as_ref().expect("a plan on the table");
         assert_eq!(
-            job.objective, "add a flag",
-            "the ask itself becomes the objective when the model declares nothing",
+            pending.objective, "add a flag",
+            "the draft's own objective stands in when the model declares nothing",
         );
-        assert!(job.plan.files.is_empty());
+        assert!(pending.plan.files.is_empty());
+        assert_eq!(
+            pending.source,
+            PlanSource::Prose,
+            "and which of the two happened travels with the proposal",
+        );
     }
 }

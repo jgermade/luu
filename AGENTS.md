@@ -179,11 +179,13 @@ cargo run --bin luu -- stdio --select-tokens 2048
 # against scripts/tasks/map-order-probe.key
 cargo test -p luu --test select_probe -- --nocapture
 
-# signed approvals: a key, and the signature over one `approve_job`. The public
+# signed approvals: a key, and the signature over one `approve_plan`. The public
 # half goes in `[[approvals.key]]`; `[approvals] required = true` then refuses an
-# unsigned approval. A wrong one is refused either way.
+# unsigned approval. A wrong one is refused either way. `job` is the id the
+# approval will hand out — the session's next — because that is what the
+# signature is bound to; an unsigned approval names nothing.
 cargo run --bin luu -- key new --out ~/.luu/approval.key --name jgermade
-echo '{"type":"approve_job","job":1,"files":["Cargo.toml"]}' \
+echo '{"type":"approve_plan","job":2,"files":["Cargo.toml"]}' \
   | cargo run --bin luu -- key sign --key ~/.luu/approval.key --session <id> --as jgermade
 
 # what a *session* may do, chosen when it starts: `[posture.<name>]` in the

@@ -445,22 +445,27 @@ pub enum PlanSource {
     Written,
 }
 
-/// Where a job is in its life. `Closed` is the only one that changes how the
-/// history renders.
+/// Where a job is in its life: opened, and not yet closed.
+///
+/// Two variants and not four. `Proposed` and `Rejected` were states of a thing
+/// that under the alternation is not a job — a plan is offered *inside* a draft
+/// and an id is what approval hands out, so a refused plan never gets one and
+/// has no state to be in. Both survive as [`crate::context::Round`], which is
+/// where the number they existed to produce now lives. See
+/// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
-    /// Proposed and not yet approved. Nothing runs in this state.
-    Proposed,
-    /// Approved. Its turns are the live ones, sent verbatim.
-    Approved,
+    /// Opened by a turn landing in it, and not closed. Its turns are the live
+    /// ones, sent verbatim.
+    ///
+    /// Reads an older recording's `approved` too: a job that was approved and
+    /// not closed is precisely one that is open, and the word is the only part
+    /// of the claim that moved.
+    #[serde(alias = "approved")]
+    Open,
     /// Closed: its turns are folded to [`Job::summary`] from here on.
     Closed,
-    /// Proposed and refused. Kept rather than erased: that a plan was put up
-    /// and turned down is worth more than a gap in the numbering, and ids are
-    /// handed out by position, so removing one would make the next collide
-    /// with it.
-    Rejected,
 }
 
 pub type TaskState = JobState;
@@ -540,13 +545,29 @@ pub struct Replaced {
     pub summary_tokens: u32,
 }
 
-/// One piece of work: proposed, approved, run, closed.
+/// One piece of work: opened by a turn landing in it, run, closed.
+///
+/// **A draft is a job whose objective is known and whose plan is not**, which is
+/// the whole of what `plan` being an `Option` says. The empty plan could not say
+/// it: [`Plan::writes`] is documented as *a plan that declares none may not
+/// write at all*, so a draft carrying `Plan::default()` through [`Plan::narrow`]
+/// would be handed the strictest sandbox there is and refused its first read.
+/// The gate reads [`JobState`]-independent state instead — a narrowing is built
+/// at an approval and nowhere else — so a draft is a job for the window and is
+/// not a job for the gate. See
+/// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: JobId,
     /// What the user asked for, as they asked for it.
     pub objective: String,
-    pub plan: Plan,
+    /// The plan it is held to, or `None` while it is a draft.
+    ///
+    /// `None` is not "no restriction" and is never read as one: nothing narrows
+    /// a sandbox from this field, so a job without a plan runs under the
+    /// session's own policy exactly as a jobless turn did before jobs were
+    /// total.
+    pub plan: Option<Plan>,
     pub state: JobState,
     /// Present from the close onwards. Dropped on a reopen, because a reopened
     /// job is being written again and the old account of it is not an account
@@ -566,34 +587,56 @@ pub struct Job {
 pub type Task = Job;
 
 impl Job {
-    pub fn new(id: JobId, objective: impl Into<String>, plan: Plan) -> Self {
+    /// A draft: the objective is what the user asked, and there is no plan
+    /// because nobody has written one yet.
+    ///
+    /// It is open from the moment it exists, because the only thing that brings
+    /// it into existence is a turn landing in it — see
+    /// [`crate::context::Context::current_job`], where that derivation lives.
+    pub fn draft(id: JobId, objective: impl Into<String>) -> Self {
         Self {
             id,
             objective: objective.into(),
-            plan,
-            state: JobState::Proposed,
+            plan: None,
+            state: JobState::Open,
             summary: None,
             closed_by: None,
             approved_by: None,
         }
     }
 
-    /// Approves it, recording which authority did — the same way a close
-    /// records who folded it.
-    pub fn approve(&mut self, by: ApprovedBy) {
-        self.state = JobState::Approved;
-        self.approved_by = Some(by);
+    /// A job an approval opened, holding the plan it was approved with and the
+    /// authority that approved it.
+    ///
+    /// There is no `approve` on a job any more, and that is the shape rather
+    /// than a rename: approval does not move a job from one state to another,
+    /// it **closes** the draft and opens this one. A constructor is what that
+    /// looks like in the type.
+    pub fn planned(id: JobId, objective: impl Into<String>, plan: Plan, by: ApprovedBy) -> Self {
+        Self {
+            id,
+            objective: objective.into(),
+            plan: Some(plan),
+            state: JobState::Open,
+            summary: None,
+            closed_by: None,
+            approved_by: Some(by),
+        }
     }
 
-    /// Refuses it. Nothing ran, so there is nothing to fold and nothing to
-    /// summarise — the plan stays as the record of what was turned down.
-    pub fn reject(&mut self) {
-        self.state = JobState::Rejected;
-    }
-
-    /// Approved and not closed: the one job turns are attributed to.
+    /// Opened and not closed: the one job turns are attributed to.
     pub fn is_open(&self) -> bool {
-        self.state == JobState::Approved
+        self.state == JobState::Open
+    }
+
+    /// Whether it is a draft — known objective, no plan.
+    ///
+    /// The question every caller that used to ask `state == Proposed` is
+    /// actually asking, and it is answered by a field rather than by counting
+    /// the job's position in the alternation: a fold that has to be counted to
+    /// be understood is a fold a reader cannot check.
+    pub fn is_draft(&self) -> bool {
+        self.plan.is_none()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -619,7 +662,14 @@ impl Job {
         by: ClosedBy,
         replaced: Option<Replaced>,
     ) {
-        let text = summary_text(&self.objective, &self.plan, steps, shown, turns, counter);
+        let text = summary_text(
+            &self.objective,
+            self.plan.as_ref(),
+            steps,
+            shown,
+            turns,
+            counter,
+        );
         let tokens = counter.count(&text);
         self.summary = Some(Summary {
             tokens,
@@ -638,7 +688,7 @@ impl Job {
     /// again. Not an undo — nothing was deleted — which is the whole reason
     /// closing was made an event.
     pub fn reopen(&mut self) {
-        self.state = JobState::Approved;
+        self.state = JobState::Open;
         self.summary = None;
         self.closed_by = None;
     }
@@ -655,14 +705,27 @@ impl Job {
 /// `RECORD/2026-08-30.what-a-summary-should-carry.completed.md` argues the fix.
 fn summary_text(
     objective: &str,
-    plan: &Plan,
+    plan: Option<&Plan>,
     steps: &[&ToolStep],
     shown: &[&Fragment],
     turns: usize,
     counter: &dyn TokenCounter,
 ) -> String {
-    let mut text = format!("[job closed] {objective}\n");
-    if !plan.tasks.is_empty() {
+    // A draft says so in its first line, and it is the line a reader of the
+    // folded window reads. *What we looked at and what we decided* and *what we
+    // then did* are different claims about the session, and a fold that headed
+    // both with the same words would make the alternation unreadable at exactly
+    // the point it is supposed to be legible. Everything below this is shared,
+    // because a draft's turns run the ordinary loop under the session's own
+    // policy — the record's guess that they "ran no tools" is true of a draft
+    // nobody explored in and of no other.
+    let mut text = match plan {
+        Some(_) => format!("[job closed] {objective}\n"),
+        None => format!("[draft closed] {objective}\n"),
+    };
+    if let Some(plan) = plan
+        && !plan.tasks.is_empty()
+    {
         text.push_str("approved plan:\n");
         for task in &plan.tasks {
             text.push_str(&format!("  - {task}\n"));
@@ -935,7 +998,7 @@ mod tests {
 
     #[test]
     fn the_summary_is_the_plan_and_the_evidence_and_nothing_the_model_said() {
-        let mut task = Task::new(
+        let mut task = Task::planned(
             2,
             "add a --dry-run flag",
             Plan {
@@ -947,8 +1010,8 @@ mod tests {
                 network: false,
                 ..Plan::default()
             },
+            ApprovedBy::Operator,
         );
-        task.approve(ApprovedBy::Operator);
         let steps = [
             step("read_file", serde_json::json!({"path": "src/lib.rs"}), None),
             step(
@@ -979,7 +1042,7 @@ mod tests {
 
     #[test]
     fn repeated_identical_actions_collapse_rather_than_repeat() {
-        let mut task = Task::new(1, "look around", Plan::default());
+        let mut task = Task::planned(1, "look around", Plan::default(), ApprovedBy::Operator);
         let steps: Vec<ToolStep> = (0..8)
             .map(|_| step("list_dir", serde_json::json!({"path": "."}), None))
             .collect();
@@ -1003,7 +1066,12 @@ mod tests {
 
     #[test]
     fn a_task_that_ran_no_tools_says_so_rather_than_stopping() {
-        let mut task = Task::new(1, "explain the design", Plan::default());
+        let mut task = Task::planned(
+            1,
+            "explain the design",
+            Plan::default(),
+            ApprovedBy::Operator,
+        );
         task.close(&[], &[], 4, &ApproximateCounter, ClosedBy::User, None);
         let text = &task.summary.as_ref().unwrap().text;
         assert!(text.contains("no tools ran"), "{text}");
@@ -1019,10 +1087,11 @@ mod tests {
 
     #[test]
     fn what_the_task_was_shown_is_quoted_from_the_file_and_not_described() {
-        let mut task = Task::new(
+        let mut task = Task::planned(
             3,
             "work out what the sandbox policy grants",
             Plan::default(),
+            ApprovedBy::Operator,
         );
         let shown = [fragment(
             "luu.toml:1-3",
@@ -1053,7 +1122,7 @@ mod tests {
 
     #[test]
     fn the_same_fragment_shown_twice_is_quoted_once() {
-        let mut task = Task::new(1, "read it twice", Plan::default());
+        let mut task = Task::planned(1, "read it twice", Plan::default(), ApprovedBy::Operator);
         let twice = [
             fragment("luu.toml:1-2", "[sandbox]\npaths = []\n"),
             fragment("luu.toml:1-2", "[sandbox]\npaths = []\n"),
@@ -1077,7 +1146,7 @@ mod tests {
 
     #[test]
     fn over_the_cap_the_newest_is_kept_and_the_rest_are_named() {
-        let mut task = Task::new(1, "read a lot", Plan::default());
+        let mut task = Task::planned(1, "read a lot", Plan::default(), ApprovedBy::Operator);
         let big = "a word ".repeat(MAX_QUOTED_TOKENS as usize);
         let shown = [
             fragment("old.rs", &big),
@@ -1106,7 +1175,7 @@ mod tests {
 
     #[test]
     fn reopening_drops_the_summary_without_recovering_anything() {
-        let mut task = Task::new(1, "x", Plan::default());
+        let mut task = Task::planned(1, "x", Plan::default(), ApprovedBy::Operator);
         task.close(&[], &[], 1, &ApproximateCounter, ClosedBy::User, None);
         task.reopen();
         assert!(task.is_open());

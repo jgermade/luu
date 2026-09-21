@@ -109,22 +109,23 @@ async fn stdio_greets_with_hello_and_answers_prompts() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    // Expect TurnStarted, Token(s), Ended, and JobProposed.
-    let mut job_id = None;
+    // Expect TurnStarted, Token(s), Ended, DraftOpened and PlanProposed — the
+    // mock's answer is a plan block, so the model suggests one.
+    let mut proposed = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if let ServerMessage::JobProposed { job, .. } = msg {
-            job_id = Some(job);
+        if matches!(msg, ServerMessage::PlanProposed { .. }) {
+            proposed = true;
             break;
         }
     }
-    let job = job_id.expect("received job proposal");
+    assert!(proposed, "received a plan proposal");
 
     // 3. Approve job.
-    let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+    let approve_msg = serde_json::to_string(&ClientMessage::ApprovePlan {
         enforcement: None,
         signature: None,
-        job,
+        job: None,
         files: vec![],
         writes: vec![],
         commands: vec![],
@@ -139,16 +140,22 @@ async fn stdio_greets_with_hello_and_answers_prompts() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    // Expect JobApproved, TurnStarted, tokens, Ended.
-    let mut ended = false;
+    // Expect JobClosed for the draft, then JobApproved. No turn follows it:
+    // the held prompt is gone, and the work starts on the next prompt.
+    let mut approved = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if matches!(msg, ServerMessage::Ended { .. }) {
-            ended = true;
+        if let ServerMessage::JobApproved { from, .. } = msg {
+            assert_eq!(
+                from,
+                Some(1),
+                "the approval closed the draft it was offered inside"
+            );
+            approved = true;
             break;
         }
     }
-    assert!(ended, "turn ended after task approval");
+    assert!(approved, "the plan was approved");
 
     // 4. Dropping client_out sends EOF on server stdin, which causes graceful shutdown.
     drop(client_out);
@@ -184,23 +191,23 @@ async fn unparseable_lines_do_not_break_stdio_stream() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    // Should still receive JobProposed!
+    // Should still receive PlanProposed!
     let mut proposed = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if matches!(msg, ServerMessage::JobProposed { .. }) {
+        if matches!(msg, ServerMessage::PlanProposed { .. }) {
             proposed = true;
             break;
         }
     }
-    assert!(proposed, "job proposed despite preceding invalid lines");
+    assert!(proposed, "plan proposed despite preceding invalid lines");
 
     drop(client_out);
     let _ = server_handle.await.unwrap();
 }
 
 #[tokio::test]
-async fn prompt_while_task_is_pending_is_refused() {
+async fn a_prompt_while_a_plan_is_on_the_table_is_more_changes() {
     let options = options_for(vec![PLAN.to_string(), ANSWER.to_string()]);
     let (server_in, mut client_out) = tokio::io::duplex(4096);
     let (client_in, server_out) = tokio::io::duplex(4096);
@@ -215,7 +222,8 @@ async fn prompt_while_task_is_pending_is_refused() {
     // Read Hello.
     let _ = client_lines.next_line().await.unwrap().unwrap();
 
-    // Send first prompt -> leads to JobProposed.
+    // The first prompt runs and the model's answer carries a plan block, so a
+    // plan reaches the table.
     let prompt1 = serde_json::to_string(&ClientMessage::Prompt {
         text: "first prompt".to_string(),
     })
@@ -228,14 +236,18 @@ async fn prompt_while_task_is_pending_is_refused() {
 
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if matches!(msg, ServerMessage::JobProposed { .. }) {
+        if matches!(msg, ServerMessage::PlanProposed { .. }) {
             break;
         }
     }
 
-    // Send second prompt while first job is still pending -> must be Refused!
+    // A second prompt while the plan is up is **not** refused any more. It is
+    // the answer *more changes*, which is the same answer as decline: the plan
+    // comes off the table, nothing closes, and the prompt runs in the draft it
+    // is still in. Refusing it would be the old `pending` guard outliving the
+    // held prompt it existed to protect.
     let prompt2 = serde_json::to_string(&ClientMessage::Prompt {
-        text: "second prompt while pending".to_string(),
+        text: "make it two flags".to_string(),
     })
     .unwrap();
     client_out
@@ -244,16 +256,24 @@ async fn prompt_while_task_is_pending_is_refused() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    let mut refused = false;
+    let mut declined = false;
+    let mut ran = false;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if let ServerMessage::Refused { reason, .. } = msg {
-            assert_eq!(reason, agent_core::protocol::Refusal::Pending);
-            refused = true;
-            break;
+        match msg {
+            ServerMessage::Refused { reason, .. } => {
+                panic!("a prompt is an answer, not a thing to refuse: {reason:?}")
+            }
+            ServerMessage::PlanDeclined => declined = true,
+            ServerMessage::TurnStarted { prompt, .. } if prompt == "make it two flags" => {
+                ran = true;
+                break;
+            }
+            _ => {}
         }
     }
-    assert!(refused, "second prompt was refused as pending");
+    assert!(declined, "the plan on the table was answered");
+    assert!(ran, "and the prompt that answered it ran");
 
     drop(client_out);
     let _ = server_handle.await.unwrap();
@@ -286,21 +306,18 @@ async fn close_and_reopen_task_over_stdio() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    let mut job_id = None;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if let ServerMessage::JobProposed { job, .. } = msg {
-            job_id = Some(job);
+        if matches!(msg, ServerMessage::PlanProposed { .. }) {
             break;
         }
     }
-    let job = job_id.expect("job proposed");
 
     // 2. Approve job.
-    let approve_msg = serde_json::to_string(&ClientMessage::ApproveJob {
+    let approve_msg = serde_json::to_string(&ClientMessage::ApprovePlan {
         enforcement: None,
         signature: None,
-        job,
+        job: None,
         files: vec![],
         writes: vec![],
         commands: vec![],
@@ -315,10 +332,12 @@ async fn close_and_reopen_task_over_stdio() {
         .unwrap();
     client_out.flush().await.unwrap();
 
-    // Wait for turn to end.
+    // Wait for the approval, which is what hands out the job's id.
+    let mut job = 0;
     while let Some(line) = client_lines.next_line().await.unwrap() {
         let msg: ServerMessage = serde_json::from_str(&line).expect("parse server message");
-        if matches!(msg, ServerMessage::Ended { .. }) {
+        if let ServerMessage::JobApproved { job: opened, .. } = msg {
+            job = opened;
             break;
         }
     }

@@ -205,12 +205,24 @@ const done = new Promise((resolve, reject) => {
   })
   ws.addEventListener("message", event => {
     const message = JSON.parse(event.data)
-    if (message.type === "job_proposed") {
-      job = message.job
+    // A prompt runs in the draft it opens, and a plan reaches the table only
+    // when the model suggests one or somebody asks. This asks.
+    if (message.type === "draft_opened") {
+      ws.send(JSON.stringify({ type: "request_plan" }))
+    }
+    // The approval names no job: an id is what it hands out, and
+    // `job_approved` below is where it arrives.
+    if (message.type === "plan_proposed") {
       ws.send(JSON.stringify({
-        type: "approve_job", job, files: [], writes: [],
+        type: "approve_plan", files: [], writes: [],
         commands: ["ls"], closes_on: null,
       }))
+    }
+    // The job the approval opened. The work starts on the next prompt, which
+    // lands inside it.
+    if (message.type === "job_approved") {
+      job = message.job
+      ws.send(JSON.stringify({ type: "prompt", text: "now list it" }))
     }
     if (message.type === "tool_result") {
       console.log("  contained call:", JSON.stringify(message.verdict))

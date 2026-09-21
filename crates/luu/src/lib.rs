@@ -942,7 +942,7 @@ fn run_key(action: &KeyAction) -> Result<()> {
                 .context("reading the approval on stdin")?;
             let message: ServerBoundMessage =
                 serde_json::from_str(input.trim()).context("parsing the approval on stdin")?;
-            let ServerBoundMessage::ApproveJob {
+            let ServerBoundMessage::ApprovePlan {
                 job,
                 files,
                 writes,
@@ -954,7 +954,16 @@ fn run_key(action: &KeyAction) -> Result<()> {
                 ..
             } = message
             else {
-                anyhow::bail!("only an approve_job message can be signed");
+                anyhow::bail!("only an approve_plan message can be signed");
+            };
+            // The id the approval will hand out, which the message names for
+            // exactly this: a signature bound to no job could be replayed
+            // against any of them.
+            let Some(job) = job else {
+                anyhow::bail!(
+                    "an approval to be signed must name the job it will open; \
+                     add `\"job\": <the session's next job id>`"
+                );
             };
             let signature = signing.sign(
                 &Approval {
@@ -970,8 +979,8 @@ fn run_key(action: &KeyAction) -> Result<()> {
                 },
                 signer.clone(),
             )?;
-            let signed = ServerBoundMessage::ApproveJob {
-                job,
+            let signed = ServerBoundMessage::ApprovePlan {
+                job: Some(job),
                 files,
                 writes,
                 commands,
@@ -1792,7 +1801,7 @@ fn describe_counts(view: &SessionView, counts: &Counts) -> String {
     let _ = writeln!(
         out,
         "\njobs: {} proposed, {} approved, {} rejected, {} closed",
-        counts.jobs.proposed, counts.jobs.approved, counts.jobs.rejected, counts.jobs.closed,
+        counts.jobs.proposed, counts.jobs.approved, counts.jobs.declined, counts.jobs.closed,
     );
     // "path(s)" and not "file(s)", deliberately: which of `src/` and
     // `src/lib.rs` is a directory is a question about a disk that a fold has no
@@ -2560,27 +2569,48 @@ pub async fn run() -> Result<()> {
                         unmet.join("\n  "),
                     );
                 }
-                let id = context.propose_job(objective.clone(), plan.clone());
                 // `luu chat` has no gate, so it has no approver either: the
                 // policy file is its standing approval and the operator who
                 // ran the command is who that was. See the open question in
                 // `RECORD/2026-09-04.signed-approvals.completed.md`.
-                context.approve_job(id, ApprovedBy::Operator);
+                //
+                // One call and not two, because approving *is* opening: a
+                // script's `## task:` closes whatever draft its earlier prompts
+                // opened and starts the job the directive describes, which is
+                // the same transition the gate makes.
+                let approved = context.approve_plan(
+                    objective.clone(),
+                    plan.clone(),
+                    plan.clone(),
+                    PlanSource::Written,
+                    ApprovedBy::Operator,
+                    counter.as_ref(),
+                );
+                let id = approved.job;
                 narrowed = Some(std::sync::Arc::new(
                     plan.narrow(agency.sandbox.as_ref(), id)
                         .with_context(|| format!("resolving the plan of job `{objective}`"))?,
                 ));
                 if let Some(recorder) = &recorder {
-                    recorder.write(&Event::Protocol(ServerMessage::JobProposed {
-                        job: id,
+                    recorder.write(&Event::Protocol(ServerMessage::PlanProposed {
                         objective: objective.clone(),
                         plan: plan.clone(),
                         // No planning call happened: a script carries its plan,
                         // which is an approval written down in advance.
                         source: Some(PlanSource::Written),
                     }));
+                    if let Some((draft, summary)) = &approved.folded {
+                        recorder.write(&Event::Protocol(ServerMessage::JobClosed {
+                            job: *draft,
+                            summary: summary.clone(),
+                            by: Some(ClosedBy::User),
+                            replaced: context.replaced_by(*draft),
+                        }));
+                    }
                     recorder.write(&Event::Protocol(ServerMessage::JobApproved {
                         job: id,
+                        from: approved.folded.as_ref().map(|(draft, _)| *draft),
+                        objective: objective.clone(),
                         plan: plan.clone(),
                         approved_by: Some(ApprovedBy::Operator),
                     }));

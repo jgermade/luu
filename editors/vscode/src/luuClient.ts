@@ -116,20 +116,21 @@ export class LuuClient extends EventEmitter {
     this.send({ type: 'cancel' });
   }
 
-  public approveJob(
-    job: JobId,
-    amendment?: {
-      files?: string[];
-      writes?: string[];
-      commands?: string[];
-      closes_on?: string | null;
-      network?: boolean | null;
-      egress?: string[] | null;
-    }
-  ): void {
+  /// Approves the plan on the table, which closes the open draft and opens the
+  /// job that plan describes — approving *is* closing.
+  ///
+  /// It names no job: a proposal is offered inside the draft and an id is what
+  /// approval hands out, so there is nothing to name until the server answers.
+  public approvePlan(amendment?: {
+    files?: string[];
+    writes?: string[];
+    commands?: string[];
+    closes_on?: string | null;
+    network?: boolean | null;
+    egress?: string[] | null;
+  }): void {
     this.send({
-      type: 'approve_job',
-      job,
+      type: 'approve_plan',
       files: amendment?.files,
       writes: amendment?.writes,
       commands: amendment?.commands,
@@ -139,8 +140,17 @@ export class LuuClient extends EventEmitter {
     });
   }
 
-  public rejectJob(job: JobId): void {
-    this.send({ type: 'reject_job', job });
+  /// Turns it down, or asks for more changes — the same answer. Nothing closes
+  /// and nothing folds: the draft it was offered inside is still open.
+  public declinePlan(): void {
+    this.send({ type: 'decline_plan' });
+  }
+
+  /// Asks for a plan over the draft as it stands. The plan is what the draft
+  /// compacts to, so this is a planning call over a window somebody has
+  /// already filled rather than over a prompt nobody has looked at.
+  public requestPlan(): void {
+    this.send({ type: 'request_plan' });
   }
 
   public closeJob(job: JobId): void {

@@ -17,21 +17,74 @@ directory per revision; nothing there is an answer to what this file answers. Se
 
 ## Jobs (and Model Tasks)
 
-A session is a sequence of **jobs** (historically called tasks), not a mode the agent is in. To avoid confusion with model checklist items, what was previously called a task is now a **job** (the bounded operational container: objective, gated approval, sandbox boundary, and compaction fold), while **tasks** designates the checklist items / steps emitted by models inside a plan (`plan.tasks`). One job:
+A session is an **alternation of jobs** (historically called tasks), not a mode the agent is in. To avoid confusion with model checklist items, what was previously called a task is now a **job** (the bounded operational container: objective, gated approval, sandbox boundary, and compaction fold), while **tasks** designates the checklist items / steps emitted by models inside a plan (`plan.tasks`). A session:
 
 ```
-the user asks for something
-  → the agent proposes a plan: tasks (checklist), files it will touch, commands it will run
-  → CONFIRMATION                  ← nothing runs before this
-  → loop: act · check · ask when unsure
-  → closing question: "shall I call this done?"
-  → close: the job is summarised; its turns stop being sent verbatim
+job 1  draft   objective: what the user asked, as they asked it
+               turns: exploring, under the session's own policy file
+               approve → close and fold, and open job 2
+
+job 2  plan    objective: the approved plan
+               turns: the work, under the plan's own sandbox
+               close → fold; the next turn opens the next draft
 ```
 
-Every job is confirmed before anything runs, so there is no autonomy setting to
-remember and no mode that can be left open. `plan`/`run`/`auto` used to live here;
-they were global where approval is per piece of work, and — the reason they went —
-a mode cannot tell the context manager what to compact. See
+**Every turn belongs to a job, from the session's first turn.** A turn landing
+where nothing is open **opens a draft** to land in, so `Turn::job` is total and
+the turns that used to belong to nothing have somewhere to fold to. A **draft is
+a job whose objective is known and whose plan is not** — `Job::plan` is the
+`Option`, and it is the one that matters: the empty plan is not *no restriction*
+but the strictest plan there is, so a draft carrying `Plan::default()` through
+`Plan::narrow` would be refused its first `read_file`. Nothing narrows a sandbox
+from a draft; a draft is a job for the window and is not a job for the gate.
+
+**Approving *is* closing.** It is not a transition inside a job — it ends one and
+opens the next, whose objective is the approved plan. So the draft folds at the
+approval and its summary becomes the plan's context, in the order a reader wants
+it: *this is what we looked at, this is what we decided, this is what we are now
+doing.* The negative decisions — `decline`, `more changes`, and a prompt sent
+instead of an answer — are the same answer, **not yet**: they end nothing and
+keep you in the job you are in. At most one job is open, everything behind it is
+a fold, and the window in steady state is *N small summaries plus the open job's
+turns*.
+
+**A job opens when a turn lands in it, and the current job is derived** — the
+last job not closed — rather than stored, because a stored field would disagree
+with the jobs the first time a resume rebuilt one and not the other. Two things
+fall out of that one rule: a draft nobody asked anything in is never opened, so
+it cannot fold to an empty summary; and a reopen is unambiguous exactly when
+nothing has been asked since the close, which is the only case it is allowed in.
+
+**The gate has two doors and neither is automatic.** The model suggests a plan
+when a drafting turn's answer carries a plan block, or a person asks for one with
+`request_plan` — and what that planning call reads is **the draft**, because *the
+plan is what the draft compacts to*. It used to read a held prompt, before
+anything had been looked at, which is a small model's worst case. No prompt is
+held any more: a prompt runs, in the draft, always.
+
+**A proposal is not a job and has no id**, because an id is what approval hands
+out — so a plan that is declined never acquires one, and `JobState` is `Open` and
+`Closed` with nothing else in it. Where `Proposed` and `Rejected` went is
+`Context::rounds`: every plan put up and what answered it, which is the number
+the refused state existed to produce — *how many rounds a plan takes before one
+is approved*. See
+[`RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`](RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md)
+and [`RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`](RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §7th–8th.
+
+**What this costs, and it is written down rather than discovered:** a drafting
+turn runs under the session's own policy file, and on this repository that file
+grants `.` at `read-write` plus `cargo`, `rustc` and `git`. So an exploratory
+turn may edit the tree and run the build with nobody having approved anything,
+where before item 22 the first prompt of a session waited behind the gate. The
+sandbox itself did not move — a draft sets no narrowing — but what reaches the
+unnarrowed sandbox did. Narrowing a draft to the session's floor *minus the write
+bit* is the obvious next row and is deliberately not taken in the same change as
+the window fold.
+
+Approval is per piece of work, so there is no autonomy setting to remember and no
+mode that can be left open. `plan`/`run`/`auto` used to live here; they were
+global where approval is per piece of work, and — the reason they went — a mode
+cannot tell the context manager what to compact. See
 [`RECORD/2026-08-27.tasks-instead-of-modes.completed.md`](RECORD/2026-08-27.tasks-instead-of-modes.completed.md)
 and [`RECORD/2026-09-04.from-tasks-to-jobs.completed.md`](RECORD/2026-09-04.from-tasks-to-jobs.completed.md).
 
@@ -133,18 +186,20 @@ a person to edit a file that already says that. See
 See [`RECORD/2026-08-30.the-gate.completed.md`](RECORD/2026-08-30.the-gate.completed.md) and
 [`RECORD/2026-08-30.narrowing.completed.md`](RECORD/2026-08-30.narrowing.completed.md).
 
-A refusal is kept, not erased: `rejected` is a state a task stays in, with the
-plan that was turned down. Nothing in a session is deleted — a closed task is
-folded, a reopened one unfolded, a refused one recorded. The lifecycle is a
-state machine and the messages that drive it come off a socket, so every
-transition is guarded: only a proposal is approved or rejected, only an open
-task closes, only a closed one reopens. A refused plan that could be *reopened*
-would be a plan a person turned down becoming the live task, with the gate
-behind it.
+A refusal is kept, not erased: a declined plan stays in `Context::rounds` beside
+the one that was eventually approved. Nothing in a session is deleted — a closed
+job is folded, a reopened one unfolded, a refused plan recorded. The lifecycle is
+a state machine and the messages that drive it come off a socket, so every
+transition is guarded: only an open job closes, only a closed one reopens, and
+**only the last one** — a reopen behind the front would give the session two open
+jobs and the next prompt a choice of two plans to run under. Closing the draft a
+plan is offered inside is refused for the reason closing a proposal used to be:
+it would take the gate off the screen with the question still up.
 
-**A proposal says who wrote it.** `task_proposed` carries `source` — `model` when
-the planning call emitted a parseable plan block, `prose` when it answered
-without one, `written` for a script's directives. The gate's headline number is
+**A proposal says who wrote it.** `plan_proposed` carries `source` — `model` when
+a drafting turn's answer carried a parseable plan block or the planning call
+emitted one, `prose` when it answered without one, `written` for a script's
+directives. The gate's headline number is
 how often a small model plans at all, and emptiness cannot answer it: a model
 that ignored the format and one that declared empty lists arrive as the same
 empty plan, and the two want different fixes (a grammar, or a sentence). The read
@@ -983,8 +1038,8 @@ Live channel — `WS /ws`:
 
 | Direction | Messages |
 | --- | --- |
-| client → server | `hello`, `prompt`, `approve_job`, `reject_job`, `close_job`, `reopen_job`, `cancel` (with `*_task` aliases) |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `job_proposed`, `job_approved`, `job_rejected`, `job_closed`, `job_reopened`, `refused`, `evicted` — all built, protocol v5 (record format 8); `context_snapshot` is still ahead |
+| client → server | `hello`, `prompt`, `approve_plan`, `decline_plan`, `request_plan`, `close_job`, `reopen_job`, `cancel` (with `approve_job`/`reject_job`/`*_task` aliases) |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `draft_opened`, `plan_proposed`, `plan_declined`, `job_approved`, `job_closed`, `job_reopened`, `refused`, `evicted`, `grounded` — all built, protocol v7 (record format 16); `job_proposed` and `job_rejected` still parse and are never written, so an older recording replays; `context_snapshot` is still ahead |
 
 **Both numbers live in two languages, and a test reads both.** `store.js`
 declares `PROTOCOL` and `FORMAT` beside `agent_core::protocol::VERSION` and
@@ -1005,10 +1060,15 @@ without a token is refused) and optional on loopback and over stdio, where the p
 this machine's own browser or the process that spawned us. The server's `hello` also
 carries the `session` id, because an approval is signed against it.
 
-**An approval can be signed.** `approve_job` carries an optional
+**An approval can be signed.** `approve_plan` carries an optional
 `signature: { by, sig }` — Ed25519 over a canonical rendering of *the grant* (session, job,
 `files`, `writes`, `commands`, `closes_on`, `network`, `egress`), so a relay that widens
-the grant between the person and the gate invalidates what it is relaying. The verifying
+the grant between the person and the gate invalidates what it is relaying. The
+`job` in that grant is **the id the approval is about to hand out**, not one that
+exists — it is the one thing the gate still names, and only because a signature
+bound to no job could be replayed against any of them. The server refuses a
+signature that names an id other than the one it is about to open, and an
+unsigned approval names nothing at all. The verifying
 keys are named in `luu.toml`:
 
 ```toml
@@ -1021,7 +1081,7 @@ public = "ed25519:…"     # luu key new --out ~/.luu/approval.key
 ```
 
 `luu key new` makes a key (private half written `0600`) and `luu key sign` signs an
-`approve_job` read on stdin, so the signing half lives where a remote operator's `luu` can
+`approve_plan` read on stdin, so the signing half lives where a remote operator's `luu` can
 call it rather than inside one surface. `job_approved` then carries `approved_by`:
 `operator` for the local unsigned case, `key { name }` for a verified signature — beside
 `closed_by` and for the same reason. Three failures are one `refused` with reason

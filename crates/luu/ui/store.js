@@ -18,8 +18,8 @@ import { $reactive } from "./vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 6
-const FORMAT = 15
+const PROTOCOL = 7
+const FORMAT = 16
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -48,10 +48,16 @@ export const state = $reactive({
   // The budget describes the first call only, while the backend's usage is
   // summed over all of them, so the two are comparable only with these added in.
   extraCalls: [],         // [{ step, prompt_tokens, shared_bytes, shared_tokens }]
-  // The session's jobs, in the order they were proposed. A proposed one is a
-  // gate: nothing runs behind it until someone answers.
+  // The session's jobs, in the order they were opened. A job with a null plan
+  // is a **draft**: its objective is known and its plan is not, and that is the
+  // whole of what a draft is. Approving closes one and opens the next.
   jobs: [],               // [{ id, objective, plan, proposed, source, state, summary }]
   tasks: [],              // alias for jobs
+  // The one plan on the table, or null. It is **not** a job and has no id — a
+  // proposal is offered inside the open draft, and an id is what approval hands
+  // out. At most one is ever up, which is what lets the gate address it without
+  // naming it. See `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`.
+  pending: null,          // { objective, plan, source } | null
   error: null,
   // The configuration modal: what this server resolved (read-only) and the
   // providers file behind it. Both are fetched when it opens rather than kept
@@ -257,42 +263,102 @@ function onProtocol(message) {
     // The lifecycle. Jobs are replaced rather than mutated, for the same
     // reason messages are: jq79 does not wake an `:each` on a property assigned
     // inside an array element.
-    case "job_proposed":
-    case "task_proposed": {
-      // A new gate is a new question, and what the last approval could not
-      // carry is not an answer to it.
-      state.refused = null
-      const id = message.job ?? message.task
-      const newJob = {
-        id,
+    // A turn landed where nothing was open, so a draft opened to hold it.
+    case "draft_opened": {
+      state.jobs = [...state.jobs, {
+        id: message.job,
         objective: message.objective,
-        plan: message.plan,
-        // Kept beside the plan as approved: the difference between them is what
-        // a person had to add, which is the cost of the gate.
-        proposed: message.plan,
-        // Whether the planning call wrote this plan or answered in prose. Null
-        // in a recording made before the distinction existed, and then the
-        // panel has only emptiness to go on.
-        source: message.source ?? null,
-        state: "proposed",
+        // The field that says this is a draft. Never an empty plan: an empty
+        // plan is the *strictest* one there is, and the panel that drew it as
+        // "grants nothing" would be right about a job and wrong about this.
+        plan: null,
+        proposed: null,
+        source: null,
+        state: "open",
         summary: null,
         closedBy: null,
-      }
-      state.jobs = [...state.jobs, newJob]
+      }]
       state.tasks = state.jobs
       break
     }
 
+    // A plan reached the table, from the model's own suggestion or because
+    // somebody asked. It is not a job and goes nowhere near `jobs`.
+    case "plan_proposed": {
+      // A new gate is a new question, and what the last approval could not
+      // carry is not an answer to it.
+      state.refused = null
+      state.pending = {
+        objective: message.objective,
+        plan: message.plan,
+        // Whether a planning call wrote this plan or the model answered in
+        // prose. Null in a recording made before the distinction existed, and
+        // then the panel has only emptiness to go on.
+        source: message.source ?? null,
+      }
+      break
+    }
+
+    // Turned down, or answered by a prompt — *decline* and *more changes* are
+    // the same answer. Nothing closed and nothing folded: the draft it was
+    // offered inside is still open and still the live job.
+    case "plan_declined":
+      state.pending = null
+      break
+
+    // Historical, from a recording written before the alternation: the thing it
+    // named was a job in a state, and under this shape it is a plan on the
+    // table. Replayed as one, so an old recording still draws a gate.
+    case "job_proposed":
+    case "task_proposed": {
+      state.refused = null
+      state.pending = {
+        objective: message.objective,
+        plan: message.plan,
+        source: message.source ?? null,
+      }
+      break
+    }
+
+    case "job_rejected":
+    case "task_rejected":
+      state.pending = null
+      break
+
     case "job_approved":
     case "task_approved": {
-      // The plan as approved, which is what the job's sandbox is built from —
-      // the person at the gate may have added what the model forgot. An older
-      // recording carries none, and then the proposal is the best answer there
-      // is.
+      // Approving *is* closing. The draft's own `job_closed` arrives before
+      // this one and folds it; this opens the job the plan describes, which is
+      // where the id comes from — `message.job` names a job that did not exist
+      // until this line.
       const id = message.job ?? message.task
-      patchJob(id, message.plan
-        ? { state: "approved", plan: message.plan }
-        : { state: "approved" })
+      const offered = state.pending
+      state.pending = null
+      // A pre-alternation recording approved a job that already existed, so
+      // patch it where it does; otherwise this line is the job's birth.
+      if (state.jobs.some(job => job.id === id)) {
+        patchJob(id, message.plan
+          ? { state: "open", plan: message.plan }
+          : { state: "open" })
+        break
+      }
+      state.jobs = [...state.jobs, {
+        id,
+        // The approved plan's own objective. An older recording carries none
+        // on this line, and then the proposal it answers is where it was.
+        objective: message.objective || (offered ? offered.objective : ""),
+        // The plan as approved, which is what the job's sandbox is built from —
+        // the person at the gate may have added what the model forgot.
+        plan: message.plan ?? null,
+        // Kept beside it: the difference between the two is what a person had
+        // to add, which is the cost of the gate.
+        proposed: offered ? offered.plan : null,
+        source: offered ? offered.source : null,
+        state: "open",
+        summary: null,
+        closedBy: null,
+      }]
+      state.tasks = state.jobs
       break
     }
 
@@ -307,13 +373,6 @@ function onProtocol(message) {
       // `RECORD/2026-09-08.a-test-that-clicks-approve.completed.md`.
       if (message.reason === "version") refusedVersion = true
       break
-
-    case "job_rejected":
-    case "task_rejected": {
-      const id = message.job ?? message.task
-      patchJob(id, { state: "rejected" })
-      break
-    }
 
     case "job_closed":
     case "task_closed": {
@@ -338,7 +397,7 @@ function onProtocol(message) {
       // The summary goes with the fold: it is an account of work that is being
       // written again.
       const id = message.job ?? message.task
-      patchJob(id, { state: "approved", summary: null, closedBy: null, replaced: null })
+      patchJob(id, { state: "open", summary: null, closedBy: null, replaced: null })
       break
     }
 
@@ -739,8 +798,21 @@ export function cancel() {
   socket.send(JSON.stringify({ type: "cancel" }))
 }
 
-/// The other half of the gate. Approving runs the prompt the server has been
-/// holding since the proposal; refusing drops it with the plan.
+/// Asks for a plan over the draft as it stands.
+///
+/// The explicit door, beside the model's own suggestion. It is a planning call
+/// over the open draft — the refinement is the draft and the plan is what
+/// survives it — so it needs no argument: what it plans over is whatever the
+/// session is currently in.
+export function requestPlan() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type: "request_plan" }))
+}
+
+/// The other half of the gate, and **neither half names a job any more**.
+/// Approving closes the open draft and opens the job the plan describes;
+/// declining ends nothing and leaves you in the draft. At most one plan is ever
+/// on the table, which is what makes the address unnecessary.
 /// **One spelling per frame.** The server accepts `task` as an alias for `job`,
 /// so a client written before the rename still works — and a frame carrying
 /// *both* is the same field twice, which is a `duplicate field` parse error and
@@ -766,7 +838,7 @@ function act(type, id) {
 /// is a list merged into the plan's own, `enforcement` is a strictness a person
 /// may tighten and not loosen. `approveJob(id, [], [], [], "", null, [], null)`
 /// is a call nobody can read.
-export function approveJob(job, amendment = {}) {
+export function approvePlan(amendment = {}) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   const {
     files = [], writes = [], commands = [], closesOn = "",
@@ -780,15 +852,22 @@ export function approveJob(job, amendment = {}) {
     enforcement = null,
   } = amendment
   socket.send(JSON.stringify({
-    // `job` alone — see `act` for what naming it twice costs.
-    type: "approve_job", job, files, writes, commands,
+    // No `job`: an id is what approval hands out, so there is nothing to name
+    // until the server answers this. The field exists on the wire only to bind
+    // a signature, which this page does not produce.
+    type: "approve_plan", files, writes, commands,
     closes_on: closesOn.trim() || null,
     network, egress, enforcement,
   }))
 }
+export const approveJob = (_job, amendment) => approvePlan(amendment)
 export const approveTask = approveJob
-export const rejectJob = job => act("reject_job", job)
-export const rejectTask = rejectJob
+export function declinePlan() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type: "decline_plan" }))
+}
+export const rejectJob = declinePlan
+export const rejectTask = declinePlan
 export const closeJob = job => act("close_job", job)
 export const closeTask = closeJob
 export const reopenJob = job => act("reopen_job", job)

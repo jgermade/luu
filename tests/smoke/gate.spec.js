@@ -189,7 +189,8 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
-  // The prompt is held, unrun, until somebody answers for it.
+  // The prompt runs, in the draft it opens, and the model's answer carries a
+  // plan block — so a plan reaches the gate as a suggestion.
   const composer = page.locator(".composer input")
   await expect(composer).toBeEnabled()
   await composer.fill("what is this repository?")
@@ -205,8 +206,8 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   const reach = gate.locator("p", { hasText: "network: yes" })
   await expect(reach).toContainText("egress: crates.io")
   await expect(reach).toContainText("the session's policy denies it")
-  // Held, and nothing has run under it: the composer is refused while it waits.
-  await expect(composer).toBeDisabled()
+  // The draft is open behind it, holding the turn that opened it.
+  await expect(page.locator("article.assistant")).not.toHaveCount(0)
 
   // What the model forgot, added by hand. The plan is the job's sandbox, so
   // this is the only moment the file the turn will actually read can get in.
@@ -216,6 +217,12 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
 
   await page.click('.gate-buttons button:has-text("Approve")')
   await expect(gate).toBeHidden({ timeout: 15_000 })
+
+  // Approving closes the draft and opens the job; the work starts on the next
+  // prompt, which lands inside it.
+  await expect(composer).toBeEnabled()
+  await composer.fill("go on then")
+  await page.click('.composer button[type="submit"]')
 
   // The call the plan never declared, allowed by the amendment and answered.
   const call = page.locator(".timeline li").first()
@@ -246,7 +253,9 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
   const fold = page.locator(".folds li").first()
   await expect(fold).toBeVisible()
-  await expect(fold).toContainText("job 1")
+  // `job 2`: job 1 is the draft the approval folded, and this is the job it
+  // opened — approving *is* closing, so a session that got this far has two.
+  await expect(fold).toContainText("job 2")
   // Both numbers come from the close and neither is counted in the page, so
   // this asserts digits rather than the word: an empty span either side would
   // still have read as "tokens of history … saved".
@@ -923,11 +932,15 @@ test("the editor setting offers Monaco where it is installed and says so where i
  *
  * **Its plan is empty, and that is not a shortcut.** A session started from the
  * page builds its own backend out of `config.toml` (`crate::backend_for`), so
- * it never sees the queue `--mock-reply` filled: the planning call gets the
- * default mock's paragraph, no `plan` block parses, and the proposal falls back
- * to the person's own ask declaring nothing — which is the ordinary case for a
+ * it never sees the queue `--mock-reply` filled: the call gets the default
+ * mock's paragraph, no `plan` block parses, and the proposal falls back to the
+ * draft's own objective declaring nothing — which is the ordinary case for a
  * 7B and exactly the state the gate exists for. Everything the job may do is
  * therefore typed at the gate, which is what these tests are about.
+ *
+ * It therefore goes through the **explicit** door. Prose is not a suggestion,
+ * so a model that answers in it opens no gate by itself, and *plan this* is how
+ * a person asks for one over the draft.
  */
 async function gateOnWidePosture(page) {
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -945,6 +958,11 @@ async function gateOnWidePosture(page) {
   await expect(composer).toBeEnabled()
   await composer.fill("what is published?")
   await page.click('.composer button[type="submit"]')
+
+  // The drafting turn lands, which is what opens the draft to plan over.
+  const live = page.locator(".live-job")
+  await expect(live).toBeVisible({ timeout: 30_000 })
+  await live.locator("button", { hasText: "plan this" }).click()
 
   const gate = page.locator(".gate")
   await expect(gate).toBeVisible({ timeout: 30_000 })
@@ -1048,7 +1066,7 @@ test("asking the gate to loosen enforcement is refused, and says by what", async
 
   const refused = page.locator(".refused")
   await expect(refused).toBeVisible()
-  await expect(refused).toContainText("approve_job")
+  await expect(refused).toContainText("approve_plan")
   await expect(refused).toContainText("enforcement best-effort")
 
   // Refused at the gate means refused in the plan: the job runs under what the

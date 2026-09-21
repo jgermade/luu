@@ -21,7 +21,6 @@ async function run() {
   let jobApprovedReceived = false;
   let turnStartedReceived = false;
   let turnEndedReceived = false;
-  let proposedJobId = null;
 
   client.on('message', (msg) => {
     // console.log('Message:', msg.type);
@@ -33,12 +32,11 @@ async function run() {
     } else if (msg.type === 'turn_started') {
       turnStartedReceived = true;
       console.log('  -> Received turn_started:', msg.turn);
-    } else if (msg.type === 'job_proposed') {
+    } else if (msg.type === 'plan_proposed') {
       jobProposedReceived = true;
-      proposedJobId = msg.job;
-      console.log('  -> Received job_proposed for job #', proposedJobId);
+      console.log('  -> Received plan_proposed:', msg.objective);
       // Approve it!
-      client.approveJob(proposedJobId, {
+      client.approvePlan({
         files: msg.plan.files,
         writes: msg.plan.writes,
         network: false,

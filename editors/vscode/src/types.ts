@@ -2,8 +2,8 @@
 
 /// What this client speaks. Sent as the first message so a host that speaks
 /// something else refuses it out loud, rather than by misreading the next one.
-export const PROTOCOL = 5;
-export const RECORD_FORMAT = 8;
+export const PROTOCOL = 7;
+export const RECORD_FORMAT = 16;
 
 export type TurnId = number;
 export type JobId = number;
@@ -51,8 +51,14 @@ export type ClientMessage =
   | { type: 'prompt'; text: string }
   | { type: 'cancel' }
   | {
-      type: 'approve_job';
-      job: JobId;
+      // Approve the plan on the table. It closes the open draft and opens the
+      // job the plan describes — approving *is* closing.
+      type: 'approve_plan';
+      /// **The id this approval will hand out**, not one that exists. Present
+      /// only to bind a signature: an approval covers a grant in a session for
+      /// a job, and one that could be replayed against another is bound to
+      /// nothing. Omit it when unsigned.
+      job?: JobId | null;
       files?: string[];
       writes?: string[];
       commands?: string[];
@@ -61,7 +67,12 @@ export type ClientMessage =
       egress?: string[] | null;
       signature?: Signature | null;
     }
-  | { type: 'reject_job'; job: JobId }
+  // Turn the plan down, or ask for more changes — the same answer. Nothing
+  // closes and nothing folds; you stay in the draft.
+  | { type: 'decline_plan' }
+  // Ask for a plan over the draft as it stands: the plan is what the draft
+  // compacts to.
+  | { type: 'request_plan' }
   | { type: 'close_job'; job: JobId }
   | { type: 'reopen_job'; job: JobId };
 
@@ -83,6 +94,28 @@ export type ServerMessage =
       job?: JobId | null;
     }
   | {
+      /// A turn landed where nothing was open, so a draft opened to hold it.
+      type: 'draft_opened';
+      job: JobId;
+      /// The turn that opened it, which is the only way a job ever opens.
+      turn: TurnId;
+      objective: string;
+    }
+  | {
+      /// A plan is on the table. It names **no job**: a proposal is offered
+      /// inside the open draft, and an id is what approval hands out.
+      type: 'plan_proposed';
+      objective: string;
+      plan: Plan;
+      source?: PlanSource | null;
+    }
+  | {
+      /// Turned down, or answered by a prompt. Nothing closed.
+      type: 'plan_declined';
+    }
+  | {
+      /// Historical: never sent at protocol 7 or above, and kept so an older
+      /// recording still replays.
       type: 'job_proposed';
       job: JobId;
       objective: string;
@@ -92,6 +125,9 @@ export type ServerMessage =
   | {
       type: 'job_approved';
       job: JobId;
+      /// The draft this approval closed on its way in, when one was open.
+      from?: JobId | null;
+      objective?: string;
       plan: Plan;
       /// Which authority approved it. Absent means the operator, which is what
       /// every approval before signatures existed was.
@@ -108,6 +144,7 @@ export type ServerMessage =
       job: JobId;
     }
   | {
+      /// Historical, beside `job_proposed`.
       type: 'job_rejected';
       job: JobId;
     }

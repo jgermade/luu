@@ -69,7 +69,20 @@ use crate::turn::{EndReason, TurnEvent};
 /// refused out loud rather than failing to parse — so this is also the first
 /// one an older client learns about by being told. See
 /// `RECORD/2026-09-19.fragments-by-reference.completed.md`.
-pub const VERSION: u32 = 6;
+///
+/// **7 is the session becoming an alternation**, and it is the largest bump
+/// here since 4 renamed the unit of work: `draft_opened`, `plan_proposed` and
+/// `plan_declined` are three things a client has to see to draw the gate and
+/// none of them existed, `job_approved` gains the draft it closed, and the gate
+/// stops naming a job in either direction — `approve_plan` and `decline_plan`
+/// address the one plan on the table, because a proposal is offered inside a
+/// draft and an id is what approval hands out. `job_proposed` and
+/// `job_rejected` stay parseable and are never written again: they describe a
+/// job that under this shape is not one, and a recording that contains them is
+/// a recording from before it. Same rule as 2, 3 and 4 for the new variants,
+/// and the first bump that *retires* any. See
+/// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`.
+pub const VERSION: u32 = 7;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -123,12 +136,34 @@ pub enum ClientMessage {
     /// Stop the turn in flight. Cancelling when nothing is running is not an
     /// error — a client that raced the end of a turn did nothing wrong.
     Cancel,
-    /// Approve a proposed job. Nothing has run under it until this arrives:
-    /// the prompt that caused the proposal is held, unrun, until it does.
-    #[serde(alias = "approve_task")]
-    ApproveJob {
-        #[serde(alias = "task")]
-        job: JobId,
+    /// Approve the plan on the table. Nothing has run under it until this
+    /// arrives: the prompt that caused the proposal is held, unrun, until it
+    /// does.
+    ///
+    /// **It names no job, and that is the change.** A proposal is a thing
+    /// offered inside a draft, not a job in a state, and an id is what approval
+    /// hands out — so there is nothing to name until this message is answered.
+    /// At most one plan is ever on the table, which is what makes the address
+    /// unnecessary rather than merely absent. The aliases keep a frame from a
+    /// client that still writes `approve_job` parsing; its `job` field is
+    /// ignored, because there was never a job for it to have been right about.
+    #[serde(alias = "approve_task", alias = "approve_job")]
+    ApprovePlan {
+        /// **The id this approval is about to hand out** — not one that exists.
+        ///
+        /// The one thing the gate still names, and only because a signature has
+        /// to be bound to something: an [`crate::approval::Approval`] covers a
+        /// grant *in a session for a job*, and one that could be replayed
+        /// against a different job is bound to nothing. A client reads it off
+        /// the session as *one past the last job* and the server refuses a
+        /// mismatch, so a stale client cannot sign for a job the session is not
+        /// about to open.
+        ///
+        /// `None` on an unsigned approval, where there is nothing to bind and
+        /// nothing to check. It is never an address: no lookup is ever done
+        /// with it, because the thing being approved is not a job yet.
+        #[serde(default, alias = "task")]
+        job: Option<JobId>,
         /// What the job may read, added to what the model declared.
         #[serde(default)]
         files: Vec<String>,
@@ -165,19 +200,30 @@ pub enum ClientMessage {
         #[serde(default)]
         signature: Option<Signature>,
     },
-    /// Refuse it. The held prompt is dropped with it — a prompt whose plan was
-    /// turned down is not a prompt that was approved on its own.
-    #[serde(alias = "reject_task")]
-    RejectJob {
-        #[serde(alias = "task")]
-        job: JobId,
-    },
+    /// Refuse the plan on the table. *Decline* and *more changes* are the same
+    /// answer — **not yet** — and neither ends anything.
+    ///
+    /// **The held prompt now runs** rather than being dropped, which is the one
+    /// behaviour in item 22 a person can observe changing. It is §seventh's own
+    /// sentence — *nothing closes, nothing folds, the conversation continues* —
+    /// and the turn it runs is what opens the draft the conversation continues
+    /// in. Names no job for [`Self::ApprovePlan`]'s reason.
+    #[serde(alias = "reject_task", alias = "reject_job")]
+    DeclinePlan,
     /// Close it: from here its turns are sent as their summary.
     #[serde(alias = "close_task")]
     CloseJob {
         #[serde(alias = "task")]
         job: JobId,
     },
+    /// Ask for a plan over the draft as it stands.
+    ///
+    /// The explicit door, beside the model's own suggestion. It runs the
+    /// planning call as a **compaction of the open draft** — the refinement is
+    /// the draft, and the plan is what survives it — so unlike every planning
+    /// call before item 22 it reads a window somebody has already filled rather
+    /// than a prompt nobody has looked at yet.
+    RequestPlan,
     /// Unfold it. Not an undo: nothing was deleted to recover.
     #[serde(alias = "reopen_task")]
     ReopenJob {
@@ -266,8 +312,52 @@ pub enum ServerMessage {
         turn: TurnId,
         spans: Vec<Grounding>,
     },
+    /// A draft opened, because a turn landed where nothing was open.
+    ///
+    /// The session's own shape on the wire: every turn belongs to a job, and
+    /// this is the message that makes that true from the first one. A client
+    /// draws the draft from here and attributes the turn that caused it.
+    DraftOpened {
+        job: JobId,
+        /// The turn that opened it, which is the only way a job ever opens.
+        ///
+        /// Carried rather than left for a client to infer, because it is the
+        /// only place that attribution exists: `turn_started` says which job a
+        /// turn is *in*, and a turn that opens a draft is in one that did not
+        /// exist when it started. Without this the first turn of every session
+        /// would read as belonging to nothing, which is the exact claim item 22
+        /// retired.
+        turn: TurnId,
+        /// What the user asked, as they asked it — a draft's objective is known
+        /// and its plan is not, which is the whole of what a draft is.
+        objective: String,
+    },
+    /// A plan is on the table, from the model's own suggestion or from
+    /// `request_plan`. Nobody has approved anything.
+    ///
+    /// **It names no job.** A proposal is offered inside the open draft and an
+    /// id is what approval hands out, so there is nothing to name yet — and a
+    /// plan that is declined never acquires one, which is what retired
+    /// `JobProposed` below. At most one is on the table at a time.
+    PlanProposed {
+        objective: String,
+        plan: Plan,
+        #[serde(default)]
+        source: Option<PlanSource>,
+    },
+    /// The plan on the table was turned down, or a prompt arrived instead of an
+    /// answer — *decline* and *more changes* are the same answer. Nothing
+    /// closed and nothing folded; the draft it was offered inside is still
+    /// open. Pairs with the [`Self::PlanProposed`] before it, by order.
+    PlanDeclined,
     /// A piece of work, with the plan that is about to be approved or refused.
     /// Nothing runs between this and `JobApproved`.
+    ///
+    /// **Historical: never written at protocol 7 or above.** It survives so a
+    /// recording made before the alternation still replays, and the format
+    /// number is what tells a reader which shape they are looking at. Under the
+    /// alternation the thing it described is not a job — see
+    /// [`Self::PlanProposed`].
     #[serde(alias = "task_proposed")]
     JobProposed {
         #[serde(alias = "task")]
@@ -283,6 +373,21 @@ pub enum ServerMessage {
     JobApproved {
         #[serde(alias = "task")]
         job: JobId,
+        /// The draft this approval closed on its way in, when one was open to
+        /// close. Approving *is* closing, so the two halves of the transition
+        /// travel together and a client never has to infer one from the other.
+        ///
+        /// `None` when no draft had opened — no turn had landed in one — and in
+        /// every recording written before protocol 7, where an approval opened
+        /// nothing and closed nothing. The `JobClosed` for the draft is sent
+        /// before this and carries the fold itself.
+        #[serde(default)]
+        from: Option<JobId>,
+        /// What the job is called. The approved plan's own objective, which
+        /// under the alternation is what the draft compacted to rather than
+        /// what a held prompt asked for.
+        #[serde(default)]
+        objective: String,
         #[serde(default)]
         plan: Plan,
         /// Which authority approved it. Absent in a recording written before
@@ -321,6 +426,9 @@ pub enum ServerMessage {
         job: JobId,
     },
     /// The plan was put up and turned down.
+    ///
+    /// **Historical: never written at protocol 7 or above**, for
+    /// [`Self::JobProposed`]'s reason and replaced by [`Self::PlanDeclined`].
     #[serde(alias = "task_rejected")]
     JobRejected {
         #[serde(alias = "task")]
@@ -457,7 +565,10 @@ impl ServerMessage {
             // A task spans turns and its lifecycle happens between them, and a
             // refusal is about the ask rather than about a turn — three of the
             // four happen when there is no turn to name.
-            Self::JobProposed { .. }
+            Self::DraftOpened { .. }
+            | Self::PlanProposed { .. }
+            | Self::PlanDeclined
+            | Self::JobProposed { .. }
             | Self::JobApproved { .. }
             | Self::JobClosed { .. }
             | Self::JobReopened { .. }
@@ -619,6 +730,8 @@ mod tests {
         assert_eq!(
             ServerMessage::JobApproved {
                 job: 2,
+                from: Some(1),
+                objective: "add a --dry-run flag".into(),
                 plan: Plan::default(),
                 approved_by: None,
             }
@@ -631,12 +744,19 @@ mod tests {
     #[test]
     fn the_client_half_of_the_lifecycle_parses_from_the_wire() {
         for (text, expected) in [
-            (r#"{"type":"approve_job","job":2}"#, "ApproveJob"),
-            (r#"{"type":"reject_job","job":2}"#, "RejectJob"),
+            (r#"{"type":"approve_plan"}"#, "ApprovePlan"),
+            (r#"{"type":"decline_plan"}"#, "DeclinePlan"),
+            (r#"{"type":"request_plan"}"#, "RequestPlan"),
             (r#"{"type":"close_job","job":2}"#, "CloseJob"),
             (r#"{"type":"reopen_job","job":2}"#, "ReopenJob"),
-            (r#"{"type":"approve_task","task":2}"#, "ApproveJob"),
-            (r#"{"type":"reject_task","task":2}"#, "RejectJob"),
+            // A client still writing the pre-alternation spellings reaches the
+            // same handler. Its `job` is read as the id the approval will hand
+            // out, which is the only thing that field can mean now — and a
+            // stale one is refused by the server rather than followed.
+            (r#"{"type":"approve_job","job":2}"#, "ApprovePlan"),
+            (r#"{"type":"reject_job","job":2}"#, "DeclinePlan"),
+            (r#"{"type":"approve_task","task":2}"#, "ApprovePlan"),
+            (r#"{"type":"reject_task","task":2}"#, "DeclinePlan"),
             (r#"{"type":"close_task","task":2}"#, "CloseJob"),
             (r#"{"type":"reopen_task","task":2}"#, "ReopenJob"),
         ] {
@@ -666,24 +786,35 @@ mod tests {
         assert!(matches!(bare, ClientMessage::Hello { format: 0, .. }));
 
         let signed: ClientMessage = serde_json::from_str(
-            r#"{"type":"approve_job","job":2,"signature":{"by":"jgermade","sig":"ab"}}"#,
+            r#"{"type":"approve_plan","job":2,"signature":{"by":"jgermade","sig":"ab"}}"#,
         )
         .unwrap();
-        let ClientMessage::ApproveJob { signature, .. } = signed else {
+        let ClientMessage::ApprovePlan { job, signature, .. } = signed else {
             panic!("an approval");
         };
         assert_eq!(signature.expect("the signature").by, "jgermade");
+        assert_eq!(
+            job,
+            Some(2),
+            "a signed approval names the id it will hand out, because that is \
+             what the signature is bound to",
+        );
 
         // And an approval from before signatures existed is still an approval.
         let unsigned: ClientMessage =
             serde_json::from_str(r#"{"type":"approve_job","job":2}"#).unwrap();
         assert!(matches!(
             unsigned,
-            ClientMessage::ApproveJob {
+            ClientMessage::ApprovePlan {
                 signature: None,
                 ..
             }
         ));
+
+        // And an unsigned one need not name a job at all: there is nothing to
+        // bind, and the id it would name does not exist yet.
+        let bare: ClientMessage = serde_json::from_str(r#"{"type":"approve_plan"}"#).unwrap();
+        assert!(matches!(bare, ClientMessage::ApprovePlan { job: None, .. }));
     }
 
     #[test]
