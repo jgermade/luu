@@ -206,6 +206,14 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   const reach = gate.locator("p", { hasText: "network: yes" })
   await expect(reach).toContainText("egress: crates.io")
   await expect(reach).toContainText("the session's policy denies it")
+  // The other term of the decision, and the one the panel could not show until
+  // `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`: what the
+  // turn in front of the gate already has. Approving is a decision about what to
+  // *add*, and a panel that states one term is a panel that reads as a yes to a
+  // list. The floor grants no writes by construction, so that is a sentence.
+  const floor = gate.locator("p.floor")
+  await expect(floor).toContainText("unapproved, a turn reads")
+  await expect(floor).toContainText("writes nothing")
   // The draft is open behind it, holding the turn that opened it.
   await expect(page.locator("article.assistant")).not.toHaveCount(0)
 
@@ -245,7 +253,25 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(live).toBeVisible()
   await live.locator("button", { hasText: "close & fold" }).click()
   await expect(live).toBeHidden({ timeout: 15_000 })
-  await expect(page.locator(".fold .summary")).toBeVisible()
+  await expect(page.locator(".fold .summary").first()).toBeVisible()
+
+  // The transcript now says which half of the alternation each fold was, and
+  // why it ended. Before
+  // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md` both folds
+  // read "job N · objective" and a reader could not tell exploration nobody
+  // approved from work somebody signed for.
+  const folds = page.locator(".chat .fold")
+  await expect(folds).toHaveCount(2)
+  await expect(folds.first()).toContainText("draft 1")
+  await expect(folds.first()).toContainText("closed by approving its plan")
+  await expect(folds.last()).toContainText("job 2")
+
+  // And `reopen` is offered only where the server would take it: the last job
+  // and no other. It is on the job that was just folded, and not on the draft
+  // the approval closed before it — which the route refuses, and used to
+  // refuse by saying the job was not closed.
+  await expect(folds.first().locator("button", { hasText: "reopen" })).toHaveCount(0)
+  await expect(folds.last().locator("button", { hasText: "reopen" })).toHaveCount(1)
 
   // The fold, with what it cost: the compaction log is the fourth of the four
   // panels the design says justify building this client, and the numbers in it

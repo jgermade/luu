@@ -64,6 +64,31 @@ plan is what the draft compacts to*. It used to read a held prompt, before
 anything had been looked at, which is a small model's worst case. No prompt is
 held any more: a prompt runs, in the draft, always.
 
+**And the page reads the alternation, on both surfaces.** A fold says which
+half it was — *draft 3* or *job 4*, from the same `!plan` rule the live-job
+block uses — and why it ended, which is now three rungs and not two:
+`ClosedBy::Approval` beside `User` and `ExitCode`, because under the alternation
+most drafts end by having a plan approved out of them and a recording that
+called that *a person folded it* could not count either. `protocol::VERSION` 8
+and `record::FORMAT` 17 carry it, the first bump of each taken for a **value**
+rather than a line. The transcript keeps both halves rather than merging a
+draft's fold into the job it became: a draft's turns happened, they are what the
+plan was written from, and hiding them would be shortest exactly where somebody
+is auditing what was approved.
+
+Two things the page was getting wrong fell out of writing that. **A draft's
+turns were loose**: `draft_opened` carries the turn it was opened to hold —
+deliberately, because a turn that opens a draft is in a job that did not exist
+when it started — and the page dropped it, so live, a draft's turns belonged to
+nothing and its fold never appeared, while the same session reloaded got them
+back from the store with their job on them. **And `reopen` was offered
+everywhere**: `Context::reopen_job` takes the last job and no other, and item 22
+shrank that window to *before your next prompt*, since every prompt opens a
+draft. The page now offers it only where the server would take it, and the
+refusal — which said *job N is not closed* about a job the person had just
+watched fold — says which of the two reasons it is. See
+[`RECORD/2026-09-21.the-alternation-on-the-page.completed.md`](RECORD/2026-09-21.the-alternation-on-the-page.completed.md).
+
 **A proposal is not a job and has no id**, because an id is what approval hands
 out — so a plan that is declined never acquires one, and `JobState` is `Open` and
 `Closed` with nothing else in it. Where `Proposed` and `Rejected` went is
@@ -92,6 +117,27 @@ implicit ones (`SYSTEM_ROOTS` and `/dev/null`) exist so a subprocess can start
 and have no write bit to take — and stamps `Authority::Draft`, so a refusal says
 the floor refused rather than sending someone to edit `luu.toml`. `chat` keeps
 the policy file: a floor is the gate's shadow, and `chat` has no gate.
+
+**The refusal names the draft, one turn in.** `Authority::Draft` carries an
+`Option<JobId>`: `None` on the first prompt of a session, where the sandbox is
+chosen before `open_draft` runs and there is genuinely nothing to name, and the
+draft's id on every prompt after it — stamped by `serve` from the context it is
+already reading, and only where the live job really is a draft. So a denial
+reads *the floor for draft 3, which grants no writes*, the way one inside an
+approved job has always read *the approved plan for job 7*, and a reader stops
+having to join the refusal's turn to the line that opened its job.
+
+**And the gate shows it.** The panel had always shown what a plan *asks for* —
+reads, writes, commands, network, egress, enforcement — and never what the turn
+in front of it may already do, which made approving read as a yes to a list
+rather than a decision about what to **add**. `/api/settings` carries the
+session's floor beside its posture (`reads`, `commands`, `network`, resolved in
+Rust and never re-derived in the page, because a second resolution of a policy
+is a second sandbox), and the gate prints it under the asks: *unapproved, a turn
+reads `.` · runs `rg`, `ls` — and writes nothing*. There is no `writes` field on
+the wire: the floor grants none by construction, so it is a sentence rather than
+an always-empty list. See
+[`RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`](RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md).
 
 It is only as strong as `enforcement`: under `best-effort` there is no Landlock,
 so a subprocess started by a draft turn can write anyway — true of every path
@@ -1260,7 +1306,7 @@ plans granted. Two things about that list are decisions rather than coverage:
 `src/lib.rs` is a directory is a question about a disk; the sandbox answers it
 with `is_dir()` when it resolves a root at approval, and a fold running
 elsewhere six weeks later has no business asking. So item 12 of
-`ROADMAP/2026-09-17` is taken this far and no further, and closing it needs a
+`ROADMAP/2026-09-21` is taken this far and no further, and closing it needs a
 field written where the answer is known.
 
 There is **no panel** for any of it yet, deliberately: a number on a page is a

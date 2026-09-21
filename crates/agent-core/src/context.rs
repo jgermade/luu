@@ -1135,8 +1135,12 @@ impl Context {
         // that never received a turn was never opened and there is nothing to
         // fold — which is the happy path, and why `folded` is an `Option`.
         let folded = match self.current_job() {
+            // `Approval` and not `User`: a person clicking *close & fold* and a
+            // plan being approved out of a draft are different rungs, and under
+            // the alternation the second is the common one. See
+            // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
             Some(draft) => self
-                .close_job_by(draft, counter, ClosedBy::User)
+                .close_job_by(draft, counter, ClosedBy::Approval)
                 .map(|summary| (draft, summary)),
             None => None,
         };

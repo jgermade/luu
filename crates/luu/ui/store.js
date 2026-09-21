@@ -18,8 +18,8 @@ import { $reactive } from "./vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 7
-const FORMAT = 16
+const PROTOCOL = 8
+const FORMAT = 17
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -279,6 +279,19 @@ function onProtocol(message) {
         closedBy: null,
       }]
       state.tasks = state.jobs
+      // The turns it opened to hold. `turn_started` says which job a turn is
+      // *in*, and a turn that opens a draft is in one that did not exist when
+      // it started — which is why this line carries the turn, and the page had
+      // been dropping it. Live, the draft's turns read as belonging to nothing
+      // and its fold never appeared; reloaded, the same session got them back
+      // from the store with their job on them. Two answers to one question, and
+      // the defect is the same shape as the pruning panel's. See
+      // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+      if (message.turn != null) {
+        state.messages = state.messages.map(entry => entry.turn === message.turn
+          ? { ...entry, job: message.job, task: message.job }
+          : entry)
+      }
       break
     }
 

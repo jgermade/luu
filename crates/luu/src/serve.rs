@@ -17,7 +17,7 @@ use agent_core::job::{ClosedBy, JobId, Plan, PlanSource, Proposal, parse_plan};
 use agent_core::protocol::{self, ClientMessage, Refusal, ServerMessage, TurnId};
 use agent_core::record;
 use agent_core::repo_map::{Order, RepoMap};
-use agent_core::sandbox::Sandbox;
+use agent_core::sandbox::{Authority, Sandbox};
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent, run_turn};
 
@@ -267,6 +267,52 @@ pub type AgencyFactory = Arc<
 /// **Nothing here is new information.** Every field was decided before the
 /// listener existed and printed to stderr, where a browser was never standing —
 /// which is the whole reason the modal's first section exists and is read-only.
+/// What a turn nobody approved may reach.
+///
+/// The gate shows what a plan *asks for*; this is the other term of the same
+/// decision — what the turn in front of the panel can already do, and therefore
+/// what approving actually adds. Derived here rather than in the page for the
+/// reason `Agency` exists at all: a second resolution of a policy, in another
+/// language, is a second sandbox, and the one on the page would be the one
+/// somebody reads while deciding.
+///
+/// **There is no `writes` field.** The floor grants none by construction, so an
+/// always-empty list would invite a reader to wonder when it is not; the panel
+/// says so as a sentence instead. See
+/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Floor {
+    /// What it may read, relative to the base where they are under it and `.`
+    /// for the base itself — the spelling a policy file uses.
+    reads: Vec<String>,
+    /// What it may run. The session's allowlist, unchanged: subtracting it
+    /// would take `rg` and `ls`, which is what exploration is for.
+    commands: Vec<String>,
+    /// Whether it may reach the network. The session's, unchanged.
+    network: bool,
+}
+
+impl Floor {
+    /// From the floor a session derived once, as the page should print it.
+    fn of(floor: &Sandbox) -> Self {
+        let policy = floor.to_policy();
+        Self {
+            reads: policy
+                .paths
+                .iter()
+                .map(
+                    |rule| match workspace::relative_of(floor.base(), &rule.path) {
+                        here if here.is_empty() => ".".to_string(),
+                        under => under,
+                    },
+                )
+                .collect(),
+            commands: policy.commands.clone(),
+            network: policy.network,
+        }
+    }
+}
+
 /// See `RECORD/2026-09-07.configuring-from-the-browser.completed.md`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Settings {
@@ -316,6 +362,11 @@ pub struct Settings {
     /// the session's, and a session can change it by starting another.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     posture: Option<record::Posture>,
+    /// What a turn nobody approved may reach. Filled at the route from the live
+    /// agency, for the same reason `posture` and `base` are: it is the
+    /// session's and not the destination's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    floor: Option<Floor>,
     store: Option<String>,
     /// Nothing has said where this run sends — see
     /// [`crate::provider::DestinationFrom`]. The page opens on the providers
@@ -562,6 +613,7 @@ impl App {
             // base the page roots its folder picker at.
             base: String::new(),
             posture: None,
+            floor: None,
             store: store.as_ref().map(|path| path.display().to_string()),
             unconfigured: provider.unconfigured(),
         };
@@ -1885,7 +1937,11 @@ async fn approve_plan(
         app.publish(Event::Protocol(ServerMessage::JobClosed {
             job: draft,
             summary,
-            by: Some(ClosedBy::User),
+            // The same value `approve_plan` wrote on the job itself: the line
+            // and the stored job are read by the same page, one live and one
+            // after a reload, and a panel that says different things in the two
+            // is the defect `the-panel-reads-the-pruned-lines` found twice.
+            by: Some(ClosedBy::Approval),
             replaced,
         }))
         .await;
@@ -2187,14 +2243,32 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
             return;
         }
         if !session.context.reopen_job(job) {
+            // Which of the two reasons, because they send a person to different
+            // places. `reopen_job` takes only the last job — reopening an
+            // earlier one would either leave two open or oblige this to close
+            // what came after — and under the alternation that is the case
+            // people actually hit, since every prompt opens a draft. Saying
+            // *not closed* there is telling them something false about a job
+            // they just watched fold. See
+            // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+            // Which of the two reasons, because they send a person to different
+            // places. `reopen_job` takes only the last job — reopening an
+            // earlier one would either leave two open or oblige this to close
+            // what came after — and under the alternation that is the case
+            // people actually hit, since every prompt opens a draft. Saying
+            // *not closed* there is telling them something false about a job
+            // they just watched fold. See
+            // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+            let last = session.context.jobs().last().map(|job| job.id);
+            let detail = match last {
+                Some(last) if last != job => format!(
+                    "job {job} is not the last one: job {last} was opened after it, \
+                     and reopening an earlier job would leave two open"
+                ),
+                _ => format!("job {job} is not closed"),
+            };
             drop(session);
-            refuse(
-                &app,
-                "reopen_job",
-                Refusal::Job,
-                format!("job {job} is not closed"),
-            )
-            .await;
+            refuse(&app, "reopen_job", Refusal::Job, detail).await;
             return;
         }
         // Live again, so its plan is the authority again. Rebuilt rather than
@@ -2222,6 +2296,43 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
 /// `instruction` is fused into the *current user message* when there is one —
 /// never into the system block, which is the part the cache reuses. `None`
 /// while a turn is already running: one at a time until sessions exist.
+/// The floor, naming the draft it is holding when one is open.
+///
+/// `Agency::floor` is derived once from the session and knows no job, because a
+/// draft's id does not exist when it is derived — but by the time a turn is
+/// being built, every prompt after the first has one open in this very context.
+/// Stamping it here is what gives a refusal the same denormalisation
+/// [`Authority::Plan`] has always had: *the floor for draft 3* rather than *the
+/// draft's floor*, with the join to `TurnStarted.job` left to nobody.
+///
+/// **Only when the live job is really a draft.** A job with a plan reaching the
+/// floor is the widening
+/// `RECORD/2026-09-21.the-drafts-floor.completed.md` §The second finding
+/// closed; naming it a draft would make a recording confidently wrong about
+/// which kind of job ran unapproved. It keeps the unstamped text, which is what
+/// that case prints today.
+///
+/// One `Sandbox` clone per drafting turn, against an `Arc` clone before it: two
+/// `Vec`s and a `PathBuf`, beside a model call. See
+/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+fn floor_holding(session: &Session, agency: &crate::session::Agency) -> Arc<Sandbox> {
+    match session.context.live_job().filter(|job| {
+        session
+            .context
+            .job(*job)
+            .is_some_and(agent_core::job::Job::is_draft)
+    }) {
+        Some(draft) => Arc::new(
+            agency
+                .floor()
+                .as_ref()
+                .clone()
+                .under(Authority::Draft(Some(draft))),
+        ),
+        None => agency.floor().clone(),
+    }
+}
+
 async fn begin_turn(
     app: &Arc<App>,
     prompt: &str,
@@ -2279,7 +2390,7 @@ async fn begin_turn(
                 // the two arms of one decision written twice is how they drift.
                 let sandbox = match &session.narrowed {
                     Some((_, sandbox)) => sandbox.clone(),
-                    None => agency.floor().clone(),
+                    None => floor_holding(&session, &agency),
                 };
                 // Re-stamped before it is scored, because the walk is a cache
                 // of line numbers and this turn may be answering after an edit
@@ -2499,7 +2610,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let session = app.session.lock().await;
         match (session.context.live_task(), &session.narrowed) {
             (Some(live), Some((task, sandbox))) if live == *task => sandbox.clone(),
-            _ => agency.floor().clone(),
+            _ => floor_holding(&session, &agency),
         }
     };
 
@@ -2731,6 +2842,7 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     settings.sandbox = agency.describe();
     settings.base = agency.sandbox.base().display().to_string();
     settings.posture = Some(agency.posture(name));
+    settings.floor = Some(Floor::of(agency.floor()));
     Json(settings).into_response()
 }
 
@@ -4311,6 +4423,7 @@ mod tests {
                     sandbox: String::new(),
                     base: String::new(),
                     posture: None,
+                    floor: None,
                     store: None,
                     unconfigured: true,
                 },
@@ -4448,6 +4561,7 @@ mod tests {
                 sandbox: String::new(),
                 base: String::new(),
                 posture: None,
+                floor: None,
                 store: None,
                 unconfigured: false,
             },

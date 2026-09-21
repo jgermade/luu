@@ -485,6 +485,16 @@ pub enum ClosedBy {
     User,
     /// The job's own [`Plan::closes_on`], on an exit code of 0.
     ExitCode,
+    /// A plan was approved out of it, which closes the draft it was proposed
+    /// inside and opens the job in one transition.
+    ///
+    /// **The rung the alternation made common.** Before item 22 a draft was not
+    /// a thing a session had, and every close was a person or an exit code;
+    /// since it, most drafts end this way and nothing said so — a recording
+    /// could not count how often exploration led to approved work, and the
+    /// transcript called it the same thing as a draft somebody gave up on. See
+    /// `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+    Approval,
 }
 
 /// Which authority approved a job.

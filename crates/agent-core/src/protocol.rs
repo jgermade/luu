@@ -82,7 +82,16 @@ use crate::turn::{EndReason, TurnEvent};
 /// a recording from before it. Same rule as 2, 3 and 4 for the new variants,
 /// and the first bump that *retires* any. See
 /// `RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md`.
-pub const VERSION: u32 = 7;
+///
+/// **8 is the rung the alternation made common**: a draft closed because a plan
+/// was approved out of it now says `approval` on `job_closed.by`, where it had
+/// been indistinguishable from a person folding it. Not a new variant of a
+/// message but a new **value** of one's field, which is the same break for a
+/// reader — `ClosedBy` is a plain enum and an unknown value is a parse error,
+/// exactly as an unknown `type` is. The first bump taken for a field rather
+/// than for a line. See
+/// `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+pub const VERSION: u32 = 8;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;

@@ -884,6 +884,82 @@ async fn a_file_added_at_the_gate_is_in_the_task_sandbox() {
     assert_eq!(session["jobs"][1]["plan"]["files"][1], "src/serve.rs");
 }
 
+/// A reopen the alternation put out of reach says *that*, and not something
+/// false.
+///
+/// Row 33. `Context::reopen_job` takes the **last** job and no other, which is
+/// argued where it is written: reopening an earlier one either leaves two open
+/// or obliges the reopen to close what came after. Item 22 is what made the
+/// rule bite — every prompt opens a draft, so the next prompt is what ends the
+/// window — and until this the refusal said *job N is not closed* about a job
+/// the person had just watched fold.
+///
+/// The page stopped offering the button here at the same time, which is the
+/// half a browser test asserts; this is the half that matters if somebody
+/// reaches the route another way. See
+/// `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
+#[tokio::test]
+async fn a_reopen_of_anything_but_the_last_job_says_which() {
+    // Two replies for two turns: the first answers with a plan block, which is
+    // what puts the gate up, and the second is the prompt that opens a draft
+    // after the job is folded. **Approving runs nothing** — under the
+    // alternation the prompt that proposed is already answered, and a turn
+    // waiting behind the gate is what item 22 removed.
+    let address = server_with(vec![PLAN.into(), ANSWER.into()]).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // A plan, approved: draft 1 closes and job 2 opens, which is the whole
+    // alternation in one message pair.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    until(&mut socket, "plan_proposed").await;
+    send(&mut socket, serde_json::json!({"type": "approve_plan"})).await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
+    let job = approved["job"].as_u64().expect("the job it opened");
+
+    // Fold it, and then open a draft after it with one more prompt. Without
+    // that prompt the reopen would succeed — which is the window item 22 left.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "close_job", "job": job}),
+    )
+    .await;
+    until(&mut socket, "job_closed").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "anything else?"}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+    let (opened, _) = until(&mut socket, "draft_opened").await;
+    let draft = opened["job"].as_u64().expect("the draft after it");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "reopen_job", "job": job}),
+    )
+    .await;
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["request"], "reopen_job");
+    assert_eq!(refused["reason"], "job", "{refused}");
+    let detail = refused["detail"].as_str().expect("a detail");
+    assert!(
+        detail.contains("not the last one") && detail.contains(&draft.to_string()),
+        "the refusal names the job that came after it, because that is what a \
+         person can act on: {detail}",
+    );
+    assert!(
+        !detail.contains("is not closed"),
+        "and does not say the opposite of what the transcript shows: {detail}",
+    );
+}
+
 /// The three other silences, each of which used to be an early return.
 #[tokio::test]
 async fn the_server_says_why_it_did_not_do_something() {
@@ -1245,6 +1321,77 @@ async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
     assert!(
         !scratch.exists(),
         "the file was written anyway, so the floor is not holding",
+    );
+    let _ = std::fs::remove_file(&scratch);
+}
+
+/// And the refusal names *which* draft, one turn in.
+///
+/// Row 32, and it is the sibling above with one prompt in front of it. On the
+/// first prompt of a session there is no draft to name — `open_draft` runs when
+/// the turn lands, after the sandbox is chosen — so that one reads *the draft's
+/// floor*, which is what the test above asserts. Every prompt after it has a
+/// draft open in the same context `serve` already reads, and the denial
+/// denormalises it the way `Authority::Plan` always has.
+///
+/// The job id is read from the wire rather than assumed to be 1: it is the
+/// draft the first prompt opened, and a test that hard-coded it would pass on
+/// the wrong number the day a session opens with anything else. See
+/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+#[tokio::test]
+async fn a_refusal_in_a_draft_names_the_draft_it_was_refused_in() {
+    let scratch = std::env::temp_dir().join(format!("luu-draft-named-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&scratch);
+    let call = format!(
+        "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by a draft\"}}}}\n```",
+        serde_json::to_string(&scratch.display().to_string()).expect("a path"),
+    );
+    let address = server_writable(
+        vec![
+            "Still drafting.".into(),
+            call,
+            "I am drafting, so I may not change that.".into(),
+        ],
+        &scratch,
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // The first prompt, which opens the draft and asks for nothing.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "what is here"}),
+    )
+    .await;
+    // `draft_opened` lands *after* the turn it was opened to hold — a job
+    // opens when a turn lands in it — so the two waits are in that order and
+    // not the reading one.
+    until(&mut socket, "ended").await;
+    let (opened, _) = until(&mut socket, "draft_opened").await;
+    let draft = opened["job"].as_u64().expect("the draft it opened");
+
+    // The second, inside the draft the first one opened.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
+    )
+    .await;
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["verdict"]["allowed"], false);
+    assert!(
+        result["verdict"]["rule"]
+            .as_str()
+            .expect("a rule")
+            .contains(&format!("the floor for draft {draft}")),
+        "a refusal inside a draft names it, like one inside a plan: {}",
+        result["verdict"]["rule"],
+    );
+    assert!(
+        !scratch.exists(),
+        "naming the draft is a change to the words, not to the floor",
     );
     let _ = std::fs::remove_file(&scratch);
 }
@@ -1642,10 +1789,13 @@ async fn a_green_command_closes_the_task_with_nobody_at_the_gate() {
     assert_eq!(session["jobs"][1]["state"], "closed");
     assert_eq!(
         session["jobs"][1]["closed_by"], "exit_code",
-        "the job's own close; `jobs[0]` is the draft, which a person folded at \
-         the gate",
+        "the job's own close; `jobs[0]` is the draft the plan was approved out of",
     );
-    assert_eq!(session["jobs"][0]["closed_by"], "user");
+    // **`approval` and not `user`**, which is what this line said until
+    // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`: nobody
+    // folded that draft — a plan was approved out of it, and the two are
+    // different rungs of the same ladder `ClosedBy` exists to count.
+    assert_eq!(session["jobs"][0]["closed_by"], "approval");
 }
 
 #[tokio::test]
@@ -2321,6 +2471,60 @@ async fn the_settings_route_reports_what_the_run_resolved() {
             .is_some_and(|text| text.contains("read-write")),
         "the sandbox this run resolved is on the page, not only on stderr"
     );
+}
+
+/// The settings carry the floor, which is what the gate shows beside a plan.
+///
+/// Row 31: the panel had always shown what a plan *asks for* and never what the
+/// turn in front of it may already do, so approving looked like a yes to a list
+/// rather than a decision about what to add. The page never derives this — a
+/// second resolution of a policy in another language is a second sandbox — so
+/// the assertion is that the route hands it over, resolved.
+///
+/// The two halves that make it a *floor*: the tree is there, and it is there
+/// **read-only**, under a policy file that grants it read-write. See
+/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+#[tokio::test]
+async fn the_settings_route_carries_the_floor_a_draft_runs_on() {
+    let address = server().await;
+    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
+        .await
+        .expect("asking for the settings")
+        .json()
+        .await
+        .expect("the settings are JSON");
+
+    let floor = &settings["floor"];
+    assert!(
+        !floor.is_null(),
+        "the floor is the other term of the gate's question"
+    );
+    let reads: Vec<&str> = floor["reads"]
+        .as_array()
+        .expect("the paths it may read")
+        .iter()
+        .map(|path| path.as_str().expect("a path"))
+        .collect();
+    assert!(
+        reads.contains(&"."),
+        "the base is spelled the way a policy file spells it: {reads:?}",
+    );
+    // The sandbox line beside it says read-write on the same tree, which is
+    // what makes this a subtraction rather than a second description of the
+    // same grant.
+    assert!(
+        settings["sandbox"]
+            .as_str()
+            .is_some_and(|text| text.contains("read-write")),
+        "the session grants writes; the floor is what takes them away",
+    );
+    // No `writes` key at all, deliberately: an always-empty list is a question
+    // mark where the panel says a sentence.
+    assert!(
+        floor.get("writes").is_none(),
+        "the floor grants no writes by construction and says so in words",
+    );
+    assert_eq!(floor["network"], false, "the mock server reaches nothing");
 }
 
 /// A server that fell into the mock says so, in the one field a page is
@@ -3237,6 +3441,53 @@ async fn a_resumed_session_renders_its_spans_on_the_turn_that_was_grounded_with_
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The recording once it holds what the caller is about to assert over.
+///
+/// **The recorder writes on its own task** — `Recorder::create` spawns it, one
+/// `write_all` and one flush per line — so a line is not in the file the moment
+/// the request or the message that produced it returns. Every other
+/// `read_record` in the suite reads a file a `luu` process has already exited
+/// from; this is the only test that reads one out from under a live server, and
+/// it had been assuming the writer had run.
+///
+/// Waiting is not a wall-clock claim about how fast that task is, and `ready`
+/// is deliberately the caller's own shape rather than a line count: under load
+/// the headers landed and the turn's lines had not, which is the same race one
+/// level down. The assertions stay exact and stay at the call site; a writer
+/// that never runs fails here after the deadline rather than passing early. A
+/// parse error counts as *not yet* for the same reason — a line half-written is
+/// a line not written — and is reported if it survives the deadline.
+async fn recording_once(
+    path: &std::path::Path,
+    what: &str,
+    ready: impl Fn(&[agent_core::record::RecordLine]) -> bool,
+) -> Vec<agent_core::record::RecordLine> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match luu::export::read_record(path) {
+            Ok(lines) if ready(&lines) => return lines,
+            Ok(lines) => assert!(
+                std::time::Instant::now() < deadline,
+                "ten seconds and the recording still does not hold {what}: {} lines",
+                lines.len(),
+            ),
+            Err(error) => assert!(
+                std::time::Instant::now() < deadline,
+                "ten seconds and the recording never parsed: {error}",
+            ),
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// How many headers a recording holds, and where the last one starts.
+fn headers_of(lines: &[agent_core::record::RecordLine]) -> Vec<&agent_core::record::RecordLine> {
+    lines
+        .iter()
+        .filter(|line| matches!(line, agent_core::record::RecordLine::Header { .. }))
+        .collect()
+}
+
 /// A `--record` file says which session each stretch of it belongs to.
 ///
 /// Item 23, driven: until this, one header at process start named the **first**
@@ -3252,8 +3503,16 @@ async fn a_resumed_session_renders_its_spans_on_the_turn_that_was_grounded_with_
 /// `started_at` is the second session's own, and the lines after it are
 /// relative to *that* — which is why the run waits before switching. Before the
 /// re-base those lines carried the offset from process start, and the wait is
-/// what makes the difference bigger than any turn this mock can take. See
-/// `RECORD/2026-09-19.a-header-per-session.completed.md`.
+/// what separates the two bases by more than nothing.
+///
+/// **What a line is checked against is measured, not assumed.** The wait used to
+/// be the bound as well as the separation, which made the test assert that a
+/// handshake, a prompt and a mock reply all fit in 400 ms of wall clock — true
+/// on an idle machine and a claim about nothing this test is for. It is now
+/// checked against how long the session had been alive, on the recorder's own
+/// clock, which load moves in the same direction as the lines themselves. See
+/// `RECORD/2026-09-19.a-header-per-session.completed.md` and
+/// `RECORD/2026-09-21.a-bound-that-is-not-a-clock.completed.md`.
 #[tokio::test]
 async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     use agent_core::record::RecordLine;
@@ -3287,10 +3546,13 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     .await;
 
     // Long enough that a line counted from the process's start could not be
-    // mistaken for one counted from the second session's: the mock answers in
-    // microseconds, so anything under this bound was re-based.
-    const WAITED: u64 = 400;
-    tokio::time::sleep(Duration::from_millis(WAITED)).await;
+    // mistaken for one counted from the second session's. It is a separation
+    // between two bases and nothing else — what a line is checked against is
+    // measured below, on the recorder's own clock, so this number is never a
+    // claim about how fast a turn runs. See
+    // `RECORD/2026-09-21.a-bound-that-is-not-a-clock.completed.md`.
+    const APART: u64 = 400;
+    tokio::time::sleep(Duration::from_millis(APART)).await;
 
     let client = reqwest::Client::new();
     let created: serde_json::Value = client
@@ -3321,7 +3583,32 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
         until(&mut socket, "draft_opened").await;
     }
 
-    let lines = luu::export::read_record(&record).expect("reading the recording back");
+    // How long the second session had been alive when the last line this test
+    // waits for was written. Every `at_ms` is stamped when its event is handled
+    // (`serve.rs`), against this same clock and this same base, so a re-based
+    // line cannot exceed it and a line counted from process start is exactly
+    // one `APART` over it. Read here rather than turned into a constant: a
+    // loaded machine moves this and the lines it bounds together.
+    let alive = luu::session::now_ms().saturating_sub(started_at);
+
+    // Two headers *and* a line under the second: the turn is what the bound
+    // below is about, and a file holding only the headers is a file the writer
+    // has not caught up with.
+    let lines = recording_once(
+        &record,
+        "two headers and a line under the second",
+        |lines| {
+            let headers = headers_of(lines);
+            headers.len() == 2
+                && lines
+                    .iter()
+                    .skip_while(|line| !std::ptr::eq(*line, headers[1]))
+                    .any(|line| {
+                        matches!(line, RecordLine::Protocol { .. } | RecordLine::Trace { .. })
+                    })
+        },
+    )
+    .await;
     let headers: Vec<&RecordLine> = lines
         .iter()
         .filter(|line| matches!(line, RecordLine::Header { .. }))
@@ -3348,6 +3635,12 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     );
 
     let RecordLine::Header {
+        started_at: first, ..
+    } = headers[0]
+    else {
+        unreachable!("filtered above")
+    };
+    let RecordLine::Header {
         started_at: second, ..
     } = headers[1]
     else {
@@ -3356,6 +3649,11 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     assert_eq!(
         *second, started_at,
         "the base a header declares is the session's own start",
+    );
+    assert!(
+        second.saturating_sub(*first) >= APART,
+        "the two bases are far enough apart that a line counted from the wrong one \
+         says so: {first} then {second}",
     );
 
     let after = lines
@@ -3370,8 +3668,9 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
         .collect::<Vec<_>>();
     assert!(!after.is_empty(), "the second session recorded nothing");
     assert!(
-        after.iter().all(|at_ms| *at_ms < WAITED),
-        "every line under the second header is counted from it: {after:?}",
+        after.iter().all(|at_ms| *at_ms <= alive),
+        "every line under the second header is counted from it, so none of them can \
+         be older than the session: {after:?} against {alive}",
     );
 
     // And the other call site, where the base goes **backwards**. A third
@@ -3402,7 +3701,10 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     let body = resumed.text().await.unwrap_or_default();
     assert_eq!(status, reqwest::StatusCode::OK, "{body}");
 
-    let lines = luu::export::read_record(&record).expect("reading the recording back");
+    let lines = recording_once(&record, "four headers", |lines| {
+        headers_of(lines).len() == 4
+    })
+    .await;
     let bases: Vec<u64> = lines
         .iter()
         .filter_map(|line| match line {

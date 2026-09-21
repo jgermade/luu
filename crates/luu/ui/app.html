@@ -276,7 +276,29 @@
   // The job turns land in: the last one not closed. It is a draft until a plan
   // is approved, which is the alternation on the screen.
   $: live = (state.jobs || state.tasks).filter(j => j.state === "open").slice(-1)[0] || null
-  $: drafting = !!live && !live.plan
+  // Which half of the alternation a job is, asked in one place. A draft is a
+  // job with no plan and that is the whole of what a draft is — the live block
+  // below and the transcript's folds both read this, because the page calling
+  // the same job a draft in one panel and a job in another is what
+  // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md` found.
+  const isDraft = job => !!job && !job.plan
+  $: drafting = isDraft(live)
+  // Whether the server would take a reopen of this one: `Context::reopen_job`
+  // succeeds for the **last** job and no other, because reopening an earlier
+  // one either gives the session two open jobs or obliges the reopen to close
+  // what came after. Item 22 is what made that bite — every prompt now opens a
+  // draft, so the next prompt is what ends the window — and the button had gone
+  // on being offered on every fold in the transcript.
+  const reopenable = job => {
+    const list = state.jobs || state.tasks
+    return !!job && !!list.length && list[list.length - 1].id === job.id
+  }
+  // What the turn in front of the gate may already do — the other term of the
+  // decision the panel asks for. Resolved by the server from the session's own
+  // floor and never worked out here: a page that derived it would be a second
+  // sandbox, disagreeing with the first at the one moment somebody is deciding.
+  // Absent in a recording, whose settings are the ones it was replayed with.
+  $: floor = state.settings?.floor || null
   $: planTasks = proposed ? (proposed.plan.tasks || proposed.plan.steps || []) : []
   $: declares = proposed
     ? planTasks.length + proposed.plan.files.length + proposed.plan.commands.length
@@ -582,13 +604,27 @@
             <div class="fold-head">
               <button type="button" class="link disclose" @click="toggle((entry.job || entry.task).id)">
                 <svg class="ic" :class.open="expanded.includes((entry.job || entry.task).id)"><use href="#i-caret"/></svg>
-                job {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
+                <!-- Which half of the alternation this was. Exploration nobody
+                     approved and work somebody signed for read the same in a
+                     transcript otherwise, which is the one thing the gate
+                     exists to record. -->
+                {{ isDraft(entry.job || entry.task) ? "draft" : "job" }} {{ (entry.job || entry.task).id }} · {{ (entry.job || entry.task).objective }}
               </button>
               <!-- Which authority folded it. Shown rather than counted in
                    private: the ladder above the person is only worth climbing if
-                   a reader can see which rung took each job. -->
+                   a reader can see which rung took each job. **Three rungs since
+                   the alternation**, and the third is the common one: most
+                   drafts end because a plan was approved out of them. -->
               <span :if="(entry.job || entry.task).closedBy === 'exit_code'" class="dim">closed by exit code</span>
-              <button type="button" class="link" :disabled="replaying" @click="reopenJob((entry.job || entry.task).id)">reopen</button>
+              <span :if="(entry.job || entry.task).closedBy === 'approval'" class="dim">closed by approving its plan</span>
+              <!-- Offered only where the server would take it. A control that is
+                   refused wherever it is clicked teaches nothing about why. -->
+              <button
+                :if="reopenable(entry.job || entry.task)"
+                type="button"
+                class="link"
+                :disabled="replaying"
+                @click="reopenJob((entry.job || entry.task).id)">reopen</button>
             </div>
             <pre class="summary">{{ (entry.job || entry.task).summary }}</pre>
           </div>
@@ -640,6 +676,18 @@
             </span>
           </p>
           <p :if="proposed?.plan.enforcement" class="dim">enforcement: {{ proposed?.plan.enforcement }}</p>
+          <!-- The floor, which is what *not* approving leaves in place. Every
+               line above says what the plan asks for; this one says what the
+               turn that asked already has, so approving is visibly a decision
+               about what to add rather than a yes to a list. Writes are a
+               sentence and not a field: the floor grants none, by construction.
+               See
+               `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`. -->
+          <p :if="floor" class="dim floor">
+            unapproved, a turn reads {{ floor?.reads.length ? floor.reads.join(" · ") : "nothing" }}<span
+              :if="floor?.commands.length"> · runs {{ floor?.commands.join(" · ") }}</span><span
+              :if="floor?.network"> · reaches the network</span> — and writes nothing
+          </p>
           <p :if="!declares" class="dim warn">
             <span :if="prose">The planning call answered in prose, so the model
             declared nothing.</span>
@@ -1235,6 +1283,9 @@
   }
   .gate .objective { font-weight: 600; margin: .2rem 0 .4rem; }
   .gate .plan { margin: 0 0 .4rem; padding-left: 1.1rem; }
+  /* The floor reads as the ground the plan is measured against, so it sits
+     apart from the asks above it rather than as one more of them. */
+  .gate .floor { border-top: 1px solid var(--line); margin-top: .4rem; padding-top: .3rem; }
   .gate p { margin: .2rem 0; }
   .gate-buttons { display: flex; gap: .5rem; margin-top: .6rem; }
   .refused {
