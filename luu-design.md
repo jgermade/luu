@@ -148,6 +148,37 @@ it was approved with** — a silent widening, item 9's shape one field along,
 which the resume route now re-narrows. See
 [`RECORD/2026-09-21.the-drafts-floor.completed.md`](RECORD/2026-09-21.the-drafts-floor.completed.md).
 
+**The floor and the plan narrow what a turn may *do*; `[authority]` is what a
+session may tell it about that, in words this machine chooses.** Built,
+off by default, and reachable only from `config.toml` and the page — never
+from a flag, and never from `chat`: `Authority::Draft` has no floor to narrow
+there, since every job a script opens is pre-approved by the script itself,
+so there is no draft state a note would ever attach to. Two tables,
+`[authority.draft]` and `[authority.plan]`, each an optional `text` and a
+`position` (`system`, the default, or `prompt`) — two and not one, because a
+draft and a plan grant different things and the sentence that fits one does
+not fit the other; asked and rejected as a single note while this was being
+argued. `system` appends the words to the cached prefix once, so they ride it
+for as long as the authority holds and cost nothing per turn; `prompt`
+prepends them to the turn's own text instead, repeated every time, which is
+the one worth having if the question is whether proximity to the turn a model
+is about to make changes anything on its own. `Authority::Policy` gets no
+table: it is the ordinary grant, and there is nothing about it worth saying
+that the tools already in front of a model would not show. **Simpler than
+`[resend]`'s session-fact story in one way that matters**: a note is
+recomputed from nothing on every `select`, so there is no window of eviction
+or pruning state a mid-session move could leave stranded, and `PUT
+/api/authority` applies whatever it is asked outright rather than deciding
+what is safe to move a live session onto. The wire says what a turn was told
+the same way it says which of the three window rules rendered it
+(`record::FORMAT` 18, `authority_draft`/`authority_plan` on the header,
+`None` on every stream written before this field existed and not *no note
+set*). Nothing here has been measured against a model yet: it exists so that
+the words and the position can be edited by hand between runs and compared,
+which is the run
+[roadmap row 27](ROADMAP/2026-09-21/README.md)'s claim (c) was blocked on. See
+[`RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`](RECORD/2026-09-22.an-authority-a-model-is-told.completed.md).
+
 Approval is per piece of work, so there is no autonomy setting to remember and no
 mode that can be left open. `plan`/`run`/`auto` used to live here; they were
 global where approval is per piece of work, and — the reason they went — a mode

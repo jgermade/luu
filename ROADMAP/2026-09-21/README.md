@@ -79,9 +79,12 @@ gone. Nothing in the protocol rots; what expired is the schedule, and the row
 that changes is row 27, which did not exist when the section was last written.
 **Row 2 also changed, on 2026-09-22**, and not the way this paragraph predicted:
 it closed on machine 3, not machine 4, and split off row 35 rather than waiting
-on the RTX fit test it used to be blocked behind. **And it is no longer the only
-`WIP` record**: [`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.WIP.md)
-joined it the same day, for row 27's claim (c).
+on the RTX fit test it used to be blocked behind. **A second `WIP` record
+joined it the same day and closed the day after**:
+[`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.completed.md),
+built and run for row 27's claim (c) — see that row, below.
+[`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) is
+once again the only one standing.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
@@ -90,7 +93,7 @@ joined it the same day, for row 27's claim (c).
 | 35 | **The 27B's RTX fit test, orphaned by item 2 closing elsewhere** — §3 of `the-16gb-threshold` was never run: does `Qwen3.8-27B-GSQ-RCO-IQ3_S.gguf` load and hold a turn on 16 GB of VRAM, still the open question `machines.md` names for machine 4. No longer item 2's precondition, since item 2 answered its question on machine 3 instead | machine 4 | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §3 |
 | 3 | **A model inside a container** — every contained run in this repository is the mock, and the trigger `luu.container.toml` names for narrowing its network has never fired. **Carried unchanged for a third revision** | machine 4 | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 4 | **Machine 2 earns its first question** — a Metal control for RADV's doubt, and the bandwidth floor at 120 GB/s | machine 2 | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §6–7 |
-| 27 | ~**What this week's instruments owe a model** — three claims, one afternoon, one corpus family: (a) how often a *model* edits a file it has quoted and then asks about it; (b) whether a model notices the divergence or its repair; (c) whether a model behaves differently when it knows it is drafting~ **(a) and (b) closed 2026-09-22, on machine 3**: the model made every requested edit in both arms and `diverged` was 0 — the repair fires `superseded` 8 times (fragments) and 16 (`--select-tokens 1024`, which re-reads a span nobody typed) — and every re-asked value, including the one answerable only from memory with no fragment attached, came back current. **(c) is not answered here** — the corpus deliberately keeps the gate out of the loop, so drafting needs a different run. **A proposal for (c)'s own instrument landed the same day**: nothing today tells a model it is drafting, so there is no second arm to run yet — see [`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.WIP.md) | (c): the proposal implemented, then a `luu serve` session with the gate in the loop | [`edit-reread-on-a-model`](../../RECORD/2026-09-22.edit-reread-on-a-model.completed.md), [`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.WIP.md) |
+| 27 | ~**What this week's instruments owe a model** — three claims, one afternoon, one corpus family: (a) how often a *model* edits a file it has quoted and then asks about it; (b) whether a model notices the divergence or its repair; (c) whether a model behaves differently when it knows it is drafting~ **closed in full, 2026-09-22–23, on machine 3.** (a) and (b): the model made every requested edit in both arms and `diverged` was 0 — the repair fires `superseded` 8 times (fragments) and 16 (`--select-tokens 1024`, which re-reads a span nobody typed) — and every re-asked value, including the one answerable only from memory with no fragment attached, came back current. (c) needed its own instrument first — nothing told a model it was drafting, so `[authority.draft]`/`[authority.plan]` was proposed and built (session fact, live `PUT`, a Settings section, `record::FORMAT` 18) — and then the run: asked to fix a one-line bug with no plan open, the model tries `edit_file` then `write_file`, both denied by the floor, explores the tree in between, and only then gives up and states the fix in prose — 5 tool calls, 2 824 completion tokens. Told in advance that writes are refused until a plan is approved, it reads the file once and proposes a plan without trying to write at all — 517 tokens, a fifth of the other arm's. Neither plan was approved, so whether the fix lands either way is untested | nothing | [`edit-reread-on-a-model`](../../RECORD/2026-09-22.edit-reread-on-a-model.completed.md), [`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.completed.md) |
 
 **Section B — the window.** Rule A is on and measured on the axis that justifies
 it; B and C are built and off. **Item 5 closed 2026-09-22, inconclusively**: it
@@ -105,7 +108,7 @@ result. B and C stay off; a new corpus is what would move them.
 | 7 | **Drift under a tool's own name** — `` ```list_dir ``, `` ```run_command ``: two of fifteen prompts, identical in the `off` and `grammar` arms, and a different trigger from the one the grammar closed. Wants `avoid_until_forced` once per tool name | nothing | [`what-constrain-does`](../../RECORD/2026-09-14.what-constrain-does.completed.md) §Still open |
 | 21 | **A window that no longer fits is absorbed in silence** — `TurnView::dropped` carries the `Evicted`, the panel reads it, and nothing treats it as something a person is *told*. The answer is to make it visible, not configurable | needs a design argument | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §6th |
 | 28 | **The two keys by content, and the migration they cost** — item 18 landed the table under `repeat`, `prune`, `results` and its own record had settled `file-read` and `cmd-output`, the cut by *what the rule is about*. Taken knowingly: those keys would name a capability nothing implements. The rename is owed the moment rule A reaches a tool's result, and it is a migration of a file on somebody's machine | rule A reaching more than spans | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §sixth, §eleventh; `crates/luu/src/provider.rs` |
-| 29 | **The tally has no denominator and no opinion** — `repeated` says what rule A dropped and nothing counts the spans it did *not* collapse, so no share can be computed; and a count per session is not a count across sessions, which is what *how often does a model edit a file it has quoted* actually asks. Both are arithmetic on a surface that now exists | row 27 for the meaning; nothing for the arithmetic | [`one-counting-surface`](../../RECORD/2026-09-19.one-counting-surface.completed.md) §Still open |
+| 29 | **The tally has no denominator and no opinion** — `repeated` says what rule A dropped and nothing counts the spans it did *not* collapse, so no share can be computed; and a count per session is not a count across sessions, which is what *how often does a model edit a file it has quoted* actually asks. Both are arithmetic on a surface that now exists. **Row 27 closed 2026-09-22–23** and gave the meaning: every edit was caught, so the denominator this row wants is a share of a number that came back 100% on this corpus | nothing for the arithmetic | [`one-counting-surface`](../../RECORD/2026-09-19.one-counting-surface.completed.md) §Still open |
 | 30 | **Whether a draft's fold is worth its summary** — the zero-turn draft case is dead by construction, and a three-turn draft that concluded nothing is the same objection with a smaller number. Nothing says where the floor is | needs a design argument | [`every-turn-belongs-to-a-job`](../../RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md) §Still open |
 
 **Section C — the gate, and the surfaces that show it.** Three of its four new
@@ -139,15 +142,17 @@ nothing in it blocks anything above.
   built an instrument whose meaning is on the other side of a machine nobody has
   had a hand on. That is the argument for running section A before writing
   another instrument, and it is the first time this file has had one that does
-  not depend on a date. **The count dropped to three on 2026-09-22**: item 2 is
-  answered, and what it left behind — the RTX fit test — moved to row 35 rather
-  than staying inside this gate.
-- **Row 27's afternoon happened for two of its three claims on 2026-09-22.** (a)
-  and (b) shared one corpus and one hour, which is why splitting them earlier
-  would have been three rows blocked on the same thing. (c) does not share
-  that hour — it needs the gate in the loop, which this corpus deliberately
-  keeps out — so what is left of the row is now genuinely one claim, not two
-  compressed into one for scheduling.
+  not depend on a date. **The count dropped to zero on 2026-09-23**: item 2 is
+  answered, its RTX fit test moved to row 35 rather than staying inside this
+  gate, and row 27 closed in full — the section's own queue, the thing that
+  made it more than a date, is empty for the first time since it was written.
+- **Row 27's afternoon happened for two of its three claims on 2026-09-22, and
+  the third took a day more.** (a) and (b) shared one corpus and one hour,
+  which is why splitting them earlier would have been three rows blocked on
+  the same thing. (c) did not share that hour — it needed the gate in the
+  loop, which this corpus deliberately keeps out, and an instrument
+  ([`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.completed.md))
+  that did not exist yet — so it closed a day later, on its own.
 - **Item 2 closed 2026-09-22, and the thing that protected it was not being tied
   to machine 4.** The instrument — a server started once at `-c 98304` — turned
   out to only need *a* machine with 48 GB and the article's own build, not the
@@ -182,8 +187,9 @@ nothing in it blocks anything above.
   told them apart from the frequency.
 - **Item 12 and row 29 are the same arithmetic complaint one field apart**, and
   both are downstream of the surface item 25 landed. Neither is blocked on a
-  model; both are worth less than they look until row 27 says what the numbers
-  are a share *of*.
+  model; **row 27 said what the numbers are a share *of* on 2026-09-22**, and
+  it was a share of a corpus this small catching everything, which is worth
+  less as a rate than it looked before the run existed to compare it to.
 - **Item 28 is ordered but not scheduled, and it is the one row here that gets
   cheaper by waiting.** The rename becomes correct exactly when rule A reaches
   a tool's result, and doing it before that names a capability the tree does not

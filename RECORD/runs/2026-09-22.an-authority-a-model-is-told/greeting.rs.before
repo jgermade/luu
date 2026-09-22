@@ -1,0 +1,7 @@
+//! What the program says to whoever is in front of it.
+
+/// Greets `name`. It should say "Hi", and it says "Hello" -- a leftover from
+/// before the copy changed everywhere else.
+pub fn greet(name: &str) -> String {
+    format!("Hello, {name}")
+}

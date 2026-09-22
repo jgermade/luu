@@ -30,10 +30,11 @@ and [`the-drafts-floor`](../../RECORD/2026-09-21.the-drafts-floor.completed.md).
 Four days of work built the instruments; none of them can be read without one of
 these boxes. Roadmap row 27 is that bill, and it lands on machine 1 or machine 4
 — whichever has a hand on it first, because unlike rows 1–4 it does not care
-which silicon answers. **On 2026-09-22 machine 3 paid two-thirds of it** — see
-item 4 below — and a second `WIP` record,
-[`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.WIP.md),
-joined `the-16gb-threshold` for what is left.
+which silicon answers. **On 2026-09-22 and 2026-09-23 machine 3 paid all of
+it** — see item 4 below.
+[`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.completed.md)
+joined `the-16gb-threshold` as a second `WIP` record the same day and closed
+the day after, which leaves `the-16gb-threshold` standing alone again.
 
 ## The inventory
 
@@ -90,19 +91,18 @@ exactly the column this file refuses to add.
    probe is already past what that comfortably covers — four verdicts per reply,
    two models, five corpora.
 
-4. **What the week's instruments owe a model** — roadmap row 27, closed for two
-   of its three claims on 2026-09-22, on machine 3: how often a model edits a
-   file it has quoted and then asks about it (every time, both arms), and
-   whether it notices the citation that replaces the stale bytes (it never had
-   to — `diverged` was 0, and every re-asked value came back current). What is
-   left is the claim that does not share the other two's protocol: whether a
-   model behaves differently while drafting now that drafting cannot write,
-   which needs the gate in the loop and a `luu serve` session, not
-   `--allow-write .` with no job. Still does not care which box answers it,
-   and each protocol is the two commands in its own record's header. It is
-   here rather than in the numbered rows above because it was the first
-   Section A run in this project's history whose blocker was an afternoon and
-   not a machine.
+4. **What the week's instruments owe a model** — roadmap row 27, closed in
+   full on 2026-09-22–23, on machine 3. How often a model edits a file it has
+   quoted and then asks about it: every time, both arms. Whether it notices
+   the citation that replaces the stale bytes: it never had to — `diverged`
+   was 0, and every re-asked value came back current. Whether it behaves
+   differently while drafting, the claim that needed its own protocol — a
+   note telling it so, built for the purpose — rather than the other two's:
+   without one it tries a denied write twice before giving up in prose; with
+   one it proposes a plan on the first read and never tries. Still did not
+   care which box answered it. It is here rather than in the numbered rows
+   above because it was the first Section A run in this project's history
+   whose blocker was an afternoon and not a machine.
 
 5. **A ceiling** (P2) — the same open-weight family at 70B+, served remotely, to
    say what the local numbers are a fraction of. Unblocked since the OpenAI
