@@ -87,15 +87,19 @@ exactly the column this file refuses to add.
    probe is already past what that comfortably covers — four verdicts per reply,
    two models, five corpora.
 
-4. **What the week's instruments owe a model** (machine 1 or machine 4) —
-   roadmap row 27, and the only entry in this list that does not care which box
-   answers it. Three claims share one corpus family and one afternoon: how often
-   a model edits a file it has quoted and then asks about it, whether it notices
-   the citation that replaces the stale bytes, and whether it behaves
-   differently while drafting now that drafting cannot write. Each protocol is
-   the two commands in its own record's header. It is here rather than in the
-   numbered rows above because it is the first Section A run in this project's
-   history whose blocker is an afternoon and not a machine.
+4. **What the week's instruments owe a model** — roadmap row 27, closed for two
+   of its three claims on 2026-09-22, on machine 3: how often a model edits a
+   file it has quoted and then asks about it (every time, both arms), and
+   whether it notices the citation that replaces the stale bytes (it never had
+   to — `diverged` was 0, and every re-asked value came back current). What is
+   left is the claim that does not share the other two's protocol: whether a
+   model behaves differently while drafting now that drafting cannot write,
+   which needs the gate in the loop and a `luu serve` session, not
+   `--allow-write .` with no job. Still does not care which box answers it,
+   and each protocol is the two commands in its own record's header. It is
+   here rather than in the numbered rows above because it was the first
+   Section A run in this project's history whose blocker was an afternoon and
+   not a machine.
 
 5. **A ceiling** (P2) — the same open-weight family at 70B+, served remotely, to
    say what the local numbers are a fraction of. Unblocked since the OpenAI

@@ -88,7 +88,7 @@ on the RTX fit test it used to be blocked behind.
 | 35 | **The 27B's RTX fit test, orphaned by item 2 closing elsewhere** — §3 of `the-16gb-threshold` was never run: does `Qwen3.8-27B-GSQ-RCO-IQ3_S.gguf` load and hold a turn on 16 GB of VRAM, still the open question `machines.md` names for machine 4. No longer item 2's precondition, since item 2 answered its question on machine 3 instead | machine 4 | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §3 |
 | 3 | **A model inside a container** — every contained run in this repository is the mock, and the trigger `luu.container.toml` names for narrowing its network has never fired. **Carried unchanged for a third revision** | machine 4 | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 4 | **Machine 2 earns its first question** — a Metal control for RADV's doubt, and the bandwidth floor at 120 GB/s | machine 2 | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §6–7 |
-| 27 | **What this week's instruments owe a model** — three claims, one afternoon, one corpus family, and the protocol for each is written in the record that built it: (a) how often a *model* edits a file it has quoted and then asks about it — 8 of 13 is a fact about a scripted corpus; (b) whether a model notices the divergence or its repair — a citation where the bytes stood; (c) whether a model behaves differently when it knows it is drafting, which the floor gave teeth, because a draft that does not know it may not write finds out by being refused and a refusal is a turn | a machine with a model | [`a-corpus-that-edits`](../../RECORD/2026-09-19.a-corpus-that-edits.completed.md), [`the-newest-body-wins`](../../RECORD/2026-09-20.the-newest-body-wins.completed.md), [`the-drafts-floor`](../../RECORD/2026-09-21.the-drafts-floor.completed.md) §Still open |
+| 27 | ~**What this week's instruments owe a model** — three claims, one afternoon, one corpus family: (a) how often a *model* edits a file it has quoted and then asks about it; (b) whether a model notices the divergence or its repair; (c) whether a model behaves differently when it knows it is drafting~ **(a) and (b) closed 2026-09-22, on machine 3**: the model made every requested edit in both arms and `diverged` was 0 — the repair fires `superseded` 8 times (fragments) and 16 (`--select-tokens 1024`, which re-reads a span nobody typed) — and every re-asked value, including the one answerable only from memory with no fragment attached, came back current. **(c) is not answered here** — the corpus deliberately keeps the gate out of the loop, so drafting needs a different run | (c): a `luu serve` session with the gate in the loop | [`edit-reread-on-a-model`](../../RECORD/2026-09-22.edit-reread-on-a-model.completed.md) |
 
 **Section B — the window.** Rule A is on and measured on the axis that justifies
 it; B and C are built and off. **Item 5 closed 2026-09-22, inconclusively**: it
@@ -140,10 +140,12 @@ nothing in it blocks anything above.
   not depend on a date. **The count dropped to three on 2026-09-22**: item 2 is
   answered, and what it left behind — the RTX fit test — moved to row 35 rather
   than staying inside this gate.
-- **Row 27 is one afternoon and three claims, which is why it is a row and not
-  three.** The corpus, the flags and the counting surface all exist; what does
-  not exist is a single session of a model doing the thing. Splitting it would
-  produce three rows blocked on the same hour.
+- **Row 27's afternoon happened for two of its three claims on 2026-09-22.** (a)
+  and (b) shared one corpus and one hour, which is why splitting them earlier
+  would have been three rows blocked on the same thing. (c) does not share
+  that hour — it needs the gate in the loop, which this corpus deliberately
+  keeps out — so what is left of the row is now genuinely one claim, not two
+  compressed into one for scheduling.
 - **Item 2 closed 2026-09-22, and the thing that protected it was not being tied
   to machine 4.** The instrument — a server started once at `-c 98304` — turned
   out to only need *a* machine with 48 GB and the article's own build, not the
