@@ -1,0 +1,169 @@
+<script :setup>
+  // What a draft or a plan is told about the authority it runs under, as
+  // opposed to what `crate::sandbox` enforces without saying so.
+  //
+  // Beside Resend for the same reason it is beside it in `[authority]`:
+  // `Authority::Draft` and `Authority::Plan` already narrow what a turn may
+  // *do*, and until this landed nothing narrowed what it *reads* about that —
+  // a draft that tries to write discovered the floor by being refused, and a
+  // refusal is a turn. See
+  // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+  const { state, loadAuthority, saveAuthority } = await import("./store.js")
+
+  await loadAuthority()
+
+  // A *copy* of the file's two tables, [`SettingsResend`]'s reason exactly:
+  // typing into the server's own answer would make an unsaved change look
+  // saved. `""` throughout is the file saying nothing, which unsets the field
+  // rather than choosing a value for it.
+  let draft = {
+    draftText: state.authority?.file?.draft?.text || "",
+    draftPosition: state.authority?.file?.draft?.position || "",
+    planText: state.authority?.file?.plan?.text || "",
+    planPosition: state.authority?.file?.plan?.position || "",
+  }
+  let saving = false
+
+  const set = (key, value) => { draft = { ...draft, [key]: value } }
+
+  // One note's half of the body: absent (not `{}`) when there is no text,
+  // so a table with nothing to say does not write an empty one into the file.
+  const note = (text, position) =>
+    text ? { text, ...(position ? { position } : {}) } : undefined
+
+  const save = async () => {
+    saving = true
+    await saveAuthority({
+      draft: note(draft.draftText, draft.draftPosition),
+      plan: note(draft.planText, draft.planPosition),
+    })
+    saving = false
+    draft = {
+      draftText: state.authority?.file?.draft?.text || "",
+      draftPosition: state.authority?.file?.draft?.position || "",
+      planText: state.authority?.file?.plan?.text || "",
+      planPosition: state.authority?.file?.plan?.position || "",
+    }
+  }
+
+  $: editable = !!state.authority?.editable
+  $: running = state.authority?.running || {}
+  // Whether the file names a note the live session is not (yet) telling a
+  // turn — a session may have started before this table existed, or under a
+  // different one this table has since replaced.
+  $: differs = key => {
+    const asked = state.authority?.file?.[key]?.text || ""
+    const live = running[key]?.text || ""
+    return !!asked && asked !== live
+  }
+</script>
+
+<h3>What this session tells a turn</h3>
+<p class="dim small">
+  Two authorities, two notes: <code>Authority::Draft</code> narrows what a turn
+  may do and says nothing about it on its own, and neither does
+  <code>Authority::Plan</code> once one is approved.
+</p>
+
+<dl class="settings" :if="state.authority">
+  <dt>Draft</dt>
+  <dd>
+    <span :if="running.draft" class="tag note-text">{{ running.draft.text }}</span>
+    <span :if="running.draft" class="dim">· {{ running.draft.position }}</span>
+    <span :if="!running.draft" class="dim">nothing sent</span>
+    <span :if="differs('draft')" class="warn">· the file says something else</span>
+  </dd>
+
+  <dt>Plan</dt>
+  <dd>
+    <span :if="running.plan" class="tag note-text">{{ running.plan.text }}</span>
+    <span :if="running.plan" class="dim">· {{ running.plan.position }}</span>
+    <span :if="!running.plan" class="dim">nothing sent</span>
+    <span :if="differs('plan')" class="warn">· the file says something else</span>
+  </dd>
+</dl>
+
+<h3>This machine's default</h3>
+<p class="dim small" :if="state.authority?.path">
+  <span class="path">{{ state.authority.path }}</span>
+  · what a session starts on unless it asks for something else
+</p>
+<p class="dim small">
+  Empty is this machine saying nothing, not choosing silence on purpose — the
+  code's own default is the same either way: no note is sent, and a draft finds
+  the floor out by trying and being refused.
+</p>
+<p :if="state.authority && !state.authority.editable" class="refused">{{ state.authority.refused }}</p>
+<p :if="state.authorityError" class="error">{{ state.authorityError }}</p>
+
+<dl class="settings" :if="state.authority">
+  <dt>Draft</dt>
+  <dd>
+    <textarea rows="2" :disabled="!editable" :value="draft.draftText"
+              placeholder="Nothing — a draft that tries to write discovers the floor by being refused."
+              @input="set('draftText', $event.target.value)"></textarea>
+  </dd>
+  <dd>
+    <div class="choice">
+      <button type="button" :disabled="!editable" :class.on="draft.draftPosition === ''"
+              @click="set('draftPosition', '')">system (default)</button>
+      <button type="button" :disabled="!editable" :class.on="draft.draftPosition === 'prompt'"
+              @click="set('draftPosition', 'prompt')">prompt</button>
+    </div>
+  </dd>
+  <dd class="note">
+    <b>system</b> appends the note to the cached prefix once — free while the
+    draft holds, since it never changes a turn already sent under it.
+    <b>prompt</b> repeats it before every turn's own text instead: costs a few
+    tokens each time, and is the one worth having if the question is whether
+    proximity to the turn a model is about to make changes anything on its own.
+  </dd>
+
+  <dt>Plan</dt>
+  <dd>
+    <textarea rows="2" :disabled="!editable" :value="draft.planText"
+              placeholder="Nothing — the ordinary case, since a plan already grants what it grants."
+              @input="set('planText', $event.target.value)"></textarea>
+  </dd>
+  <dd>
+    <div class="choice">
+      <button type="button" :disabled="!editable" :class.on="draft.planPosition === ''"
+              @click="set('planPosition', '')">system (default)</button>
+      <button type="button" :disabled="!editable" :class.on="draft.planPosition === 'prompt'"
+              @click="set('planPosition', 'prompt')">prompt</button>
+    </div>
+  </dd>
+
+  <dd class="note caveat">
+    Neither table has been measured against a model yet. The point of leaving
+    both the words and the position editable here is to change them by hand
+    between runs and read what moves — see
+    <code>RECORD/2026-09-22.an-authority-a-model-is-told.completed.md</code>
+    for the run this is for and what it still does not answer.
+  </dd>
+</dl>
+
+<div class="modal-foot">
+  <div class="modal-actions" :if="state.authority">
+    <button type="button" class="save" :disabled="!editable || saving"
+            @click="save()">{{ saving ? "Saving…" : "Save" }}</button>
+  </div>
+</div>
+
+<style scoped>
+  h3:first-child { margin-top: 0; }
+  .path { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+  .note b, .caveat b { color: var(--fg); font-weight: 600; }
+  .note-text { max-width: 100%; overflow-wrap: anywhere; }
+  textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    resize: vertical;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--fg);
+    padding: .4rem .6rem;
+  }
+</style>

@@ -19,7 +19,7 @@ import { $reactive } from "./vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 8
-const FORMAT = 17
+const FORMAT = 18
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -74,6 +74,13 @@ export const state = $reactive({
   // something it is not.
   resend: null,
   resendError: null,
+  // GET /api/authority — { path, editable, refused, file, running }. `file` is
+  // this machine's `[authority]` table and `running` is what the live session
+  // is actually telling a draft or a plan about itself. No `waiting`: unlike
+  // `resend`, a note has no window state a mid-session move could leave
+  // stranded, so a save always takes.
+  authority: null,
+  authorityError: null,
   // The last thing the server declined to do, and why. Cleared when a turn
   // starts, because by then the answer is on screen.
   refused: null,          // { request, reason, detail }
@@ -983,6 +990,49 @@ export async function saveResend(body) {
     return true
   } catch (e) {
     state.resendError = `${e}`
+    return false
+  }
+}
+
+/// This machine's `[authority]` table, and what the live session is telling a
+/// draft or a plan. [`loadResend`]'s mirror, one table along.
+export async function loadAuthority() {
+  state.authorityError = null
+  try {
+    const res = await fetch("./api/authority", { headers: apiHeaders() })
+    if (res.ok) {
+      state.authority = await res.json()
+    } else {
+      state.authority = null
+      state.authorityError = await res.text()
+    }
+  } catch (e) {
+    state.authorityError = `${e}`
+  }
+}
+
+/// Writes `[authority]`, and takes the server's answer as the new truth.
+///
+/// No `waiting` in the response to read — [`AuthorityView`]'s own reason:
+/// a note has no ratchet a save could be unsafe to move. What is saved is
+/// what runs, the moment this returns.
+export async function saveAuthority(body) {
+  state.authorityError = null
+  try {
+    const res = await fetch("./api/authority", {
+      method: "PUT",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      state.authorityError = await res.text()
+      return false
+    }
+    state.authority = await res.json()
+    await refreshSettings()
+    return true
+  } catch (e) {
+    state.authorityError = `${e}`
     return false
   }
 }

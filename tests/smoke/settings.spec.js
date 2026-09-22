@@ -196,3 +196,74 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   expect(errors).toEqual([])
 })
+
+/**
+ * Settings → Authority, [`the resend rules are chosen from the page`]'s reason
+ * one section along: a person opening a page and clicking it has found bugs
+ * a unit test did not. See
+ * `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+ *
+ * No `waiting` message to test here — that is the point of §"Applied live in
+ * full" in `put_authority`'s own doc comment: a note has no ratchet a save
+ * could be unsafe to move, so what is saved is what runs.
+ */
+test("an authority note is written from the page and reaches the live session", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await chooseFolder(page)
+
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Authority")')
+
+  const running = page.locator(".modal .settings").first()
+  await expect(running).toBeVisible()
+  // Nothing set yet, on either authority.
+  await expect(running.locator("dd").nth(0)).toContainText("nothing sent")
+  await expect(running.locator("dd").nth(1)).toContainText("nothing sent")
+
+  const editor = page.locator(".modal .settings").nth(1)
+  await editor
+    .locator("textarea")
+    .first()
+    .fill("You can read, but writes are refused until a plan is approved.")
+  await page.locator(".modal button.save").click()
+
+  await expect(running.locator("dd").nth(0)).toContainText(
+    "You can read, but writes are refused",
+  )
+  // `system` is the default and is never sent as the empty string the
+  // "unset" button writes for a rule — it renders as the word itself once a
+  // note exists to have a position at all.
+  await expect(running.locator("dd").nth(0)).toContainText("system")
+
+  const written = await (await fetch(`${BASE}/api/authority`)).json()
+  expect(written.file.draft.text).toContain("writes are refused")
+  expect(written.running.draft.text).toContain("writes are refused")
+  expect(written.running.draft.position).toBe("system")
+  // The plan table is untouched.
+  expect(written.file.plan).toBeUndefined()
+  expect(written.running.plan).toBeNull()
+  const onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain("[authority.draft]")
+  expect(onDisk).toContain("[provider.here]")
+
+  // `prompt`, which repeats the note every turn instead of riding the cached
+  // prefix once.
+  await editor.locator('button:has-text("prompt")').first().click()
+  await page.locator(".modal button.save").click()
+  await expect(running.locator("dd").nth(0)).toContainText("prompt")
+  const moved = await (await fetch(`${BASE}/api/authority`)).json()
+  expect(moved.running.draft.position).toBe("prompt")
+
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})

@@ -17,6 +17,7 @@
   const SettingsGeneral = await import("./settings-general.html")
   const SettingsModels = await import("./settings-models.html")
   const SettingsResend = await import("./settings-resend.html")
+  const SettingsAuthority = await import("./settings-authority.html")
 </script>
 
 <!-- `@click.self` is the backdrop: a click that lands on the dialog itself
@@ -58,12 +59,20 @@
         <svg class="ic"><use href="#i-repeat"/></svg>
         <span>Resend</span>
       </button>
+      <button
+        type="button"
+        :class.on="ui.section === 'authority'"
+        @click="showSection('authority')">
+        <svg class="ic"><use href="#i-chat"/></svg>
+        <span>Authority</span>
+      </button>
     </nav>
 
     <section class="modal-body pane">
       <SettingsGeneral :if="ui.section === 'general'" />
       <SettingsModels :if="ui.section === 'models'" />
       <SettingsResend :if="ui.section === 'resend'" />
+      <SettingsAuthority :if="ui.section === 'authority'" />
     </section>
   </div>
 </dialog>
