@@ -42,8 +42,8 @@ what fits at all.
 | --- | --- | --- | --- | --- | --- |
 | 1 | **M1 Pro, 16 GB** — macOS | 16 GB unified | ~200 GB/s | 7B comfortable, 14b tight | Gate probe, container baseline, and four model-in-the-loop runs (coverage, precision, repeat-once, the tool-call probe). The Apple answer for anything that is not confinement |
 | 2 | **Mac mini M4, 16 GB** | 16 GB unified | ~120 GB/s | same, slower | **Allocated on 2026-09-17 and not yet run**: Metal as the control for RADV's doubt, and the bandwidth floor — [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §6–7. Cannot answer confinement at all: `enforcement = "kernel"` denies `run_command` on macOS, so `closes_on` is unreachable there |
-| 3 | **MacBook M4 Pro, 48 GB** | 48 GB unified | ~273 GB/s | **32b comfortable** | Size sweep completed — [`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md) |
-| 4 | **Ryzen 5 3600 + RTX 5060 Ti** | 16 GB VRAM | ~448 GB/s | 14b comfortable — measured, 11.1/16.3 GB at ctx 8192; **27B IQ3_S is the open question** | Native Linux confinement, the 14B ceiling and KV precision, all closed. **The only box that can answer either of this revision's two crit rows** — a model inside a container (item 3) and 8K against 96K (item 2) — [`landlock-holds-natively`](../../RECORD/2026-09-08.landlock-holds-natively.completed.md), [`the-rtx-holds-14b`](../../RECORD/2026-09-08.the-rtx-holds-14b.completed.md), [`the-14b-context-ceiling`](../../RECORD/2026-09-08.the-14b-context-ceiling.completed.md) |
+| 3 | **MacBook M4 Pro, 48 GB** | 48 GB unified | ~273 GB/s | **32b comfortable** | Size sweep completed; **now also roadmap item 2**, 2026-09-22 — the article's own `Qwen3.8-27B-GSQ-RCO-IQ3_S.gguf`, not the RTX, answered *8K against 96K* first — [`the-size-sweep`](../../RECORD/2026-09-03.the-size-sweep.completed.md), [`8k-against-96k-on-the-m4-pro`](../../RECORD/2026-09-22.8k-against-96k-on-the-m4-pro.completed.md) |
+| 4 | **Ryzen 5 3600 + RTX 5060 Ti** | 16 GB VRAM | ~448 GB/s | 14b comfortable — measured, 11.1/16.3 GB at ctx 8192; **27B IQ3_S is the open question** | Native Linux confinement, the 14B ceiling and KV precision, all closed. **The only box that can answer this revision's remaining crit row** — a model inside a container (item 3). Item 2 closed on machine 3 instead; the 27B fit test it used to gate is row 35, still owed here — [`landlock-holds-natively`](../../RECORD/2026-09-08.landlock-holds-natively.completed.md), [`the-rtx-holds-14b`](../../RECORD/2026-09-08.the-rtx-holds-14b.completed.md), [`the-14b-context-ceiling`](../../RECORD/2026-09-08.the-14b-context-ceiling.completed.md) |
 | 5 | **i5 9400F + GTX 1660 Super** | 6 GB VRAM | ~336 GB/s | 7B at the edge, degrades rather than breaks | Hardware floor measured — [`the-floor-on-6gb`](../../RECORD/2026-09-08.the-floor-on-6gb.completed.md) |
 | 6 | **BC-250** — Zen 2 + RDNA 2 | 16 GB GDDR6, **split by `amdgpu.gttsize` and not by the board** (~9.4 GiB addressable as configured today) | ~224 GB/s | 7b comfortable; **14b and 27B both a function of where the line is drawn** | Vulkan serving stack measured. Roadmap item 1: raise GTT to 12 GiB, reboot, and find out whether `ggml-vulkan` will use what it is given — [`the-bc250-run`](../../RECORD/2026-09-04.the-bc250-run.completed.md), [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §1–2 |
 | 7 | **A GitHub runner** — `ubuntu-latest`, Linux 6.17 | — | — | no model | **Level 3 on Linux, on every push**: the image builds, the handshake holds, and Landlock ABI v7 + seccomp hold `run_command` inside stock Docker — [`the-container-on-a-runner`](../../RECORD/2026-09-08.the-container-on-a-runner.completed.md) |
@@ -70,12 +70,16 @@ exactly the column this file refuses to add.
    Vulkan-untested. The firmware knob is the *other* lever and is deliberately
    not touched first, because it is not revertible by a reboot.
 
-2. **Whether the 27B fits machine 4 at all** — roadmap item 2's precondition.
+2. **Whether the 27B fits machine 4 at all** — roadmap row 35, no longer item 2's
+   precondition: item 2 closed on machine 3 on 2026-09-22 without this fit test
+   ever running, because the M4 Pro was at hand and the question it answers —
+   window as `luu`'s own flag — does not care which box does it.
    [`the-14b-context-ceiling`](../../RECORD/2026-09-08.the-14b-context-ceiling.completed.md)
    closed with *"Not Qwen3.8 anything"*, and that was right about a ~17 GB Q4
    build. A 11.77 GB non-uniform packing is a different file, which is why the
-   run is a fit test before it is a comparison. If it does not fit, item 2 moves
-   to machine 3 and stops being one flag apart on a 16 GB box.
+   run is a fit test before it is a comparison, and it is still worth running on
+   its own terms: a 16 GB card holding what a 48 GB Mac holds is a different
+   finding than the one machine 3 already made.
 
 3. **A judge that is not the model under test** (P1) — roadmap item 13. Not a
    measurement to run: an argument to write. Every number this repository has was

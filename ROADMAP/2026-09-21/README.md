@@ -77,11 +77,15 @@ only `WIP` record in the tree and it was written so that *the morning of
 2026-09-17* would not be spent deciding what to type. That morning is five days
 gone. Nothing in the protocol rots; what expired is the schedule, and the row
 that changes is row 27, which did not exist when the section was last written.
+**Row 2 also changed, on 2026-09-22**, and not the way this paragraph predicted:
+it closed on machine 3, not machine 4, and split off row 35 rather than waiting
+on the RTX fit test it used to be blocked behind.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 1 | **The BC-250's heap is a setting** — `amdgpu.gttsize=12288` and a reboot, then whether `ggml-vulkan` will *use* the heap it was given rather than insisting on `DEVICE_LOCAL`. A bigger number from `--list-devices` is not the same as a bigger model loading | machine 6, and a reboot | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §1–2 |
-| 2 | **8K against 96K, one flag apart** — the differentiator's first local trial, and the three outcomes are named before looking | machine 4, after the 27B fit test | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §3–5 |
+| 2 | ~**8K against 96K, one flag apart** — the differentiator's first local trial, and the three outcomes are named before looking~ **closed 2026-09-22, on machine 3 and not machine 4**: the 27B fit test was never run on the RTX — the M4 Pro was at hand and item 2 took the fallback route §*What is left* #2 named in advance. `grounded.txt` never fills 8K (largest prompt 3 106 of 8 192) so it ties by construction and says nothing; `long-session.txt` does fill it, and 96K answers 4 of 6 turns against 8K's 1 of 6, with or without rules A/B/C — rule A never fires on this corpus (nothing it attaches is a span), rule C prunes tool output instead of evicting turns but does not raise the answer count. First outcome of the three named, on one seed, one corpus, one box | nothing | [`8k-against-96k-on-the-m4-pro`](../../RECORD/2026-09-22.8k-against-96k-on-the-m4-pro.completed.md) |
+| 35 | **The 27B's RTX fit test, orphaned by item 2 closing elsewhere** — §3 of `the-16gb-threshold` was never run: does `Qwen3.8-27B-GSQ-RCO-IQ3_S.gguf` load and hold a turn on 16 GB of VRAM, still the open question `machines.md` names for machine 4. No longer item 2's precondition, since item 2 answered its question on machine 3 instead | machine 4 | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §3 |
 | 3 | **A model inside a container** — every contained run in this repository is the mock, and the trigger `luu.container.toml` names for narrowing its network has never fired. **Carried unchanged for a third revision** | machine 4 | [`a-session-picks-its-executor`](../../RECORD/2026-09-08.a-session-picks-its-executor.completed.md) §Still open |
 | 4 | **Machine 2 earns its first question** — a Metal control for RADV's doubt, and the bandwidth floor at 120 GB/s | machine 2 | [`the-16gb-threshold`](../../RECORD/2026-09-16.the-16gb-threshold.WIP.md) §6–7 |
 | 27 | **What this week's instruments owe a model** — three claims, one afternoon, one corpus family, and the protocol for each is written in the record that built it: (a) how often a *model* edits a file it has quoted and then asks about it — 8 of 13 is a fact about a scripted corpus; (b) whether a model notices the divergence or its repair — a citation where the bytes stood; (c) whether a model behaves differently when it knows it is drafting, which the floor gave teeth, because a draft that does not know it may not write finds out by being refused and a refusal is a turn | a machine with a model | [`a-corpus-that-edits`](../../RECORD/2026-09-19.a-corpus-that-edits.completed.md), [`the-newest-body-wins`](../../RECORD/2026-09-20.the-newest-body-wins.completed.md), [`the-drafts-floor`](../../RECORD/2026-09-21.the-drafts-floor.completed.md) §Still open |
@@ -130,14 +134,18 @@ nothing in it blocks anything above.
   built an instrument whose meaning is on the other side of a machine nobody has
   had a hand on. That is the argument for running section A before writing
   another instrument, and it is the first time this file has had one that does
-  not depend on a date.
+  not depend on a date. **The count dropped to three on 2026-09-22**: item 2 is
+  answered, and what it left behind — the RTX fit test — moved to row 35 rather
+  than staying inside this gate.
 - **Row 27 is one afternoon and three claims, which is why it is a row and not
   three.** The corpus, the flags and the counting surface all exist; what does
   not exist is a single session of a model doing the thing. Splitting it would
   produce three rows blocked on the same hour.
-- **Item 2 stays the one to protect if the afternoon runs out**, unchanged from
-  the last revision and for the same reason: the instrument — a server started
-  once at `-c 98304` — only exists while somebody is at machine 4.
+- **Item 2 closed 2026-09-22, and the thing that protected it was not being tied
+  to machine 4.** The instrument — a server started once at `-c 98304` — turned
+  out to only need *a* machine with 48 GB and the article's own build, not the
+  RTX specifically; run there instead and the fit test it was waiting on stopped
+  being its precondition. Row 35 carries that fit test forward on its own.
 - **Rows 31, 32 and 33 are one neighbourhood and should be read together**, the
   way items 9 and 10 were. The alternation and the floor both landed as changes
   to *what runs*, and neither reached the surface a person watches. The last two
