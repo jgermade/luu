@@ -30,7 +30,10 @@ and [`the-drafts-floor`](../../RECORD/2026-09-21.the-drafts-floor.completed.md).
 Four days of work built the instruments; none of them can be read without one of
 these boxes. Roadmap row 27 is that bill, and it lands on machine 1 or machine 4
 — whichever has a hand on it first, because unlike rows 1–4 it does not care
-which silicon answers.
+which silicon answers. **On 2026-09-22 machine 3 paid two-thirds of it** — see
+item 4 below — and a second `WIP` record,
+[`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.WIP.md),
+joined `the-16gb-threshold` for what is left.
 
 ## The inventory
 
