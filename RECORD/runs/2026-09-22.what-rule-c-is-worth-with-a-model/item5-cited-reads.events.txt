@@ -1,0 +1,4 @@
+{"channel":"trace","at_ms":317361,"message":{"type":"pruned","turn":3,"turns":[1,2],"tokens":15777,"counter":{"kind":"model","id":"qwen3.8-27b"}}}
+{"channel":"trace","at_ms":671498,"message":{"type":"pruned","turn":4,"turns":[3],"tokens":15581,"counter":{"kind":"model","id":"qwen3.8-27b"}}}
+{"channel":"trace","at_ms":968978,"message":{"type":"pruned","turn":5,"turns":[4],"tokens":15121,"counter":{"kind":"model","id":"qwen3.8-27b"}}}
+{"channel":"trace","at_ms":1304831,"message":{"type":"pruned","turn":6,"turns":[5],"tokens":13148,"counter":{"kind":"model","id":"qwen3.8-27b"}}}

@@ -1,0 +1,3 @@
+{"channel":"protocol","at_ms":315793,"message":{"type":"evicted","turn":3,"turns":[1,2],"tokens":16661,"counter":{"kind":"model","id":"qwen3.8-27b"},"policy":{"policy":"turn"}}}
+{"channel":"protocol","at_ms":670784,"message":{"type":"evicted","turn":5,"turns":[3,4],"tokens":18789,"counter":{"kind":"model","id":"qwen3.8-27b"},"policy":{"policy":"turn"}}}
+{"channel":"trace","at_ms":670791,"message":{"type":"pruned","turn":5,"turns":[],"tokens":0,"counter":{"kind":"model","id":"qwen3.8-27b"}}}

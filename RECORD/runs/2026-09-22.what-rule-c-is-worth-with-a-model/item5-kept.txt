@@ -1,0 +1,324 @@
+provider: openai@127.0.0.1:8100
+note: the window is the server's: --context-limit 8192 is what this run budgets against and there is no field on this API to send it in. Start the server with at least 8192 (llama-server -c 8192, vLLM --max-model-len 8192); the prompt_tokens each turn reports is what actually arrived.
+
+> what does the context manager do?
+
+```tool
+{"name": "list_dir", "arguments": {"path": "."}}
+```
+
+  [1] → list_dir {"path":"."}
+  [1] ← ok · . (read-write) · held by in-process check · 1 ms
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["grep", "-ri", "context", "crates", "--include=*.rs", "-l"]}}
+```
+
+  [2] → run_command {"argv":["grep","-ri","context","crates","--include=*.rs","-l"]}
+  [2] ← denied · `grep` is not in commands = [cargo, rustc, git, rg, ls], under the sandbox policy · held by in-process check · 0 ms
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["rg", "-l", "context", "crates"]}}
+```
+
+  [3] → run_command {"argv":["rg","-l","context","crates"]}
+  [3] ← denied · the kernel cannot hold this child (landlock and seccomp are Linux-only, and this is macos); grant it anyway with enforcement = "best-effort" · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates"}}
+```
+
+  [4] → list_dir {"path":"crates"}
+  [4] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/luu"}}
+```
+
+  [5] → list_dir {"path":"crates/luu"}
+  [5] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/luu/src"}}
+```
+
+  [6] → list_dir {"path":"crates/luu/src"}
+  [6] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core"}}
+```
+
+  [7] → list_dir {"path":"crates/agent-core"}
+  [7] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core/src"}}
+```
+
+  [8] → list_dir {"path":"crates/agent-core/src"}
+  [8] ← ok · . (read-write) · held by in-process check · 0 ms
+
+
+
+[tool limit reached] 6579 prompt / 586 completion
+
+> now explain the token budget, bucket by bucket
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [1] ← ok · . (read-write) · held by in-process check · 31 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 200}}
+```
+
+  [2] → read_file {"path":"crates/agent-core/src/context.rs","start_line":200}
+  [2] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 400}}
+```
+
+  [3] → read_file {"path":"crates/agent-core/src/context.rs","start_line":400}
+  [3] ← ok · . (read-write) · held by in-process check · 1 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 300, "max_lines": 100}}
+```
+
+  [4] → read_file {"max_lines":100,"path":"crates/agent-core/src/context.rs","start_line":300}
+  [4] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/trace.rs"}}
+```
+
+  [5] → read_file {"path":"crates/agent-core/src/trace.rs"}
+  [5] ← ok · . (read-write) · held by in-process check · 15 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 600, "max_lines": 250}}
+```
+
+  [6] → read_file {"max_lines":250,"path":"crates/agent-core/src/context.rs","start_line":600}
+  [6] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 850, "max_lines": 300}}
+```
+
+  [7] → read_file {"max_lines":300,"path":"crates/agent-core/src/context.rs","start_line":850}
+  [7] ← ok · . (read-write) · held by in-process check · 1 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 1150, "max_lines": 300}}
+```
+
+  [8] → read_file {"max_lines":300,"path":"crates/agent-core/src/context.rs","start_line":1150}
+  [8] ← ok · . (read-write) · held by in-process check · 0 ms
+
+
+
+[tool limit reached] 66837 prompt / 652 completion
+
+== evicted turns 1, 2 — 16661 tokens out of the window, for good
+
+> how does the stable prefix survive a new turn?
+
+```tool
+{"name": "list_dir", "arguments": {"path": "."}}
+```
+
+  [1] → list_dir {"path":"."}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["grep", "-rn", "stable prefix", "--include=*.rs", "--include=*.md", "."]}}
+```
+
+  [2] → run_command {"argv":["grep","-rn","stable prefix","--include=*.rs","--include=*.md","."]}
+  [2] ← denied · `grep` is not in commands = [cargo, rustc, git, rg, ls], under the sandbox policy · held by in-process check · 0 ms
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["rg", "-n", "stable prefix", "."]}}
+```
+
+  [3] → run_command {"argv":["rg","-n","stable prefix","."]}
+  [3] ← denied · the kernel cannot hold this child (landlock and seccomp are Linux-only, and this is macos); grant it anyway with enforcement = "best-effort" · held by in-process check · 0 ms
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["git", "grep", "-n", "stable prefix"]}}
+```
+
+  [4] → run_command {"argv":["git","grep","-n","stable prefix"]}
+  [4] ← denied · the kernel cannot hold this child (landlock and seccomp are Linux-only, and this is macos); grant it anyway with enforcement = "best-effort" · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates"}}
+```
+
+  [5] → list_dir {"path":"crates"}
+  [5] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core"}}
+```
+
+  [6] → list_dir {"path":"crates/agent-core"}
+  [6] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core/src"}}
+```
+
+  [7] → list_dir {"path":"crates/agent-core/src"}
+  [7] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [8] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [8] ← ok · . (read-write) · held by in-process check · 0 ms
+
+
+
+[tool limit reached] 6727 prompt / 507 completion
+
+> what happens when the window fills up?
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 180}}
+```
+
+  [1] → read_file {"path":"crates/agent-core/src/context.rs","start_line":180}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 380}}
+```
+
+  [2] → read_file {"path":"crates/agent-core/src/context.rs","start_line":380}
+  [2] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 580}}
+```
+
+  [3] → read_file {"path":"crates/agent-core/src/context.rs","start_line":580}
+  [3] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 780}}
+```
+
+  [4] → read_file {"path":"crates/agent-core/src/context.rs","start_line":780}
+  [4] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 980}}
+```
+
+  [5] → read_file {"path":"crates/agent-core/src/context.rs","start_line":980}
+  [5] ← ok · . (read-write) · held by in-process check · 1 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 1180}}
+```
+
+  [6] → read_file {"path":"crates/agent-core/src/context.rs","start_line":1180}
+  [6] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 1380}}
+```
+
+  [7] → read_file {"path":"crates/agent-core/src/context.rs","start_line":1380}
+  [7] ← ok · . (read-write) · held by in-process check · 2 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 1580}}
+```
+
+  [8] → read_file {"path":"crates/agent-core/src/context.rs","start_line":1580}
+  [8] ← ok · . (read-write) · held by in-process check · 0 ms
+
+
+
+[tool limit reached] 85527 prompt / 678 completion
+
+== evicted turns 3, 4 — 18789 tokens out of the window, for good
+
+> which turn gets dropped first, and why that one?
+
+```tool
+{"name": "list_dir", "arguments": {"path": "."}}
+```
+
+  [1] → list_dir {"path":"."}
+  [1] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["grep", "-rn", "drop", "crates/"], "cwd": "."}}
+```
+
+  [2] → run_command {"argv":["grep","-rn","drop","crates/"],"cwd":"."}
+  [2] ← denied · `grep` is not in commands = [cargo, rustc, git, rg, ls], under the sandbox policy · held by in-process check · 0 ms
+
+```tool
+{"name": "run_command", "arguments": {"argv": ["rg", "-n", "drop", "crates/"], "cwd": "."}}
+```
+
+  [3] → run_command {"argv":["rg","-n","drop","crates/"],"cwd":"."}
+  [3] ← denied · the kernel cannot hold this child (landlock and seccomp are Linux-only, and this is macos); grant it anyway with enforcement = "best-effort" · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates"}}
+```
+
+  [4] → list_dir {"path":"crates"}
+  [4] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core"}}
+```
+
+  [5] → list_dir {"path":"crates/agent-core"}
+  [5] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "list_dir", "arguments": {"path": "crates/agent-core/src"}}
+```
+
+  [6] → list_dir {"path":"crates/agent-core/src"}
+  [6] ← ok · . (read-write) · held by in-process check · 0 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs"}}
+```
+
+  [7] → read_file {"path":"crates/agent-core/src/context.rs"}
+  [7] ← ok · . (read-write) · held by in-process check · 1 ms
+
+```tool
+{"name": "read_file", "arguments": {"path": "crates/agent-core/src/context.rs", "start_line": 200}}
+```
+
+  [8] → read_file {"path":"crates/agent-core/src/context.rs","start_line":200}
+  [8] ← ok · . (read-write) · held by in-process check · 1 ms
+
+
+
+[tool limit reached] 8743 prompt / 669 completion
+
+> summarise everything above in three lines
+
+1. You asked which turn gets dropped first from the context window, and why that one.
+2. I traced it to `crates/agent-core/src/context.rs`: eviction always cuts from the front — the oldest turn — either one at a time (`Eviction::Turn`) or in one deeper cut past a low-water mark (`Eviction::Block`), because the oldest exchange is the least relevant and cutting less often keeps the history byte-identical for the prefix cache.
+3. The same file documents the companion rules: `Repeat::Once` renders a repeated code span only in the oldest turn that carries it, and `Prune::Behind` makes old turns give up their code (and optionally tool output) before they are evicted whole.
+
+[stop] 5458 prompt / 1256 completion
