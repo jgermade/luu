@@ -132,6 +132,13 @@ struct File {
     /// `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resend: Option<Resend>,
+    /// `[authority]`: what a draft or a plan tells the model about itself, as
+    /// opposed to what the sandbox enforces without saying so. Beside `resend`
+    /// for the same reason — it changes the bytes a turn sends — and its own
+    /// table because it answers a different question. See
+    /// `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authority: Option<AuthorityNotes>,
 }
 
 /// `[ui]`. One setting so far.
@@ -185,6 +192,86 @@ pub struct Resend {
     pub results: Option<agent_core::context::Results>,
 }
 
+/// `[authority]`: what a draft or a plan is told about itself, as this
+/// machine's default.
+///
+/// `Authority::Draft` and `Authority::Plan` (`agent_core::sandbox::Authority`)
+/// already narrow what a turn may *do*; nothing narrows what it *reads* about
+/// that. Two tables and not one field, because a draft and a plan grant
+/// different things and the sentence that fits one does not fit the other —
+/// asked and rejected as a single note in the record this type argues for.
+/// `Authority::Policy` has no table here: it is the ordinary grant, and there
+/// is nothing about it worth telling a model that the tools it already has
+/// would not show it.
+///
+/// Every key of every table is optional, absent meaning *no note* — not *some
+/// default text* — the same convention [`Resend`] states for the same reason:
+/// a hand-written table may set the wording without setting the position, or
+/// set neither and mean nothing here yet.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct AuthorityNotes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<AuthorityNote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<AuthorityNote>,
+}
+
+impl AuthorityNotes {
+    /// Neither table set. The page skips writing this out where it holds, so
+    /// a session that never touched an authority note does not grow a new
+    /// empty field in every `/api/settings` response.
+    pub fn is_empty(&self) -> bool {
+        self.draft.is_none() && self.plan.is_none()
+    }
+
+    /// What a draft turn is actually told, in the wire's shape — `None`
+    /// wherever this config's `text` is absent or empty, which is what makes
+    /// this the one place the config's *optional* words become the header's
+    /// and the render's *this note exists or it does not*.
+    pub fn draft_note(&self) -> Option<agent_core::sandbox::AuthorityNote> {
+        Self::wire(self.draft.as_ref())
+    }
+
+    /// The same, for a plan. See [`Self::draft_note`].
+    pub fn plan_note(&self) -> Option<agent_core::sandbox::AuthorityNote> {
+        Self::wire(self.plan.as_ref())
+    }
+
+    fn wire(note: Option<&AuthorityNote>) -> Option<agent_core::sandbox::AuthorityNote> {
+        let text = note?.text.as_ref()?;
+        if text.is_empty() {
+            return None;
+        }
+        Some(agent_core::sandbox::AuthorityNote {
+            text: text.clone(),
+            position: note?.position.unwrap_or_default(),
+        })
+    }
+}
+
+/// One authority's note as this machine's config states it, before it is
+/// worth sending: what it says, and where it goes.
+///
+/// **Not [`agent_core::sandbox::AuthorityNote`]**, on purpose — that one is
+/// the wire's shape, `text` required because it exists only once a caller
+/// decided to send something. This one is the config file's, where `text`
+/// absent is the ordinary and expected case and a required field would make
+/// every unconfigured table an error.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct AuthorityNote {
+    /// The words. Absent (not empty) means nothing is sent — the whole feature
+    /// is this field, and the reason it exists is to be edited by hand between
+    /// runs rather than compiled in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Where it goes, defaulting to `System` when `text` is set. See
+    /// [`agent_core::sandbox::NotePosition`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<agent_core::sandbox::NotePosition>,
+}
+
 /// One named posture: a policy file, and nothing else.
 ///
 /// The file decides the sandbox **and** the seam — `commands`, `network`,
@@ -209,6 +296,7 @@ pub struct Config {
     postures: BTreeMap<String, Posture>,
     ui: Option<Ui>,
     resend: Option<Resend>,
+    authority: Option<AuthorityNotes>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -300,6 +388,7 @@ impl Config {
             postures: file.posture,
             ui: file.ui,
             resend: file.resend,
+            authority: file.authority,
         };
         config.check_default(path)?;
         Ok(config)
@@ -400,6 +489,7 @@ impl Config {
             posture: self.postures.clone(),
             ui: self.ui.clone(),
             resend: self.resend,
+            authority: self.authority.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -451,6 +541,7 @@ impl Config {
             postures: self.postures.clone(),
             ui: self.ui.clone(),
             resend: self.resend,
+            authority: self.authority.clone(),
         }
     }
 
@@ -467,9 +558,24 @@ impl Config {
         }
     }
 
+    /// The file as the authority editor hands it back, [`Config::with_resend`]'s
+    /// reason exactly, one table along.
+    pub fn with_authority(&self, authority: AuthorityNotes) -> Self {
+        Self {
+            authority: Some(authority),
+            ..self.clone()
+        }
+    }
+
     /// What this machine sets the three rules to, where it says anything.
     pub fn resend(&self) -> Option<Resend> {
         self.resend
+    }
+
+    /// What this machine tells a draft or a plan about itself, where it says
+    /// anything.
+    pub fn authority(&self) -> Option<&AuthorityNotes> {
+        self.authority.as_ref()
     }
 
     /// What the page should look like, as the file asks for it.

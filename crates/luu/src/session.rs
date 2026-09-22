@@ -344,6 +344,12 @@ pub fn header(
     budget: Budget,
     counter: Counter,
     posture: Option<record::Posture>,
+    // What this session's config says a draft and a plan are told, in the
+    // wire's shape already — `luu chat` has no `Authority::Draft`, so its
+    // only caller passes `AuthorityNotes::default()` and both fields go out
+    // `None`, the same as a stream from before format 18. See
+    // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+    authority: &crate::provider::AuthorityNotes,
     started_at: u64,
 ) -> RecordLine {
     RecordLine::Header {
@@ -363,6 +369,8 @@ pub fn header(
         repeat: Some(budget.repeat),
         prune: Some(budget.prune),
         results: Some(budget.results),
+        authority_draft: authority.draft_note(),
+        authority_plan: authority.plan_note(),
         started_at,
     }
 }
@@ -400,6 +408,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         path: &Path,
         backend: &str,
@@ -410,6 +419,7 @@ impl Recorder {
         // back against another one. See
         // `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
         posture: Option<record::Posture>,
+        authority: &crate::provider::AuthorityNotes,
         started_at: u64,
     ) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -422,7 +432,9 @@ impl Recorder {
             .await
             .with_context(|| format!("creating {}", path.display()))?;
 
-        let header = header(backend, model, budget, counter, posture, started_at);
+        let header = header(
+            backend, model, budget, counter, posture, authority, started_at,
+        );
         file.write_all(format!("{}\n", serde_json::to_string(&header)?).as_bytes())
             .await?;
 
@@ -462,6 +474,7 @@ impl Recorder {
     /// when it started, so the lines after its header carry the offset from
     /// that, which can be hours. Correct, and the same number the store's
     /// stream for that session already carries.
+    #[allow(clippy::too_many_arguments)]
     pub fn session(
         &self,
         backend: &str,
@@ -469,6 +482,7 @@ impl Recorder {
         budget: Budget,
         counter: Counter,
         posture: Option<record::Posture>,
+        authority: &crate::provider::AuthorityNotes,
         started_at: u64,
     ) {
         // Stored before the line is sent, so a turn published between the two
@@ -476,9 +490,9 @@ impl Recorder {
         // one it is replacing.
         self.started_at
             .store(started_at, std::sync::atomic::Ordering::Relaxed);
-        let _ = self
-            .lines
-            .send(header(backend, model, budget, counter, posture, started_at));
+        let _ = self.lines.send(header(
+            backend, model, budget, counter, posture, authority, started_at,
+        ));
     }
 
     pub fn write(&self, event: &Event) {
@@ -509,7 +523,15 @@ mod tests {
             .pruning(Prune::Behind)
             .citing(Results::Cited);
 
-        match header("mock", "mock", budget, Counter::Approximate, None, 0) {
+        match header(
+            "mock",
+            "mock",
+            budget,
+            Counter::Approximate,
+            None,
+            &crate::provider::AuthorityNotes::default(),
+            0,
+        ) {
             RecordLine::Header {
                 repeat,
                 prune,
@@ -537,6 +559,7 @@ mod tests {
             Budget::new(8192, 512, Eviction::Turn).repeating(Repeat::Always),
             Counter::Approximate,
             None,
+            &crate::provider::AuthorityNotes::default(),
             0,
         ) {
             RecordLine::Header {

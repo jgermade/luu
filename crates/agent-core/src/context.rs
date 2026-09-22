@@ -709,6 +709,15 @@ pub struct Context {
     /// knowing whether a stale span went out as bytes or as the line that cites
     /// it. Also set on every selection, because it too describes the render.
     resending: Repeat,
+    /// What the turn about to be built is told about the authority it is
+    /// running under, when `luu serve` set one — see
+    /// [`Self::note_system`]. Not `self.system` itself: that field is the
+    /// stable prefix a construction fixes for the session's life, and this one
+    /// is set fresh, before every `select`, from whatever the caller's current
+    /// authority and config say right now. `None` is *nothing to add*, not
+    /// *forgot to set it* — a session that never calls `note_system` renders
+    /// exactly as one from before this field existed.
+    authority_note: Option<String>,
     /// The session's jobs, in order. Closed ones fold their turns at
     /// selection time; nothing here rewrites the history.
     jobs: Vec<Job>,
@@ -782,6 +791,7 @@ impl Context {
             pruned: 0,
             cited: Results::Kept,
             resending: Repeat::Always,
+            authority_note: None,
             jobs: Vec::new(),
             rounds: Vec::new(),
         }
@@ -990,6 +1000,11 @@ impl Context {
                 // given.
                 cited: Results::Kept,
                 resending: Repeat::Always,
+                // A resumed session has not rendered either, [`Self::cited`]'s
+                // reason: the next `select` sets it fresh from whatever the
+                // caller's authority is *now*, which may not be what it was
+                // when the recording was made.
+                authority_note: None,
                 jobs,
                 // Carried, because a round is history and not a render: how
                 // many times a plan was put up before one was approved is a
@@ -1003,6 +1018,12 @@ impl Context {
 
     /// The whole cached prefix, as one message. Assembled here and nowhere else
     /// so that two call sites cannot join it differently.
+    ///
+    /// [`Self::authority_note`] renders last, after the map, on purpose: the
+    /// map and the tools describe the repository and its rest and do not
+    /// change with the turn's authority, while the note is the one part of
+    /// this block that can — a draft becoming a plan changes what follows it
+    /// here exactly as opening a job already changes the turns below.
     fn system_message(&self) -> String {
         let mut text = self.system.clone();
         for block in [&self.tools, &self.map] {
@@ -1010,6 +1031,10 @@ impl Context {
                 text.push_str("\n\n");
                 text.push_str(block);
             }
+        }
+        if let Some(note) = &self.authority_note {
+            text.push_str("\n\n");
+            text.push_str(note);
         }
         text
     }
@@ -1020,6 +1045,18 @@ impl Context {
 
     pub fn system(&self) -> &str {
         &self.system
+    }
+
+    /// Sets what the *next* `select` tells the model about the authority it
+    /// is running under, under `position = "system"` — `position = "prompt"`
+    /// never reaches this far in, because it is the caller's own prompt
+    /// string that carries it. `None` clears whatever was set before: an
+    /// authority note is a fact about the turn about to render, never one
+    /// carried over from the turn before it, so a caller that stops setting
+    /// one is a caller whose note goes away on its very next call, the same
+    /// turn the authority itself would.
+    pub fn note_system(&mut self, note: Option<String>) {
+        self.authority_note = note;
     }
 
     /// Closes a turn and counts it, once. `id` is the number the session gave
@@ -1529,7 +1566,20 @@ impl Context {
         // rather than borrowed for the reason [`Current`] gives: the floor and
         // the prune line move between here and the walk.
         let current = Current::of(&self.turns, code_context, budget.repeat);
-        let system_tokens = counter.count(&self.system);
+        // The note counts with the block it renders in, under `position =
+        // "system"` — the system bucket is where `system_message` puts it,
+        // and a bucket that did not count what it sends is the thing this
+        // project's whole counting discipline exists to refuse.
+        let system_tokens = counter.count(&self.system)
+            + self.authority_note.as_deref().map_or(0, |note| {
+                // `system_message` joins with two newlines the same way this
+                // adds a separate count rather than concatenating first: the
+                // two can differ by a token or two across the join, the same
+                // order this file already accepts for the tools/map split
+                // below, and re-tokenizing the whole joined string on every
+                // turn just to save that token or two is not the trade.
+                counter.count(note)
+            });
         let tools_tokens = counter.count(&self.tools);
         let map_tokens = counter.count(&self.map);
         // Counted as the two buckets they will be plotted as. Tokenization is

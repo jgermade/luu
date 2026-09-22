@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::{Counter, Eviction, Prune, Repeat, Results};
 use crate::protocol::ServerMessage;
+use crate::sandbox::AuthorityNote;
 use crate::trace::TraceMessage;
 
 /// Bumped when an older reader could not make sense of a newer file.
@@ -173,7 +174,15 @@ use crate::trace::TraceMessage;
 /// and the thing it makes countable is how often exploration led to approved
 /// work — which nothing could ask before. See
 /// `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
-pub const FORMAT: u32 = 17;
+///
+/// **18 carries `authority_draft` and `authority_plan`**, beside `repeat`,
+/// `prune` and `results` and with their `None` semantics: a stream written
+/// before this format does not say, and a run made under a note and one made
+/// without it are not the same arm. `None` here means *this session set
+/// nothing under this authority*, which a hand-written `[authority]` table
+/// naming a position but no `text` already means before it ever reaches the
+/// wire. See `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+pub const FORMAT: u32 = 18;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -286,6 +295,16 @@ pub enum RecordLine {
         /// effect.
         #[serde(default)]
         results: Option<Results>,
+        /// What a draft turn in this session is told about the authority it
+        /// runs under, when this session's config set anything. `None` in a
+        /// stream written before format 18, for the same reason the three
+        /// rules above are: inventing the field on the reader's behalf would
+        /// put a claim in a record the record never made.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authority_draft: Option<AuthorityNote>,
+        /// The same, for a plan. See `authority_draft`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authority_plan: Option<AuthorityNote>,
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
@@ -318,6 +337,8 @@ mod tests {
             repeat: Some(Repeat::Once),
             prune: Some(Prune::Behind),
             results: Some(Results::Cited),
+            authority_draft: None,
+            authority_plan: None,
             started_at: 1_700_000_000_000,
         };
         let token = RecordLine::Protocol {
@@ -407,6 +428,8 @@ mod tests {
             repeat: Some(repeat),
             prune: Some(prune),
             results: Some(results),
+            authority_draft: None,
+            authority_plan: None,
             started_at: 1_700_000_000_000,
         };
         let arms =

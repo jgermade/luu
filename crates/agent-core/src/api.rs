@@ -618,6 +618,17 @@ pub struct SessionView {
     pub prune: Option<Prune>,
     #[serde(default)]
     pub results: Option<Results>,
+    /// What this session's draft turns are told about their authority, the
+    /// stream's **last** header's word on it — [`Self::repeat`]'s reason, one
+    /// field along. `None` is *unknown*, format-17-or-earlier's answer, and
+    /// not *no note was set*: a resume comparing the fold against a session
+    /// with nothing configured needs the two to read as the same thing, which
+    /// they do — both are `None`.
+    #[serde(default)]
+    pub authority_draft: Option<crate::sandbox::AuthorityNote>,
+    /// The same, for a plan. See [`Self::authority_draft`].
+    #[serde(default)]
+    pub authority_plan: Option<crate::sandbox::AuthorityNote>,
     /// Everything the server declined to do, in order. Empty in a session that
     /// was refused nothing — and in every view folded before anything kept
     /// them, which the stream cannot distinguish and nothing pretends to.
@@ -652,6 +663,8 @@ impl SessionView {
             repeat: None,
             prune: None,
             results: None,
+            authority_draft: None,
+            authority_plan: None,
             refusals: Vec::new(),
             record: None,
         }
@@ -1316,6 +1329,8 @@ impl SessionView {
                     repeat,
                     prune,
                     results,
+                    authority_draft,
+                    authority_plan,
                     ..
                 } => {
                     // The last header wins here too, and it is what tells a
@@ -1336,6 +1351,9 @@ impl SessionView {
                     view.repeat = *repeat;
                     view.prune = *prune;
                     view.results = *results;
+                    // And the two notes, one field along.
+                    view.authority_draft = authority_draft.clone();
+                    view.authority_plan = authority_plan.clone();
                 }
                 RecordLine::Protocol { at_ms, message } => view.apply_protocol(*at_ms, message),
                 RecordLine::Trace { at_ms, message } => view.apply_trace(*at_ms, message),
@@ -1369,6 +1387,8 @@ mod tests {
                 repeat: Some(crate::context::Repeat::Always),
                 prune: Some(crate::context::Prune::Never),
                 results: Some(crate::context::Results::Kept),
+                authority_draft: None,
+                authority_plan: None,
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {
@@ -1876,6 +1896,8 @@ mod tests {
             repeat: Some(crate::context::Repeat::Once),
             prune: Some(crate::context::Prune::Never),
             results: Some(crate::context::Results::Kept),
+            authority_draft: None,
+            authority_plan: None,
             started_at: 1_700_000_000_000,
         }
     }

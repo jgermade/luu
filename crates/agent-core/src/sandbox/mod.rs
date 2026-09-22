@@ -229,6 +229,38 @@ impl std::fmt::Display for Authority {
     }
 }
 
+/// What a draft or a plan tells the model about itself, as opposed to what
+/// this module enforces without saying so. `Authority::Policy` has no note —
+/// it is the ordinary grant, and nothing here has anything to tell a model
+/// that its own tools would not already show it. See
+/// `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuthorityNote {
+    /// The words a caller chose to send. Never invented here — this module
+    /// enforces the authority and a caller decides whether, and how, to say
+    /// so.
+    pub text: String,
+    /// Where the caller put it. Recorded beside the words because a reader
+    /// comparing two runs needs to know where a note landed, not only what it
+    /// said — see [`NotePosition`].
+    #[serde(default)]
+    pub position: NotePosition,
+}
+
+/// Where an authority's note is rendered, once a caller decided to send one.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotePosition {
+    /// Appended to the stable prefix — free while the authority holds, since
+    /// it never changes a turn already sent under it. The default.
+    #[default]
+    System,
+    /// Prepended to the turn's own prompt, every turn — the one worth having
+    /// when the question is whether proximity to the turn the model is about
+    /// to make changes anything on its own.
+    Prompt,
+}
+
 /// A resolved policy, and the thing tools ask.
 #[derive(Debug, Clone)]
 pub struct Sandbox {

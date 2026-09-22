@@ -124,6 +124,9 @@ struct Destination {
     counter: Arc<dyn TokenCounter>,
     /// The same resolution, rendered for the page.
     settings: Settings,
+    /// What a draft or a plan is told about itself, this session's own choice
+    /// of it. See `crate::provider::AuthorityNotes`.
+    authority: crate::provider::AuthorityNotes,
 }
 
 impl Destination {
@@ -146,6 +149,24 @@ impl Destination {
                 results: budget.results,
                 ..self.settings.clone()
             },
+            authority: self.authority.clone(),
+        }
+    }
+
+    /// [`Self::resending`]'s mirror for the two notes instead of the three
+    /// rules: everything that decides where a turn goes is kept, and what
+    /// changed is what a draft or a plan is told about itself.
+    fn noting(&self, authority: crate::provider::AuthorityNotes) -> Self {
+        Self {
+            backend: self.backend.clone(),
+            model: self.model.clone(),
+            budget: self.budget,
+            counter: self.counter.clone(),
+            settings: Settings {
+                authority: authority.clone(),
+                ..self.settings.clone()
+            },
+            authority,
         }
     }
 }
@@ -341,6 +362,14 @@ pub struct Settings {
     repeat: agent_core::context::Repeat,
     prune: agent_core::context::Prune,
     results: agent_core::context::Results,
+    /// What a draft or a plan this session opens is told about itself, the
+    /// same reason `repeat`/`prune`/`results` are here: a fact a session may
+    /// choose and nothing can read back is a fact the page can contradict.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::AuthorityNotes::is_empty"
+    )]
+    authority: crate::provider::AuthorityNotes,
     counter: agent_core::context::Counter,
     counter_warning: Option<String>,
     select_tokens: u32,
@@ -549,6 +578,14 @@ impl App {
             false => Vec::new(),
         };
 
+        // No CLI flag reaches this, on purpose — see
+        // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md` §What
+        // was rejected. Read fresh rather than threaded through
+        // `StdioOptions`, `machine_resend`'s own reason: a table the page
+        // writes has to reach the next session, and this server's first one
+        // is no exception. Loaded before the recorder so the very first line
+        // of a `--record` file already carries it.
+        let authority = machine_authority().await;
         let recorder = match record {
             Some(path) => Some(
                 Recorder::create(
@@ -558,6 +595,7 @@ impl App {
                     budget,
                     counter.id(),
                     Some(agency.posture(None)),
+                    &authority,
                     started_at,
                 )
                 .await?,
@@ -603,6 +641,7 @@ impl App {
             repeat: budget.repeat,
             prune: budget.prune,
             results: budget.results,
+            authority: authority.clone(),
             counter: counter_id.clone(),
             counter_warning,
             select_tokens,
@@ -651,6 +690,7 @@ impl App {
                 budget,
                 counter,
                 settings,
+                authority: authority.clone(),
             })),
             tokenizer,
             approvers,
@@ -707,6 +747,7 @@ impl App {
                 budget,
                 counter_id,
                 Some(agency.posture(None)),
+                &authority,
                 started_at,
             )]),
         }))
@@ -1015,6 +1056,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/{name}/models", get(get_provider_models))
         .route("/api/resend", get(get_resend).put(put_resend))
+        .route("/api/authority", get(get_authority).put(put_authority))
         .route("/api/postures", get(get_postures))
         .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
@@ -2370,10 +2412,51 @@ async fn begin_turn(
 
         let (tx, rx) = watch::channel(false);
         session.cancel = Some(tx);
+        // The sandbox the turn about to be built runs under — `session.narrowed`
+        // when a plan is open, the floor otherwise. Resolved once, here, rather
+        // than separately for the selector below and for the note this feeds:
+        // two readings of one decision is how they drift, the same reasoning
+        // the selector's own comment already gives for reading it through the
+        // live job rather than the policy file.
+        let sandbox = match &session.narrowed {
+            Some((_, sandbox)) => sandbox.clone(),
+            None => floor_holding(&session, &agency),
+        };
+        // What this turn is told about that authority, if this machine or this
+        // session set anything. `Authority::Policy` gets no table and
+        // therefore no note — see `crate::provider::AuthorityNotes`.
+        let note = match sandbox.authority() {
+            Authority::Draft(_) => sending.authority.draft.as_ref(),
+            Authority::Plan(_) => sending.authority.plan.as_ref(),
+            Authority::Policy => None,
+        };
         let text = match instruction {
             Some(instruction) => format!("{instruction}{prompt}"),
             None => prompt.to_string(),
         };
+        // `position = "prompt"` reaches no further than this string: the note
+        // rides the one thing that changes every turn anyway, so repeating it
+        // costs exactly what the config says it does and nothing this
+        // function does not already account for.
+        let text = match note {
+            Some(crate::provider::AuthorityNote {
+                text: Some(words),
+                position: Some(agent_core::sandbox::NotePosition::Prompt),
+            }) => format!("{words}\n\n{text}"),
+            _ => text,
+        };
+        // `position = "system"` (the default when `text` is set) rides the
+        // cached prefix instead — see `Context::note_system`. Set every turn
+        // regardless of whether it changed, `None` included: an authority
+        // note is a fact about the turn about to render and never one carried
+        // over from the one before it.
+        session.context.note_system(match note {
+            Some(crate::provider::AuthorityNote {
+                text: Some(words),
+                position: None | Some(agent_core::sandbox::NotePosition::System),
+            }) => Some(words.clone()),
+            _ => None,
+        });
         // The fragments this turn's own text points at, read through the
         // sandbox the *live job* was granted — `session.narrowed` when a plan
         // is open, the floor otherwise. That is not a detail: the gate
@@ -2383,15 +2466,6 @@ async fn begin_turn(
         let code: Vec<Fragment> = match app.select_tokens {
             0 => Vec::new(),
             tokens => {
-                // The floor rather than the policy file on the `None` arm, so
-                // this reads the same sandbox the turn below will run under.
-                // A no-op for what is *selected* — the floor differs from the
-                // policy file only in the write bit, and selecting reads — but
-                // the two arms of one decision written twice is how they drift.
-                let sandbox = match &session.narrowed {
-                    Some((_, sandbox)) => sandbox.clone(),
-                    None => floor_holding(&session, &agency),
-                };
                 // Re-stamped before it is scored, because the walk is a cache
                 // of line numbers and this turn may be answering after an edit
                 // the last turn made. Through the **agency's** sandbox: the
@@ -3445,6 +3519,127 @@ async fn put_resend(
     Json(resend_view(&state, waiting).await).into_response()
 }
 
+/// The `[authority]` table, [`ResendView`]'s mirror one table along.
+///
+/// No `waiting` here — [`NewSession::authority`]'s own comment gives the
+/// reason: a note has no window's worth of eviction and pruning state a
+/// mid-session move could leave inconsistent, so there is nothing this half
+/// has to decide is unsafe to apply.
+#[derive(serde::Serialize)]
+struct AuthorityView {
+    path: Option<String>,
+    editable: bool,
+    refused: Option<String>,
+    file: crate::provider::AuthorityNotes,
+    running: RunningAuthority,
+}
+
+#[derive(serde::Serialize)]
+struct RunningAuthority {
+    draft: Option<agent_core::sandbox::AuthorityNote>,
+    plan: Option<agent_core::sandbox::AuthorityNote>,
+}
+
+impl RunningAuthority {
+    fn of(authority: &crate::provider::AuthorityNotes) -> Self {
+        Self {
+            draft: authority.draft_note(),
+            plan: authority.plan_note(),
+        }
+    }
+}
+
+async fn authority_view(state: &AppRouterState) -> AuthorityView {
+    let (file, path) = match crate::provider::Config::load() {
+        Ok((config, path)) => (config.authority().cloned().unwrap_or_default(), path),
+        Err(_) => (Default::default(), None),
+    };
+    AuthorityView {
+        path: path
+            .or_else(crate::provider::Config::path_for_writing)
+            .map(|path| path.display().to_string()),
+        editable: state.providers_editable,
+        refused: match state.providers_editable {
+            true => None,
+            false => Some(
+                "this server is bound off loopback. An authority note outlives the session, and \
+                 the bearer token says who may reach the port rather than who may decide what \
+                 this machine tells a model. Edit config.toml on the machine itself."
+                    .to_string(),
+            ),
+        },
+        file,
+        running: RunningAuthority::of(&state.app.destination().await.authority),
+    }
+}
+
+async fn get_authority(State(state): State<AppRouterState>) -> Response {
+    Json(authority_view(&state).await).into_response()
+}
+
+/// Writes `[authority]`, and moves the live session onto it outright.
+///
+/// **Applied live in full, unlike [`put_resend`]**: an authority note is
+/// recomputed from nothing on every `select`, so there is no state a move
+/// could leave stranded and no direction that costs a turn to reverse. What
+/// [`put_resend`] spends a `waiting` message explaining is, for this table,
+/// simply true every time.
+async fn put_authority(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<crate::provider::AuthorityNotes>,
+) -> Response {
+    let app = &state.app;
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "authority notes are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(path) = crate::provider::Config::path_for_writing() else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml. \
+             Run luu once on a terminal, or set LUU_HOME.",
+        )
+            .into_response();
+    };
+    let current = crate::provider::Config::load()
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    if let Err(error) = current.with_authority(asked.clone()).write(&path) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+
+    let live = app.destination().await;
+    // Field by field, [`resend_live`]'s rule A: a table naming one authority
+    // leaves the other exactly as it was running, rather than clearing it.
+    let authority = crate::provider::AuthorityNotes {
+        draft: asked.draft.or_else(|| live.authority.draft.clone()),
+        plan: asked.plan.or_else(|| live.authority.plan.clone()),
+    };
+    if authority != live.authority {
+        let sending = Arc::new(live.noting(authority));
+        *app.destination.write().await = sending.clone();
+        let posture = app.agency().await.posture(app.posture.lock().await.clone());
+        let header = {
+            let view = app.view.lock().await;
+            retarget_header(&view, &sending, sending.counter.id(), posture)
+        };
+        if let Some(header) = header {
+            if app.store.is_some() {
+                app.stream.lock().await.push(header);
+            }
+            let mut view = app.view.lock().await;
+            view.authority_draft = sending.authority.draft_note();
+            view.authority_plan = sending.authority.plan_note();
+        }
+        app.checkpoint().await;
+    }
+
+    Json(authority_view(&state).await).into_response()
+}
+
 async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     let live = state.app.view.lock().await.summary();
     let mut sessions = vec![live];
@@ -3494,6 +3689,15 @@ struct NewSession {
     prune: Option<agent_core::context::Prune>,
     #[serde(default)]
     results: Option<agent_core::context::Results>,
+    /// What a draft or a plan this session opens is told about itself, each
+    /// absent meaning *whatever this server is already under* — the same
+    /// three-level precedence [`NewSession::resend`] gives `repeat`, `prune`
+    /// and `results`, one field along. Named `authority` and not `notes`,
+    /// because it is a position on `agent_core::sandbox::Authority` and not a
+    /// scratchpad. See
+    /// `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+    #[serde(default)]
+    authority: Option<crate::provider::AuthorityNotes>,
 }
 
 impl NewSession {
@@ -3527,6 +3731,30 @@ impl NewSession {
         };
         (asked != budget).then_some(asked)
     }
+
+    /// [`Self::resend`]'s three levels, for the two notes instead of the three
+    /// rules. **Simpler by one level in effect, not in code**: a rule has a
+    /// window's worth of eviction and pruning state that a rename mid-session
+    /// could leave inconsistent, which is what `resend_live` exists to reason
+    /// about. A note has none — it is recomputed from nothing every render, so
+    /// there is no "safe to move a live session onto" question to answer, and
+    /// what is "already running" is simply carried forward like any other
+    /// field nobody named.
+    fn authority(
+        &self,
+        machine: crate::provider::AuthorityNotes,
+        running: crate::provider::AuthorityNotes,
+    ) -> Option<crate::provider::AuthorityNotes> {
+        let asked = self.authority.clone().unwrap_or_default();
+        let merged = crate::provider::AuthorityNotes {
+            draft: asked
+                .draft
+                .or(machine.draft)
+                .or_else(|| running.draft.clone()),
+            plan: asked.plan.or(machine.plan).or_else(|| running.plan.clone()),
+        };
+        (merged != running).then_some(merged)
+    }
 }
 
 /// This machine's `[resend]` table, re-read at a session start.
@@ -3544,6 +3772,14 @@ impl NewSession {
 async fn machine_resend() -> crate::provider::Resend {
     crate::provider::Config::load()
         .map(|(config, _)| config.resend().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// This machine's `[authority]` table, [`machine_resend`]'s reason exactly,
+/// one table along.
+async fn machine_authority() -> crate::provider::AuthorityNotes {
+    crate::provider::Config::load()
+        .map(|(config, _)| config.authority().cloned().unwrap_or_default())
         .unwrap_or_default()
 }
 
@@ -3650,6 +3886,14 @@ fn retarget_header(
                 Some(sending.budget.repeat),
                 Some(sending.budget.prune),
                 Some(sending.budget.results),
+            )
+        // A fifth term, `authority`'s own reason: a session whose notes moved
+        // is a session rendering under something else, the same fact a rule
+        // moving already is.
+        && (view.authority_draft.clone(), view.authority_plan.clone())
+            == (
+                sending.authority.draft_note(),
+                sending.authority.plan_note(),
             );
     match same {
         true => None,
@@ -3659,6 +3903,7 @@ fn retarget_header(
             sending.budget,
             counter,
             Some(posture),
+            &sending.authority,
             view.started_at,
         )),
     }
@@ -3739,6 +3984,9 @@ async fn destination_for(
         budget,
         counter,
         settings,
+        // Neither the destination's nor the process's, `budget`'s own reason
+        // one field up: kept from the session that is being pointed elsewhere.
+        authority: current.authority.clone(),
     })
 }
 
@@ -3781,6 +4029,13 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         Some(budget) => Arc::new(sending.resending(budget)),
         None => sending,
     };
+    // And what a draft or a plan this session opens is told about itself,
+    // [`NewSession::authority`]'s own reason — applied the same way, beside
+    // the rules and not folded into them, because it is not one of the three.
+    let sending = match asked.authority(machine_authority().await, sending.authority.clone()) {
+        Some(authority) => Arc::new(sending.noting(authority)),
+        None => sending,
+    };
     // And the same rule for what it may do: built before anything is reset, so
     // a runtime that is not installed or an image that is not built refuses the
     // *new* session rather than ending the one that is running.
@@ -3816,6 +4071,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         sending.budget,
         sending.counter.id(),
         Some(posture.clone()),
+        &sending.authority,
         started_at,
     )];
     // And the `--record` file gets the same line, which until now it did not:
@@ -3829,6 +4085,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
             sending.budget,
             sending.counter.id(),
             Some(posture.clone()),
+            &sending.authority,
             started_at,
         );
     }
@@ -3923,6 +4180,10 @@ async fn resume_session(
     // `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md` part 2.
     let sending = match asked.resend(machine_resend().await, sending.budget) {
         Some(budget) => Arc::new(sending.resending(budget)),
+        None => sending,
+    };
+    let sending = match asked.authority(machine_authority().await, sending.authority.clone()) {
+        Some(authority) => Arc::new(sending.noting(authority)),
         None => sending,
     };
 
@@ -4067,6 +4328,7 @@ async fn resume_session(
             sending.budget,
             sending.counter.id(),
             Some(posture.clone()),
+            &sending.authority,
             loaded_view.started_at,
         );
     }
@@ -4426,7 +4688,9 @@ mod tests {
                     floor: None,
                     store: None,
                     unconfigured: true,
+                    authority: crate::provider::AuthorityNotes::default(),
                 },
+                authority: crate::provider::AuthorityNotes::default(),
             })),
             tokenizer: None,
             session: Mutex::new(Session {
@@ -4564,7 +4828,9 @@ mod tests {
                 floor: None,
                 store: None,
                 unconfigured: false,
+                authority: crate::provider::AuthorityNotes::default(),
             },
+            authority: crate::provider::AuthorityNotes::default(),
         }
     }
 

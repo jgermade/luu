@@ -2451,6 +2451,11 @@ pub async fn run() -> Result<()> {
                 // A one-shot names no posture: its policy file is the flag it
                 // was given, and the three facts are what that resolved to.
                 Some(agency.posture(None)),
+                // `luu chat` has no `Authority::Draft` to narrow — every job a
+                // script opens is pre-approved by the script itself — so
+                // there is nothing here to tell a model about. See
+                // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
+                &crate::provider::AuthorityNotes::default(),
                 started_at,
             )
             .await?,
