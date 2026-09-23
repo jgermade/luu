@@ -173,10 +173,14 @@ what is safe to move a live session onto. The wire says what a turn was told
 the same way it says which of the three window rules rendered it
 (`record::FORMAT` 18, `authority_draft`/`authority_plan` on the header,
 `None` on every stream written before this field existed and not *no note
-set*). Nothing here has been measured against a model yet: it exists so that
-the words and the position can be edited by hand between runs and compared,
-which is the run
-[roadmap row 27](ROADMAP/2026-09-21/README.md)'s claim (c) was blocked on. See
+set*). It exists so that the words and the position can be edited by hand
+between runs and compared, which is the run
+[roadmap row 27](ROADMAP/2026-09-21/README.md)'s claim (c) was blocked on, and
+that run has been made once: one seed, one one-line bug, `position = "system"`,
+`qwen3.8-27b`. Without a note, a drafting model tried two denied writes before
+stating the fix in prose, 2 824 completion tokens; told that writes wait for a
+plan, it read once and proposed one, 517. Neither plan was approved, so what the
+note does to the work itself is unmeasured. See
 [`RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`](RECORD/2026-09-22.an-authority-a-model-is-told.completed.md).
 
 Approval is per piece of work, so there is no autonomy setting to remember and no
@@ -868,6 +872,10 @@ access = "execute"
   jobs were approved against this one. `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
+  Starting the worker with the session was chosen before anyone had a number.
+  The number is ~100 ms over a host session, on machine 1 with the image already
+  built — warm, and small enough that nobody would reverse the choice on cost.
+  See [`RECORD/2026-09-15.what-a-container-start-costs.completed.md`](RECORD/2026-09-15.what-a-container-start-costs.completed.md).
 
   **What that rule compares, since 2026-09-17.** The fold keeps the posture its
   stream's last header names, and a resume refuses — 409, naming both sides —
@@ -1337,7 +1345,7 @@ plans granted. Two things about that list are decisions rather than coverage:
 `src/lib.rs` is a directory is a question about a disk; the sandbox answers it
 with `is_dir()` when it resolves a root at approval, and a fold running
 elsewhere six weeks later has no business asking. So item 12 of
-`ROADMAP/2026-09-21` is taken this far and no further, and closing it needs a
+`ROADMAP/2026-09-23` is taken this far and no further, and closing it needs a
 field written where the answer is known.
 
 There is **no panel** for any of it yet, deliberately: a number on a page is a
