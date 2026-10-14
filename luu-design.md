@@ -1578,6 +1578,21 @@ turn 9 runs keeps reading turn 3. See
 All four are readable for **any turn of the session**, not only the running one,
 and the ones a recording carries replay the same way.
 
+On the page they are **cards that fold** — the turn, the budget, the prefix, the
+calls, the folds and the prompt — each saying in one phrase what it holds while
+it is folded (`6% used`, `94% reused`, `1 call`), and which ones are folded is
+kept in `localStorage` like the rest of what the page remembers about a screen.
+The budget is drawn **as a share of the window**: `N% used · sent / limit`, the
+bar with what nothing claimed left undrawn, and one row per bucket with its count
+and its share, then `free`, then what the turn sent that is counted and not
+budgeted (its round trips, the chat template) with no share at all. Under those,
+a **row that opens** for every bucket that is a list — the tools, the map's files,
+the folded jobs, the messages, this turn's fragments — counted in items, and
+opened into the items with `≈` what each costs: its share of the bucket's
+measured count, by characters, read out of the sent prompt the way the chat's
+Context dialog groups it. See
+[`RECORD/2026-10-14.the-debug-panel-in-cards.completed.md`](RECORD/2026-10-14.the-debug-panel-in-cards.completed.md).
+
 ### One surface that counts, for the whole session rather than the turn
 
 Every panel above is per turn, which is the rule they were built under and is

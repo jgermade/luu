@@ -38,6 +38,18 @@ function keptWidth(key) {
   }
 }
 
+/// A remembered list of names out of `allowed`, or `[]`. Anything else in the
+/// stored value — a card that was renamed, a hand edit — is dropped rather
+/// than kept as a name nothing answers to.
+function keptList(key, allowed) {
+  try {
+    const found = JSON.parse(localStorage.getItem(key) || "[]")
+    return Array.isArray(found) ? found.filter(name => allowed.includes(name)) : []
+  } catch {
+    return []
+  }
+}
+
 /// Any string, or the fallback: for a value whose allowed set is the server's
 /// to say, and checked against it where it is used.
 function keptText(key, fallback) {
@@ -55,6 +67,10 @@ function keep(key, value) {
     // Unremembered, still applied.
   }
 }
+
+/// The debug panel's cards, by the name `views/inspector/debug/debug.html`
+/// folds them under.
+const DEBUG_CARDS = ["turn", "context", "prefix", "tools", "compaction", "prompt"]
 
 export const prefs = $reactive({
   /// `auto` | `light` | `dark`. **`dark` is what a browser with nothing
@@ -87,6 +103,10 @@ export const prefs = $reactive({
   /// Which panel the inspector is showing. Was in `app.html`; it is the same
   /// kind of fact as the four above and belongs with them.
   inspector: kept("luu.inspector.mode", ["files", "git", "debug"], "debug"),
+  /// The debug panel's cards that are folded. Every card is open unless
+  /// somebody folded it, because each of them is one of the panels the design
+  /// says justify the page — folding is a person making room, not a default.
+  debugFolded: keptList("luu.debug.folded", DEBUG_CARDS),
   /// `manual` | `auto`. Whether the page answers the job gate itself.
   ///
   /// **`auto` is a person deciding once instead of per job, and never the
@@ -162,6 +182,15 @@ export function setPane(which) {
 export function setInspector(which) {
   prefs.inspector = which
   keep("luu.inspector.mode", which)
+}
+
+/// Folds one of the debug panel's cards, or opens it again.
+export function toggleDebugCard(name) {
+  if (!DEBUG_CARDS.includes(name)) return
+  prefs.debugFolded = prefs.debugFolded.includes(name)
+    ? prefs.debugFolded.filter(card => card !== name)
+    : [...prefs.debugFolded, name]
+  keep("luu.debug.folded", JSON.stringify(prefs.debugFolded))
 }
 
 /// `null` forgets the width, which is what a double click on the handle asks.
