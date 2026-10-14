@@ -16,6 +16,7 @@
   const Scrollable = await import("@web/components/scrollable.html")
   const Card = await import("@web/views/inspector/debug/card.html")
   const { showDebug } = await import("@web/lib/workspace.js")
+  const { paint, group, split, withSpecs, contents, ORDER } = await import("@web/helpers/prompt-parts.js")
 
   // The one thing a 20rem rail has never been able to show: a prompt, at the
   // width it was written for. `showDebug` opens it as a tab in the content
@@ -51,6 +52,15 @@
     run_command: "i-terminal",
   }
   const toolIcon = name => `#${TOOL_ICONS[name] || "i-sliders"}`
+
+  // What the rows that open are called: what a bucket holds, counted.
+  const LIST_NAMES = {
+    tools: "tools",
+    map: "files in the map",
+    summaries: "folded jobs",
+    history: "messages",
+    code: "code fragments",
+  }
 
   $: view = (state.selectedTurn, state.history, state.turn, state.budget,
              state.prefix, state.tools, state.extraCalls, state.prompt,
@@ -126,6 +136,46 @@
   $: compactionSummary = !folds.length
     ? "none"
     : `${plural(folds.length, "fold")} · ${short(savedTotal)} saved`
+  // What the buckets that are lists hold, item by item — the rows under the
+  // legend that open. Cut out of the prompt the turn sent by the same reading
+  // the chat's Context dialog groups it with (`helpers/prompt-parts.js`), so
+  // the two never disagree about what is in a bucket. The question is what
+  // tells this turn's code from the words after it, and it is the turn's own:
+  // the newest one asked when the live turn is between turns.
+  $: asked = (state.messages, view?.turn !== null && view?.turn !== undefined
+    ? state.messages.find(m => m.role === "user" && m.turn === view.turn)?.text
+    : [...state.messages].reverse().find(m => m.role === "user")?.text) || ""
+  $: notes = [state.settings?.authority?.draft?.text, state.settings?.authority?.plan?.text]
+    .filter(Boolean)
+  $: held = view?.prompt
+    ? contents(withSpecs(group(paint(split(view.prompt), asked, notes)), view?.toolSpecs || ""))
+    : {}
+  // An item's cost is its part of the bucket's measured count, split by
+  // characters: close, and said with a `≈` because it is not a count.
+  $: lists = ORDER.filter(bucket => held[bucket]).map(bucket => {
+    const tokens = view?.budget?.buckets?.find(b => b.name === bucket)?.tokens ?? null
+    const { chars, items } = held[bucket]
+    return {
+      bucket,
+      name: LIST_NAMES[bucket] || bucket,
+      tokens,
+      count: items.filter(item => !item.muted).length,
+      items: items.map(item => ({
+        ...item,
+        // At least one: a two-letter answer is still a message the model reads.
+        tokens: tokens !== null && chars && !item.muted
+          ? Math.max(1, Math.round((tokens * item.chars) / chars))
+          : null,
+      })),
+    }
+  })
+  // Which of them are open. Not remembered: a list is opened to look at one
+  // turn, and the next turn's is a different list.
+  let opened = []
+  const toggleList = bucket => {
+    opened = opened.includes(bucket) ? opened.filter(b => b !== bucket) : [...opened, bucket]
+  }
+
   $: promptSummary = view?.prompt
     ? plural(view.prompt.split("\n").length, "line")
     : "nothing sent"
@@ -212,6 +262,28 @@
         <span class="name">chat template</span>
         <b>{{ short(templateOverhead) }}</b>
         <span class="share">—</span>
+      </li>
+    </ul>
+    <!-- What the buckets that are lists hold: a row each, counted in items,
+         that opens into the items and roughly what each one costs. -->
+    <ul :if="lists.length" class="lists">
+      <li :each="list in lists" :key="list.bucket" :class.expanded="opened.includes(list.bucket)">
+        <button type="button" class="list-head" :aria-expanded="opened.includes(list.bucket) ? 'true' : 'false'"
+                :title="list.tokens !== null ? `${list.bucket}: ${list.tokens} tokens` : list.bucket"
+                @click="toggleList(list.bucket)">
+          <svg class="ic caret" :class.open="opened.includes(list.bucket)"><use href="#i-caret"/></svg>
+          <span class="name">{{ list.name }}</span>
+          <b>{{ list.count }}</b>
+          <span class="share"></span>
+        </button>
+        <ul :if="opened.includes(list.bucket)" class="items">
+          <li :each="(item, i) in list.items" :key="i" :class.muted="!!item.muted" :title="item.title || item.label">
+            <span class="label">{{ item.label }}</span>
+            <span :if="item.tag" class="tag">{{ item.tag }}</span>
+            <span :if="item.where" class="where" :class.path="!!item.path">{{ item.where }}</span>
+            <b :if="item.tokens !== null">≈{{ short(item.tokens) }}</b>
+          </li>
+        </ul>
       </li>
     </ul>
     <p class="note">
@@ -436,6 +508,50 @@
   .swatch { width: 10px; height: 10px; border-radius: 3px; }
   .swatch.free { background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line); }
 
+  /* ---- the rows that open: a caret where a swatch would be, then the
+     items, indented to the name above them -------------------------------- */
+  .lists { list-style: none; margin: .35rem 0 0; padding: .35rem 0 0; border-top: 1px dashed var(--line); font-size: 13px; }
+  .list-head {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto 3.4rem;
+    align-items: center;
+    gap: .55rem;
+    width: 100%;
+    padding: .12rem 0;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .list-head:hover .name { color: var(--accent); }
+  .list-head .caret { width: 10px; height: 10px; color: var(--dim); transition: transform .15s; }
+  .list-head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list-head b { font-weight: normal; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .items {
+    list-style: none;
+    margin: .1rem 0 .35rem calc(10px + .55rem);
+    padding: 0 0 0 .55rem;
+    border-left: 1px solid var(--line);
+    font-size: 12px;
+  }
+  .items li { display: flex; align-items: baseline; gap: .4rem; padding: .08rem 0; min-width: 0; }
+  .items .label { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .items .where {
+    flex: 1; min-width: 0; color: var(--dim); font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* A directory is cut from the front: its end is the part that says where. */
+  .items .where.path { direction: rtl; text-align: left; }
+  .items .tag { flex: none; color: var(--warn); font-size: 11px; }
+  .items b {
+    flex: none; margin-left: auto; padding-left: .3rem;
+    font-weight: normal; color: var(--dim); font-variant-numeric: tabular-nums;
+  }
+  .items li.muted { color: var(--dim); font-style: italic; }
+
   .bar .system, .swatch.system { background: var(--b-system); }
   .bar .tools, .swatch.tools { background: var(--b-tools); }
   .bar .map, .swatch.map { background: var(--b-map); }
@@ -456,7 +572,7 @@
   code { font-size: 11px; }
 
   /* ---- the prompt's head: what to do with it, on the card's far side ----- */
-  .open {
+  button.open {
     flex: none;
     font-size: 12px;
     color: var(--accent);

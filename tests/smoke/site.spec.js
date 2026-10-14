@@ -164,5 +164,16 @@ test("the repository map is a bucket of its own in the budget", async ({ page })
   const tokens = Number((await map.innerText()).replace(/[^0-9]/g, ""))
   expect(tokens).toBeGreaterThan(0)
 
+  // And what the bucket holds, file by file: the row under the legend opens
+  // into the files the map outlined, each with roughly what it costs. See
+  // `RECORD/2026-10-14.the-debug-panel-in-cards.completed.md`.
+  const files = page.locator(".inspector .lists > li")
+    .filter({ has: page.locator(".list-head", { hasText: "files in the map" }) })
+  await expect(files).toHaveCount(1)
+  await expect(files.locator(".items")).toHaveCount(0)
+  await files.locator(".list-head").click()
+  await expect(files.locator(".items li").first()).toBeVisible()
+  await expect(files.locator(".items li").first()).toContainText(/≈\d/)
+
   expect(errors, `the page logged: ${errors.join(" | ")}`).toEqual([])
 })
