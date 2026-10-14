@@ -8,8 +8,13 @@
   // `views/inspector/version-control/version-control.html` instead of `app.html` having to thread six
   // computed values through three components that each want a different
   // subset of them.
+  //
+  // Drawn as cards that fold, each saying in one phrase what it holds while it
+  // is folded, and the budget as a share of the window rather than of itself.
+  // See `RECORD/2026-10-14.the-debug-panel-in-cards.completed.md`.
   const { state, panel, selectTurn } = await import("@web/lib/store.js")
   const Scrollable = await import("@web/components/scrollable.html")
+  const Card = await import("@web/views/inspector/debug/card.html")
   const { showDebug } = await import("@web/lib/workspace.js")
 
   // The one thing a 20rem rail has never been able to show: a prompt, at the
@@ -17,6 +22,35 @@
   // column, which also switches to it where there are only two columns. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const readIt = (id, title, text) => showDebug(id, title, text)
+
+  // `37.2k`, `1M`: a card is 20rem wide and a count is read for its size. The
+  // exact number is on the row's title, and in the sentence under the rows.
+  const short = n => {
+    if (n === null || n === undefined) return "—"
+    const size = Math.abs(n)
+    if (size >= 1e6) return `${+(n / 1e6).toFixed(1)}M`
+    if (size >= 1e3) return `${+(n / 1e3).toFixed(1)}k`
+    return String(n)
+  }
+  // A share of `whole`, to a tenth: an 8K window makes 0.4% a block worth
+  // seeing, and rounding it to 0 would hide it.
+  const share = (part, whole) => {
+    if (!whole) return "—"
+    const percent = (part / whole) * 100
+    if (percent === 0) return "0%"
+    return percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`
+  }
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`
+
+  // Which symbol a call is drawn with, by what it does to the workspace.
+  const TOOL_ICONS = {
+    read_file: "i-file",
+    list_dir: "i-folder",
+    write_file: "i-edit",
+    edit_file: "i-edit",
+    run_command: "i-terminal",
+  }
+  const toolIcon = name => `#${TOOL_ICONS[name] || "i-sliders"}`
 
   $: view = (state.selectedTurn, state.history, state.turn, state.budget,
              state.prefix, state.tools, state.extraCalls, state.prompt,
@@ -52,6 +86,16 @@
   $: templateOverhead = view?.budget?.backendPrompt
     ? view.budget.backendPrompt - budgetSent - extraSent
     : null
+  // The window, and what of it nothing has claimed. Shares are of the window
+  // when there is one — the question a person asks of a budget is how full it
+  // is — and of what the buckets add up to when the window is unknown.
+  $: limit = view?.budget?.limit || null
+  $: free = limit ? Math.max(limit - budgetTotal, 0) : null
+  $: used = limit ? Math.round((budgetSent / limit) * 100) : null
+  $: whole = limit || budgetTotal
+  // A bucket with nothing in it is a row in the legend and not a sliver in
+  // the bar: the legend says it is empty, a 2px stripe would say it is not.
+  $: segments = view?.budget ? view.budget.buckets.filter(b => b.tokens > 0) : []
   // Named for the same reason the budget names its own: two counts measured
   // differently are not comparable, and the pruned line is the one number on
   // this panel that is a *difference* of two windows rather than a total.
@@ -64,263 +108,383 @@
   $: reuseFresh = view?.prefix
     ? view.prefix.prompt_tokens - view.prefix.shared_tokens
     : 0
+
+  // What each card says while it is folded.
+  $: turnSummary = reading
+    ? `turn ${state.selectedTurn}`
+    : state.turn ? `turn ${state.turn}, running` : "live"
+  $: contextSummary = !view?.budget
+    ? "no turn yet"
+    : used !== null ? `${used}% used` : `${short(budgetSent)} sent`
+  $: prefixSummary = view?.prefix ? `${reusePercent}% reused` : "first turn"
+  $: calls = view?.tools || []
+  $: denied = calls.filter(call => call.verdict && !call.verdict.allowed).length
+  $: toolsSummary = !calls.length
+    ? "none"
+    : `${plural(calls.length, "call")}${denied ? ` · ${denied} denied` : ""}`
+  $: savedTotal = folds.reduce((sum, fold) => sum + (fold.saved || 0), 0)
+  $: compactionSummary = !folds.length
+    ? "none"
+    : `${plural(folds.length, "fold")} · ${short(savedTotal)} saved`
+  $: promptSummary = view?.prompt
+    ? plural(view.prompt.split("\n").length, "line")
+    : "nothing sent"
 </script>
 
-<div class="turn-picker">
-  <select
-    :value="state.selectedTurn === null ? 'live' : state.selectedTurn"
-    @change="selectTurn($event.target.value)">
-    <option value="live">live</option>
-    <option :each="entry in state.history" :key="entry.turn" :value="entry.turn">
-      turn {{ entry.turn }}
-    </option>
-  </select>
-  <span :if="!reading && state.turn" class="dim">turn {{ state.turn }}, running</span>
-  <span :if="!reading && !state.turn" class="dim">the newest turn</span>
-  <button :if="reading" type="button" class="link" @click="selectTurn(null)">back to live</button>
-</div>
-<p :if="reading" class="reading">
-  Turn {{ view?.turn }} as it was sent
-  <span :if="view?.reason && view?.reason !== 'stop'" class="warn">· {{ view?.reason }}</span>
-  <span :if="view?.usage" class="dim">
-    · {{ view?.usage.prompt_tokens }} prompt / {{ view?.usage.completion_tokens }} completion
-  </span>
-</p>
-<h2>Token budget</h2>
-<div :if="view?.budget">
-  <div class="bar">
-    <span
-      :each="bucket in view?.budget?.buckets"
-      :key="bucket.name"
-      :class="bucket.name"
-      :style="`flex-grow:${bucket.tokens || 0}`"
-      :title="`${bucket.name}: ${bucket.tokens}`"></span>
+<Card name="turn" title="Turn" :summary="turnSummary">
+  <div class="turn-picker row">
+    <svg class="ic"><use href="#i-clock"/></svg>
+    <select
+      :value="state.selectedTurn === null ? 'live' : state.selectedTurn"
+      @change="selectTurn($event.target.value)">
+      <option value="live">live</option>
+      <option :each="entry in state.history" :key="entry.turn" :value="entry.turn">
+        turn {{ entry.turn }}
+      </option>
+    </select>
+    <span :if="!reading && state.turn" class="dim">turn {{ state.turn }}, running</span>
+    <span :if="!reading && !state.turn" class="dim">the newest turn</span>
+    <button :if="reading" type="button" class="link back" @click="selectTurn(null)">back to live</button>
   </div>
-  <ul class="legend">
-    <li :each="bucket in view?.budget?.buckets" :key="bucket.name">
-      <span :class="bucket.name"></span>{{ bucket.name }}
-      <b>{{ bucket.tokens }}</b>
+  <!-- The model is the live session's, and a turn read back does not record
+       which one it went to: shown for the live turn only, rather than beside
+       a turn it may not have answered. -->
+  <div :if="!reading && state.model" class="row">
+    <svg class="ic"><use href="#i-chip"/></svg>
+    <span class="grow">{{ state.model }}</span>
+    <span :if="state.backend" class="dim">{{ state.backend }}</span>
+  </div>
+  <p :if="reading" class="reading">
+    Turn {{ view?.turn }} as it was sent
+    <span :if="view?.reason && view?.reason !== 'stop'" class="warn">· {{ view?.reason }}</span>
+    <span :if="view?.usage" class="dim">
+      · {{ view?.usage?.prompt_tokens }} prompt / {{ view?.usage?.completion_tokens }} completion
+    </span>
+  </p>
+</Card>
+
+<Card name="context" title="Context" :summary="contextSummary">
+  <div :if="view?.budget">
+    <div class="usage">
+      <b :if="used !== null">{{ used }}% used</b>
+      <b :if="used === null">{{ short(budgetSent) }} sent</b>
+      <span :if="limit" :title="`${budgetSent} of ${limit}`">{{ short(budgetSent) }} / {{ short(limit) }}</span>
+      <span :if="!limit">window unknown</span>
+    </div>
+    <div class="bar">
+      <span
+        :each="bucket in segments"
+        :key="bucket.name"
+        :class="bucket.name"
+        :style="`flex-grow:${bucket.tokens}`"
+        :title="`${bucket.name}: ${bucket.tokens}`"></span>
+      <span :if="free" class="free" :style="`flex-grow:${free}`" :title="`free: ${free}`"></span>
+    </div>
+    <ul class="rows legend">
+      <li :each="bucket in view?.budget?.buckets" :key="bucket.name" :title="`${bucket.tokens} tokens`">
+        <span class="swatch" :class="bucket.name"></span>
+        <span class="name">{{ bucket.name }}</span>
+        <b>{{ short(bucket.tokens) }}</b>
+        <span class="share">{{ share(bucket.tokens, whole) }}</span>
+      </li>
+    </ul>
+    <!-- What is not a bucket: the window nothing claimed, and what the turn
+         sent beside the bar — its tool round trips, and whatever the server's
+         chat template wrapped around it. Those two are counted and not
+         budgeted, so they have no share of the window to show. -->
+    <ul :if="free !== null || view?.extraCalls?.length || templateOverhead !== null" class="rows">
+      <li :if="free !== null" :title="`${free} tokens`">
+        <span class="swatch free"></span>
+        <span class="name">free</span>
+        <b>{{ short(free) }}</b>
+        <span class="share">{{ share(free, limit) }}</span>
+      </li>
+      <li :if="view?.extraCalls?.length" class="beside"
+          :title="`This turn made ${view?.extraCalls?.length + 1} model calls: the bar is the first, and the tool round trips sent ${extraSent} tokens more.`">
+        <span class="swatch"></span>
+        <span class="name">round trips · {{ plural(view?.extraCalls?.length, "call") }}</span>
+        <b>{{ short(extraSent) }}</b>
+        <span class="share">—</span>
+      </li>
+      <li :if="templateOverhead !== null" class="beside"
+          :title="`Backend counted ${view?.budget?.backendPrompt} over ${view?.extraCalls?.length + 1} call(s): ${templateOverhead} more than we sent, the chat template applied on its side.`">
+        <span class="swatch"></span>
+        <span class="name">chat template</span>
+        <b>{{ short(templateOverhead) }}</b>
+        <span class="share">—</span>
+      </li>
+    </ul>
+    <p class="note">
+      {{ budgetSent }} tokens sent<span :if="limit">, {{ budgetTotal }} of {{ limit }} spoken for</span>
+      <span :if="!limit">— window unknown, so nothing was budgeted</span>
+    </p>
+    <p :if="view?.budget?.counter?.kind === 'approximate'" class="note warn">
+      Counted approximately (chars/4). Not a measurement — pass
+      <code>--tokenizer</code> for real numbers.
+    </p>
+    <p :if="view?.dropped" class="note event">
+      Turn {{ view?.dropped?.turn }} dropped turn(s)
+      {{ view?.dropped?.turns.join(", ") }} — {{ view?.dropped?.tokens }}
+      tokens out of the window, for good, under the
+      <b>{{ view?.dropped?.policy.policy }}</b> policy.
+    </p>
+    <!-- The other cut, and the clause that is the whole difference between them:
+         a pruned turn is still asked, still answered and still citable. Without
+         this line the only trace of `--prune-behind` on the page was the `code`
+         bucket being smaller than it was a turn ago, with nothing to say which
+         turns paid for it. -->
+    <p :if="view?.cited" class="note event pruned">
+      Turn {{ view?.cited?.turn }} pruned turn(s)
+      {{ view?.cited?.turns.join(", ") }} — {{ view?.cited?.tokens }}
+      tokens of code out of the prompt<span :if="citedCounter">, counted
+      {{ citedCounter }}</span>. The turns themselves are still in the
+      conversation.
+    </p>
+  </div>
+  <p :if="!view?.budget" class="note">
+    No turn yet. The budget is decided before the call, so the first prompt
+    fills this in.
+  </p>
+</Card>
+
+<Card name="prefix" title="Prefix reuse" :summary="prefixSummary">
+  <div :if="view?.prefix">
+    <div class="usage">
+      <b>{{ reusePercent }}% reused</b>
+      <span :title="`${view?.prefix?.shared_tokens} of ${view?.prefix?.prompt_tokens}`">
+        {{ short(view?.prefix?.shared_tokens) }} / {{ short(view?.prefix?.prompt_tokens) }}
+      </span>
+    </div>
+    <div class="bar">
+      <span
+        class="shared"
+        :style="`flex-grow:${view?.prefix?.shared_tokens || 0}`"
+        :title="`shared: ${view?.prefix?.shared_tokens}`"></span>
+      <span
+        class="fresh"
+        :style="`flex-grow:${reuseFresh}`"
+        :title="`new: ${reuseFresh}`"></span>
+    </div>
+    <ul class="rows">
+      <li :title="`${view?.prefix?.shared_tokens} tokens`">
+        <span class="swatch shared"></span>
+        <span class="name">shared</span>
+        <b>{{ short(view?.prefix?.shared_tokens) }}</b>
+        <span class="share">{{ share(view?.prefix?.shared_tokens, view?.prefix?.prompt_tokens) }}</span>
+      </li>
+      <li :title="`${reuseFresh} tokens`">
+        <span class="swatch fresh"></span>
+        <span class="name">new</span>
+        <b>{{ short(reuseFresh) }}</b>
+        <span class="share">{{ share(reuseFresh, view?.prefix?.prompt_tokens) }}</span>
+      </li>
+    </ul>
+    <p class="note">
+      {{ view?.prefix?.shared_tokens }} of {{ view?.prefix?.prompt_tokens }}
+      tokens ({{ view?.prefix?.shared_bytes }} bytes) were already in the
+      previous prompt, before the first difference — which is where the cache
+      stops.
+    </p>
+  </div>
+  <p :if="!view?.prefix" class="note">
+    First turn of the session — no previous prompt to measure against, which
+    is not the same as no reuse.
+  </p>
+</Card>
+
+<Card name="tools" title="Tool calls" :summary="toolsSummary">
+  <ol class="timeline" :if="calls.length">
+    <li :each="call in calls" :key="call.step">
+      <div class="call">
+        <svg class="ic kind"><use :href="toolIcon(call.name)"/></svg>
+        <b>{{ call.name }}</b>
+        <span class="dim">{{ JSON.stringify(call.arguments) }}</span>
+      </div>
+      <div :if="call.verdict" class="verdict">
+        <span :class="call.verdict.allowed ? 'ok' : 'bad'">
+          {{ call.verdict.allowed ? "allowed" : "denied" }}
+        </span>
+        <span class="dim">{{ call.verdict.rule }}</span>
+      </div>
+      <div :if="call.verdict" class="held" :class.warn="call.verdict.enforced_by.by === 'partial'">
+        held by
+        <span :if="call.verdict.enforced_by.by === 'process'">an in-process check</span>
+        <span :if="call.verdict.enforced_by.by === 'kernel'">{{ call.verdict.enforced_by.how }}</span>
+        <span :if="call.verdict.enforced_by.by === 'partial'">
+          {{ call.verdict.enforced_by.how }} — missing {{ call.verdict.enforced_by.missing }}
+        </span>
+        <span :if="call.duration_ms !== null" class="dim">· {{ call.duration_ms }} ms</span>
+        <span :if="call.output" class="dim">· {{ call.output.length }} bytes back</span>
+        <span :if="call.truncated" class="warn">· cut</span>
+      </div>
+      <div :if="call.command" class="held">
+        <span :class="call.command.exit_code === 0 ? 'ok' : 'bad'">
+          exit {{ call.command.exit_code === null ? "—" : call.command.exit_code }}
+        </span>
+        <span :if="call.command.signal !== null" class="warn">· signal {{ call.command.signal }}</span>
+        <span class="dim">· {{ call.command.duration_ms }} ms in the child</span>
+        <span :if="call.command.stderr" class="dim">· {{ call.command.stderr.length }} bytes on stderr</span>
+      </div>
+      <div :if="!call.verdict" class="held">running…</div>
+      <div :if="call.error" class="err">{{ call.error }}</div>
     </li>
-  </ul>
-  <p class="dim">
-    {{ budgetSent }} tokens sent<span :if="view?.budget?.limit">, {{ budgetTotal }} of {{ view?.budget?.limit }} spoken for</span>
-    <span :if="!view?.budget?.limit">— window unknown, so nothing was budgeted</span>
+  </ol>
+  <p :if="!calls.length" class="note">
+    No tool calls this turn. A turn that only answers makes none.
   </p>
-  <p :if="view?.budget?.counter?.kind === 'approximate'" class="dim warn">
-    Counted approximately (chars/4). Not a measurement — pass
-    <code>--tokenizer</code> for real numbers.
-  </p>
-  <p :if="view?.extraCalls?.length" class="dim">
-    This turn made {{ view?.extraCalls?.length + 1 }} model calls: the bar is
-    the first, and the tool round trips sent {{ extraSent }} tokens more.
-  </p>
-  <p :if="templateOverhead !== null" class="dim">
-    Backend counted {{ view?.budget?.backendPrompt }} over
-    {{ view?.extraCalls?.length + 1 }} call(s): {{ templateOverhead }}
-    more than we sent, the chat template applied on its side.
-  </p>
-  <p :if="view?.dropped" class="dim">
-    Turn {{ view?.dropped?.turn }} dropped turn(s)
-    {{ view?.dropped?.turns.join(", ") }} — {{ view?.dropped?.tokens }}
-    tokens out of the window, for good, under the
-    <b>{{ view?.dropped?.policy.policy }}</b> policy.
-  </p>
-  <!-- The other cut, and the clause that is the whole difference between them:
-       a pruned turn is still asked, still answered and still citable. Without
-       this line the only trace of `--prune-behind` on the page was the `code`
-       bucket being smaller than it was a turn ago, with nothing to say which
-       turns paid for it. -->
-  <p :if="view?.cited" class="dim">
-    Turn {{ view?.cited?.turn }} pruned turn(s)
-    {{ view?.cited?.turns.join(", ") }} — {{ view?.cited?.tokens }}
-    tokens of code out of the prompt<span :if="citedCounter">, counted
-    {{ citedCounter }}</span>. The turns themselves are still in the
-    conversation.
-  </p>
-</div>
-<p :if="!view?.budget" class="dim">
-  No turn yet. The budget is decided before the call, so the first prompt
-  fills this in.
-</p>
+</Card>
 
-<h2>Prefix reuse</h2>
-<div :if="view?.prefix">
-  <div class="bar">
-    <span
-      class="shared"
-      :style="`flex-grow:${view?.prefix.shared_tokens || 0}`"
-      :title="`shared: ${view?.prefix.shared_tokens}`"></span>
-    <span
-      class="fresh"
-      :style="`flex-grow:${reuseFresh}`"
-      :title="`new: ${reuseFresh}`"></span>
-  </div>
-  <p class="dim">
-    <b>{{ reusePercent }}%</b> of this prompt was already in the previous
-    one: {{ view?.prefix.shared_tokens }} of
-    {{ view?.prefix.prompt_tokens }} tokens ({{ view?.prefix.shared_bytes }}
-    bytes) before the first difference, which is where the cache stops.
+<Card name="compaction" title="Compaction" :summary="compactionSummary">
+  <ol class="folds" :if="folds.length">
+    <li :each="fold in folds" :key="fold.id">
+      <div class="call">
+        <svg class="ic kind"><use href="#i-diff"/></svg>
+        <b>job {{ fold.id }}</b>
+        <span class="dim">{{ fold.objective }}</span>
+      </div>
+      <div class="held">
+        <span :if="fold.turns.length">turns {{ fold.turns.join(", ") }}</span>
+        <span :if="!fold.turns.length" class="dim">turns not recorded</span>
+        <span :if="fold.closedBy === 'exit_code'" class="dim">· closed by exit code</span>
+      </div>
+      <div :if="fold.before !== null" class="held">
+        <b>{{ fold.before }}</b> tokens of history →
+        <b>{{ fold.after }}</b> in the line that stands in for them,
+        <span :class="fold.saved > 0 ? 'ok' : 'bad'">{{ fold.saved }} saved</span>
+      </div>
+      <div :if="fold.before === null" class="held dim">
+        what it replaced was not recorded — this stream predates format 9
+      </div>
+    </li>
+  </ol>
+  <p :if="!folds.length" class="note">
+    Nothing folded yet. A job that is closed is sent as one summary from then
+    on, and this is where what that cost goes.
   </p>
-</div>
-<p :if="!view?.prefix" class="dim">
-  First turn of the session — no previous prompt to measure against, which
-  is not the same as no reuse.
-</p>
+</Card>
 
-<h2>Tool calls</h2>
-<ol class="timeline" :if="view?.tools?.length">
-  <li :each="call in view?.tools" :key="call.step">
-    <div class="call">
-      <b>{{ call.name }}</b>
-      <span class="dim">{{ JSON.stringify(call.arguments) }}</span>
-    </div>
-    <div :if="call.verdict" class="verdict">
-      <span :class="call.verdict.allowed ? 'ok' : 'bad'">
-        {{ call.verdict.allowed ? "allowed" : "denied" }}
-      </span>
-      <span class="dim">{{ call.verdict.rule }}</span>
-    </div>
-    <div :if="call.verdict" class="held" :class.warn="call.verdict.enforced_by.by === 'partial'">
-      held by
-      <span :if="call.verdict.enforced_by.by === 'process'">an in-process check</span>
-      <span :if="call.verdict.enforced_by.by === 'kernel'">{{ call.verdict.enforced_by.how }}</span>
-      <span :if="call.verdict.enforced_by.by === 'partial'">
-        {{ call.verdict.enforced_by.how }} — missing {{ call.verdict.enforced_by.missing }}
-      </span>
-      <span :if="call.duration_ms !== null" class="dim">· {{ call.duration_ms }} ms</span>
-      <span :if="call.output" class="dim">· {{ call.output.length }} bytes back</span>
-      <span :if="call.truncated" class="warn">· cut</span>
-    </div>
-    <div :if="call.command" class="held">
-      <span :class="call.command.exit_code === 0 ? 'ok' : 'bad'">
-        exit {{ call.command.exit_code === null ? "—" : call.command.exit_code }}
-      </span>
-      <span :if="call.command.signal !== null" class="warn">· signal {{ call.command.signal }}</span>
-      <span class="dim">· {{ call.command.duration_ms }} ms in the child</span>
-      <span :if="call.command.stderr" class="dim">· {{ call.command.stderr.length }} bytes on stderr</span>
-    </div>
-    <div :if="!call.verdict" class="dim">running…</div>
-    <div :if="call.error" class="err">{{ call.error }}</div>
-  </li>
-</ol>
-<p :if="!view?.tools?.length" class="dim">
-  No tool calls this turn. A turn that only answers makes none.
-</p>
-
-<h2>Compaction</h2>
-<ol class="folds" :if="folds.length">
-  <li :each="fold in folds" :key="fold.id">
-    <div class="call">
-      <b>job {{ fold.id }}</b>
-      <span class="dim">{{ fold.objective }}</span>
-    </div>
-    <div class="held">
-      <span :if="fold.turns.length">turns {{ fold.turns.join(", ") }}</span>
-      <span :if="!fold.turns.length" class="dim">turns not recorded</span>
-      <span :if="fold.closedBy === 'exit_code'" class="dim">· closed by exit code</span>
-    </div>
-    <div :if="fold.before !== null" class="held">
-      <b>{{ fold.before }}</b> tokens of history →
-      <b>{{ fold.after }}</b> in the line that stands in for them,
-      <span :class="fold.saved > 0 ? 'ok' : 'bad'">{{ fold.saved }} saved</span>
-    </div>
-    <div :if="fold.before === null" class="held dim">
-      what it replaced was not recorded — this stream predates format 9
-    </div>
-  </li>
-</ol>
-<p :if="!folds.length" class="dim">
-  Nothing folded yet. A job that is closed is sent as one summary from then
-  on, and this is where what that cost goes.
-</p>
-
-<h2>
-  Prompt sent to the model
-  <button
-    :if="view?.prompt"
-    type="button"
-    class="link open"
-    title="Open it in the content column, at the width it was written for"
-    @click="readIt(
-      `prompt:${state.selectedTurn === null ? 'live' : state.selectedTurn}`,
-      `prompt · turn ${view?.turn ?? 'live'}`,
-      view?.prompt)">open →</button>
-</h2>
-<Scrollable :if="view?.prompt" :y="true" frame="well" max="22rem"><pre>{{ view?.prompt }}</pre></Scrollable>
-<p :if="!view?.prompt" class="dim">Nothing sent yet this session.</p>
+<Card name="prompt" title="Prompt" :summary="promptSummary">
+  <template :slot.action>
+    <button
+      :if="view?.prompt"
+      type="button"
+      class="link open"
+      title="Open it in the content column, at the width it was written for"
+      @click="readIt(
+        `prompt:${state.selectedTurn === null ? 'live' : state.selectedTurn}`,
+        `prompt · turn ${view?.turn ?? 'live'}`,
+        view?.prompt)">open →</button>
+  </template>
+  <Scrollable :if="view?.prompt" :y="true" frame="well" max="22rem"><pre>{{ view?.prompt }}</pre></Scrollable>
+  <p :if="!view?.prompt" class="note">Nothing sent yet this session.</p>
+</Card>
 
 <style scoped>
-  h2 {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    color: var(--dim);
-    margin: 1.2rem 0 .5rem;
-  }
-  h2:first-child { margin-top: 0; }
-  /* A heading that carries one control: the word is the section, the button is
-     what to do with it, and they are the same line rather than two. */
-  h2 .open {
-    float: right;
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: normal;
-    color: var(--accent);
-  }
-  .turn-picker { display: flex; align-items: center; gap: .5rem; margin-bottom: .8rem; }
+  /* ---- rows: an icon, what it is, and what goes with it, like a list in a
+     sidebar rather than a sentence ---------------------------------------- */
+  .row { display: flex; align-items: center; gap: .55rem; padding: .2rem 0; font-size: 13px; min-width: 0; }
+  .row > .ic { color: var(--dim); }
+  .row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .turn-picker select {
     background: var(--bg); color: inherit; border: 1px solid var(--line);
     border-radius: 6px; font: inherit; font-size: 12px; padding: .15rem .4rem;
   }
+  .turn-picker .dim { font-size: 12px; }
+  .turn-picker .back { margin-left: auto; font-size: 12px; }
   /* A panel that is not about the turn on screen says so once, here, rather
      than by every number in it looking current. */
   .reading {
-    margin: 0 0 .8rem; padding: .3rem .6rem; font-size: 12px;
+    margin: .35rem 0 0; padding: .3rem .6rem; font-size: 12px;
     border-left: 3px solid var(--b-history); background: var(--raised);
     border-radius: 0 6px 6px 0;
   }
 
-  .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--sunken); }
-  .bar span { min-width: 2px; }
-  .bar span.system, .legend span.system { background: var(--b-system); }
-  .bar span.tools, .legend span.tools { background: var(--b-tools); }
-  .bar span.map, .legend span.map { background: var(--b-map); }
-  .bar span.history, .legend span.history { background: var(--b-history); }
-  .bar span.summaries, .legend span.summaries { background: var(--b-summaries); }
-  .bar span.code, .legend span.code { background: var(--b-code); }
-  .bar span.prompt, .legend span.prompt { background: var(--b-prompt); }
-  .bar span.reserve, .legend span.reserve { background: var(--b-reserve); }
-  .bar span.shared { background: var(--b-history); }
-  .bar span.fresh { background: var(--b-reserve); }
-
-  .legend { list-style: none; margin: .6rem 0 0; padding: 0; font-size: 13px; }
-  .legend li { display: flex; align-items: center; gap: .4rem; }
-  .legend li b { margin-left: auto; font-variant-numeric: tabular-nums; }
-  .legend span { width: 9px; height: 9px; border-radius: 2px; }
-
-  .timeline { list-style: none; margin: 0; padding: 0; font-size: 12px; }
-  .timeline li {
-    border-left: 2px solid var(--line);
-    padding: 0 0 .5rem .6rem;
-    margin-bottom: .5rem;
+  /* ---- a budget: how full, the bar, and a row per block ----------------- */
+  .usage {
+    display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
+    font-variant-numeric: tabular-nums;
   }
-  .timeline .call { overflow-wrap: anywhere; }
+  .usage b { font-size: 14px; font-weight: 500; }
+  .usage span { color: var(--dim); font-size: 12px; }
+
+  .bar {
+    display: flex; gap: 2px; height: 6px; margin: .45rem 0 .6rem;
+    border-radius: 999px; overflow: hidden; background: var(--sunken);
+  }
+  .bar span { min-width: 3px; border-radius: 2px; }
+  /* Free is the bar's own ground: what is left of the window is the part
+     nothing is drawn on. */
+  .bar span.free { background: transparent; }
+
+  .rows { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .rows + .rows { margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed var(--line); }
+  /* Four columns, the last fixed, so every row's share lines up under the one
+     above it and every count ends at the same edge. */
+  .rows li {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto 3.4rem;
+    align-items: center;
+    gap: .55rem;
+    padding: .12rem 0;
+  }
+  .rows .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rows b { font-weight: normal; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .rows .share { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Counted, not budgeted: beside the window rather than in it. */
+  .rows li.beside { color: var(--dim); opacity: .7; }
+  .rows li.beside .swatch { background: none; box-shadow: inset 0 0 0 1px var(--line); }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; }
+  .swatch.free { background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line); }
+
+  .bar .system, .swatch.system { background: var(--b-system); }
+  .bar .tools, .swatch.tools { background: var(--b-tools); }
+  .bar .map, .swatch.map { background: var(--b-map); }
+  .bar .history, .swatch.history { background: var(--b-history); }
+  .bar .summaries, .swatch.summaries { background: var(--b-summaries); }
+  .bar .code, .swatch.code { background: var(--b-code); }
+  .bar .prompt, .swatch.prompt { background: var(--b-prompt); }
+  .bar .reserve, .swatch.reserve { background: var(--b-reserve); }
+  .bar .shared, .swatch.shared { background: var(--b-history); }
+  .bar .fresh, .swatch.fresh { background: var(--b-reserve); }
+
+  .note { margin: .55rem 0 0; font-size: 12px; line-height: 1.5; color: var(--dim); }
+  .note.warn { color: var(--warn); }
+  /* A cut is something that happened to this turn, not a description of it:
+     marked in the colour of what it took. */
+  .note.event { padding-left: .55rem; border-left: 3px solid var(--warn); }
+  .note.event.pruned { border-left-color: var(--b-code); }
+  code { font-size: 11px; }
+
+  /* ---- the prompt's head: what to do with it, on the card's far side ----- */
+  .open {
+    flex: none;
+    font-size: 12px;
+    color: var(--accent);
+  }
+
+  /* ---- calls and folds: a list, one entry per thing that happened -------- */
+  .timeline, .folds { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .timeline li, .folds li { padding: .4rem 0; }
+  .timeline li:first-child, .folds li:first-child { padding-top: 0; }
+  .timeline li + li, .folds li + li { border-top: 1px solid var(--line); }
+  .timeline li:last-child, .folds li:last-child { padding-bottom: 0; }
+  .call { display: flex; align-items: baseline; gap: .45rem; font-size: 13px; }
+  .call .kind { width: 14px; height: 14px; color: var(--dim); align-self: center; }
+  /* The name is read whole; the arguments after it are what wraps. */
+  .call b { flex: none; white-space: nowrap; }
+  .call .dim { font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+  /* Everything under a call's name starts where its name does. */
+  .verdict, .held, .err { padding-left: calc(14px + .45rem); line-height: 1.5; overflow-wrap: anywhere; }
   .timeline .call b { color: var(--accent); }
-  .timeline .verdict .ok { color: var(--b-history); }
-  .timeline .verdict .bad { color: var(--bad); }
+  .timeline .ok { color: var(--ok); }
+  .timeline .bad { color: var(--bad); }
   .timeline .held { color: var(--dim); }
   .timeline .held.warn { color: var(--warn); }
   .timeline .err { color: var(--bad); overflow-wrap: anywhere; }
 
-  .folds { list-style: none; margin: 0; padding: 0; font-size: 12px; }
-  .folds li {
-    border-left: 2px solid var(--b-summaries);
-    padding: 0 0 .5rem .6rem;
-    margin-bottom: .5rem;
-  }
   .folds .call b { color: var(--b-summaries); }
   .folds .held { color: var(--dim); }
   .folds .held b { color: var(--fg); font-variant-numeric: tabular-nums; }
-  .folds .ok { color: var(--b-history); }
+  .folds .ok { color: var(--ok); }
   .folds .bad { color: var(--bad); }
 </style>
