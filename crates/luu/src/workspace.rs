@@ -511,8 +511,15 @@ pub async fn diff(sandbox: &Sandbox, relative: &str, staged: bool) -> Result<Dif
 /// also why the `/dev/null` and `~/.gitconfig` findings in
 /// `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md` do not reach
 /// it — a child here inherits the server's own environment.
+///
+/// **Without the optional locks.** `git status` otherwise rewrites the index
+/// to refresh its stat cache, under `.git/index.lock`, and a child killed
+/// mid-write — `kill_on_drop`, the timeout, a server stopped — leaves the lock
+/// behind, and the person's own next `git commit` refused. A reader in the
+/// background should not write, which is what the variable is for.
 async fn git(base: &Path, args: &[&str]) -> Result<String, Error> {
     let run = Command::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
         .arg(base)
         .args(args)
@@ -771,6 +778,55 @@ mod tests {
             assert_eq!(git_status(&repo).await.unwrap(), Some(BTreeMap::new()));
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Asking leaves the index alone. A file touched without being changed is
+    /// the case where `git status` would refresh its stat cache by rewriting
+    /// `.git/index` — under the lock a killed child leaves behind.
+    #[tokio::test]
+    async fn asking_git_writes_nothing_into_the_repository() {
+        let repo = std::env::temp_dir().join(format!("luu-nolock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        if !run(&["init", "-q"]) {
+            return;
+        }
+        std::fs::write(repo.join("a.txt"), "same\n").unwrap();
+        assert!(run(&["add", "a.txt"]) && run(&["commit", "-qm", "a"]));
+        // Same bytes, a later mtime: the index's stat for it is now stale.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(repo.join("a.txt"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let index = || {
+            std::fs::metadata(repo.join(".git/index"))
+                .unwrap()
+                .modified()
+                .unwrap()
+        };
+        let before = index();
+
+        assert_eq!(git_status(&repo).await.unwrap(), Some(BTreeMap::new()));
+        assert_eq!(index(), before, "git status rewrote the index");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// The count is the file's, not the payload's, and the two agree exactly
