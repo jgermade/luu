@@ -428,9 +428,9 @@
   const withParts = (list, _tools, _history, _turn) => {
     const rows = list.map(entry => {
       if (entry.kind !== "message" || entry.message.role !== "assistant") return transcriptRows.keep(entry.id, entry)
-      const { parts, live, timing } = partsOf(entry.message)
+      const { parts, live, reading, timing } = partsOf(entry.message)
       const kept = parts.map(part => transcriptRows.keep(`${entry.id}:${part.i}`, part))
-      return transcriptRows.keep(entry.id, { ...entry, parts: kept, live, timing })
+      return transcriptRows.keep(entry.id, { ...entry, parts: kept, live, reading, timing })
     })
     transcriptRows.sweep()
     return rows
@@ -445,7 +445,16 @@
     const parts = segments(message.text || "", tools, live)
       .flatMap(part => part.kind === "text" ? snippets(part.text) : [part])
       .map((part, i) => ({ ...part, i, live }))
-    return { parts, live, timing: timing(message, tools) }
+    // The model is reading what a call returned: the call says *done* and the
+    // next token has not come. That wait is the prefill of the result — a
+    // whole file, on a local 7B — and it was the one stretch of a turn with
+    // nothing on screen moving. A call held for a person is not this: it is
+    // waiting on them, and says so on its own card.
+    const last = parts[parts.length - 1]
+    const reading = live && last?.kind === "tool" && !!last.call?.verdict && !last.call.held
+      ? last.name || "the call"
+      : ""
+    return { parts, live, reading, timing: timing(message, tools) }
   }
 
   // A turn that starts may be the one that has to wait for an engine — one
@@ -926,6 +935,12 @@
                 · {{ ui.engine.secs }}s
               </span>
               <span :if="!engineBusy">waiting for the model…</span>
+            </div>
+            <!-- And between calls: under the last one, until the model writes
+                 again. -->
+            <div :if="entry.reading" class="waiting" aria-live="polite">
+              <span class="dot"></span>
+              <span>the model is reading what {{ entry.reading }} returned…</span>
             </div>
 
             <!-- The turn's facts, and the way into everything behind them: the

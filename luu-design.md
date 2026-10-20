@@ -1449,7 +1449,9 @@ The rest follows from that:
   a line). It pairs each block, in order, with the turn's `tool_call`/`tool_result`, and
   `tool-call.html` draws each one as a card: the name, what the call is about, how it went, and
   the arguments and output behind a click. A block still being written is a placeholder, and a
-  tail that could be the start of one is held back for the frame or two it takes to tell. Nothing
+  tail that could be the start of one is held back for the frame or two it takes to tell. While a
+  live answer ends on a call that has run, a line under it says the model is reading what the
+  call returned, until the next token. Nothing
   on the wire or in the store changed. The text is the concatenated tokens live and after a
   reload alike, and the raw text is still what the inspector shows. See
   [`RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`](RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md).
