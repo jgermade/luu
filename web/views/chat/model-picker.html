@@ -77,9 +77,11 @@
     }
   }
 
-  const focusOn = name => {
+  const focusOn = async name => {
     focus = name
-    load(name)
+    grow(name)
+    await load(name)
+    grow(name)
   }
 
   const toggle = async event => {
@@ -98,24 +100,30 @@
     // models it is choosing among.
     const first = names.includes(current) ? current : names[0] || ""
     height = fit(first)
-    focusOn(first)
-    await load(first)
-    height = fit(first)
+    await focusOn(first)
   }
 
-  // The columns' height, in rem: enough for the providers and for the list
-  // the menu opened on, and then **fixed** while it is open — a height that
-  // followed the focused provider moved the menu's top edge each time the
-  // pointer crossed another, because it opens upward. A longer list scrolls
-  // in its column. The ceiling is the CSS's.
+  // The columns' height, in rem: enough for the providers and for the lists
+  // focused since the menu opened, and it **never shrinks** while it is open —
+  // a height that followed the focused provider moved the menu's top edge each
+  // time the pointer crossed another, because it opens upward. Growing moves
+  // it once, for a list that would not have fitted. A longer list than the
+  // ceiling scrolls in its column; the ceiling is the CSS's.
   let height = 0
+  const grow = name => { height = Math.max(height, fit(name)) }
   const fit = name => {
     const providers = names.length * 2.5 + .6
     const listed = lists[name]
-    const models = listed
-      ? 2 + Math.max(1, listed.models.length + listed.unavailable.length) * 1.65
+    if (!listed) return Math.max(8, providers)
+    // The reason is the one thing in this column whose height is its text's
+    // length rather than a row count: ~58 characters fit the width at this
+    // size. A provider that answers nothing — 401, nothing listening — says so
+    // here, and left uncounted it was a three-line message in 3.65rem.
+    const reason = listed.reason && !listed.models.length
+      ? Math.ceil(listed.reason.length / 58) * 1.4 + .4
       : 0
-    return Math.max(8, providers, models)
+    const rows = Math.max(1, listed.models.length + listed.unavailable.length)
+    return Math.max(8, providers, 2 + reason + rows * 1.65)
   }
 
   const choose = async (provider, model) => {
@@ -358,8 +366,10 @@
   .cols {
     display: grid;
     grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
-    /* Fitted once, then fixed: see `fit`. */
-    height: min(50vh, 20rem, var(--rows, 12rem));
+    /* A floor of its own, then `fit`'s measurement, then the viewport: the
+       old `min()` had only a ceiling, so a measured height could lower the
+       menu and never raise it. */
+    height: min(max(16rem, var(--rows, 18rem)), 60vh, 30rem);
   }
   .providers {
     list-style: none;
