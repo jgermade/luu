@@ -1031,6 +1031,25 @@ export async function loadProviders() {
   }
 }
 
+/// What a destination answers, before anything about it is saved.
+///
+/// Takes the form's own fields rather than a profile name: the provider being
+/// added is not in the file, and the one being edited is in it with the values
+/// being replaced. Writes nothing either way.
+export async function probeProvider(body) {
+  try {
+    const res = await fetch("./api/providers/probe", {
+      method: "POST",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) return { models: [], error: await res.text() }
+    return await res.json()
+  } catch (e) {
+    return { models: [], error: `${e}` }
+  }
+}
+
 /// This machine's `[resend]` table, and what the live session is under.
 ///
 /// Fetched by the section that draws it, like the providers: two questions with

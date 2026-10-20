@@ -1660,8 +1660,20 @@ default that leaves the machine without `remote = true`, and the refusal names
 the profile and the host. The page then asks for that host to be *typed* and
 retries with the declaration in place. So the rule has one implementation, and
 the word is produced by a person answering the machine's objection rather than
-by a checkbox the program pre-ticked. Keys are paths and never values, for the
-reason the provider section gives.
+by a checkbox the program pre-ticked. A key typed into the form is written to a
+file before `config.toml` is, and the file holds a path, for the reason the
+provider section gives.
+
+**The form asks the destination before it writes it.** *Test* sends the
+candidate as typed — backend, URL, key — to `POST /api/providers/probe`, which
+calls the backend's `/models` and answers with the list or the server's own
+refusal, and **writes nothing**: a provider being added is not in the file, and
+one being edited is in it with the values being replaced, so the saved-profile
+route would test the wrong destination. On an answer, `Model` offers what came
+back and chooses none of it. It is behind the same loopback door as the writes,
+because it spends the key. It proves the endpoint answers and the key is
+accepted, not that a turn will succeed. See
+[`RECORD/2026-10-20.probing-a-destination.completed.md`](RECORD/2026-10-20.probing-a-destination.completed.md).
 
 **Nothing in the modal changes the session that is running.** What a session
 sends to is fixed for its lifetime, and the file the modal writes is what the
@@ -1920,6 +1932,16 @@ this repository deliberately runs code it did not write. A file is the only one
 of the three whose exposure the program can check, so both secrets — the API key
 and `/ws`'s bearer token — are read and checked in the same place. See
 [`RECORD/2026-09-07.naming-a-provider.completed.md`](RECORD/2026-09-07.naming-a-provider.completed.md).
+
+**That is where the key rests, not how it arrives.** The provider form takes the
+key itself as well as a path: the server writes it `0600` — a new file created
+with the mode, one it replaces narrowed to it — and `config.toml` gets the
+path, byte-for-byte what the shell commands would have produced. **It is never
+read back.** The page is told `sk-…cdef` (nothing at all under twelve
+characters) and whether the file is missing, empty or readable by others,
+derived from the file on every load rather than stored, so it cannot report a
+key that was replaced by hand. See
+[`RECORD/2026-10-20.a-key-typed-into-the-form.completed.md`](RECORD/2026-10-20.a-key-typed-into-the-form.completed.md).
 
 **A profile is written and chosen from the browser as well as by hand**: the
 configuration modal edits this file on loopback, and a new session names one of

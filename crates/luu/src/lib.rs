@@ -1708,6 +1708,24 @@ pub(crate) fn build_backend(
     })
 }
 
+/// A backend for a destination **nobody has saved**: the key arrives as a
+/// value rather than as a path, which is the whole difference from
+/// [`build_backend`]. Nothing is announced, because the caller is a probe and
+/// the window caveat belongs to a run.
+pub(crate) fn probe_backend(kind: BackendKind, url: &str, key: Option<String>) -> Box<dyn Backend> {
+    match kind {
+        BackendKind::Mock => Box::new(Mock::default()),
+        BackendKind::Ollama => Box::new(Ollama::new(url)),
+        BackendKind::Openai => {
+            let mut backend = OpenAi::new(url);
+            if let Some(key) = key {
+                backend = backend.with_api_key(key);
+            }
+            Box::new(backend)
+        }
+    }
+}
+
 /// What a server building a destination mid-run wants: no fixtures, no delay,
 /// and nothing printed to a terminal nobody is watching.
 pub(crate) fn backend_for(resolved: &provider::Resolved) -> Result<Box<dyn Backend>> {

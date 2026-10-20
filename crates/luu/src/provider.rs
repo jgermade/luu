@@ -57,7 +57,7 @@ pub enum BackendKind {
 impl BackendKind {
     /// Where this backend is when nothing said otherwise. The mock is nowhere,
     /// which is why it is `None` rather than a URL nobody dials.
-    fn default_url(self) -> Option<&'static str> {
+    pub fn default_url(self) -> Option<&'static str> {
         match self {
             Self::Mock => None,
             Self::Ollama => Some(DEFAULT_OLLAMA_URL),

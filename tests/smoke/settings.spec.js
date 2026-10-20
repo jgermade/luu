@@ -1,6 +1,7 @@
 // @ts-check
 import { expect, test } from "@playwright/test"
 import { spawn } from "node:child_process"
+import { createServer } from "node:http"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -491,6 +492,74 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
 
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})
+
+/**
+ * Settings → Models: **Test** asks the destination as typed, before anything
+ * about it is saved. The server here is a stand-in `/v1/models` that refuses a
+ * wrong key the way a hosted API does, so the refusal the page shows is the
+ * server's own. See `RECORD/2026-10-20.probing-a-destination.completed.md`.
+ */
+test("a destination is tested before it is saved, and the test writes nothing", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  const fake = createServer((req, res) => {
+    if (req.url !== "/v1/models") return res.writeHead(404).end()
+    if (req.headers.authorization !== "Bearer sk-right") {
+      return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"invalid api key"}')
+    }
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ data: [{ id: "abab-7" }, { id: "abab-8" }] }))
+  })
+  await new Promise(done => fake.listen(0, "127.0.0.1", done))
+  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fake.address()).port}/v1`
+  const before = readFileSync(join(home, "config.toml"), "utf8")
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    await page.locator('.modal button.add:has-text("+ provider")').click()
+    const form = page.getByRole("dialog", { name: "Add a provider" })
+    await form.locator("dd input").first().fill("hosted")
+    await form.locator("select.backend").selectOption("openai")
+    await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(at)
+
+    // The wrong key: the server's 401, and the model stays free text.
+    await form.locator('input[type="password"]').fill("sk-wrong")
+    await form.locator("button.test").click()
+    await expect(form.locator("dd.warn")).toContainText("401")
+    await expect(form.locator('input[placeholder="qwen2.5-coder:7b"]')).toBeVisible()
+
+    // The right one: what it serves, offered, and nothing chosen for them.
+    await form.locator('input[type="password"]').fill("sk-right")
+    await expect(form.locator("dd.warn")).toHaveCount(0)
+    await form.locator("button.test").click()
+    const offered = form.locator(".model-row select")
+    await expect(offered.locator("option")).toHaveText(["— whichever the server picks —", "abab-7", "abab-8"])
+    await expect(offered).toHaveValue("")
+
+    // A field the answer was asked with changes, and the answer goes with it.
+    await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(`${at}/`)
+    await expect(form.locator(".model-row select")).toHaveCount(0)
+    await expect(form.locator('input[placeholder="qwen2.5-coder:7b"]')).toBeVisible()
+
+    // Two probes, and the file is as it was.
+    expect(readFileSync(join(home, "config.toml"), "utf8")).toBe(before)
+    await form.locator("button", { hasText: "Cancel" }).click()
+    await expect(form).toHaveCount(0)
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    fake.close()
+  }
 
   expect(errors).toEqual([])
 })

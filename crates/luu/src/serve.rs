@@ -1367,6 +1367,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/settings.json", get(get_settings))
         .route("/api/providers", get(get_providers).put(put_providers))
         .route("/api/providers.json", get(get_providers))
+        .route("/api/providers/probe", post(probe_provider))
         .route("/api/providers/{name}/models", get(get_provider_models))
         .route("/api/resend", get(get_resend).put(put_resend))
         .route("/api/authority", get(get_authority).put(put_authority))
@@ -5258,6 +5259,10 @@ struct ProvidersView {
     /// a turn in flight, or turns already sent to the old one.
     #[serde(skip_serializing_if = "Option::is_none")]
     waiting: Option<String>,
+    /// Provider name → what may be said about its key file without saying what
+    /// is in it. Read from disk here rather than kept in `config.toml`, where
+    /// even two ends of a key would be two ends of a key in every backup.
+    keys: std::collections::BTreeMap<String, crate::secret::Preview>,
 }
 
 async fn providers_view(
@@ -5270,6 +5275,25 @@ async fn providers_view(
             destination.settings.profile.clone(),
             destination.settings.follows_default,
         )
+    };
+    let keys = {
+        let paths: Vec<(String, PathBuf)> = config
+            .profiles()
+            .iter()
+            .filter_map(|(name, profile)| {
+                Some((
+                    name.clone(),
+                    crate::provider::expand_home(profile.key_file.as_ref()?),
+                ))
+            })
+            .collect();
+        blocking(move || {
+            paths
+                .into_iter()
+                .map(|(name, path)| (name, crate::secret::preview(&path)))
+                .collect()
+        })
+        .await
     };
     Ok(ProvidersView {
         path: shown_path(path).await,
@@ -5305,6 +5329,7 @@ async fn providers_view(
                 )
             }
         },
+        keys,
     })
 }
 
@@ -5496,16 +5521,138 @@ struct Declaration {
     host: String,
 }
 
+/// What a **candidate** destination answers, before anything about it is saved.
+///
+/// `GET /api/providers/{name}/models` cannot do this: it resolves through
+/// `config.toml`, where a provider being added is absent and one being edited
+/// still holds the values being replaced — so it would test the destination
+/// somebody is changing *away from* and call it a test. Saving first is the
+/// other way, and it writes a broken profile in order to discover that it is
+/// broken. **This writes nothing.** See
+/// `RECORD/2026-10-20.probing-a-destination.completed.md`.
+#[derive(serde::Deserialize)]
+struct ProbeAsk {
+    backend: crate::provider::BackendKind,
+    #[serde(default)]
+    url: Option<String>,
+    /// The key as typed, for a form whose key is not on disk yet. Falls back
+    /// to `key_file`, so testing a saved provider retypes nothing.
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    key_file: Option<PathBuf>,
+}
+
+#[derive(serde::Serialize)]
+struct Probed {
+    models: Vec<String>,
+    /// The server's own refusal, which is the useful one: a 401 names the key,
+    /// a connection error names the URL.
+    error: Option<String>,
+}
+
+async fn probe_provider(
+    State(state): State<AppRouterState>,
+    Json(ask): Json<ProbeAsk>,
+) -> Response {
+    // The same door the writes are behind. A probe is not a write, but it
+    // spends the key, and that is close enough to belong on this side of it.
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "providers are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let url = ask
+        .url
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .or_else(|| ask.backend.default_url().map(str::to_string))
+        .unwrap_or_default();
+    let typed = ask
+        .key
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty());
+    let key = match (typed, ask.key_file) {
+        (Some(key), _) => Some(key),
+        (None, Some(path)) => {
+            let path = crate::provider::expand_home(&path);
+            match blocking(move || {
+                crate::secret::read(
+                    &path,
+                    "the API key file",
+                    "hands the key to anyone who can read it here",
+                )
+            })
+            .await
+            {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    return Json(Probed {
+                        models: Vec::new(),
+                        error: Some(format!("{error:#}")),
+                    })
+                    .into_response();
+                }
+            }
+        }
+        (None, None) => None,
+    };
+    let backend = crate::probe_backend(ask.backend, &url, key);
+    let (models, error) = match backend.models().await {
+        Ok(models) => (models, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    Json(Probed { models, error }).into_response()
+}
+
 #[derive(serde::Deserialize)]
 struct ProvidersEdit {
     default: Option<String>,
     #[serde(default)]
     providers: std::collections::BTreeMap<String, crate::provider::Profile>,
+    /// Provider name → the key as typed, for the one field `config.toml` must
+    /// never hold. **Deserialize-only, and there is no field anywhere that
+    /// sends one back**: `Profile` is serialized into the file *and* into the
+    /// view the page reads, so a secret on it would land in both.
+    /// See `RECORD/2026-10-20.a-key-typed-into-the-form.completed.md`.
+    #[serde(default)]
+    keys: std::collections::BTreeMap<String, String>,
+}
+
+/// The key files the edit asked for, written before `config.toml` so the file
+/// never points at one that is not there. Answers with the `key-file` each
+/// profile should carry.
+///
+/// A failed config write afterwards leaves an orphan `0600` file, which is the
+/// right way round: deleting what may be the only copy of a credential because
+/// a *different* write was refused is worse than leaving it.
+fn write_keys(
+    state_dir: &std::path::Path,
+    providers: &std::collections::BTreeMap<String, crate::provider::Profile>,
+    keys: &std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<std::collections::BTreeMap<String, PathBuf>> {
+    let mut written = std::collections::BTreeMap::new();
+    for (name, key) in keys {
+        if key.trim().is_empty() {
+            continue;
+        }
+        // The path the form gave, if it gave one: somebody adopting a key file
+        // they already have should not have to retype the secret to move it.
+        let shown = providers
+            .get(name)
+            .and_then(|profile| profile.key_file.clone())
+            .unwrap_or_else(|| state_dir.join(format!("{name}.key")));
+        crate::secret::write(&crate::provider::expand_home(&shown), key)?;
+        written.insert(name.clone(), shown);
+    }
+    Ok(written)
 }
 
 async fn put_providers(
     State(state): State<AppRouterState>,
-    Json(edit): Json<ProvidersEdit>,
+    Json(mut edit): Json<ProvidersEdit>,
 ) -> Response {
     if !state.providers_editable {
         return (
@@ -5530,6 +5677,32 @@ async fn put_providers(
         .await
         .map(|(config, _)| config)
         .unwrap_or_default();
+    // Before the config write, so nothing in the file ever names a key file
+    // that was not created.
+    if !edit.keys.is_empty() {
+        let state_dir = path.parent().unwrap_or(&path).to_path_buf();
+        let providers = edit.providers.clone();
+        let keys = edit.keys.clone();
+        match blocking(move || write_keys(&state_dir, &providers, &keys)).await {
+            Ok(written) => {
+                for (name, key_file) in written {
+                    if let Some(profile) = edit.providers.get_mut(&name) {
+                        profile.key_file = Some(key_file);
+                    }
+                }
+            }
+            Err(error) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(WriteRefused {
+                        message: format!("{error:#}"),
+                        declaration: None,
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
     let config = current.from_parts(edit.default, edit.providers);
     // Checked by the loader that will read it back, so the rule a remote
     // default has to declare itself is enforced here by being the same rule.

@@ -10,7 +10,7 @@
   // one; `defaulting` opens it with *default* already ticked, which is how the
   // list asks for a remote default to be confirmed here. `saved(name)` is told
   // what was written.
-  const { state, saveProviders } = await import("@web/lib/store.js")
+  const { state, saveProviders, probeProvider } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
   const TextInput = await import("@web/components/text-input.html")
   const SelectInput = await import("@web/components/select-input.html")
@@ -43,6 +43,13 @@
   let model = was.model || ""
   let contextLimit = was["context-limit"] ?? ""
   let keyFile = was["key-file"] || ""
+  // The key itself, which is the one thing here that is never read back: the
+  // server writes it to `keyFile` at 0600 and the file never comes to the page.
+  // Empty on an edit means *leave the file alone*, not *clear the key*.
+  let keyValue = ""
+  // What the server could say about the key on disk without saying the key:
+  // `sk-…cdef`, and whichever of "no file" or "anyone can read it" applies.
+  const key = editing ? state.providers?.keys?.[editing] || null : null
   let toolCalls = was["tool-calls"] === "native" ? "native" : ""
   let makeDefault = defaulting || (!!editing && state.providers?.default === editing)
   // Removing asks twice: the first click arms it.
@@ -53,6 +60,27 @@
   // table's foot asks for, here because this form is what caused it.
   let declaration = null
   let typed = ""
+  // What the destination answered when it was last asked, which is only ever
+  // what is typed *right now* — any edit to the fields it was asked with
+  // throws it away rather than letting a stale list look like a fresh one.
+  let probe = null
+  let probing = false
+  const forget = () => { probe = null }
+
+  const test = async () => {
+    probing = true
+    probe = null
+    probe = await probeProvider({
+      backend,
+      ...(url.trim() ? { url: url.trim() } : {}),
+      ...(keyValue.trim() ? { key: keyValue } : {}),
+      ...(!keyValue.trim() && keyFile.trim() ? { key_file: keyFile.trim() } : {}),
+    })
+    probing = false
+    // Nothing is chosen for them: a probe that lists one model still leaves
+    // the field as it was, because the field is what a session starts on and
+    // the person may have meant another.
+  }
 
   $: chosen = BACKENDS.find(b => b.value === backend) || BACKENDS[0]
   $: trimmed = name.trim()
@@ -92,6 +120,7 @@
     const result = await saveProviders({
       default: defaultAfter(),
       providers: { ...others(), [trimmed]: profile(!!declaration || !!was.remote) },
+      ...(backend === "openai" && keyValue.trim() ? { keys: { [trimmed]: keyValue } } : {}),
     })
     saving = false
     if (result?.ok) {
@@ -141,13 +170,13 @@
       <dt>Backend</dt>
       <dd>
         <SelectInput class="backend" :select-class="'backend'" :options="BACKENDS" :model="backend"
-                     @change="declaration = null" />
+                     @change="declaration = null, forget()" />
       </dd>
 
       <dt :if="backend !== 'mock'">URL</dt>
       <dd :if="backend !== 'mock'">
         <TextInput :model="url" :placeholder="chosen.url"
-                   @input="declaration = null" />
+                   @input="declaration = null, forget()" />
       </dd>
       <dd :if="backend !== 'mock'" class="note">
         Empty is {{ chosen.url }}. Anything that is not this machine has to be
@@ -155,8 +184,26 @@
       </dd>
 
       <dt :if="backend !== 'mock'">Model</dt>
-      <dd :if="backend !== 'mock'">
-        <TextInput :model="model" placeholder="qwen2.5-coder:7b" />
+      <dd :if="backend !== 'mock'" class="model-row">
+        <SelectInput :if="probe?.models?.length" :model="model">
+          <option value="">— whichever the server picks —</option>
+          <option :each="m in probe.models" :key="m" :value="m">{{ m }}</option>
+        </SelectInput>
+        <TextInput :if="!probe?.models?.length" :model="model" placeholder="qwen2.5-coder:7b" />
+        <button type="button" class="test" :disabled="probing" @click="test()">
+          {{ probing ? "Asking…" : "Test" }}
+        </button>
+      </dd>
+      <dd :if="probe?.error" class="warn">{{ probe.error }}</dd>
+      <dd :if="probe && !probe.error && !probe.models.length" class="note">
+        It answered, and listed no models. That is an ordinary answer from a
+        server holding one: leave this empty and it serves what it has.
+      </dd>
+      <dd :if="backend !== 'mock'" class="note">
+        <strong>Test</strong> asks this destination what it serves, using the
+        URL and key above. It saves nothing, and what it proves is that the
+        endpoint answers and the key is accepted — not that a turn will
+        succeed. Empty sends no model of our choosing.
       </dd>
 
       <dt :if="backend !== 'mock'">Window</dt>
@@ -178,13 +225,29 @@
         A server that does not refuses the turn and says so.
       </dd>
 
+      <dt :if="backend === 'openai'">Key</dt>
+      <dd :if="backend === 'openai'">
+        <TextInput type="password" :model="keyValue" @input="forget()"
+                   :placeholder="keyFile ? 'leave empty to keep the key that is there' : 'sk-…'" />
+        <span :if="key?.mask" class="dim">on disk: <code>{{ key.mask }}</code></span>
+        <span :if="key && !key.mask && !key.problem" class="dim">a key is set, too short to show any of</span>
+      </dd>
+      <dd :if="key?.problem" class="warn">{{ key.problem }}</dd>
+      <dd :if="backend === 'openai'" class="note">
+        Written to the file below with mode <code>0600</code>, never into
+        <code>config.toml</code>, which keeps the path. <strong>It is not read
+        back</strong>: this box is empty even when a key is set, and the ends
+        shown above are read from the file rather than remembered.
+      </dd>
+
       <dt :if="backend === 'openai'">Key file</dt>
       <dd :if="backend === 'openai'">
-        <TextInput :model="keyFile" placeholder="~/.luu/that.key" />
+        <TextInput :model="keyFile" placeholder="~/.luu/that.key" @input="forget()" />
       </dd>
       <dd :if="backend === 'openai'" class="note">
-        A path, never the key itself: a key in <code>config.toml</code> is a key
-        in every backup of it.
+        Empty is <code>{{ trimmed || "that" }}.key</code> beside
+        <code>config.toml</code>. Point it at a file you already have to use
+        that one instead of writing a new one.
       </dd>
 
       <dt>Default</dt>
@@ -224,6 +287,11 @@
   .form input:not([type]), .form select { width: 100%; }
   .form input.w-num { width: 6rem; margin-right: .4rem; }
   .form label { display: flex; gap: .4rem; align-items: center; }
+  /* The control and the button that fills it, on one line — the button is
+     about this field and reads as a label everywhere else. */
+  .model-row { display: flex; gap: .5rem; align-items: center; }
+  .model-row > :first-child { flex: 1; min-width: 0; }
+  .test { flex: none; }
   /* On the left, away from the two that keep the form: Cancel and Save stay
      together on the right, so the auto margin is this one's alone. Outlined
      in the colour of what it does, and filled once it is armed. */
