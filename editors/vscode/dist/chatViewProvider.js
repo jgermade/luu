@@ -57,17 +57,17 @@ class LuuChatViewProvider {
                 case 'cancel':
                     this._client.cancel();
                     break;
-                case 'approve_job':
+                case 'approve_plan':
                     try {
-                        this._client.approveJob(data.job, data.amendment);
+                        this._client.approvePlan(data.amendment);
                     }
                     catch (err) {
                         vscode.window.showErrorMessage(`Failed to approve job: ${err.message}`);
                     }
                     break;
-                case 'reject_job':
+                case 'decline_plan':
                     try {
-                        this._client.rejectJob(data.job);
+                        this._client.declinePlan();
                     }
                     catch (err) {
                         vscode.window.showErrorMessage(`Failed to reject job: ${err.message}`);

@@ -4,6 +4,7 @@ exports.LuuClient = void 0;
 const cp = require("child_process");
 const readline = require("readline");
 const events_1 = require("events");
+const types_1 = require("./types");
 class LuuClient extends events_1.EventEmitter {
     child = null;
     rl = null;
@@ -59,6 +60,7 @@ class LuuClient extends events_1.EventEmitter {
                 input: this.child.stdout,
                 crlfDelay: Infinity,
             });
+            this.greet();
             this.rl.on('line', (line) => {
                 const trimmed = line.trim();
                 if (!trimmed) {
@@ -74,6 +76,13 @@ class LuuClient extends events_1.EventEmitter {
             });
         }
     }
+    /// What this client speaks, before anything else it might say. Optional over
+    /// stdio — the peer is the process this one spawned — and sent anyway, so a
+    /// version mismatch is answered here rather than discovered as an
+    /// unparseable frame three messages later.
+    greet() {
+        this.send({ type: 'hello', protocol: types_1.PROTOCOL, format: types_1.RECORD_FORMAT });
+    }
     send(msg) {
         if (!this.child || !this.child.stdin || this.child.killed) {
             throw new Error('luu stdio process is not running');
@@ -87,10 +96,14 @@ class LuuClient extends events_1.EventEmitter {
     cancel() {
         this.send({ type: 'cancel' });
     }
-    approveJob(job, amendment) {
+    /// Approves the plan on the table, which closes the open draft and opens the
+    /// job that plan describes — approving *is* closing.
+    ///
+    /// It names no job: a proposal is offered inside the draft and an id is what
+    /// approval hands out, so there is nothing to name until the server answers.
+    approvePlan(amendment) {
         this.send({
-            type: 'approve_job',
-            job,
+            type: 'approve_plan',
             files: amendment?.files,
             writes: amendment?.writes,
             commands: amendment?.commands,
@@ -99,8 +112,16 @@ class LuuClient extends events_1.EventEmitter {
             egress: amendment?.egress,
         });
     }
-    rejectJob(job) {
-        this.send({ type: 'reject_job', job });
+    /// Turns it down, or asks for more changes — the same answer. Nothing closes
+    /// and nothing folds: the draft it was offered inside is still open.
+    declinePlan() {
+        this.send({ type: 'decline_plan' });
+    }
+    /// Asks for a plan over the draft as it stands. The plan is what the draft
+    /// compacts to, so this is a planning call over a window somebody has
+    /// already filled rather than over a prompt nobody has looked at.
+    requestPlan() {
+        this.send({ type: 'request_plan' });
     }
     closeJob(job) {
         this.send({ type: 'close_job', job });
