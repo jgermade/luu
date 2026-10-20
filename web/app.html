@@ -1244,10 +1244,13 @@
 </div>
 
 <!-- Which folder the panels look at. Over the whole window on a first visit,
-     with no way out other than choosing: there is nothing behind it yet. -->
-<Project :if="workspace.picker.open" />
+     with no way out other than choosing: there is nothing behind it yet.
+     These two are mounted in `settings.html` too, and only one of the pair
+     renders: opened *from* Settings they are sheets inside it, and `Modal`
+     reads that from the DOM rather than from a flag. -->
+<Project :if="workspace.picker.open && !state.settingsOpen" />
 <SettingsModal :if="state.settingsOpen" />
-<SessionStarter :if="ui.starter" />
+<SessionStarter :if="ui.starter && !state.settingsOpen" />
 <TurnInspect :if="ui.inspecting != null" />
 <ContextModal :if="ui.contextOpen" />
 <DiffModal :if="ui.diff" />

@@ -6,9 +6,17 @@
   // table have nothing to do with each other, and stacking them made the second
   // one the reward for scrolling past the first. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { closeSettings } = await import("@web/lib/store.js")
+  const { closeSettings, state } = await import("@web/lib/store.js")
   const { ui } = await import("@web/lib/ui.js")
   const Modal = await import("@web/components/modal.html")
+  // Mounted here as well as in `app.html`, and the duplication is the point:
+  // `Modal` decides it is a child by looking for an open `dialog.modal` above
+  // it **in the DOM**, so the same component is a sheet inside Settings here
+  // and a window of its own there. Both are reached from Settings, so opened
+  // from it they belong in it.
+  const SessionStarter = await import("@web/views/chat/session-starter.html")
+  const Project = await import("@web/views/inspector/tree/project.html")
+  const { workspace } = await import("@web/lib/workspace.js")
 
   const SettingsGeneral = await import("./general/general.html")
   const SettingsModels = await import("./models/models.html")
@@ -111,6 +119,11 @@
       </div>
     </section>
   </div>
+
+  <!-- Inside the dialog, so they open as sheets over Settings rather than as
+       a second window on top of it. -->
+  <SessionStarter :if="ui.starter" />
+  <Project :if="workspace.picker.open" />
 </Modal>
 
 <style scoped>

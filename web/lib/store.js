@@ -1123,7 +1123,16 @@ export async function saveAuthority(body) {
   }
 }
 
-export function closeSettings() {
+export async function closeSettings() {
+  // The sheets Settings owns go with it. They are mounted *inside* its dialog
+  // while it is open and at the top level while it is not, so leaving one set
+  // would re-open it as a window of its own the moment this flag flips.
+  const { ui } = await import("@web/lib/ui.js")
+  const { closePicker } = await import("@web/lib/workspace.js")
+  ui.starter = null
+  // Refuses while the first-visit picker is forced, which is the one case
+  // where there is nothing behind it to go back to.
+  closePicker()
   state.settingsOpen = false
 }
 
