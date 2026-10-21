@@ -88,6 +88,14 @@ test.beforeAll(async () => {
       'chmod +x "$(dirname "$0")/$2"\n',
   )
   chmodSync(join(brewBin, "brew"), 0o755)
+  // And no podman but the one it installs. The Runtimes test needs a machine
+  // without one, and luu finds runtimes on PATH alone, so every directory
+  // holding a real one is left out rather than the machine assumed bare — it
+  // stopped being bare the evening somebody installed podman on it.
+  const path = (process.env.PATH || "")
+    .split(":")
+    .filter(dir => dir && !existsSync(join(dir, "podman")))
+    .join(":")
 
   server = spawn(
     binary(),
@@ -103,7 +111,7 @@ test.beforeAll(async () => {
       env: {
         ...process.env,
         LUU_HOME: home,
-        PATH: `${join(home, "brew-bin")}:${process.env.PATH}`,
+        PATH: `${brewBin}:${path}`,
         OLLAMA_MODELS: join(home, "stores/ollama"),
         HF_HUB_CACHE: join(home, "stores/hub"),
         LLAMA_CACHE: join(home, "stores/llama.cpp"),
