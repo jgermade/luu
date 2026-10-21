@@ -583,6 +583,11 @@ pub struct SessionSummary {
     /// Where the replayable recording lives, when there is one. The UI streams
     /// this rather than the summaries, because a summary cannot show timing.
     pub record: Option<String>,
+    /// When a turn was last written in it, by the store's account: what the
+    /// history is ordered by, so opening a session does not move it. `None`
+    /// from a fold, which does not know when it was stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -708,6 +713,7 @@ impl SessionView {
             started_at: self.started_at,
             turns: self.turns.len(),
             record: self.record.clone(),
+            written_at: None,
         }
     }
 

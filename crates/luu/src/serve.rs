@@ -6225,15 +6225,37 @@ async fn put_authority(
 }
 
 async fn list_sessions(State(state): State<AppRouterState>) -> Response {
-    let live = state.app.view.lock().await.summary();
-    let mut sessions = vec![live];
+    // The live session's last turn, from the fold in memory: the store saves
+    // a moment after a turn ends, and a list asked for in that moment would
+    // otherwise place a session just written to where it was before.
+    let (mut live, last_turn) = {
+        let view = state.app.view.lock().await;
+        // A turn's time is counted from the session's start.
+        let last = view
+            .turns
+            .last()
+            .map(|turn| view.started_at + turn.started_at_ms);
+        (view.summary(), last)
+    };
     let active_id = state.app.session_id.lock().await.clone();
+    let mut stored = Vec::new();
     if let Some(store) = &state.app.store {
         match store.lock().await.list() {
-            Ok(stored) => sessions.extend(stored.into_iter().filter(|row| row.id != active_id)),
+            Ok(rows) => stored = rows,
             Err(error) => eprintln!("warning: could not list the session store: {error:#}"),
         }
     }
+    // The live row stands for the stored session it is, so it carries that
+    // session's `written_at`: a client ordering by it puts the live session
+    // where it was last written to, and opening one does not move it. A
+    // session not stored yet counts from when it started.
+    let saved = stored
+        .iter()
+        .find(|row| row.id == active_id)
+        .and_then(|row| row.written_at);
+    live.written_at = last_turn.max(saved).or(Some(live.started_at));
+    let mut sessions = vec![live];
+    sessions.extend(stored.into_iter().filter(|row| row.id != active_id));
     Json(sessions).into_response()
 }
 

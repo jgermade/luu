@@ -3,7 +3,7 @@
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approvePlan, declinePlan, requestPlan, closeJob, reopenJob,
-          resumeSession, deleteSession, renameSession,
+          resumeSession, deleteSession, renameSession, refreshSessionsList,
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
   const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
@@ -355,6 +355,18 @@
     if (s?.title && s.title !== "live") return s.title
     return s?.id === "live" ? "Live session" : (s?.id || "")
   }
+  // The history in the order sessions were last written to — the server says
+  // when (`written_at`), the live row included — so opening one does not move
+  // it to the top; only writing in it does.
+  $: history = [...(state.sessions || [])]
+    .sort((a, b) => (b.written_at ?? b.started_at ?? 0) - (a.written_at ?? a.started_at ?? 0))
+  // Asked again each time it opens: the counts it shows move with every turn.
+  const toggleHistory = async () => {
+    if (ui.history) return closeHistory()
+    openHistory()
+    await refreshSessionsList()
+  }
+
   $: sessionName = nameOf(
     (state.sessions || []).find(s => s.id === state.currentSessionId)
       || { id: state.currentSessionId },
@@ -807,7 +819,7 @@
         <button type="button" title="New session — where it sends, and which model"
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
         <button type="button" title="Earlier sessions"
-                @click="ui.history ? closeHistory() : openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+                @click="toggleHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
         <button type="button" class="copy-chat" :disabled="!state.messages.length"
                 :title="copiedChat ? 'Copied' : 'Copy the conversation'"
                 :aria-label="copiedChat ? 'Copied' : 'Copy the conversation'"
@@ -832,7 +844,7 @@
       <!-- The old tab strip, as a popover. Switching and deleting, which are
            the two things the strip did. -->
       <div :if="ui.history" class="history" @click="armedClose = ''">
-        <div :each="s in state.sessions" :key="s.id" class="row" :class.on="s.id === state.currentSessionId">
+        <div :each="s in history" :key="s.id" class="row" :class.on="s.id === state.currentSessionId">
           <button type="button" class="pick" :title="s.id" @click="onSwitchSession(s.id)">
             {{ nameOf(s) }}
             <span class="dim">{{ s.turns }}t</span>
