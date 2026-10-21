@@ -274,6 +274,10 @@ struct File {
     /// machine's account. See [`Terminal`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     terminal: Option<Terminal>,
+    /// `[sessions]`: what the server does with a session on its own. See
+    /// [`Sessions`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sessions: Option<Sessions>,
     /// `[resend]`: how much of the history a turn pays for again. In this file
     /// and not in `localStorage` for the reason the providers are — it changes
     /// the bytes a run sends, which is a fact about the run and not about the
@@ -392,6 +396,24 @@ pub struct Ui {
     /// page's own two glyphs — see `crate::icons`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_theme: Option<PathBuf>,
+}
+
+/// `[sessions]`. One setting so far.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Sessions {
+    /// Whether a session nobody named is given a name by its own model, from
+    /// its first prompt, when its first turn ends. On unless the file says
+    /// `false`: it is a call per session, and on a hosted API that is money.
+    /// See `RECORD/2026-10-21.sessions-that-name-themselves.WIP.md`.
+    #[serde(default = "enabled")]
+    pub auto_name: bool,
+}
+
+impl Default for Sessions {
+    fn default() -> Self {
+        Self { auto_name: true }
+    }
 }
 
 /// `[terminal]`. One setting so far.
@@ -575,6 +597,7 @@ pub struct Config {
     postures: BTreeMap<String, Posture>,
     ui: Option<Ui>,
     terminal: Option<Terminal>,
+    sessions: Option<Sessions>,
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
@@ -687,6 +710,7 @@ impl Config {
             postures: file.posture,
             ui: file.ui,
             terminal: file.terminal,
+            sessions: file.sessions,
             resend: file.resend,
             authority: file.authority,
             engines: file.engine,
@@ -850,6 +874,7 @@ impl Config {
             posture: self.postures.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
+            sessions: self.sessions,
             resend: self.resend,
             authority: self.authority.clone(),
             engine: self.engines.clone(),
@@ -906,6 +931,7 @@ impl Config {
             postures: self.postures.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
+            sessions: self.sessions,
             resend: self.resend,
             authority: self.authority.clone(),
             engines: self.engines.clone(),
@@ -1019,6 +1045,12 @@ impl Config {
     /// says nothing.
     pub fn terminal(&self) -> Terminal {
         self.terminal.unwrap_or_default()
+    }
+
+    /// What the server does with a session on its own, defaulted where the
+    /// file says nothing.
+    pub fn sessions(&self) -> Sessions {
+        self.sessions.unwrap_or_default()
     }
 
     /// Every posture the file names.
@@ -1362,6 +1394,14 @@ mod tests {
         // A misspelling is an error, never a silent default.
         assert!(Config::from_toml("[terminal]\nhost = \"sometimes\"\n", "c").is_err());
         assert!(Config::from_toml("[terminal]\nhots = \"always\"\n", "c").is_err());
+
+        // `[sessions]`: naming on unless the file says otherwise, kept
+        // through a write, and a misspelling refused.
+        assert!(none.sessions().auto_name);
+        let off = Config::from_toml("[sessions]\nauto-name = false\n", "c").expect("loads");
+        assert!(!off.sessions().auto_name);
+        assert!(off.render().unwrap().contains("auto-name = false"));
+        assert!(Config::from_toml("[sessions]\nautoname = false\n", "c").is_err());
     }
 
     #[test]
