@@ -171,6 +171,27 @@ pub enum BackendError {
     Malformed(String),
 }
 
+impl BackendError {
+    /// A failure to reach the server, **with its causes**. `reqwest`'s own line
+    /// is `error sending request for url (…)` whatever went wrong; whether it
+    /// was the certificate, the name or the connection is in the source chain,
+    /// and a person fixing it needs that part — on an intercepted network it is
+    /// `invalid peer certificate: UnknownIssuer`, and nothing above it says so.
+    pub fn transport(error: &(dyn std::error::Error + 'static)) -> Self {
+        let mut text = error.to_string();
+        let mut source = error.source();
+        while let Some(cause) = source {
+            let line = cause.to_string();
+            if !text.contains(&line) {
+                text.push_str(": ");
+                text.push_str(&line);
+            }
+            source = cause.source();
+        }
+        Self::Transport(text)
+    }
+}
+
 pub type ChunkStream<'a> = Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>> + Send + 'a>>;
 
 /// Object-safe on purpose: the turn loop holds a `dyn Backend`, so swapping
@@ -259,5 +280,34 @@ pub trait Backend: Send + Sync {
     fn constrain_caveat(&self, constraint: &Constraint) -> Option<String> {
         let _ = constraint;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The causes, in order and once each: the top line alone said nothing of
+    /// which of them it was.
+    #[test]
+    fn a_transport_error_says_its_causes() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("error sending request for url (https://x/v1/models)")]
+        struct Top(#[source] Middle);
+        #[derive(Debug, thiserror::Error)]
+        #[error("client error (Connect)")]
+        struct Middle(#[source] std::io::Error);
+
+        let error = Top(Middle(std::io::Error::other(
+            "invalid peer certificate: UnknownIssuer",
+        )));
+        let BackendError::Transport(text) = BackendError::transport(&error) else {
+            unreachable!("transport() builds a Transport")
+        };
+        assert_eq!(
+            text,
+            "error sending request for url (https://x/v1/models): client error (Connect): \
+             invalid peer certificate: UnknownIssuer"
+        );
     }
 }

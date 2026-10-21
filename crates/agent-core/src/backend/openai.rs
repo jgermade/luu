@@ -339,7 +339,7 @@ impl Backend for OpenAi {
             let response = request
                 .send()
                 .await
-                .map_err(|error| BackendError::Transport(error.to_string()))?;
+                .map_err(|error| BackendError::transport(&error))?;
             if !response.status().is_success() {
                 return Err(BackendError::Rejected(format!(
                     "{} from {url}",
@@ -544,7 +544,7 @@ impl Backend for OpenAi {
             let response = post
                 .send()
                 .await
-                .map_err(|e| BackendError::Transport(e.to_string()))?;
+                .map_err(|e| BackendError::transport(&e))?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -567,7 +567,7 @@ impl Backend for OpenAi {
             let mut texted = false;
 
             while let Some(bytes) = body.next().await {
-                let bytes = bytes.map_err(|e| BackendError::Transport(e.to_string()))?;
+                let bytes = bytes.map_err(|e| BackendError::transport(&e))?;
                 buf.extend_from_slice(&bytes);
 
                 // A chunk boundary lands anywhere, so only whole lines are parsed.

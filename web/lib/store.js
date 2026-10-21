@@ -1203,8 +1203,14 @@ export async function saveProviders(body) {
       // leaves this machine and has not said so. The server names the host and
       // the caller asks for it to be typed — the declaration is produced by a
       // person, which is the whole content of the rule.
-      const refused = await res.json().catch(() => null)
-      state.providersError = refused?.message || "the write was refused"
+      // JSON when the loader refused the file; plain text when the request
+      // never reached it — a body that would not deserialize, a server bound
+      // off loopback. Either way the server's own words, never a stand-in that
+      // hides which of them it was.
+      const text = await res.text().catch(() => "")
+      let refused = null
+      try { refused = JSON.parse(text) } catch { /* plain text */ }
+      state.providersError = refused?.message || text.trim() || `the write was refused (${res.status})`
       return { ok: false, declaration: refused?.declaration || null }
     }
     state.providers = await res.json()
