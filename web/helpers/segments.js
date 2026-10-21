@@ -22,7 +22,12 @@
 // `RECORD/2026-09-30.native-tool-calls.completed.md` and `agent_core::tools::CALL_FENCES`.
 const FENCES = ["```tool", "```json"]
 
-/// `[{ kind: "text", text }` | `{ kind: "tool", call, name, arguments, pending, raw }]`.
+/// `[{ kind: "text", text }` | `{ kind: "tool", call, name, arguments, pending, raw }`
+/// | `{ kind: "think", text, open, words }]`.
+///
+/// `think` is what the model wrote while reasoning, cut out by the rules
+/// `agent_core::tools::mask_thinking` masks with, and never read for calls:
+/// a call tried out there was not made. `open` is a block not yet closed.
 ///
 /// `call` is the executed call this block became, in order, or `null` where
 /// none did: the turn ended on it (cancelled, out of steps) or the block did
@@ -33,7 +38,6 @@ export function segments(text, tools = [], live = false) {
   const calls = [...(tools || [])].sort((a, b) => a.step - b.step)
   const out = []
   let used = 0
-  let i = 0
   const pushText = t => {
     if (!t) return
     const last = out[out.length - 1]
@@ -53,6 +57,10 @@ export function segments(text, tools = [], live = false) {
     })
   }
 
+  // The reply between two thinking blocks, read for calls. `live` only for the
+  // last stretch of the text: one with thinking after it is finished.
+  const scan = (text, live) => {
+  let i = 0
   while (i < text.length) {
     const [fence, tag] = FENCES
       .map(f => [text.indexOf(f, i), f])
@@ -105,6 +113,14 @@ export function segments(text, tools = [], live = false) {
     else pushText(text.slice(bare, end))
     i = end
   }
+  }
+
+  const regions = thinking(text)
+  regions.forEach((region, n) => {
+    const last = n === regions.length - 1
+    if (region.think) out.push({ kind: "think", text: region.text, open: region.open })
+    else scan(region.text, live && last)
+  })
 
   // Calls the text does not show in a form this file recognises — a bare
   // object mid-line, say. Still drawn: a call that ran is never hidden.
@@ -114,8 +130,42 @@ export function segments(text, tools = [], live = false) {
   }
 
   return out
-    .map(part => part.kind === "text" ? { ...part, text: part.text.replace(/^\n+|\s+$/g, "") } : part)
-    .filter(part => part.kind !== "text" || part.text)
+    .map(part => part.kind === "text" ? { ...part, text: part.text.replace(/^\n+|\s+$/g, "") }
+      : part.kind === "think" ? { ...part, text: part.text.trim(), words: part.text.split(/\s+/).filter(Boolean).length }
+      : part)
+    // An empty block that closed is a model told not to think, which says so
+    // with `<think></think>`: nothing to draw.
+    .filter(part => part.kind === "tool" || part.text || (part.kind === "think" && part.open))
+}
+
+const OPEN = "<think>"
+const CLOSE = "</think>"
+
+/// The reply cut where the model thought and where it answered.
+function thinking(text) {
+  const regions = []
+  let at = 0
+  // A close with no open ahead of it: the template opened it in the prompt.
+  const close = text.indexOf(CLOSE)
+  if (close >= 0 && !text.slice(0, close).includes(OPEN)) {
+    regions.push({ think: true, text: text.slice(0, close), open: false })
+    at = close + CLOSE.length
+  }
+  for (;;) {
+    const open = text.indexOf(OPEN, at)
+    if (open < 0) {
+      regions.push({ think: false, text: text.slice(at) })
+      return regions
+    }
+    regions.push({ think: false, text: text.slice(at, open) })
+    const end = text.indexOf(CLOSE, open + OPEN.length)
+    if (end < 0) {
+      regions.push({ think: true, text: text.slice(open + OPEN.length), open: true })
+      return regions
+    }
+    regions.push({ think: true, text: text.slice(open + OPEN.length, end), open: false })
+    at = end + CLOSE.length
+  }
 }
 
 function parse(body) {
@@ -159,4 +209,6 @@ function holdBack(tail) {
   return tail
     .replace(/(^|\n)[ \t]*`{1,3}(t(o(ol?)?)?|j(s(on?)?)?)?$/, "$1")
     .replace(/(^|\n)[ \t]*\{\s*("(n(a(me?)?)?)?"?)?$/, "$1")
+    // Or of a thinking block, which would otherwise flash as `<thi`.
+    .replace(/<(t(h(i(nk?)?)?)?)?$/, "")
 }

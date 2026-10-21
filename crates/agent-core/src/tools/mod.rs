@@ -445,14 +445,59 @@ pub const CALL_FENCES: [&str; 2] = ["tool", "json"];
 /// and text after it is the model writing its own result
 /// ([`CallVerdict::ContinuedPastFence`]), which the history should not tell it
 /// was said.
+///
+/// The call is looked for **outside the thinking** — see [`mask_thinking`] —
+/// and the prose is cut from the text as written, thinking included, because
+/// what the history says the model wrote is not this function's to change.
 pub fn split_call(text: &str) -> Option<(String, ToolCall)> {
+    let seen = mask_thinking(text);
     let fenced = CALL_FENCES.iter().find_map(|tag| {
-        let (open, body, _) = fenced_bounds(text, tag)?;
+        let (open, body, _) = fenced_bounds(&seen, tag)?;
         let call = serde_json::from_str::<ToolCall>(body).ok()?;
         Some((open, call))
     });
-    let (start, call) = fenced.or_else(|| bare_object_at(text))?;
+    let (start, call) = fenced.or_else(|| bare_object_at(&seen))?;
     (!call.name.is_empty()).then(|| (text[..start].trim_end().to_string(), call))
+}
+
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+/// `text` with its reasoning blanked out: every byte of a thinking span turned
+/// into a space, so every offset into the result is an offset into `text`.
+///
+/// **A call written while thinking is not a call.** Reasoning is where a model
+/// tries one out and talks itself out of it, and the reader that finds calls
+/// takes the first block anywhere in the text. Three shapes are thinking:
+///
+/// - `<think>…</think>`;
+/// - everything before a `</think>` with no `<think>` ahead of it — a template
+///   that opens the block in the prompt, so the reply carries only its end;
+/// - a `<think>` never closed, to the end of the text.
+///
+/// See `RECORD/2026-10-21.a-call-written-while-thinking.completed.md`.
+pub fn mask_thinking(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(THINK_OPEN) && !text.contains(THINK_CLOSE) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut bytes = text.as_bytes().to_vec();
+    let mut at = 0;
+    if let Some(close) = text.find(THINK_CLOSE)
+        && !text[..close].contains(THINK_OPEN)
+    {
+        at = close + THINK_CLOSE.len();
+        bytes[..at].fill(b' ');
+    }
+    while let Some(open) = text[at..].find(THINK_OPEN).map(|found| at + found) {
+        let end = text[open..]
+            .find(THINK_CLOSE)
+            .map_or(text.len(), |found| open + found + THINK_CLOSE.len());
+        bytes[open..end].fill(b' ');
+        at = end;
+    }
+    // Each span starts and ends on an ASCII tag or the end of the text, so
+    // blanking it whole leaves the rest exactly as it was.
+    std::borrow::Cow::Owned(String::from_utf8(bytes).expect("whole spans blanked with ASCII"))
 }
 
 /// Where a reply landed against the tool-call format, for a probe that
@@ -481,6 +526,10 @@ pub enum CallVerdict {
 /// misnamed fence against — the caller's, because this function has no
 /// [`Tools`] of its own and should not need one to be tested.
 pub fn score_call(text: &str, tool_names: &[&str]) -> CallVerdict {
+    // Scored as `split_call` reads it: a call tried out while thinking is
+    // neither a call nor a drift.
+    let seen = mask_thinking(text);
+    let text: &str = &seen;
     if let Some((_, close_end)) = CALL_FENCES
         .iter()
         .filter_map(|tag| fenced_span(text, tag))
@@ -598,6 +647,55 @@ mod tests {
     #[test]
     fn plain_prose_is_an_answer_and_not_a_call() {
         assert!(parse_call("The file defines one function, `main`.").is_none());
+    }
+
+    const RUN: &str =
+        "```tool\n{\"name\": \"run_command\", \"arguments\": {\"argv\": [\"rm\", \"x\"]}}\n```";
+    const READ: &str = "```tool\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\"}}\n```";
+
+    /// The case this exists for: the model tries a call out while thinking,
+    /// rejects it, and makes another. The rejected one is not run.
+    #[test]
+    fn a_call_written_while_thinking_is_not_the_call() {
+        let text = format!("<think>I could {RUN} — no, read first.</think>\nReading.\n{READ}");
+        let (prose, call) = split_call(&text).unwrap();
+        assert_eq!(call.name, "read_file");
+        // The prose is the text as written, thinking included: the history
+        // is not this function's to edit.
+        assert!(prose.starts_with("<think>I could ```tool"));
+        assert!(prose.ends_with("Reading."));
+        assert_eq!(score_call(&text, TOOL_NAMES), CallVerdict::Parsed);
+    }
+
+    #[test]
+    fn thinking_that_only_closes_was_opened_by_the_template() {
+        let text = format!("{RUN} is too much.</think>\n{READ}");
+        assert_eq!(parse_call(&text).unwrap().name, "read_file");
+    }
+
+    #[test]
+    fn thinking_never_closed_holds_no_call() {
+        assert!(parse_call(&format!("<think>maybe {RUN}")).is_none());
+        let bare = "<think>maybe {\"name\":\"list_dir\",\"arguments\":{}}";
+        assert!(parse_call(bare).is_none());
+        assert_eq!(score_call(bare, TOOL_NAMES), CallVerdict::NoCall);
+    }
+
+    #[test]
+    fn the_mask_keeps_every_offset_and_touches_nothing_else() {
+        let text = "a<think>ñé</think>b</think>c<think>d";
+        let masked = mask_thinking(text);
+        assert_eq!(masked.len(), text.len());
+        // A stray close after a closed block is text: only the first close
+        // can mean the template opened it.
+        assert_eq!(
+            masked.split_whitespace().collect::<Vec<_>>(),
+            ["a", "b</think>c"]
+        );
+        assert!(matches!(
+            mask_thinking("no tags"),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     const TOOL_NAMES: &[&str] = &[

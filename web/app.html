@@ -922,6 +922,17 @@
                   <Scrollable :x="true" background="var(--code-ground)"><pre><code :html="snippetHtml(`${entry.id}:${part.i}`, part, snippet.lit)"></code></pre></Scrollable>
                 </figure>
                 <ToolCall :if="part.kind === 'tool'" :part="part" :live="part.live" />
+                <!-- What the model wrote while reasoning: folded, because it is
+                     not the answer, and behind a click, because it is often
+                     the reason for one. -->
+                <details :if="part.kind === 'think'" class="think">
+                  <summary>
+                    <span class="dot" :class.on="part.live && part.open"></span>
+                    {{ part.live && part.open ? "thinking…" : "thought" }}
+                    <span class="dim">· {{ part.words }} words</span>
+                  </summary>
+                  <div class="think-text">{{ part.text }}</div>
+                </details>
               </div>
             </div>
             <!-- Where the answer will go, while there is none yet: waiting for
@@ -1770,6 +1781,13 @@
   }
   @keyframes waiting { 50% { opacity: .3; } }
   @media (prefers-reduced-motion: reduce) { .waiting .dot { animation: none; } }
+  .think { font-size: 12px; color: var(--dim); margin: .2rem 0; }
+  .think summary { cursor: pointer; display: flex; align-items: center; gap: .45rem; list-style: none; }
+  .think summary::-webkit-details-marker { display: none; }
+  .think .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--dim); }
+  .think .dot.on { background: var(--accent); animation: waiting 1s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .think .dot.on { animation: none; } }
+  .think-text { white-space: pre-wrap; margin: .3rem 0 .3rem .9rem; padding-left: .6rem; border-left: 2px solid var(--line, color-mix(in srgb, var(--dim) 30%, transparent)); }
 
   /* ---- the chat's foot: two rows --------------------------------------- */
   .chat-foot {

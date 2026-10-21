@@ -533,7 +533,11 @@ The model never executes anything directly — it only emits a structured reques
 - **How the model expresses a call is a transport detail.** `ToolCall` is the type
   and the parser is one function. It reads a fenced ```` ```tool ```` block
   out of plain text, which works against any backend including a 7B that has
-  never seen a tool API. **Native function calling is built, per destination,
+  never seen a tool API. **A call written while thinking is not a call**: the
+  reasoning is masked out before the reader looks (`tools::mask_thinking`),
+  because that is where a model tries a call out and drops it, and the text
+  itself — stored, resent, inspected — is left as the model wrote it. See
+  [`RECORD/2026-10-21.a-call-written-while-thinking.completed.md`](RECORD/2026-10-21.a-call-written-while-thinking.completed.md). **Native function calling is built, per destination,
   and off by default** (`tool-calls = "native"` on a profile, `--tool-calls
   native` for a run, recorded in the header as `record::FORMAT` 19). The tools
   travel in the request's own `tools` field, so the server's chat template
@@ -1450,7 +1454,9 @@ The rest follows from that:
   the arguments and output behind a click. A block still being written is a placeholder, and a
   tail that could be the start of one is held back for the frame or two it takes to tell. While a
   live answer ends on a call that has run, a line under it says the model is reading what the
-  call returned, until the next token. Nothing
+  call returned, until the next token. What the model wrote while reasoning — `<think>…</think>`,
+  or everything before a `</think>` the template opened in the prompt — is its own part, folded
+  under *thinking…* while it streams and *thought* after. Nothing
   on the wire or in the store changed. The text is the concatenated tokens live and after a
   reload alike, and the raw text is still what the inspector shows. See
   [`RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`](RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md).

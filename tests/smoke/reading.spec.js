@@ -22,6 +22,10 @@ const PORT = 7902
 const BASE = `http://127.0.0.1:${PORT}`
 
 const READ = '```tool\n{"name":"read_file","arguments":{"path":"AGENTS.md"}}\n```'
+// A call tried out while thinking and dropped, then the one made. Three words,
+// so six seconds, the first four of them with the thinking still open.
+const DRAFT = '```tool\n{"name":"read_file","arguments":{"path":"NOT-THIS.md"}}\n```'
+const THINKING = `<think>Maybe ${DRAFT} no.</think>\n${READ}`
 
 function binary() {
   const named = process.env.LUU_BIN
@@ -53,7 +57,10 @@ test.beforeAll(async () => {
       "--bind", `127.0.0.1:${PORT}`,
       "--no-store",
       "--mock-delay-ms", "2000",
+      // One call and its answer per test, in the order the tests run.
       "--mock-reply", READ,
+      "--mock-reply", "Done.",
+      "--mock-reply", THINKING,
       "--mock-reply", "Done.",
     ],
     { cwd: root, env: { ...process.env, LUU_HOME: home }, stdio: "pipe" },
@@ -119,5 +126,48 @@ test("the chat says the model is reading what a call returned", async ({ page })
   await expect(answer.locator(".parts .text").last()).toHaveText("Done.", { timeout: 10_000 })
   await expect(answer.locator(".waiting")).toHaveCount(0)
 
+  expect(errors).toEqual([])
+})
+
+/**
+ * What the model writes while thinking is drawn folded, says *thinking…* while
+ * it streams, and is never read for a call: the read it tried out and dropped
+ * there is not run, and the one after it is. See
+ * `RECORD/2026-10-21.a-call-written-while-thinking.completed.md`.
+ */
+test("a call written while thinking is not run, and the thinking is folded", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  const composer = page.locator(".composer input")
+  await expect(composer).toBeEnabled()
+  await composer.fill("piensa y lee")
+  await page.click('.composer button[type="submit"]')
+
+  const answer = page.locator(".transcript article.assistant").last()
+  const thought = answer.locator("details.think")
+  await expect(thought.locator("summary")).toContainText("thinking…", { timeout: 10_000 })
+  // No card for what was only considered, while it is being considered.
+  await expect(answer.locator(".call")).toHaveCount(0)
+
+  // The call that was made, and only that one.
+  await expect(answer.locator(".call .status")).toHaveText("done", { timeout: 15_000 })
+  await expect(answer.locator(".call")).toHaveCount(1)
+  await expect(answer.locator(".call .subject")).toHaveText("AGENTS.md")
+  await expect(thought.locator("summary")).toContainText("thought")
+
+  // Folded, and the dropped call is in it when opened.
+  await expect(thought.locator(".think-text")).toBeHidden()
+  await thought.locator("summary").click()
+  await expect(thought.locator(".think-text")).toContainText("NOT-THIS.md")
+
+  await expect(answer.locator(".parts .text").last()).toHaveText("Done.", { timeout: 10_000 })
   expect(errors).toEqual([])
 })
