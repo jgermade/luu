@@ -401,6 +401,81 @@ impl Backend for OpenAi {
         })
     }
 
+    /// `llama-server`'s `GET /props` once — it serves one model, so what it
+    /// says is said of every model it lists: `n_ctx`, the window it was
+    /// started with, and `chat_template_caps.supports_tools`. Failing that,
+    /// the listing's `max_model_len` per model (vLLM), which says nothing of
+    /// tools: vLLM takes them or not by flags it was started with. A hosted
+    /// API answers neither, and is left saying nothing.
+    fn facts<'a>(
+        &'a self,
+        models: &'a [String],
+    ) -> BackendFuture<'a, std::collections::BTreeMap<String, super::ModelFacts>> {
+        let root = self.base_url.trim_end_matches("/v1").to_string();
+        let listing = format!("{}/models", self.base_url);
+        let http = self.http.clone();
+        let api_key = self.api_key.clone();
+        Box::pin(async move {
+            let get = |url: String| {
+                let mut request = http.get(url).timeout(super::LIST_TIMEOUT);
+                if let Some(key) = &api_key {
+                    request = request.bearer_auth(key);
+                }
+                request
+            };
+            let json = |response: reqwest::Response| async move {
+                match response.status().is_success() {
+                    true => response.json::<serde_json::Value>().await.ok(),
+                    false => None,
+                }
+            };
+            let n = |value: Option<&serde_json::Value>| {
+                value
+                    .and_then(serde_json::Value::as_u64)
+                    .filter(|n| *n > 0)
+                    .and_then(|n| u32::try_from(n).ok())
+            };
+            if let Ok(response) = get(format!("{root}/props")).send().await
+                && let Some(props) = json(response).await
+            {
+                let window = n(props
+                    .pointer("/default_generation_settings/n_ctx")
+                    .or_else(|| props.get("n_ctx")));
+                let facts = super::ModelFacts {
+                    window,
+                    window_is: window.map(|_| super::WindowIs::Served),
+                    tools: props
+                        .pointer("/chat_template_caps/supports_tools")
+                        .and_then(serde_json::Value::as_bool),
+                };
+                if facts != super::ModelFacts::default() {
+                    return Ok(models.iter().map(|m| (m.clone(), facts.clone())).collect());
+                }
+            }
+            let mut said = std::collections::BTreeMap::new();
+            if let Ok(response) = get(listing).send().await
+                && let Some(listed) = json(response).await
+                && let Some(data) = listed.get("data").and_then(serde_json::Value::as_array)
+            {
+                for entry in data {
+                    if let Some(id) = entry.get("id").and_then(serde_json::Value::as_str)
+                        && let Some(window) = n(entry.get("max_model_len"))
+                    {
+                        said.insert(
+                            id.to_string(),
+                            super::ModelFacts {
+                                window: Some(window),
+                                window_is: Some(super::WindowIs::Served),
+                                tools: None,
+                            },
+                        );
+                    }
+                }
+            }
+            Ok(said)
+        })
+    }
+
     /// `response_format` is what the OpenAI-shaped spec itself documents, and
     /// every server behind this backend that claims compatibility at all
     /// tends to agree on it. `grammar` is the opposite: measured, on this

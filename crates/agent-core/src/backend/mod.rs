@@ -179,6 +179,32 @@ pub type ChunkStream<'a> = Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>
 /// being generated, and the caller is a page waiting on a request.
 pub const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// What a server says of one model it lists, before anything is sent to it.
+/// Every field is `None` where it said nothing — which is not *no*.
+///
+/// See `RECORD/2026-10-21.connecting-a-provider.WIP.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ModelFacts {
+    /// The most this model will hold, by the server's account.
+    pub window: Option<u32>,
+    /// Whose number `window` is, which decides what a person may do with it.
+    pub window_is: Option<WindowIs>,
+    /// Whether the model takes a `tools` field.
+    pub tools: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowIs {
+    /// What the model was trained to hold. A ceiling: luu chooses the window
+    /// per request under it (Ollama's `num_ctx`), and the server's own default
+    /// is something else again.
+    Trained,
+    /// What the server was started with. A fact: one number for every request,
+    /// so a smaller one is a budget luu keeps and a larger one is a lie.
+    Served,
+}
+
 /// A future a `dyn Backend` can hand back. Boxed for the same reason
 /// [`ChunkStream`] is: the turn loop holds a `dyn Backend`.
 pub type BackendFuture<'a, T> =
@@ -206,6 +232,18 @@ pub trait Backend: Send + Sync {
     /// `RECORD/2026-09-30.the-window-the-server-says.completed.md`.
     fn window(&self) -> BackendFuture<'_, Option<u32>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// What the server says of each of `models`: its window and its tools.
+    /// Asked by a person connecting a provider, never by a turn. The default
+    /// says nothing about anything; a model missing from the answer is one
+    /// nothing was said about.
+    fn facts<'a>(
+        &'a self,
+        models: &'a [String],
+    ) -> BackendFuture<'a, std::collections::BTreeMap<String, ModelFacts>> {
+        let _ = models;
+        Box::pin(async { Ok(std::collections::BTreeMap::new()) })
     }
 
     /// What to tell a caller **once**, before it measures anything, about a

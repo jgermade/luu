@@ -5371,6 +5371,19 @@ struct ProviderModels {
     /// does not look missing. See `models::LocalModel::runs_on`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     unavailable: Vec<Unavailable>,
+    /// What the server says of each model, only when the provider form asked
+    /// (`?facts=1`): one request per model on Ollama is not a cost the chat's
+    /// picker should pay every time it opens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    facts: Option<std::collections::BTreeMap<String, agent_core::backend::ModelFacts>>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ModelsAsk {
+    /// The provider form: every model, switched off or not, with what the
+    /// server says of each.
+    #[serde(default)]
+    facts: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -5384,7 +5397,9 @@ struct Unavailable {
 async fn get_provider_models(
     State(state): State<AppRouterState>,
     Path(name): Path<String>,
+    Query(ask): Query<ModelsAsk>,
 ) -> Response {
+    let for_form = ask.facts.is_some_and(|value| value != "0");
     let name = bare(&name);
     let (config, path) = match load_config().await {
         Ok(loaded) => loaded,
@@ -5469,6 +5484,17 @@ async fn get_provider_models(
             Err(error) => (Vec::new(), Some(error.to_string())),
         },
     };
+    let profile = config.profiles().get(name).cloned().unwrap_or_default();
+    let facts = match for_form && local_engine.is_none() && !models.is_empty() {
+        true => Some(backend.facts(&models).await.unwrap_or_default()),
+        false => None,
+    };
+    // The pickers offer what is switched on; the form sees everything, since
+    // it is where a model is switched back on.
+    let models: Vec<String> = match for_form {
+        true => models,
+        false => models.into_iter().filter(|m| profile.offers(m)).collect(),
+    };
 
     // Last used with *this profile*, then what the profile itself says, then
     // whatever the provider listed first. The first of those is why the store
@@ -5496,6 +5522,7 @@ async fn get_provider_models(
         suggested_from,
         labels,
         unavailable,
+        facts,
     })
     .into_response()
 }
@@ -5546,6 +5573,10 @@ struct ProbeAsk {
 #[derive(serde::Serialize)]
 struct Probed {
     models: Vec<String>,
+    /// What the server says of each model — its window and its tools — for
+    /// the form to fill in rather than ask. A model it said nothing of is
+    /// absent.
+    facts: std::collections::BTreeMap<String, agent_core::backend::ModelFacts>,
     /// The server's own refusal, which is the useful one: a 401 names the key,
     /// a connection error names the URL.
     error: Option<String>,
@@ -5591,6 +5622,7 @@ async fn probe_provider(
                 Err(error) => {
                     return Json(Probed {
                         models: Vec::new(),
+                        facts: Default::default(),
                         error: Some(format!("{error:#}")),
                     })
                     .into_response();
@@ -5604,7 +5636,16 @@ async fn probe_provider(
         Ok(models) => (models, None),
         Err(error) => (Vec::new(), Some(error.to_string())),
     };
-    Json(Probed { models, error }).into_response()
+    let facts = match models.is_empty() {
+        true => Default::default(),
+        false => backend.facts(&models).await.unwrap_or_default(),
+    };
+    Json(Probed {
+        models,
+        facts,
+        error,
+    })
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]

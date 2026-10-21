@@ -153,6 +153,29 @@ fn parse_line(line: &[u8], texted: bool) -> Result<Option<Chunk>, BackendError> 
     Ok((!text.is_empty()).then_some(Chunk::Text(text)))
 }
 
+/// What `POST /api/show` says of one model. `capabilities` is absent on an
+/// Ollama too old to have it, and then nothing is said about tools.
+fn show_facts(shown: &serde_json::Value) -> super::ModelFacts {
+    let window = shown
+        .get("model_info")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|info| {
+            info.iter()
+                .find(|(key, _)| key.ends_with(".context_length"))
+                .and_then(|(_, value)| value.as_u64())
+        })
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0);
+    super::ModelFacts {
+        window,
+        window_is: window.map(|_| super::WindowIs::Trained),
+        tools: shown
+            .get("capabilities")
+            .and_then(serde_json::Value::as_array)
+            .map(|caps| caps.iter().any(|cap| cap == "tools")),
+    }
+}
+
 /// `GET /api/tags` — what this Ollama has pulled.
 #[derive(Deserialize)]
 struct Tags {
@@ -194,6 +217,36 @@ impl Backend for Ollama {
                 .await
                 .map_err(|error| BackendError::Malformed(error.to_string()))?;
             Ok(tags.models.into_iter().map(|tag| tag.name).collect())
+        })
+    }
+
+    /// `POST /api/show` per model, all at once: `capabilities` names `tools`,
+    /// and `model_info` carries `<architecture>.context_length` — the training
+    /// maximum, which is a ceiling for the `num_ctx` luu sends and not the
+    /// window Ollama uses when nobody sends one. A model whose answer does
+    /// not come is left out, which is *nothing said*.
+    fn facts<'a>(
+        &'a self,
+        models: &'a [String],
+    ) -> BackendFuture<'a, std::collections::BTreeMap<String, super::ModelFacts>> {
+        let url = format!("{}/api/show", self.base_url);
+        let http = self.http.clone();
+        Box::pin(async move {
+            let asks = models.iter().map(|model| {
+                let request = http
+                    .post(&url)
+                    .timeout(super::LIST_TIMEOUT)
+                    .json(&serde_json::json!({ "model": model }));
+                async move {
+                    let shown: serde_json::Value = request.send().await.ok()?.json().await.ok()?;
+                    Some((model.clone(), show_facts(&shown)))
+                }
+            });
+            Ok(futures_util::future::join_all(asks)
+                .await
+                .into_iter()
+                .flatten()
+                .collect())
         })
     }
 
@@ -291,6 +344,26 @@ impl Backend for Ollama {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/api/show` as Ollama 0.33 answers it here: the window is the training
+    /// maximum and says so, `tools` is read off `capabilities`, and an Ollama
+    /// old enough to have no `capabilities` says nothing about tools rather
+    /// than *no*.
+    #[test]
+    fn what_api_show_says_of_a_model() {
+        let shown = serde_json::json!({
+            "capabilities": ["completion", "tools", "insert"],
+            "model_info": { "general.architecture": "qwen2", "qwen2.context_length": 32768 },
+        });
+        let facts = show_facts(&shown);
+        assert_eq!(facts.window, Some(32768));
+        assert_eq!(facts.window_is, Some(super::super::WindowIs::Trained));
+        assert_eq!(facts.tools, Some(true));
+
+        let plain = show_facts(&serde_json::json!({ "capabilities": ["completion"] }));
+        assert_eq!((plain.window, plain.tools), (None, Some(false)));
+        assert_eq!(show_facts(&serde_json::json!({})).tools, None);
+    }
     use crate::backend::Message;
 
     /// A call Ollama parsed arrives whole on one line, and goes up as the
