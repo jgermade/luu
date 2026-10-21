@@ -156,7 +156,9 @@
        the pane — see RECORD/2026-10-08.settings-design-system-and-folio. */
     display: flex;
     flex-direction: column;
-    padding: 1.25rem 1.75rem 2.5rem;
+    /* Nothing: each section pads itself, and a section's foot reaches the
+       pane's edges because nothing here holds it in. */
+    padding: 0;
     scroll-padding-bottom: 4rem;
   }
   /* One section in the flow, which is what the pane scrolls; the others laid

@@ -11,8 +11,13 @@
   //
   //   <Modal title="Add a provider" width="34rem" :open="open" @close="close?.()">
   //     <template :slot.head><span class="dim">beside the title</span></template>
-  //     <section class="modal-body">…</section>
+  //     <section class="modal-body">
+  //       <div class="modal-main">…</div>
+  //       <div class="modal-foot">…</div>
+  //     </section>
   //   </Modal>
+  //
+  // The body pads nothing; the content and the foot pad themselves (`app.css`).
   //
   // `:open` is for a script: a form that saved sets it false and leaves the
   // way a click on close does. `locked` refuses every dismissal and hides the
@@ -236,7 +241,13 @@
      is the exception below — it comes out of a head, not out of nowhere. */
   dialog { transform-origin: 50% 22%; }
   dialog[open] { display: flex; animation: folio-down .36s cubic-bezier(.16, 1, .3, 1); }
-  dialog::backdrop { background: rgba(0, 0, 0, .55); }
+  /* Blurred as well as dimmed, the way a child's veil is, so what is behind
+     a modal reads as behind it rather than as a second page to read. */
+  dialog::backdrop {
+    background: rgba(0, 0, 0, .55);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+  }
   dialog[open]::backdrop { animation: backdrop-in .2s ease-out; }
   dialog.closing { animation: folio-up .15s cubic-bezier(.4, 0, 1, 1) forwards; }
   dialog.closing::backdrop { animation: backdrop-out .15s ease-in forwards; }

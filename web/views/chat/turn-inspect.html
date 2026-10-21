@@ -72,33 +72,37 @@
   </div>
 
   <section class="modal-body">
-    <div :if="tab === 'context'">
-      <p :if="asked" class="asked"><span class="k">asked</span> {{ asked.text }}</p>
+    <!-- The content pads itself, and so does the foot beside it: the body
+         holds both and pads neither. -->
+    <div class="modal-main">
+      <div :if="tab === 'context'">
+        <p :if="asked" class="asked"><span class="k">asked</span> {{ asked.text }}</p>
 
-      <ContextView :prompt="kept?.prompt || ''" :toolSpecs="kept?.toolSpecs || ''"
-                   :budget="kept?.budget || null"
-                   :asked="asked?.text || ''" :extraCalls="kept?.extraCalls || []"
-                   :notes="notes" :window="state.settings?.window || null" />
-    </div>
+        <ContextView :prompt="kept?.prompt || ''" :toolSpecs="kept?.toolSpecs || ''"
+                     :budget="kept?.budget || null"
+                     :asked="asked?.text || ''" :extraCalls="kept?.extraCalls || []"
+                     :notes="notes" :window="state.settings?.window || null" />
+      </div>
 
-    <div :if="tab === 'answer'">
-      <p class="dim small">The answer as the model wrote it, tool blocks included.</p>
-      <div class="well"><pre class="raw">{{ message?.text || "" }}</pre></div>
-      <p :if="kept?.error" class="bad">{{ kept.error }}</p>
-    </div>
+      <div :if="tab === 'answer'">
+        <p class="dim small">The answer as the model wrote it, tool blocks included.</p>
+        <div class="well"><pre class="raw">{{ message?.text || "" }}</pre></div>
+        <p :if="kept?.error" class="bad">{{ kept.error }}</p>
+      </div>
 
-    <div :if="tab === 'tools'">
-      <div :each="call in tools" :key="call.step" class="block">
-        <div class="role">
-          step {{ call.step }} · <b>{{ call.name }}</b>
-          <span :if="call.verdict" :class="call.verdict.allowed ? 'ok' : 'bad'">
-            · {{ call.verdict.allowed ? "allowed" : "denied" }} — {{ call.verdict.rule }}
-          </span>
-          <span :if="call.duration_ms != null" class="dim">· {{ call.duration_ms }} ms</span>
+      <div :if="tab === 'tools'">
+        <div :each="call in tools" :key="call.step" class="block">
+          <div class="role">
+            step {{ call.step }} · <b>{{ call.name }}</b>
+            <span :if="call.verdict" :class="call.verdict.allowed ? 'ok' : 'bad'">
+              · {{ call.verdict.allowed ? "allowed" : "denied" }} — {{ call.verdict.rule }}
+            </span>
+            <span :if="call.duration_ms != null" class="dim">· {{ call.duration_ms }} ms</span>
+          </div>
+          <Scrollable :y="true" frame="well" max="28rem"><pre>{{ JSON.stringify(call.arguments, null, 2) }}</pre></Scrollable>
+          <Scrollable :if="call.error" :y="true" frame="well" max="28rem"><pre class="bad">{{ call.error }}</pre></Scrollable>
+          <Scrollable :if="call.output" :y="true" frame="well" max="28rem"><pre>{{ call.output }}</pre></Scrollable>
         </div>
-        <Scrollable :y="true" frame="well" max="28rem"><pre>{{ JSON.stringify(call.arguments, null, 2) }}</pre></Scrollable>
-        <Scrollable :if="call.error" :y="true" frame="well" max="28rem"><pre class="bad">{{ call.error }}</pre></Scrollable>
-        <Scrollable :if="call.output" :y="true" frame="well" max="28rem"><pre>{{ call.output }}</pre></Scrollable>
       </div>
     </div>
   </section>

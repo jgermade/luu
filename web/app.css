@@ -415,13 +415,13 @@ pre {
 /* The dialog itself — box, backdrop, the way in and out, and its head — is
    `components/modal.html`. What is here is what goes *in* one: a modal's
    content is its owner's, so its styles are the page's. */
-.modal-body { padding: 1rem; overflow: auto; scroll-padding-bottom: 4rem; }
-.modal-body.pane { padding: 1.25rem 1.75rem 2.5rem; scroll-padding-bottom: 2.5rem; }
-/* Settings' pane pads more than a modal's body, so a section's foot reaches
-   out over that padding instead: edge to edge, and down to the bottom edge.
-   Only the sections' own feet — a form opened from a section is a dialog
-   mounted inside the pane, and its foot is a modal's, not the pane's. */
-.modal-body.pane :is(.models-pane, .engines-pane) > .modal-foot { margin: auto -1.75rem -2.5rem; padding: 0 1.75rem; bottom: -2.5rem; }
+/* **A container pads nothing; what is in it pads itself.** The body scrolls
+   and holds two things, the content (`.modal-main`) and the actions
+   (`.modal-foot`), and each brings its own padding — so the foot reaches the
+   edges because nothing holds it in, not because it pulls itself back out of
+   a padding with negative margins, which is how a gap above it was lost. */
+.modal-body { padding: 0; overflow: auto; display: flex; flex-direction: column; scroll-padding-bottom: 4rem; }
+.modal-main { padding: 1rem; flex: 1 0 auto; }
 /* A body with a pinned foot keeps its grey, which moves with it; what a bounce
    uncovers is the parent's, and the parent is grey above and white below — the
    top of the content and the white foot at its bottom. Normally covered whole
@@ -545,17 +545,15 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
 /* Pinned while the report above it scrolls: a Save button below the fold is a
    form people think they cannot submit — and a refusal that scrolls away from
    the button it is about is one somebody clicks past. Both live in the same
-   pinned footer for that reason. */
+   pinned footer for that reason. A sibling of the content, not inside it, so
+   it is edge to edge and at the bottom with no margin of its own: `auto` above
+   it takes the room a short content leaves. */
 .modal-foot {
   position: sticky;
-  bottom: -1rem;
+  bottom: 0;
+  margin-top: auto;
   background: var(--panel);
   border-top: 1px solid var(--line);
-  /* Edge to edge and down to the bottom: out over the body's 1rem padding on
-     three sides, so the grey is a band across the modal's foot rather than a
-     block floating inside it. */
-  margin: .8rem -1rem -1rem;
-  margin-top: auto;
   padding: .2rem 1rem 0;
   z-index: 2;
 }

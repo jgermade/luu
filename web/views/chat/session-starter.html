@@ -45,69 +45,73 @@
 
 <Modal title="Where a session sends" width="34rem" @close="closeStarter()">
   <section class="modal-body">
-    <p :if="!profileNames.length" class="refused">
-      There are no providers in <code>config.toml</code> yet. Write one in
-      Settings → Models first — a session can only be sent somewhere this
-      machine has already named.
-    </p>
+    <!-- The content pads itself, and so does the foot beside it: the body
+         holds both and pads neither. -->
+    <div class="modal-main">
+      <p :if="!profileNames.length" class="refused">
+        There are no providers in <code>config.toml</code> yet. Write one in
+        Settings → Models first — a session can only be sent somewhere this
+        machine has already named.
+      </p>
 
-    <dl class="settings" :if="profileNames.length">
-      <dt>Provider</dt>
-      <dd>
-        <SelectInput :model="ui.starter?.provider" @change="loadModels($event)">
-          <option :each="name in profileNames" :key="name" :value="name">{{ name }}</option>
-        </SelectInput>
-        <span :if="ui.starter?.provider === state.providers?.default" class="dim">· the file's default</span>
-      </dd>
+      <dl class="settings" :if="profileNames.length">
+        <dt>Provider</dt>
+        <dd>
+          <SelectInput :model="ui.starter?.provider" @change="loadModels($event)">
+            <option :each="name in profileNames" :key="name" :value="name">{{ name }}</option>
+          </SelectInput>
+          <span :if="ui.starter?.provider === state.providers?.default" class="dim">· the file's default</span>
+        </dd>
 
-      <dt>Model</dt>
-      <dd>
-        <TextInput :model="ui.starter?.model" list="starter-models"
-                   :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
-                   @input="editStarter({ model: $event })" />
-        <datalist id="starter-models">
-          <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
-        </datalist>
-        <span :if="ui.starter?.from" class="dim">· {{ ui.starter?.from }}</span>
-      </dd>
-      <dd :if="ui.starter?.reason" class="caveat">
-        Could not list this provider's models: {{ ui.starter?.reason }}. Type one —
-        a model that is not pulled yet is still a name worth writing down.
-      </dd>
+        <dt>Model</dt>
+        <dd>
+          <TextInput :model="ui.starter?.model" list="starter-models"
+                     :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
+                     @input="editStarter({ model: $event })" />
+          <datalist id="starter-models">
+            <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
+          </datalist>
+          <span :if="ui.starter?.from" class="dim">· {{ ui.starter?.from }}</span>
+        </dd>
+        <dd :if="ui.starter?.reason" class="caveat">
+          Could not list this provider's models: {{ ui.starter?.reason }}. Type one —
+          a model that is not pulled yet is still a name worth writing down.
+        </dd>
 
-      <!-- What the session may do, which is not where it sends. Offered only
-           where somebody has written one down: the names come from
-           `config.toml`, and a page cannot add to them. -->
-      <dt :if="places.length > 1">Runs</dt>
-      <dd :if="places.length > 1">
-        <SelectInput class="place" :model="ui.starter?.place"
-                     @change="editStarter({ place: $event })">
-          <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
-                  :title="p.title">{{ p.name }} — {{ p.label }}</option>
-        </SelectInput>
-      </dd>
-      <dd :if="places.length > 1 && chosenPosture" class="dim small">
-        {{ state.postures?.postures[chosenPosture]?.policy }} — chosen now:
-        a session's jobs are approved against what it may do.
-      </dd>
-      <dd :if="!ui.starter?.reason && !ui.starter?.loading && !ui.starter?.models?.length" class="dim">
-        This provider offers no list, so the model is whatever you type.
-      </dd>
-    </dl>
+        <!-- What the session may do, which is not where it sends. Offered only
+             where somebody has written one down: the names come from
+             `config.toml`, and a page cannot add to them. -->
+        <dt :if="places.length > 1">Runs</dt>
+        <dd :if="places.length > 1">
+          <SelectInput class="place" :model="ui.starter?.place"
+                       @change="editStarter({ place: $event })">
+            <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
+                    :title="p.title">{{ p.name }} — {{ p.label }}</option>
+          </SelectInput>
+        </dd>
+        <dd :if="places.length > 1 && chosenPosture" class="dim small">
+          {{ state.postures?.postures[chosenPosture]?.policy }} — chosen now:
+          a session's jobs are approved against what it may do.
+        </dd>
+        <dd :if="!ui.starter?.reason && !ui.starter?.loading && !ui.starter?.models?.length" class="dim">
+          This provider offers no list, so the model is whatever you type.
+        </dd>
+      </dl>
 
-    <p class="dim small" :if="profileNames.length">
-      <strong>Start session</strong> opens an empty one there.
-      <strong>Continue here</strong> keeps the history on screen and moves it —
-      the session's stream gains a header saying where it changed, so the turns
-      before it are not read as comparable with the ones after.
-      Neither changes the file, and neither touches a turn that is running.
-    </p>
-    <p class="dim small" :if="profileNames.length && cannotContinue">
-      Cannot continue: {{ cannotContinue }}.
-    </p>
-    <p class="dim small" :if="profileNames.length && busy">
-      Cannot start one either: {{ busy }}.
-    </p>
+      <p class="dim small" :if="profileNames.length">
+        <strong>Start session</strong> opens an empty one there.
+        <strong>Continue here</strong> keeps the history on screen and moves it —
+        the session's stream gains a header saying where it changed, so the turns
+        before it are not read as comparable with the ones after.
+        Neither changes the file, and neither touches a turn that is running.
+      </p>
+      <p class="dim small" :if="profileNames.length && cannotContinue">
+        Cannot continue: {{ cannotContinue }}.
+      </p>
+      <p class="dim small" :if="profileNames.length && busy">
+        Cannot start one either: {{ busy }}.
+      </p>
+    </div>
 
     <div class="modal-foot">
       <div class="modal-actions">

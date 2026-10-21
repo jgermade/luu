@@ -302,137 +302,141 @@
 
 <Modal :title="editing ? `Provider ${editing}` : 'Add a provider'" width="40rem" :open="open" @close="close?.()">
   <section class="modal-body">
+    <!-- The content pads itself, and so does the foot beside it: the body
+         holds both and pads neither. -->
+    <div class="modal-main">
 
-    <!-- Where it is, folded to one line once it has answered. -->
-    <div :if="folded" class="summary">
-      <span class="what"><strong>{{ trimmed || "unnamed" }}</strong> · {{ chosen.short }}<span :if="backend !== 'mock'"> · {{ host }}</span><span :if="!list.loading && !list.error"> · {{ listed.length }} {{ listed.length === 1 ? "model" : "models" }}</span></span>
-      <button type="button" class="change" @click="changing = true">Change</button>
-    </div>
-
-    <dl :if="!folded" class="settings form">
-      <dt>Name</dt>
-      <dd>
-        <TextInput :model="name" placeholder="local" autofocus :warn="clash" @input="declaration = null" />
-        <span :if="clash" class="warn">already a provider of that name</span>
-      </dd>
-
-      <dt>Backend</dt>
-      <dd>
-        <SelectInput class="backend" :select-class="'backend'" :options="BACKENDS" :model="backend"
-                     @change="forget()" />
-      </dd>
-
-      <dt :if="backend !== 'mock'">URL</dt>
-      <dd :if="backend !== 'mock'">
-        <TextInput :model="url" :placeholder="chosen.url" @input="forget()" />
-      </dd>
-
-      <dt :if="backend === 'openai'">Key</dt>
-      <dd :if="backend === 'openai'">
-        <TextInput type="password" :model="keyValue" @input="forget()"
-                   :placeholder="keyFile ? 'leave empty to keep the key that is there' : 'if the server asks for one'" />
-        <span :if="key?.mask" class="dim">on disk: <code>{{ key.mask }}</code></span>
-      </dd>
-      <dd :if="key?.problem" class="warn">{{ key.problem }}</dd>
-      <dt :if="backend === 'openai'">Key file</dt>
-      <dd :if="backend === 'openai'">
-        <TextInput :model="keyFile" :placeholder="`~/.luu/${trimmed || 'that'}.key`" @input="forget()" />
-      </dd>
-      <dd :if="backend === 'openai'" class="note">
-        The key is written to that file with mode <code>0600</code>, never into
-        <code>config.toml</code>, and never read back.
-      </dd>
-
-      <dt></dt>
-      <dd :if="!engineOwned" class="connect-row">
-        <button type="button" class="connect" :disabled="connecting" @click="connect()">
-          {{ connecting ? "Connecting…" : "Connect" }}
-        </button>
-        <span class="dim">asks what it serves; saves nothing</span>
-      </dd>
-      <dd :if="engineOwned" class="note">
-        luu starts this provider's server, so its models are this machine's:
-        they are chosen in Settings → Engines.
-      </dd>
-    </dl>
-
-    <p :if="error" class="error">{{ error }}</p>
-
-    <!-- What it serves. -->
-    <div :if="folded" class="serves">
-      <p :if="list.loading" class="dim">Asking {{ host }} what it serves…</p>
-      <p :if="list.error" class="warn">
-        It did not answer: {{ list.error }}. What the file says of its models is
-        kept as it is.
-      </p>
-      <p :if="!list.loading && !list.error && !listed.length" class="dim">
-        It answered, and listed no models — an ordinary answer from a server
-        holding one. A session sends no model of our choosing.
-      </p>
-
-      <div :if="listed.length" class="windows">
-        <Checkbox :model="sameWindow" label="Same window for every model" />
-        <span :if="sameWindow" class="common">
-          <input class="win" inputmode="numeric" :value="commonWindow"
-                 :class.invalid="commonOver"
-                 :placeholder="commonCeiling < Infinity ? String(commonCeiling) : '—'"
-                 @input="commonWindow = $event.target.value">
-          <span class="dim">tokens<span :if="commonCeiling < Infinity">, up to {{ commonCeiling }}</span></span>
-        </span>
+      <!-- Where it is, folded to one line once it has answered. -->
+      <div :if="folded" class="summary">
+        <span class="what"><strong>{{ trimmed || "unnamed" }}</strong> · {{ chosen.short }}<span :if="backend !== 'mock'"> · {{ host }}</span><span :if="!list.loading && !list.error"> · {{ listed.length }} {{ listed.length === 1 ? "model" : "models" }}</span></span>
+        <button type="button" class="change" @click="changing = true">Change</button>
       </div>
 
-      <p :if="listed.length" class="dim pick-note">
-        The default is what a new session here starts on.
-        <span :if="!defaultModel">None chosen: the first listed.</span>
-      </p>
+      <dl :if="!folded" class="settings form">
+        <dt>Name</dt>
+        <dd>
+          <TextInput :model="name" placeholder="local" autofocus :warn="clash" @input="declaration = null" />
+          <span :if="clash" class="warn">already a provider of that name</span>
+        </dd>
 
-      <ul :if="listed.length" class="models">
-        <li :each="row in rows" :key="row.key" :class="row.kind" :class.off="row.off">
-          <span :if="row.kind === 'head'" class="head">{{ row.label }}</span>
-          <label :if="row.kind === 'model'" class="pick" :title="row.chosen ? 'Click again for none' : 'Make it the default'">
-            <input type="radio" name="default-model" :checked="row.chosen" :disabled="row.off"
-                   @click="toggleDefault(row.name)">
-            <span class="mname">{{ row.name }}</span>
-            <span :if="row.off" class="dim">left out</span>
-          </label>
-          <!-- Both cells on every row, empty where they have nothing, so the
-               columns line up down the list. -->
-          <span :if="row.kind === 'model'" class="wcell">
-            <input :if="!sameWindow" class="win" inputmode="numeric" :value="row.window" :placeholder="row.placeholder"
-                   :class.invalid="row.over" @input="setWindow(row.name, $event.target.value)">
-            <span :if="!sameWindow && row.hint" class="dim hint">{{ row.hint }}</span>
-          </span>
-          <span :if="row.kind === 'model'" class="tcell">
-            <select :if="row.group !== 'tools'" class="transport" :value="row.transport"
-                    @change="setTransport(row.name, $event.target.value)">
-              <option value="fenced">fenced</option>
-              <option value="native">native</option>
-            </select>
-          </span>
-          <span :if="row.kind === 'model' && row.note" class="rnote" :class.warn="row.transport === 'native'">{{ row.note }}</span>
-        </li>
-      </ul>
+        <dt>Backend</dt>
+        <dd>
+          <SelectInput class="backend" :select-class="'backend'" :options="BACKENDS" :model="backend"
+                       @change="forget()" />
+        </dd>
 
-      <div :if="noTools.length" class="leave">
-        <Checkbox :checked="leaving" label="Leave out the models without tools"
-                  @change="leaveOut = !leaving" />
+        <dt :if="backend !== 'mock'">URL</dt>
+        <dd :if="backend !== 'mock'">
+          <TextInput :model="url" :placeholder="chosen.url" @input="forget()" />
+        </dd>
+
+        <dt :if="backend === 'openai'">Key</dt>
+        <dd :if="backend === 'openai'">
+          <TextInput type="password" :model="keyValue" @input="forget()"
+                     :placeholder="keyFile ? 'leave empty to keep the key that is there' : 'if the server asks for one'" />
+          <span :if="key?.mask" class="dim">on disk: <code>{{ key.mask }}</code></span>
+        </dd>
+        <dd :if="key?.problem" class="warn">{{ key.problem }}</dd>
+        <dt :if="backend === 'openai'">Key file</dt>
+        <dd :if="backend === 'openai'">
+          <TextInput :model="keyFile" :placeholder="`~/.luu/${trimmed || 'that'}.key`" @input="forget()" />
+        </dd>
+        <dd :if="backend === 'openai'" class="note">
+          The key is written to that file with mode <code>0600</code>, never into
+          <code>config.toml</code>, and never read back.
+        </dd>
+
+        <dt></dt>
+        <dd :if="!engineOwned" class="connect-row">
+          <button type="button" class="connect" :disabled="connecting" @click="connect()">
+            {{ connecting ? "Connecting…" : "Connect" }}
+          </button>
+          <span class="dim">asks what it serves; saves nothing</span>
+        </dd>
+        <dd :if="engineOwned" class="note">
+          luu starts this provider's server, so its models are this machine's:
+          they are chosen in Settings → Engines.
+        </dd>
+      </dl>
+
+      <p :if="error" class="error">{{ error }}</p>
+
+      <!-- What it serves. -->
+      <div :if="folded" class="serves">
+        <p :if="list.loading" class="dim">Asking {{ host }} what it serves…</p>
+        <p :if="list.error" class="warn">
+          It did not answer: {{ list.error }}. What the file says of its models is
+          kept as it is.
+        </p>
+        <p :if="!list.loading && !list.error && !listed.length" class="dim">
+          It answered, and listed no models — an ordinary answer from a server
+          holding one. A session sends no model of our choosing.
+        </p>
+
+        <div :if="listed.length" class="windows">
+          <Checkbox :model="sameWindow" label="Same window for every model" />
+          <span :if="sameWindow" class="common">
+            <input class="win" inputmode="numeric" :value="commonWindow"
+                   :class.invalid="commonOver"
+                   :placeholder="commonCeiling < Infinity ? String(commonCeiling) : '—'"
+                   @input="commonWindow = $event.target.value">
+            <span class="dim">tokens<span :if="commonCeiling < Infinity">, up to {{ commonCeiling }}</span></span>
+          </span>
+        </div>
+
+        <p :if="listed.length" class="dim pick-note">
+          The default is what a new session here starts on.
+          <span :if="!defaultModel">None chosen: the first listed.</span>
+        </p>
+
+        <ul :if="listed.length" class="models">
+          <li :each="row in rows" :key="row.key" :class="row.kind" :class.off="row.off">
+            <span :if="row.kind === 'head'" class="head">{{ row.label }}</span>
+            <label :if="row.kind === 'model'" class="pick" :title="row.chosen ? 'Click again for none' : 'Make it the default'">
+              <input type="radio" name="default-model" :checked="row.chosen" :disabled="row.off"
+                     @click="toggleDefault(row.name)">
+              <span class="mname">{{ row.name }}</span>
+              <span :if="row.off" class="dim">left out</span>
+            </label>
+            <!-- Both cells on every row, empty where they have nothing, so the
+                 columns line up down the list. -->
+            <span :if="row.kind === 'model'" class="wcell">
+              <input :if="!sameWindow" class="win" inputmode="numeric" :value="row.window" :placeholder="row.placeholder"
+                     :class.invalid="row.over" @input="setWindow(row.name, $event.target.value)">
+              <span :if="!sameWindow && row.hint" class="dim hint">{{ row.hint }}</span>
+            </span>
+            <span :if="row.kind === 'model'" class="tcell">
+              <select :if="row.group !== 'tools'" class="transport" :value="row.transport"
+                      @change="setTransport(row.name, $event.target.value)">
+                <option value="fenced">fenced</option>
+                <option value="native">native</option>
+              </select>
+            </span>
+            <span :if="row.kind === 'model' && row.note" class="rnote" :class.warn="row.transport === 'native'">{{ row.note }}</span>
+          </li>
+        </ul>
+
+        <div :if="noTools.length" class="leave">
+          <Checkbox :checked="leaving" label="Leave out the models without tools"
+                    @change="leaveOut = !leaving" />
+        </div>
+        <p :if="anyFenced" class="note">
+          <strong>fenced</strong> is luu's own format: the tools as text in the
+          prompt, a call as a fenced block. It works with any model and is less
+          precise — on <code>qwen2.5-coder:7b</code> it made 7 of 15 calls where
+          native made 15.
+        </p>
       </div>
-      <p :if="anyFenced" class="note">
-        <strong>fenced</strong> is luu's own format: the tools as text in the
-        prompt, a call as a fenced block. It works with any model and is less
-        precise — on <code>qwen2.5-coder:7b</code> it made 7 of 15 calls where
-        native made 15.
-      </p>
-    </div>
 
-    <dl class="settings form tail">
-      <dt>Default</dt>
-      <dd>
-        <Checkbox :model="makeDefault"
-                  label="what every run that names no provider sends to"
-                  @change="declaration = null" />
-      </dd>
-    </dl>
+      <dl class="settings form tail">
+        <dt>Default</dt>
+        <dd>
+          <Checkbox :model="makeDefault"
+                    label="what every run that names no provider sends to"
+                    @change="declaration = null" />
+        </dd>
+      </dl>
+    </div>
 
     <div class="modal-foot">
       <div :if="declaration" class="declare">

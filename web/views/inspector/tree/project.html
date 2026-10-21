@@ -220,102 +220,106 @@
        :locked="workspace.picker.forced" @close="closePicker()">
 
   <section class="modal-body">
-    <p :if="workspace.picker.forced" class="dim small intro">
-      <code>luu serve</code> was started in <code>{{ base || workspace.base }}</code>
-      on {{ host ? host : "this machine" }}.
-      Everything the panels can reach is under it — pick the folder you are
-      working in, or take the whole thing.
-    </p>
+    <!-- The content pads itself, and so does the foot beside it: the body
+         holds both and pads neither. -->
+    <div class="modal-main">
+      <p :if="workspace.picker.forced" class="dim small intro">
+        <code>luu serve</code> was started in <code>{{ base || workspace.base }}</code>
+        on {{ host ? host : "this machine" }}.
+        Everything the panels can reach is under it — pick the folder you are
+        working in, or take the whole thing.
+      </p>
 
-    <div class="project">
-      <!-- Hosts: this machine, and every `[host.*]`. -->
-      <section class="col hosts" aria-label="Host">
-        <h3>Host</h3>
-        <ul class="list" role="listbox">
-          <li :each="name in names" :key="name || '-'">
-            <button type="button" class="pick" role="option"
-                    :class.on="name === host" :aria-selected="String(name === host)"
-                    :title="name ? (hostsView.hosts[name]?.url || '') : 'the server this page came from'"
-                    @click="pickHost(name)">
-              <span class="dot" :class="name ? (reach[name]?.state || 'asking') : 'ok'"
-                    :title="reach[name]?.error || ''"></span>
-              <span class="text">
-                <strong>{{ label(name) }}</strong>
-                <span class="dim small">{{ name ? (hostsView.hosts[name]?.url || "").replace(/^https?:\/\//, "") : "this machine" }}</span>
-              </span>
-              <span :if="name === currentHost" class="here small">here</span>
-            </button>
-            <button :if="name && hostsView.editable" type="button" class="edit" title="Edit this host"
-                    @click="editingHost = { name }"><svg class="ic"><use href="#i-edit"/></svg></button>
-          </li>
-        </ul>
-        <button :if="hostsView.editable" type="button" class="add" @click="editingHost = {}">
-          <svg class="ic"><use href="#i-plus"/></svg> Add a host
-        </button>
-      </section>
+      <div class="project">
+        <!-- Hosts: this machine, and every `[host.*]`. -->
+        <section class="col hosts" aria-label="Host">
+          <h3>Host</h3>
+          <ul class="list" role="listbox">
+            <li :each="name in names" :key="name || '-'">
+              <button type="button" class="pick" role="option"
+                      :class.on="name === host" :aria-selected="String(name === host)"
+                      :title="name ? (hostsView.hosts[name]?.url || '') : 'the server this page came from'"
+                      @click="pickHost(name)">
+                <span class="dot" :class="name ? (reach[name]?.state || 'asking') : 'ok'"
+                      :title="reach[name]?.error || ''"></span>
+                <span class="text">
+                  <strong>{{ label(name) }}</strong>
+                  <span class="dim small">{{ name ? (hostsView.hosts[name]?.url || "").replace(/^https?:\/\//, "") : "this machine" }}</span>
+                </span>
+                <span :if="name === currentHost" class="here small">here</span>
+              </button>
+              <button :if="name && hostsView.editable" type="button" class="edit" title="Edit this host"
+                      @click="editingHost = { name }"><svg class="ic"><use href="#i-edit"/></svg></button>
+            </li>
+          </ul>
+          <button :if="hostsView.editable" type="button" class="add" @click="editingHost = {}">
+            <svg class="ic"><use href="#i-plus"/></svg> Add a host
+          </button>
+        </section>
 
-      <!-- The folder on it. -->
-      <section class="col folder" aria-label="Folder">
-        <h3>Folder</h3>
-        <p :if="reach[host]?.state === 'down'" class="refused">
-          {{ label(host) }} does not answer: {{ reach[host]?.error }}
-        </p>
-        <nav :if="reach[host]?.state !== 'down'" class="crumbs">
-          <button :each="crumb in crumbs" :key="crumb.path" type="button" class="crumb"
-                  :class.on="crumb.path === here" @click="browseTo(crumb.path)">{{ crumb.name }}</button>
-        </nav>
-        <ul :if="reach[host]?.state !== 'down'" class="folders list">
-          <li :each="row in folders" :key="row.path">
-            <button type="button" class="row" :class.ignored="row.ignored" :title="row.path"
-                    @click="browseTo(row.path)">
-              <svg class="ic"><use href="#i-folder"/></svg>
-              <span class="name">{{ row.name }}</span>
-              <span :if="row.repo" class="repo" title="A git repository">git</span>
-              <svg class="ic caret"><use href="#i-caret"/></svg>
-            </button>
-          </li>
-        </ul>
-        <p :if="listed && !listed.error && !folders.length" class="dim small">
-          Nothing but files in here. Take it, or go back up.
-        </p>
-        <p :if="listed?.error" class="refused">{{ listed.error }}</p>
-      </section>
+        <!-- The folder on it. -->
+        <section class="col folder" aria-label="Folder">
+          <h3>Folder</h3>
+          <p :if="reach[host]?.state === 'down'" class="refused">
+            {{ label(host) }} does not answer: {{ reach[host]?.error }}
+          </p>
+          <nav :if="reach[host]?.state !== 'down'" class="crumbs">
+            <button :each="crumb in crumbs" :key="crumb.path" type="button" class="crumb"
+                    :class.on="crumb.path === here" @click="browseTo(crumb.path)">{{ crumb.name }}</button>
+          </nav>
+          <ul :if="reach[host]?.state !== 'down'" class="folders list">
+            <li :each="row in folders" :key="row.path">
+              <button type="button" class="row" :class.ignored="row.ignored" :title="row.path"
+                      @click="browseTo(row.path)">
+                <svg class="ic"><use href="#i-folder"/></svg>
+                <span class="name">{{ row.name }}</span>
+                <span :if="row.repo" class="repo" title="A git repository">git</span>
+                <svg class="ic caret"><use href="#i-caret"/></svg>
+              </button>
+            </li>
+          </ul>
+          <p :if="listed && !listed.error && !folders.length" class="dim small">
+            Nothing but files in here. Take it, or go back up.
+          </p>
+          <p :if="listed?.error" class="refused">{{ listed.error }}</p>
+        </section>
 
-      <!-- The session there: where its commands run, and where it sends. -->
-      <section class="col run" aria-label="Runtime and model">
-        <h3>Runtime</h3>
-        <SelectInput :if="places.length > 1" class="place" :model="place"
-                     @change="place = $event">
-          <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
-                  :title="p.title">{{ p.name }} — {{ p.label }}</option>
-        </SelectInput>
-        <p :if="places.length <= 1" class="dim small">
-          {{ places[0] ? places[0].name + " — " + places[0].label : "the server's own policy" }}
-        </p>
+        <!-- The session there: where its commands run, and where it sends. -->
+        <section class="col run" aria-label="Runtime and model">
+          <h3>Runtime</h3>
+          <SelectInput :if="places.length > 1" class="place" :model="place"
+                       @change="place = $event">
+            <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
+                    :title="p.title">{{ p.name }} — {{ p.label }}</option>
+          </SelectInput>
+          <p :if="places.length <= 1" class="dim small">
+            {{ places[0] ? places[0].name + " — " + places[0].label : "the server's own policy" }}
+          </p>
 
-        <h3>Model</h3>
-        <p :if="dest && !providerNames.length" class="dim small">
-          {{ label(host) }} has no providers in its <code>config.toml</code> yet.
-        </p>
-        <SelectInput :if="providerNames.length" :model="provider"
-                     @change="loadModels(host, $event)">
-          <option :each="name in providerNames" :key="name" :value="name">{{ name }}</option>
-        </SelectInput>
-        <ul :if="providerNames.length" class="models list" role="listbox">
-          <li :if="shown?.loading" class="dim small pad">asking the provider…</li>
-          <li :each="m in shown?.models || []" :key="m">
-            <button type="button" class="model" role="option" :class.on="m === model"
-                    :aria-selected="String(m === model)" @click="model = m">
-              <span class="check">{{ m === model ? "✓" : "" }}</span>
-              <span class="name">{{ shown?.labels?.[m] || modelLabel(m) }}</span>
-            </button>
-          </li>
-        </ul>
-        <TextInput :if="providerNames.length && shown && !shown.loading && !shown.models?.length"
-                   :model="model" placeholder="a model name — or empty for its own"
-                   @input="model = $event" />
-        <p :if="shown?.reason && !shown?.models?.length" class="dim small">{{ shown.reason }}</p>
-      </section>
+          <h3>Model</h3>
+          <p :if="dest && !providerNames.length" class="dim small">
+            {{ label(host) }} has no providers in its <code>config.toml</code> yet.
+          </p>
+          <SelectInput :if="providerNames.length" :model="provider"
+                       @change="loadModels(host, $event)">
+            <option :each="name in providerNames" :key="name" :value="name">{{ name }}</option>
+          </SelectInput>
+          <ul :if="providerNames.length" class="models list" role="listbox">
+            <li :if="shown?.loading" class="dim small pad">asking the provider…</li>
+            <li :each="m in shown?.models || []" :key="m">
+              <button type="button" class="model" role="option" :class.on="m === model"
+                      :aria-selected="String(m === model)" @click="model = m">
+                <span class="check">{{ m === model ? "✓" : "" }}</span>
+                <span class="name">{{ shown?.labels?.[m] || modelLabel(m) }}</span>
+              </button>
+            </li>
+          </ul>
+          <TextInput :if="providerNames.length && shown && !shown.loading && !shown.models?.length"
+                     :model="model" placeholder="a model name — or empty for its own"
+                     @input="model = $event" />
+          <p :if="shown?.reason && !shown?.models?.length" class="dim small">{{ shown.reason }}</p>
+        </section>
+      </div>
     </div>
 
     <div class="modal-foot">

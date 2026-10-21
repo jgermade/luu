@@ -76,158 +76,160 @@
 </script>
 
 <div class="engines-pane">
-  <div class="ds-hero">
-    <div class="ds-hero-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="4" y="4" width="16" height="16" rx="3"/>
-        <rect x="9" y="9" width="6" height="6"/>
-        <line x1="9" y1="1" x2="9" y2="4"/>
-        <line x1="15" y1="1" x2="15" y2="4"/>
-        <line x1="9" y1="20" x2="9" y2="23"/>
-        <line x1="15" y1="20" x2="15" y2="23"/>
-        <line x1="20" y1="9" x2="23" y2="9"/>
-        <line x1="20" y1="14" x2="23" y2="14"/>
-        <line x1="1" y1="9" x2="4" y2="9"/>
-        <line x1="1" y1="14" x2="4" y2="14"/>
-      </svg>
-    </div>
-    <div class="ds-hero-body">
-      <h4 class="ds-hero-title">Motores de inferencia</h4>
-      <p class="ds-hero-desc">Servidores de modelos que luu inicia y supervisa localmente: llama-server, mlx y ollama.</p>
-    </div>
-  </div>
-
-  <div class="ds-flow">
-    <div class="ds-flow-step">
-      <span class="ds-flow-num">1</span>
-      <div class="ds-flow-body">
-        <div class="ds-flow-title">Bajo demanda</div>
-        <p class="ds-flow-desc">Se descarga la versión gestionada oficial la primera vez que se requiere.</p>
+  <div class="pane-main">
+    <div class="ds-hero">
+      <div class="ds-hero-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="3"/>
+          <rect x="9" y="9" width="6" height="6"/>
+          <line x1="9" y1="1" x2="9" y2="4"/>
+          <line x1="15" y1="1" x2="15" y2="4"/>
+          <line x1="9" y1="20" x2="9" y2="23"/>
+          <line x1="15" y1="20" x2="15" y2="23"/>
+          <line x1="20" y1="9" x2="23" y2="9"/>
+          <line x1="20" y1="14" x2="23" y2="14"/>
+          <line x1="1" y1="9" x2="4" y2="9"/>
+          <line x1="1" y1="14" x2="4" y2="14"/>
+        </svg>
+      </div>
+      <div class="ds-hero-body">
+        <h4 class="ds-hero-title">Motores de inferencia</h4>
+        <p class="ds-hero-desc">Servidores de modelos que luu inicia y supervisa localmente: llama-server, mlx y ollama.</p>
       </div>
     </div>
-    <div class="ds-flow-step">
-      <span class="ds-flow-num">2</span>
-      <div class="ds-flow-body">
-        <div class="ds-flow-title">Arranque automático</div>
-        <p class="ds-flow-desc">El motor se inicia al abrir una sesión y conmuta de modelo con el chat.</p>
+
+    <div class="ds-flow">
+      <div class="ds-flow-step">
+        <span class="ds-flow-num">1</span>
+        <div class="ds-flow-body">
+          <div class="ds-flow-title">Bajo demanda</div>
+          <p class="ds-flow-desc">Se descarga la versión gestionada oficial la primera vez que se requiere.</p>
+        </div>
+      </div>
+      <div class="ds-flow-step">
+        <span class="ds-flow-num">2</span>
+        <div class="ds-flow-body">
+          <div class="ds-flow-title">Arranque automático</div>
+          <p class="ds-flow-desc">El motor se inicia al abrir una sesión y conmuta de modelo con el chat.</p>
+        </div>
+      </div>
+      <div class="ds-flow-step">
+        <span class="ds-flow-num">3</span>
+        <div class="ds-flow-body">
+          <div class="ds-flow-title">Sin fugas</div>
+          <p class="ds-flow-desc">Se detiene al cerrar la sesión o salir del servidor, liberando VRAM.</p>
+        </div>
       </div>
     </div>
-    <div class="ds-flow-step">
-      <span class="ds-flow-num">3</span>
-      <div class="ds-flow-body">
-        <div class="ds-flow-title">Sin fugas</div>
-        <p class="ds-flow-desc">Se detiene al cerrar la sesión o salir del servidor, liberando VRAM.</p>
-      </div>
+
+    <p class="dim small" :if="view?.path">
+      Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />. Los botones <strong>start</strong> y <strong>stop</strong> permiten control manual.
+    </p>
+    <p :if="!view && !error" class="dim small skeleton-pulse">
+      Cargando engines configurados…
+    </p>
+    <p :if="view && !view.editable" class="refused">{{ view.refused }}</p>
+    <p :if="error" class="error">{{ error }}</p>
+
+    <div :if="!view && !error" class="engine-skeleton">
+      <header>
+        <span class="skeleton-bar" style="width: 7rem; height: 1.1rem;"></span>
+        <span class="skeleton-badge skeleton-pulse">comprobando…</span>
+      </header>
+      <div class="skeleton-bar" style="width: 15rem; margin-top: .4rem;"></div>
     </div>
-  </div>
 
-  <p class="dim small" :if="view?.path">
-    Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />. Los botones <strong>start</strong> y <strong>stop</strong> permiten control manual.
-  </p>
-  <p :if="!view && !error" class="dim small skeleton-pulse">
-    Cargando engines configurados…
-  </p>
-  <p :if="view && !view.editable" class="refused">{{ view.refused }}</p>
-  <p :if="error" class="error">{{ error }}</p>
+    <div :if="view && !names.length" class="refused">
+      None yet. <strong>+ engine</strong> writes one, and a provider that
+      starts it.
+    </div>
 
-  <div :if="!view && !error" class="engine-skeleton">
-    <header>
-      <span class="skeleton-bar" style="width: 7rem; height: 1.1rem;"></span>
-      <span class="skeleton-badge skeleton-pulse">comprobando…</span>
-    </header>
-    <div class="skeleton-bar" style="width: 15rem; margin-top: .4rem;"></div>
-  </div>
-
-  <div :if="view && !names.length" class="refused">
-    None yet. <strong>+ engine</strong> writes one, and a provider that
-    starts it.
-  </div>
-
-  <section :each="name in names" :key="name" class="engine">
-    <header>
-      <strong>{{ name }}</strong>
-      <span class="tag">{{ view.engines[name].kind }}</span>
-      <span class="state" :class="view.engines[name].status.state"
-            :class.up="view.engines[name].status.answering">
-        {{ stateWord(view.engines[name].status) }}
-      </span>
-      <span :if="view.engines[name].status.pid" class="dim small">
-        pid {{ view.engines[name].status.pid }}
-      </span>
-      <span :if="view.engines[name].status.exit && view.engines[name].status.state !== 'running'"
-            class="dim small">· {{ view.engines[name].status.exit }}</span>
-      <span class="grow"></span>
-      <button type="button" class="link" :disabled="!view.editable || !!busy"
-              :if="view.engines[name].status.state !== 'running'"
-              @click="act(`start:${name}`, () => startEngine(name))">start</button>
-      <button type="button" class="link" :disabled="!view.editable || !!busy"
-              :if="view.engines[name].status.state === 'running'"
-              @click="act(`stop:${name}`, () => stopEngine(name))">stop</button>
-      <button type="button" class="link" :disabled="!view.editable"
-              @click="editing = { name }">edit</button>
-      <button type="button" class="link" :disabled="!view.editable || !!busy"
-              @click="remove(name)">remove</button>
-    </header>
-
-    <dl class="settings">
-      <dt>Binary</dt>
-      <dd>
-        <span class="dim">{{ binaryWord(view.engines[name].binary) }}</span>
-        <code :if="view.engines[name].resolved">{{ view.engines[name].resolved }}</code>
-        <span :if="view.engines[name].problem" class="warn">{{ view.engines[name].problem }}</span>
-        <button type="button" class="link"
-                :if="view.engines[name].binary === 'managed' && !view.engines[name].resolved"
-                :disabled="!view.editable || installing.length > 0"
-                @click="act('install', () => installEngine(view.engines[name].kind, view.engines[name].version, view.engines[name].variant))">
-          download {{ view.engines[name].version || view.pinned[view.engines[name].kind] }}
-        </button>
-      </dd>
-
-      <dt :if="view.engines[name].kind !== 'ollama'">Model</dt>
-      <dd :if="view.engines[name].kind !== 'ollama'">
-        <span :if="view.engines[name].model">{{ modelLabel(view.engines[name].model) }}</span>
-        <span :if="!view.engines[name].model" class="dim">named in the arguments</span>
-      </dd>
-
-      <dt>Sends</dt>
-      <dd>
-        <code>{{ view.engines[name].url }}</code>
-        <span :if="!view.engines[name].providers.length" class="dim">· no provider names it</span>
-        <span :each="p in view.engines[name].providers" :key="p">
-          · <span class="tag">{{ p }}</span>
-          <button type="button" class="link" title="Start a session on this provider"
-                  @click="openStarter(p)">use →</button>
+    <section :each="name in names" :key="name" class="engine">
+      <header>
+        <strong>{{ name }}</strong>
+        <span class="tag">{{ view.engines[name].kind }}</span>
+        <span class="state" :class="view.engines[name].status.state"
+              :class.up="view.engines[name].status.answering">
+          {{ stateWord(view.engines[name].status) }}
         </span>
-      </dd>
+        <span :if="view.engines[name].status.pid" class="dim small">
+          pid {{ view.engines[name].status.pid }}
+        </span>
+        <span :if="view.engines[name].status.exit && view.engines[name].status.state !== 'running'"
+              class="dim small">· {{ view.engines[name].status.exit }}</span>
+        <span class="grow"></span>
+        <button type="button" class="link" :disabled="!view.editable || !!busy"
+                :if="view.engines[name].status.state !== 'running'"
+                @click="act(`start:${name}`, () => startEngine(name))">start</button>
+        <button type="button" class="link" :disabled="!view.editable || !!busy"
+                :if="view.engines[name].status.state === 'running'"
+                @click="act(`stop:${name}`, () => stopEngine(name))">stop</button>
+        <button type="button" class="link" :disabled="!view.editable"
+                @click="editing = { name }">edit</button>
+        <button type="button" class="link" :disabled="!view.editable || !!busy"
+                @click="remove(name)">remove</button>
+      </header>
 
-      <dt>Arguments</dt>
-      <dd>
-        <code :if="(view.engines[name].args || []).length">{{ view.engines[name].args.join(" ") }}</code>
-        <span :if="!(view.engines[name].args || []).length" class="dim">none — the model is the part worth writing here</span>
-      </dd>
+      <dl class="settings">
+        <dt>Binary</dt>
+        <dd>
+          <span class="dim">{{ binaryWord(view.engines[name].binary) }}</span>
+          <code :if="view.engines[name].resolved">{{ view.engines[name].resolved }}</code>
+          <span :if="view.engines[name].problem" class="warn">{{ view.engines[name].problem }}</span>
+          <button type="button" class="link"
+                  :if="view.engines[name].binary === 'managed' && !view.engines[name].resolved"
+                  :disabled="!view.editable || installing.length > 0"
+                  @click="act('install', () => installEngine(view.engines[name].kind, view.engines[name].version, view.engines[name].variant))">
+            download {{ view.engines[name].version || view.pinned[view.engines[name].kind] }}
+          </button>
+        </dd>
 
-      <dt :if="view.engines[name].status.log.length">Output</dt>
-      <dd :if="view.engines[name].status.log.length">
-        <Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ view.engines[name].status.log.join("\n") }}</pre></Scrollable>
-      </dd>
-    </dl>
-  </section>
+        <dt :if="view.engines[name].kind !== 'ollama'">Model</dt>
+        <dd :if="view.engines[name].kind !== 'ollama'">
+          <span :if="view.engines[name].model">{{ modelLabel(view.engines[name].model) }}</span>
+          <span :if="!view.engines[name].model" class="dim">named in the arguments</span>
+        </dd>
 
-  <section :if="installing.length || failed.length" class="downloads">
-    <h3>Downloads</h3>
-    <div :each="i in installing" :key="i.asset" class="download">
-      <span>{{ i.asset }}</span>
-      <progress :value="i.done" :max="i.total || 1"></progress>
-      <span class="dim small">{{ i.state }} · {{ mb(i.done) }} of {{ mb(i.total) }} · {{ pct(i) }}%</span>
-    </div>
-    <p :each="i in failed" :key="i.asset" class="error">{{ i.asset }}: {{ i.error }}</p>
-  </section>
+        <dt>Sends</dt>
+        <dd>
+          <code>{{ view.engines[name].url }}</code>
+          <span :if="!view.engines[name].providers.length" class="dim">· no provider names it</span>
+          <span :each="p in view.engines[name].providers" :key="p">
+            · <span class="tag">{{ p }}</span>
+            <button type="button" class="link" title="Start a session on this provider"
+                    @click="openStarter(p)">use →</button>
+          </span>
+        </dd>
 
-  <p class="dim small" :if="view?.root">
-    luu's own copies go in <code>{{ view.root }}</code>, one directory per
-    version, checked against the sha256 GitHub publishes before they are
-    unpacked.
-  </p>
+        <dt>Arguments</dt>
+        <dd>
+          <code :if="(view.engines[name].args || []).length">{{ view.engines[name].args.join(" ") }}</code>
+          <span :if="!(view.engines[name].args || []).length" class="dim">none — the model is the part worth writing here</span>
+        </dd>
+
+        <dt :if="view.engines[name].status.log.length">Output</dt>
+        <dd :if="view.engines[name].status.log.length">
+          <Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ view.engines[name].status.log.join("\n") }}</pre></Scrollable>
+        </dd>
+      </dl>
+    </section>
+
+    <section :if="installing.length || failed.length" class="downloads">
+      <h3>Downloads</h3>
+      <div :each="i in installing" :key="i.asset" class="download">
+        <span>{{ i.asset }}</span>
+        <progress :value="i.done" :max="i.total || 1"></progress>
+        <span class="dim small">{{ i.state }} · {{ mb(i.done) }} of {{ mb(i.total) }} · {{ pct(i) }}%</span>
+      </div>
+      <p :each="i in failed" :key="i.asset" class="error">{{ i.asset }}: {{ i.error }}</p>
+    </section>
+
+    <p class="dim small" :if="view?.root">
+      luu's own copies go in <code>{{ view.root }}</code>, one directory per
+      version, checked against the sha256 GitHub publishes before they are
+      unpacked.
+    </p>
+  </div>
 
   <!-- Pinned to the bottom of the pane — see models.html. -->
   <div class="modal-foot">
@@ -246,6 +248,10 @@
     flex-direction: column;
     flex: 1 0 auto;
   }
+  /* The section pads its content and its foot, each its own; the pane they
+     sit in pads nothing. */
+  .pane-main { padding: 1.25rem 1.75rem 1.5rem; }
+  .modal-foot { padding: .2rem 1.75rem 0; }
   h3:first-child { margin-top: 0; }
   .engine {
     background: var(--panel, #ffffff);

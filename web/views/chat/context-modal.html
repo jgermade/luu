@@ -52,14 +52,18 @@
   </div>
 
   <section class="modal-body">
-    <p :if="!state.budget" class="dim">
-      Nothing has been sent in this session yet. The context is measured when a
-      turn is built, so it is here from the first prompt on.
-    </p>
-    <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
-                 :budget="state.budget"
-                 :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
-                 :window="state.settings?.window || null" :answer="answer" />
+    <!-- The content pads itself, and so does the foot beside it: the body
+         holds both and pads neither. -->
+    <div class="modal-main">
+      <p :if="!state.budget" class="dim">
+        Nothing has been sent in this session yet. The context is measured when a
+        turn is built, so it is here from the first prompt on.
+      </p>
+      <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
+                   :budget="state.budget"
+                   :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
+                   :window="state.settings?.window || null" :answer="answer" />
+    </div>
   </section>
 </Modal>
 
