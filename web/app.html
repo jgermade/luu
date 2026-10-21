@@ -358,7 +358,14 @@
   // The history in the order sessions were last written to — the server says
   // when (`written_at`), the live row included — so opening one does not move
   // it to the top; only writing in it does.
+  //
+  // A session nothing was ever sent in is left out — a *Start session* with no
+  // prompt after it, whose record is page loads and nothing else — unless it
+  // is the one on screen. They are the newest rows, they carry nothing to
+  // open, and named by their ids they were indistinguishable from the ones
+  // that do. Left out of the list, not out of the store.
   $: history = [...(state.sessions || [])]
+    .filter(s => s.turns > 0 || s.id === state.currentSessionId)
     .sort((a, b) => (b.written_at ?? b.started_at ?? 0) - (a.written_at ?? a.started_at ?? 0))
   // Asked again each time it opens: the counts it shows move with every turn.
   const toggleHistory = async () => {
@@ -864,7 +871,7 @@
             <svg class="ic"><use href="#i-close"/></svg>
           </button>
         </div>
-        <p :if="!state.sessions.length" class="dim small">No sessions yet.</p>
+        <p :if="!history.length" class="dim small">No sessions yet.</p>
       </div>
     </header>
 
