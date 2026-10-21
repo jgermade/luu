@@ -231,8 +231,12 @@
     </li>
   </ul>
 
-  <div class="section-actions" :if="state.providers">
-    <button type="button" class="add" :disabled="!editable" @click="openForm()">+ provider</button>
+  <!-- Pinned to the bottom of the pane, where it is the same distance away
+       however long the list above it is. -->
+  <div class="modal-foot" :if="state.providers">
+    <div class="modal-actions">
+      <button type="button" class="add" :disabled="!editable" @click="openForm()">+ provider</button>
+    </div>
   </div>
 </div>
 
@@ -240,13 +244,10 @@
               :saved="saved" :close="() => { form = null }" />
 
 <style scoped>
-  .section-actions {
-    margin-top: 1rem;
-    display: flex;
-  }
   .models-pane {
-    display: block;
-    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
   }
   .models-status-card {
     background: var(--panel, #ffffff);

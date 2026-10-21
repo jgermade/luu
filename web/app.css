@@ -417,6 +417,9 @@ pre {
    content is its owner's, so its styles are the page's. */
 .modal-body { padding: 1rem; overflow: auto; scroll-padding-bottom: 4rem; }
 .modal-body.pane { padding: 1.25rem 1.75rem 2.5rem; scroll-padding-bottom: 2.5rem; }
+/* Settings' pane pads more than a modal's body, so its foot reaches out over
+   that padding instead: edge to edge, and down to the bottom edge. */
+.modal-body.pane .modal-foot { margin: auto -1.75rem -2.5rem; padding: 0 1.75rem; bottom: -2.5rem; }
 /* A body with a pinned foot keeps its grey, which moves with it; what a bounce
    uncovers is the parent's, and the parent is grey above and white below — the
    top of the content and the white foot at its bottom. Normally covered whole

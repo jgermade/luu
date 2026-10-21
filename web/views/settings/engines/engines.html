@@ -229,8 +229,11 @@
     unpacked.
   </p>
 
-  <div class="section-actions">
-    <button type="button" class="add" :disabled="!view?.editable" @click="editing = {}">+ engine</button>
+  <!-- Pinned to the bottom of the pane — see models.html. -->
+  <div class="modal-foot">
+    <div class="modal-actions">
+      <button type="button" class="add" :disabled="!view?.editable" @click="editing = {}">+ engine</button>
+    </div>
   </div>
 </div>
 
@@ -238,13 +241,10 @@
             :saved="next => { view = next }" :close="() => { editing = null }" />
 
 <style scoped>
-  .section-actions {
-    margin-top: 1rem;
-    display: flex;
-  }
   .engines-pane {
-    display: block;
-    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
   }
   h3:first-child { margin-top: 0; }
   .engine {

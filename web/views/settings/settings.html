@@ -151,7 +151,11 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     box-sizing: border-box;
-    display: block;
+    /* A column all the way down to each section's own pane, so a pinned foot's
+       `margin-top: auto` reaches the bottom when the content is shorter than
+       the pane — see RECORD/2026-10-08.settings-design-system-and-folio. */
+    display: flex;
+    flex-direction: column;
     padding: 1.25rem 1.75rem 2.5rem;
     scroll-padding-bottom: 4rem;
   }
@@ -160,9 +164,10 @@
      known. The chosen one fades in as the one it replaces fades out. */
   .stage {
     position: relative;
-    min-height: 100%;
+    flex: 1 0 auto;
     box-sizing: border-box;
-    display: block;
+    display: flex;
+    flex-direction: column;
   }
   .section {
     position: absolute;
@@ -186,8 +191,9 @@
     visibility: visible;
     pointer-events: auto;
     transition: opacity .22s ease-in .06s;
-    min-height: 100%;
-    display: block;
+    flex: 1 0 auto;
+    display: flex;
+    flex-direction: column;
   }
   @media (prefers-reduced-motion: reduce) {
     .pane, .section, .section.on, .section.leaving { transition: none; }
