@@ -56,181 +56,185 @@
   })[state.settings?.window_from] || ""
 </script>
 
-<!-- The first run. The server decides this (`unconfigured`), the page only
-     shows it: a browser working it out from the backend name would be a second
-     copy of a rule that already has one. -->
-<div :if="state.settings?.unconfigured" class="first-run">
-  <strong>Nothing says where this machine sends.</strong>
-  <p>
-    There is no provider in <code>config.toml</code> and no destination was
-    typed on the command line, so this server fell back to the mock — which
-    answers in sentences and is nowhere. Add one below, then start a
-    session on it.
-  </p>
-</div>
-
-<div class="ds-hero">
-  <div class="ds-hero-icon">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="2" y="2" width="20" height="8" rx="2"/>
-      <rect x="2" y="14" width="20" height="8" rx="2"/>
-      <line x1="6" y1="6" x2="6.01" y2="6"/>
-      <line x1="6" y1="18" x2="6.01" y2="18"/>
-      <path d="M18 6h.01"/>
-      <path d="M18 18h.01"/>
-      <path d="M12 10v4"/>
-    </svg>
-  </div>
-  <div class="ds-hero-body">
-    <h4 class="ds-hero-title">Modelos y proveedores</h4>
-    <p class="ds-hero-desc">Destino activo de inferencia y perfiles configurados (Ollama, OpenAI, llama-server y remotos).</p>
-  </div>
-</div>
-
-<h3>Destino activo de la sesión</h3>
-<p class="dim small">
-  No requiere reiniciar. El botón <strong>use →</strong> conmuta la sesión viva al perfil seleccionado.
-</p>
-
 <div class="models-pane">
   <div class="pane-main">
-    <div class="models-status-card" :if="!state.settings">
-      <div class="status-card-header">
-        <div class="status-badge-group">
-          <span class="skeleton-bar" style="width: 5rem;"></span>
-          <span class="skeleton-badge skeleton-pulse">cargando…</span>
-        </div>
+    <!-- The first run. The server decides this (`unconfigured`), the page only
+         shows it: a browser working it out from the backend name would be a second
+         copy of a rule that already has one. -->
+    <div :if="state.settings?.unconfigured" class="first-run">
+      <strong>Nothing says where this machine sends.</strong>
+      <p>
+        There is no provider in <code>config.toml</code> and no destination was
+        typed on the command line, so this server fell back to the mock — which
+        answers in sentences and is nowhere. Add one below, then start a
+        session on it.
+      </p>
+    </div>
+
+    <div class="ds-hero">
+      <div class="ds-hero-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="20" height="8" rx="2"/>
+          <rect x="2" y="14" width="20" height="8" rx="2"/>
+          <line x1="6" y1="6" x2="6.01" y2="6"/>
+          <line x1="6" y1="18" x2="6.01" y2="18"/>
+          <path d="M18 6h.01"/>
+          <path d="M18 18h.01"/>
+          <path d="M12 10v4"/>
+        </svg>
       </div>
-      <div class="status-stats-grid">
-        <div :each="i in [1, 2, 3, 4]" :key="i" class="stat-pill">
-          <span class="skeleton-bar" style="width: 4rem;"></span>
-          <span class="skeleton-bar" style="width: 6rem; height: 1.2rem; margin-top: .3rem;"></span>
-        </div>
+      <div class="ds-hero-body">
+        <h4 class="ds-hero-title">Modelos y proveedores</h4>
+        <p class="ds-hero-desc">Destino activo de inferencia y perfiles configurados (Ollama, OpenAI, llama-server y remotos).</p>
       </div>
     </div>
 
-    <div class="models-status-card" :if="state.settings">
-      <div class="status-card-header">
-        <div class="status-badge-group">
-          <span class="status-pulse-dot" :class.active="state.settings.backend !== 'mock'"></span>
-          <span class="status-backend-pill">{{ state.settings.backend }}</span>
-          <span :if="state.settings.profile" class="status-profile-pill">{{ state.settings.profile }}</span>
-          <span :if="state.settings.remote" class="tag warn">remoto</span>
-          <span :if="!state.settings.destination" class="tag dim">mock</span>
-          <span :if="ui.reach?.verdict === 'missing'" class="tag warn">{{ ui.reach?.detail }}</span>
+    <section class="pane-group">
+      <h3>Destino activo de la sesión</h3>
+      <p class="dim small">
+        No requiere reiniciar. El botón <strong>use →</strong> conmuta la sesión viva al perfil seleccionado.
+      </p>
+
+      <div class="models-status-card" :if="!state.settings">
+        <div class="status-card-header">
+          <div class="status-badge-group">
+            <span class="skeleton-bar" style="width: 5rem;"></span>
+            <span class="skeleton-badge skeleton-pulse">cargando…</span>
+          </div>
         </div>
-        <div class="status-model-badge" :if="state.settings.model">
-          <code>{{ state.settings.model }}</code>
+        <div class="status-stats-grid">
+          <div :each="i in [1, 2, 3, 4]" :key="i" class="stat-pill">
+            <span class="skeleton-bar" style="width: 4rem;"></span>
+            <span class="skeleton-bar" style="width: 6rem; height: 1.2rem; margin-top: .3rem;"></span>
+          </div>
         </div>
       </div>
 
-      <div class="status-stats-grid">
-        <div class="stat-pill">
-          <span class="stat-label">Ventana de tokens</span>
-          <strong class="stat-value">{{ state.settings.window ? state.settings.window + ' tokens' : 'Sin límite' }}</strong>
-          <span class="stat-sub dim">{{ state.settings.reserve }} reservados · {{ windowSource }}</span>
+      <div class="models-status-card" :if="state.settings">
+        <div class="status-card-header">
+          <div class="status-badge-group">
+            <span class="status-pulse-dot" :class.active="state.settings.backend !== 'mock'"></span>
+            <span class="status-backend-pill">{{ state.settings.backend }}</span>
+            <span :if="state.settings.profile" class="status-profile-pill">{{ state.settings.profile }}</span>
+            <span :if="state.settings.remote" class="tag warn">remoto</span>
+            <span :if="!state.settings.destination" class="tag dim">mock</span>
+            <span :if="ui.reach?.verdict === 'missing'" class="tag warn">{{ ui.reach?.detail }}</span>
+          </div>
+          <div class="status-model-badge" :if="state.settings.model">
+            <code>{{ state.settings.model }}</code>
+          </div>
         </div>
-        <div class="stat-pill">
-          <span class="stat-label">Conteo de contexto</span>
-          <strong class="stat-value">{{ state.settings.counter?.kind === 'model' ? state.settings.counter.id : 'Aproximado' }}</strong>
-          <span class="stat-sub dim">map {{ state.settings.map_tokens || 0 }} · select {{ state.settings.select_tokens || 0 }}</span>
+
+        <div class="status-stats-grid">
+          <div class="stat-pill">
+            <span class="stat-label">Ventana de tokens</span>
+            <strong class="stat-value">{{ state.settings.window ? state.settings.window + ' tokens' : 'Sin límite' }}</strong>
+            <span class="stat-sub dim">{{ state.settings.reserve }} reservados · {{ windowSource }}</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Conteo de contexto</span>
+            <strong class="stat-value">{{ state.settings.counter?.kind === 'model' ? state.settings.counter.id : 'Aproximado' }}</strong>
+            <span class="stat-sub dim">map {{ state.settings.map_tokens || 0 }} · select {{ state.settings.select_tokens || 0 }}</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Sandbox / Postura</span>
+            <strong class="stat-value">{{ state.settings.posture?.name || 'Servidor host' }}</strong>
+            <span class="stat-sub dim">{{ state.settings.posture?.runtime || 'host' }} · {{ state.settings.posture?.enforcement || 'kernel' }}</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">Sesión / Almacén</span>
+            <strong class="stat-value">{{ state.settings.store ? 'Almacenado' : 'Solo memoria' }}</strong>
+            <span class="stat-sub dim">
+              <PathText :if="state.settings.store" :path="state.settings.store" :home="state.settings.home" />
+              <span :if="!state.settings.store">memoria</span>
+            </span>
+          </div>
         </div>
-        <div class="stat-pill">
-          <span class="stat-label">Sandbox / Postura</span>
-          <strong class="stat-value">{{ state.settings.posture?.name || 'Servidor host' }}</strong>
-          <span class="stat-sub dim">{{ state.settings.posture?.runtime || 'host' }} · {{ state.settings.posture?.enforcement || 'kernel' }}</span>
-        </div>
-        <div class="stat-pill">
-          <span class="stat-label">Sesión / Almacén</span>
-          <strong class="stat-value">{{ state.settings.store ? 'Almacenado' : 'Solo memoria' }}</strong>
-          <span class="stat-sub dim">
-            <PathText :if="state.settings.store" :path="state.settings.store" :home="state.settings.home" />
-            <span :if="!state.settings.store">memoria</span>
-          </span>
-        </div>
+
+        <details class="sandbox-toggle" :if="state.settings?.sandbox">
+          <summary class="dim">Inspeccionar sandbox activo</summary>
+          <Scrollable :y="true" frame="well" max="10rem"><pre class="sandbox">{{ state.settings.sandbox }}</pre></Scrollable>
+        </details>
       </div>
+    </section>
 
-      <details class="sandbox-toggle" :if="state.settings?.sandbox">
-        <summary class="dim">Inspeccionar sandbox activo</summary>
-        <Scrollable :y="true" frame="well" max="10rem"><pre class="sandbox">{{ state.settings.sandbox }}</pre></Scrollable>
-      </details>
-    </div>
+    <section class="pane-group">
+      <h3>Providers</h3>
+      <p class="dim small" :if="state.providers?.path">
+        <PathText :path="state.providers.path" :home="state.settings?.home" />
+        <span :if="state.providers.running">· the live session is on <strong>{{ state.providers.running }}</strong></span>
+      </p>
+      <!-- The file's default moved and the live session did not: the server says
+           why, and the one button is the one that moves it by choice. -->
+      <p :if="state.providers?.waiting" class="refused">
+        The default is <strong>{{ state.providers.default || "the mock" }}</strong> and the
+        live session stayed where it was: {{ state.providers.waiting }}.
+        <button type="button" class="link" :if="state.providers.default"
+                @click="openStarter(state.providers.default)">move it →</button>
+      </p>
+      <p :if="state.providers && !state.providers.editable" class="refused">
+        {{ state.providers.refused }}
+      </p>
+      <p :if="state.providersError" class="error">{{ state.providersError }}</p>
 
-    <h3>Providers</h3>
-    <p class="dim small" :if="state.providers?.path">
-      <PathText :path="state.providers.path" :home="state.settings?.home" />
-      <span :if="state.providers.running">· the live session is on <strong>{{ state.providers.running }}</strong></span>
-    </p>
-    <!-- The file's default moved and the live session did not: the server says
-         why, and the one button is the one that moves it by choice. -->
-    <p :if="state.providers?.waiting" class="refused">
-      The default is <strong>{{ state.providers.default || "the mock" }}</strong> and the
-      live session stayed where it was: {{ state.providers.waiting }}.
-      <button type="button" class="link" :if="state.providers.default"
-              @click="openStarter(state.providers.default)">move it →</button>
-    </p>
-    <p :if="state.providers && !state.providers.editable" class="refused">
-      {{ state.providers.refused }}
-    </p>
-    <p :if="state.providersError" class="error">{{ state.providersError }}</p>
+      <p :if="defaultError" class="error">{{ defaultError }}</p>
 
-    <p :if="defaultError" class="error">{{ defaultError }}</p>
+      <!-- One row per profile in the file, read-only: a click on *edit* opens its
+           form. The built-in mock first, because "no default" in the file is it. -->
+      <ul class="providers">
+        <li :if="!state.providers" class="profile">
+          <div class="who">
+            <span class="skeleton-bar" style="width: 6rem;"></span>
+            <span class="skeleton-bar" style="width: 14rem;"></span>
+          </div>
+          <div class="tags">
+            <span class="skeleton-badge skeleton-pulse">cargando…</span>
+          </div>
+        </li>
+        <li class="builtin" :class.default="!state.providers?.default">
+          <div class="who">
+            <strong>mock</strong>
+            <span class="dim">built in — what a run with no default falls back to. It answers in
+              sentences and sends nowhere.</span>
+          </div>
+          <div class="tags">
+            <span :if="!state.providers?.default" class="tag default">default</span>
+            <span :if="runningMock" class="tag" title="What this server is sending to">running</span>
+          </div>
+          <div class="acts">
+            <button type="button" class="link" :if="state.providers?.default" :disabled="!editable"
+                    @click="makeDefault('')">make default</button>
+          </div>
+        </li>
+        <li :each="name in profileNames" :key="name" class="profile"
+            :class.default="state.providers?.default === name">
+          <div class="who">
+            <strong class="name">{{ name }}</strong>
+            <span class="dim">
+              {{ state.providers.providers[name].backend || "ollama" }}
+              <span :if="state.providers.providers[name].url">· {{ state.providers.providers[name].url }}</span>
+              <span :if="state.providers.providers[name].model">· {{ state.providers.providers[name].model }}</span>
+              <span :if="state.providers.providers[name]['context-limit']">· {{ state.providers.providers[name]["context-limit"] }} tokens</span>
+              <span :if="state.providers.providers[name]['tool-calls'] === 'native'">· native tools</span>
+            </span>
+          </div>
+          <div class="tags">
+            <span :if="state.providers?.default === name" class="tag default">default</span>
+            <span :if="name === state.providers?.running" class="tag" title="What this server is sending to">running</span>
+            <span :if="state.providers.providers[name].remote" class="tag warn" title="Declared as off this machine">remote</span>
+            <span :if="state.providers.providers[name].engine" class="tag"
+                  :title="`luu starts [engine.${state.providers.providers[name].engine}] before a session sends here`">engine</span>
+          </div>
+          <div class="acts">
+            <button type="button" class="link" :if="state.providers?.default !== name" :disabled="!editable"
+                    @click="makeDefault(name)">make default</button>
+            <button type="button" class="link" title="Start a session on this provider"
+                    @click="openStarter(name)">use →</button>
+            <button type="button" class="link edit" :disabled="!editable" @click="openForm(name)">edit</button>
+          </div>
+        </li>
+      </ul>    </section>
 
-    <!-- One row per profile in the file, read-only: a click on *edit* opens its
-         form. The built-in mock first, because "no default" in the file is it. -->
-    <ul class="providers">
-      <li :if="!state.providers" class="profile">
-        <div class="who">
-          <span class="skeleton-bar" style="width: 6rem;"></span>
-          <span class="skeleton-bar" style="width: 14rem;"></span>
-        </div>
-        <div class="tags">
-          <span class="skeleton-badge skeleton-pulse">cargando…</span>
-        </div>
-      </li>
-      <li class="builtin" :class.default="!state.providers?.default">
-        <div class="who">
-          <strong>mock</strong>
-          <span class="dim">built in — what a run with no default falls back to. It answers in
-            sentences and sends nowhere.</span>
-        </div>
-        <div class="tags">
-          <span :if="!state.providers?.default" class="tag default">default</span>
-          <span :if="runningMock" class="tag" title="What this server is sending to">running</span>
-        </div>
-        <div class="acts">
-          <button type="button" class="link" :if="state.providers?.default" :disabled="!editable"
-                  @click="makeDefault('')">make default</button>
-        </div>
-      </li>
-      <li :each="name in profileNames" :key="name" class="profile"
-          :class.default="state.providers?.default === name">
-        <div class="who">
-          <strong class="name">{{ name }}</strong>
-          <span class="dim">
-            {{ state.providers.providers[name].backend || "ollama" }}
-            <span :if="state.providers.providers[name].url">· {{ state.providers.providers[name].url }}</span>
-            <span :if="state.providers.providers[name].model">· {{ state.providers.providers[name].model }}</span>
-            <span :if="state.providers.providers[name]['context-limit']">· {{ state.providers.providers[name]["context-limit"] }} tokens</span>
-            <span :if="state.providers.providers[name]['tool-calls'] === 'native'">· native tools</span>
-          </span>
-        </div>
-        <div class="tags">
-          <span :if="state.providers?.default === name" class="tag default">default</span>
-          <span :if="name === state.providers?.running" class="tag" title="What this server is sending to">running</span>
-          <span :if="state.providers.providers[name].remote" class="tag warn" title="Declared as off this machine">remote</span>
-          <span :if="state.providers.providers[name].engine" class="tag"
-                :title="`luu starts [engine.${state.providers.providers[name].engine}] before a session sends here`">engine</span>
-        </div>
-        <div class="acts">
-          <button type="button" class="link" :if="state.providers?.default !== name" :disabled="!editable"
-                  @click="makeDefault(name)">make default</button>
-          <button type="button" class="link" title="Start a session on this provider"
-                  @click="openStarter(name)">use →</button>
-          <button type="button" class="link edit" :disabled="!editable" @click="openForm(name)">edit</button>
-        </div>
-      </li>
-    </ul>
   </div>
 
   <!-- Pinned to the bottom of the pane, where it is the same distance away
@@ -251,16 +255,14 @@
     flex-direction: column;
     flex: 1 0 auto;
   }
-  /* The section pads its content and its foot, each its own; the pane they
-     sit in pads nothing. */
-  .pane-main { padding: 1.25rem 1.75rem 1.5rem; }
+  /* The foot pads itself, beside a `.pane-main` that pads the content; the
+     pane they sit in pads nothing. */
   .modal-foot { padding: .2rem 1.75rem 0; }
   .models-status-card {
     background: var(--panel, #ffffff);
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: .85rem 1rem;
-    margin: .6rem 0 .9rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
   }
   .status-card-header {
@@ -339,10 +341,8 @@
     font-size: 11px;
     line-height: 1.2;
   }
-  h3:first-child { margin-top: 0; }
   .providers {
     list-style: none;
-    margin: .5rem 0 0;
     padding: 0;
     border: 1px solid var(--line);
     border-radius: 8px;

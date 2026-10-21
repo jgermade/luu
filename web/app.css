@@ -422,6 +422,14 @@ pre {
    a padding with negative margins, which is how a gap above it was lost. */
 .modal-body { padding: 0; overflow: auto; display: flex; flex-direction: column; scroll-padding-bottom: 4rem; }
 .modal-main { padding: 1rem; flex: 1 0 auto; }
+/* A Settings section's content: a column whose **gap is the only space**
+   between its blocks — the hero, then each heading grouped with what it heads
+   (`.pane-group`), closer together. The blocks bring no vertical margin of
+   their own; the reset is for the page-wide ones (`h3`, `p`, `.refused`,
+   `.error`) that keep theirs everywhere else. */
+.pane-main { padding: 1.25rem 1.75rem 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+.pane-group { display: flex; flex-direction: column; gap: .6rem; }
+.modal-body :is(.pane-main, .pane-group) > * { margin-block: 0; }
 /* A body with a pinned foot keeps its grey, which moves with it; what a bounce
    uncovers is the parent's, and the parent is grey above and white below — the
    top of the content and the white foot at its bottom. Normally covered whole
@@ -525,7 +533,6 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
 /* The first run. Loud on purpose and once: a page that opens on a chat box
    answering from a fixture is the one thing this says out loud. */
 .first-run {
-  margin: 0 0 1rem;
   padding: .7rem .9rem;
   border: 1px solid var(--warn);
   border-left-width: 3px;
@@ -684,7 +691,6 @@ html.resizing, html.resizing * { cursor: col-resize !important; user-select: non
   align-items: center;
   gap: 1.25rem;
   padding: 1.1rem 1.35rem;
-  margin: 0 0 1.25rem;
   background: color-mix(in srgb, var(--panel) 75%, var(--bg));
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -848,7 +854,6 @@ html.resizing, html.resizing * { cursor: col-resize !important; user-select: non
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: .65rem;
-  margin: .85rem 0 1.15rem;
 }
 .ds-flow-step {
   border: 1px solid var(--line);
