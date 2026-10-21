@@ -1559,7 +1559,10 @@
   .status.closed { color: var(--bad); }
 
   /* ---- the chat's head: a name, and three things beside it -------------- */
-  .chat .col-head { position: relative; }
+  /* Not positioned: the history popover hangs below the head, and a head that
+     was its containing block clipped it to the 2px left above its border —
+     the bar is `overflow: hidden` so that nothing in it wraps. The column
+     (`.col`, positioned) holds it instead, at the same place. */
   .name, .name-edit {
     min-width: 0;
     flex: 1;
@@ -1605,7 +1608,8 @@
   /* Two columns chosen here: lit, so the head says the page is narrowed. */
   .acts .columns.on { color: var(--accent); }
 
-  /* The old tab strip, as a popover under the clock. */
+  /* The old tab strip, as a popover under the clock, placed against the chat
+     column rather than its head — see above. */
   .history {
     position: absolute;
     top: calc(var(--chrome-h) - 2px);

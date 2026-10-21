@@ -171,3 +171,26 @@ test("a call written while thinking is not run, and the thinking is folded", asy
   await expect(answer.locator(".parts .text").last()).toHaveText("Done.", { timeout: 10_000 })
   expect(errors).toEqual([])
 })
+
+/**
+ * The clock in the chat's head opens the earlier sessions under it, on
+ * screen. `toBeVisible` cannot tell a popover clipped by an `overflow: hidden`
+ * parent from one that shows — this one was, to 2px, for weeks — so what is
+ * asked is what the screen has at the popover's middle.
+ */
+test("the earlier sessions open under the clock, and are not clipped", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  await page.click('button[title="Earlier sessions"]')
+  const popover = page.locator(".chat .history")
+  await expect(popover.locator(".row")).not.toHaveCount(0)
+  const seen = await popover.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    return { height: box.height, inside: element.contains(top) }
+  })
+  expect(seen.height).toBeGreaterThan(20)
+  expect(seen.inside).toBe(true)
+})
