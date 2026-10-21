@@ -1416,7 +1416,7 @@ Server stack: `axum` + `tokio`.
 ### UI stack
 
 **[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.** Vendored at
-`web/vendor/jq79.js`, version 0.7.4, with its source map beside it, which binds attributes one
+`web/vendor/jq79.js`, version 0.7.5, with its source map beside it, which binds attributes one
 at a time (`:title="x"`); `:attrs` went in 0.7. See
 [`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
 **0.7.4 keeps a keyed `:each` row that is handed a new object**, re-running its bindings rather
@@ -1424,11 +1424,10 @@ than rebuilding it, and has an unmount hook (`$destroyed`) that luu's components
 listeners and observers with. luu's lists also keep the objects of rows that did not change
 (`helpers/rows.js`), so a token or an opened folder leaves every other row alone. See
 [`RECORD/2026-10-02.jq79-0.7.4-and-rows-that-stay.completed.md`](RECORD/2026-10-02.jq79-0.7.4-and-rows-that-stay.completed.md).
-**One line in it is luu's, not jq79's**: a bare `.html` specifier (`@web/components/modal.html`)
-is resolved with `import.meta.resolve`, so it goes through the import map the way a `.js` one
-does; jq79 hands it to `fetch`, which never reads one. The source map is corrected for that line.
-It goes upstream, and the vendored copy is replaced when it lands. See
-[`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
+**0.7.5 resolves a bare `.html` specifier through the import map** (`@web/components/modal.html`),
+with `import.meta.resolve`, the way a `.js` one already was; `fetch` never reads one. That was a
+line luu patched into the vendored file, and the vendored copy is now jq79's own, byte for byte.
+See [`RECORD/2026-10-21.jq79-0.7.5.completed.md`](RECORD/2026-10-21.jq79-0.7.5.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
 frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
