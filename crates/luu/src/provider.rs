@@ -405,7 +405,7 @@ pub struct Sessions {
     /// Whether a session nobody named is given a name by its own model, from
     /// its first prompt, when its first turn ends. On unless the file says
     /// `false`: it is a call per session, and on a hosted API that is money.
-    /// See `RECORD/2026-10-21.sessions-that-name-themselves.WIP.md`.
+    /// See `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
     #[serde(default = "enabled")]
     pub auto_name: bool,
 }

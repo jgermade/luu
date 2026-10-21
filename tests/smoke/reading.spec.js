@@ -173,20 +173,20 @@ test("a call written while thinking is not run, and the thinking is folded", asy
 })
 
 /**
- * The clock in the chat's head opens the earlier sessions under it, on
- * screen. `toBeVisible` cannot tell a popover clipped by an `overflow: hidden`
- * parent from one that shows — this one was, to 2px, for weeks — so what is
- * asked is what the screen has at the popover's middle.
+ * The clock in the chat's head opens the earlier sessions, on screen.
+ * `toBeVisible` cannot tell a list clipped by an `overflow: hidden` parent
+ * from one that shows — the popover this was until 2026-10-21 was, to 2px,
+ * for weeks — so what is asked is what the screen has at the list's middle.
  */
-test("the earlier sessions open under the clock, and are not clipped", async ({ page }) => {
+test("the earlier sessions open from the clock, and are on screen", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
 
   await page.click('button[title="Earlier sessions"]')
-  const popover = page.locator(".chat .history")
-  await expect(popover.locator(".row")).not.toHaveCount(0)
-  const seen = await popover.evaluate(element => {
+  const list = page.getByRole("dialog", { name: "Sessions" }).locator("ul.sessions")
+  await expect(list.locator("li")).not.toHaveCount(0)
+  const seen = await list.evaluate(element => {
     const box = element.getBoundingClientRect()
     const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
     return { height: box.height, inside: element.contains(top) }

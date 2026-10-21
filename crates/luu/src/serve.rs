@@ -3479,6 +3479,9 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         _ => None,
     };
 
+    // What a session nobody named is named from, once this turn is over —
+    // see [`name_session`]. Kept before the task takes the prompt.
+    let named_from = prompt.clone();
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel(256);
         let forwarder = {
@@ -3666,7 +3669,162 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         if let Some(proposal) = parse_plan(&answered) {
             offer(&app, proposal, PlanSource::Model).await;
         }
+
+        // Last, so it never holds up the turn: a session's first turn is over
+        // and the person has the answer before a title is asked for.
+        name_session(
+            app.clone(),
+            sending.backend.clone(),
+            sending.model.clone(),
+            sending.budget.limit,
+            named_from,
+        )
+        .await;
     });
+}
+
+/// What a session's own model is asked to be called by. See [`name_session`].
+const NAMING: &str = "Name the conversation below. Reply with only its title: two to six \
+                      words, in the language it is written in. No quotes, no final period.";
+
+/// How long a title may take. A thinking model thinks first, and the thinking
+/// is what this waits for; past it there is no name rather than a late one.
+const NAMING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether a session is still called by what it was born as: `live` in
+/// memory, its id once stored. A title anything else gave it is a name.
+fn unnamed(title: &str, id: &str) -> bool {
+    title == LIVE_SESSION || title == id || title.starts_with("session-")
+}
+
+/// A model's answer, as a title: the first line outside its thinking, without
+/// a label, quotes or a closing period, whitespace collapsed, at most sixty
+/// characters cut at a word. `None` for an answer with nothing in it, which
+/// names nothing rather than naming badly.
+fn tidy_title(answer: &str) -> Option<String> {
+    const MAX: usize = 60;
+    let visible = agent_core::tools::mask_thinking(answer);
+    // A label on a line of its own is not the title; the line after it is.
+    let line = visible
+        .lines()
+        .map(|line| {
+            // Markdown around a label as well as around the title:
+            // `**Title:** The name`.
+            let line = line.trim().trim_start_matches(['*', '#', '_', ' ']);
+            let line = ["Title:", "title:", "Título:", "Titulo:"]
+                .iter()
+                .find_map(|label| line.strip_prefix(label))
+                .unwrap_or(line);
+            line.trim_start_matches(['*', '_', ' '])
+                .trim()
+                .trim_matches(|c: char| "\"'`«»“”‘’*#".contains(c))
+                .trim()
+                .trim_end_matches(['.', ':', ';'])
+                .trim()
+        })
+        .find(|line| !line.is_empty())?;
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let mut title = String::new();
+    for word in &words {
+        if title.chars().count() + 1 + word.chars().count() > MAX {
+            break;
+        }
+        if !title.is_empty() {
+            title.push(' ');
+        }
+        title.push_str(word);
+    }
+    // One word longer than the limit is still a word: its first sixty.
+    if title.is_empty() {
+        title = words.first()?.chars().take(MAX).collect();
+    }
+    (!title.is_empty()).then_some(title)
+}
+
+/// A name for a session nobody named, asked of the destination it already
+/// sends to, from its first prompt, once its first turn has ended.
+///
+/// Nothing here can fail a turn: every way out is *no name*. Not on the mock,
+/// which answers from a script and would hand this call the next reply a test
+/// wrote; not where `[sessions] auto-name = false`; not over a title somebody
+/// gave; and not into a session that is no longer the one on screen. The
+/// request carries the turn's own window, because Ollama reloads a model asked
+/// for another `num_ctx`. See
+/// `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
+async fn name_session(
+    app: Arc<App>,
+    backend: Arc<dyn Backend>,
+    model: String,
+    window: Option<u32>,
+    prompt: String,
+) {
+    let id = app.session_id.lock().await.clone();
+    {
+        let view = app.view.lock().await;
+        if view.turns.len() != 1 || !unnamed(&view.title, &id) {
+            return;
+        }
+    }
+    if backend.name() == "mock" {
+        return;
+    }
+    let wanted = match load_config().await {
+        Ok((config, _)) => config.sessions().auto_name,
+        Err(_) => false,
+    };
+    if !wanted {
+        return;
+    }
+
+    let request = CompletionRequest {
+        model,
+        messages: vec![
+            agent_core::backend::Message::system(NAMING),
+            agent_core::backend::Message::user(prompt.chars().take(2000).collect::<String>()),
+        ],
+        context_limit: window,
+        ..Default::default()
+    };
+    // No field caps an answer's length, so the stream is read here and dropped
+    // — which drops the request — at the first full line outside the thinking.
+    let mut answer = String::new();
+    let read = async {
+        let mut stream = backend.stream(request);
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(agent_core::backend::Chunk::Text(text)) => {
+                    answer.push_str(&text);
+                    let visible = agent_core::tools::mask_thinking(&answer);
+                    if visible.trim_start().contains('\n') && tidy_title(&answer).is_some() {
+                        break;
+                    }
+                }
+                Ok(agent_core::backend::Chunk::Done { .. }) => break,
+                Err(_) => {
+                    answer.clear();
+                    break;
+                }
+            }
+        }
+    };
+    let _ = tokio::time::timeout(NAMING_TIMEOUT, read).await;
+    let Some(title) = tidy_title(&answer) else {
+        return;
+    };
+
+    // The session may have moved on while the model answered: another one
+    // opened, or a name given by hand.
+    if *app.session_id.lock().await != id {
+        return;
+    }
+    {
+        let mut view = app.view.lock().await;
+        if !unnamed(&view.title, &id) {
+            return;
+        }
+        view.title = title;
+    }
+    app.checkpoint().await;
 }
 
 /// The plan a resumed session comes back holding, if a person never answered it.
@@ -7517,6 +7675,48 @@ mod tests {
     use agent_core::sandbox::SandboxPolicy;
 
     use super::*;
+
+    /// What comes back from the model, as the title a session gets: the
+    /// first line outside the thinking, without the decoration small models
+    /// put around a one-line answer, and nothing from an answer that is empty.
+    #[test]
+    fn a_model_s_answer_is_tidied_into_a_title() {
+        let t = |answer: &str| tidy_title(answer);
+        assert_eq!(
+            t("Configurar un proveedor"),
+            Some("Configurar un proveedor".into())
+        );
+        assert_eq!(
+            t("\"Configurar un proveedor.\""),
+            Some("Configurar un proveedor".into())
+        );
+        assert_eq!(
+            t("**Title:** Fixing the menu height"),
+            Some("Fixing the menu height".into())
+        );
+        assert_eq!(
+            t("Title:\nFixing the menu height\nmore"),
+            Some("Fixing the menu height".into())
+        );
+        assert_eq!(
+            t("<think>the user asks about keys</think>\n\nAPI keys in the form"),
+            Some("API keys in the form".into())
+        );
+        assert_eq!(t("<think>still thinking"), None);
+        assert_eq!(t("  \n "), None);
+        let long = "word ".repeat(30);
+        let cut = t(&long).unwrap();
+        assert!(cut.chars().count() <= 60 && !cut.ends_with(' '), "{cut:?}");
+        assert_eq!(t(&"x".repeat(80)).unwrap().chars().count(), 60);
+    }
+
+    /// Born `live`, stored as its id: both are no name yet; anything else is.
+    #[test]
+    fn a_session_is_unnamed_until_something_names_it() {
+        assert!(unnamed("live", "session-1-a"));
+        assert!(unnamed("session-1-a", "session-1-a"));
+        assert!(!unnamed("Configurar un proveedor", "session-1-a"));
+    }
 
     const PLAN: &str = "```plan\n{\"objective\":\"add a flag\",\"tasks\":[\"read the CLI\"],\
                         \"files\":[\"Cargo.toml\"],\"commands\":[]}\n```";

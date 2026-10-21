@@ -3,13 +3,13 @@
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approvePlan, declinePlan, requestPlan, closeJob, reopenJob,
-          resumeSession, deleteSession, renameSession, refreshSessionsList,
+          renameSession,
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
   const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
   const { workspace, loadRoot, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor } =
     await import("@web/lib/workspace.js")
-  const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
+  const { ui, openSettingsAt, openStarter, openHistory, checkModel,
           watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal } = await import("@web/lib/ui.js")
   const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
@@ -54,6 +54,7 @@
   const SettingsModal = await import("@web/views/settings/settings.html")
   const ModelPicker = await import("@web/views/chat/model-picker.html")
   const SessionStarter = await import("@web/views/chat/session-starter.html")
+  const SessionsModal = await import("@web/views/chat/sessions-modal.html")
   const ToolCall = await import("@web/views/chat/tool-call.html")
   const TurnInspect = await import("@web/views/chat/turn-inspect.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
@@ -185,28 +186,6 @@
     expanded = expanded.includes(id) ? expanded.filter(open => open !== id) : [...expanded, id]
   }
 
-  const onSwitchSession = id => {
-    closeHistory()
-    if (!id || id === state.currentSessionId) return
-    resumeSession(id)
-  }
-
-  // Closing a session here *is* deleting it — its stream and its fold, out of
-  // SQLite, with nothing that undoes it. So the × arms on the first click and
-  // deletes on the second, and a click anywhere else in the list disarms it. A
-  // `confirm()` would be one line and would also be the only browser dialog in
-  // a page that already has its own modals.
-  let armedClose = ""
-  const onCloseSession = (id, event) => {
-    event.stopPropagation()
-    if (armedClose !== id) {
-      armedClose = id
-      return
-    }
-    armedClose = ""
-    deleteSession(id)
-  }
-
   const submit = () => {
     send(draft)
     draft = ""
@@ -223,7 +202,8 @@
   //
   // One session is on screen, so a tab strip was spending a row to answer a
   // question — *which session* — that the column's head answers in words. The
-  // strip lives on as the history popover; this is the name, edited in place.
+  // strip lives on as the sessions modal behind the clock
+  // (`views/chat/sessions-modal.html`); this is the name, edited in place.
   let renaming = false
   let nameDraft = ""
   const startRename = () => {
@@ -269,12 +249,7 @@
     if (event.defaultPrevented) return
     if (event.target.closest?.(".terminal, #monaco-host")) return
     if (document.querySelector("dialog[open]")) return
-    if (ui.history) return closeHistory()
     if (renaming) return cancelRename()
-    if (armedClose) {
-      armedClose = ""
-      return
-    }
     const composer = document.querySelector(".composer input")
     if (showChat && composer && document.activeElement !== composer) return focusChat()
     // Three columns are all on screen, so there is nothing to swap.
@@ -355,25 +330,6 @@
     if (s?.title && s.title !== "live") return s.title
     return s?.id === "live" ? "Live session" : (s?.id || "")
   }
-  // The history in the order sessions were last written to — the server says
-  // when (`written_at`), the live row included — so opening one does not move
-  // it to the top; only writing in it does.
-  //
-  // A session nothing was ever sent in is left out — a *Start session* with no
-  // prompt after it, whose record is page loads and nothing else — unless it
-  // is the one on screen. They are the newest rows, they carry nothing to
-  // open, and named by their ids they were indistinguishable from the ones
-  // that do. Left out of the list, not out of the store.
-  $: history = [...(state.sessions || [])]
-    .filter(s => s.turns > 0 || s.id === state.currentSessionId)
-    .sort((a, b) => (b.written_at ?? b.started_at ?? 0) - (a.written_at ?? a.started_at ?? 0))
-  // Asked again each time it opens: the counts it shows move with every turn.
-  const toggleHistory = async () => {
-    if (ui.history) return closeHistory()
-    openHistory()
-    await refreshSessionsList()
-  }
-
   $: sessionName = nameOf(
     (state.sessions || []).find(s => s.id === state.currentSessionId)
       || { id: state.currentSessionId },
@@ -826,7 +782,7 @@
         <button type="button" title="New session — where it sends, and which model"
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
         <button type="button" title="Earlier sessions"
-                @click="toggleHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+                @click="openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
         <button type="button" class="copy-chat" :disabled="!state.messages.length"
                 :title="copiedChat ? 'Copied' : 'Copy the conversation'"
                 :aria-label="copiedChat ? 'Copied' : 'Copy the conversation'"
@@ -848,31 +804,6 @@
           @click="toggleColumns()"><svg class="ic"><use href="#i-dock"/></svg></button>
       </div>
 
-      <!-- The old tab strip, as a popover. Switching and deleting, which are
-           the two things the strip did. -->
-      <div :if="ui.history" class="history" @click="armedClose = ''">
-        <div :each="s in history" :key="s.id" class="row" :class.on="s.id === state.currentSessionId">
-          <button type="button" class="pick" :title="s.id" @click="onSwitchSession(s.id)">
-            {{ nameOf(s) }}
-            <span class="dim">{{ s.turns }}t</span>
-          </button>
-          <!-- Only where the server would take it: `delete_session_handler`
-               refuses the live session and the active one, and a control that is
-               only ever refused is worse than no control at all. -->
-          <button
-            :if="s.id !== 'live' && s.id !== state.currentSessionId"
-            type="button"
-            class="close"
-            :class.armed="armedClose === s.id"
-            :title="armedClose === s.id
-              ? 'Click again to delete this session and its stream'
-              : 'Delete this session'"
-            @click="onCloseSession(s.id, $event)">
-            <svg class="ic"><use href="#i-close"/></svg>
-          </button>
-        </div>
-        <p :if="!history.length" class="dim small">No sessions yet.</p>
-      </div>
     </header>
 
     <div class="chat-body">
@@ -1296,6 +1227,7 @@
 <Project :if="workspace.picker.open && !state.settingsOpen" />
 <SettingsModal :if="state.settingsOpen" />
 <SessionStarter :if="ui.starter && !state.settingsOpen" />
+<SessionsModal :if="ui.history" />
 <TurnInspect :if="ui.inspecting != null" />
 <ContextModal :if="ui.contextOpen" />
 <DiffModal :if="ui.diff" />
@@ -1578,10 +1510,9 @@
   .status.closed { color: var(--bad); }
 
   /* ---- the chat's head: a name, and three things beside it -------------- */
-  /* Not positioned: the history popover hangs below the head, and a head that
-     was its containing block clipped it to the 2px left above its border —
-     the bar is `overflow: hidden` so that nothing in it wraps. The column
-     (`.col`, positioned) holds it instead, at the same place. */
+  /* Not positioned, and nothing hangs from it: the bar is `overflow: hidden`
+     so that nothing in it wraps, which clipped the history when it was a
+     popover here to the 2px above the border. It is a modal now. */
   .name, .name-edit {
     min-width: 0;
     flex: 1;
@@ -1627,59 +1558,6 @@
   /* Two columns chosen here: lit, so the head says the page is narrowed. */
   .acts .columns.on { color: var(--accent); }
 
-  /* The old tab strip, as a popover under the clock, placed against the chat
-     column rather than its head — see above. */
-  .history {
-    position: absolute;
-    top: calc(var(--chrome-h) - 2px);
-    right: .4rem;
-    z-index: 20;
-    min-width: 18rem;
-    max-width: 26rem;
-    max-height: 60vh;
-    overflow-y: auto;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: .3rem;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
-  }
-  .history .row { display: flex; align-items: center; border-radius: 6px; }
-  .history .row:hover { background: var(--bg); }
-  .history .row.on .pick { color: var(--fg); font-weight: 600; }
-  .history .pick {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: baseline;
-    gap: .4rem;
-    background: none;
-    border: 0;
-    border-radius: 6px;
-    color: var(--dim);
-    font: inherit;
-    font-size: 13px;
-    padding: .3rem .5rem;
-    cursor: pointer;
-    text-align: left;
-  }
-  .history .pick .dim { font-size: 11px; font-variant-numeric: tabular-nums; }
-  .history .close {
-    background: none;
-    border: 0;
-    border-radius: 4px;
-    color: var(--dim);
-    padding: .2rem;
-    margin-right: .2rem;
-    cursor: pointer;
-    opacity: .5;
-  }
-  .history .close:hover { opacity: 1; background: var(--bg); }
-  /* Armed: one more click deletes the session, and the colour is the page's
-     own "this is the bad one". */
-  .history .close.armed { opacity: 1; color: var(--bad); background: var(--bg); }
-  .history .close .ic { width: 12px; height: 12px; }
-  .history p { margin: .4rem .5rem; }
 
   /* ---- the chat's body ------------------------------------------------- */
   .chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }

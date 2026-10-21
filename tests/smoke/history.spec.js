@@ -97,13 +97,20 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   // many turns it holds — which is what tells the two sessions apart here.
   // Polled: the popover asks for the list again as it opens, and draws the one
   // it had until the answer lands.
+  const dialog = page.getByRole("dialog", { name: "Sessions" })
   const rowsAre = async expected => {
     await page.click('button[title="Earlier sessions"]')
-    const pop = page.locator(".chat .history")
-    await expect.poll(() => pop.locator(".row").evaluateAll(all =>
-      all.map(row => (row.classList.contains("on") ? "*" : "") + row.querySelector(".dim").textContent.trim())))
+    await expect.poll(() => dialog.locator("ul.sessions li").evaluateAll(all =>
+      all.map(row => (row.classList.contains("on") ? "*" : "") +
+        row.querySelector(".facts").textContent.match(/(\d+) turns?/)[1] + "t")))
       .toEqual(expected)
+    await page.keyboard.press("Escape")
+    await expect(dialog).toHaveCount(0)
+  }
+  const pickOther = async () => {
     await page.click('button[title="Earlier sessions"]')
+    await dialog.locator("ul.sessions li:not(.on) .pick").first().click()
+    await expect(dialog).toHaveCount(0)
   }
 
   // A with one turn; then B, with one, which is the one written to last.
@@ -116,8 +123,7 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   await rowsAre(["*2t", "1t"])
 
   // A, picked: its turn is back, and it stays where it was.
-  await page.click('button[title="Earlier sessions"]')
-  await page.locator(".chat .history .row:not(.on) .pick").click()
+  await pickOther()
   await expect(page.locator(".transcript article.user .text")).toHaveText(["uno"])
   await rowsAre(["2t", "*1t"])
 
@@ -131,10 +137,23 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   await page.getByRole("dialog", { name: "Where a session sends" }).locator('button:has-text("Start session")').click()
   await expect(page.locator(".transcript article.user")).toHaveCount(0)
   await rowsAre(["*0t", "2t", "2t"])
-  await page.click('button[title="Earlier sessions"]')
-  await page.locator(".chat .history .row:not(.on) .pick").first().click()
+  await pickOther()
   await expect(page.locator(".transcript article.user .text")).toHaveText(["uno", "tres"])
   await rowsAre(["*2t", "2t"])
+
+  // Searched: a piece of one session's id finds that one, and nothing found
+  // says so.
+  await page.click('button[title="Earlier sessions"]')
+  const other = await dialog.locator("ul.sessions li:not(.on) .pick").first().getAttribute("title")
+  const search = dialog.locator('input[placeholder="Search by name"]')
+  await expect(search).toBeFocused()
+  await search.fill(other.slice(-8))
+  await expect(dialog.locator("ul.sessions li")).toHaveCount(1)
+  await expect(dialog.locator("ul.sessions li .pick")).toHaveAttribute("title", other)
+  await search.fill("nada-que-se-llame-así")
+  await expect(dialog.locator("ul.sessions li")).toHaveCount(0)
+  await expect(dialog).toContainText("No session matches")
+  await page.keyboard.press("Escape")
 
   expect(errors).toEqual([])
 })

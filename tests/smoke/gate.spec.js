@@ -534,12 +534,15 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   await expect(page.locator("svg.sprite symbol")).toHaveCount(23)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
-  // The history is the old strip. The live session cannot be deleted — the
-  // server refuses it — so the row that is on carries no ×.
+  // The history is the old strip, as a modal. The live session cannot be
+  // deleted — the server refuses it — so the row that is on carries no ×.
   await page.click('.chat .acts button[title="Earlier sessions"]')
-  await expect(page.locator(".chat .history .row").first()).toBeVisible()
-  await expect(page.locator(".chat .history .row.on")).toHaveCount(1)
-  await expect(page.locator(".chat .history .row.on .close")).toHaveCount(0)
+  const sessions = page.getByRole("dialog", { name: "Sessions" })
+  await expect(sessions.locator("ul.sessions li").first()).toBeVisible()
+  await expect(sessions.locator("ul.sessions li.on")).toHaveCount(1)
+  await expect(sessions.locator("ul.sessions li.on .close")).toHaveCount(0)
+  await page.keyboard.press("Escape")
+  await expect(sessions).toHaveCount(0)
 })
 
 /**

@@ -1088,10 +1088,15 @@ the screen somebody reads from. Dark stays the default for a browser with nothin
 because every screenshot and every record here was taken against it.
 
 **The chat has a name, not a tab strip.** One session is on screen, so a strip was spending a row
-to answer a question the head answers in words; the strip lives on as a history popover — in the
-order sessions were last **written** to, so opening one does not move it and a turn in it does
-(`written_at`, a store column since schema 4, which the live row carries from its own last turn) —
-and the
+to answer a question the head answers in words; the strip lives on as the **sessions modal**
+behind the clock — a search over the names and ids, and the list in the order sessions were last
+**written** to, so opening one does not move it and a turn in it does (`written_at`, a store
+column since schema 4, which the live row carries from its own last turn), with the sessions
+nothing was sent in left out. **A session names itself**: when its first turn ends and nobody
+named it, the server asks the same model for a two-to-six-word title from the first prompt, with
+the turn's own window, and drops the stream at the first line of answer or at sixty seconds —
+never over a name somebody gave, never on the mock, and not at all under `[sessions] auto-name =
+false`. See [`RECORD/2026-10-21.sessions-that-name-themselves.completed.md`](RECORD/2026-10-21.sessions-that-name-themselves.completed.md). The
 name is editable in place — `PATCH /api/sessions/{id}`, the only thing the page may change about
 a stored session other than deleting it. It refuses an empty title, and it patches the two places
 a title lives (the listing's column and the fold's blob) rather than going through `save`, which

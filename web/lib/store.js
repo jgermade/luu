@@ -477,6 +477,9 @@ function onProtocol(message) {
       }
       state.turn = null
       state.status = idle()
+      // The first turn of a session nobody named is when the server asks its
+      // model for a name.
+      if (!isReplay && state.messages.filter(m => m.role === "user").length === 1) watchForName()
       // A window the server said is learned in the background, after the
       // session starts; the end of a turn is when the page asks again, so the
       // context indicator is not left reading `/ —` over a window luu knows.
@@ -1308,6 +1311,29 @@ export async function refreshLiveSession() {
   } catch {
     // Ignore fetch failure
   }
+}
+
+/// A session nobody named is given one by its own model a moment after its
+/// first turn ends (`serve::name_session`). Nothing on the wire says when, so
+/// the list is asked for again a few times, further apart each time, and the
+/// asking stops at the name or after half a minute. See
+/// `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
+const named = s => !!s?.title && s.title !== "live" && !s.title.startsWith("session-")
+let naming = null
+function watchForName() {
+  if (naming) return
+  const delays = [1500, 3000, 5000, 8000, 12000]
+  let i = 0
+  const next = async () => {
+    await refreshSessionsList()
+    const current = (state.sessions || []).find(s => s.id === state.currentSessionId)
+    if (named(current) || i >= delays.length) {
+      naming = null
+      return
+    }
+    naming = setTimeout(next, delays[i++])
+  }
+  naming = setTimeout(next, 500)
 }
 
 export async function refreshSessionsList() {
