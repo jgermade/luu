@@ -1,16 +1,17 @@
 <script :setup="{ taken = [], editing = '', defaulting = false, saved = null, close = null }">
-  // A provider, added or edited: a form of its own over Settings. The list in
-  // Models is read-only and this is where a profile is written — it used to
-  // be a seven-column table of inputs with a save button under it.
+  // A provider, added or edited, in two halves: **where it is** — name,
+  // backend, URL, key — and, once Connect has spoken to it, **what it serves**:
+  // every model it lists, grouped by what the server says of its tools, with
+  // a window each and the default among them. The first half folds into one
+  // line when the second has something to show. See
+  // `RECORD/2026-10-21.connecting-a-provider.completed.md`.
   //
   // **It writes one profile and nothing else.** The body is the file as the
   // server last answered it, with this profile put in (or, for an edit, put in
-  // place of the one it was), so nothing else in the file moves. `taken` is
-  // every name in the file. `editing` is the name being edited, `""` to add
-  // one; `defaulting` opens it with *default* already ticked, which is how the
-  // list asks for a remote default to be confirmed here. `saved(name)` is told
-  // what was written.
-  const { state, saveProviders, probeProvider } = await import("@web/lib/store.js")
+  // place of the one it was). `taken` is every name in the file, `editing` the
+  // one being edited (`""` to add), `defaulting` opens it with *default*
+  // ticked, and `saved(name)` is told what was written.
+  const { state, saveProviders, probeProvider, providerModels } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
   const TextInput = await import("@web/components/text-input.html")
   const SelectInput = await import("@web/components/select-input.html")
@@ -23,80 +24,224 @@
   // than a value: the server fills the same default in, and a URL the person
   // never typed should not be written into their file as if they had.
   const BACKENDS = [
-    { value: "ollama", label: "Ollama", url: "http://127.0.0.1:11434" },
+    { value: "ollama", label: "Ollama", short: "Ollama", url: "http://127.0.0.1:11434" },
     {
       value: "openai",
       label: "OpenAI-compatible — llama-server, vLLM, LM Studio, a hosted API",
+      short: "OpenAI-compatible",
       url: "http://127.0.0.1:8080/v1",
     },
-    { value: "mock", label: "Mock — answers in sentences, sends nowhere", url: "" },
+    { value: "mock", label: "Mock — answers in sentences, sends nowhere", short: "Mock", url: "" },
   ]
 
   // The profile as the file has it, for an edit. `remote` and `engine` are
   // not fields here and are carried through: `remote` is only ever written
   // after the host was typed, and `engine` is Settings → Engines' to set.
   const was = editing ? state.providers?.providers?.[editing] || {} : {}
+  const saved_entries = was.models || {}
+
+  // ---- the first half: where it is ------------------------------------
 
   let name = editing
   let backend = was.backend || "ollama"
   let url = was.url || ""
-  let model = was.model || ""
-  let contextLimit = was["context-limit"] ?? ""
   let keyFile = was["key-file"] || ""
   // The key itself, which is the one thing here that is never read back: the
   // server writes it to `keyFile` at 0600 and the file never comes to the page.
   // Empty on an edit means *leave the file alone*, not *clear the key*.
   let keyValue = ""
-  // What the server could say about the key on disk without saying the key:
-  // `sk-…cdef`, and whichever of "no file" or "anyone can read it" applies.
   const key = editing ? state.providers?.keys?.[editing] || null : null
-  let toolCalls = was["tool-calls"] === "native" ? "native" : ""
   let makeDefault = defaulting || (!!editing && state.providers?.default === editing)
+
+  // ---- the second half: what it serves --------------------------------
+
+  // `{ models, facts, error }`, from Connect or, on an edit, from the saved
+  // provider. Null is *not connected*, and then the second half is not drawn
+  // and a save leaves whatever the file held for it alone.
+  let list = null
+  let connecting = false
+  // The first half unfolded again after a connection: *Change*.
+  let changing = false
+  // A provider whose server luu starts lists this machine's models, which
+  // Settings → Engines is where to choose; it does not connect from here.
+  const engineOwned = !!was.engine
+
+  // The default model; "" is none chosen, which is *the first listed*.
+  let defaultModel = was.model || ""
+  // Same window for every model: the profile's `context-limit`. Otherwise one
+  // per model, in `windows`, and the profile has none.
+  const savedWindows = Object.fromEntries(Object.entries(saved_entries)
+    .filter(([, e]) => e["context-limit"] != null)
+    .map(([m, e]) => [m, String(e["context-limit"])]))
+  let sameWindow = was["context-limit"] != null && !Object.keys(savedWindows).length
+  let commonWindow = was["context-limit"] != null ? String(was["context-limit"]) : ""
+  let windows = savedWindows
+  // A transport chosen by hand, by model; absent is what the server's answer
+  // implies.
+  let transports = Object.fromEntries(Object.entries(saved_entries)
+    .filter(([, e]) => e["tool-calls"])
+    .map(([m, e]) => [m, e["tool-calls"]]))
+  // Switched off in the file, for a reason this form did not give.
+  const savedOff = Object.entries(saved_entries).filter(([, e]) => e.enabled === false).map(([m]) => m)
+  // Leave the models the server says have no tools out of the pickers.
+  let leaveOut = null
+
   // Removing asks twice: the first click arms it.
   let armed = false
   let saving = false
   let error = null
-  // The one refusal a person can answer: the same `{ profile, host }` the
-  // table's foot asks for, here because this form is what caused it.
+  // The one refusal a person can answer: a remote default asks for its host.
   let declaration = null
   let typed = ""
-  // What the destination answered when it was last asked, which is only ever
-  // what is typed *right now* — any edit to the fields it was asked with
-  // throws it away rather than letting a stale list look like a fresh one.
-  let probe = null
-  let probing = false
-  const forget = () => { probe = null }
 
-  const test = async () => {
-    probing = true
-    probe = null
-    probe = await probeProvider({
+  $: chosen = BACKENDS.find(b => b.value === backend) || BACKENDS[0]
+  $: trimmed = name.trim()
+  $: clash = !!trimmed && trimmed !== editing && taken.includes(trimmed)
+  $: folded = !!list && !changing
+  $: host = (() => {
+    try { return new URL(url.trim() || chosen.url).host } catch { return url.trim() || chosen.url }
+  })()
+
+  // Any edit to what the answer was asked with throws it away rather than
+  // letting a list for the old destination pass for one for the new.
+  const forget = () => { if (list && !list.saved) list = null; declaration = null }
+
+  const connect = async () => {
+    connecting = true
+    error = null
+    const answer = await probeProvider({
       backend,
       ...(url.trim() ? { url: url.trim() } : {}),
       ...(keyValue.trim() ? { key: keyValue } : {}),
       ...(!keyValue.trim() && keyFile.trim() ? { key_file: keyFile.trim() } : {}),
     })
-    probing = false
-    // Nothing is chosen for them: a probe that lists one model still leaves
-    // the field as it was, because the field is what a session starts on and
-    // the person may have meant another.
+    connecting = false
+    if (answer.error) {
+      error = answer.error
+      // A server that wants a key says so with a 401: that is the field.
+      if (/\b401\b/.test(answer.error) && backend === "openai") $self('input[type="password"]')?.focus()
+      return
+    }
+    list = { models: answer.models || [], facts: answer.facts || {} }
+    changing = false
   }
 
-  $: chosen = BACKENDS.find(b => b.value === backend) || BACKENDS[0]
-  $: trimmed = name.trim()
-  $: clash = !!trimmed && trimmed !== editing && taken.includes(trimmed)
-  $: canAdd = !!trimmed && !clash && !saving && (!declaration || typed.trim() === declaration.host)
+  // An edit opens folded, on the provider as saved, and asks it what it
+  // serves — the request the chat's picker already makes, with the facts.
+  if (editing && !engineOwned) {
+    list = { models: [], facts: {}, saved: true, loading: true }
+    providerModels(editing, { facts: true }).then(answer => {
+      list = answer.reason && !answer.models?.length
+        ? { models: [], facts: {}, saved: true, error: answer.reason }
+        : { models: answer.models || [], facts: answer.facts || {}, saved: true }
+    })
+  }
 
-  const profile = remote => ({
-    backend,
-    ...(backend !== "mock" && url.trim() ? { url: url.trim() } : {}),
-    ...(model.trim() ? { model: model.trim() } : {}),
-    ...(String(contextLimit).trim() ? { "context-limit": Number(contextLimit) } : {}),
-    ...(backend === "openai" && keyFile.trim() ? { "key-file": keyFile.trim() } : {}),
-    ...(backend !== "mock" && toolCalls === "native" ? { "tool-calls": "native" } : {}),
-    ...(remote ? { remote: true } : {}),
-    ...(was.engine ? { engine: was.engine } : {}),
+  // ---- the models, grouped ---------------------------------------------
+
+  const groupOf = m => {
+    const tools = list?.facts?.[m]?.tools
+    return tools === true ? "tools" : tools === false ? "none" : "unsaid"
+  }
+  $: listed = list?.models || []
+  $: hasTools = listed.some(m => groupOf(m) === "tools")
+  $: noTools = listed.filter(m => groupOf(m) === "none")
+  $: leaving = leaveOut ?? (noTools.length > 0 && noTools.every(m => savedOff.includes(m)))
+  // The profile's transport, for every model with no entry of its own: native
+  // where the server has models that take tools, since those need nothing
+  // written; otherwise what the file said.
+  $: profileTransport = hasTools ? "native" : (was["tool-calls"] === "native" ? "native" : "fenced")
+  const transportOf = m => transports[m]
+    || (groupOf(m) === "tools" ? "native" : groupOf(m) === "none" ? "fenced" : profileTransport)
+  const isOff = m => groupOf(m) === "none" ? leaving : savedOff.includes(m)
+
+  const ceilingOf = m => list?.facts?.[m]?.window || null
+  const overOf = (m, value) => {
+    const n = Number(String(value ?? "").trim())
+    return !!String(value ?? "").trim() && (!Number.isInteger(n) || n <= 0 || (ceilingOf(m) && n > ceilingOf(m)))
+  }
+  // The one number for every model may not pass any of their ceilings.
+  $: commonCeiling = listed.map(ceilingOf).filter(Boolean).reduce((a, b) => Math.min(a, b), Infinity)
+  $: commonOver = sameWindow && !!commonWindow.trim()
+    && (!(Number(commonWindow) > 0) || Number(commonWindow) > commonCeiling)
+
+  const HEADS = { tools: "Tools", unsaid: "Not said", none: "No tools" }
+  // Everything a row reads is an argument, because a `$:` runs again for what
+  // it names and not for what a function it calls happens to read.
+  const buildRows = (_list, _windows, _transports, _leaving, _default, _profileTransport) => ["tools", "unsaid", "none"].flatMap(group => {
+    const members = listed.filter(m => groupOf(m) === group)
+    if (!members.length) return []
+    return [
+      { key: `head:${group}`, kind: "head", label: HEADS[group] },
+      ...members.map(m => {
+        const facts = list?.facts?.[m] || {}
+        const transport = transportOf(m)
+        return {
+          key: m,
+          kind: "model",
+          name: m,
+          group,
+          off: isOff(m),
+          chosen: defaultModel === m,
+          window: windows[m] ?? "",
+          over: overOf(m, windows[m]),
+          placeholder: facts.window_is === "served" ? String(facts.window) : facts.window_is === "trained" ? "Ollama's" : "—",
+          hint: facts.window_is === "served"
+            ? `the server's ${facts.window}; lower is a budget`
+            : facts.window_is === "trained" ? `up to ${facts.window}` : "",
+          transport,
+          note: group === "tools" ? ""
+            : transport === "native" && group === "none" ? "the server says it has no tools: it will likely refuse the turn"
+            : transport === "fenced" ? "fenced: less precise" : "",
+        }
+      }),
+    ]
   })
+  $: rows = buildRows(list, windows, transports, leaving, defaultModel, profileTransport)
+  $: anyFenced = rows.some(r => r.kind === "model" && !r.off && r.group !== "tools" && r.transport === "fenced")
+  $: invalid = (!sameWindow && rows.some(r => r.kind === "model" && r.over)) || commonOver
+
+  const toggleDefault = m => { defaultModel = defaultModel === m ? "" : m }
+  const setWindow = (m, value) => { windows = { ...windows, [m]: value } }
+  const setTransport = (m, value) => { transports = { ...transports, [m]: value } }
+
+  $: canSave = !!trimmed && !clash && !saving && !invalid && !list?.loading
+    && (!declaration || typed.trim() === declaration.host)
+
+  // ---- writing it ------------------------------------------------------
+
+  const profile = remote => {
+    const out = {
+      backend,
+      ...(backend !== "mock" && url.trim() ? { url: url.trim() } : {}),
+      ...(backend === "openai" && keyFile.trim() ? { "key-file": keyFile.trim() } : {}),
+      ...(remote ? { remote: true } : {}),
+      ...(was.engine ? { engine: was.engine } : {}),
+    }
+    // Not connected: what the second half would have said is left as the
+    // file had it.
+    if (!list || list.error || list.loading) {
+      for (const k of ["model", "context-limit", "tool-calls", "models"]) {
+        if (was[k] !== undefined) out[k] = was[k]
+      }
+      return out
+    }
+    if (defaultModel) out.model = defaultModel
+    if (sameWindow && commonWindow.trim()) out["context-limit"] = Number(commonWindow)
+    if (profileTransport === "native") out["tool-calls"] = "native"
+    // Exceptions only. An entry for a model the server did not list now is
+    // kept: it was written down on purpose, and the server may be elsewhere.
+    const models = Object.fromEntries(Object.entries(saved_entries).filter(([m]) => !listed.includes(m)))
+    for (const m of listed) {
+      const entry = {}
+      if (!sameWindow && String(windows[m] ?? "").trim()) entry["context-limit"] = Number(windows[m])
+      if (transportOf(m) !== profileTransport) entry["tool-calls"] = transportOf(m)
+      if (isOff(m)) entry.enabled = false
+      if (Object.keys(entry).length) models[m] = entry
+    }
+    if (Object.keys(models).length) out.models = models
+    return out
+  }
 
   // The file, with `editing` taken out: a rename writes the new name and
   // not the old one beside it.
@@ -113,8 +258,8 @@
     return editing && now === editing ? null : now
   }
 
-  const add = async () => {
-    if (!canAdd) return
+  const save = async () => {
+    if (!canSave) return
     saving = true
     error = null
     const result = await saveProviders({
@@ -129,7 +274,6 @@
       return
     }
     // Asked for the host: keep the form, and show the question inside it.
-    // Anything else is the server's own message, which is the useful one.
     if (result?.declaration && !declaration) {
       declaration = result.declaration
       typed = ""
@@ -156,100 +300,132 @@
   }
 </script>
 
-<Modal :title="editing ? `Provider ${editing}` : 'Add a provider'" width="34rem" :open="open" @close="close?.()">
+<Modal :title="editing ? `Provider ${editing}` : 'Add a provider'" width="40rem" :open="open" @close="close?.()">
   <section class="modal-body">
-    <dl class="settings form">
+
+    <!-- Where it is, folded to one line once it has answered. -->
+    <div :if="folded" class="summary">
+      <span class="what"><strong>{{ trimmed || "unnamed" }}</strong> · {{ chosen.short }}<span :if="backend !== 'mock'"> · {{ host }}</span><span :if="!list.loading && !list.error"> · {{ listed.length }} {{ listed.length === 1 ? "model" : "models" }}</span></span>
+      <button type="button" class="change" @click="changing = true">Change</button>
+    </div>
+
+    <dl :if="!folded" class="settings form">
       <dt>Name</dt>
       <dd>
-        <TextInput :model="name" placeholder="local" autofocus :warn="clash"
-                   @input="declaration = null" />
+        <TextInput :model="name" placeholder="local" autofocus :warn="clash" @input="declaration = null" />
         <span :if="clash" class="warn">already a provider of that name</span>
       </dd>
-      <dd class="note">What a session and <code>-p</code> call it.</dd>
 
       <dt>Backend</dt>
       <dd>
         <SelectInput class="backend" :select-class="'backend'" :options="BACKENDS" :model="backend"
-                     @change="declaration = null, forget()" />
+                     @change="forget()" />
       </dd>
 
       <dt :if="backend !== 'mock'">URL</dt>
       <dd :if="backend !== 'mock'">
-        <TextInput :model="url" :placeholder="chosen.url"
-                   @input="declaration = null, forget()" />
-      </dd>
-      <dd :if="backend !== 'mock'" class="note">
-        Empty is {{ chosen.url }}. Anything that is not this machine has to be
-        declared before it can be the default.
-      </dd>
-
-      <dt :if="backend !== 'mock'">Model</dt>
-      <dd :if="backend !== 'mock'" class="model-row">
-        <SelectInput :if="probe?.models?.length" :model="model">
-          <option value="">— whichever the server picks —</option>
-          <option :each="m in probe.models" :key="m" :value="m">{{ m }}</option>
-        </SelectInput>
-        <TextInput :if="!probe?.models?.length" :model="model" placeholder="qwen2.5-coder:7b" />
-        <button type="button" class="test" :disabled="probing" @click="test()">
-          {{ probing ? "Asking…" : "Test" }}
-        </button>
-      </dd>
-      <dd :if="probe?.error" class="warn">{{ probe.error }}</dd>
-      <dd :if="probe && !probe.error && !probe.models.length" class="note">
-        It answered, and listed no models. That is an ordinary answer from a
-        server holding one: leave this empty and it serves what it has.
-      </dd>
-      <dd :if="backend !== 'mock'" class="note">
-        <strong>Test</strong> asks this destination what it serves, using the
-        URL and key above. It saves nothing, and what it proves is that the
-        endpoint answers and the key is accepted — not that a turn will
-        succeed. Empty sends no model of our choosing.
-      </dd>
-
-      <dt :if="backend !== 'mock'">Window</dt>
-      <dd :if="backend !== 'mock'">
-        <TextInput size="num" :model="contextLimit" placeholder="—" inputmode="numeric" />
-        <span class="dim">tokens, the context the server was started with</span>
-      </dd>
-
-      <dt :if="backend !== 'mock'">Tool calls</dt>
-      <dd :if="backend !== 'mock'">
-        <SelectInput class="tool-calls" :select-class="'tool-calls'" :model="toolCalls">
-          <option value="">fenced — the tools as text in our prompt</option>
-          <option value="native">native — the server's tools field and its own tool prompt</option>
-        </SelectInput>
-      </dd>
-      <dd :if="backend !== 'mock'" class="note">
-        Native needs a server that takes <code>tools</code>: llama-server with
-        its chat template, or Ollama with a model that declares tool support.
-        A server that does not refuses the turn and says so.
+        <TextInput :model="url" :placeholder="chosen.url" @input="forget()" />
       </dd>
 
       <dt :if="backend === 'openai'">Key</dt>
       <dd :if="backend === 'openai'">
         <TextInput type="password" :model="keyValue" @input="forget()"
-                   :placeholder="keyFile ? 'leave empty to keep the key that is there' : 'sk-…'" />
+                   :placeholder="keyFile ? 'leave empty to keep the key that is there' : 'if the server asks for one'" />
         <span :if="key?.mask" class="dim">on disk: <code>{{ key.mask }}</code></span>
-        <span :if="key && !key.mask && !key.problem" class="dim">a key is set, too short to show any of</span>
       </dd>
       <dd :if="key?.problem" class="warn">{{ key.problem }}</dd>
-      <dd :if="backend === 'openai'" class="note">
-        Written to the file below with mode <code>0600</code>, never into
-        <code>config.toml</code>, which keeps the path. <strong>It is not read
-        back</strong>: this box is empty even when a key is set, and the ends
-        shown above are read from the file rather than remembered.
-      </dd>
-
       <dt :if="backend === 'openai'">Key file</dt>
       <dd :if="backend === 'openai'">
-        <TextInput :model="keyFile" placeholder="~/.luu/that.key" @input="forget()" />
+        <TextInput :model="keyFile" :placeholder="`~/.luu/${trimmed || 'that'}.key`" @input="forget()" />
       </dd>
       <dd :if="backend === 'openai'" class="note">
-        Empty is <code>{{ trimmed || "that" }}.key</code> beside
-        <code>config.toml</code>. Point it at a file you already have to use
-        that one instead of writing a new one.
+        The key is written to that file with mode <code>0600</code>, never into
+        <code>config.toml</code>, and never read back.
       </dd>
 
+      <dt></dt>
+      <dd :if="!engineOwned" class="connect-row">
+        <button type="button" class="connect" :disabled="connecting" @click="connect()">
+          {{ connecting ? "Connecting…" : "Connect" }}
+        </button>
+        <span class="dim">asks what it serves; saves nothing</span>
+      </dd>
+      <dd :if="engineOwned" class="note">
+        luu starts this provider's server, so its models are this machine's:
+        they are chosen in Settings → Engines.
+      </dd>
+    </dl>
+
+    <p :if="error" class="error">{{ error }}</p>
+
+    <!-- What it serves. -->
+    <div :if="folded" class="serves">
+      <p :if="list.loading" class="dim">Asking {{ host }} what it serves…</p>
+      <p :if="list.error" class="warn">
+        It did not answer: {{ list.error }}. What the file says of its models is
+        kept as it is.
+      </p>
+      <p :if="!list.loading && !list.error && !listed.length" class="dim">
+        It answered, and listed no models — an ordinary answer from a server
+        holding one. A session sends no model of our choosing.
+      </p>
+
+      <div :if="listed.length" class="windows">
+        <Checkbox :model="sameWindow" label="Same window for every model" />
+        <span :if="sameWindow" class="common">
+          <input class="win" inputmode="numeric" :value="commonWindow"
+                 :class.invalid="commonOver"
+                 :placeholder="commonCeiling < Infinity ? String(commonCeiling) : '—'"
+                 @input="commonWindow = $event.target.value">
+          <span class="dim">tokens<span :if="commonCeiling < Infinity">, up to {{ commonCeiling }}</span></span>
+        </span>
+      </div>
+
+      <p :if="listed.length" class="dim pick-note">
+        The default is what a new session here starts on.
+        <span :if="!defaultModel">None chosen: the first listed.</span>
+      </p>
+
+      <ul :if="listed.length" class="models">
+        <li :each="row in rows" :key="row.key" :class="row.kind" :class.off="row.off">
+          <span :if="row.kind === 'head'" class="head">{{ row.label }}</span>
+          <label :if="row.kind === 'model'" class="pick" :title="row.chosen ? 'Click again for none' : 'Make it the default'">
+            <input type="radio" name="default-model" :checked="row.chosen" :disabled="row.off"
+                   @click="toggleDefault(row.name)">
+            <span class="mname">{{ row.name }}</span>
+            <span :if="row.off" class="dim">left out</span>
+          </label>
+          <!-- Both cells on every row, empty where they have nothing, so the
+               columns line up down the list. -->
+          <span :if="row.kind === 'model'" class="wcell">
+            <input :if="!sameWindow" class="win" inputmode="numeric" :value="row.window" :placeholder="row.placeholder"
+                   :class.invalid="row.over" @input="setWindow(row.name, $event.target.value)">
+            <span :if="!sameWindow && row.hint" class="dim hint">{{ row.hint }}</span>
+          </span>
+          <span :if="row.kind === 'model'" class="tcell">
+            <select :if="row.group !== 'tools'" class="transport" :value="row.transport"
+                    @change="setTransport(row.name, $event.target.value)">
+              <option value="fenced">fenced</option>
+              <option value="native">native</option>
+            </select>
+          </span>
+          <span :if="row.kind === 'model' && row.note" class="rnote" :class.warn="row.transport === 'native'">{{ row.note }}</span>
+        </li>
+      </ul>
+
+      <div :if="noTools.length" class="leave">
+        <Checkbox :checked="leaving" label="Leave out the models without tools"
+                  @change="leaveOut = !leaving" />
+      </div>
+      <p :if="anyFenced" class="note">
+        <strong>fenced</strong> is luu's own format: the tools as text in the
+        prompt, a call as a fenced block. It works with any model and is less
+        precise — on <code>qwen2.5-coder:7b</code> it made 7 of 15 calls where
+        native made 15.
+      </p>
+    </div>
+
+    <dl class="settings form tail">
       <dt>Default</dt>
       <dd>
         <Checkbox :model="makeDefault"
@@ -257,8 +433,6 @@
                   @change="declaration = null" />
       </dd>
     </dl>
-
-    <p :if="error" class="error">{{ error }}</p>
 
     <div class="modal-foot">
       <div :if="declaration" class="declare">
@@ -270,13 +444,13 @@
         <TextInput :model="typed" :placeholder="declaration.host" />
       </div>
       <div class="modal-actions">
-        <!-- Removing, from the profile's own form rather than from the list:
-             one write, asked twice. -->
         <button :if="editing" type="button" class="remove" :class.armed="armed" :disabled="saving"
                 @click="armed ? remove() : (armed = true)">{{ armed ? `Remove ${editing}?` : "Remove" }}</button>
         <button type="button" @click="open = false">Cancel</button>
-        <button type="button" class="save" :disabled="!canAdd" @click="add()">
-          {{ saving ? "Saving…" : (declaration ? "Confirm and save" : (editing ? "Save" : "Add provider")) }}
+        <button type="button" class="save" :disabled="!canSave" @click="save()">
+          {{ saving ? "Saving…" : declaration ? "Confirm and save"
+            : !list && !engineOwned ? "Save without connecting"
+            : editing ? "Save" : "Add provider" }}
         </button>
       </div>
     </div>
@@ -285,16 +459,46 @@
 
 <style scoped>
   .form input:not([type]), .form select { width: 100%; }
-  .form input.w-num { width: 6rem; margin-right: .4rem; }
   .form label { display: flex; gap: .4rem; align-items: center; }
-  /* The control and the button that fills it, on one line — the button is
-     about this field and reads as a label everywhere else. */
-  .model-row { display: flex; gap: .5rem; align-items: center; }
-  .model-row > :first-child { flex: 1; min-width: 0; }
-  .test { flex: none; }
-  /* On the left, away from the two that keep the form: Cancel and Save stay
-     together on the right, so the auto margin is this one's alone. Outlined
-     in the colour of what it does, and filled once it is armed. */
+  .connect-row { display: flex; gap: .6rem; align-items: center; }
+  .summary {
+    display: flex; align-items: center; gap: .8rem;
+    padding: .6rem .8rem; border: 1px solid var(--line); border-radius: 6px;
+  }
+  .summary .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .serves { margin-top: .9rem; }
+  .windows { display: flex; align-items: center; gap: 1rem; min-height: 2rem; }
+  .common { display: flex; align-items: center; gap: .4rem; }
+  .pick-note { margin: .6rem 0 .3rem; }
+  .win {
+    width: 6.5rem; flex: none; box-sizing: border-box; padding: .25rem .4rem; font: inherit; font-size: 12px;
+    border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit;
+  }
+  .win.invalid { border-color: var(--bad, #c62828); }
+  .transport {
+    font: inherit; font-size: 12px; padding: .2rem .3rem;
+    border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit;
+  }
+  .models { list-style: none; margin: 0; padding: 0; }
+  .models li.head {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
+    margin-top: .7rem; padding-bottom: .2rem; border-bottom: 1px solid var(--line);
+  }
+  .models li.model {
+    display: grid; grid-template-columns: minmax(0, 1fr) 14rem 5rem; gap: .2rem .6rem;
+    align-items: center; padding: .3rem 0;
+  }
+  .models li.model.off .mname { color: var(--dim); text-decoration: line-through; }
+  .pick { display: flex; gap: .45rem; align-items: center; min-width: 0; cursor: pointer; }
+  .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wcell { display: flex; align-items: center; gap: .4rem; }
+  .tcell { display: flex; justify-content: flex-end; }
+  .hint { font-size: 11px; white-space: nowrap; }
+  .rnote { grid-column: 1 / -1; font-size: 11px; color: var(--dim); padding-left: 1.4rem; }
+  .rnote.warn { color: var(--warn, #b26a00); }
+  .leave { margin-top: .7rem; }
+  .tail { margin-top: 1rem; }
+  /* On the left, away from the two that keep the form. */
   .remove {
     margin-right: auto;
     background: none;

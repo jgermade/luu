@@ -426,7 +426,7 @@ async fn the_window_is_read_off_the_server_where_it_says() {
 /// `/props` is said of every model it lists, vLLM's `max_model_len` of each
 /// one and nothing of tools, and a server that says neither is left saying
 /// nothing — an empty answer, not an error. See
-/// `RECORD/2026-10-21.connecting-a-provider.WIP.md`.
+/// `RECORD/2026-10-21.connecting-a-provider.completed.md`.
 #[tokio::test]
 async fn the_facts_are_what_the_server_says_and_no_more() {
     use agent_core::backend::{ModelFacts, WindowIs};

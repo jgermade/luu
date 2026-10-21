@@ -182,7 +182,7 @@ pub const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What a server says of one model it lists, before anything is sent to it.
 /// Every field is `None` where it said nothing — which is not *no*.
 ///
-/// See `RECORD/2026-10-21.connecting-a-provider.WIP.md`.
+/// See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ModelFacts {
     /// The most this model will hold, by the server's account.

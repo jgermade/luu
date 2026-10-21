@@ -1354,9 +1354,13 @@ export async function newSession(choice) {
 /// A provider that is not running answers with an empty list and a reason —
 /// see `serve::ProviderModels`. That is not an error state in the page either:
 /// the field it fills is a suggestion beside an input somebody may type into.
-export async function providerModels(name) {
+/// `facts` is the provider form's ask: every model, switched off or not, with
+/// what the server says of each — one request per model on Ollama, which the
+/// pickers do not pay.
+export async function providerModels(name, { facts = false } = {}) {
   try {
-    const res = await fetch(`./api/providers/${encodeURIComponent(name)}/models`, {
+    const query = facts ? "?facts=1" : ""
+    const res = await fetch(`./api/providers/${encodeURIComponent(name)}/models${query}`, {
       headers: apiHeaders(),
     })
     if (!res.ok) return { models: [], reason: await res.text(), suggested: null }

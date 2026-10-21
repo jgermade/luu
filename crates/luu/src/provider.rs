@@ -119,7 +119,7 @@ pub struct Profile {
     /// What differs for one model from the rest of this profile, by the name
     /// the server lists it under. **Exceptions, never a catalogue**: a model
     /// with no entry takes the profile's values, so one pulled tomorrow needs
-    /// no edit. See `RECORD/2026-10-21.connecting-a-provider.WIP.md`.
+    /// no edit. See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub models: std::collections::BTreeMap<String, ModelEntry>,
 }
@@ -1397,7 +1397,7 @@ mod tests {
 
     /// A model's own entry sits between the flag and the profile, for the
     /// window and the transport alike, and a model without one is the
-    /// profile's. See `RECORD/2026-10-21.connecting-a-provider.WIP.md`.
+    /// profile's. See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
     #[test]
     fn a_model_s_own_entry_is_between_the_flag_and_the_profile() {
         let text = "[provider.local]\nbackend = \"ollama\"\nmodel = \"big\"\n\

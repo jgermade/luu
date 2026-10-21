@@ -144,6 +144,25 @@ test.afterAll(() => {
   rmSync(home, { recursive: true, force: true })
 })
 
+/**
+ * A stand-in `/v1/models` on a port of its own, refusing every key but `key`
+ * when there is one — the way a hosted API does, so what the page shows of a
+ * refusal is the server's own. Closed by the caller.
+ */
+async function fakeOpenAi(models, key = null) {
+  const fake = createServer((req, res) => {
+    if (req.url !== "/v1/models") return res.writeHead(404).end()
+    if (key && req.headers.authorization !== `Bearer ${key}`) {
+      return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"invalid api key"}')
+    }
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ data: models.map(id => ({ id })) }))
+  })
+  await new Promise(done => fake.listen(0, "127.0.0.1", done))
+  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fake.address()).port}/v1`
+  return { at, close: () => fake.close() }
+}
+
 async function chooseFolder(page) {
   const picker = page.locator("dialog.modal").first()
   await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
@@ -443,17 +462,22 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(form.locator(".warn")).toContainText("already a provider")
   await expect(form.locator("button.save")).toBeDisabled()
 
+  // Connected first: the models are chosen from what it serves, not typed.
+  const server = await fakeOpenAi(["tiny", "tiny-q4"])
   await form.locator("dd input").first().fill("local")
   await form.locator("select.backend").selectOption("openai")
-  await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill("http://127.0.0.1:8081/v1")
-  await form.locator('input[placeholder="qwen2.5-coder:7b"]').fill("tiny")
+  await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(server.at)
+  await form.locator("button.connect").click()
+  await expect(form.locator(".summary")).toContainText("2 models")
+  await form.locator('label.pick:has-text("tiny") input').first().click()
   await form.locator("button.save").click()
   await expect(form).toHaveCount(0)
 
   // Written on its own, and in the list without a second save.
   const onDisk = readFileSync(join(home, "config.toml"), "utf8")
   expect(onDisk).toContain("[provider.local]")
-  expect(onDisk).toContain('url = "http://127.0.0.1:8081/v1"')
+  expect(onDisk).toContain(`url = "${server.at}"`)
+  expect(onDisk).toContain('model = "tiny"')
   expect(onDisk).toContain("[provider.here]")
   const names = page.locator(".modal ul.providers li.profile .name")
   await expect(names).toHaveText(["here", "local"])
@@ -463,16 +487,18 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   // Not asked to be the default, so the mock still is.
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
 
-  // Edited in its own form, which opens on what the file has.
+  // Edited in its own form, which opens folded on what the file has and asks
+  // the provider what it serves.
   const row = name => page.locator(".modal ul.providers li.profile", { has: page.locator(`.name:text-is("${name}")`) })
   await row("local").locator("button.edit").click()
   const edit = page.getByRole("dialog", { name: "Provider local" })
-  await expect(edit).toBeVisible()
-  const model = edit.locator('input[placeholder="qwen2.5-coder:7b"]')
-  await expect(model).toHaveValue("tiny")
-  await model.fill("tiny-q4")
+  await expect(edit.locator(".summary")).toBeVisible()
+  const pick = name => edit.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) }).locator('input[type="radio"]')
+  await expect(pick("tiny")).toBeChecked()
+  await pick("tiny-q4").click()
   await edit.locator("button.save").click()
   await expect(edit).toHaveCount(0)
+  server.close()
   expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
   await expect(row("local")).toContainText("tiny-q4")
 
@@ -486,6 +512,8 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(scratch).toHaveCount(0)
   await row("scratch").locator("button.edit").click()
   const renaming = page.getByRole("dialog", { name: "Provider scratch" })
+  // An edit opens folded on the summary; the name is under *Change*.
+  await renaming.locator("button.change").click()
   await renaming.locator("dd input").first().fill("scratch2")
   await renaming.locator("button.save").click()
   await expect(names).toHaveText(["here", "local", "scratch2"])
@@ -505,28 +533,19 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
 })
 
 /**
- * Settings → Models: **Test** asks the destination as typed, before anything
- * about it is saved. The server here is a stand-in `/v1/models` that refuses a
- * wrong key the way a hosted API does, so the refusal the page shows is the
- * server's own. See `RECORD/2026-10-20.probing-a-destination.completed.md`.
+ * Settings → Models: **Connect** asks the destination as typed, before
+ * anything about it is saved, and a wrong key comes back as the server's own
+ * refusal, at the key. See
+ * `RECORD/2026-10-21.connecting-a-provider.completed.md`.
  */
-test("a destination is tested before it is saved, and the test writes nothing", async ({ page }) => {
+test("a destination is connected to before it is saved, and connecting writes nothing", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
   page.on("console", message => {
     if (message.type() === "error") errors.push(`console: ${message.text()}`)
   })
 
-  const fake = createServer((req, res) => {
-    if (req.url !== "/v1/models") return res.writeHead(404).end()
-    if (req.headers.authorization !== "Bearer sk-right") {
-      return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"invalid api key"}')
-    }
-    res.writeHead(200, { "content-type": "application/json" })
-    res.end(JSON.stringify({ data: [{ id: "abab-7" }, { id: "abab-8" }] }))
-  })
-  await new Promise(done => fake.listen(0, "127.0.0.1", done))
-  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fake.address()).port}/v1`
+  const server = await fakeOpenAi(["abab-7", "abab-8"], "sk-right")
   const before = readFileSync(join(home, "config.toml"), "utf8")
 
   try {
@@ -539,37 +558,130 @@ test("a destination is tested before it is saved, and the test writes nothing", 
     const form = page.getByRole("dialog", { name: "Add a provider" })
     await form.locator("dd input").first().fill("hosted")
     await form.locator("select.backend").selectOption("openai")
-    await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(at)
+    await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(server.at)
 
-    // The wrong key: the server's 401, and the model stays free text.
-    await form.locator('input[type="password"]').fill("sk-wrong")
-    await form.locator("button.test").click()
-    await expect(form.locator("dd.warn")).toContainText("401")
-    await expect(form.locator('input[placeholder="qwen2.5-coder:7b"]')).toBeVisible()
+    // The wrong key: the server's 401, the form still open, the key in focus.
+    const key = form.locator('input[type="password"]')
+    await key.fill("sk-wrong")
+    await form.locator("button.connect").click()
+    await expect(form.locator("p.error")).toContainText("401")
+    await expect(form.locator(".summary")).toHaveCount(0)
+    await expect(key).toBeFocused()
 
-    // The right one: what it serves, offered, and nothing chosen for them.
-    await form.locator('input[type="password"]').fill("sk-right")
-    await expect(form.locator("dd.warn")).toHaveCount(0)
-    await form.locator("button.test").click()
-    const offered = form.locator(".model-row select")
-    await expect(offered.locator("option")).toHaveText(["— whichever the server picks —", "abab-7", "abab-8"])
-    await expect(offered).toHaveValue("")
+    // The right one: folded to a line, and what it serves below it, with
+    // nothing chosen for them.
+    await key.fill("sk-right")
+    await form.locator("button.connect").click()
+    await expect(form.locator(".summary")).toContainText("hosted · OpenAI-compatible")
+    await expect(form.locator(".summary")).toContainText("2 models")
+    await expect(form.locator("li.model .mname")).toHaveText(["abab-7", "abab-8"])
+    await expect(form.locator('li.model input[type="radio"]:checked')).toHaveCount(0)
+    // Nothing said about tools by this server: one group, *not said*.
+    await expect(form.locator("li.head")).toHaveText(["Not said"])
 
-    // A field the answer was asked with changes, and the answer goes with it.
-    await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(`${at}/`)
-    await expect(form.locator(".model-row select")).toHaveCount(0)
-    await expect(form.locator('input[placeholder="qwen2.5-coder:7b"]')).toBeVisible()
+    // Changed, and a field the answer was asked with changes: the answer goes.
+    await form.locator("button.change").click()
+    await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(`${server.at}/`)
+    await expect(form.locator("li.model")).toHaveCount(0)
+    await expect(form.locator("button.save")).toHaveText("Save without connecting")
 
-    // Two probes, and the file is as it was.
+    // Two connections, and the file is as it was.
     expect(readFileSync(join(home, "config.toml"), "utf8")).toBe(before)
     await form.locator("button", { hasText: "Cancel" }).click()
     await expect(form).toHaveCount(0)
     await page.locator(".modal-head button.close", { hasText: "close" }).click()
   } finally {
-    fake.close()
+    server.close()
   }
 
   expect(errors).toEqual([])
+})
+
+/**
+ * The models half: grouped by what the server says of their tools, a window
+ * each that may not pass what the server says it holds, and the file written
+ * as exceptions — the one that differs, the one left out — and nothing for
+ * the rest. Against a stand-in Ollama whose `/api/show` answers per model.
+ */
+test("the models are grouped by their tools and written as exceptions", async ({ page }) => {
+  const SHOW = {
+    "coder:7b": { capabilities: ["completion", "tools"], model_info: { "qwen2.context_length": 32768 } },
+    "old:3b": { capabilities: ["completion"], model_info: { "llama.context_length": 8192 } },
+    mystery: { model_info: {} },
+  }
+  const fake = createServer((req, res) => {
+    let body = ""
+    req.on("data", chunk => (body += chunk))
+    req.on("end", () => {
+      res.setHeader("content-type", "application/json")
+      if (req.url === "/api/tags") return res.end(JSON.stringify({ models: Object.keys(SHOW).map(name => ({ name })) }))
+      if (req.url === "/api/show") return res.end(JSON.stringify(SHOW[JSON.parse(body).model] || {}))
+      res.writeHead(404).end()
+    })
+  })
+  await new Promise(done => fake.listen(0, "127.0.0.1", done))
+  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fake.address()).port}`
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    await page.locator('.modal button.add:has-text("+ provider")').click()
+    const form = page.getByRole("dialog", { name: "Add a provider" })
+    await form.locator("dd input").first().fill("grouped")
+    await form.locator('input[placeholder="http://127.0.0.1:11434"]').fill(at)
+    await form.locator("button.connect").click()
+
+    // Three groups, in this order, and *not said* is not *no*.
+    await expect(form.locator("li.head")).toHaveText(["Tools", "Not said", "No tools"])
+    const row = name => form.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) })
+    await expect(row("coder:7b").locator("select")).toHaveCount(0)
+    await expect(row("old:3b").locator("select")).toHaveValue("fenced")
+    await expect(row("old:3b")).toContainText("up to 8192")
+
+    // Past what the model holds is refused before it is sent.
+    await row("old:3b").locator("input.win").fill("9000")
+    await expect(form.locator("button.save")).toBeDisabled()
+    await row("old:3b").locator("input.win").fill("4096")
+    await expect(form.locator("button.save")).toBeEnabled()
+
+    await form.locator(".leave label").click()
+    await expect(row("old:3b")).toContainText("left out")
+    await form.locator("button.save").click()
+    await expect(form).toHaveCount(0)
+
+    const written = readFileSync(join(home, "config.toml"), "utf8")
+    const table = written.slice(written.indexOf("[provider.grouped]"))
+    // Native for the profile, since its models with tools need nothing written.
+    expect(table).toContain('tool-calls = "native"')
+    expect(table).toContain('[provider.grouped.models."old:3b"]')
+    expect(table).toContain("context-limit = 4096")
+    expect(table).toContain("enabled = false")
+    expect(table).not.toContain('models."coder:7b"')
+    expect(table).not.toContain("models.mystery")
+
+    // Left out of the pickers, and still in the form.
+    const offered = await (await fetch(`${BASE}/api/providers/grouped/models`)).json()
+    expect(offered.models).toEqual(["coder:7b", "mystery"])
+    const all = await (await fetch(`${BASE}/api/providers/grouped/models?facts=1`)).json()
+    expect(all.models).toHaveLength(3)
+    expect(all.facts["old:3b"]).toEqual({ window: 8192, window_is: "trained", tools: false })
+
+    // Removed again, so the tests after this one see the file they expect.
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    delete now.providers.grouped
+    const put = await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: now.default ?? null, providers: now.providers }),
+    })
+    expect(put.ok).toBe(true)
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    fake.close()
+  }
 })
 
 /**

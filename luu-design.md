@@ -1671,16 +1671,28 @@ by a checkbox the program pre-ticked. A key typed into the form is written to a
 file before `config.toml` is, and the file holds a path, for the reason the
 provider section gives.
 
-**The form asks the destination before it writes it.** *Test* sends the
-candidate as typed — backend, URL, key — to `POST /api/providers/probe`, which
-calls the backend's `/models` and answers with the list or the server's own
-refusal, and **writes nothing**: a provider being added is not in the file, and
-one being edited is in it with the values being replaced, so the saved-profile
-route would test the wrong destination. On an answer, `Model` offers what came
-back and chooses none of it. It is behind the same loopback door as the writes,
-because it spends the key. It proves the endpoint answers and the key is
-accepted, not that a turn will succeed. See
-[`RECORD/2026-10-20.probing-a-destination.completed.md`](RECORD/2026-10-20.probing-a-destination.completed.md).
+**The form connects before it writes.** It is two halves: *where it is* —
+name, backend, URL, and for `openai` an optional key — and, once **Connect**
+has spoken to it, *what it serves*. Connect sends the candidate as typed to
+`POST /api/providers/probe`, which answers with the list, what the server says
+of each model (`Backend::facts`), or the server's own refusal — a `401` lands
+on the key field — and **writes nothing**: a provider being added is not in the
+file, and one being edited is in it with the values being replaced. On an
+answer the first half folds to one line with *Change* under it, and the models
+follow, grouped by what the server said of their tools — *tools*, *not said*,
+*no tools*, because a server that says nothing has not said *no*. Each has a
+window, prefilled and capped by what the server reports: on Ollama a choice
+under the training maximum (`/api/show`), on llama-server or vLLM the server's
+own `n_ctx`, which a smaller number only budgets under. The default is a radio
+that can be cleared — none is *the first listed*. Models outside *tools* get a
+transport select, fenced or native, and the models without tools can be left
+out of the pickers. *Save without connecting* stays, for a server that is off.
+An edit opens folded and asks the saved provider the same, through
+`GET /api/providers/{name}/models?facts=1` — the picker's route, which without
+`facts` pays no per-model request and lists only what is switched on. Behind
+the loopback door, because it spends the key. See
+[`RECORD/2026-10-20.probing-a-destination.completed.md`](RECORD/2026-10-20.probing-a-destination.completed.md)
+and [`RECORD/2026-10-21.connecting-a-provider.completed.md`](RECORD/2026-10-21.connecting-a-provider.completed.md).
 
 **Nothing in the modal changes the session that is running.** What a session
 sends to is fixed for its lifetime, and the file the modal writes is what the
@@ -1949,6 +1961,15 @@ characters) and whether the file is missing, empty or readable by others,
 derived from the file on every load rather than stored, so it cannot report a
 key that was replaced by hand. See
 [`RECORD/2026-10-20.a-key-typed-into-the-form.completed.md`](RECORD/2026-10-20.a-key-typed-into-the-form.completed.md).
+
+**A model's exceptions live under its profile, never a catalogue of them.**
+`[provider.local.models."qwen2.5-coder:32b"]` holds what differs for that one
+model — `context-limit`, `tool-calls`, `enabled = false` to leave it out of the
+pickers — and a model with no table takes the profile's, so one pulled tomorrow
+needs no edit. A run resolves a flag, then the model's entry, then the
+profile, with no request to anyone: the form asked the server, and the file
+remembers its answer. `-m` still reaches a model left out — naming one is
+choosing it.
 
 **A profile is written and chosen from the browser as well as by hand**: the
 configuration modal edits this file on loopback, and a new session names one of
