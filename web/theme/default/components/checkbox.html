@@ -104,7 +104,7 @@
   }
   .check:hover:not(.disabled) .box { border-color: var(--luu-accent); }
   .check:active:not(.disabled) .box { transform: scale(.88); }
-  input:focus-visible + .box { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+  input:focus-visible + .box { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 2px; }
   /* The label's own state, never an ancestor's: a page with an `.on` of its
      own — Settings' open section — drew every box inside it ticked. */
   .check.on .box, .check.mixed .box { background: var(--luu-accent); border-color: var(--luu-accent); }

@@ -384,7 +384,7 @@
   }
   .strip button.on { color: var(--luu-fg); }
   .strip button:disabled { opacity: .45; cursor: default; }
-  .strip button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
+  .strip button:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
   .count {
     min-width: 1.4em;
     padding: 0 .35rem;
@@ -423,7 +423,7 @@
   }
   .close:hover { background: var(--luu-hover); color: var(--luu-fg); }
   .close:active { background: var(--luu-active); }
-  .close:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .close:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 1px; }
   .close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 
   /* A frame and a `Scrollable`; the content pads itself, so the padding

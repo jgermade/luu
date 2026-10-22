@@ -113,7 +113,7 @@
   .option:hover:not(.off) .dot, .option.on .dot { border-color: var(--luu-accent); }
   .option:active:not(.off) .dot { transform: scale(.88); }
   .option.on .dot::after { transform: scale(1); }
-  input:focus-visible + .dot { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+  input:focus-visible + .dot { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 2px; }
 
   .text { display: flex; flex-direction: column; gap: .1rem; }
   .label { font-weight: var(--luu-weight-medium); }

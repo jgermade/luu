@@ -56,8 +56,15 @@
   --luu-bad-active: #82182b;
   --luu-bad-soft: #fbe9ec;
 
-  /* The ring a focused control draws, and the dim behind a modal. */
+  /* The ring a focused field draws in its border, and the dim behind a
+     modal. */
   --luu-focus: #2f5bbd;
+  /* The outline anything else draws when focused from the keyboard — a
+     button, a tab, a link, a box, a switch — and the button a closed modal
+     hands the focus back to: one thin grey line, the same in both tones, that
+     says where the focus is without competing with what is chosen. */
+  --luu-outline-width: 1px;
+  --luu-outline-color: #999;
   --luu-overlay: rgba(17, 20, 26, .42);
 
   /* ---- type --------------------------------------------------------------- */

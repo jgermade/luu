@@ -62,6 +62,12 @@ body {
    fighting them. Its focus ring, above all, which `input:…:focus` used to
    draw a second time inside the component's. See
    RECORD/2026-10-21.the-design-system-applied.completed.md. */
+/* What the browser draws round a focused button, link or anything else the
+   page writes bare, in the theme's outline: one thin grey line, as the
+   theme's components draw theirs. */
+:where(:focus-visible) {
+  outline: var(--luu-outline-width) solid var(--luu-outline-color);
+}
 :where(input) {
   /* `flex: 1` because a text field is, everywhere on this page, the thing on
      its row that takes the leftover width — the composer, the rename box, a
@@ -79,7 +85,7 @@ body {
   transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease;
 }
 :where(input:not([type="checkbox"]):not([type="radio"]):focus) {
-  outline: 2px solid var(--luu-accent);
+  outline: var(--luu-outline-width) solid var(--luu-outline-color);
   outline-offset: -1px;
 }
 :where(input[type="number"]) { appearance: textfield; -moz-appearance: textfield; }
@@ -109,7 +115,7 @@ body {
   transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease;
 }
 :where(select:focus) {
-  outline: 2px solid var(--luu-accent);
+  outline: var(--luu-outline-width) solid var(--luu-outline-color);
   outline-offset: -1px;
 }
 
@@ -126,7 +132,7 @@ body {
   transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease;
 }
 :where(textarea:focus) {
-  outline: 2px solid var(--luu-accent);
+  outline: var(--luu-outline-width) solid var(--luu-outline-color);
   outline-offset: -1px;
 }
 

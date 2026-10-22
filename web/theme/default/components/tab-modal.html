@@ -318,7 +318,7 @@
   }
   .strip button.on { color: var(--luu-fg); }
   .strip button:disabled { opacity: .45; cursor: default; }
-  .strip button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
+  .strip button:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
   .count {
     min-width: 1.4em;
     padding: 0 .35rem;
@@ -365,7 +365,7 @@
   }
   .close:hover { background: var(--luu-hover); color: var(--luu-fg); }
   .close:active { background: var(--luu-active); }
-  .close:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .close:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 1px; }
   .toned .close { color: inherit; opacity: .8; }
   .toned .close:hover { opacity: 1; color: inherit; background: color-mix(in srgb, currentColor 16%, transparent); }
   .toned .close:active { background: color-mix(in srgb, currentColor 26%, transparent); }

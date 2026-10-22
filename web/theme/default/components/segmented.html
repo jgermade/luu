@@ -155,7 +155,7 @@
   button:active:not(:disabled):not(.on) { background: var(--luu-active); }
   button.on { color: var(--luu-fg); }
   button:disabled { opacity: .5; cursor: default; }
-  button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  button:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 1px; }
   button { display: inline-flex; align-items: center; justify-content: center; gap: var(--luu-space-1); }
   button.square { width: calc(var(--h) - 4px); padding: 0; }
   .glyph {
