@@ -1122,6 +1122,12 @@ through `Sandbox::check_path` against that base and the root is a prefix the pag
 *lists* by. A picker that could climb above the base would be a browser control that moves the
 sandbox. Paths stay base-relative everywhere they are sent, and the root is applied to what is
 shown — a second spelling for the same file is a second chance to get the prefix wrong.
+**The base is the working directory**: where `luu` was started, or what `--workdir`
+(`LUU_WORKDIR`) names, the process moving there before anything reads it. In production that is
+the project, `luu` being a binary on the `PATH`; in this repository it is luu's own source, so
+`make up` reads the checkout's `.env` for `LUU_WORKDIR` (`.env.example`). luu itself never reads a
+`.env`: a project's own would decide what luu may reach. See
+[`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
 
 **What is not there is said where it is missing.** No providers at all: the chat column's body is
 a placeholder with the one button that fixes it, opening Settings on Models — rather than a modal

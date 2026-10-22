@@ -65,8 +65,14 @@ build:
 # Loopback, and no token: `serve` refuses any other address without
 # --auth-token-file, because /ws carries job approval. Sessions are cached in
 # the state directory, so a restart does not lose the conversation.
+#
+# `.env`, when there is one, is this checkout's and is read here and nowhere
+# else: it names the working directory (LUU_WORKDIR), since the checkout is
+# luu's own source and not the project being worked on. luu never reads a
+# .env itself — a project's would decide what luu may reach. See .env.example.
 up:
-	$(CARGO) run --bin luu -- serve --bind $(BIND)
+	@set -a; if [ -f .env ]; then . ./.env; fi; set +a; \
+		$(CARGO) run --bin luu -- serve --bind $(BIND)
 
 # The page, clicked: a prompt, the gate, an amendment, Approve, the tool call
 # and the fold — against `luu serve` on the mock, which the spec starts itself.

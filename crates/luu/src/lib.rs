@@ -61,6 +61,14 @@ use tokio::sync::{mpsc, watch};
     about = "Local AI agent, built for small models"
 )]
 struct Cli {
+    /// The working directory: the tree the agent reads and writes, and where
+    /// `luu.toml` is looked for. Where `luu` was started, unless this names
+    /// another. In this repository's development it comes from `.env`, which
+    /// `make up` loads — the checkout is luu's own source, not the project
+    /// being worked on.
+    #[arg(long, global = true, value_name = "PATH", env = "LUU_WORKDIR")]
+    workdir: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -2186,7 +2194,14 @@ fn counter_name(counter: &Counter) -> String {
 }
 
 pub async fn run() -> Result<()> {
-    let Cli { command } = Cli::parse();
+    let Cli { workdir, command } = Cli::parse();
+    // Before anything reads it: every part of luu that needs the working
+    // directory asks the process for it, so moving the process there is what
+    // makes all of them agree.
+    if let Some(dir) = &workdir {
+        std::env::set_current_dir(dir)
+            .with_context(|| format!("--workdir {}: cannot work there", dir.display()))?;
+    }
 
     if let Command::Export {
         records,

@@ -90,6 +90,12 @@ There is a `Makefile` for the four a person types most — `make install`,
 `make lint` for what CI runs. Everything below is what those wrap and what
 nothing wraps.
 
+**The working directory** is the root luu works under, and the session's
+project folder is picked inside it: where `luu` starts, or `--workdir PATH`
+(`LUU_WORKDIR`). Here that would be luu's own source, so `make up` loads this
+checkout's `.env` — copy `.env.example` and set `LUU_WORKDIR` to the project to
+try luu on. Only `make up` reads it; the binary never reads a `.env`.
+
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets     # CI runs this with RUSTFLAGS=-D warnings
