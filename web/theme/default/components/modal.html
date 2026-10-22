@@ -27,6 +27,12 @@
   // that is part of its body. `head` is `auto` for that, or `dark` or
   // `integrated` to say it outright. The dark head is a `data-tone="dark"`
   // island, so it draws with the theme's own dark values.
+  //
+  // **Or a head in a tone**, whatever the size: `accent`, `ok`, `warn` or
+  // `bad` is the same bar in that tone's strong colour, with the ink a solid
+  // `Badge` has on it — what the dialog is about said before it is read.
+  //
+  //   <Modal :open="removing" title="Remove workstation?" head="bad" …>
 
   const Scrollable = await import("./scrollable.html")
 
@@ -41,6 +47,8 @@
   const LARGE = 640
   let wide = false
   $: dark = head === "dark" || (head === "auto" && wide)
+  const TONES = ["accent", "ok", "warn", "bad"]
+  $: tone = TONES.includes(head) ? head : null
 
   // How long the way out is, from the token, so reduced motion is no wait.
   const exit = () => {
@@ -92,6 +100,11 @@
         @click="backdrop($event)">
   <div class="box">
     <header :if="title || isDismissible" class="head" :class.dark="dark"
+            :class.toned="!!tone"
+            :class.tone-accent="tone === 'accent'"
+            :class.tone-ok="tone === 'ok'"
+            :class.tone-warn="tone === 'warn'"
+            :class.tone-bad="tone === 'bad'"
             :data-tone="dark ? 'dark' : null">
       <h2 class="title">{{ title }}</h2>
       <button :if="isDismissible" type="button" class="close" title="Close" @click="ask()">
@@ -187,6 +200,18 @@
     color: var(--luu-fg);
     border-color: var(--luu-surface);
   }
+  /* A head in a tone: the same bar, in the tone's strong colour and the ink a
+     solid badge has on it. Its own edge, as the dark one's. */
+  .head.toned {
+    padding: var(--luu-space-3) var(--luu-space-5);
+    background: var(--ink);
+    color: var(--luu-on-accent);
+    border-color: var(--ink);
+  }
+  .tone-accent { --ink: var(--luu-accent); }
+  .tone-ok { --ink: var(--luu-ok); }
+  .tone-warn { --ink: var(--luu-warn); }
+  .tone-bad { --ink: var(--luu-bad); }
   .title {
     margin: 0;
     font-size: var(--luu-text-lg);
@@ -206,6 +231,12 @@
   .close:hover { background: var(--luu-hover); color: var(--luu-fg); }
   .close:active { background: var(--luu-active); }
   .close:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  /* On a tone the theme's hover, press and ring are drawn for a surface, and
+     vanish; the head's own ink draws them instead. */
+  .toned .close { color: inherit; opacity: .8; }
+  .toned .close:hover { opacity: 1; color: inherit; background: color-mix(in srgb, currentColor 16%, transparent); }
+  .toned .close:active { background: color-mix(in srgb, currentColor 26%, transparent); }
+  .toned .close:focus-visible { outline-color: currentColor; }
   .close svg {
     width: 16px;
     height: 16px;

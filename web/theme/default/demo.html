@@ -254,6 +254,23 @@
   let deleted = 0
   const remove = () => { deleted += 1; asking = false }
 
+  // Every head a modal can have, and a dialog worth opening under each: the
+  // tones say what it is about before it is read. Small, at 30rem, so `auto`
+  // shows the integrated head and every other value shows itself.
+  const HEADS = ["auto", "integrated", "dark", "accent", "ok", "warn", "bad"]
+  const HEAD_COPY = {
+    auto: { title: "Head: auto", text: "Decided by the width it is drawn at. This one is 30rem, so its head is part of its body; from 40rem it would be dark." },
+    integrated: { title: "Rename the session", text: "Part of its body: a small question that belongs to the page under it." },
+    dark: { title: "Context of turn 12", text: "A bar like the page's own columns, for a view as large as a page." },
+    accent: { title: "Connect a provider", text: "Something to set up: luu speaks to it before anything is saved." },
+    ok: { title: "Connected", text: "12 models from 192.168.1.20:11434, every one of them with tools." },
+    warn: { title: "Runs on the host", text: "This posture has no container: a command the model asks for runs as you, on this machine." },
+    bad: { title: "Remove workstation?", text: "Its key file stays on disk, and the sessions that used it keep their history." },
+  }
+  let modalHead = "accent"
+  let headed = false
+  let tabHead = "auto"
+
   let icUrl = ""
   let icName = "Work Station"
   let icWindow = "32768"
@@ -1107,7 +1124,8 @@
           <h4 class="kind-title">Modal</h4>
           <p class="kind-lead">The platform's <code>&lt;dialog&gt;</code>. ESC, the backdrop and the close
             button ask to close; the owner decides. A large one has a dark head, a small one a head
-            that is part of its body.</p>
+            that is part of its body — and any of them a head in a tone, <code>accent</code>,
+            <code>ok</code>, <code>warn</code> or <code>bad</code>, whatever its size.</p>
             <div class="row">
               <Button variant="danger" @click="asking = true">Delete a session…</Button>
               <Button @click="editing = true">A form…</Button>
@@ -1115,6 +1133,21 @@
               <Button @click="large = true">A large one…</Button>
               <p class="state">deleted: <code>{{ deleted }}</code></p>
           </div>
+          <div class="row heads">
+            <Segmented label="Modal head" size="sm" :model="modalHead" :options="HEADS" />
+            <Button @click="headed = true">With this head…</Button>
+          </div>
+
+          <Modal :open="headed" :title="HEAD_COPY[modalHead].title" :head="modalHead" width="30rem"
+                 @close="headed = false">
+            <p class="muted-line">{{ HEAD_COPY[modalHead].text }}</p>
+            <p class="muted-line"><code>head="{{ modalHead }}"</code></p>
+            <template :slot.foot>
+              <Button :if="modalHead === 'bad'" variant="ghost" @click="headed = false">Keep it</Button>
+              <Button :if="modalHead === 'bad'" variant="danger" @click="headed = false">Remove</Button>
+              <Button :if="modalHead !== 'bad'" variant="primary" @click="headed = false">Done</Button>
+            </template>
+          </Modal>
 
           <Modal :open="asking" title="Delete this session?" width="26rem" @close="asking = false">
             Its stream goes with it, and nothing brings it back.
@@ -1142,7 +1175,8 @@
           <Modal :open="large" title="Context of turn 12" width="48rem" @close="large = false">
             <p class="muted-line">A large modal has a dark head, a bar like the page's own; a small one
               has a head that is part of its body. <code>head="auto"</code> decides by the width it is
-              drawn at, and <code>dark</code> or <code>integrated</code> say it outright.</p>
+              drawn at, and <code>dark</code> or <code>integrated</code> say it outright — or a tone,
+            for a head that says what the dialog is about.</p>
             <Progress :amount="5400" :max="8192" label="Window" />
             <template :slot.foot>
               <Button @click="large = false">Close</Button>
@@ -1162,14 +1196,18 @@
           <h4 class="kind-title">TabModal</h4>
           <p class="kind-lead">A modal whose head is its tabs: several views of one thing, chosen where a
             title would be. The owner shows the panel the model names; a fixed <code>height</code>
-            keeps the dialog still as the tabs change.</p>
+            keeps the dialog still as the tabs change. Its head takes the same values as a
+            <code>Modal</code>'s, and on a tone the tabs and their line are drawn in its ink.</p>
+            <div class="row heads">
+              <Segmented label="Tab modal head" size="sm" :model="tabHead" :options="HEADS" />
+            </div>
             <div class="row">
               <Button @click="tabbing = true">workstation…</Button>
-              <p class="state">tab: <code>{{ tmTab }}</code> · saved: <code>{{ tmSaved }}</code></p>
+              <p class="state">tab: <code>{{ tmTab }}</code> · saved: <code>{{ tmSaved }}</code> · head: <code>{{ tabHead }}</code></p>
           </div>
 
           <TabModal :open="tabbing" title="workstation" :tabs="TM_TABS" :model="tmTab" height="17rem"
-                    @close="tabbing = false">
+                    :head="tabHead" @close="tabbing = false">
             <div :if="tmTab === 'connection'" class="stack">
               <InputContainer label="URL" :model="tmUrl" description="where the server listens" />
               <InputContainer label="Backend" type="select" :model="backend" :options="BACKENDS"

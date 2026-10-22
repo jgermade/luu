@@ -281,6 +281,83 @@ test("a modal's head follows its size, and a tab modal's head is its tabs", asyn
   expect(errors, "the page logged errors").toEqual([])
 })
 
+/**
+ * A head in a tone, with and without tabs: the bar in the tone's strong
+ * colour and the solid badge's ink on it, whatever the size — and on a tab
+ * modal, the chosen tab and its line in that ink, since the accent's line
+ * would vanish on accent. Read against what the tokens compute to, so the
+ * test follows the theme rather than a copy of its values.
+ */
+test("a modal's head can be any tone, with tabs or without", async ({ page }) => {
+  const errors = await demo(page)
+  // What a token computes to, read off an element painted with it.
+  const computed = token => page.evaluate(name => {
+    const probe = document.createElement("div")
+    probe.style.background = `var(${name})`
+    document.body.append(probe)
+    const colour = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return colour
+  }, token)
+  const paint = locator => locator.evaluate(e => ({
+    bg: getComputedStyle(e).backgroundColor,
+    fg: getComputedStyle(e).color,
+  }))
+  const ink = await computed("--luu-on-accent")
+
+  const kind = page.locator("#modal")
+  const TITLES = { accent: "Connect a provider", ok: "Connected", warn: "Runs on the host", bad: "Remove workstation?" }
+  for (const [tone, title] of Object.entries(TITLES)) {
+    await kind.getByRole("radio", { name: tone, exact: true }).click()
+    await kind.getByRole("button", { name: "With this head…" }).click()
+    const dialog = page.getByRole("dialog", { name: title })
+    const head = dialog.locator("header")
+    await expect(head).toHaveClass(new RegExp(`\\btone-${tone}\\b`))
+    // A tone is not the dark island: the page's own values, re-pointed none.
+    await expect(head).not.toHaveAttribute("data-tone", "dark")
+    expect(await paint(head)).toEqual({ bg: await computed(`--luu-${tone}`), fg: ink })
+    await page.keyboard.press("Escape")
+    await expect(dialog).toBeHidden()
+  }
+  // The other three are still what they were: at 30rem, `auto` is part of the
+  // body, and `dark` says it outright whatever the size.
+  await kind.getByRole("radio", { name: "dark", exact: true }).click()
+  await kind.getByRole("button", { name: "With this head…" }).click()
+  await expect(page.getByRole("dialog", { name: "Context of turn 12" }).locator("header"))
+    .toHaveAttribute("data-tone", "dark")
+  await page.keyboard.press("Escape")
+  await kind.getByRole("radio", { name: "auto", exact: true }).click()
+  await kind.getByRole("button", { name: "With this head…" }).click()
+  const auto = page.getByRole("dialog", { name: "Head: auto" }).locator("header")
+  await expect(auto).not.toHaveAttribute("data-tone", "dark")
+  await expect(auto).not.toHaveClass(/\btoned\b/)
+  await page.keyboard.press("Escape")
+
+  // With tabs: the head in the tone, the chosen tab and its line in the ink.
+  const tabs = page.locator("#tab-modal")
+  await tabs.getByRole("radio", { name: "warn", exact: true }).click()
+  await tabs.getByRole("button", { name: "workstation…" }).click()
+  const tabbed = page.getByRole("dialog", { name: "workstation" })
+  const head = tabbed.locator("header")
+  await expect(head).toHaveClass(/\btone-warn\b/)
+  expect((await paint(head)).bg).toBe(await computed("--luu-warn"))
+  const chosen = tabbed.getByRole("tab", { selected: true })
+  await expect(chosen).toBeFocused()
+  expect((await paint(chosen)).fg).toBe(ink)
+  expect((await paint(tabbed.locator(".line"))).bg).toBe(ink)
+  // A tab not chosen is a step back from the ink, not the theme's grey.
+  const other = await paint(tabbed.getByRole("tab", { name: "Limits" }))
+  expect(other.fg).not.toBe(ink)
+  expect(other.fg).not.toBe(await computed("--luu-fg-muted"))
+  await page.keyboard.press("ArrowRight")
+  await expect(tabbed.getByRole("tab", { selected: true })).toHaveText(/Models/)
+  await page.keyboard.press("Escape")
+  await expect(tabbed).toBeHidden()
+  await expect(page.locator("#tab-modal .state")).toContainText("head: warn")
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
 test("a sub-modal comes out of its parent's head, and ESC closes it alone", async ({ page }) => {
   const errors = await demo(page)
   await page.locator("#sub-modal").getByRole("button", { name: "Edit a provider…" }).click()
