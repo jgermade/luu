@@ -605,6 +605,9 @@ impl Settings {
                 crate::provider::BackendKind::Openai => {
                     agent_core::backend::openai::OpenAi::window_caveat(budget.limit)
                 }
+                crate::provider::BackendKind::Anthropic => {
+                    agent_core::backend::anthropic::Anthropic::window_caveat(budget.limit)
+                }
                 _ => None,
             },
             reserve: budget.reserve,
@@ -835,6 +838,9 @@ impl App {
                 crate::provider::BackendKind::Openai => {
                     agent_core::backend::openai::OpenAi::window_caveat(budget.limit)
                 }
+                crate::provider::BackendKind::Anthropic => {
+                    agent_core::backend::anthropic::Anthropic::window_caveat(budget.limit)
+                }
                 _ => None,
             },
             reserve: budget.reserve,
@@ -873,6 +879,12 @@ impl App {
         if let Some(built) = &built
             && let Some(caveat) = backend.constrain_caveat(built)
         {
+            eprintln!("note: {caveat}");
+        }
+        // And the sampling it pinned, where the destination has nowhere to put
+        // it: a header saying `seed: 42` over a run that sent none is two runs
+        // looking alike that were not.
+        if let Some(caveat) = backend.sampling_caveat(temperature, seed) {
             eprintln!("note: {caveat}");
         }
         let (constraint, schema_retry) = match (constrain, built) {

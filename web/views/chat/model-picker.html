@@ -207,7 +207,7 @@
             <span class="text">
               <strong>{{ name }}</strong>
               <span class="dim small">
-                {{ state.providers?.providers?.[name]?.backend || "ollama" }}{{ state.providers?.providers?.[name]?.engine ? " · luu starts it" : "" }}{{ state.providers?.providers?.[name]?.["tool-calls"] === "native" ? " · native tools" : "" }}
+                {{ state.providers?.providers?.[name]?.backend || "ollama" }}{{ state.providers?.providers?.[name]?.engine ? " · luu starts it" : "" }}{{ (state.providers?.providers?.[name]?.["tool-calls"] || (state.providers?.providers?.[name]?.backend === "anthropic" ? "native" : "")) === "native" ? " · native tools" : "" }}
               </span>
             </span>
             <svg class="ic go"><use href="#i-caret"/></svg>

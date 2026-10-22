@@ -31,8 +31,34 @@
       short: "OpenAI-compatible",
       url: "http://127.0.0.1:8080/v1",
     },
+    {
+      value: "anthropic",
+      label: "Anthropic-compatible — Claude, MiniMax, DeepSeek, Kimi, GLM, a local /v1/messages",
+      short: "Anthropic-compatible",
+      url: "http://127.0.0.1:8080",
+    },
     { value: "mock", label: "Mock — answers in sentences, sends nowhere", short: "Mock", url: "" },
   ]
+  // The two HTTP APIs take a key; Ollama asks for none and the mock is nowhere.
+  const KEYED = ["openai", "anthropic"]
+  // How calls travel when the file says nothing: what the server resolves to
+  // on its own, so the form writes only where it differs.
+  const transportFor = b => b === "anthropic" ? "native" : "fenced"
+
+  // The Messages API's own keys, on the profile. Absent sends nothing but
+  // `max-tokens`, which the API requires and luu fills in.
+  const MESSAGES_KEYS = ["thinking", "effort", "max-tokens"]
+  const THINKING = [
+    { value: "", label: "the server's default" },
+    { value: "adaptive", label: "adaptive — the model decides, its summary folds in the chat" },
+    { value: "budget", label: "a budget of tokens — Claude 4.5 and earlier, most compatible servers" },
+    { value: "off", label: "off" },
+  ]
+  const EFFORTS = [
+    { value: "", label: "the server's default" },
+    ...["low", "medium", "high", "xhigh", "max"].map(e => ({ value: e, label: e })),
+  ]
+  const DEFAULT_MAX_TOKENS = 16384
 
   // The profile as the file has it, for an edit. `remote` and `engine` are
   // not fields here and are carried through: `remote` is only ever written
@@ -51,6 +77,13 @@
   // Empty on an edit means *leave the file alone*, not *clear the key*.
   let keyValue = ""
   const key = editing ? state.providers?.keys?.[editing] || null : null
+  $: keyed = KEYED.includes(backend)
+
+  // `thinking` is a word or a number in the file; the select holds the word.
+  let thinkingMode = typeof was.thinking === "number" ? "budget" : was.thinking || ""
+  let thinkingBudget = typeof was.thinking === "number" ? String(was.thinking) : ""
+  let effort = was.effort || ""
+  let maxTokens = was["max-tokens"] != null ? String(was["max-tokens"]) : ""
   let makeDefault = defaulting || (!!editing && state.providers?.default === editing)
 
   // ---- the second half: what it serves --------------------------------
@@ -119,7 +152,7 @@
     if (answer.error) {
       error = answer.error
       // A server that wants a key says so with a 401: that is the field.
-      if (/\b401\b/.test(answer.error) && backend === "openai") $self('input[type="password"]')?.focus()
+      if (/\b401\b/.test(answer.error) && keyed) $self('input[type="password"]')?.focus()
       return
     }
     list = { models: answer.models || [], facts: answer.facts || {} }
@@ -150,7 +183,7 @@
   // The profile's transport, for every model with no entry of its own: native
   // where the server has models that take tools, since those need nothing
   // written; otherwise what the file said.
-  $: profileTransport = hasTools ? "native" : (was["tool-calls"] === "native" ? "native" : "fenced")
+  $: profileTransport = hasTools ? "native" : (was["tool-calls"] || transportFor(backend))
   const transportOf = m => transports[m]
     || (groupOf(m) === "tools" ? "native" : groupOf(m) === "none" ? "fenced" : profileTransport)
   const isOff = m => groupOf(m) === "none" ? leaving : savedOff.includes(m)
@@ -188,7 +221,7 @@
           placeholder: facts.window_is === "served" ? String(facts.window) : facts.window_is === "trained" ? "Ollama's" : "—",
           hint: facts.window_is === "served"
             ? `the server's ${facts.window}; lower is a budget`
-            : facts.window_is === "trained" ? `up to ${facts.window}` : "",
+            : facts.window_is === "trained" || facts.window_is === "limit" ? `up to ${facts.window}` : "",
           transport,
           note: group === "tools" ? ""
             : transport === "native" && group === "none" ? "the server says it has no tools: it will likely refuse the turn"
@@ -205,7 +238,13 @@
   const setWindow = (m, value) => { windows = { ...windows, [m]: value } }
   const setTransport = (m, value) => { transports = { ...transports, [m]: value } }
 
-  $: canSave = !!trimmed && !clash && !saving && !invalid && !list?.loading
+  // A budget is at least the API's 1024 and leaves room under the cap.
+  const count = v => { const n = Number(String(v).trim()); return Number.isInteger(n) && n > 0 ? n : null }
+  $: maxBad = backend === "anthropic" && !!maxTokens.trim() && !count(maxTokens)
+  $: budgetBad = backend === "anthropic" && thinkingMode === "budget"
+    && (!count(thinkingBudget) || count(thinkingBudget) < 1024
+      || count(thinkingBudget) >= (count(maxTokens) || DEFAULT_MAX_TOKENS))
+  $: canSave = !!trimmed && !clash && !saving && !invalid && !list?.loading && !maxBad && !budgetBad
     && (!declaration || typed.trim() === declaration.host)
 
   // ---- writing it ------------------------------------------------------
@@ -214,9 +253,15 @@
     const out = {
       backend,
       ...(backend !== "mock" && url.trim() ? { url: url.trim() } : {}),
-      ...(backend === "openai" && keyFile.trim() ? { "key-file": keyFile.trim() } : {}),
+      ...(keyed && keyFile.trim() ? { "key-file": keyFile.trim() } : {}),
       ...(remote ? { remote: true } : {}),
       ...(was.engine ? { engine: was.engine } : {}),
+    }
+    if (backend === "anthropic") {
+      if (thinkingMode === "budget") out.thinking = count(thinkingBudget)
+      else if (thinkingMode) out.thinking = thinkingMode
+      if (effort) out.effort = effort
+      if (count(maxTokens)) out["max-tokens"] = count(maxTokens)
     }
     // Not connected: what the second half would have said is left as the
     // file had it.
@@ -228,12 +273,15 @@
     }
     if (defaultModel) out.model = defaultModel
     if (sameWindow && commonWindow.trim()) out["context-limit"] = Number(commonWindow)
-    if (profileTransport === "native") out["tool-calls"] = "native"
+    if (profileTransport !== transportFor(backend)) out["tool-calls"] = profileTransport
     // Exceptions only. An entry for a model the server did not list now is
     // kept: it was written down on purpose, and the server may be elsewhere.
     const models = Object.fromEntries(Object.entries(saved_entries).filter(([m]) => !listed.includes(m)))
     for (const m of listed) {
-      const entry = {}
+      // What this form does not draw is kept as the file had it — a model's
+      // own `thinking`, say — while the backend still reads it.
+      const entry = Object.fromEntries(Object.entries(saved_entries[m] || {})
+        .filter(([k]) => MESSAGES_KEYS.includes(k) && backend === "anthropic"))
       if (!sameWindow && String(windows[m] ?? "").trim()) entry["context-limit"] = Number(windows[m])
       if (transportOf(m) !== profileTransport) entry["tool-calls"] = transportOf(m)
       if (isOff(m)) entry.enabled = false
@@ -265,7 +313,7 @@
     const result = await saveProviders({
       default: defaultAfter(),
       providers: { ...others(), [trimmed]: profile(!!declaration || !!was.remote) },
-      ...(backend === "openai" && keyValue.trim() ? { keys: { [trimmed]: keyValue } } : {}),
+      ...(keyed && keyValue.trim() ? { keys: { [trimmed]: keyValue } } : {}),
     })
     saving = false
     if (result?.ok) {
@@ -330,18 +378,18 @@
           <TextInput :model="url" :placeholder="chosen.url" @input="forget()" />
         </dd>
 
-        <dt :if="backend === 'openai'">Key</dt>
-        <dd :if="backend === 'openai'">
+        <dt :if="keyed">Key</dt>
+        <dd :if="keyed">
           <TextInput type="password" :model="keyValue" @input="forget()"
                      :placeholder="keyFile ? 'leave empty to keep the key that is there' : 'if the server asks for one'" />
           <span :if="key?.mask" class="dim">on disk: <code>{{ key.mask }}</code></span>
         </dd>
         <dd :if="key?.problem" class="warn">{{ key.problem }}</dd>
-        <dt :if="backend === 'openai'">Key file</dt>
-        <dd :if="backend === 'openai'">
+        <dt :if="keyed">Key file</dt>
+        <dd :if="keyed">
           <TextInput :model="keyFile" :placeholder="`~/.luu/${trimmed || 'that'}.key`" @input="forget()" />
         </dd>
-        <dd :if="backend === 'openai'" class="note">
+        <dd :if="keyed" class="note">
           The key is written to that file with mode <code>0600</code>, never into
           <code>config.toml</code>, and never read back.
         </dd>
@@ -429,6 +477,31 @@
       </div>
 
       <dl class="settings form tail">
+        <dt :if="backend === 'anthropic'">Thinking</dt>
+        <dd :if="backend === 'anthropic'" class="inline">
+          <Select select-class="thinking" :options="THINKING" :model="thinkingMode" />
+          <input :if="thinkingMode === 'budget'" class="win budget" inputmode="numeric" :value="thinkingBudget"
+                 placeholder="4096" :class.invalid="budgetBad" @input="thinkingBudget = $event.target.value">
+        </dd>
+        <dd :if="backend === 'anthropic' && budgetBad" class="warn">
+          a budget is at least 1024 tokens, and under max tokens
+        </dd>
+        <dt :if="backend === 'anthropic'">Effort</dt>
+        <dd :if="backend === 'anthropic'">
+          <Select select-class="effort" :options="EFFORTS" :model="effort" />
+        </dd>
+        <dt :if="backend === 'anthropic'">Max tokens</dt>
+        <dd :if="backend === 'anthropic'" class="inline">
+          <input class="win max-tokens" inputmode="numeric" :value="maxTokens" :placeholder="String(DEFAULT_MAX_TOKENS)"
+                 :class.invalid="maxBad" @input="maxTokens = $event.target.value">
+          <span class="dim">one reply, thinking included</span>
+        </dd>
+        <dd :if="backend === 'anthropic'" class="note">
+          The thinking comes back signed and goes back to the model on every step of
+          a tool call, as long as nothing before it changed. Claude 4.7 and later hide
+          it unless thinking is <strong>adaptive</strong>.
+        </dd>
+
         <dt>Default</dt>
         <dd>
           <Checkbox :model="makeDefault"
@@ -465,6 +538,7 @@
   .form input:not([type]), .form select { width: 100%; }
   .form label { display: flex; gap: .4rem; align-items: center; }
   .connect-row { display: flex; gap: .6rem; align-items: center; }
+  .inline { display: flex; gap: .6rem; align-items: center; }
   .summary {
     display: flex; align-items: center; gap: .8rem;
     padding: .6rem .8rem; border: 1px solid var(--luu-border); border-radius: 6px;

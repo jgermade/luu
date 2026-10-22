@@ -1723,7 +1723,7 @@ file before `config.toml` is, and the file holds a path, for the reason the
 provider section gives.
 
 **The form connects before it writes.** It is two halves: *where it is* —
-name, backend, URL, and for `openai` an optional key — and, once **Connect**
+name, backend, URL, and for `openai` and `anthropic` an optional key — and, once **Connect**
 has spoken to it, *what it serves*. Connect sends the candidate as typed to
 `POST /api/providers/probe`, which answers with the list, what the server says
 of each model (`Backend::facts`), or the server's own refusal — a `401` lands
@@ -1766,7 +1766,8 @@ for itself** — a browser deciding it from `backend == "mock"` is the same clas
 of mistake as a second `is_this_machine` in JavaScript.
 
 **A provider lists what it serves.** `Backend::models` reads Ollama's
-`/api/tags` and an OpenAI-compatible `/models`, so a model is chosen from what
+`/api/tags`, an OpenAI-compatible `/models` and an Anthropic-compatible
+`/v1/models`, so a model is chosen from what
 is actually pulled rather than typed from memory. A provider that is not running
 is not an error here: the list comes back empty with the reason beside it, and
 the field stays typable, because a model that has not been pulled yet is a
@@ -1927,8 +1928,9 @@ against it; baselines need a real model.
 
 ## Inference backend
 
-**Two are built, behind one trait**: `ollama` (`POST /api/chat`, NDJSON) and
-`openai` (`POST /chat/completions`, SSE) — the second is not a hosted-API feature,
+**Three are built, behind one trait**: `ollama` (`POST /api/chat`, NDJSON),
+`openai` (`POST /chat/completions`, SSE), and `anthropic` (`POST /v1/messages`,
+SSE — [below](#the-anthropic-compatible-backend-and-the-thinking-it-keeps)). The second is not a hosted-API feature,
 it is how `llama-server`, vLLM and LM Studio are reached, which is five of the six
 machines in [`ROADMAP/2026-09-01/machines.md`](ROADMAP/2026-09-01/machines.md) plus
 two hosted endpoints. Binding `llama-cpp-rs` directly, for KV-cache control across
@@ -1951,6 +1953,70 @@ usage at all unless `stream_options.include_usage` is on the request, and some
 report none even then. `None` is *not reported*; zero would claim the server saw
 an empty prompt, in exactly the number the budget panel plots against ours. See
 [`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
+
+### The Anthropic-compatible backend, and the thinking it keeps
+
+**A third is built**: `anthropic` (`POST /v1/messages`, SSE), for Anthropic's own
+API and the ones that copied its shape — MiniMax, DeepSeek, Moonshot, Z.ai, and the
+`/v1/messages` of `llama-server` and Ollama. The URL is what their docs give as
+`ANTHROPIC_BASE_URL` (`https://api.minimax.io/anthropic`), and `/v1/messages` is
+appended, as the SDKs do; the key is `x-api-key`, never a bearer; the version is
+`2023-06-01`, which every compatible server was written against and which still
+takes a pinned `temperature` — Claude 4.7 and later refuse one, the others decide.
+`--seed` has no field on this API and the run says so before it measures.
+
+**What it shares with `openai`**: there is no field for the window, so
+`--context-limit` is budgeted against, not sent, and said. **What it does not**:
+`max_tokens` is required, so it is the backend's own — 16 384 unless a profile says
+`max-tokens` — and never `--reserve`, which is a budget and would end every thinking
+block at 512 tokens. And the prompt is three numbers: `input_tokens` leaves out what
+the cache served, so `prompt_tokens` is `input + cache_creation + cache_read`, or a
+cached prompt would read as a short one.
+
+**A thinking block streams up as `<think>…</think>`** — the reasoning everything
+above the backend already masks before it looks for a call and the page folds — and
+**goes back signed, or not at all.** The backend keeps each reply that carried
+thinking, as the blocks the server sent, under the hash of the model, the tools,
+every message before it and its own text. A request sends a held reply back as those
+blocks — signature and `tool_use` id included — exactly when that prefix comes back
+byte for byte; any other reply goes back as its text with the thinking cut out,
+because reasoning sent as text teaches a model to write `<think>` into its answers.
+That is the server's own check computed on this side: a signature binds the
+conversation before it, and a change before one reply is a change before every reply
+after it, so what stops being replayed is always the leading run the check allows.
+Inside a turn it always holds — the loop appends to a copy and never re-selects — so
+**interleaved thinking works on every step of a tool loop**; across turns it holds
+until luu evicts, folds or prunes. No beta header, nothing per host. The memory is
+the process's: a resumed session replays nothing from before, and the store keeps
+text, never a signature.
+
+**The rest of what the API offers, taken where it fits the design**: native
+`tool_use` / `tool_result` blocks by default on this backend (thinking between calls
+only exists between `tool_use` blocks, and no recording predates the backend), one
+call per reply (`disable_parallel_tool_use`, since a replayed `tool_use` without its
+result is refused), `cache_control` on the system block and on the last block of the
+history — the stable prefix is byte-identical by design, and on Claude it is cached
+only if marked — `output_config.format` for `Constraint::Schema`, and nothing for a
+grammar, which is said. A profile, or one model, may say:
+
+```toml
+[provider.claude]
+backend = "anthropic"
+url = "https://api.anthropic.com"
+key-file = "~/.luu/claude.key"
+model = "claude-opus-5-5"
+thinking = "adaptive"     # {type: adaptive, display: summarized}; "off"; or a budget: 4096
+effort = "high"           # output_config.effort: low … max
+max-tokens = 32000        # the cap on one reply, thinking included
+```
+
+Absent sends nothing — the server's default — except `max-tokens`. The three are
+refused on any other backend's profile, and a budget that does not fit under the cap
+is refused where the file is rather than at a first turn. `GET /v1/models` answers
+Connect: Claude's listing carries `max_input_tokens`, a ceiling luu budgets under
+(`WindowIs::Limit`), and its capability tree, read as *a Claude model*, all of which
+take tools; a `404` is a server that does not list. See
+[`RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`](RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md).
 
 ### Where a model lives
 

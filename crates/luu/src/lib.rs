@@ -10,7 +10,8 @@ use agent_core::agent::{DEFAULT_MAX_STEPS, SchemaRetry, run_agent_turn};
 use agent_core::api::{Counts, SessionView, Tokens};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{
-    Backend, CompletionRequest, Constraint, mock::Mock, ollama::Ollama, openai::OpenAi,
+    Backend, CompletionRequest, Constraint, anthropic::Anthropic, mock::Mock, ollama::Ollama,
+    openai::OpenAi,
 };
 use agent_core::context::{
     Budget, Context as AgentContext, Counter, Eviction, Fragment, Prune, Repeat, Results,
@@ -332,9 +333,16 @@ enum Command {
         #[arg(long)]
         openai_url: Option<String>,
 
-        /// A file holding the bearer token for `--backend openai`. Omitted
-        /// means no `Authorization` header at all, which is what a local
-        /// server wants. A file rather than a flag or an env var, for the
+        /// Where the Anthropic-compatible server is — what its docs give as
+        /// `ANTHROPIC_BASE_URL`, without `/v1`: Anthropic's API, MiniMax,
+        /// DeepSeek, Moonshot, Z.ai, or a local server's `/v1/messages`.
+        /// Defaults to the profile's URL, then to `http://127.0.0.1:8080`.
+        #[arg(long)]
+        anthropic_url: Option<String>,
+
+        /// A file holding the key for `--backend openai` (a bearer token) or
+        /// `--backend anthropic` (`x-api-key`). Omitted means no key header
+        /// at all, which is what a local server wants. A file rather than a flag or an env var, for the
         /// reason `crate::secret` gives — and its mode is checked there, as the
         /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
@@ -539,9 +547,16 @@ enum Command {
         #[arg(long)]
         openai_url: Option<String>,
 
-        /// A file holding the bearer token for `--backend openai`. Omitted
-        /// means no `Authorization` header at all, which is what a local
-        /// server wants.
+        /// Where the Anthropic-compatible server is — what its docs give as
+        /// `ANTHROPIC_BASE_URL`, without `/v1`: Anthropic's API, MiniMax,
+        /// DeepSeek, Moonshot, Z.ai, or a local server's `/v1/messages`.
+        /// Defaults to the profile's URL, then to `http://127.0.0.1:8080`.
+        #[arg(long)]
+        anthropic_url: Option<String>,
+
+        /// A file holding the key for `--backend openai` (a bearer token) or
+        /// `--backend anthropic` (`x-api-key`). Omitted means no key header
+        /// at all, which is what a local server wants.
         #[arg(long, value_name = "PATH")]
         api_key_file: Option<std::path::PathBuf>,
 
@@ -744,9 +759,16 @@ enum Command {
         #[arg(long)]
         openai_url: Option<String>,
 
-        /// A file holding the bearer token for `--backend openai`. Omitted
-        /// means no `Authorization` header at all, which is what a local
-        /// server wants. A file rather than a flag or an env var, for the
+        /// Where the Anthropic-compatible server is — what its docs give as
+        /// `ANTHROPIC_BASE_URL`, without `/v1`: Anthropic's API, MiniMax,
+        /// DeepSeek, Moonshot, Z.ai, or a local server's `/v1/messages`.
+        /// Defaults to the profile's URL, then to `http://127.0.0.1:8080`.
+        #[arg(long)]
+        anthropic_url: Option<String>,
+
+        /// A file holding the key for `--backend openai` (a bearer token) or
+        /// `--backend anthropic` (`x-api-key`). Omitted means no key header
+        /// at all, which is what a local server wants. A file rather than a flag or an env var, for the
         /// reason `crate::secret` gives — and its mode is checked there, as the
         /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
@@ -1575,6 +1597,7 @@ struct ModelArgs<'a> {
     model: Option<&'a str>,
     ollama_url: Option<&'a str>,
     openai_url: Option<&'a str>,
+    anthropic_url: Option<&'a str>,
     api_key_file: Option<&'a std::path::Path>,
     tool_calls: Option<provider::ToolCalls>,
     /// What this run budgets against, and 0 for "nothing said" — in which case
@@ -1644,6 +1667,7 @@ fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resol
             model: args.model,
             ollama_url: args.ollama_url,
             openai_url: args.openai_url,
+            anthropic_url: args.anthropic_url,
             api_key_file: args.api_key_file,
             context_limit: args.context_limit,
             tool_calls: args.tool_calls,
@@ -1695,17 +1719,44 @@ pub(crate) fn build_backend(
                 eprintln!("note: {caveat}");
             }
             let mut backend = OpenAi::new(&resolved.url);
-            if let Some(path) = &resolved.key_file {
-                let key = crate::secret::read(
-                    path,
-                    "the API key file",
-                    "hands the key to anyone who can read it here",
-                )?;
+            if let Some(key) = api_key(resolved)? {
+                backend = backend.with_api_key(key);
+            }
+            Box::new(backend)
+        }
+        BackendKind::Anthropic => {
+            // The same sentence, for the same reason: `max_tokens` caps the
+            // reply, and there is nowhere on this API to send the window.
+            if announce && let Some(caveat) = Anthropic::window_caveat(Some(resolved.context_limit))
+            {
+                eprintln!("note: {caveat}");
+            }
+            let keys = resolved.messages;
+            let mut backend = Anthropic::new(&resolved.url)
+                .with_thinking(keys.thinking)
+                .with_effort(keys.effort);
+            if let Some(max_tokens) = keys.max_tokens {
+                backend = backend.with_max_tokens(max_tokens);
+            }
+            if let Some(key) = api_key(resolved)? {
                 backend = backend.with_api_key(key);
             }
             Box::new(backend)
         }
     })
+}
+
+/// The key a resolution names, read and its mode checked; `None` without a
+/// file, which sends no key header at all.
+fn api_key(resolved: &provider::Resolved) -> Result<Option<String>> {
+    let Some(path) = &resolved.key_file else {
+        return Ok(None);
+    };
+    Ok(Some(crate::secret::read(
+        path,
+        "the API key file",
+        "hands the key to anyone who can read it here",
+    )?))
 }
 
 /// A backend for a destination **nobody has saved**: the key arrives as a
@@ -1718,6 +1769,13 @@ pub(crate) fn probe_backend(kind: BackendKind, url: &str, key: Option<String>) -
         BackendKind::Ollama => Box::new(Ollama::new(url)),
         BackendKind::Openai => {
             let mut backend = OpenAi::new(url);
+            if let Some(key) = key {
+                backend = backend.with_api_key(key);
+            }
+            Box::new(backend)
+        }
+        BackendKind::Anthropic => {
+            let mut backend = Anthropic::new(url);
             if let Some(key) = key {
                 backend = backend.with_api_key(key);
             }
@@ -2330,6 +2388,7 @@ pub async fn run() -> Result<()> {
         model,
         ollama_url,
         openai_url,
+        anthropic_url,
         api_key_file,
         tool_calls,
         mock_delay_ms,
@@ -2384,6 +2443,7 @@ pub async fn run() -> Result<()> {
             model: model.as_deref(),
             ollama_url: ollama_url.as_deref(),
             openai_url: openai_url.as_deref(),
+            anthropic_url: anthropic_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
             tool_calls,
             context_limit,
@@ -2574,6 +2634,7 @@ pub async fn run() -> Result<()> {
         model,
         ollama_url,
         openai_url,
+        anthropic_url,
         api_key_file,
         tool_calls,
         mock_delay_ms,
@@ -2607,6 +2668,7 @@ pub async fn run() -> Result<()> {
             model: model.as_deref(),
             ollama_url: ollama_url.as_deref(),
             openai_url: openai_url.as_deref(),
+            anthropic_url: anthropic_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
             tool_calls,
             context_limit,
@@ -2691,6 +2753,7 @@ pub async fn run() -> Result<()> {
         model,
         ollama_url,
         openai_url,
+        anthropic_url,
         api_key_file,
         tool_calls,
         mock_delay_ms,
@@ -2742,6 +2805,7 @@ pub async fn run() -> Result<()> {
         model: model.as_deref(),
         ollama_url: ollama_url.as_deref(),
         openai_url: openai_url.as_deref(),
+        anthropic_url: anthropic_url.as_deref(),
         api_key_file: api_key_file.as_deref(),
         tool_calls,
         context_limit,
@@ -2831,6 +2895,12 @@ pub async fn run() -> Result<()> {
     if let Some(built) = &built
         && let Some(caveat) = backend.constrain_caveat(built)
     {
+        eprintln!("note: {caveat}");
+    }
+    // And the sampling it pinned, where the destination has nowhere to put
+    // it: a header saying `seed: 42` over a run that sent none is two runs
+    // looking alike that were not.
+    if let Some(caveat) = backend.sampling_caveat(temperature, seed) {
         eprintln!("note: {caveat}");
     }
     // The two arms diverge here. `Grammar` is honestly a first-attempt

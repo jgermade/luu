@@ -427,6 +427,10 @@ impl agent_core::backend::Backend for Started {
     fn constrain_caveat(&self, constraint: &agent_core::backend::Constraint) -> Option<String> {
         self.inner.constrain_caveat(constraint)
     }
+
+    fn sampling_caveat(&self, temperature: Option<f32>, seed: Option<u32>) -> Option<String> {
+        self.inner.sampling_caveat(temperature, seed)
+    }
 }
 
 // ---- its life -------------------------------------------------------------

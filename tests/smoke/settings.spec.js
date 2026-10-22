@@ -699,6 +699,103 @@ test("the models are grouped by their tools and written as exceptions", async ({
 })
 
 /**
+ * An Anthropic-compatible provider: the key goes as `x-api-key`, the listing's
+ * `max_input_tokens` caps each window, a Claude model is one that takes tools,
+ * and the Messages API's own keys — thinking, effort, max tokens — are written
+ * to the profile while native calls, its default, are not. See
+ * `RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`.
+ */
+test("an anthropic provider connects with its key and writes its thinking", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const MODELS = [
+    { id: "claude-opus-5-5", max_input_tokens: 1000000, capabilities: { thinking: { supported: true } } },
+    { id: "claude-haiku-4-5", max_input_tokens: 200000, capabilities: { thinking: { supported: true } } },
+  ]
+  const fake = createServer((req, res) => {
+    if (!req.url.startsWith("/v1/models")) return res.writeHead(404).end()
+    if (req.headers["x-api-key"] !== "sk-ant-right" || !req.headers["anthropic-version"]) {
+      return res.writeHead(401, { "content-type": "application/json" })
+        .end('{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}')
+    }
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ data: MODELS, has_more: false }))
+  })
+  await new Promise(done => fake.listen(0, "127.0.0.1", done))
+  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fake.address()).port}`
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    await page.locator('.modal button.add:has-text("+ provider")').click()
+    const form = page.getByRole("dialog", { name: "Add a provider" })
+    await form.locator("dd input").first().fill("claude")
+    await form.locator("select.backend").selectOption("anthropic")
+    await form.locator('input[placeholder="http://127.0.0.1:8080"]').fill(at)
+
+    const key = form.locator('input[type="password"]')
+    await key.fill("sk-ant-wrong")
+    await form.locator("button.connect").click()
+    await expect(form.locator("p.error")).toContainText("401")
+    await expect(key).toBeFocused()
+
+    await key.fill("sk-ant-right")
+    await form.locator("button.connect").click()
+    await expect(form.locator(".summary")).toContainText("claude · Anthropic-compatible")
+    await expect(form.locator(".summary")).toContainText("2 models")
+    await expect(form.locator("li.head")).toHaveText(["Tools"])
+    const row = name => form.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) })
+    await expect(row("claude-haiku-4-5")).toContainText("up to 200000")
+
+    // A budget that does not fit under the cap is refused before it is sent.
+    await form.locator("select.thinking").selectOption("budget")
+    await form.locator("input.budget").fill("4096")
+    await form.locator("input.max-tokens").fill("2048")
+    await expect(form.locator("button.save")).toBeDisabled()
+    await form.locator("select.thinking").selectOption("adaptive")
+    await form.locator("select.effort").selectOption("high")
+    await form.locator("input.max-tokens").fill("32000")
+    await row("claude-opus-5-5").locator('input[type="radio"]').click()
+    await form.locator("button.save").click()
+    await expect(form).toHaveCount(0)
+
+    const written = readFileSync(join(home, "config.toml"), "utf8")
+    const table = written.slice(written.indexOf("[provider.claude]"))
+    expect(table).toContain('backend = "anthropic"')
+    expect(table).toContain('model = "claude-opus-5-5"')
+    expect(table).toContain('thinking = "adaptive"')
+    expect(table).toContain('effort = "high"')
+    expect(table).toContain("max-tokens = 32000")
+    expect(table).toContain("key-file = ")
+    // Native is what an anthropic profile resolves to: nothing to write.
+    expect(table).not.toContain("tool-calls")
+
+    const all = await (await fetch(`${BASE}/api/providers/claude/models?facts=1`)).json()
+    expect(all.facts["claude-opus-5-5"]).toEqual({ window: 1000000, window_is: "limit", tools: true })
+
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    delete now.providers.claude
+    const put = await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: now.default ?? null, providers: now.providers }),
+    })
+    expect(put.ok).toBe(true)
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    fake.close()
+  }
+
+  expect(errors).toEqual([])
+})
+
+/**
  * Settings → Engines: a model server luu starts. No download here — the suite
  * does not reach the network — so the binary is a stand-in named
  * `llama-server` that serves HTTP on the port luu hands it, which is enough to

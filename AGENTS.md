@@ -101,6 +101,12 @@ cargo run --bin luu -- chat "hola" --backend ollama   # against a local Ollama
 # hosted endpoint, or Ollama's own /v1. The window is the server's — see below.
 cargo run --bin luu -- chat "hola" --backend openai \
   --openai-url http://127.0.0.1:8080/v1 --model qwen2.5-coder-7b
+# and anything Anthropic-compatible: Anthropic's API, MiniMax, DeepSeek, Kimi,
+# GLM, or a local server's /v1/messages. The URL is the provider's
+# ANTHROPIC_BASE_URL; its thinking comes back folded and goes back signed.
+cargo run --bin luu -- chat "hola" --backend anthropic \
+  --anthropic-url https://api.anthropic.com --model claude-opus-5-5 \
+  --api-key-file ~/.luu/claude.key
 # and the same destination written down once, in `config.toml` in the state
 # directory: `[provider.<name>]` carries the backend, the URL, the model, the
 # key file and the server's window. `-p` names one, `-m` overrides its model,
@@ -631,9 +637,10 @@ real release.
 is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into
 the binary for release. Editing a component costs a reload, not a `cargo build`.
 
-## The two backends, and the one rule that does not transfer
+## The three backends, and the one rule that does not transfer
 
-`--backend ollama` and `--backend openai` are both built, behind one trait.
+`--backend ollama`, `--backend openai` and `--backend anthropic` are built, behind
+one trait.
 The second is not about hosted APIs: it is how `llama-server`, vLLM and LM Studio
 are reached, which is most of the machines in
 [`ROADMAP/2026-09-01/machines.md`](ROADMAP/2026-09-01/machines.md).
@@ -664,6 +671,20 @@ at all, which is what a local server wants. The backend's name in a recording is
 `openai@<host>`, not `openai`, because a header whose job is to make two runs
 comparable cannot call a 7B on a laptop and a hosted frontier model the same
 thing.
+
+**`--backend anthropic` shares the window rule and breaks two others.** No field
+for the window either; but `max_tokens` is required (16 384, or `max-tokens` on
+the profile — never `--reserve`), and `prompt_tokens` is `input_tokens` plus both
+cache counts, or a cached prompt reads as a short one. Its calls are `native` by
+default. **A thinking block is kept by the backend under the exact prefix it
+answered, and sent back signed only when that prefix comes back byte for byte** —
+every step of a tool loop, and earlier turns until luu evicts, folds or prunes;
+anything else goes back as text with the thinking cut out. So a change that edits
+history does not break it, and a change that makes the in-turn prefix move between
+steps does: `run_agent_turn` appending to a copy is load-bearing here. `thinking`,
+`effort` and `max-tokens` are profile keys the loader refuses on any other backend.
+See
+[`RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`](RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md).
 
 ## Running against a real model (Ollama)
 

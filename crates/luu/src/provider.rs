@@ -52,6 +52,9 @@ pub enum BackendKind {
     /// Any OpenAI-compatible server: `llama-server`, vLLM, LM Studio, a hosted
     /// endpoint, or Ollama's own `/v1`.
     Openai,
+    /// Any Anthropic-compatible server: Anthropic's own API, MiniMax, DeepSeek,
+    /// Moonshot, Z.ai, or the `/v1/messages` of `llama-server` and Ollama.
+    Anthropic,
 }
 
 impl BackendKind {
@@ -62,6 +65,7 @@ impl BackendKind {
             Self::Mock => None,
             Self::Ollama => Some(DEFAULT_OLLAMA_URL),
             Self::Openai => Some(agent_core::backend::openai::DEFAULT_BASE_URL),
+            Self::Anthropic => Some(agent_core::backend::anthropic::DEFAULT_BASE_URL),
         }
     }
 
@@ -70,7 +74,26 @@ impl BackendKind {
             Self::Mock => "mock",
             Self::Ollama => "ollama",
             Self::Openai => "openai",
+            Self::Anthropic => "anthropic",
         }
+    }
+
+    /// How tool calls travel when nothing says. Fenced, which every recording
+    /// before the key was made under — except on the Anthropic API, where no
+    /// recording predates it and the thinking a model does *between* calls only
+    /// exists between `tool_use` blocks. See
+    /// `RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`.
+    pub fn default_tool_calls(self) -> ToolCalls {
+        match self {
+            Self::Anthropic => ToolCalls::Native,
+            _ => ToolCalls::Fenced,
+        }
+    }
+
+    /// Whether a key or a file may hold a key for it: the two HTTP APIs that
+    /// take one. Ollama asks for none and the mock is nowhere.
+    pub fn takes_key(self) -> bool {
+        matches!(self, Self::Openai | Self::Anthropic)
     }
 }
 
@@ -116,12 +139,76 @@ pub struct Profile {
     /// See `RECORD/2026-09-30.native-tool-calls.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<ToolCalls>,
+    /// `"adaptive"`, `"off"`, or a budget in tokens — the Anthropic API's
+    /// `thinking`. See [`MessagesKeys`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<agent_core::backend::anthropic::Thinking>,
+    /// `output_config.effort`: `low`, `medium`, `high`, `xhigh` or `max`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<agent_core::backend::anthropic::Effort>,
+    /// The cap on one reply, thinking included: the Anthropic API's required
+    /// `max_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
     /// What differs for one model from the rest of this profile, by the name
     /// the server lists it under. **Exceptions, never a catalogue**: a model
     /// with no entry takes the profile's values, so one pulled tomorrow needs
     /// no edit. See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub models: std::collections::BTreeMap<String, ModelEntry>,
+}
+
+/// The three keys only the Anthropic API reads, read off a profile or one
+/// model's entry, absent meaning *nothing sent* — the server's own default — except
+/// `max-tokens`, which the API requires and the backend fills in. Refused on
+/// any other backend's profile: a key that a backend ignores is a key somebody
+/// believes is working. See
+/// `RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MessagesKeys {
+    pub thinking: Option<agent_core::backend::anthropic::Thinking>,
+    pub effort: Option<agent_core::backend::anthropic::Effort>,
+    pub max_tokens: Option<u32>,
+}
+
+impl MessagesKeys {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// One level over another, key by key: a model's over its profile's.
+    pub fn over(self, under: Self) -> Self {
+        Self {
+            thinking: self.thinking.or(under.thinking),
+            effort: self.effort.or(under.effort),
+            max_tokens: self.max_tokens.or(under.max_tokens),
+        }
+    }
+
+    /// The name of the first key set, for the refusal that names it.
+    fn first(&self) -> Option<&'static str> {
+        match () {
+            _ if self.thinking.is_some() => Some("thinking"),
+            _ if self.effort.is_some() => Some("effort"),
+            _ if self.max_tokens.is_some() => Some("max-tokens"),
+            _ => None,
+        }
+    }
+
+    /// A budget the cap leaves no room under is a 400 at the first turn; it
+    /// is refused here instead, where the file is.
+    fn problem(&self) -> Option<String> {
+        let max = self
+            .max_tokens
+            .unwrap_or(agent_core::backend::anthropic::DEFAULT_MAX_TOKENS);
+        if self.max_tokens == Some(0) {
+            return Some("max-tokens = 0 leaves no room for a reply".into());
+        }
+        let budget = self.thinking.and_then(|thinking| thinking.budget())?;
+        (budget >= max).then(|| {
+            format!("thinking = {budget} does not fit under max-tokens = {max}: raise max-tokens")
+        })
+    }
 }
 
 /// One model's exceptions to its profile. Every key optional, absent meaning
@@ -141,6 +228,17 @@ pub struct ModelEntry {
     /// reaches it: typing a model is choosing it.
     #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
     pub enabled: bool,
+    /// `"adaptive"`, `"off"`, or a budget in tokens — one model's
+    /// `thinking`, over the profile's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<agent_core::backend::anthropic::Thinking>,
+    /// `output_config.effort`: `low`, `medium`, `high`, `xhigh` or `max`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<agent_core::backend::anthropic::Effort>,
+    /// The cap on one reply, thinking included: the Anthropic API's required
+    /// `max_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
 }
 
 impl Default for ModelEntry {
@@ -149,6 +247,9 @@ impl Default for ModelEntry {
             context_limit: None,
             tool_calls: None,
             enabled: true,
+            thinking: None,
+            effort: None,
+            max_tokens: None,
         }
     }
 }
@@ -165,6 +266,24 @@ impl Profile {
     /// Whether the pickers offer `model`: everything but what is switched off.
     pub fn offers(&self, model: &str) -> bool {
         self.models.get(model).is_none_or(|entry| entry.enabled)
+    }
+
+    pub fn messages(&self) -> MessagesKeys {
+        MessagesKeys {
+            thinking: self.thinking,
+            effort: self.effort,
+            max_tokens: self.max_tokens,
+        }
+    }
+}
+
+impl ModelEntry {
+    pub fn messages(&self) -> MessagesKeys {
+        MessagesKeys {
+            thinking: self.thinking,
+            effort: self.effort,
+            max_tokens: self.max_tokens,
+        }
     }
 }
 
@@ -662,6 +781,12 @@ pub enum ConfigError {
     },
     #[error("{path}: [server]: {problem}")]
     BadServer { path: String, problem: String },
+    #[error("{path}: {at}: {problem}")]
+    BadMessages {
+        path: String,
+        at: String,
+        problem: String,
+    },
     #[error("{path}: [host.{name}]: {problem}")]
     BadHost {
         path: String,
@@ -719,6 +844,7 @@ impl Config {
         };
         config.check_default(path)?;
         config.check_engines(path)?;
+        config.check_messages(path)?;
         config.check_hosts(path)?;
         config.check_server(path)?;
         Ok(config)
@@ -737,6 +863,53 @@ impl Config {
                     profile: profile.clone(),
                     engine: engine.clone(),
                 });
+            }
+        }
+        Ok(())
+    }
+
+    /// `thinking`, `effort` and `max-tokens` sit only on an `anthropic`
+    /// profile, and a thinking budget fits under the cap it shares — on the
+    /// profile and on each model as it resolves. Both would otherwise be
+    /// found at a first turn, or never.
+    fn check_messages(&self, path: &str) -> Result<(), ConfigError> {
+        for (name, profile) in &self.providers {
+            let own = profile.messages();
+            let anthropic = profile.backend == Some(BackendKind::Anthropic);
+            let mut levels = vec![(None, own)];
+            levels.extend(
+                profile
+                    .models
+                    .iter()
+                    .map(|(model, entry)| (Some(model.as_str()), entry.messages())),
+            );
+            for (model, keys) in levels {
+                let at = match model {
+                    Some(model) => format!("[provider.{name}.models.\"{model}\"]"),
+                    None => format!("[provider.{name}]"),
+                };
+                if !anthropic && let Some(key) = keys.first() {
+                    return Err(ConfigError::BadMessages {
+                        path: path.to_string(),
+                        at,
+                        problem: format!(
+                            "`{key}` is read by the anthropic backend only, and this profile's \
+                             is {}: nothing would send it",
+                            profile.backend.unwrap_or(BackendKind::Mock).as_str()
+                        ),
+                    });
+                }
+                let resolved = match model {
+                    Some(_) => keys.over(own),
+                    None => keys,
+                };
+                if let Some(problem) = resolved.problem() {
+                    return Err(ConfigError::BadMessages {
+                        path: path.to_string(),
+                        at,
+                        problem,
+                    });
+                }
             }
         }
         Ok(())
@@ -1079,6 +1252,7 @@ pub struct Flags<'a> {
     pub model: Option<&'a str>,
     pub ollama_url: Option<&'a str>,
     pub openai_url: Option<&'a str>,
+    pub anthropic_url: Option<&'a str>,
     pub api_key_file: Option<&'a Path>,
     /// 0 is the CLI's "unknown window", which is also its "not set".
     pub context_limit: u32,
@@ -1138,6 +1312,9 @@ pub struct Resolved {
     pub engine: Option<(String, Engine)>,
     /// How tool calls travel to and from this destination.
     pub tool_calls: ToolCalls,
+    /// `thinking`, `effort` and `max-tokens`: the model's over the profile's.
+    /// Empty on every backend but `anthropic`, where the file refuses them.
+    pub messages: MessagesKeys,
     /// Whether anybody *chose* this: `-p`, or any flag at all, or a provider
     /// picked for a session. A destination nobody chose is the file's default
     /// (or the mock with no default), and it follows the file when the file
@@ -1161,6 +1338,7 @@ impl Resolved {
             destination_from: DestinationFrom::Default,
             engine: None,
             tool_calls: ToolCalls::Fenced,
+            messages: MessagesKeys::default(),
             named: false,
         }
     }
@@ -1225,13 +1403,14 @@ pub fn resolve(
         .backend
         .or(profile.backend)
         .unwrap_or(BackendKind::Mock);
-    // The two URL flags collapse here: only one of them can be the destination
+    // The URL flags collapse here: only one of them can be the destination
     // once the backend is known, and carrying both further is how a run ends up
     // reporting the address it did not dial.
     let flag_url = match kind {
         BackendKind::Mock => None,
         BackendKind::Ollama => flags.ollama_url,
         BackendKind::Openai => flags.openai_url,
+        BackendKind::Anthropic => flags.anthropic_url,
     };
     let url = flag_url
         .map(str::to_string)
@@ -1272,6 +1451,12 @@ pub fn resolve(
     // the model, then the profile.
     let entry = profile.models.get(&model).cloned().unwrap_or_default();
     let window = entry.context_limit.or(profile.context_limit);
+    // Only while the backend is still the profile's own, as its URL is:
+    // `--backend openai` over an Anthropic profile has no use for them.
+    let messages = match profile.backend.unwrap_or(kind) == kind {
+        true => entry.messages().over(profile.messages()),
+        false => MessagesKeys::default(),
+    };
 
     Ok(Resolved {
         kind,
@@ -1300,13 +1485,15 @@ pub fn resolve(
                 .and_then(|engine| Some((engine.clone(), config.engines.get(engine)?.clone()))),
             false => None,
         },
-        // The flag over the profile, and fenced where neither says: the
-        // transport every earlier recording was made under.
+        // The flag over the profile, and the backend's own where neither
+        // says: fenced, the transport every earlier recording was made
+        // under, except where no recording predates the backend.
         tool_calls: flags
             .tool_calls
             .or(entry.tool_calls)
             .or(profile.tool_calls)
-            .unwrap_or_default(),
+            .unwrap_or(kind.default_tool_calls()),
+        messages,
         profile: name,
         // A flag beats the file here exactly as it does field by field above,
         // and the mock is a destination when somebody typed it.
@@ -1319,6 +1506,7 @@ pub fn resolve(
             || flags.model.is_some()
             || flags.ollama_url.is_some()
             || flags.openai_url.is_some()
+            || flags.anthropic_url.is_some()
             || flags.api_key_file.is_some()
             || flags.context_limit != 0
             || flags.tool_calls.is_some(),
@@ -1505,6 +1693,109 @@ mod tests {
     fn resolved(text: &str, flags: Flags<'_>) -> Resolved {
         let config = config(text).expect("the file loads");
         resolve(&config, Some(Path::new(PATH)), flags).expect("it resolves")
+    }
+
+    /// The Messages API's own keys, a model's over its profile's; native
+    /// calls unless the file says otherwise; and the URL flag that is its own.
+    #[test]
+    fn an_anthropic_profile_carries_its_thinking_and_calls_natively() {
+        use agent_core::backend::anthropic::{Effort, Thinking};
+        let text = "[provider.claude]\nbackend = \"anthropic\"\n\
+                    url = \"https://api.anthropic.com\"\nmodel = \"claude-opus-5-5\"\n\
+                    thinking = \"adaptive\"\neffort = \"high\"\n\n\
+                    [provider.claude.models.\"claude-haiku-4-5\"]\n\
+                    thinking = 4096\nmax-tokens = 8192\n";
+        let named = |model| Flags {
+            provider: Some("claude"),
+            model,
+            ..Default::default()
+        };
+        let opus = resolved(text, named(None));
+        assert_eq!(opus.kind, BackendKind::Anthropic);
+        assert_eq!(opus.tool_calls, ToolCalls::Native);
+        assert_eq!(
+            opus.messages,
+            MessagesKeys {
+                thinking: Some(Thinking::Adaptive),
+                effort: Some(Effort::High),
+                max_tokens: None,
+            }
+        );
+        let haiku = resolved(text, named(Some("claude-haiku-4-5")));
+        assert_eq!(haiku.messages.thinking, Some(Thinking::Budget(4096)));
+        assert_eq!(haiku.messages.effort, Some(Effort::High));
+        assert_eq!(haiku.messages.max_tokens, Some(8192));
+
+        // The file still says fenced when somebody wrote it.
+        let fenced = resolved(
+            &text.replace(
+                "effort = \"high\"\n",
+                "effort = \"high\"\ntool-calls = \"fenced\"\n",
+            ),
+            named(None),
+        );
+        assert_eq!(fenced.tool_calls, ToolCalls::Fenced);
+
+        // Its own URL flag, and another backend's flag leaves the keys behind
+        // with the URL.
+        let moved = resolved(
+            text,
+            Flags {
+                anthropic_url: Some("https://api.minimax.io/anthropic"),
+                ..named(None)
+            },
+        );
+        assert_eq!(moved.url, "https://api.minimax.io/anthropic");
+        let other = resolved(
+            text,
+            Flags {
+                backend: Some(BackendKind::Openai),
+                ..named(None)
+            },
+        );
+        assert_eq!(other.messages, MessagesKeys::default());
+        assert_eq!(other.tool_calls, ToolCalls::Fenced);
+
+        // And it writes back as it was read.
+        let rendered = config(text).unwrap().render().unwrap();
+        assert!(rendered.contains("thinking = \"adaptive\""), "{rendered}");
+        assert!(rendered.contains("thinking = 4096"), "{rendered}");
+        assert!(rendered.contains("max-tokens = 8192"), "{rendered}");
+    }
+
+    #[test]
+    fn the_messages_keys_are_refused_where_nothing_would_send_them() {
+        let error = config("[provider.local]\nbackend = \"ollama\"\nthinking = \"adaptive\"\n")
+            .expect_err("thinking on an ollama profile");
+        assert!(
+            error
+                .to_string()
+                .contains("read by the anthropic backend only"),
+            "{error}"
+        );
+        let error = config(
+            "[provider.w]\nbackend = \"openai\"\n\n[provider.w.models.\"m\"]\nmax-tokens = 10\n",
+        )
+        .expect_err("max-tokens on an openai model");
+        assert!(
+            error.to_string().contains("[provider.w.models.\"m\"]"),
+            "{error}"
+        );
+
+        // A budget the cap leaves no room under, on the profile or as a model
+        // resolves it — and a budget under the API's own minimum.
+        let error = config("[provider.c]\nbackend = \"anthropic\"\nthinking = 20000\n")
+            .expect_err("a budget over the default cap");
+        assert!(error.to_string().contains("raise max-tokens"), "{error}");
+        assert!(
+            config(
+                "[provider.c]\nbackend = \"anthropic\"\nthinking = 4096\n\n\
+                 [provider.c.models.\"m\"]\nmax-tokens = 2048\n"
+            )
+            .is_err()
+        );
+        assert!(config("[provider.c]\nbackend = \"anthropic\"\nthinking = 100\n").is_err());
+        assert!(config("[provider.c]\nbackend = \"anthropic\"\neffort = \"huge\"\n").is_err());
     }
 
     #[test]
