@@ -54,12 +54,12 @@
   <div :if="buckets.length" class="budget">
     <div class="bar">
       <span :each="b in buckets" :key="b.name"
-            :style="`flex-grow:${b.tokens};background:var(--b-${b.name}, var(--dim))`"
+            :style="`flex-grow:${b.tokens};background:var(--luu-bucket-${b.name}, var(--luu-fg-muted))`"
             :title="`${b.name}: ${b.tokens}`"></span>
     </div>
     <ul class="legend">
       <li :each="b in buckets" :key="b.name">
-        <span class="swatch" :style="`background:var(--b-${b.name}, var(--dim))`"></span>
+        <span class="swatch" :style="`background:var(--luu-bucket-${b.name}, var(--luu-fg-muted))`"></span>
         {{ b.name }} <b>{{ b.tokens }}</b>
       </li>
     </ul>
@@ -75,7 +75,7 @@
 
   <section :each="g in groups" :key="g.bucket" class="group" :data-bucket="g.bucket">
     <header>
-      <span class="swatch" :style="`background:var(--b-${g.bucket}, var(--dim))`"></span>
+      <span class="swatch" :style="`background:var(--luu-bucket-${g.bucket}, var(--luu-fg-muted))`"></span>
       <b :class="'b-' + g.bucket">{{ g.bucket }}</b>
       <span :if="g.tokens !== null" class="dim">{{ g.tokens }} tokens</span>
       <span :if="g.native" class="dim">· the request's <code>tools</code> field</span>
@@ -94,7 +94,7 @@
 
   <section :if="reply" class="group answer" data-bucket="answer">
     <header>
-      <span class="swatch" style="background:var(--b-history)"></span>
+      <span class="swatch" style="background:var(--luu-bucket-history)"></span>
       <b class="b-history">answer</b>
       <span class="dim">the reply to this prompt · not sent yet: the next turn carries it in history</span>
       <span class="grow"></span>
@@ -111,7 +111,7 @@
   </section>
 
   <p :if="nativeTools" class="note">
-    <span class="swatch" style="background:var(--b-tools)"></span>
+    <span class="swatch" style="background:var(--luu-bucket-tools)"></span>
     <b>tools {{ nativeTools }}</b> — sent in the request's own <code>tools</code>
     field, not in the prompt's text. The server's chat template renders them into the
     prompt with the tool prompt the model was trained on, which is why the
@@ -126,28 +126,28 @@
 
 <style scoped>
   .budget { margin-bottom: 1rem; }
-  .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sunken); }
+  .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--luu-sunken); }
   .bar span { min-width: 2px; }
   .legend { list-style: none; display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: .5rem 0 .3rem; padding: 0; font-size: 12px; }
   .legend li { display: flex; align-items: center; gap: .35rem; }
   .swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
-  .dim { color: var(--dim); }
+  .dim { color: var(--luu-fg-muted); }
   .small { font-size: 11px; }
   .grow { flex: 1; }
   /* Not part of what was sent, so it does not look like a bucket that was. */
   .group.answer { border-style: dashed; }
   .group {
     margin-bottom: .8rem;
-    border: 1px solid var(--line);
+    border: 1px solid var(--luu-border);
     border-radius: 6px;
-    background: var(--sunken);
+    background: var(--luu-sunken);
   }
   .group header {
     display: flex;
     align-items: center;
     gap: .45rem;
     padding: .35rem .65rem;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--luu-border);
     font-size: 12px;
   }
   .group header .link { font-size: 11px; }
@@ -160,8 +160,8 @@
     mask-image: linear-gradient(to bottom, #000 75%, transparent);
   }
   .body.scroll { max-height: 30rem; overflow: auto; }
-  .entry + .entry { margin-top: .5rem; padding-top: .5rem; border-top: 1px dashed var(--line); }
-  .role { font-size: 11px; color: var(--dim); margin-bottom: .15rem; }
+  .entry + .entry { margin-top: .5rem; padding-top: .5rem; border-top: 1px dashed var(--luu-border); }
+  .role { font-size: 11px; color: var(--luu-fg-muted); margin-bottom: .15rem; }
   /* The card is the box: the page's own `pre` draws another inside it. */
   pre {
     margin: 0;
@@ -174,14 +174,14 @@
     overflow-wrap: anywhere;
     font-size: 12px;
   }
-  .note { font-size: 12px; color: var(--dim); display: flex; gap: .45rem; align-items: baseline; margin: 0 0 .9rem; }
-  .note b { color: var(--b-tools); white-space: nowrap; }
+  .note { font-size: 12px; color: var(--luu-fg-muted); display: flex; gap: .45rem; align-items: baseline; margin: 0 0 .9rem; }
+  .note b { color: var(--luu-bucket-tools); white-space: nowrap; }
   /* The legend's colours, on the text they count. */
-  .b-system { color: var(--b-system); }
-  .b-tools { color: var(--b-tools); }
-  .b-map { color: var(--b-map); }
-  .b-summaries { color: var(--b-summaries); }
-  .b-history { color: var(--b-history); }
-  .b-code { color: var(--b-code); }
-  .b-prompt { color: var(--b-prompt); }
+  .b-system { color: var(--luu-bucket-system); }
+  .b-tools { color: var(--luu-bucket-tools); }
+  .b-map { color: var(--luu-bucket-map); }
+  .b-summaries { color: var(--luu-bucket-summaries); }
+  .b-history { color: var(--luu-bucket-history); }
+  .b-code { color: var(--luu-bucket-code); }
+  .b-prompt { color: var(--luu-bucket-prompt); }
 </style>

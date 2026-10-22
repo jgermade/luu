@@ -983,7 +983,7 @@ context manager is actually doing — the CLI can't show a token budget or a pro
 1260px; below it, the inspector and *one* of the other two, with a toggle in that column's own
 head. Which of the two is a person's choice rather than the viewport's, and a click that opens
 something in the content column switches to it, because the click already said which column
-they want. `General → layout` pins the two-column mode at any width, and the **chat's head
+they want. `Appearance → Layout` pins the two-column mode at any width, and the **chat's head
 narrows to two columns for now** without touching that setting — the last button there, and in
 the content's head too while it is on; the swap and that switch are one control in both heads.
 **A phone is three slides** (below 760px): the chat, the inspector and the content, a screen wide
@@ -1031,7 +1031,7 @@ holding a shell where the session runs, which hiding does not end and `exit`
 does — there is no button for it
 ([`RECORD/2026-10-01.the-foot-names-its-file.completed.md`](RECORD/2026-10-01.the-foot-names-its-file.completed.md)) — and, the way VS Code does it, a single click opens a **preview** tab, in
 italics, that the next single click replaces in place, while a double click (on the row, or on
-the tab) or the tree's pencil keeps it; the chat's head is the session's name, editable in place, beside
+the tab) keeps it; the chat's head is the session's name, editable in place, beside
 new-session and history. Settings sits in the inspector rather than in the chat's head because
 the chat's head is the one head that disappears: below 1260px the second column is a choice, and
 with the content showing there was no settings button on the page at all.
@@ -1048,15 +1048,22 @@ save. Those rows are **built in plain JS by `rows.js`, not by a template**: a `:
 `:each` charges a scope and two effects per coloured span, over spans that arrive whole,
 already coloured, and never change. Dropping the renderer from that one subtree halves the time
 to the whole file and takes the tab's JS heap from hundreds of megabytes to about twelve. See
-[`RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`](RECORD/2026-09-16.the-viewer-in-plain-js.completed.md). Read-only throughout: the file tree and the git panel are a window onto the workspace,
-not a second way to change it — every write still goes through the job gate. A tree row is an
-`<li>` holding three controls rather than one big `<button>` — the button that opens the thing,
-git's letter, and an **edit pencil that appears only under the pointer** (and under keyboard
-focus, because an action that exists only on hover is one a keyboard cannot find). Its slot is
-reserved rather than conjured, so revealing it does not reflow the name being pointed at. **The
-pencil opens the file today**: the write half is not decided, and deciding it means arguing with
-the sentence above rather than routing around it. See
+[`RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`](RECORD/2026-09-16.the-viewer-in-plain-js.completed.md). The file tree and the git panel are a window onto the workspace, **with one exception: a
+person renames a file or a folder from the tree**. Every other write — a model's, a tool's —
+still goes through the job gate. A tree row is an `<li>` holding three controls rather than one
+big `<button>` — the button that opens the thing, git's letter, and an **edit pencil that
+appears only under the pointer** (and under keyboard focus, because an action that exists only
+on hover is one a keyboard cannot find). Its slot is reserved rather than conjured, so revealing
+it does not reflow the name being pointed at. See
 [`RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`](RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md).
+**The pencil renames** (so does F2 on a row): the name becomes a field, Enter or leaving it
+renames, ESC puts it back, and a refusal is said under the row with the field still open. It is
+`POST /api/workspace/rename` with a new *name*, never a path, so a rename cannot become a move;
+a name already taken is a 409, not an overwrite; both ends are checked by the sandbox for
+`read-write`, so a posture that only reads refuses it; and only a page on this machine may ask,
+by the bound address and by `Host`, as for Settings' writes. An open tab and the expanded
+folders follow what was renamed. See
+[`RECORD/2026-10-21.the-tree-renames.completed.md`](RECORD/2026-10-21.the-tree-renames.completed.md).
 
 The columns' contents and every dialog are separate jq79 components
 (`inspector-{files,git,debug}.html`, `views/editor/editor.html`, `settings-{modal,general,models}.html`,
@@ -1088,8 +1095,11 @@ the screen somebody reads from. Dark stays the default for a browser with nothin
 because every screenshot and every record here was taken against it.
 
 **The chat has a name, not a tab strip.** One session is on screen, so a strip was spending a row
-to answer a question the head answers in words; the strip lives on as the **sessions modal**
-behind the clock — a search over the names and ids, and the list in the order sessions were last
+to answer a question the head answers in words; the strip lives on as the **History** tab of
+the **Sessions** dialog, a dark-headed `TabModal` whose other tab is **New session** — the `+` opens
+it on New session and the clock on History, one dialog of one height
+([`RECORD/2026-10-21.the-design-system-applied.completed.md`](RECORD/2026-10-21.the-design-system-applied.completed.md)).
+History is a search over the names and ids, and the list in the order sessions were last
 **written** to, so opening one does not move it and a turn in it does (`written_at`, a store
 column since schema 4, which the live row carries from its own last turn), with the sessions
 nothing was sent in left out. **A session names itself**: when its first turn ends and nobody
@@ -1249,9 +1259,12 @@ this machine already has, named by `[ui] icon-theme` in `config.toml` — an ext
 or a theme JSON — and nothing is vendored: the page draws its own file and folder until
 somebody names one, the same way the sandbox waits to be told where `~/.cargo` is. The theme is
 read into an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
-reaches the filesystem. **Settings → General → Files chooses it** from the themes this machine has
-(imports, and VS Code, VSCodium, Cursor and Windsurf extensions), from a typed path, or from a folder
-picked in the browser and imported into `<state dir>/icon-themes/`. A choice is written to
+reaches the filesystem. **Settings → Appearance → Files Theme chooses it** — the tree's own shapes, then the themes
+imported into `<state dir>/icon-themes/`, then VS Code, VSCodium, Cursor and Windsurf extensions —
+each drawn beside the list (`GET /api/icon-theme/previews`, one request for all of them), and *Add a
+theme* imports a folder, a zip (opened in the page) or a theme JSON with its icons, picked or
+dropped on the frame; one that draws nothing is refused. With none chosen the tree draws its own
+shapes: a folder, open or shut, and a sheet per kind of file, coloured by token. A choice is written to
 `config.toml` only if it loads, and is swapped in live. The manifest's `revision`, in every icon
 URL, keeps the browser's cache honest. A versioned extension path that an update removed resolves
 to the newest version beside it. See
@@ -1507,14 +1520,44 @@ The rest follows from that:
   (`turn_started`, a refusal, a plan at the gate) draws the real thing. It does not wait for
   `turn_started`, because a slow server made that look like a lost message. See
   [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
-- **Components**: `web/components/` holds components that import nothing from the page.
-  Everything arrives as props or slots, everything leaves as `:model` or `$emit`, styles are
-  scoped, and page tokens are read with fallbacks. `Modal` (the `<dialog>` every modal is) and
-  `Dropup` besides three that each take an idea from rare-ui with none of its code: `Segmented` (a pill that slides to the chosen answer), `Rail` (a bar beside the chosen section that springs
-  to it; it was a dot until 2026-09-30) and `SaveButton` (a count of unsaved changes, and a tick once a
-  save lands). Every segmented choice on the page is a `Segmented`, and the global `.choice` rule is
-  gone. See
+- **Components**: `web/components/` holds the components the theme does not have yet, which
+  import nothing from the page. Everything arrives as props or slots, everything leaves as
+  `:model` or `$emit`, and styles are scoped. `Modal` (the `<dialog>` every modal is, with the
+  folio and the child sheet), `Dropup`, `PathText`, and two that each take an idea
+  from rare-ui with none of its code: `Rail` (a bar beside the chosen section that springs to it;
+  it was a dot until 2026-09-30) and `SaveButton` (a count of unsaved changes, and a tick once a
+  save lands). See
   [`RECORD/2026-09-28.components-of-our-own.completed.md`](RECORD/2026-09-28.components-of-our-own.completed.md).
+- **The page draws with a theme, and a theme is a folder**: `web/theme/default/` holds
+  `tokens.css` (colour by role, type, space, radii, control heights, shadows, motion, all
+  `--luu-*`, durations `0ms` under reduced motion), `luu.css` (luu's own surfaces: the bars'
+  ground, dividers, the tree's and the chat's grounds and inks, the context buckets, Monokai, the
+  terminal's ANSI colours; the file icons' colours, for `files.svg`), twenty-six components that
+  draw with those tokens and no fallbacks — among them `Scrollable` (something that scrolls on a
+  ground that does not, so a bounce shows the content's ground; the theme's modal bodies, menus
+  and typeahead scroll through it, the only components that import another), `InputContainer` (a control, its name and its description in one box), `Typeahead`
+  (a text field with a list that narrows as it is typed into), `Section` and `AnchorNav` (parts
+  of a page that can be linked to, and an index that marks the one being read), `TabModal` (a
+  modal whose head is its tabs, with a `bar` above its body for a search) and `SubModal` (a sheet
+  out of a modal's head over its body, with or without tabs) — and
+  a demo of the components at `/theme/default/` — a folder path serves its `index.html`, and
+  without the slash redirects to it. **`app.css` declares no colour of its own**: `index.html`
+  loads both theme files first, and every rule reads `--luu-*`. Light is `:root` and dark is a
+  dark root **or any `[data-tone="dark"]` element**, so which surfaces are dark — the heads, the
+  feet, a modal's head, the terminal, and the editor and snippets by their tone preference — is
+  said in the markup, and what dark *is* is the theme's. The chat column re-points the `--luu-*`
+  inks for its grey. The page's form controls are the theme's: `TextInput`, `Select`,
+  `Textarea`, `Checkbox`, `Segmented`. `app.css`'s rules for bare `input`, `select`, `textarea`,
+  `button` and `pre` are `:where()`, so they weigh nothing against a component's scoped style. A
+  bare boolean attribute (`<Button disabled>`) is on; a large modal (40rem and up, as drawn) has a dark head — a `data-tone="dark"` island — and a small one a head that is part of its body, in the theme's `Modal` and `TabModal` and the page's own `Modal`;
+  every pressable component has a pressed state
+  (`--luu-active` and its accent and danger twins); no class a component uses on its own elements is
+  one of `app.css`'s; a value is never a prop named `value` or
+  `checked`, which jq79 keeps for the element's own; slot content is styled by whoever writes it.
+  See
+  [`RECORD/2026-10-21.a-design-system-of-components.completed.md`](RECORD/2026-10-21.a-design-system-of-components.completed.md)
+  and
+  [`RECORD/2026-10-21.the-design-system-applied.completed.md`](RECORD/2026-10-21.the-design-system-applied.completed.md).
 - **Virtualization**: no library, and none needed — bind `:each` to a computed window plus two spacer
   elements. `GET /api/sessions/:id/turns?from=&limit=` already puts pagination on the server.
 

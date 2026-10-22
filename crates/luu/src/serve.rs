@@ -1376,6 +1376,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // directory. The import is the one body on this API that is not
         // small, so it alone gets a larger limit.
         .route("/api/icon-theme", get(get_icon_theme).put(put_icon_theme))
+        .route("/api/icon-theme/previews", get(get_icon_theme_previews))
         .route(
             "/api/icon-theme/import",
             post(import_icon_theme).layer(axum::extract::DefaultBodyLimit::max(
@@ -1412,6 +1413,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // every path.
         .route("/api/workspace/tree", get(get_workspace_tree))
         .route("/api/workspace/file", get(get_workspace_file))
+        .route("/api/workspace/rename", post(post_workspace_rename))
         .route("/api/workspace/git-status", get(get_workspace_git_status))
         .route("/api/workspace/git-diff", get(get_workspace_git_diff))
         .route("/api/workspace/events", get(get_workspace_events))
@@ -1530,11 +1532,25 @@ async fn asset_handler(uri: Uri) -> Response {
     serve_asset(uri.path().trim_start_matches('/')).await
 }
 
+/// One embedded file, or a folder's `index.html`.
+///
+/// A folder is served at its path with the slash — `theme/default/` — because
+/// that is where its page's relative URLs resolve from. Without the slash it
+/// redirects there, relatively, so the same answer holds under a host's prefix.
+/// See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
 async fn serve_asset(path: &str) -> Response {
-    match Ui::get(path) {
-        Some(file) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response()
+    let file = match path.is_empty() || path.ends_with('/') {
+        true => format!("{path}index.html"),
+        false => path.to_owned(),
+    };
+    match Ui::get(&file) {
+        Some(found) => {
+            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime.as_ref())], found.data).into_response()
+        }
+        None if Ui::get(&format!("{path}/index.html")).is_some() => {
+            let folder = path.rsplit('/').next().unwrap_or(path);
+            axum::response::Redirect::permanent(&format!("{folder}/")).into_response()
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
@@ -3945,6 +3961,7 @@ fn workspace_error(error: workspace::Error) -> Response {
         // and a client that asked for something outside it asked wrongly.
         workspace::Error::Refused(_) => StatusCode::BAD_REQUEST,
         workspace::Error::Missing(_) => StatusCode::NOT_FOUND,
+        workspace::Error::Taken(_) => StatusCode::CONFLICT,
         workspace::Error::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, error.to_string()).into_response()
@@ -3977,6 +3994,66 @@ async fn get_workspace_file(
     match workspace::file(sandbox.as_ref(), &query.path).await {
         Ok(file) => Json(file).into_response(),
         Err(error) => workspace_error(error),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RenameRequest {
+    /// The entry, as the tree names it.
+    path: String,
+    /// Its new name: a name, never a path.
+    name: String,
+}
+
+/// A file or a folder renamed from the tree: the one write the workspace
+/// panel makes. `{ path }` back is the new path, which the page re-points its
+/// open tab and its expanded folders at; the tree itself follows from the
+/// disk's own event, like any other change.
+///
+/// **From this machine only**, as Settings' writes and the engines are: a
+/// rename is a person at the keyboard, and a page on another site that
+/// rebinds its DNS to 127.0.0.1 must not be one. What it may reach is the
+/// sandbox's answer for `read-write`. See
+/// `RECORD/2026-10-21.the-tree-renames.completed.md`.
+async fn post_workspace_rename(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<RenameRequest>,
+) -> Response {
+    if let Err(refused) = workspace_writable(&state, &headers) {
+        return *refused;
+    }
+    let sandbox = workspace_sandbox(&state).await;
+    match workspace::rename(sandbox.as_ref(), &request.path, &request.name).await {
+        Ok(path) => Json(serde_json::json!({ "path": path })).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
+/// Whether this request may change the workspace: a server bound on loopback,
+/// asked by the name it was dialled by. [`engines_allowed`]'s two halves, with
+/// the refusals said about files.
+fn workspace_writable(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), Box<Response>> {
+    let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
+    if !state.providers_editable {
+        return Err(refuse(
+            "this server is bound off loopback, and renaming changes this machine's files. \
+             Rename from a browser on the machine itself."
+                .to_string(),
+        ));
+    }
+    let host = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .unwrap_or("");
+    match host_is_loopback(host) {
+        true => Ok(()),
+        false => Err(refuse(format!(
+            "Host `{host}` is not this machine, and only this machine renames its files"
+        ))),
     }
 }
 
@@ -4127,6 +4204,53 @@ fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
 
 async fn get_icon_theme(State(state): State<AppRouterState>) -> Response {
     Json(blocking(move || icon_theme_view(&state)).await).into_response()
+}
+
+/// Every icon theme Settings offers, drawn: what each one shows for a few
+/// names a person knows ([`crate::icons::SAMPLES`]), so they can be told apart
+/// before one is chosen. `{ samples: [{ name, dir }], previews: { path: [url |
+/// null] } }`, keyed by the path as the list names it.
+///
+/// **One request for all of them**, because finding them reads a
+/// `package.json` per installed extension, which is the read that has taken
+/// minutes on this disk; and **only the themes that list offers**, plus the
+/// one named in `config.toml` — never a path the page sends — so this answers
+/// about themes and nothing else. What a theme may point at is already
+/// confined to its own folder by [`crate::icons::load`]. See
+/// `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`.
+async fn get_icon_theme_previews() -> Response {
+    let answer = blocking(|| {
+        let named = crate::provider::Config::load()
+            .ok()
+            .and_then(|(config, _)| config.ui().and_then(|ui| ui.icon_theme.clone()));
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let folder = icon_theme_folder();
+        let mut paths: Vec<String> = crate::icons::discover(folder.as_deref(), home.as_deref())
+            .into_iter()
+            .map(|found| found.path)
+            .collect();
+        if let Some(named) = named.map(|named| named.display().to_string())
+            && !paths.contains(&named)
+        {
+            paths.push(named);
+        }
+        let previews: std::collections::BTreeMap<String, Vec<Option<String>>> = paths
+            .into_iter()
+            .filter_map(|path| {
+                let theme =
+                    crate::icons::load(&crate::provider::expand_home(std::path::Path::new(&path)))
+                        .ok()?;
+                Some((path, crate::icons::preview(&theme)))
+            })
+            .collect();
+        let samples: Vec<_> = crate::icons::SAMPLES
+            .iter()
+            .map(|(name, dir)| serde_json::json!({ "name": name, "dir": dir }))
+            .collect();
+        serde_json::json!({ "samples": samples, "previews": previews })
+    })
+    .await;
+    Json(answer).into_response()
 }
 
 /// Filesystem work a handler cannot avoid, on the blocking pool instead of a

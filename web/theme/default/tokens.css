@@ -1,0 +1,177 @@
+/* The default theme's tokens: every value its components draw with, and the
+   only place each one is written. A component reads them with no fallback — a
+   missing token should look missing, not quietly draw this theme's value
+   under another one. See
+   RECORD/2026-10-21.a-design-system-of-components.completed.md.
+
+   `:root` is light, and `[data-theme="dark"]` re-points the colours: the
+   attribute `prefs.js` already sets on the page. **Any element can be an
+   island** of the other tone with `data-tone="dark"` (or `"light"`): the
+   colours are re-declared on it, and everything inside draws with them —
+   luu's heads and feet are dark on a light page this way. The colours are
+   the page's own, so a screen that moves over does not change colour by
+   moving. Shape, type and motion are the same in both. */
+
+:root, [data-tone="light"] {
+  /* ---- colour, by role ---------------------------------------------------- */
+
+  /* Grounds, from the bottom up: the page, a well cut into it (a code block,
+     a track), and anything that sits on it (a card, a field, a menu). */
+  --luu-bg: #f4f5f8;
+  --luu-sunken: #eaedf2;
+  --luu-surface: #ffffff;
+  /* A row or an item under the pointer, and one that is chosen: a tint of the
+     accent over the surface, never the accent itself — that is a control
+     that is on. */
+  --luu-hover: #f0f2f6;
+  /* Pressed: a step past the hover, so a press reads as one even where there
+     is no hover — under a finger. */
+  --luu-active: #e2e6ed;
+  --luu-selected: #e6ebf7;
+  --luu-selected-hover: #dae2f3;
+  /* Raised but quiet: a block about another turn, a fold. */
+  --luu-raised: #f0f2f6;
+
+  --luu-border: #c8c8c8;
+  --luu-border-strong: #a3a3a3;
+
+  --luu-fg: #1a1d23;
+  --luu-fg-muted: #5b6472;
+  /* Placeholders and what is switched off: still readable, plainly not ink. */
+  --luu-fg-subtle: #8a92a0;
+
+  /* The tones. Each has a `-soft` ground for a badge or an alert, and the
+     strong colour is the ink on it, so a tone reads the same in both. */
+  --luu-accent: #2f5bbd;
+  --luu-accent-hover: #264c9f;
+  --luu-accent-active: #1d3d82;
+  --luu-on-accent: #ffffff;
+  --luu-accent-soft: #e6ebf7;
+  --luu-ok: #4a7a1c;
+  --luu-ok-soft: #eaf3df;
+  --luu-warn: #8a5d12;
+  --luu-warn-soft: #fdf7e9;
+  --luu-bad: #b8253f;
+  --luu-bad-hover: #9c1f35;
+  --luu-bad-active: #82182b;
+  --luu-bad-soft: #fbe9ec;
+
+  /* The ring a focused control draws, and the dim behind a modal. */
+  --luu-focus: #2f5bbd;
+  --luu-overlay: rgba(17, 20, 26, .42);
+
+  /* ---- type --------------------------------------------------------------- */
+
+  --luu-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --luu-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --luu-text-xs: 11px;
+  --luu-text-sm: 12px;
+  --luu-text-md: 13px;
+  --luu-text-lg: 15px;
+  --luu-text-xl: 18px;
+  --luu-text-2xl: 22px;
+  --luu-weight-regular: 400;
+  --luu-weight-medium: 500;
+  --luu-weight-bold: 600;
+  --luu-leading: 1.5;
+  --luu-leading-tight: 1.25;
+
+  /* ---- space -------------------------------------------------------------- */
+
+  --luu-space-1: .25rem;
+  --luu-space-2: .5rem;
+  --luu-space-3: .75rem;
+  --luu-space-4: 1rem;
+  --luu-space-5: 1.25rem;
+  --luu-space-6: 1.5rem;
+  --luu-space-7: 2rem;
+  --luu-space-8: 3rem;
+
+  /* ---- shape -------------------------------------------------------------- */
+
+  --luu-radius-sm: 4px;
+  --luu-radius-md: 6px;
+  --luu-radius-lg: 10px;
+  --luu-radius-full: 999px;
+  --luu-border-width: 1px;
+  /* How far below the window's top a linked section lands: the height of a
+     page's sticky head, which only the page knows — so it sets this. */
+  --luu-anchor-offset: var(--luu-space-4);
+
+  /* A control's height, so a button, a field and a select on one row line
+     up without anybody measuring. */
+  --luu-control-sm: 24px;
+  --luu-control-md: 30px;
+  --luu-control-lg: 36px;
+
+  --luu-shadow-sm: 0 1px 2px rgba(17, 20, 26, .06);
+  --luu-shadow-md: 0 4px 12px rgba(17, 20, 26, .10), 0 1px 3px rgba(17, 20, 26, .06);
+  --luu-shadow-lg: 0 18px 48px rgba(17, 20, 26, .18), 0 4px 12px rgba(17, 20, 26, .08);
+
+  /* ---- motion ------------------------------------------------------------- */
+
+  /* Something that moves from one place to another: damped, no overshoot —
+     `Segmented`'s pill. */
+  --luu-ease: cubic-bezier(.32, .72, 0, 1);
+  /* Something that arrives: fast, then settling — the modal's folio. */
+  --luu-ease-out: cubic-bezier(.16, 1, .3, 1);
+  --luu-duration-fast: 120ms;
+  --luu-duration: 200ms;
+  --luu-duration-slow: 320ms;
+  /* A page scrolled to one of its sections, from an index. */
+  --luu-duration-scroll: 250ms;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"], [data-tone="dark"] {
+  --luu-bg: #111111;
+  --luu-sunken: #0a0a0a;
+  --luu-surface: #191919;
+  --luu-hover: #222222;
+  --luu-active: #2e2e2e;
+  --luu-selected: #2a3241;
+  --luu-selected-hover: #323d53;
+  --luu-raised: #0e0e0e;
+
+  --luu-border: #2c2c2c;
+  --luu-border-strong: #444444;
+
+  --luu-fg: #e6e6e6;
+  --luu-fg-muted: #9e9e9e;
+  --luu-fg-subtle: #6e6e6e;
+
+  --luu-accent: #7aa2f7;
+  --luu-accent-hover: #93b4f8;
+  --luu-accent-active: #5f88e0;
+  --luu-on-accent: #111111;
+  --luu-accent-soft: #1d2433;
+  --luu-ok: #9ece6a;
+  --luu-ok-soft: #1a2214;
+  --luu-warn: #e0af68;
+  --luu-warn-soft: #1a1712;
+  --luu-bad: #f7768e;
+  --luu-bad-hover: #f98fa3;
+  --luu-bad-active: #de5f78;
+  --luu-bad-soft: #2a1519;
+
+  --luu-focus: #7aa2f7;
+  --luu-overlay: rgba(0, 0, 0, .56);
+
+  --luu-shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+  --luu-shadow-md: 0 4px 12px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
+  --luu-shadow-lg: 0 18px 48px rgba(0, 0, 0, .6), 0 4px 12px rgba(0, 0, 0, .35);
+
+  color-scheme: dark;
+}
+
+/* Once, here, instead of a media query in every component: every transition
+   and animation the components write takes its time from these. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --luu-duration-fast: 0ms;
+    --luu-duration: 0ms;
+    --luu-duration-slow: 0ms;
+    --luu-duration-scroll: 0ms;
+  }
+}

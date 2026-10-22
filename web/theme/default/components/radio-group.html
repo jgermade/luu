@@ -1,0 +1,121 @@
+<script :setup="{
+  options = [],
+  model = '',
+  name = '',
+  label = '',
+  disabled = false,
+  direction = 'column'
+}">
+  // One answer out of a few, each worth a line of explanation — where a
+  // `Segmented` would have to cut the explanation off. Native radios, so the
+  // arrows, Tab and a screen reader behave as everywhere else.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <RadioGroup label="Host shell" :model="host" :options="[
+  //     { value: 'loopback', label: 'loopback', description: 'only from this machine' },
+  //     { value: 'always', label: 'always', description: 'whoever holds the token' },
+  //   ]" />
+  //
+  // An option is a string or `{ value, label, description, disabled }`.
+  // `direction` is `column` or `row`. The choice goes up through `:model` and
+  // as `change`.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+
+  $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
+  $: val = model
+  // Radios are a group by name; one nobody gave is one nobody else has.
+  const group = name || `luu-radio-${Math.random().toString(36).slice(2, 9)}`
+
+  const choose = item => {
+    $updateModel(item.value)
+    $emit("change", item.value)
+  }
+</script>
+
+<div class="group" role="radiogroup" :aria-label="label || null"
+     :class.row="direction === 'row'" :class.disabled="isDisabled">
+  <label :each="item in items" :key="String(item.value)" class="option"
+         :class.on="item.value === val" :class.off="isDisabled || item.disabled">
+    <input type="radio"
+           :name="group"
+           :value="String(item.value)"
+           :checked="item.value === val"
+           :disabled="isDisabled || item.disabled"
+           @change="choose(item)">
+    <span class="dot" aria-hidden="true"></span>
+    <span class="text">
+      <span class="label">{{ item.label }}</span>
+      <span :if="item.description" class="description">{{ item.description }}</span>
+    </span>
+  </label>
+</div>
+
+<style scoped>
+  .group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-2);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    color: var(--luu-fg);
+  }
+  .row { flex-direction: row; flex-wrap: wrap; gap: var(--luu-space-4); }
+
+  .option {
+    position: relative;
+    display: inline-flex;
+    align-items: flex-start;
+    gap: var(--luu-space-2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .off { opacity: .5; cursor: default; }
+
+  /* The native control, invisible and on top of the drawn one, so a click
+     lands on it. */
+  input {
+    position: absolute;
+    z-index: 1;
+    opacity: 0;
+    cursor: inherit;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+  }
+  /* Invisible whatever a page's own rule for a disabled input says. */
+  input:disabled { opacity: 0; }
+  .dot {
+    position: relative;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin-top: calc((1em * var(--luu-leading) - 16px) / 2);
+    border: var(--luu-border-width) solid var(--luu-border-strong);
+    border-radius: var(--luu-radius-full);
+    background: var(--luu-surface);
+    transition: border-color var(--luu-duration-fast) ease, transform var(--luu-duration-fast) ease;
+  }
+  .dot::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border-radius: inherit;
+    background: var(--luu-accent);
+    transform: scale(0);
+    transition: transform var(--luu-duration) var(--luu-ease-out);
+  }
+  .option:hover:not(.off) .dot, .on .dot { border-color: var(--luu-accent); }
+  .option:active:not(.off) .dot { transform: scale(.88); }
+  .on .dot::after { transform: scale(1); }
+  input:focus-visible + .dot { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+
+  .text { display: flex; flex-direction: column; gap: .1rem; }
+  .label { font-weight: var(--luu-weight-medium); }
+  .description { color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
+</style>

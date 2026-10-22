@@ -1,0 +1,89 @@
+<script :setup="{ id = '', title = '', level = 2, divided = false }">
+  // A part of a page that can be linked to: `<section id>`, its title with a
+  // `#` beside it that is the link to it, what it is about, and its content.
+  // An `AnchorNav` lists sections like this one and marks the one being read.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Section id="models" title="Models">
+  //     <template :slot.lead>Where a session sends, and what it may ask.</template>
+  //     <template :slot.actions><Button size="sm">+ provider</Button></template>
+  //     …
+  //   </Section>
+  //
+  // `level` is 2 or 3, the heading's. `divided` draws a line under it, for a
+  // page of sections one after another. A link to it lands below a page's
+  // sticky head when the page sets `--luu-anchor-offset` to that head's height.
+
+  // A bare attribute (`<X divided>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDivided = flag(divided)
+  $: small = Number(level) >= 3
+</script>
+
+<section class="section" :id="id || null" :class.divided="isDivided" :aria-labelledby="id ? `${id}-title` : null">
+  <header class="head">
+    <h2 :if="!small" class="title" :id="id ? `${id}-title` : null">
+      {{ title }}<a :if="id" class="anchor" :href="`#${id}`" :aria-label="`Link to ${title}`">#</a>
+    </h2>
+    <h3 :if="small" class="title small" :id="id ? `${id}-title` : null">
+      {{ title }}<a :if="id" class="anchor" :href="`#${id}`" :aria-label="`Link to ${title}`">#</a>
+    </h3>
+    <div :if="$slots.actions" class="actions"><slot.actions /></div>
+  </header>
+  <p :if="$slots.lead" class="lead"><slot.lead /></p>
+  <div class="body"><slot></slot></div>
+</section>
+
+<style scoped>
+  .section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-3);
+    min-width: 0;
+    scroll-margin-top: var(--luu-anchor-offset);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+  }
+  .divided {
+    padding-bottom: var(--luu-space-7);
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+  }
+
+  .head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--luu-space-3);
+  }
+  .title {
+    margin: 0;
+    font-size: var(--luu-text-xl);
+    font-weight: var(--luu-weight-bold);
+    line-height: var(--luu-leading-tight);
+  }
+  .title.small { font-size: var(--luu-text-lg); }
+
+  /* There under the pointer and under the keyboard, as the tree's pencil is:
+     a link that only hover shows is one a keyboard cannot find. */
+  .anchor {
+    margin-left: var(--luu-space-2);
+    padding: 0 var(--luu-space-1);
+    border-radius: var(--luu-radius-sm);
+    color: var(--luu-fg-subtle);
+    font-weight: var(--luu-weight-regular);
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity var(--luu-duration-fast) ease, color var(--luu-duration-fast) ease;
+  }
+  .head:hover .anchor, .anchor:focus-visible { opacity: 1; }
+  .anchor:hover { color: var(--luu-accent); }
+  .anchor:active { color: var(--luu-accent-hover); background: var(--luu-active); }
+  .anchor:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .section:target .anchor { opacity: 1; color: var(--luu-accent); }
+
+  .actions { display: flex; align-items: center; gap: var(--luu-space-2); flex: none; }
+  .lead { margin: 0; max-width: 44rem; color: var(--luu-fg-muted); font-size: var(--luu-text-md); line-height: var(--luu-leading); }
+  .body { min-width: 0; }
+</style>

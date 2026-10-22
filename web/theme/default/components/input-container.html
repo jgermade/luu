@@ -1,0 +1,192 @@
+<script :setup="{
+  model = '',
+  type = 'text',
+  options = [],
+  label = '',
+  description = '',
+  error = '',
+  warning = '',
+  placeholder = '',
+  list = '',
+  selectClass = '',
+  disabled = false,
+  required = false,
+  id = '',
+  name = ''
+}">
+  // One control and what is said about it, in one box: its name inside the
+  // border, at the top; the control under it, borderless; what it is for
+  // under the box, or what is wrong with it in place of that. `type="select"`
+  // makes the control a `<select>` of `options`; anything else is an
+  // `<input>` of that type.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <InputContainer label="URL" description="where the server listens"
+  //                   :model="url" placeholder="http://127.0.0.1:11434" />
+  //   <InputContainer label="Backend" type="select" :options="BACKENDS" :model="backend" />
+  //
+  // Where `Field` puts a name above any control, this *is* the control: the
+  // whole box is what is clicked and what is focused. An option is a string or
+  // `{ value, label, disabled, title }`. The value goes up through `:model`,
+  // and as `input` (each keystroke) and `change` (committed), in
+  // `$event.detail`. `warning` is said where the description is, in the warning
+  // tone — *this will not do what you think* — where `error` is *this is
+  // wrong*. `list` is a `<datalist>`'s id, for suggestions a text field still
+  // lets a person type past; `selectClass` names the `<select>` itself.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isRequired = flag(required)
+
+  $: isSelect = type === "select"
+  $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
+  $: val = model ?? ""
+  // The description is the control's, for a screen reader as for an eye.
+  const said = `luu-said-${Math.random().toString(36).slice(2, 9)}`
+
+  const typed = event => {
+    const v = event.target.value
+    $updateModel(v)
+    $emit("input", v)
+  }
+  const committed = event => {
+    const v = event.target.value
+    if (isSelect) $updateModel(v)
+    $emit("change", v)
+  }
+</script>
+
+<div class="container">
+  <label class="box"
+         :class.has-problem="!!error"
+         :class.has-warning="!error && !!warning"
+         :class.off="isDisabled"
+         :class.choice="isSelect">
+    <span :if="label" class="name">
+      {{ label }}<span :if="isRequired" class="mark" aria-hidden="true">*</span>
+    </span>
+    <input :if="!isSelect"
+           :type="type"
+           :value="val"
+           :placeholder="placeholder || null"
+           :disabled="isDisabled"
+           :required="isRequired"
+           :id="id || null"
+           :name="name || null"
+           :list="list || null"
+           :aria-invalid="error ? 'true' : null"
+           :aria-describedby="error || warning || description ? said : null"
+           @input="typed($event)"
+           @change="committed($event)">
+    <select :if="isSelect"
+            :class="selectClass || null"
+            :value="val"
+            :disabled="isDisabled"
+            :required="isRequired"
+            :id="id || null"
+            :name="name || null"
+            :aria-invalid="error ? 'true' : null"
+            :aria-describedby="error || warning || description ? said : null"
+            @change="committed($event)">
+      <option :if="placeholder" value="" disabled :selected="!val">{{ placeholder }}</option>
+      <option :each="item in items" :key="String(item.value)"
+              :value="item.value" :disabled="item.disabled"
+              :title="item.title || null">{{ item.label }}</option>
+    </select>
+    <svg :if="isSelect" class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5" /></svg>
+  </label>
+  <p :if="error" class="said problem" :id="said" role="alert">{{ error }}</p>
+  <p :if="!error && warning" class="said warning" :id="said">{{ warning }}</p>
+  <p :if="!error && !warning && description" class="said" :id="said">{{ description }}</p>
+</div>
+
+<style scoped>
+  .container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-1);
+    min-width: 0;
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+  }
+
+  .box {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: var(--luu-space-2) var(--luu-space-3);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    cursor: text;
+    transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease,
+                background var(--luu-duration-fast) ease;
+  }
+  .box.choice { cursor: pointer; }
+  .box:hover:not(.off) { border-color: var(--luu-border-strong); }
+  .box:active:not(.off) { background: var(--luu-active); }
+  .box:focus-within {
+    border-color: var(--luu-focus);
+    box-shadow: 0 0 0 1px var(--luu-focus);
+    background: var(--luu-surface);
+  }
+  .has-problem, .has-problem:hover:not(.off) { border-color: var(--luu-bad); }
+  .has-problem:focus-within { border-color: var(--luu-bad); box-shadow: 0 0 0 1px var(--luu-bad); }
+  .has-warning, .has-warning:hover:not(.off) { border-color: var(--luu-warn); }
+  .has-warning:focus-within { border-color: var(--luu-warn); box-shadow: 0 0 0 1px var(--luu-warn); }
+  .off { opacity: .55; background: var(--luu-sunken); cursor: not-allowed; }
+
+  .name {
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-xs);
+    font-weight: var(--luu-weight-medium);
+    line-height: var(--luu-leading-tight);
+  }
+  .box:focus-within .name { color: var(--luu-accent); }
+  .has-problem .name, .has-problem:focus-within .name { color: var(--luu-bad); }
+  .mark { color: var(--luu-bad); margin-left: .15rem; }
+
+  input, select {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    outline: none;
+    box-shadow: none;
+  }
+  /* Against a page whose own rule dims a disabled element: the box is dimmed
+     once, here. */
+  input:disabled, select:disabled { opacity: 1; cursor: not-allowed; }
+  input::placeholder { color: var(--luu-fg-subtle); }
+  select { appearance: none; padding-right: 1.5rem; cursor: inherit; }
+  option { background: var(--luu-surface); color: var(--luu-fg); }
+  .caret {
+    position: absolute;
+    right: var(--luu-space-3);
+    bottom: calc(var(--luu-space-2) + .2em);
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: var(--luu-fg-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+
+  .said { margin: 0; color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
+  .said.problem { color: var(--luu-bad); }
+  .said.warning { color: var(--luu-warn); }
+</style>

@@ -305,6 +305,57 @@ async fn server_storing_selecting(
     address.to_string()
 }
 
+/// A server whose workspace is `base`, granted `access` there: what the
+/// tree reads and renames, without this package's own files in the way.
+async fn server_over_tree(base: &std::path::Path, access: Access) -> String {
+    let mut policy = SandboxPolicy::default();
+    policy.allow(base, access);
+    let agency = Agency::new(
+        Arc::new(Tools::standard()),
+        Arc::new(Sandbox::new(&policy, base).expect("the sandbox")),
+        agent_core::agent::Limits::default().with_max_steps(4),
+        None,
+    );
+    let serving = bind(ServeOptions {
+        icons: std::sync::Arc::new(luu::icons::Theme::default()),
+        provider: luu::provider::Resolved {
+            named: true,
+            ..luu::provider::Resolved::mock()
+        },
+        counter_warning: None,
+        approvers: Default::default(),
+        address: "127.0.0.1:0".parse().expect("a loopback address"),
+        backend: Arc::new(Mock::replies(vec![]).delay(Duration::ZERO)),
+        model: "mock".into(),
+        record: None,
+        budget: Budget::new(0, 0, Eviction::Turn),
+        counter: Arc::new(ApproximateCounter),
+        tokenizer: None,
+        agency,
+        temperature: None,
+        seed: None,
+        map_tokens: 0,
+        map_order: Default::default(),
+        map_fill: Default::default(),
+        select_tokens: 0,
+        select_weights: Default::default(),
+        constrain: None,
+        auth_token_file: None,
+        exposure: None,
+        origin: None,
+        store: None,
+        agency_for: Some(agency_factory_rooted(base.to_path_buf())),
+        describe_for: None,
+        postures: Default::default(),
+        postures_path: None,
+    })
+    .await
+    .expect("binding the server");
+    let address = serving.address();
+    tokio::spawn(serving.run());
+    address.to_string()
+}
+
 /// A server that will only take a signed approval, and the key that can make
 /// one. Loopback, so nothing here is testing the token — what is being asserted
 /// is that the signature is checked on its own account.
@@ -756,6 +807,97 @@ async fn the_page_and_the_missing_page() {
         .await
         .expect("the request");
     assert_eq!(missing.status(), 404);
+}
+
+/// A folder of the UI is served at its path with the slash, as its
+/// `index.html`, and redirects there without it — relatively, so the same
+/// answer holds under a host's prefix. The theme's demo is the folder. See
+/// `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+#[tokio::test]
+async fn a_folder_is_its_index() {
+    let address = server().await;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let demo = http
+        .get(format!("http://{address}/theme/default/"))
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(demo.status(), 200);
+    assert!(demo.text().await.unwrap().contains("tokens.css"));
+
+    let bare = http
+        .get(format!("http://{address}/theme/default"))
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(bare.status(), 308);
+    assert_eq!(bare.headers()["location"], "default/");
+
+    // A folder with no index is not one.
+    let none = http
+        .get(format!("http://{address}/theme/default/components/"))
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(none.status(), 404);
+}
+
+/// The tree renames a file, says where it went, refuses a name that is
+/// taken without touching either file, and takes no rename from a page that
+/// reached this machine by another name — a rebinding site is same-origin
+/// with loopback, and `Host` is what it cannot fake. See
+/// `RECORD/2026-10-21.the-tree-renames.completed.md`.
+#[tokio::test]
+async fn the_tree_renames_a_file_from_this_machine_only() {
+    let base = std::env::temp_dir().join(format!("luu-serve-rename-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("src/old.rs"), "old").unwrap();
+    std::fs::write(base.join("src/kept.rs"), "kept").unwrap();
+    let address = server_over_tree(&base, Access::ReadWrite).await;
+    let http = reqwest::Client::new();
+    let rename = |path: &str, name: &str| {
+        http.post(format!("http://{address}/api/workspace/rename"))
+            .json(&serde_json::json!({ "path": path, "name": name }))
+            .send()
+    };
+
+    let renamed = rename("src/old.rs", "new.rs").await.expect("the request");
+    assert_eq!(renamed.status(), 200);
+    let body: Value = renamed.json().await.unwrap();
+    assert_eq!(body["path"], "src/new.rs");
+    assert_eq!(
+        std::fs::read_to_string(base.join("src/new.rs")).unwrap(),
+        "old"
+    );
+
+    let taken = rename("src/new.rs", "kept.rs").await.expect("the request");
+    assert_eq!(taken.status(), 409);
+    assert_eq!(
+        std::fs::read_to_string(base.join("src/kept.rs")).unwrap(),
+        "kept"
+    );
+    assert!(base.join("src/new.rs").exists());
+
+    let moved = rename("src/new.rs", "../new.rs")
+        .await
+        .expect("the request");
+    assert_eq!(moved.status(), 400);
+
+    let rebound = http
+        .post(format!("http://{address}/api/workspace/rename"))
+        .header("host", "evil.example")
+        .json(&serde_json::json!({ "path": "src/new.rs", "name": "x.rs" }))
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(rebound.status(), 403);
+    assert!(base.join("src/new.rs").exists());
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// The terminal opens where the session's commands run, and only for this

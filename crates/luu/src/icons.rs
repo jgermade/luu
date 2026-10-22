@@ -66,6 +66,94 @@ impl Theme {
     pub fn path(&self, id: &str) -> Option<&Path> {
         self.paths.get(id).map(PathBuf::as_path)
     }
+
+    /// The id this theme draws `name` with: the page's own lookup
+    /// (`iconFor` in `web/lib/workspace.js`) — the whole name first, then
+    /// shorter and shorter extensions, so `d.ts` beats `ts`, then the theme's
+    /// default. A folder is closed.
+    pub fn icon_for(&self, name: &str, dir: bool) -> Option<&str> {
+        let manifest = &self.manifest;
+        let lower = name.to_lowercase();
+        if dir {
+            return manifest
+                .folder_names
+                .get(&lower)
+                .or(manifest.folder.as_ref())
+                .map(String::as_str);
+        }
+        if let Some(id) = manifest.file_names.get(&lower) {
+            return Some(id);
+        }
+        let parts: Vec<&str> = lower.split('.').collect();
+        for at in 1..parts.len() {
+            if let Some(id) = manifest.file_extensions.get(&parts[at..].join(".")) {
+                return Some(id);
+            }
+        }
+        manifest.file.as_deref()
+    }
+}
+
+/// The names a theme is previewed with in Settings: two folders and the files
+/// a person meets in most trees — one of each kind the tree's own shapes tell
+/// apart — so two themes can be told apart at a glance.
+pub const SAMPLES: [(&str, bool); 12] = [
+    ("src", true),
+    ("tests", true),
+    ("main.rs", false),
+    ("index.ts", false),
+    ("package.json", false),
+    ("Cargo.toml", false),
+    ("README.md", false),
+    ("logo.svg", false),
+    ("index.html", false),
+    ("deploy.sh", false),
+    ("demo.mp4", false),
+    ("release.zip", false),
+];
+
+/// An icon bigger than this is not previewed: these are 16-pixel glyphs, and
+/// a theme whose icon is a megabyte is drawn by its own tree, not inlined here.
+const PREVIEW_BYTES: u64 = 64 * 1024;
+
+/// What `theme` draws each of [`SAMPLES`] with, as `data:` URLs — inline,
+/// because the server serves icons only for the theme in use, and these are
+/// themes that are not in use yet. `None` where the theme has no icon for it.
+pub fn preview(theme: &Theme) -> Vec<Option<String>> {
+    SAMPLES
+        .iter()
+        .map(|(name, dir)| {
+            let path = theme.path(theme.icon_for(name, *dir)?)?;
+            if std::fs::metadata(path).ok()?.len() > PREVIEW_BYTES {
+                return None;
+            }
+            let bytes = std::fs::read(path).ok()?;
+            Some(format!(
+                "data:{};base64,{}",
+                content_type(path),
+                base64(&bytes)
+            ))
+        })
+        .collect()
+}
+
+/// Standard base64, padded: the one encoding a `data:` URL needs, and not
+/// worth a dependency.
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
+        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            match i <= chunk.len() {
+                true => out.push(TABLE[(n >> shift & 63) as usize] as char),
+                false => out.push('='),
+            }
+        }
+    }
+    out
 }
 
 /// The subset of a VSCode icon theme this reads.
@@ -493,7 +581,19 @@ pub fn import(root: &Path, files: Vec<(String, Vec<u8>)>) -> Result<PathBuf, Str
             std::fs::write(&target, bytes)
                 .map_err(|error| format!("{}: {error}", target.display()))?;
         }
-        load(&staging).map(|_| ())
+        // A theme that loads and draws nothing is a theme JSON without its
+        // icons — it names them by path, and a JSON alone does not carry them.
+        // Refused rather than imported to show the tree's own shapes under
+        // another name.
+        let theme = load(&staging)?;
+        match theme.paths.is_empty() {
+            true => Err(
+                "it names icons that were not included: a theme JSON needs its icons \
+                         beside it — add the folder it is in, or a zip of it"
+                    .into(),
+            ),
+            false => Ok(()),
+        }
     })();
     if let Err(error) = written {
         let _ = std::fs::remove_dir_all(&staging);
@@ -529,6 +629,17 @@ pub fn content_type(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The encoding a `data:` URL is read with, padding included.
+    #[test]
+    fn base64_is_the_standard_one() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
+    }
     use std::fs;
 
     fn theme_dir() -> (tempdir::Dir, PathBuf) {
@@ -639,6 +750,27 @@ mod tests {
 
     /// A folder copied out of an extension without its `package.json` is found
     /// by its theme JSON.
+    /// A theme is previewed with the icons the page would draw: an extension
+    /// it maps, its default for the rest, and nothing for a folder when it
+    /// declares no folder icon.
+    #[test]
+    fn a_preview_draws_what_the_tree_would() {
+        let (_dir, path) = theme_dir();
+        let theme = load(&path).unwrap();
+        assert_eq!(theme.icon_for("main.rs", false), Some("_rust"));
+        assert_eq!(theme.icon_for("index.ts", false), Some("_file"));
+        assert_eq!(theme.icon_for("src", true), None);
+        let shown = preview(&theme);
+        assert_eq!(shown.len(), SAMPLES.len());
+        let at = |name: &str| SAMPLES.iter().position(|(n, _)| *n == name).unwrap();
+        assert_eq!(shown[at("src")], None);
+        assert_eq!(
+            shown[at("main.rs")].as_deref(),
+            Some("data:image/svg+xml;base64,PHN2Zy8+")
+        );
+        assert!(shown[at("README.md")].is_some());
+    }
+
     #[test]
     fn a_folder_without_a_package_json_is_read_through_its_theme_json() {
         let (dir, _) = theme_dir();
@@ -684,6 +816,18 @@ mod tests {
             load(&landed).unwrap().manifest.name.as_deref(),
             Some("Great")
         );
+    }
+
+    /// A theme JSON on its own names icons it does not bring: refused, with
+    /// what to do instead, rather than imported as a theme that draws nothing.
+    #[test]
+    fn a_theme_json_without_its_icons_is_refused() {
+        let root = tempdir::Dir::new("icons-bare-json");
+        let json = br#"{"iconDefinitions":{"_rust":{"iconPath":"./icons/rust.svg"}},"fileExtensions":{"rs":"_rust"}}"#;
+        let files = vec![("bare/theme.json".to_string(), json.to_vec())];
+        let error = import(root.path(), files).unwrap_err();
+        assert!(error.contains("icons that were not included"), "{error}");
+        assert!(!root.path().join("bare").exists());
     }
 
     /// Paths off the network are re-checked: nothing may climb out.

@@ -5,7 +5,7 @@
   // difference between a form that works and one that looks like it did. See
   // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`.
   const { state, saveProviders, loadProviders, refreshSettings } = await import("@web/lib/store.js")
-  const Scrollable = await import("@web/components/scrollable.html")
+  const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
   const { ui, openStarter } = await import("@web/lib/ui.js")
   const ProviderForm = await import("./provider-form.html")
@@ -259,8 +259,8 @@
      pane they sit in pads nothing. */
   .modal-foot { padding: .2rem 1.75rem 0; }
   .models-status-card {
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     padding: .85rem 1rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
@@ -272,7 +272,7 @@
     gap: .75rem;
     margin-bottom: .75rem;
     padding-bottom: .6rem;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--luu-border);
   }
   .status-badge-group {
     display: flex;
@@ -283,34 +283,34 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--dim);
+    background: var(--luu-fg-muted);
     display: inline-block;
   }
   .status-pulse-dot.active {
-    background: var(--ok);
+    background: var(--luu-ok);
     box-shadow: 0 0 0 3px rgba(74, 122, 28, .2);
   }
   .status-backend-pill {
     font-size: 13px;
     font-weight: 600;
-    color: var(--fg);
+    color: var(--luu-fg);
     text-transform: capitalize;
   }
   .status-profile-pill {
     font-size: 11.5px;
     font-weight: 600;
-    background: var(--selected, rgba(47, 91, 189, .1));
-    color: var(--accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .1));
+    color: var(--luu-accent);
     padding: .15rem .5rem;
     border-radius: 4px;
-    border: 1px solid var(--accent);
+    border: 1px solid var(--luu-accent);
   }
   .status-model-badge code {
     font-size: 12px;
-    background: var(--sunken, rgba(0, 0, 0, .05));
+    background: var(--luu-sunken, rgba(0, 0, 0, .05));
     padding: .2rem .5rem;
     border-radius: 4px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--luu-border);
   }
   .status-stats-grid {
     display: grid;
@@ -321,8 +321,8 @@
     display: flex;
     flex-direction: column;
     gap: .15rem;
-    background: var(--sunken, rgba(0, 0, 0, .02));
-    border: 1px solid var(--line);
+    background: var(--luu-sunken, rgba(0, 0, 0, .02));
+    border: 1px solid var(--luu-border);
     border-radius: 6px;
     padding: .5rem .7rem;
   }
@@ -330,12 +330,12 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: .04em;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
   }
   .stat-value {
     font-size: 13px;
     font-weight: 600;
-    color: var(--fg);
+    color: var(--luu-fg);
   }
   .stat-sub {
     font-size: 11px;
@@ -344,16 +344,16 @@
   .providers {
     list-style: none;
     padding: 0;
-    border: 1px solid var(--line);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
-    background: var(--panel, #ffffff);
+    background: var(--luu-surface, #ffffff);
     box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
     overflow: hidden;
   }
   .sandbox-toggle {
     margin-top: .6rem;
     padding-top: .4rem;
-    border-top: 1px dashed var(--line);
+    border-top: 1px dashed var(--luu-border);
     font-size: 11.5px;
   }
   .sandbox-toggle summary {
@@ -365,7 +365,7 @@
     margin: .4rem 0 0;
     padding: .4rem;
     font-size: 11px;
-    background: var(--sunken, rgba(0,0,0,.03));
+    background: var(--luu-sunken, rgba(0,0,0,.03));
     border-radius: 4px;
   }
   .providers li {
@@ -378,22 +378,22 @@
     scroll-margin-bottom: 5rem;
   }
   .providers li:hover {
-    background: var(--sunken, rgba(0, 0, 0, .02));
+    background: var(--luu-sunken, rgba(0, 0, 0, .02));
   }
-  .providers li + li { border-top: 1px solid var(--line); }
+  .providers li + li { border-top: 1px solid var(--luu-border); }
   .providers li.default {
-    border-left: 3px solid var(--accent);
+    border-left: 3px solid var(--luu-accent);
   }
   .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
-  .who strong.name { font-size: 13.5px; font-weight: 600; color: var(--fg); }
+  .who strong.name { font-size: 13.5px; font-weight: 600; color: var(--luu-fg); }
   .who .dim { font-size: 12px; overflow-wrap: anywhere; }
   .tags, .acts { display: flex; gap: .4rem; align-items: center; flex: none; }
   .acts button { scroll-margin-bottom: 5rem; }
   .tag.default {
-    background: var(--selected, rgba(47, 91, 189, .1));
-    border-color: var(--accent);
-    color: var(--accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .1));
+    border-color: var(--luu-accent);
+    color: var(--luu-accent);
     font-weight: 500;
   }
-  .builtin .who strong { color: var(--dim); }
+  .builtin .who strong { color: var(--luu-fg-muted); }
 </style>

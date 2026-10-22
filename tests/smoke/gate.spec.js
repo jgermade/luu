@@ -98,6 +98,7 @@ test.beforeAll(async () => {
   writeFileSync(
     join(home, "config.toml"),
     '[provider.here]\nbackend = "mock"\nmodel = "mock"\n\n' +
+      '[provider.there]\nbackend = "mock"\nmodel = "mock-there"\n\n' +
       `[posture.wide]\npolicy = "${join(home, "wide.toml")}"\n`,
   )
   server = spawn(
@@ -401,6 +402,45 @@ test("the inspector can be pointed at a turn that has ended", async ({ page }) =
 })
 
 /**
+ * Choosing another provider in the dialog asks that provider for its models. A
+ * component's event is a CustomEvent carrying the value in `detail`; handing
+ * the event itself on asked for `[provider.[object CustomEvent]]`, and the
+ * dialog could neither list models nor go back. Nothing is started, so the
+ * session the tests above read is left alone.
+ */
+test("choosing another provider in the dialog lists that provider's models", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  await page.click('.chat .acts button[title*="New session"]')
+  const starter = page.getByRole("dialog", { name: "Sessions" })
+  await expect(starter).toBeVisible()
+  const provider = starter.locator("select").first()
+  const model = starter.locator('input[list="starter-models"]')
+
+  await provider.selectOption("there")
+  await expect(model).toHaveValue("mock-there")
+  await expect(starter.locator(".said.warning")).toHaveCount(0)
+  await provider.selectOption("here")
+  await expect(model).toHaveValue("mock")
+
+  // And what is typed is a name, not an event.
+  await model.fill("typed-by-hand")
+  await model.blur()
+  await expect(model).toHaveValue("typed-by-hand")
+
+  await starter.getByRole("button", { name: "Close" }).click()
+  await expect(starter).toBeHidden()
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
  * A session picks what it may do, at the one moment it can — the same dialog
  * that asks where it sends. **Last in the file on purpose**: these tests share
  * one server, and starting a session ends the one the tests above are reading.
@@ -427,7 +467,7 @@ test("a session is started on a posture, and the page says which", async ({ page
   // a `+ New` button beside a dropdown in the page header; one session is on
   // screen, so the head names it and the strip became the history popover.
   await page.click('.chat .acts button[title*="New session"]')
-  const starter = page.getByRole("dialog", { name: "Where a session sends" })
+  const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
 
   // Offered by name, out of config.toml. The page cannot add to the list: a
@@ -446,7 +486,7 @@ test("a session is started on a posture, and the page says which", async ({ page
   // The next session is offered where this one runs.
   await page.click('.chat .acts button[title*="New session"]')
   await expect(starter.locator("select.place")).toHaveValue("wide|")
-  await starter.locator(".modal-head button.close").click()
+  await starter.getByRole("button", { name: "Close" }).click()
   await expect(starter).toBeHidden()
 
   // And it is in force: Models opens on what this server resolved, and it
@@ -531,7 +571,9 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(23)
+  // 23, and Appearance's palette since 2026-10-21. The tree's own shapes are
+  // the theme's, in `theme/default/files.svg`, not the page's.
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(24)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be
@@ -541,6 +583,19 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   await expect(sessions.locator("ul.sessions li").first()).toBeVisible()
   await expect(sessions.locator("ul.sessions li.on")).toHaveCount(1)
   await expect(sessions.locator("ul.sessions li.on .close")).toHaveCount(0)
+  // One dialog, two tabs: the clock opens it on History, the `+` on New
+  // session, and either tab is a click away from the other.
+  await expect(sessions.getByRole("tab", { selected: true })).toHaveText("History")
+  await sessions.getByRole("tab", { name: "New session" }).click()
+  await expect(sessions.getByRole("combobox", { name: "Provider" })).toBeVisible()
+  await expect(sessions.getByRole("button", { name: "Start session" })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(sessions).toHaveCount(0)
+  await page.click('.chat .acts button[title^="New session"]')
+  await expect(sessions.getByRole("tab", { selected: true })).toHaveText("New session")
+  await sessions.getByRole("tab", { name: "History" }).click()
+  await expect(sessions.locator("ul.sessions li").first()).toBeVisible()
+  await expect(sessions.getByRole("button", { name: "Start session" })).toHaveCount(0)
   await page.keyboard.press("Escape")
   await expect(sessions).toHaveCount(0)
 })
@@ -826,8 +881,20 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   // row's own icon, and a bug in it shows up as a row with neither.
   await expect(page.locator(".inspector .tree img.icon")).toHaveCount(0)
   await expect(page.locator(".inspector .tree svg.glyph").first()).toBeVisible()
-  await expect(page.locator('.inspector .tree use[href="#i-folder"]').first()).toBeVisible()
-  await expect(page.locator('.inspector .tree use[href="#i-file"]').first()).toBeVisible()
+  await expect(page.locator('.inspector .tree use[href$="files.svg#i-folder"]').first()).toBeVisible()
+  // The theme's sprite is XML a `<use>` can read: one that does not parse —
+  // a double hyphen in a comment is enough — draws every one of these as
+  // nothing, with no error anywhere.
+  const sprite = await page.evaluate(async () => {
+    const text = await (await fetch("./theme/default/files.svg")).text()
+    const doc = new DOMParser().parseFromString(text, "image/svg+xml")
+    return { broken: !!doc.querySelector("parsererror"), symbols: doc.querySelectorAll("symbol").length }
+  })
+  expect(sprite).toEqual({ broken: false, symbols: 11 })
+  // A sheet, drawn by its kind where the tree knows it: `Cargo.toml` is data,
+  // `AGENTS.md` a document.
+  await expect(page.locator('.inspector .tree use[href*="files.svg#i-file"]').first()).toBeVisible()
+  await expect(page.locator('.inspector .tree svg.glyph:is([data-kind="data"], [data-kind="doc"])').first()).toBeVisible()
   // And a directory row carries the caret that opens it.
   await expect(page.locator('.inspector .tree .twist use[href="#i-caret"]').first()).toBeVisible()
 
@@ -837,8 +904,9 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   // nothing on the page named the key that replaces it. See
   // `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`.
   await page.click('.inspector .col-foot button[title="Settings"]')
-  const icons = page.locator(".settings dt", { hasText: "Icons" }).locator("xpath=..")
-  await expect(icons).toContainText("the tree's own two shapes")
+  await page.click('.modal .rail button:has-text("Appearance")')
+  const icons = page.locator(".files-group")
+  await expect(icons).toContainText("the tree draws its own shapes")
   await expect(icons).toContainText("[ui] icon-theme")
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
@@ -1043,6 +1111,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
     (await (await fetch("./api/monaco")).json()).installed)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
   const monaco = page.locator('.modal .seg button:has-text("Monaco")')
   await expect(monaco).toBeVisible()
 
@@ -1069,6 +1138,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
   // And switching back disposes it: an editor left attached to a detached
   // element is a leak that only shows up after twenty tab switches.
   await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
   await page.click('.modal .seg button:has-text("This page")')
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("#monaco-host")).toHaveCount(0)
@@ -1099,7 +1169,7 @@ async function gateOnWidePosture(page) {
   await chooseFolder(page)
 
   await page.click('.chat .acts button[title*="New session"]')
-  const starter = page.getByRole("dialog", { name: "Where a session sends" })
+  const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
   await starter.locator("select.place").selectOption("wide|")
   await starter.locator('button:has-text("Start session")').click()
@@ -1237,28 +1307,30 @@ test("a segmented control is one radio group to the keyboard", async ({ page }) 
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
   await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
 
-  const group = page.getByRole("radiogroup", { name: "Editor colours" })
+  // Snippet colours: Dark, Light, starting on Light.
+  const group = page.getByRole("radiogroup", { name: "Snippet colours" })
   const dark = group.getByRole("radio", { name: "Dark" })
   const light = group.getByRole("radio", { name: "Light" })
-  await expect(dark).toBeChecked()
-  // One stop for Tab, on the chosen answer.
-  await expect(dark).toHaveAttribute("tabindex", "0")
-  await expect(light).toHaveAttribute("tabindex", "-1")
-
-  await dark.focus()
-  await page.keyboard.press("ArrowRight")
   await expect(light).toBeChecked()
-  await expect(light).toBeFocused()
+  // One stop for Tab, on the chosen answer.
   await expect(light).toHaveAttribute("tabindex", "0")
+  await expect(dark).toHaveAttribute("tabindex", "-1")
+
+  await light.focus()
   // It wraps, as native radios do.
   await page.keyboard.press("ArrowRight")
   await expect(dark).toBeChecked()
   await expect(dark).toBeFocused()
-  await page.keyboard.press("End")
+  await expect(dark).toHaveAttribute("tabindex", "0")
+  await page.keyboard.press("ArrowRight")
   await expect(light).toBeChecked()
+  await expect(light).toBeFocused()
   await page.keyboard.press("Home")
   await expect(dark).toBeChecked()
+  await page.keyboard.press("End")
+  await expect(light).toBeChecked()
 })
 
 /**

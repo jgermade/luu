@@ -13,9 +13,9 @@
   // ticked, and `saved(name)` is told what was written.
   const { state, saveProviders, probeProvider, providerModels } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
-  const TextInput = await import("@web/components/text-input.html")
-  const SelectInput = await import("@web/components/select-input.html")
-  const Checkbox = await import("@web/components/checkbox.html")
+  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const Select = await import("@web/theme/default/components/select.html")
+  const Checkbox = await import("@web/theme/default/components/checkbox.html")
 
   // False once it should leave: `Modal` plays the exit, then `close` unmounts.
   let open = true
@@ -321,7 +321,7 @@
 
         <dt>Backend</dt>
         <dd>
-          <SelectInput class="backend" :select-class="'backend'" :options="BACKENDS" :model="backend"
+          <Select select-class="backend" :options="BACKENDS" :model="backend"
                        @change="forget()" />
         </dd>
 
@@ -417,8 +417,8 @@
         </ul>
 
         <div :if="noTools.length" class="leave">
-          <Checkbox :checked="leaving" label="Leave out the models without tools"
-                    @change="leaveOut = !leaving" />
+          <Checkbox :model="leaving" label="Leave out the models without tools"
+                    @change="leaveOut = $event.detail" />
         </div>
         <p :if="anyFenced" class="note">
           <strong>fenced</strong> is luu's own format: the tools as text in the
@@ -467,7 +467,7 @@
   .connect-row { display: flex; gap: .6rem; align-items: center; }
   .summary {
     display: flex; align-items: center; gap: .8rem;
-    padding: .6rem .8rem; border: 1px solid var(--line); border-radius: 6px;
+    padding: .6rem .8rem; border: 1px solid var(--luu-border); border-radius: 6px;
   }
   .summary .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .serves { margin-top: .9rem; }
@@ -476,40 +476,40 @@
   .pick-note { margin: .6rem 0 .3rem; }
   .win {
     width: 6.5rem; flex: none; box-sizing: border-box; padding: .25rem .4rem; font: inherit; font-size: 12px;
-    border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit;
+    border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
   }
-  .win.invalid { border-color: var(--bad, #c62828); }
+  .win.invalid { border-color: var(--luu-bad, #c62828); }
   .transport {
     font: inherit; font-size: 12px; padding: .2rem .3rem;
-    border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit;
+    border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
   }
   .models { list-style: none; margin: 0; padding: 0; }
   .models li.head {
-    font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
-    margin-top: .7rem; padding-bottom: .2rem; border-bottom: 1px solid var(--line);
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--luu-fg-muted);
+    margin-top: .7rem; padding-bottom: .2rem; border-bottom: 1px solid var(--luu-border);
   }
   .models li.model {
     display: grid; grid-template-columns: minmax(0, 1fr) 14rem 5rem; gap: .2rem .6rem;
     align-items: center; padding: .3rem 0;
   }
-  .models li.model.off .mname { color: var(--dim); text-decoration: line-through; }
+  .models li.model.off .mname { color: var(--luu-fg-muted); text-decoration: line-through; }
   .pick { display: flex; gap: .45rem; align-items: center; min-width: 0; cursor: pointer; }
   .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wcell { display: flex; align-items: center; gap: .4rem; }
   .tcell { display: flex; justify-content: flex-end; }
   .hint { font-size: 11px; white-space: nowrap; }
-  .rnote { grid-column: 1 / -1; font-size: 11px; color: var(--dim); padding-left: 1.4rem; }
-  .rnote.warn { color: var(--warn, #b26a00); }
+  .rnote { grid-column: 1 / -1; font-size: 11px; color: var(--luu-fg-muted); padding-left: 1.4rem; }
+  .rnote.warn { color: var(--luu-warn, #b26a00); }
   .leave { margin-top: .7rem; }
   .tail { margin-top: 1rem; }
   /* On the left, away from the two that keep the form. */
   .remove {
     margin-right: auto;
     background: none;
-    border: 1px solid var(--bad, #c62828);
-    color: var(--bad, #c62828);
+    border: 1px solid var(--luu-bad, #c62828);
+    color: var(--luu-bad, #c62828);
   }
-  .remove:hover:not(:disabled) { background: color-mix(in srgb, var(--bad, #c62828) 10%, transparent); }
-  .remove.armed, .remove.armed:hover:not(:disabled) { background: var(--bad, #c62828); color: var(--on-accent, #fff); }
+  .remove:hover:not(:disabled) { background: color-mix(in srgb, var(--luu-bad, #c62828) 10%, transparent); }
+  .remove.armed, .remove.armed:hover:not(:disabled) { background: var(--luu-bad, #c62828); color: var(--luu-on-accent, #fff); }
   .remove ~ .save { margin-left: 0; }
 </style>

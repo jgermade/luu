@@ -1,0 +1,125 @@
+<script :setup="{ title = '', subtitle = '', padded = true, interactive = false }">
+  // A surface that groups one thing: a provider, an engine, a runtime. A head
+  // when there is a `title` or something in the `actions` slot, the content,
+  // and a foot when the `foot` slot has something.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Card title="workstation" subtitle="ollama · 192.168.1.20">
+  //     <template :slot.actions><Button size="sm">edit</Button></template>
+  //     …
+  //     <template :slot.foot>…</template>
+  //   </Card>
+  //
+  // `interactive` is a card that is itself the thing to click: it lifts on
+  // hover and emits `click`. A card with buttons in it is not one.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isInteractive = flag(interactive)
+  $: isPadded = flag(padded)
+
+  const click = event => {
+    if (isInteractive) $emit("click", event)
+  }
+  const key = event => {
+    if (!isInteractive || (event.key !== "Enter" && event.key !== " ")) return
+    event.preventDefault()
+    $emit("click", event)
+  }
+</script>
+
+<section class="card"
+         :class.interactive="isInteractive"
+         :tabindex="isInteractive ? 0 : null"
+         :role="isInteractive ? 'button' : null"
+         @click="click($event)"
+         @keydown="key($event)">
+  <header :if="title || $slots.actions" class="head">
+    <div class="titles">
+      <h3 :if="title" class="title">{{ title }}</h3>
+      <p :if="subtitle" class="subtitle">{{ subtitle }}</p>
+    </div>
+    <div :if="$slots.actions" class="actions"><slot.actions /></div>
+  </header>
+  <div class="body" :class.padded="isPadded"><slot></slot></div>
+  <footer :if="$slots.foot" class="foot"><slot.foot /></footer>
+</section>
+
+<style scoped>
+  .card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-lg);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    box-shadow: var(--luu-shadow-sm);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+  }
+  .interactive {
+    cursor: pointer;
+    transition: border-color var(--luu-duration-fast) ease,
+                box-shadow var(--luu-duration) ease,
+                transform var(--luu-duration) var(--luu-ease-out);
+  }
+  .interactive:hover {
+    border-color: var(--luu-border-strong);
+    box-shadow: var(--luu-shadow-md);
+    transform: translateY(-1px);
+  }
+  /* Pressed: back down onto the page. */
+  .interactive:active {
+    box-shadow: var(--luu-shadow-sm);
+    transform: none;
+    background: var(--luu-hover);
+  }
+  .interactive:focus-visible {
+    outline: 2px solid var(--luu-focus);
+    outline-offset: 2px;
+  }
+
+  .head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--luu-space-3);
+    padding: var(--luu-space-3) var(--luu-space-4) 0;
+  }
+  .titles { min-width: 0; }
+  .title {
+    margin: 0;
+    font-size: var(--luu-text-md);
+    font-weight: var(--luu-weight-bold);
+    line-height: var(--luu-leading-tight);
+  }
+  .subtitle {
+    margin: .15rem 0 0;
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-sm);
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: var(--luu-space-1);
+    flex: none;
+  }
+
+  .body { min-width: 0; }
+  .body.padded { padding: var(--luu-space-3) var(--luu-space-4); }
+
+  .foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--luu-space-2);
+    padding: var(--luu-space-2) var(--luu-space-4);
+    border-top: var(--luu-border-width) solid var(--luu-border);
+    background: var(--luu-sunken);
+    border-radius: 0 0 var(--luu-radius-lg) var(--luu-radius-lg);
+  }
+</style>

@@ -188,8 +188,9 @@ test("the resend rules are chosen from the page, and a save says what it did not
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Sessions")')
   // Resend and Authority are one section now, in this order, and the rail
-  // puts Engines before Models.
-  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Engines", "Models", "Runtimes", "Sessions"])
+  // puts Engines before Models; Appearance is General's other half since
+  // 2026-10-21.
+  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Appearance", "Engines", "Models", "Runtimes", "Sessions"])
   await expect(page.locator("#sessions-resend h2")).toHaveText("Resend")
   await expect(page.locator("#sessions-authority h2")).toHaveText("Authority")
 
@@ -390,10 +391,23 @@ test("an icon theme is imported from a picked folder and drawn at once", async (
   await expect(page.locator(".inspector img")).toHaveCount(0)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
-  await page.locator(".modal input[type=file]").setInputFiles(picked)
+  await page.click('.modal .rail button:has-text("Appearance")')
+  await page.locator(".modal input.pick-folder").setInputFiles(picked)
 
-  const row = page.locator(".modal .themes li", { hasText: "Tiny Icons" })
-  await expect(row).toContainText("in use")
+  // Chosen, under *Installed in :luu*, and drawn in the preview with its own icons.
+  const row = page.getByRole("radio", { name: /Tiny Icons/ })
+  await expect(row).toHaveAttribute("aria-checked", "true")
+  const preview = page.locator(".modal .theme-preview")
+  await expect(preview).toContainText("Tiny Icons")
+  await expect(preview.locator(".ds-badge")).not.toHaveClass(/unseen/)
+  await expect(preview.locator(".big-tree img").first()).toHaveAttribute("src", /^data:image\/svg\+xml;base64,/)
+  // The tree's own shapes, previewed under the pointer, without choosing them.
+  await page.getByRole("radio", { name: /The tree's own/ }).hover()
+  await expect(preview).toContainText("The tree's own")
+  await expect(preview.locator(".big-tree img")).toHaveCount(0)
+  // Not in use, so its badge is held but not shown — the head does not move.
+  await expect(preview.locator(".ds-badge")).toHaveClass(/unseen/)
+  await expect(row).toHaveAttribute("aria-checked", "true")
   const onDisk = readFileSync(join(home, "config.toml"), "utf8")
   expect(onDisk).toContain("icon-themes/tiny-icons")
   expect(onDisk).toContain("[provider.here]")
@@ -997,4 +1011,149 @@ test("runtimes, postures and the host shell are configured from Settings", async
   await expect.poll(config).not.toContain("[terminal]")
 
   expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * General's previews are drawn, not left as bare markup: the editor and the
+ * snippets side by side, the mini editor a numbered-by-hand list in its tone,
+ * the layout's miniatures and the icon themes' cards laid out. Written after
+ * a cleanup of one rule took the others with it and the page showed `1. 1 fn
+ * main()` — every one of these is a style that was missing then. See
+ * `RECORD/2026-10-21.the-design-system-applied.completed.md`.
+ */
+test("Appearance draws its previews: editor, snippets, layout and the files theme", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+
+  const pane = page.locator(".appearance-pane")
+  const style = (selector, property) =>
+    pane.locator(selector).first().evaluate((el, p) => getComputedStyle(el)[p], property)
+  await expect(pane.locator(".code-group .duo")).toBeVisible()
+  expect(await style(".code-group .duo", "display")).toBe("grid")
+  expect((await style(".code-group .duo", "gridTemplateColumns")).split(" ")).toHaveLength(2)
+  expect(await style(".mini-lines", "listStyleType")).toBe("none")
+  expect(await style(".mini-editor", "borderTopLeftRadius")).toBe("8px")
+  expect(await style(".layout-preview-grid .mini-app", "display")).toBe("flex")
+  expect(await style(".files-duo", "display")).toBe("grid")
+  expect(await style(".big-tree", "listStyleType")).toBe("none")
+
+  // The mini editor is in the tone the theme choice says.
+  const editor = pane.locator(".mini-editor")
+  await pane.getByRole("radiogroup", { name: "Editor theme" }).getByRole("radio", { name: "Light" }).click()
+  await expect(editor).toHaveAttribute("data-tone", "light")
+  expect(await editor.evaluate(el => getComputedStyle(el).backgroundColor)).toBe("rgb(255, 255, 255)")
+  await pane.getByRole("radiogroup", { name: "Editor theme" }).getByRole("radio", { name: "Dark" }).click()
+  await expect(editor).toHaveAttribute("data-tone", "dark")
+
+  // The sizes: each on its own, applied to the page and kept for the next visit.
+  const rootVar = name => page.evaluate(n => document.documentElement.style.getPropertyValue(n), name)
+  await pane.getByRole("radiogroup", { name: "Editor text size" }).getByRole("radio", { name: "Large" }).click()
+  await pane.getByRole("radiogroup", { name: "Chat text size" }).getByRole("radio", { name: "Small" }).click()
+  await pane.getByRole("radiogroup", { name: "Files size" }).getByRole("radio", { name: "Large" }).click()
+  expect(await rootVar("--luu-editor-font")).toBe("14px")
+  expect(await rootVar("--luu-chat-zoom")).toBe("0.9")
+  expect(await rootVar("--luu-tree-zoom")).toBe("1.15")
+  expect(await page.evaluate(() => localStorage.getItem("luu.size.editor"))).toBe("l")
+  await page.evaluate(() => { for (const k of ["luu.size.tree", "luu.size.editor", "luu.size.chat"]) localStorage.removeItem(k) })
+
+  // A server started before the previews existed answers 404: the page says
+  // so, and the preview's tree is still a tree — its folders are the page's
+  // to know.
+  await page.route("**/api/icon-theme/previews", route => route.fulfill({ status: 404, body: "not found" }))
+  await page.reload()
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  await expect(page.locator(".appearance-pane")).toContainText("Restart luu serve")
+  await expect(page.locator(".theme-preview .big-tree .caret")).toHaveCount(2)
+  await expect(page.locator(".theme-preview .big-tree img")).toHaveCount(0)
+})
+
+/** A zip of `files` (path → text), stored rather than deflated: what a person
+ *  makes of a theme folder, without a library to make it here. */
+function zipOf(files) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    return c >>> 0
+  })
+  const crc32 = bytes => {
+    let c = 0xffffffff
+    for (const b of bytes) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8)
+    return (c ^ 0xffffffff) >>> 0
+  }
+  const locals = []
+  const centrals = []
+  let offset = 0
+  for (const [path, text] of Object.entries(files)) {
+    const name = Buffer.from(path)
+    const data = Buffer.from(text)
+    const crc = crc32(data)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(name.length, 26)
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6)
+    central.writeUInt32LE(crc, 16); central.writeUInt32LE(data.length, 20); central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(name.length, 28); central.writeUInt32LE(offset, 42)
+    locals.push(local, name, data)
+    centrals.push(central, name)
+    offset += 30 + name.length + data.length
+  }
+  const directory = Buffer.concat(centrals)
+  const end = Buffer.alloc(22)
+  const count = Object.keys(files).length
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10)
+  end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, directory, end])
+}
+
+const themeFiles = label => ({
+  "package.json": JSON.stringify({ name: label.toLowerCase().replace(/ /g, "-"), contributes: { iconThemes: [{ id: "t", label, path: "./theme.json" }] } }),
+  "theme.json": JSON.stringify({ iconDefinitions: { _rust: { iconPath: "./icons/rust.svg" } }, fileExtensions: { rs: "_rust" }, file: "_rust" }),
+  "icons/rust.svg": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='#c33'/></svg>",
+})
+
+/**
+ * *+ Add a theme* takes a folder, a zip or a theme JSON, and the frame takes
+ * any of them dropped on it. A zip is opened in the page (`lib/unzip.js`) and
+ * sent as the folder it holds; one whose files are at its top is put under its
+ * own name; and a JSON on its own, which names icons it does not bring, is
+ * refused with what to do instead. See
+ * `RECORD/2026-10-21.the-design-system-applied.completed.md`.
+ */
+test("a theme is added as a zip, dropped on the frame, and a bare JSON is refused", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+
+  // A zip with the theme in a folder, picked.
+  const inFolder = Object.fromEntries(Object.entries(themeFiles("Zipped Icons")).map(([p, t]) => [`zipped/${p}`, t]))
+  await page.locator(".modal input.pick-file").setInputFiles({ name: "zipped.zip", mimeType: "application/zip", buffer: zipOf(inFolder) })
+  await expect(page.getByRole("radio", { name: /Zipped Icons/ })).toHaveAttribute("aria-checked", "true")
+  await expect(page.locator(".theme-preview .big-tree img").first()).toHaveAttribute("src", /^data:image\/svg/)
+
+  // A zip of a theme's contents, dropped on the frame: put under its own name.
+  const flat = zipOf(themeFiles("Dropped Icons")).toString("base64")
+  await page.locator(".files-frame").evaluate(async (frame, b64) => {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([bytes], "dropped.zip", { type: "application/zip" }))
+    for (const type of ["dragenter", "dragover", "drop"]) {
+      frame.dispatchEvent(new DragEvent(type, { dataTransfer: transfer, bubbles: true, cancelable: true }))
+    }
+  }, flat)
+  await expect(page.getByRole("radio", { name: /Dropped Icons/ })).toHaveAttribute("aria-checked", "true")
+
+  // A JSON alone: refused, saying why and what to add instead.
+  await page.locator(".modal input.pick-file").setInputFiles({
+    name: "bare.json", mimeType: "application/json", buffer: Buffer.from(themeFiles("Bare")["theme.json"]),
+  })
+  await expect(page.locator(".appearance-pane")).toContainText("icons that were not included")
+  await expect(page.getByRole("radio", { name: /Dropped Icons/ })).toHaveAttribute("aria-checked", "true")
 })

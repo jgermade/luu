@@ -1,0 +1,135 @@
+<script :setup="{
+  model = '',
+  options = [],
+  placeholder = '',
+  size = 'md',
+  disabled = false,
+  invalid = false,
+  warn = false,
+  selectClass = '',
+  id = '',
+  name = '',
+  label = ''
+}">
+  // One answer out of a list too long for a `Segmented`, as the platform's
+  // own `<select>`: its menu, its keyboard, its behaviour on a phone. Only the
+  // closed box is drawn here.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Select :model="backend" :options="['ollama', 'openai', 'mock']" />
+  //   <Select :model="provider" placeholder="choose one">
+  //     <option :each="p in providers" :key="p" :value="p">{{ p }}</option>
+  //   </Select>
+  //
+  // An option is a string or `{ value, label, disabled, title }`. The choice
+  // goes up through `:model` and as `change`, in `$event.detail`. `warn` is a
+  // border in the warning tone. `selectClass` names the `<select>` itself, for
+  // a caller — or a test — that addresses it.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isInvalid = flag(invalid)
+  $: isWarn = flag(warn)
+
+  $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
+  $: val = model ?? ""
+
+  const chosen = event => {
+    const v = event.target.value
+    $updateModel(v)
+    $emit("change", v)
+  }
+</script>
+
+<div class="select"
+     :class.sm="size === 'sm'"
+     :class.lg="size === 'lg'"
+     :class.invalid="isInvalid"
+     :class.warned="isWarn && !isInvalid"
+     :class.disabled="isDisabled"
+     :class.unset="!val">
+  <select :class="selectClass || null"
+          :value="val"
+          :disabled="isDisabled"
+          :id="id || null"
+          :name="name || null"
+          :aria-label="label || null"
+          :aria-invalid="isInvalid ? 'true' : null"
+          @change="chosen($event)">
+    <option :if="placeholder" value="" disabled :selected="!val">{{ placeholder }}</option>
+    <option :each="item in items"
+            :key="String(item.value)"
+            :value="item.value"
+            :disabled="item.disabled"
+            :title="item.title || null">{{ item.label }}</option>
+    <slot></slot>
+  </select>
+  <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5" /></svg>
+</div>
+
+<style scoped>
+  .select {
+    --h: var(--luu-control-md);
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+    height: var(--h);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease;
+  }
+  .select:hover:not(.disabled) { border-color: var(--luu-border-strong); }
+  .select:active:not(.disabled) { background: var(--luu-active); }
+  .select:focus-within {
+    border-color: var(--luu-focus);
+    box-shadow: 0 0 0 1px var(--luu-focus);
+  }
+  .invalid, .invalid:hover:not(.disabled) { border-color: var(--luu-bad); }
+  /* `warned`, not `warn`: a page's own `.warn` is a line of text saying why,
+     often right beside this box. */
+  .warned, .warned:hover:not(.disabled) { border-color: var(--luu-warn); }
+  .disabled { opacity: .55; background: var(--luu-sunken); }
+  .sm { --h: var(--luu-control-sm); font-size: var(--luu-text-sm); }
+  .lg { --h: var(--luu-control-lg); font-size: var(--luu-text-lg); }
+
+  select {
+    width: 100%;
+    height: 100%;
+    padding: 0 2rem 0 var(--luu-space-3);
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    outline: none;
+    cursor: pointer;
+  }
+  .sm select { padding-left: var(--luu-space-2); }
+  .unset select { color: var(--luu-fg-subtle); }
+  /* Against a page whose own rule dims a disabled element: the box is dimmed
+     once, here, and not again inside it. */
+  select:disabled { cursor: not-allowed; opacity: 1; }
+  option { background: var(--luu-surface); color: var(--luu-fg); }
+
+  .caret {
+    position: absolute;
+    right: var(--luu-space-2);
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: var(--luu-fg-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+</style>

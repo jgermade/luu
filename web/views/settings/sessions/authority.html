@@ -9,10 +9,10 @@
   // refusal is a turn. See
   // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
   const { state, loadAuthority, saveAuthority } = await import("@web/lib/store.js")
-  const Segmented = await import("@web/components/segmented.html")
+  const Segmented = await import("@web/theme/default/components/segmented.html")
   const SaveButton = await import("@web/components/save-button.html")
   const PathText = await import("@web/components/path-text.html")
-  const TextareaInput = await import("@web/components/textarea-input.html")
+  const Textarea = await import("@web/theme/default/components/textarea.html")
 
   const POSITIONS = [{ value: "", label: "system (default)" }, "prompt"]
 
@@ -78,18 +78,18 @@
 
 <div class="ds-diagram">
   <div class="ds-diagram-node">
-    <div style="font-weight:600;color:var(--b-system);">1. Fase Draft</div>
-    <div style="font-size:10px;color:var(--dim);">Pre-aprobación · Sólo lectura</div>
+    <div style="font-weight:600;color:var(--luu-bucket-system);">1. Fase Draft</div>
+    <div style="font-size:10px;color:var(--luu-fg-muted);">Pre-aprobación · Sólo lectura</div>
   </div>
   <div class="ds-diagram-arrow">➔</div>
   <div class="ds-diagram-node">
-    <div style="font-weight:600;color:var(--ok);">2. Gate de Control</div>
-    <div style="font-size:10px;color:var(--dim);">Plan aprobado por usuario</div>
+    <div style="font-weight:600;color:var(--luu-ok);">2. Gate de Control</div>
+    <div style="font-size:10px;color:var(--luu-fg-muted);">Plan aprobado por usuario</div>
   </div>
   <div class="ds-diagram-arrow">➔</div>
   <div class="ds-diagram-node">
-    <div style="font-weight:600;color:var(--accent);">3. Fase Plan</div>
-    <div style="font-size:10px;color:var(--dim);">Permisos estrechados</div>
+    <div style="font-weight:600;color:var(--luu-accent);">3. Fase Plan</div>
+    <div style="font-size:10px;color:var(--luu-fg-muted);">Permisos estrechados</div>
   </div>
 </div>
 
@@ -127,7 +127,7 @@
 <dl class="settings" :if="state.authority">
   <dt>Draft</dt>
   <dd>
-    <TextareaInput :rows="2" :disabled="!editable" :model="draft.draftText"
+    <Textarea :rows="2" :disabled="!editable" :model="draft.draftText"
                    placeholder="Nothing — a draft that tries to write discovers the floor by being refused." />
   </dd>
   <dd>
@@ -147,7 +147,7 @@
 
   <dt>Plan</dt>
   <dd>
-    <TextareaInput :rows="2" :disabled="!editable" :model="draft.planText"
+    <Textarea :rows="2" :disabled="!editable" :model="draft.planText"
                    placeholder="Nothing — the ordinary case, since a plan already grants what it grants." />
   </dd>
   <dd>
@@ -182,7 +182,7 @@
   }
   h3:first-child { margin-top: 0; }
   .path { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
-  .note b, .caveat b { color: var(--fg); font-weight: 600; }
+  .note b, .caveat b { color: var(--luu-fg); font-weight: 600; }
   .note-text { max-width: 100%; overflow-wrap: anywhere; }
   .rule-visual-pills {
     display: flex;
@@ -196,25 +196,25 @@
     font-size: 11px;
     padding: .15rem .5rem;
     border-radius: 4px;
-    border: 1px solid var(--line);
-    background: var(--sunken, rgba(0, 0, 0, .04));
-    color: var(--dim);
+    border: 1px solid var(--luu-border);
+    background: var(--luu-sunken, rgba(0, 0, 0, .04));
+    color: var(--luu-fg-muted);
   }
   .rule-pill strong {
-    color: var(--fg);
+    color: var(--luu-fg);
     margin-right: .2rem;
   }
   .rule-pill.accent {
-    border-color: var(--accent);
-    background: var(--selected, rgba(47, 91, 189, .08));
-    color: var(--fg);
+    border-color: var(--luu-accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .08));
+    color: var(--luu-fg);
   }
   .rule-pill.accent strong {
-    color: var(--accent);
+    color: var(--luu-accent);
   }
   .rule-pill.warn {
-    border-color: var(--warn);
-    background: var(--warn-bg, rgba(138, 93, 18, .08));
+    border-color: var(--luu-warn);
+    background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
   }
   textarea {
     width: 100%;
@@ -222,9 +222,9 @@
     font: inherit;
     resize: vertical;
     border-radius: 6px;
-    border: 1px solid var(--line);
-    background: var(--bg);
-    color: var(--fg);
+    border: 1px solid var(--luu-border);
+    background: var(--luu-bg);
+    color: var(--luu-fg);
     padding: .4rem .6rem;
   }
 </style>

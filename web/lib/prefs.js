@@ -79,8 +79,8 @@ export const prefs = $reactive({
   /// quietly reinterpret all of them. `auto` is a choice, not the absence of
   /// one.
   // Light only, for now: the dark theme is off while the page's palette is
-  // reworked. Its tokens stay in `app.css`, because the columns' heads and
-  // feet are drawn with them.
+  // reworked. Its tokens stay in the theme, because the columns' heads and
+  // feet are drawn with them (`data-tone="dark"`).
   theme: "light",
   /// `own` | `monaco`. What draws a file in the content column. `monaco` is an
   /// npm dependency of this directory rather than a payload in the tree, so it
@@ -128,9 +128,23 @@ export const prefs = $reactive({
   /// offered, because a posture can leave `config.toml` and a runtime this
   /// machine.
   place: keptText("luu.place", "|"),
+  /// `s` | `m` | `l`: how big the tree, the editor and the chat are drawn,
+  /// each on its own. `m` is the size each was before it could be chosen.
+  treeSize: kept("luu.size.tree", ["s", "m", "l"], "m"),
+  editorSize: kept("luu.size.editor", ["s", "m", "l"], "m"),
+  chatSize: kept("luu.size.chat", ["s", "m", "l"], "m"),
 })
 
-/// Dark is `:root`'s own palette in `app.css`, so light is the attribute. Set
+/// The sizes, as the page applies them: the tree and the chat are scaled whole
+/// — text and icons together, since both are full of fixed pixel sizes — and
+/// the editor's text is a size of its own, because its rows are measured in
+/// lines (`lh`) and Monaco takes a font size, not a scale.
+export const SIZES = {
+  zoom: { s: 0.9, m: 1, l: 1.15 },
+  editorPx: { s: 11, m: 12, l: 14 },
+}
+
+/// Light is the theme's `:root` and dark is `data-theme="dark"` on it. Set
 /// unconditionally while the dark theme is off — see `prefs.theme`.
 function paint() {
   document.documentElement.setAttribute("data-theme", "light")
@@ -141,8 +155,27 @@ function paintTones() {
   document.documentElement.setAttribute("data-snippet-tone", prefs.snippetTone)
 }
 
+/// On the root, so every surface that draws the tree, the editor or the chat
+/// reads one value: `--luu-tree-zoom`, `--luu-chat-zoom`, `--luu-editor-font`.
+function paintSizes() {
+  const root = document.documentElement.style
+  root.setProperty("--luu-tree-zoom", String(SIZES.zoom[prefs.treeSize]))
+  root.setProperty("--luu-chat-zoom", String(SIZES.zoom[prefs.chatSize]))
+  root.setProperty("--luu-editor-font", `${SIZES.editorPx[prefs.editorSize]}px`)
+}
+
 paint()
 paintTones()
+paintSizes()
+
+/// `tree` | `editor` | `chat`, and `s` | `m` | `l`.
+export function setSize(which, size) {
+  const key = { tree: "treeSize", editor: "editorSize", chat: "chatSize" }[which]
+  if (!key) return
+  prefs[key] = size
+  keep(`luu.size.${which}`, size)
+  paintSizes()
+}
 export function setEditorTone(which) {
   prefs.editorTone = which
   keep("luu.editor-tone", which)

@@ -13,7 +13,7 @@
   // is folded, and the budget as a share of the window rather than of itself.
   // See `RECORD/2026-10-14.the-debug-panel-in-cards.completed.md`.
   const { state, panel, selectTurn } = await import("@web/lib/store.js")
-  const Scrollable = await import("@web/components/scrollable.html")
+  const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const Card = await import("@web/views/inspector/debug/card.html")
   const { showDebug } = await import("@web/lib/workspace.js")
   const { paint, group, split, withSpecs, contents, ORDER } = await import("@web/helpers/prompt-parts.js")
@@ -455,10 +455,10 @@
   /* ---- rows: an icon, what it is, and what goes with it, like a list in a
      sidebar rather than a sentence ---------------------------------------- */
   .row { display: flex; align-items: center; gap: .55rem; padding: .2rem 0; font-size: 13px; min-width: 0; }
-  .row > .ic { color: var(--dim); }
+  .row > .ic { color: var(--luu-fg-muted); }
   .row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .turn-picker select {
-    background: var(--bg); color: inherit; border: 1px solid var(--line);
+    background: var(--luu-bg); color: inherit; border: 1px solid var(--luu-border);
     border-radius: 6px; font: inherit; font-size: 12px; padding: .15rem .4rem;
   }
   .turn-picker .dim { font-size: 12px; }
@@ -467,7 +467,7 @@
      than by every number in it looking current. */
   .reading {
     margin: .35rem 0 0; padding: .3rem .6rem; font-size: 12px;
-    border-left: 3px solid var(--b-history); background: var(--raised);
+    border-left: 3px solid var(--luu-bucket-history); background: var(--luu-raised);
     border-radius: 0 6px 6px 0;
   }
 
@@ -477,11 +477,11 @@
     font-variant-numeric: tabular-nums;
   }
   .usage b { font-size: 14px; font-weight: 500; }
-  .usage span { color: var(--dim); font-size: 12px; }
+  .usage span { color: var(--luu-fg-muted); font-size: 12px; }
 
   .bar {
     display: flex; gap: 2px; height: 6px; margin: .45rem 0 .6rem;
-    border-radius: 999px; overflow: hidden; background: var(--sunken);
+    border-radius: 999px; overflow: hidden; background: var(--luu-sunken);
   }
   .bar span { min-width: 3px; border-radius: 2px; }
   /* Free is the bar's own ground: what is left of the window is the part
@@ -489,7 +489,7 @@
   .bar span.free { background: transparent; }
 
   .rows { list-style: none; margin: 0; padding: 0; font-size: 13px; }
-  .rows + .rows { margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed var(--line); }
+  .rows + .rows { margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed var(--luu-border); }
   /* Four columns, the last fixed, so every row's share lines up under the one
      above it and every count ends at the same edge. */
   .rows li {
@@ -500,17 +500,17 @@
     padding: .12rem 0;
   }
   .rows .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rows b { font-weight: normal; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .rows b { font-weight: normal; color: var(--luu-fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
   .rows .share { text-align: right; font-variant-numeric: tabular-nums; }
   /* Counted, not budgeted: beside the window rather than in it. */
-  .rows li.beside { color: var(--dim); opacity: .7; }
-  .rows li.beside .swatch { background: none; box-shadow: inset 0 0 0 1px var(--line); }
+  .rows li.beside { color: var(--luu-fg-muted); opacity: .7; }
+  .rows li.beside .swatch { background: none; box-shadow: inset 0 0 0 1px var(--luu-border); }
   .swatch { width: 10px; height: 10px; border-radius: 3px; }
-  .swatch.free { background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line); }
+  .swatch.free { background: var(--luu-sunken); box-shadow: inset 0 0 0 1px var(--luu-border); }
 
   /* ---- the rows that open: a caret where a swatch would be, then the
      items, indented to the name above them -------------------------------- */
-  .lists { list-style: none; margin: .35rem 0 0; padding: .35rem 0 0; border-top: 1px dashed var(--line); font-size: 13px; }
+  .lists { list-style: none; margin: .35rem 0 0; padding: .35rem 0 0; border-top: 1px dashed var(--luu-border); font-size: 13px; }
   .list-head {
     display: grid;
     grid-template-columns: 10px minmax(0, 1fr) auto 3.4rem;
@@ -521,86 +521,86 @@
     background: none;
     border: 0;
     border-radius: 4px;
-    color: var(--fg);
+    color: var(--luu-fg);
     font: inherit;
     text-align: left;
     cursor: pointer;
   }
-  .list-head:hover .name { color: var(--accent); }
-  .list-head .caret { width: 10px; height: 10px; color: var(--dim); transition: transform .15s; }
+  .list-head:hover .name { color: var(--luu-accent); }
+  .list-head .caret { width: 10px; height: 10px; color: var(--luu-fg-muted); transition: transform .15s; }
   .list-head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .list-head b { font-weight: normal; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .list-head b { font-weight: normal; color: var(--luu-fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
   .items {
     list-style: none;
     margin: .1rem 0 .35rem calc(10px + .55rem);
     padding: 0 0 0 .55rem;
-    border-left: 1px solid var(--line);
+    border-left: 1px solid var(--luu-border);
     font-size: 12px;
   }
   .items li { display: flex; align-items: baseline; gap: .4rem; padding: .08rem 0; min-width: 0; }
   .items .label { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .items .where {
-    flex: 1; min-width: 0; color: var(--dim); font-size: 11px;
+    flex: 1; min-width: 0; color: var(--luu-fg-muted); font-size: 11px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* A directory is cut from the front: its end is the part that says where. */
   .items .where.path { direction: rtl; text-align: left; }
-  .items .tag { flex: none; color: var(--warn); font-size: 11px; }
+  .items .tag { flex: none; color: var(--luu-warn); font-size: 11px; }
   .items b {
     flex: none; margin-left: auto; padding-left: .3rem;
-    font-weight: normal; color: var(--dim); font-variant-numeric: tabular-nums;
+    font-weight: normal; color: var(--luu-fg-muted); font-variant-numeric: tabular-nums;
   }
-  .items li.muted { color: var(--dim); font-style: italic; }
+  .items li.muted { color: var(--luu-fg-muted); font-style: italic; }
 
-  .bar .system, .swatch.system { background: var(--b-system); }
-  .bar .tools, .swatch.tools { background: var(--b-tools); }
-  .bar .map, .swatch.map { background: var(--b-map); }
-  .bar .history, .swatch.history { background: var(--b-history); }
-  .bar .summaries, .swatch.summaries { background: var(--b-summaries); }
-  .bar .code, .swatch.code { background: var(--b-code); }
-  .bar .prompt, .swatch.prompt { background: var(--b-prompt); }
-  .bar .reserve, .swatch.reserve { background: var(--b-reserve); }
-  .bar .shared, .swatch.shared { background: var(--b-history); }
-  .bar .fresh, .swatch.fresh { background: var(--b-reserve); }
+  .bar .system, .swatch.system { background: var(--luu-bucket-system); }
+  .bar .tools, .swatch.tools { background: var(--luu-bucket-tools); }
+  .bar .map, .swatch.map { background: var(--luu-bucket-map); }
+  .bar .history, .swatch.history { background: var(--luu-bucket-history); }
+  .bar .summaries, .swatch.summaries { background: var(--luu-bucket-summaries); }
+  .bar .code, .swatch.code { background: var(--luu-bucket-code); }
+  .bar .prompt, .swatch.prompt { background: var(--luu-bucket-prompt); }
+  .bar .reserve, .swatch.reserve { background: var(--luu-bucket-reserve); }
+  .bar .shared, .swatch.shared { background: var(--luu-bucket-history); }
+  .bar .fresh, .swatch.fresh { background: var(--luu-bucket-reserve); }
 
-  .note { margin: .55rem 0 0; font-size: 12px; line-height: 1.5; color: var(--dim); }
-  .note.warn { color: var(--warn); }
+  .note { margin: .55rem 0 0; font-size: 12px; line-height: 1.5; color: var(--luu-fg-muted); }
+  .note.warn { color: var(--luu-warn); }
   /* A cut is something that happened to this turn, not a description of it:
      marked in the colour of what it took. */
-  .note.event { padding-left: .55rem; border-left: 3px solid var(--warn); }
-  .note.event.pruned { border-left-color: var(--b-code); }
+  .note.event { padding-left: .55rem; border-left: 3px solid var(--luu-warn); }
+  .note.event.pruned { border-left-color: var(--luu-bucket-code); }
   code { font-size: 11px; }
 
   /* ---- the prompt's head: what to do with it, on the card's far side ----- */
   button.open {
     flex: none;
     font-size: 12px;
-    color: var(--accent);
+    color: var(--luu-accent);
   }
 
   /* ---- calls and folds: a list, one entry per thing that happened -------- */
   .timeline, .folds { list-style: none; margin: 0; padding: 0; font-size: 12px; }
   .timeline li, .folds li { padding: .4rem 0; }
   .timeline li:first-child, .folds li:first-child { padding-top: 0; }
-  .timeline li + li, .folds li + li { border-top: 1px solid var(--line); }
+  .timeline li + li, .folds li + li { border-top: 1px solid var(--luu-border); }
   .timeline li:last-child, .folds li:last-child { padding-bottom: 0; }
   .call { display: flex; align-items: baseline; gap: .45rem; font-size: 13px; }
-  .call .kind { width: 14px; height: 14px; color: var(--dim); align-self: center; }
+  .call .kind { width: 14px; height: 14px; color: var(--luu-fg-muted); align-self: center; }
   /* The name is read whole; the arguments after it are what wraps. */
   .call b { flex: none; white-space: nowrap; }
   .call .dim { font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
   /* Everything under a call's name starts where its name does. */
   .verdict, .held, .err { padding-left: calc(14px + .45rem); line-height: 1.5; overflow-wrap: anywhere; }
-  .timeline .call b { color: var(--accent); }
-  .timeline .ok { color: var(--ok); }
-  .timeline .bad { color: var(--bad); }
-  .timeline .held { color: var(--dim); }
-  .timeline .held.warn { color: var(--warn); }
-  .timeline .err { color: var(--bad); overflow-wrap: anywhere; }
+  .timeline .call b { color: var(--luu-accent); }
+  .timeline .ok { color: var(--luu-ok); }
+  .timeline .bad { color: var(--luu-bad); }
+  .timeline .held { color: var(--luu-fg-muted); }
+  .timeline .held.warn { color: var(--luu-warn); }
+  .timeline .err { color: var(--luu-bad); overflow-wrap: anywhere; }
 
-  .folds .call b { color: var(--b-summaries); }
-  .folds .held { color: var(--dim); }
-  .folds .held b { color: var(--fg); font-variant-numeric: tabular-nums; }
-  .folds .ok { color: var(--ok); }
-  .folds .bad { color: var(--bad); }
+  .folds .call b { color: var(--luu-bucket-summaries); }
+  .folds .held { color: var(--luu-fg-muted); }
+  .folds .held b { color: var(--luu-fg); font-variant-numeric: tabular-nums; }
+  .folds .ok { color: var(--luu-ok); }
+  .folds .bad { color: var(--luu-bad); }
 </style>

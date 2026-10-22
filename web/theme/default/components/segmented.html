@@ -1,0 +1,166 @@
+<script :setup="{ options = [], model = '', size = 'md', disabled = false, label = '', block = false, iconsOnly = false }">
+  // A few mutually exclusive answers side by side — two to five short words —
+  // with a pill behind the chosen one that slides to the next.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Segmented label="Theme" :options="['light', 'dark']" :model="theme" />
+  //
+  // An option is a string or `{ value, label, icon, disabled, title }`; `icon`
+  // is an SVG path on a 24×24 grid, stroked in the text's colour, and
+  // `icons-only` draws it alone, with the label as the button's name and its
+  // tooltip. One radio
+  // group to the keyboard: Tab stops on the chosen answer, and the arrows,
+  // Home and End move the choice. The choice goes up through `:model` and as
+  // `change`. `block` stretches the answers across the row.
+  //
+  // **The first placement snaps**: the transition is switched on a frame
+  // after the first measurement, so a view does not open with every pill
+  // sliding in from the edge.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isBlock = flag(block)
+
+  $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
+
+  let at = null
+  let moving = false
+
+  const place = () => {
+    const on = $self("button.on")
+    if (!on || !on.offsetWidth) return
+    at = { x: on.offsetLeft, y: on.offsetTop, w: on.offsetWidth, h: on.offsetHeight }
+    if (!moving) requestAnimationFrame(() => { moving = true })
+  }
+
+  const choose = item => {
+    if (isDisabled || item.disabled || item.value === model) return
+    $updateModel(item.value)
+    $emit("change", item.value)
+  }
+
+  $: isIconsOnly = flag(iconsOnly)
+  $: open = isDisabled ? [] : items.filter(i => !i.disabled)
+  $: stop = open.find(i => i.value === model) ?? open[0]
+
+  const STEP = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
+  const key = (e, item) => {
+    if (!open.length) return
+    const i = open.indexOf(item)
+    const next =
+      e.key === "Home" ? open[0] :
+      e.key === "End" ? open[open.length - 1] :
+      e.key in STEP ? open[(i + STEP[e.key] + open.length) % open.length] :
+      null
+    if (!next) return
+    e.preventDefault()
+    choose(next)
+    $self(".seg").querySelectorAll("button")[items.indexOf(next)]?.focus()
+  }
+
+  await $mounted()
+  const sizes = new ResizeObserver(() => place())
+  sizes.observe($self(".seg"))
+  $destroyed(() => sizes.disconnect())
+  $: (model, items, requestAnimationFrame(place))
+  $: pill = at
+    ? `width:${at.w}px;height:${at.h}px;transform:translate(${at.x}px,${at.y}px)`
+    : "display:none"
+</script>
+
+<div class="seg"
+     :class.sm="size === 'sm'"
+     :class.lg="size === 'lg'"
+     :class.block="isBlock"
+     :class.moving="moving"
+     role="radiogroup"
+     :aria-label="label || null"
+     :aria-disabled="isDisabled ? 'true' : null">
+  <span class="pill" :style="pill" aria-hidden="true"></span>
+  <button :each="item in items"
+          :key="String(item.value)"
+          type="button"
+          role="radio"
+          :aria-checked="item.value === model ? 'true' : 'false'"
+          :tabindex="item === stop ? 0 : -1"
+          :class.on="item.value === model"
+          :disabled="isDisabled || item.disabled"
+          :title="item.title || (isIconsOnly && item.icon ? item.label : null)"
+          :aria-label="isIconsOnly && item.icon ? item.label : null"
+          :class.square="isIconsOnly && !!item.icon"
+          @click="choose(item)"
+          @keydown="key($event, item)"><!-- One line: the button's text is its label and nothing around it.
+    --><svg :if="item.icon" class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path :d="item.icon" /></svg><span :if="!isIconsOnly || !item.icon">{{ item.label }}</span></button>
+</div>
+
+<style scoped>
+  .seg {
+    --h: var(--luu-control-md);
+    position: relative;
+    isolation: isolate;
+    display: inline-flex;
+    flex-wrap: wrap;
+    /* Its own width even as a flex item of a column, which would stretch it. */
+    width: fit-content;
+    max-width: 100%;
+    gap: 2px;
+    padding: 2px;
+    border-radius: calc(var(--luu-radius-md) + 2px);
+    background: var(--luu-sunken);
+    box-shadow: inset 0 0 0 var(--luu-border-width) var(--luu-border);
+  }
+  .sm { --h: var(--luu-control-sm); }
+  .lg { --h: var(--luu-control-lg); }
+  .block { display: flex; width: auto; }
+  .block button { flex: 1; }
+
+  .pill {
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    left: 0;
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    box-shadow: var(--luu-shadow-sm), 0 0 0 var(--luu-border-width) var(--luu-border);
+  }
+  .moving .pill {
+    transition: transform var(--luu-duration-slow) var(--luu-ease),
+                width var(--luu-duration-slow) var(--luu-ease);
+  }
+
+  button {
+    height: calc(var(--h) - 4px);
+    padding: 0 var(--luu-space-3);
+    border: 0;
+    border-radius: var(--luu-radius-md);
+    background: transparent;
+    color: var(--luu-fg-muted);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    font-weight: var(--luu-weight-medium);
+    cursor: pointer;
+    transition: color var(--luu-duration) ease;
+  }
+  .sm button { padding: 0 var(--luu-space-2); font-size: var(--luu-text-sm); }
+  .lg button { font-size: var(--luu-text-lg); }
+  button:hover:not(:disabled) { color: var(--luu-fg); }
+  button:active:not(:disabled):not(.on) { background: var(--luu-active); }
+  button.on { color: var(--luu-fg); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: var(--luu-space-1); }
+  button.square { width: calc(var(--h) - 4px); padding: 0; }
+  .glyph {
+    width: 1.15em;
+    height: 1.15em;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+</style>

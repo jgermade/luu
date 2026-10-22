@@ -1,0 +1,66 @@
+<script :setup="{ tone = 'neutral', size = 'md', dot = false, solid = false }">
+  // A short label that says what state something is in: `ready`, `3 changed`,
+  // `remote`. `tone` is the state — `neutral`, `accent`, `ok`, `warn`, `bad` —
+  // drawn as the tone's ink on its soft ground, or filled with `solid`. `dot`
+  // puts a dot of the tone before the text, for a status read at a glance.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Badge tone="ok" dot>ready</Badge>
+  //   <Badge tone="accent" solid size="sm">new</Badge>
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: hasDot = flag(dot)
+  $: isSolid = flag(solid)
+</script>
+
+<span class="badge"
+      :class.tone-accent="tone === 'accent'"
+      :class.tone-ok="tone === 'ok'"
+      :class.tone-warn="tone === 'warn'"
+      :class.tone-bad="tone === 'bad'"
+      :class.solid="isSolid"
+      :class.sm="size === 'sm'"
+      :class.lg="size === 'lg'">
+  <span :if="hasDot" class="dot" aria-hidden="true"></span>
+  <slot></slot>
+</span>
+
+<style scoped>
+  .badge {
+    --ink: var(--luu-fg-muted);
+    --ground: var(--luu-sunken);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--luu-space-1);
+    padding: .1rem var(--luu-space-2);
+    border-radius: var(--luu-radius-full);
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-sm);
+    font-weight: var(--luu-weight-medium);
+    line-height: var(--luu-leading);
+    white-space: nowrap;
+  }
+  .tone-accent { --ink: var(--luu-accent); --ground: var(--luu-accent-soft); }
+  .tone-ok { --ink: var(--luu-ok); --ground: var(--luu-ok-soft); }
+  .tone-warn { --ink: var(--luu-warn); --ground: var(--luu-warn-soft); }
+  .tone-bad { --ink: var(--luu-bad); --ground: var(--luu-bad-soft); }
+  .solid { background: var(--ink); color: var(--luu-on-accent); }
+  .solid:not(.tone-accent, .tone-ok, .tone-warn, .tone-bad) { background: var(--luu-fg-muted); color: var(--luu-surface); }
+
+  .sm { font-size: var(--luu-text-xs); padding: 0 .4rem; }
+  .lg { font-size: var(--luu-text-md); padding: .15rem var(--luu-space-3); }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--luu-radius-full);
+    background: currentColor;
+    flex: none;
+  }
+  .solid .dot { background: currentColor; }
+</style>

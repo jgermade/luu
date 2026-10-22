@@ -1,0 +1,105 @@
+<script :setup="{ text = '', placement = 'top', delay = 400 }">
+  // A word about what is under the pointer or the focus: a button that is
+  // only an icon, a number that needs its unit. The slot is the thing; `text`
+  // is what is said about it. It opens in the top layer (`popover`), so no
+  // container clips it.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Tooltip text="Settings"><Button square label="Settings">⚙</Button></Tooltip>
+  //
+  // `placement` is `top`, `bottom`, `left` or `right`, and flips to the other
+  // side when there is no room. It waits `delay` ms on hover and none on
+  // focus — someone tabbing is reading, not passing over. Not for anything a
+  // person needs in order to act: a phone has no hover.
+
+  const id = `luu-tip-${Math.random().toString(36).slice(2, 9)}`
+  let timer = 0
+  let side = placement
+
+  const OPPOSITE = { top: "bottom", bottom: "top", left: "right", right: "left" }
+  const fits = (s, t, w, h) =>
+    s === "top" ? t.top - 6 - h >= 0 :
+    s === "bottom" ? t.bottom + 6 + h <= window.innerHeight :
+    s === "left" ? t.left - 6 - w >= 0 :
+    t.right + 6 + w <= window.innerWidth
+
+  const place = () => {
+    const anchor = $self(".anchor")
+    const tip = $self(".tip")
+    if (!anchor || !tip) return
+    const t = anchor.getBoundingClientRect()
+    const w = tip.offsetWidth
+    const h = tip.offsetHeight
+    side = fits(placement, t, w, h) ? placement : OPPOSITE[placement]
+    const x =
+      side === "left" ? t.left - 6 - w :
+      side === "right" ? t.right + 6 :
+      t.left + t.width / 2 - w / 2
+    const y =
+      side === "top" ? t.top - 6 - h :
+      side === "bottom" ? t.bottom + 6 :
+      t.top + t.height / 2 - h / 2
+    tip.style.left = `${Math.min(Math.max(4, x), window.innerWidth - w - 4)}px`
+    tip.style.top = `${Math.min(Math.max(4, y), window.innerHeight - h - 4)}px`
+  }
+
+  const show = wait => {
+    if (!text) return
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      const tip = $self(".tip")
+      if (!tip || tip.matches(":popover-open")) return
+      tip.showPopover()
+      place()
+    }, wait)
+  }
+  const hide = () => {
+    clearTimeout(timer)
+    const tip = $self(".tip")
+    if (tip?.matches(":popover-open")) tip.hidePopover()
+  }
+  const key = event => {
+    if (event.key === "Escape") hide()
+  }
+
+  await $mounted()
+  $destroyed(() => clearTimeout(timer))
+</script>
+
+<span class="anchor"
+      :aria-describedby="text ? id : null"
+      @pointerenter="show(delay)"
+      @pointerleave="hide()"
+      @focusin="show(0)"
+      @focusout="hide()"
+      @keydown="key($event)"><slot></slot></span>
+<span class="tip" :id="id" popover="manual" role="tooltip" :data-side="side">{{ text }}</span>
+
+<style scoped>
+  .anchor { display: inline-flex; }
+  .tip {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    max-width: 18rem;
+    padding: var(--luu-space-1) var(--luu-space-2);
+    border: 0;
+    border-radius: var(--luu-radius-sm);
+    background: var(--luu-fg);
+    color: var(--luu-bg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-sm);
+    line-height: var(--luu-leading-tight);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--luu-duration-fast) ease,
+                display var(--luu-duration-fast) allow-discrete,
+                overlay var(--luu-duration-fast) allow-discrete;
+  }
+  .tip:popover-open { opacity: 1; }
+  @starting-style {
+    .tip:popover-open { opacity: 0; }
+  }
+</style>

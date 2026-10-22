@@ -1,0 +1,243 @@
+<script :setup="{ open = false, title = '', width = '32rem', height = '', dismissible = true, head = 'auto' }">
+  // A view over the page that has to be answered or left before the page is
+  // used again. The platform's `<dialog>`, opened with `showModal()`: ESC, the
+  // focus held inside, the page behind made inert, and a backdrop.
+  //
+  // **Part of the default theme**: imports only the theme's own `Scrollable`,
+  // which its body scrolls through, and draws only with `tokens.css`. See
+  // `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Modal :open="asking" title="Delete this session?" @close="asking = false">
+  //     Its stream goes with it.
+  //     <template :slot.foot>
+  //       <Button @click="asking = false">Keep it</Button>
+  //       <Button variant="danger" @click="remove()">Delete</Button>
+  //     </template>
+  //   </Modal>
+  //
+  // **The owner decides whether it closes.** ESC, a click on the backdrop and
+  // the close button only emit `close`; it closes when `:open` goes false, and
+  // plays its way out first. `dismissible` false refuses all three and hides
+  // the close button — for a question with no way back. `width` is a length,
+  // capped at the window; `height` too, for a modal as tall as a page (Settings
+  // is one), whose body takes the room between the head and the foot.
+  //
+  // **The head follows the size**: a large modal — 40rem and up, as drawn —
+  // has a dark head, a bar like the page's own, and a small one has a head
+  // that is part of its body. `head` is `auto` for that, or `dark` or
+  // `integrated` to say it outright. The dark head is a `data-tone="dark"`
+  // island, so it draws with the theme's own dark values.
+
+  const Scrollable = await import("./scrollable.html")
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isOpen = flag(open)
+  $: isDismissible = flag(dismissible)
+
+  let leaving = false
+  // How wide it was drawn, measured each time it opens: a modal asked for at
+  // 40rem on a phone is a small one there.
+  const LARGE = 640
+  let wide = false
+  $: dark = head === "dark" || (head === "auto" && wide)
+
+  // How long the way out is, from the token, so reduced motion is no wait.
+  const exit = () => {
+    const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
+    return Number.isFinite(ms) ? ms : 0
+  }
+
+  const show = () => {
+    const dialog = $self("dialog")
+    if (!dialog || dialog.open) return
+    leaving = false
+    dialog.showModal()
+    wide = dialog.offsetWidth >= LARGE
+  }
+  const hide = () => {
+    const dialog = $self("dialog")
+    if (!dialog?.open || leaving) return
+    const ms = exit()
+    if (!ms) return dialog.close()
+    leaving = true
+    setTimeout(() => { dialog.close(); leaving = false }, ms)
+  }
+
+  const ask = () => {
+    if (isDismissible) $emit("close")
+  }
+  // ESC is the platform's, and it would close the dialog behind the owner's
+  // back; it becomes a request like the others.
+  const cancel = event => {
+    event.preventDefault()
+    ask()
+  }
+  // A click whose target is the dialog itself landed on the backdrop: the
+  // content fills the box, so anything inside has a target of its own.
+  const backdrop = event => {
+    if (event.target === event.currentTarget) ask()
+  }
+
+  await $mounted()
+  $: isOpen ? requestAnimationFrame(show) : hide()
+</script>
+
+<dialog class="modal"
+        :class.leaving="leaving"
+        :class.tall="!!height"
+        :style="`width:min(${width}, calc(100vw - 2rem))` + (height ? `;height:min(${height}, calc(100dvh - 2rem))` : '')"
+        :aria-label="title || null"
+        @cancel="cancel($event)"
+        @click="backdrop($event)">
+  <div class="box">
+    <header :if="title || isDismissible" class="head" :class.dark="dark"
+            :data-tone="dark ? 'dark' : null">
+      <h2 class="title">{{ title }}</h2>
+      <button :if="isDismissible" type="button" class="close" title="Close" @click="ask()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+      </button>
+    </header>
+    <div class="body"><Scrollable y fill><div class="content"><slot></slot></div></Scrollable></div>
+    <footer :if="$slots.foot" class="foot"><slot.foot /></footer>
+  </div>
+</dialog>
+
+<style scoped>
+  .modal {
+    max-height: calc(100dvh - 4rem);
+    padding: 0;
+    border: 0;
+    border-radius: var(--luu-radius-lg);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    box-shadow: var(--luu-shadow-lg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    overflow: hidden;
+  }
+  .modal[open] { animation: arrive var(--luu-duration-slow) var(--luu-ease-out); }
+  .modal.leaving { animation: leave var(--luu-duration) cubic-bezier(.4, 0, 1, 1) forwards; }
+  .modal::backdrop {
+    background: var(--luu-overlay);
+    backdrop-filter: blur(2px);
+  }
+  .modal[open]::backdrop { animation: fade var(--luu-duration-slow) ease; }
+  /* The way out is keyframes of its own, not `fade` reversed: an animation
+     whose name stays the same is not started again, only turned round — and
+     one that has finished, turned round, is at its start at once. */
+  .modal.leaving::backdrop { animation: fade-out var(--luu-duration) ease forwards; }
+
+  /* Every modal comes in as a folio, as the page's own do: a sheet tipped away
+     at the bottom that swings upright, on a pivot a fifth of the way down so
+     the top barely moves and the foot travels — and leaves the same way. A
+     sub-modal is the exception: it comes out of a head, not out of nowhere. */
+  .modal { transform-origin: 50% 22%; }
+  @keyframes arrive {
+    from { opacity: 0; transform: perspective(1200px) rotateX(36deg) translateY(-14px) scale(.97); }
+    to { opacity: 1; transform: perspective(1200px) rotateX(0deg) translateY(0) scale(1); }
+  }
+  @keyframes leave {
+    from { opacity: 1; transform: perspective(1200px) rotateX(0deg) translateY(0) scale(1); }
+    to { opacity: 0; transform: perspective(1200px) rotateX(24deg) translateY(-10px) scale(.98); }
+  }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes fade-out { to { opacity: 0; } }
+
+  /* **Each part draws its own edge**, and the dialog none: a dark head's edge
+     is the head's own colour, so a dark head is not framed in the light line
+     the body has. First and last round the corners the dialog clips. */
+  .box > * {
+    border-inline: var(--luu-border-width) solid var(--luu-border);
+  }
+  .box > :first-child {
+    border-top: var(--luu-border-width) solid var(--luu-border);
+    border-top-left-radius: var(--luu-radius-lg);
+    border-top-right-radius: var(--luu-radius-lg);
+  }
+  .box > :last-child {
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+    border-bottom-left-radius: var(--luu-radius-lg);
+    border-bottom-right-radius: var(--luu-radius-lg);
+  }
+  .box {
+    display: flex;
+    flex-direction: column;
+    max-height: inherit;
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--luu-space-3);
+    padding: var(--luu-space-4) var(--luu-space-5) 0;
+    /* Above anything a SubModal lays over the body — its sheet and its veil —
+       so a sheet comes out from under the head as it slides in, rather than
+       across it. Opaque for the same reason. */
+    position: relative;
+    z-index: 20;
+    background: var(--luu-surface);
+  }
+  /* The large modal's bar: the dark tone's own surface, and a body under it
+     that starts its own padding again. */
+  .head.dark {
+    padding: var(--luu-space-3) var(--luu-space-5);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    border-color: var(--luu-surface);
+  }
+  .title {
+    margin: 0;
+    font-size: var(--luu-text-lg);
+    font-weight: var(--luu-weight-bold);
+    line-height: var(--luu-leading-tight);
+  }
+  .close {
+    display: inline-flex;
+    padding: var(--luu-space-1);
+    margin-right: calc(-1 * var(--luu-space-1));
+    border: 0;
+    border-radius: var(--luu-radius-sm);
+    background: transparent;
+    color: var(--luu-fg-muted);
+    cursor: pointer;
+  }
+  .close:hover { background: var(--luu-hover); color: var(--luu-fg); }
+  .close:active { background: var(--luu-active); }
+  .close:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .close svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  /* With a height: the box fills it, and the body takes what the head and
+     the foot leave, so the foot stays at the bottom. */
+  .tall .box { height: 100%; }
+  .tall .body { flex: 1; }
+  /* The body is a frame and a `Scrollable`: it shrinks to what the box
+     leaves — `min-height: 0` — and the scroller in it scrolls; the content
+     pads itself, so the padding scrolls with it. */
+  .body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .content { padding: var(--luu-space-4) var(--luu-space-5); }
+  .foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--luu-space-2);
+    /* As tall as a row of buttons whatever is in it, so a foot holding a line
+       of text and one holding buttons are the same foot. */
+    box-sizing: content-box;
+    min-height: var(--luu-control-md);
+    padding: var(--luu-space-3) var(--luu-space-5);
+    border-top: var(--luu-border-width) solid var(--luu-border);
+    background: var(--luu-sunken);
+  }
+</style>

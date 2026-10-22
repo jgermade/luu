@@ -116,7 +116,7 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   // A with one turn; then B, with one, which is the one written to last.
   await say("uno")
   await page.click('button[title^="New session"]')
-  await page.getByRole("dialog", { name: "Where a session sends" }).locator('button:has-text("Start session")').click()
+  await page.getByRole("dialog", { name: "Sessions" }).locator('button:has-text("Start session")').click()
   await expect(page.locator(".transcript article.user")).toHaveCount(0)
   await say("dos")
   await say("dos más")
@@ -134,7 +134,7 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   // Started and left empty: listed while it is the one on screen, and not
   // once another is — it holds nothing to open.
   await page.click('button[title^="New session"]')
-  await page.getByRole("dialog", { name: "Where a session sends" }).locator('button:has-text("Start session")').click()
+  await page.getByRole("dialog", { name: "Sessions" }).locator('button:has-text("Start session")').click()
   await expect(page.locator(".transcript article.user")).toHaveCount(0)
   await rowsAre(["*0t", "2t", "2t"])
   await pickOther()

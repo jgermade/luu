@@ -201,6 +201,42 @@ export function iconFor(name, isDir, expanded = false) {
   return theme.file ?? null
 }
 
+/// The tree's own shape for a row when no icon theme draws it: a folder, open
+/// or shut, or a sheet with its kind on it — `{ id, kind }`, `id` the sprite's
+/// symbol and `kind` what colours it (`--luu-glyph-<kind>`), or `""` for a
+/// sheet with nothing on it. By extension, and by the names that carry none.
+/// Not an icon theme: a kind is a family, not a language.
+const KINDS = {
+  code: "rs js mjs cjs ts tsx jsx py go java kt kts c h cc cpp hpp cs rb php swift scala lua zig ex exs hs ml dart r jl sql vue svelte",
+  markup: "html htm xml xhtml css scss sass less",
+  data: "json jsonc json5 toml yaml yml ini cfg conf lock env csv tsv plist properties",
+  doc: "md mdx txt rst adoc org pdf log",
+  image: "png jpg jpeg gif svg webp ico bmp avif tif tiff",
+  media: "mp3 wav ogg flac m4a mp4 mov webm mkv avi",
+  archive: "zip tar gz tgz bz2 xz 7z rar zst",
+  shell: "sh bash zsh fish ps1 bat cmd",
+}
+const BY_EXTENSION = Object.fromEntries(
+  Object.entries(KINDS).flatMap(([kind, list]) => list.split(" ").map(ext => [ext, kind])))
+const BY_NAME = {
+  dockerfile: "data", containerfile: "data", makefile: "shell", justfile: "shell",
+  license: "doc", licence: "doc", readme: "doc", changelog: "doc",
+}
+/// The theme's sprite of those shapes, relative so it resolves under a host's
+/// prefix (`/h/<name>/`) as well. See `theme/default/files.svg`.
+export const FILES_SPRITE = "./theme/default/files.svg"
+
+export function glyphFor(name, isDir, open = false) {
+  if (isDir) return { id: `${FILES_SPRITE}#${open ? "i-folder-open" : "i-folder"}`, kind: "folder" }
+  const lower = name.toLowerCase()
+  const dot = lower.lastIndexOf(".")
+  const kind = BY_NAME[lower] ?? BY_EXTENSION[dot >= 0 ? lower.slice(dot + 1) : ""] ??
+    // A dotfile with no kind of its own (`.gitignore`, `.editorconfig`) is
+    // configuration, which is what nearly all of them are.
+    (dot === 0 ? "data" : "")
+  return { id: `${FILES_SPRITE}#${kind ? `i-file-${kind}` : "i-file"}`, kind }
+}
+
 export async function loadIcons() {
   try {
     workspace.icons = await ask("./api/icons/manifest")
@@ -208,6 +244,17 @@ export async function loadIcons() {
     // A page that cannot read the manifest simply has no icons; the tree is
     // the point and it still lists.
     workspace.icons = { loaded: false }
+  }
+}
+
+/// Every theme Settings offers, drawn: `{ samples: [{ name, dir }], previews:
+/// { path: [url | null] } }`, one icon per sample per theme. One request for
+/// all of them; empty, never an error, when the server cannot say.
+export async function loadIconPreviews() {
+  try {
+    return await ask("./api/icon-theme/previews")
+  } catch {
+    return { samples: [], previews: {} }
   }
 }
 
@@ -233,13 +280,80 @@ export async function saveIconTheme(path) {
 /// Imports the folder a directory picker chose, then selects it. `files` is
 /// the input's `FileList`; each one goes up under the path the picker gave it.
 export async function importIconTheme(files) {
+  return importThemeFiles([...files].map(file => ({ path: file.webkitRelativePath || file.name, blob: file })))
+}
+
+/// The files of a theme as the server takes them: `{ path, blob }`, every path
+/// under one folder whose name the import is called by.
+export async function importThemeFiles(entries) {
   const form = new FormData()
-  for (const file of files) form.append("file", file, file.webkitRelativePath || file.name)
+  for (const { path, blob } of entries) form.append("file", blob, path)
   return answered(await fetch("./api/icon-theme/import", {
     method: "POST",
     headers: apiHeaders(),
     body: form,
   }))
+}
+
+// ---- a theme, from whatever was given ----------------------------------------
+//
+// A folder, a zip, or a theme JSON, picked or dropped — each made into the one
+// shape the server takes: the files of one folder. See
+// `RECORD/2026-10-21.the-design-system-applied.completed.md`.
+
+const stem = name => name.replace(/\.[^.]+$/, "") || "theme"
+
+/// Under one folder: as they are when every path already shares its first
+/// part, and under `name` otherwise — a zip of a theme's contents, or a JSON
+/// with its icons beside it.
+function underOneFolder(entries, name) {
+  const tops = new Set(entries.map(entry => entry.path.split("/")[0]))
+  const nested = entries.every(entry => entry.path.includes("/"))
+  return tops.size === 1 && nested
+    ? entries
+    : entries.map(entry => ({ ...entry, path: `${name}/${entry.path}` }))
+}
+
+/// Files picked or dropped loose: a zip is opened and is the theme; anything
+/// else — a theme JSON, with whatever came with it — is the theme's folder,
+/// named after the JSON.
+export async function themeFromFiles(files) {
+  const list = [...files]
+  const zip = list.find(file => /\.zip$/i.test(file.name) || file.type === "application/zip")
+  if (zip) {
+    const { unzip } = await import("./unzip.js")
+    return underOneFolder(await unzip(zip), stem(zip.name))
+  }
+  const json = list.find(file => /\.json$/i.test(file.name))
+  return underOneFolder(
+    list.map(file => ({ path: file.webkitRelativePath || file.name, blob: file })),
+    stem(json?.name || list[0]?.name || "theme"))
+}
+
+/// What was dropped: a folder walked to its files, or loose files as above.
+export async function themeFromDrop(transfer) {
+  const roots = [...transfer.items]
+    .map(item => item.webkitGetAsEntry?.())
+    .filter(Boolean)
+  const folder = roots.find(entry => entry.isDirectory)
+  if (!folder) return themeFromFiles(transfer.files)
+  const out = []
+  const walk = async (entry, path) => {
+    if (entry.isFile) {
+      const blob = await new Promise((done, fail) => entry.file(done, fail))
+      if (entry.name !== ".DS_Store") out.push({ path, blob })
+      return
+    }
+    const reader = entry.createReader()
+    // `readEntries` answers in batches until one comes back empty.
+    for (;;) {
+      const batch = await new Promise((done, fail) => reader.readEntries(done, fail))
+      if (!batch.length) break
+      for (const child of batch) await walk(child, `${path}/${child.name}`)
+    }
+  }
+  await walk(folder, folder.name)
+  return out
 }
 
 async function answered(response) {
@@ -530,6 +644,64 @@ async function relist(keys) {
       }
     }))
   }
+}
+
+/// A file or a folder renamed from the tree's pencil: the one write the tree
+/// makes. Answers `{ ok, path }` with the new path, or `{ ok: false, error }`
+/// in the server's words — a name that is taken, a posture that only reads.
+///
+/// **Everything keyed by the old path moves with it**: a folder stays open
+/// under its new name, and so does everything open inside it, and a tab on
+/// the file — or on anything under the folder — follows rather than being
+/// left on a path that no longer exists. The disk's own event arrives after
+/// this and finds nothing left to do. See
+/// `RECORD/2026-10-21.the-tree-renames.completed.md`.
+export async function renameEntry(path, name) {
+  let answer
+  try {
+    answer = await fetch("./api/workspace/rename", {
+      method: "POST",
+      headers: { ...apiHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path, name }),
+    })
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+  if (!answer.ok) return { ok: false, error: (await answer.text()) || `HTTP ${answer.status}` }
+  const renamed = (await answer.json()).path
+  if (renamed === path) return { ok: true, path }
+
+  const moved = key => key === path ? renamed
+    : key.startsWith(`${path}/`) ? renamed + key.slice(path.length)
+    : null
+  // The listings under it name the old paths in every entry, so they are
+  // dropped and read again under the new ones; what was expanded stays so.
+  const reopen = Object.keys(workspace.expanded).map(moved).filter(key => key !== null)
+  workspace.open = Object.fromEntries(Object.entries(workspace.open).filter(([key]) => moved(key) === null))
+  workspace.expanded = Object.fromEntries(
+    Object.entries(workspace.expanded).map(([key, on]) => [moved(key) ?? key, on]))
+
+  const idOf = tab => tab.kind === "diff" ? diffId(tab.path) : fileId(tab.path)
+  let active = null
+  workspace.tabs = workspace.tabs.map(tab => {
+    const to = (tab.kind === "file" || tab.kind === "diff") && moved(tab.path)
+    if (!to) return tab
+    const next = { ...tab, path: to, title: basename(to) }
+    next.id = idOf(next)
+    if (tab.id === workspace.active) active = next
+    return next
+  })
+  if (active) {
+    workspace.active = active.id
+    workspace.selected = { ...active }
+    if (active.kind === "file") loadFile(active, { quiet: true })
+    else loadDiff(active, { quiet: true })
+  }
+
+  await relist(new Set([parentOf(path)]))
+  await Promise.all(reopen.map(key => openDir(key, true)))
+  statusSoon()
+  return { ok: true, path: renamed }
 }
 
 /// `git status` at most once a second, and once more after a burst. Not only

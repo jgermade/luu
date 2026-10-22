@@ -1,0 +1,131 @@
+<script :setup="{
+  model = false,
+  indeterminate = false,
+  disabled = false,
+  label = '',
+  description = '',
+  id = '',
+  name = ''
+}">
+  // Yes or no about one thing, said by ticking it. For a setting that takes
+  // effect at once, a `Switch` reads better; this is for a choice inside a
+  // form that is saved later, or for picking several items from a list.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Checkbox :model="isDefault" label="Default" description="what a run with no -p sends to" />
+  //   <Checkbox :model="all" :indeterminate="some">select all</Checkbox>
+  //
+  // `indeterminate` is *some of them*, drawn as a dash; a click resolves it to
+  // checked. The value goes up through `:model` and as `change`; a box that
+  // is fixed on is `model="true"` — jq79 never hands `:checked` to a
+  // component.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isMixed = flag(indeterminate)
+
+  $: on = flag(model) || model === 1
+
+  const toggled = event => {
+    const v = event.target.checked
+    $updateModel(v)
+    $emit("change", v)
+  }
+
+  await $mounted()
+  // A property, not an attribute: there is no markup for it.
+  $: (() => { const box = $self("input"); if (box) box.indeterminate = isMixed && !on })()
+</script>
+
+<label class="check" :class.disabled="isDisabled" :class.on="on" :class.mixed="isMixed && !on">
+  <input type="checkbox"
+         :checked="on"
+         :disabled="isDisabled"
+         :id="id || null"
+         :name="name || null"
+         @change="toggled($event)">
+  <span class="box" aria-hidden="true">
+    <svg viewBox="0 0 24 24">
+      <path class="tick" d="M5 12.5l4.5 4.5L19 7" />
+      <path class="dash" d="M6 12h12" />
+    </svg>
+  </span>
+  <span :if="label || description || $slots.default" class="text">
+    <span :if="label" class="label">{{ label }}</span>
+    <slot></slot>
+    <span :if="description" class="description">{{ description }}</span>
+  </span>
+</label>
+
+<style scoped>
+  .check {
+    position: relative;
+    display: inline-flex;
+    align-items: flex-start;
+    gap: var(--luu-space-2);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    cursor: pointer;
+    user-select: none;
+  }
+  .disabled { opacity: .5; cursor: default; }
+
+  /* The native control, invisible and on top of the drawn one, so a click
+     lands on it. */
+  input {
+    position: absolute;
+    z-index: 1;
+    opacity: 0;
+    cursor: inherit;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+  }
+  /* Invisible whatever a page's own rule for a disabled input says. */
+  input:disabled { opacity: 0; }
+  .box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin-top: calc((1em * var(--luu-leading) - 16px) / 2);
+    border: var(--luu-border-width) solid var(--luu-border-strong);
+    border-radius: var(--luu-radius-sm);
+    background: var(--luu-surface);
+    transition: background var(--luu-duration-fast) ease, border-color var(--luu-duration-fast) ease,
+                transform var(--luu-duration-fast) ease;
+  }
+  .check:hover:not(.disabled) .box { border-color: var(--luu-accent); }
+  .check:active:not(.disabled) .box { transform: scale(.88); }
+  input:focus-visible + .box { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+  .on .box, .mixed .box { background: var(--luu-accent); border-color: var(--luu-accent); }
+
+  svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: var(--luu-on-accent);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .tick {
+    stroke-dasharray: 22;
+    stroke-dashoffset: 22;
+    transition: stroke-dashoffset var(--luu-duration) var(--luu-ease-out);
+  }
+  .on .tick { stroke-dashoffset: 0; }
+  .dash { display: none; }
+  .mixed .dash { display: inline; }
+
+  .text { display: flex; flex-direction: column; gap: .1rem; }
+  .label { font-weight: var(--luu-weight-medium); }
+  .description { color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
+</style>

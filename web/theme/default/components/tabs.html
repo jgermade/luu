@@ -1,0 +1,134 @@
+<script :setup="{ items = [], model = '', label = '', size = 'md' }">
+  // Views of one thing, one at a time: a turn's context, its answer, its
+  // calls. Only the strip is drawn here; the owner shows the panel that
+  // `model` names, so a panel can be anything and can stay mounted or not.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Tabs label="Turn" :model="tab" :items="[
+  //     { value: 'context', label: 'Context', count: 7 }, 'answer', 'calls',
+  //   ]" />
+  //   <section :if="tab === 'context'">…</section>
+  //
+  // An item is a string or `{ value, label, count, disabled }`; `count` is a
+  // small number beside the label. The arrows, Home and End move between
+  // tabs and choose as they go. The choice goes up through `:model` and as
+  // `change`. A line under the chosen tab slides to the next.
+
+  $: tabs = items.map(t => typeof t === "string" ? { value: t, label: t } : t)
+  $: open = tabs.filter(t => !t.disabled)
+
+  let at = null
+  let moving = false
+  const place = () => {
+    const on = $self("button.on")
+    if (!on || !on.offsetWidth) return
+    at = { x: on.offsetLeft, w: on.offsetWidth }
+    if (!moving) requestAnimationFrame(() => { moving = true })
+  }
+
+  const choose = tab => {
+    if (tab.disabled || tab.value === model) return
+    $updateModel(tab.value)
+    $emit("change", tab.value)
+  }
+
+  const STEP = { ArrowRight: 1, ArrowLeft: -1 }
+  const key = (e, tab) => {
+    const i = open.indexOf(tab)
+    const next =
+      e.key === "Home" ? open[0] :
+      e.key === "End" ? open[open.length - 1] :
+      e.key in STEP ? open[(i + STEP[e.key] + open.length) % open.length] :
+      null
+    if (!next) return
+    e.preventDefault()
+    choose(next)
+    $self(".tabs").querySelectorAll("button")[tabs.indexOf(next)]?.focus()
+  }
+
+  await $mounted()
+  const sizes = new ResizeObserver(() => place())
+  sizes.observe($self(".tabs"))
+  $destroyed(() => sizes.disconnect())
+  $: (model, tabs, requestAnimationFrame(place))
+  $: line = at ? `width:${at.w}px;transform:translateX(${at.x}px)` : "display:none"
+</script>
+
+<div class="tabs" role="tablist" :aria-label="label || null"
+     :class.sm="size === 'sm'" :class.moving="moving">
+  <button :each="tab in tabs"
+          :key="String(tab.value)"
+          type="button"
+          role="tab"
+          :aria-selected="tab.value === model ? 'true' : 'false'"
+          :tabindex="tab.value === model ? 0 : -1"
+          :class.on="tab.value === model"
+          :disabled="tab.disabled"
+          @click="choose(tab)"
+          @keydown="key($event, tab)">
+    {{ tab.label }}
+    <span :if="tab.count !== undefined && tab.count !== null" class="count">{{ tab.count }}</span>
+  </button>
+  <span class="line" :style="line" aria-hidden="true"></span>
+</div>
+
+<style scoped>
+  .tabs {
+    position: relative;
+    display: flex;
+    gap: var(--luu-space-1);
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+    font-family: var(--luu-font-sans);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--luu-space-2);
+    height: var(--luu-control-lg);
+    padding: 0 var(--luu-space-3);
+    border: 0;
+    background: transparent;
+    color: var(--luu-fg-muted);
+    font: inherit;
+    font-size: var(--luu-text-md);
+    font-weight: var(--luu-weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--luu-duration) ease;
+  }
+  .sm button { height: var(--luu-control-md); padding: 0 var(--luu-space-2); font-size: var(--luu-text-sm); }
+  button:hover:not(:disabled) { color: var(--luu-fg); }
+  button:active:not(:disabled) { background: var(--luu-active); border-radius: var(--luu-radius-sm) var(--luu-radius-sm) 0 0; }
+  button.on { color: var(--luu-fg); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
+
+  .count {
+    min-width: 1.4em;
+    padding: 0 .35rem;
+    border-radius: var(--luu-radius-full);
+    background: var(--luu-sunken);
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-xs);
+    text-align: center;
+    line-height: 1.6;
+  }
+  .on .count { background: var(--luu-accent-soft); color: var(--luu-accent); }
+
+  .line {
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: var(--luu-accent);
+  }
+  .moving .line {
+    transition: transform var(--luu-duration-slow) var(--luu-ease),
+                width var(--luu-duration-slow) var(--luu-ease);
+  }
+</style>

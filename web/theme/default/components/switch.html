@@ -1,0 +1,107 @@
+<script :setup="{
+  model = false,
+  disabled = false,
+  size = 'md',
+  label = '',
+  description = ''
+}">
+  // On or off, and in force as soon as it moves: a setting, not a field in a
+  // form that is saved later — that is a `Checkbox`.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Switch :model="autoName" label="Name sessions" description="from their first prompt" />
+  //
+  // A `role="switch"` button: Space and Enter flip it. The value goes up
+  // through `:model` and as `change`; one fixed on is `model="true"`.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+
+  $: on = flag(model)
+
+  const flip = () => {
+    if (isDisabled) return
+    $updateModel(!on)
+    $emit("change", !on)
+  }
+</script>
+
+<span class="switch" :class.sm="size === 'sm'" :class.disabled="isDisabled">
+  <button type="button"
+          role="switch"
+          class="track"
+          :class.on="on"
+          :aria-checked="on ? 'true' : 'false'"
+          :aria-label="label || null"
+          :disabled="isDisabled"
+          @click="flip()">
+    <span class="thumb" aria-hidden="true"></span>
+  </button>
+  <span :if="label || description" class="text" @click="flip()">
+    <span :if="label" class="label">{{ label }}</span>
+    <span :if="description" class="description">{{ description }}</span>
+  </span>
+</span>
+
+<style scoped>
+  .switch {
+    --w: 32px;
+    --h: 18px;
+    display: inline-flex;
+    align-items: flex-start;
+    gap: var(--luu-space-2);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+  }
+  .sm { --w: 26px; --h: 14px; font-size: var(--luu-text-sm); }
+  .disabled { opacity: .5; }
+
+  .track {
+    position: relative;
+    flex: none;
+    width: var(--w);
+    height: var(--h);
+    margin-top: calc((1em * var(--luu-leading) - var(--h)) / 2);
+    padding: 0;
+    border: 0;
+    border-radius: var(--luu-radius-full);
+    background: var(--luu-border-strong);
+    cursor: pointer;
+    transition: background var(--luu-duration) ease;
+  }
+  .track:disabled { cursor: default; opacity: 1; }
+  .track:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+  .track.on { background: var(--luu-accent); }
+
+  .thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: calc(var(--h) - 4px);
+    height: calc(var(--h) - 4px);
+    border-radius: var(--luu-radius-full);
+    background: #fff;
+    box-shadow: var(--luu-shadow-sm);
+    transition: transform var(--luu-duration-slow) var(--luu-ease);
+  }
+  .on .thumb { transform: translateX(calc(var(--w) - var(--h))); }
+  /* Pressed: the thumb gives under the finger, wherever it is. */
+  .track:active:not(:disabled) .thumb { transform: scale(.85); }
+  .track.on:active:not(:disabled) .thumb { transform: translateX(calc(var(--w) - var(--h))) scale(.85); }
+
+  .text {
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .disabled .text { cursor: default; }
+  .label { font-weight: var(--luu-weight-medium); }
+  .description { color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
+</style>

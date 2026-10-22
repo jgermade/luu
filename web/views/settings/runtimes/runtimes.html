@@ -6,11 +6,11 @@
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
   const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
     await import("@web/lib/runtimes.js")
-  const Scrollable = await import("@web/components/scrollable.html")
+  const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
   const { state } = await import("@web/lib/store.js")
-  const TextInput = await import("@web/components/text-input.html")
-  const SelectInput = await import("@web/components/select-input.html")
+  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const Select = await import("@web/theme/default/components/select.html")
 
   let view = null
   let error = ""
@@ -274,34 +274,34 @@
      nothing. */
   .runtimes-pane { flex: 1 0 auto; }
   .runtime {
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     padding: .75rem 1rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
   }
   .runtime.off { opacity: .7; }
   .runtime header { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-  .runtime header strong { font-size: 14px; font-weight: 600; color: var(--fg); text-transform: capitalize; }
+  .runtime header strong { font-size: 14px; font-weight: 600; color: var(--luu-fg); text-transform: capitalize; }
   .runtime p { margin: .35rem 0 0; }
   .state {
     font-size: 11px;
     padding: .15rem .45rem;
     border-radius: 4px;
-    border: 1px solid var(--line);
-    background: var(--sunken, rgba(0, 0, 0, .03));
-    color: var(--dim);
+    border: 1px solid var(--luu-border);
+    background: var(--luu-sunken, rgba(0, 0, 0, .03));
+    color: var(--luu-fg-muted);
   }
   .state.up {
-    color: var(--ok);
-    border-color: var(--ok);
+    color: var(--luu-ok);
+    border-color: var(--luu-ok);
     background: rgba(74, 122, 28, .08);
     font-weight: 500;
   }
   .state.down {
-    color: var(--warn);
-    border-color: var(--warn);
-    background: var(--warn-bg, rgba(138, 93, 18, .08));
+    color: var(--luu-warn);
+    border-color: var(--luu-warn);
+    background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
   }
   .images { list-style: none; margin: .5rem 0 0; padding: 0; }
   .images li {
@@ -321,7 +321,7 @@
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
   }
   /* Each row is a `div` holding its `dt` and `dd`, which HTML allows in a
      `dl`, so the pair spans the grid's two columns as one. */
@@ -339,21 +339,21 @@
     flex-direction: column;
     gap: .3rem;
     padding: .75rem 1rem;
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     cursor: pointer;
     transition: all .15s ease;
     box-shadow: 0 1px 3px rgba(0, 0, 0, .03);
   }
   .hosts label:hover {
-    background: var(--sunken, rgba(0, 0, 0, .02));
-    border-color: var(--accent);
+    background: var(--luu-sunken, rgba(0, 0, 0, .02));
+    border-color: var(--luu-accent);
   }
   .hosts label:has(input:checked) {
-    border-color: var(--accent);
-    background: var(--selected, rgba(47, 91, 189, .06));
-    box-shadow: 0 0 0 1px var(--accent);
+    border-color: var(--luu-accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .06));
+    box-shadow: 0 0 0 1px var(--luu-accent);
   }
   .host-header {
     display: flex;
@@ -361,11 +361,11 @@
     gap: .5rem;
     font-weight: 600;
     font-size: 13px;
-    color: var(--fg);
+    color: var(--luu-fg);
   }
   .host-caption {
     font-size: 11px;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
     line-height: 1.35;
   }
   .runtime-placeholders {
@@ -375,8 +375,8 @@
     margin: .6rem 0;
   }
   .runtime-skeleton {
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     padding: .75rem 1rem;
     display: flex;

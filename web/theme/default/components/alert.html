@@ -1,0 +1,105 @@
+<script :setup="{ tone = 'accent', title = '', dismissible = false }">
+  // A message about the view around it: a notice, a caveat, a refusal. `tone`
+  // is how much it matters — `accent` to say something, `ok` that something
+  // went well, `warn` that something will not, `bad` that something did not.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Alert tone="warn" title="Not on this machine">
+  //     The URL is on your network, so <code>remote = true</code> is required.
+  //   </Alert>
+  //
+  // `bad` is announced as an alert, the rest as a status. `dismissible` draws
+  // a close button that emits `dismiss`; the owner decides whether it goes.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDismissible = flag(dismissible)
+</script>
+
+<div class="alert"
+     :class.tone-ok="tone === 'ok'"
+     :class.tone-warn="tone === 'warn'"
+     :class.tone-bad="tone === 'bad'"
+     :class.tone-neutral="tone === 'neutral'"
+     :role="tone === 'bad' ? 'alert' : 'status'">
+  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" />
+    <path :if="tone === 'ok'" d="M8 12.5l2.5 2.5L16 9.5" />
+    <path :if="tone === 'warn' || tone === 'bad'" d="M12 7.5v5.5M12 16.5v.01" />
+    <path :if="tone !== 'ok' && tone !== 'warn' && tone !== 'bad'" d="M12 11v5.5M12 7.5v.01" />
+  </svg>
+  <div class="text">
+    <strong :if="title" class="title">{{ title }}</strong>
+    <div class="body"><slot></slot></div>
+  </div>
+  <button :if="isDismissible" type="button" class="dismiss" title="Dismiss"
+          @click="$emit('dismiss')">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+  </button>
+</div>
+
+<style scoped>
+  .alert {
+    --ink: var(--luu-accent);
+    --ground: var(--luu-accent-soft);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--luu-space-3);
+    padding: var(--luu-space-3) var(--luu-space-4);
+    border: var(--luu-border-width) solid color-mix(in srgb, var(--ink) 35%, transparent);
+    border-radius: var(--luu-radius-md);
+    background: var(--ground);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+  }
+  .tone-ok { --ink: var(--luu-ok); --ground: var(--luu-ok-soft); }
+  .tone-warn { --ink: var(--luu-warn); --ground: var(--luu-warn-soft); }
+  .tone-bad { --ink: var(--luu-bad); --ground: var(--luu-bad-soft); }
+  .tone-neutral { --ink: var(--luu-fg-muted); --ground: var(--luu-sunken); }
+
+  .icon {
+    width: 18px;
+    height: 18px;
+    margin-top: .1rem;
+    flex: none;
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .text {
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+    flex: 1;
+    min-width: 0;
+  }
+  .title { color: var(--ink); font-weight: var(--luu-weight-bold); }
+
+  .dismiss {
+    display: inline-flex;
+    padding: 2px;
+    margin: -2px -4px 0 0;
+    border: 0;
+    border-radius: var(--luu-radius-sm);
+    background: transparent;
+    color: var(--luu-fg-muted);
+    cursor: pointer;
+  }
+  .dismiss:hover { color: var(--luu-fg); background: color-mix(in srgb, var(--ink) 12%, transparent); }
+  .dismiss:active { background: color-mix(in srgb, var(--ink) 22%, transparent); }
+  .dismiss:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .dismiss svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+</style>

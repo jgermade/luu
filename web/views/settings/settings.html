@@ -14,11 +14,12 @@
   // it **in the DOM**, so the same component is a sheet inside Settings here
   // and a window of its own there. Both are reached from Settings, so opened
   // from it they belong in it.
-  const SessionStarter = await import("@web/views/chat/session-starter.html")
+  const SessionsDialog = await import("@web/views/chat/sessions-dialog.html")
   const Project = await import("@web/views/inspector/tree/project.html")
   const { workspace } = await import("@web/lib/workspace.js")
 
   const SettingsGeneral = await import("./general/general.html")
+  const SettingsAppearance = await import("./appearance/appearance.html")
   const SettingsModels = await import("./models/models.html")
   const SettingsEngines = await import("./engines/engines.html")
   const SettingsRuntimes = await import("./runtimes/runtimes.html")
@@ -30,6 +31,9 @@
     // names comes first. Resend and Authority are one section, Sessions —
     // see `views/settings/sessions/sessions.html`.
     { value: "general", label: "General", icon: "i-sliders" },
+    // How the page looks on this screen: the editor and the chat's code, the
+    // columns, the tree's icons. See `appearance/appearance.html`.
+    { value: "appearance", label: "Appearance", icon: "i-palette" },
     { value: "engines", label: "Engines", icon: "i-chip" },
     { value: "models", label: "Models", icon: "i-server" },
     // Where a session's commands run: the container runtimes, their images,
@@ -108,6 +112,8 @@
       <div class="stage">
         <div :if="mounted('general')" class="section" data-section="general" :class="phase('general')"
              :aria-hidden="String(shown !== 'general')"><SettingsGeneral /></div>
+        <div :if="mounted('appearance')" class="section" data-section="appearance" :class="phase('appearance')"
+             :aria-hidden="String(shown !== 'appearance')"><SettingsAppearance /></div>
         <div :if="mounted('engines')" class="section" data-section="engines" :class="phase('engines')"
              :aria-hidden="String(shown !== 'engines')"><SettingsEngines /></div>
         <div :if="mounted('runtimes')" class="section" data-section="runtimes" :class="phase('runtimes')"
@@ -122,7 +128,7 @@
 
   <!-- Inside the dialog, so they open as sheets over Settings rather than as
        a second window on top of it. -->
-  <SessionStarter :if="ui.starter" />
+  <SessionsDialog :if="ui.sessions" />
   <Project :if="workspace.picker.open" />
 </Modal>
 
@@ -138,8 +144,8 @@
   .rail-col {
     padding: .6rem .4rem;
     /* Its ground and inks are the chat's — `.rail-col` in `app.css`. */
-    border-right: 1px solid var(--line);
-    background: var(--chat-bg);
+    border-right: 1px solid var(--luu-border);
+    background: var(--luu-chat-bg);
     overflow-y: auto;
     height: 100%;
     box-sizing: border-box;

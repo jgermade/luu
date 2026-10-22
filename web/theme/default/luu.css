@@ -1,0 +1,169 @@
+/* The default theme's answer for luu's own surfaces: what `tokens.css` does
+   not know because no component needs it — the bars' ground, the dividers,
+   the tree's and the chat's grounds and inks, the context buckets, Monokai,
+   the terminal's colours. The app loads this after `tokens.css`, and so does
+   the demo, for its file icons. A second theme replaces both files.
+
+   Tones work as in `tokens.css`: light on `:root`, dark on a dark root and on
+   any `[data-tone="dark"]` island, so a dark head on a light page draws its
+   buckets and its code dark too. See
+   RECORD/2026-10-21.the-design-system-applied.completed.md. */
+
+:root {
+  /* One number for every column head and every column foot on the page. The
+     chat's foot is twice it, and that is the only exception — see
+     RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md. */
+  --luu-chrome-h: 40px;
+
+  /* The bars' ground: the columns' heads and feet, a modal's head. Dark in
+     both tones, and the root is painted with it, so a bounce at the window's
+     edge runs on into the bars rather than off a white page. */
+  --luu-bar: #191919;
+
+  /* The page's own greys. The dividers between the columns and their resize
+     handles are dark; the inspector's ground is a light grey and the chat's a
+     slightly darker one. The chat carries its own inks, darker than the
+     page's and fully saturated, for 7:1 rather than 4.5:1: each clears 7.2:1
+     on #dddddd (the text itself 13.7:1) and more on the white of a card in
+     it. */
+  --luu-divider: #3a3a3a;
+  --luu-tree-bg: #ededed;
+  --luu-chat-bg: #dddddd;
+  --luu-chat-fg: #111317;
+  --luu-chat-dim: #3a414c;
+  --luu-chat-accent: #0035b2;
+  --luu-chat-warn: #613e00;
+  --luu-chat-bad: #8f0018;
+  --luu-chat-ok: #244c00;
+  /* Borders on the chat's grey, where the page's line vanishes, and a hover
+     there, a lighter grey as on the tree's. */
+  --luu-chat-line: #a8a8a8;
+  --luu-chat-hover: #ececec;
+
+  /* The sixteen colours a shell names, from the author's own terminal
+     (`joshua.itermcolors` in github.com/jgermade/sh). Without them xterm
+     draws Tango, whose yellow and greens are a step duller than the prompt
+     they were picked for. One set: the terminal is always an island of dark. */
+  --luu-ansi-black: #999999;
+  --luu-ansi-red: #ff3c3c;
+  --luu-ansi-green: #73d216;
+  --luu-ansi-yellow: #ffe816;
+  --luu-ansi-blue: #3465a4;
+  --luu-ansi-magenta: #f92a72;
+  --luu-ansi-cyan: #62dafc;
+  --luu-ansi-white: #cfcfcf;
+  --luu-ansi-bright-black: #aaaaaa;
+  --luu-ansi-bright-red: #ff2525;
+  --luu-ansi-bright-green: #8ae234;
+  --luu-ansi-bright-yellow: #fce94f;
+  --luu-ansi-bright-blue: #729fcf;
+  --luu-ansi-bright-magenta: #f92a72;
+  --luu-ansi-bright-cyan: #81e4ff;
+  --luu-ansi-bright-white: #f8f8f2;
+}
+
+:root, [data-tone="light"] {
+  /* One colour per bucket, so a bar and its legend agree. Named after the
+     buckets the context manager emits, not after a palette. Each darkens on
+     light: the dark tone's pastels wash out on white, and a legend whose
+     swatch cannot be told from its neighbour is not a legend. */
+  --luu-bucket-system: #2f5bbd;
+  --luu-bucket-tools: #0b7185;
+  /* The repository map: prefix, like the two above, and a shade of the same
+     family — what the bar shows as prefix should read as one region. */
+  --luu-bucket-map: #075a6b;
+  --luu-bucket-history: #4a7a1c;
+  /* Folded history: the same colour, darker. A closed task is history that
+     was compressed, and the bar should say so without a second reading. */
+  --luu-bucket-summaries: #33561a;
+  --luu-bucket-code: #6f3fb5;
+  --luu-bucket-prompt: #8a5d12;
+  --luu-bucket-reserve: #c3c9d3;
+
+  /* The tree's own two shapes, when no icon theme is chosen: a folder in the
+     yellow a file manager has always drawn one in, and a white sheet. */
+  --luu-glyph-folder-fill: #f6d26b;
+  --luu-glyph-folder-stroke: #c2921c;
+  --luu-glyph-file-fill: #ffffff;
+  --luu-glyph-file-stroke: #7d8592;
+  /* A sheet's colour by the kind of file it is: its edge and its symbol in
+     it, and its paper a tint of it. */
+  --luu-glyph-code: #2f6fd6;
+  --luu-glyph-markup: #d9622b;
+  --luu-glyph-data: #8a5cd6;
+  --luu-glyph-doc: #5b6472;
+  --luu-glyph-image: #2e9a5e;
+  --luu-glyph-media: #d13f86;
+  --luu-glyph-archive: #9c6f25;
+  --luu-glyph-shell: #1f8f96;
+
+  /* Monokai's light tone: the same hues darkened until each reads at 5:1 on
+     white, and its near-white foreground the page's ink. The capture names
+     are `crate::highlight`'s NAMES. */
+  --luu-code-ground: #ffffff;
+  --luu-code-ink: #1a1d23;
+  --luu-code-gutter: #7c8088;
+  --luu-hl-keyword: #dc0653;
+  --luu-hl-operator: #dc0653;
+  --luu-hl-tag: #dc0653;
+  --luu-hl-string: #7a7016;
+  --luu-hl-literal: #7a7016;
+  --luu-hl-comment: #736f5d;
+  --luu-hl-number: #8541ff;
+  --luu-hl-constant: #8541ff;
+  --luu-hl-function: #577a11;
+  --luu-hl-attribute: #577a11;
+  --luu-hl-heading: #577a11;
+  --luu-hl-type: #0f7a8e;
+  --luu-hl-constructor: #0f7a8e;
+  --luu-hl-link: #0f7a8e;
+  --luu-hl-variable: var(--luu-code-ink);
+  --luu-hl-property: var(--luu-code-ink);
+  --luu-hl-punctuation: var(--luu-code-ink);
+}
+
+:root[data-theme="dark"], [data-tone="dark"] {
+  --luu-bucket-system: #7aa2f7;
+  --luu-bucket-tools: #2ac3de;
+  --luu-bucket-map: #1a8fa8;
+  --luu-bucket-history: #9ece6a;
+  --luu-bucket-summaries: #5c7f45;
+  --luu-bucket-code: #bb9af7;
+  --luu-bucket-prompt: #e0af68;
+  --luu-bucket-reserve: #3a3a3a;
+
+  --luu-glyph-folder-fill: #e2b33f;
+  --luu-glyph-folder-stroke: #a87b12;
+  --luu-glyph-file-fill: #2a2a2a;
+  --luu-glyph-file-stroke: #a0a0a0;
+  --luu-glyph-code: #7aa2f7;
+  --luu-glyph-markup: #ff9e64;
+  --luu-glyph-data: #bb9af7;
+  --luu-glyph-doc: #a9b1c2;
+  --luu-glyph-image: #9ece6a;
+  --luu-glyph-media: #f7768e;
+  --luu-glyph-archive: #e0af68;
+  --luu-glyph-shell: #2ac3de;
+
+  /* Monokai, as Sublime Text 3 ships it, on its own ground. */
+  --luu-code-ground: #111111;
+  --luu-code-ink: #f8f8f2;
+  --luu-code-gutter: #90908a;
+  --luu-hl-keyword: #f92672;
+  --luu-hl-operator: #f92672;
+  --luu-hl-tag: #f92672;
+  --luu-hl-string: #e6db74;
+  --luu-hl-literal: #e6db74;
+  --luu-hl-comment: #75715e;
+  --luu-hl-number: #ae81ff;
+  --luu-hl-constant: #ae81ff;
+  --luu-hl-function: #a6e22e;
+  --luu-hl-attribute: #a6e22e;
+  --luu-hl-heading: #a6e22e;
+  --luu-hl-type: #66d9ef;
+  --luu-hl-constructor: #66d9ef;
+  --luu-hl-link: #66d9ef;
+  --luu-hl-variable: #f8f8f2;
+  --luu-hl-property: #f8f8f2;
+  --luu-hl-punctuation: #f8f8f2;
+}

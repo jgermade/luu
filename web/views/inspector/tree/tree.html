@@ -3,9 +3,10 @@
   // `target/` in it is not one to walk eagerly, and because the endpoint is
   // one directory wide for the same reason. See
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
-  const { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor } =
+  const { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor, glyphFor, renameEntry, FILES_SPRITE } =
     await import("@web/lib/workspace.js")
   const { keeper } = await import("@web/helpers/rows.js")
+  const TextInput = await import("@web/theme/default/components/text-input.html")
 
   // Rooted at the folder somebody chose, which is a subdirectory of the one
   // `luu serve` was started in. Paths stay relative to *that* base throughout —
@@ -42,15 +43,22 @@
         const nested = `${entry.path}/${entry.only}`
         const open = !!workspace.expanded[nested]
         const last = nested.slice(nested.lastIndexOf("/") + 1)
+        const icon = iconFor(last, true, open)
         out.push(treeRows.keep(entry.path, {
           ...entry, name: `${entry.name}/${entry.only}`, depth, open, nested,
-          icon: iconFor(last, true, open),
+          icon, glyph: icon ? null : glyphFor(last, true, open),
         }))
         if (open) flatten(nested, depth + 1, out)
         continue
       }
       const open = !!entry.dir && !!workspace.expanded[entry.path]
-      out.push(treeRows.keep(entry.path, { ...entry, depth, open, nested: null, icon: iconFor(entry.name, entry.dir, open) }))
+      // The tree's own shape is resolved here too, beside the theme's icon and
+      // only when there is none: a folder open or shut, a sheet by its kind.
+      const icon = iconFor(entry.name, entry.dir, open)
+      out.push(treeRows.keep(entry.path, {
+        ...entry, depth, open, nested: null, icon,
+        glyph: icon ? null : glyphFor(entry.name, entry.dir, open),
+      }))
       if (entry.dir && workspace.expanded[entry.path]) {
         flatten(entry.path, depth + 1, out)
       }
@@ -85,6 +93,71 @@
   $: rows = tree(workspace.root || "", workspace.open, workspace.expanded, workspace.icons)
 
   $: selectedPath = workspace.selected?.kind === "file" ? workspace.selected.path : null
+
+  // ---- renaming ------------------------------------------------------------
+  //
+  // **The pencil renames**, a file or a folder, in place: the name becomes a
+  // field, Enter or leaving it renames, ESC puts it back. F2 on a row does the
+  // same, as it does in an editor. The one write this panel makes — see
+  // `RECORD/2026-10-21.the-tree-renames.completed.md`.
+  //
+  // A compact row (`parent/nested`) renames the folder it starts with, which
+  // is the row's own path; the field starts on that folder's own name.
+  let renaming = null
+  let draft = ""
+  let renameError = ""
+  let renameBusy = false
+
+  const ownName = path => path.slice(path.lastIndexOf("/") + 1)
+  const startRename = row => {
+    renaming = row.path
+    draft = ownName(row.path)
+    renameError = ""
+    // On the next frame the field exists. The name is chosen up to its
+    // extension, as an editor does, so typing replaces the part that is
+    // usually what changes; a folder's name is chosen whole.
+    requestAnimationFrame(() => {
+      const field = $self(".node.renaming input")
+      if (!field) return
+      field.focus()
+      const dot = row.dir ? -1 : draft.lastIndexOf(".")
+      field.setSelectionRange(0, dot > 0 ? dot : draft.length)
+    })
+  }
+  const stopRename = () => {
+    renaming = null
+    renameError = ""
+  }
+  const commitRename = async () => {
+    const path = renaming
+    if (!path || renameBusy) return
+    const name = draft.trim()
+    if (!name || name === ownName(path)) return stopRename()
+    renameBusy = true
+    const answer = await renameEntry(path, name)
+    renameBusy = false
+    // Answered after the person moved on to another row: not this one's to close.
+    if (renaming !== path) return
+    if (answer.ok) return stopRename()
+    renameError = answer.error
+    requestAnimationFrame(() => $self(".node.renaming input")?.focus())
+  }
+  const renameKey = event => {
+    if (event.key !== "Escape") return
+    // The page's ESC would otherwise swap a column as well.
+    event.preventDefault()
+    stopRename()
+  }
+  // Leaving the field renames, unless it was left because of an error being
+  // shown — then it stays open with what was typed.
+  const renameBlur = () => {
+    if (!renameError) commitRename()
+  }
+  const rowKey = (event, row) => {
+    if (event.key !== "F2") return
+    event.preventDefault()
+    startRename(row)
+  }
 </script>
 
 <div class="head">
@@ -108,14 +181,17 @@
     :key="row.path"
     class="node"
     :class.on="row.path === selectedPath"
+    :class.renaming="row.path === renaming"
     :class.ignored="row.ignored"
     :style="`--depth:${row.depth}`">
     <button
+      :if="row.path !== renaming"
       type="button"
       class="row"
       :title="row.nested || row.path"
       @click="row.dir ? toggleDir(row.nested || row.path) : showFile(row.path)"
-      @dblclick="row.dir || showFile(row.path, { pinned: true })">
+      @dblclick="row.dir || showFile(row.path, { pinned: true })"
+      @keydown="rowKey($event, row)">
       <!-- A target of its own: on a compact row the name opens the nested
            folder and the caret the parent; on any other row both open the
            same one. -->
@@ -132,7 +208,7 @@
         :src="`./api/icons/${row.icon}?r=${workspace.icons.revision || 0}`"
         alt=""
         loading="lazy">
-      <svg :if="!row.icon" class="ic glyph"><use :href="row.dir ? '#i-folder' : '#i-file'"/></svg>
+      <svg :if="!row.icon" class="ic glyph" :class.folder="row.dir" :data-kind="row.glyph?.kind || null"><use :href="row.glyph?.id || `${FILES_SPRITE}#i-file`"/></svg>
       <span class="name">{{ row.name }}</span>
       <!-- A folder that is a repository of its own — a submodule, a clone
            inside the workspace — the way the project modal marks it. -->
@@ -142,14 +218,29 @@
          says, and a person reading this panel already knows them. It no longer
          needs `margin-left: auto` — the button beside it is `flex: 1`, so what
          pushes these two right is the name's own greed. -->
-    <span :if="row.status" class="status" :class="row.status.trim()">{{ row.status }}</span>
+    <!-- The row while it is being renamed: the same indent and icon, and the
+         name as a field. -->
+    <div :if="row.path === renaming" class="row editing">
+      <span class="twist"></span>
+      <svg class="ic glyph" :class.folder="row.dir" :data-kind="row.glyph?.kind || null"><use :href="row.glyph?.id || `${FILES_SPRITE}#${row.dir ? 'i-folder' : 'i-file'}`"/></svg>
+      <TextInput size="sm" :model="draft" :invalid="!!renameError" :disabled="renameBusy"
+                 :label="`New name for ${ownName(row.path)}`"
+                 @input="renameError = ''"
+                 @enter="commitRename()"
+                 @keydown="renameKey($event.detail)"
+                 @blur="renameBlur()" />
+    </div>
+    <span :if="row.status && row.path !== renaming" class="status" :class="row.status.trim()">{{ row.status }}</span>
     <button
+      :if="row.path !== renaming"
       type="button"
       class="edit"
-      :title="`Edit ${row.name}`"
-      @click="showFile(row.path, { pinned: true })">
+      :title="`Rename ${ownName(row.path)}`"
+      :aria-label="`Rename ${ownName(row.path)}`"
+      @click="startRename(row)">
       <svg class="ic"><use href="#i-edit"/></svg>
     </button>
+    <p :if="row.path === renaming && renameError" class="rename-error" role="alert">{{ renameError }}</p>
   </li>
 </ul>
 
@@ -161,14 +252,16 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: .08em;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
     margin: 0;
   }
-  .head .link { margin-left: auto; display: flex; text-decoration: none; color: var(--dim); }
+  .head .link { margin-left: auto; display: flex; text-decoration: none; color: var(--luu-fg-muted); }
   .head .link .ic { width: 14px; height: 14px; }
-  .head .link:hover { color: var(--fg); }
+  .head .link:hover { color: var(--luu-fg); }
 
-  .tree { list-style: none; margin: 0; padding: 0; }
+  /* Settings → Appearance → Files Theme → Size: text and icons together
+     (`prefs.js`). */
+  .tree { list-style: none; margin: 0; padding: 0; zoom: var(--luu-tree-zoom, 1); }
 
   /* The whole row: what is hovered, what is selected, and what the three
      controls sit in. The background lives here rather than on the button, so
@@ -178,19 +271,31 @@
     align-items: center;
     border-radius: 4px;
   }
-  .node:hover { background: var(--bg); }
+  .node:hover { background: var(--luu-bg); }
   /* A tint rather than the accent filled in: the row is content somebody
      picked, not a control that is pressed, and a 20rem rail of saturated bars
      read as a toolbar. The token keeps the highlight on its own theme's side
      of the scale instead of crossing to the opposite end the way a filled
-     `--accent` has to — see the token's own note in `app.css`. Text stays
-     `--fg`, which is what lets the glyph, the caret and git's letter keep
-     their own colours rather than all turning `--on-accent`. */
-  .node.on { background: var(--selected); }
+     `--luu-accent` has to — see the token's own note in the theme's
+     `tokens.css`. Text stays
+     `--luu-fg`, which is what lets the glyph, the caret and git's letter keep
+     their own colours rather than all turning `--luu-on-accent`. */
+  .node.on { background: var(--luu-selected); }
   /* Selected *and* hovered used to be the selected colour exactly, so the
      pointer stopped meaning anything over the one row it is most likely to be
      on. */
-  .node.on:hover { background: var(--selected-hover); }
+  .node.on:hover { background: var(--luu-selected-hover); }
+  /* Being renamed: the field takes the row, and a refusal wraps under it. */
+  .node.renaming { flex-wrap: wrap; background: var(--luu-selected); }
+  .row.editing { cursor: default; padding-top: .15rem; padding-bottom: .15rem; }
+  .rename-error {
+    flex-basis: 100%;
+    margin: 0;
+    padding: .1rem .3rem .3rem calc(var(--depth) * .75rem + 1.6rem);
+    color: var(--luu-bad);
+    font-size: 11px;
+    line-height: 1.4;
+  }
 
   .row {
     display: flex;
@@ -222,7 +327,7 @@
   /* There was no focus style at all: tabbing through the tree moved an
      invisible cursor. */
   .row:focus-visible, .edit:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--luu-accent);
     outline-offset: -2px;
     border-radius: 4px;
   }
@@ -235,7 +340,7 @@
   .node.ignored .icon,
   .node.ignored .glyph { opacity: .45; }
 
-  .twist { width: 14px; flex: none; display: flex; justify-content: center; color: var(--dim); }
+  .twist { width: 14px; flex: none; display: flex; justify-content: center; color: var(--luu-fg-muted); }
   .twist .ic { width: 12px; height: 12px; }
   /* The caret is a control of its own now — on a compact row it opens the
      parent — so it says so under the pointer. */
@@ -244,7 +349,7 @@
   /* The fallback, and still deliberately not a second icon set: two shapes,
      enough that an unconfigured tree reads as intentional. `[ui] icon-theme`
      in config.toml replaces them with any VSCode icon theme on this machine. */
-  .glyph { color: var(--dim); }
+  .glyph { color: var(--luu-fg-muted); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .repo {
@@ -253,7 +358,7 @@
     line-height: 1;
     padding: .1rem .25rem;
     border-radius: 3px;
-    color: var(--accent);
+    color: var(--luu-accent);
     border: 1px solid currentColor;
   }
 
@@ -261,13 +366,13 @@
     flex: none;
     font-size: 11px;
     font-family: ui-monospace, monospace;
-    color: var(--warn);
+    color: var(--luu-warn);
     white-space: pre;
     padding: 0 .1rem;
   }
   /* Untracked is the one that reads differently from "changed": nothing of it
      is in git yet. */
-  .status.\?\? { color: var(--b-history); }
+  .status.\?\? { color: var(--luu-bucket-history); }
 
   /* **The slot is always there; only its contents come and go.** Letting the
      icon in and out of the flow moves the name 241px → 221px, which re-runs
@@ -297,7 +402,7 @@
      exists only on hover is an action a keyboard cannot find. */
   .node:hover .edit,
   .edit:focus-visible { opacity: 1; pointer-events: auto; }
-  .edit:hover { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+  .edit:hover { background: color-mix(in srgb, var(--luu-fg) 14%, transparent); }
 
-  .err { color: var(--bad); font-size: 12px; line-height: 1.5; }
+  .err { color: var(--luu-bad); font-size: 12px; line-height: 1.5; }
 </style>

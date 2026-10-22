@@ -21,6 +21,8 @@
 /// Monaco ships as AMD and its loader claims the page's `require`/`define`.
 /// Loaded once, and only when somebody chose it: a `<script>` in `index.html`
 /// would cost every visit for a setting that is off by default.
+import { prefs, SIZES } from "@web/lib/prefs.js"
+
 let loading = null
 
 function loadLoader() {
@@ -183,13 +185,16 @@ export async function paint(host, { text, language, tone, path }) {
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      fontSize: 12,
+      // Settings → Appearance → Editor → Text size, read where the editor is
+      // made and again each time it paints another file.
+      fontSize: SIZES.editorPx[prefs.editorSize],
     })
     attachedTo = host
     paintedPath = path
     return true
   }
   monaco.editor.setTheme(theme)
+  editor.updateOptions({ fontSize: SIZES.editorPx[prefs.editorSize] })
   const model = editor.getModel()
   if (model) {
     monaco.editor.setModelLanguage(model, LANGUAGES[language] || language || "plaintext")

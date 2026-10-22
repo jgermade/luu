@@ -10,11 +10,11 @@
   // reload already put in `state.history`, and the message beside it. See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
   const { state } = await import("@web/lib/store.js")
-  const Scrollable = await import("@web/components/scrollable.html")
+  const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const { ui, closeInspect } = await import("@web/lib/ui.js")
   const Modal = await import("@web/components/modal.html")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
-  const Segmented = await import("@web/components/segmented.html")
+  const Segmented = await import("@web/theme/default/components/segmented.html")
   const ContextView = await import("./context-view.html")
 
   let tab = "context"
@@ -68,7 +68,7 @@
   </div>
 
   <div class="tabs">
-    <Segmented size="small" label="View" :options="TABS" :model="tab" />
+    <Segmented size="sm" label="View" :options="TABS" :model="tab" />
   </div>
 
   <section class="modal-body">
@@ -114,21 +114,21 @@
     flex-wrap: wrap;
     gap: .4rem 1.4rem;
     padding: .7rem 1rem;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--luu-border);
     font-size: 12px;
   }
   .facts div { display: flex; flex-direction: column; gap: .1rem; }
-  .k { color: var(--dim); font-size: 11px; }
+  .k { color: var(--luu-fg-muted); font-size: 11px; }
   .facts b { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .warn { color: var(--warn); }
-  .bad { color: var(--bad); }
-  .ok { color: var(--b-history); }
-  .dim { color: var(--dim); }
+  .warn { color: var(--luu-warn); }
+  .bad { color: var(--luu-bad); }
+  .ok { color: var(--luu-bucket-history); }
+  .dim { color: var(--luu-fg-muted); }
   .small { font-size: 11px; }
   .tabs { padding: .6rem 1rem 0; }
   .asked { margin: 0 0 .8rem; overflow-wrap: anywhere; }
   .block { margin-bottom: .8rem; }
-  .role { font-size: 11px; color: var(--dim); text-transform: lowercase; margin-bottom: .2rem; }
+  .role { font-size: 11px; color: var(--luu-fg-muted); text-transform: lowercase; margin-bottom: .2rem; }
   /* Its ground is its well's, a Scrollable's or the raw answer's. */
   pre {
     margin: 0;

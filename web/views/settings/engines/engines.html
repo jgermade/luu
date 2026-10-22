@@ -5,7 +5,7 @@
   // See `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
   const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, modelLabel } =
     await import("@web/lib/engines.js")
-  const Scrollable = await import("@web/components/scrollable.html")
+  const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
   const { state } = await import("@web/lib/store.js")
   const { openStarter } = await import("@web/lib/ui.js")
@@ -256,38 +256,38 @@
      pane they sit in pads nothing. */
   .modal-foot { padding: .2rem 1.75rem 0; }
   .engine {
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     padding: .75rem 1rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
   }
   .engine header { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-  .engine header strong { font-size: 14px; font-weight: 600; color: var(--fg); }
+  .engine header strong { font-size: 14px; font-weight: 600; color: var(--luu-fg); }
   .engine .grow { flex: 1; }
   .engine .settings { margin-top: .6rem; }
   .state {
     font-size: 11px;
     padding: .15rem .45rem;
     border-radius: 4px;
-    border: 1px solid var(--line);
-    background: var(--sunken, rgba(0, 0, 0, .03));
-    color: var(--dim);
+    border: 1px solid var(--luu-border);
+    background: var(--luu-sunken, rgba(0, 0, 0, .03));
+    color: var(--luu-fg-muted);
   }
   .state.running {
-    color: var(--warn);
-    border-color: var(--warn);
-    background: var(--warn-bg, rgba(138, 93, 18, .08));
+    color: var(--luu-warn);
+    border-color: var(--luu-warn);
+    background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
     font-weight: 500;
   }
   .state.up {
-    color: var(--ok);
-    border-color: var(--ok);
+    color: var(--luu-ok);
+    border-color: var(--luu-ok);
     background: rgba(74, 122, 28, .08);
     font-weight: 500;
   }
   .state.exited {
-    color: var(--dim);
+    color: var(--luu-fg-muted);
   }
   .log {
     margin: 0;
@@ -296,13 +296,13 @@
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
   }
   .download { display: flex; align-items: center; gap: .6rem; font-size: 12px; margin: .3rem 0; }
   .download progress { flex: 1; }
   .engine-skeleton {
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     padding: .75rem 1rem;
     display: flex;

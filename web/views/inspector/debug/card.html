@@ -34,9 +34,9 @@
 
 <style scoped>
   .card {
-    border: 1px solid var(--line);
+    border: 1px solid var(--luu-border);
     border-radius: 12px;
-    background: var(--panel);
+    background: var(--luu-surface);
     padding: .55rem .8rem .7rem;
     margin-bottom: .6rem;
   }
@@ -51,7 +51,7 @@
     background: none;
     border: 0;
     padding: .15rem 0;
-    color: var(--fg);
+    color: var(--luu-fg);
     font: inherit;
     font-size: 13px;
     font-weight: 600;
@@ -59,12 +59,12 @@
     cursor: pointer;
   }
   .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .caret { flex: none; width: 12px; height: 12px; color: var(--dim); transition: transform .15s; }
+  .caret { flex: none; width: 12px; height: 12px; color: var(--luu-fg-muted); transition: transform .15s; }
   /* The phrase a folded card is, at the far side — where an open card has
      nothing, because its body says it. */
   .summary {
     margin-left: auto;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
     font-weight: normal;
     font-size: 12px;
     font-variant-numeric: tabular-nums;

@@ -1,0 +1,362 @@
+<script :setup="{
+  open = false,
+  title = '',
+  tabs = [],
+  model = '',
+  width = '40rem',
+  height = '',
+  dismissible = true,
+  head = 'auto',
+  tinted = false
+}">
+  // A modal whose head is its tabs: several views of one thing — a provider's
+  // connection, its models, its limits — in one dialog, chosen from where a
+  // title would be. The platform's `<dialog>`, as `Modal` is.
+  //
+  // **Part of the default theme**: imports only the theme's own `Scrollable`,
+  // which its body scrolls through, and draws only with `tokens.css`. See
+  // `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <TabModal :open="editing" title="workstation" :model="tab" height="24rem"
+  //             :tabs="['Connection', 'Models', { value: 'limits', label: 'Limits', count: 2 }]"
+  //             @close="editing = false">
+  //     <div :if="tab === 'Connection'">…</div>
+  //     <div :if="tab === 'Models'">…</div>
+  //     <template :slot.foot><Button variant="primary">Save</Button></template>
+  //   </TabModal>
+  //
+  // A tab is a string or `{ value, label, count, disabled }`. Only the strip is
+  // the component's: the owner shows the panel `:model` names, as with `Tabs`,
+  // so a panel can be anything and stay mounted or not. The choice goes up
+  // through `:model` and as `change`; the arrows, Home and End move it.
+  // `height` fixes everything between the head and the foot — the `bar` and
+  // the body together — so changing tabs does not resize the dialog, and a tab
+  // chosen starts at the top of its panel. The `bar` slot is above the body
+  // and does not scroll with it: a search over what the body lists. It pads
+  // itself; a tab with nothing for it leaves it empty and takes no room.
+  // `tinted` grounds the body in the page's grey — lighter than the foot's —
+  // so white boxes and rows sit on it, as cards sit on the page. As with `Modal`, ESC, the
+  // backdrop and the close button only emit `close` — the owner closes it with
+  // `:open` — and `dismissible` false refuses all three.
+  //
+  // **The head follows the size**: a large modal — 40rem and up, as drawn —
+  // has a dark head, a bar like the page's own, and a small one has a head
+  // that is part of its body. `head` is `auto` for that, or `dark` or
+  // `integrated` to say it outright. The dark head is a `data-tone="dark"`
+  // island, so it draws with the theme's own dark values.
+
+  const Scrollable = await import("./scrollable.html")
+
+  // A bare attribute (`<X dismissible>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isOpen = flag(open)
+  $: isDismissible = flag(dismissible)
+  $: isTinted = flag(tinted)
+
+  const uid = `luu-tabmodal-${Math.random().toString(36).slice(2, 9)}`
+  const tabId = value => `${uid}-tab-${String(value).replace(/[^\w-]/g, "_")}`
+  $: list = tabs.map(t => typeof t === "string" ? { value: t, label: t } : t)
+  $: usable = list.filter(t => !t.disabled)
+
+  // ---- the dialog ------------------------------------------------------------
+
+  let leaving = false
+  // How wide it was drawn, measured each time it opens: a modal asked for at
+  // 40rem on a phone is a small one there.
+  const LARGE = 640
+  let wide = false
+  $: dark = head === "dark" || (head === "auto" && wide)
+  const exit = () => {
+    const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
+    return Number.isFinite(ms) ? ms : 0
+  }
+  const show = () => {
+    const dialog = $self("dialog")
+    if (!dialog || dialog.open) return
+    leaving = false
+    dialog.showModal()
+    wide = dialog.offsetWidth >= LARGE
+    requestAnimationFrame(place)
+    // The focus starts on the tab that is chosen, so the arrows work at once.
+    requestAnimationFrame(() => $self("button[role=tab].on")?.focus())
+  }
+  const hide = () => {
+    const dialog = $self("dialog")
+    if (!dialog?.open || leaving) return
+    const ms = exit()
+    if (!ms) return dialog.close()
+    leaving = true
+    setTimeout(() => { dialog.close(); leaving = false }, ms)
+  }
+  const ask = () => {
+    if (isDismissible) $emit("close")
+  }
+  const cancel = event => {
+    event.preventDefault()
+    ask()
+  }
+  const backdrop = event => {
+    if (event.target === event.currentTarget) ask()
+  }
+
+  // ---- the tabs --------------------------------------------------------------
+
+  let at = null
+  let moving = false
+  const place = () => {
+    const on = $self("button[role=tab].on")
+    if (!on || !on.offsetWidth) return
+    at = { x: on.offsetLeft, w: on.offsetWidth }
+    if (!moving) requestAnimationFrame(() => { moving = true })
+  }
+  const choose = tab => {
+    if (tab.disabled || tab.value === model) return
+    $updateModel(tab.value)
+    $emit("change", tab.value)
+    const body = $self(".body [data-scrollable]")
+    if (body) body.scrollTop = 0
+  }
+  const STEP = { ArrowRight: 1, ArrowLeft: -1 }
+  const key = (e, tab) => {
+    const i = usable.indexOf(tab)
+    const next =
+      e.key === "Home" ? usable[0] :
+      e.key === "End" ? usable[usable.length - 1] :
+      e.key in STEP ? usable[(i + STEP[e.key] + usable.length) % usable.length] :
+      null
+    if (!next) return
+    e.preventDefault()
+    choose(next)
+    $self(`#${tabId(next.value)}`)?.focus()
+  }
+
+  await $mounted()
+  const sizes = new ResizeObserver(() => place())
+  sizes.observe($self(".strip"))
+  $destroyed(() => sizes.disconnect())
+  $: isOpen ? requestAnimationFrame(show) : hide()
+  $: (model, list, requestAnimationFrame(place))
+  $: line = at ? `width:${at.w}px;transform:translateX(${at.x}px)` : "display:none"
+</script>
+
+<dialog class="modal"
+        :class.leaving="leaving"
+        :style="`width:min(${width}, calc(100vw - 2rem))`"
+        :aria-label="title || null"
+        @cancel="cancel($event)"
+        @click="backdrop($event)">
+  <div class="box">
+    <header class="head" :class.dark="dark" :data-tone="dark ? 'dark' : null">
+      <h2 :if="title" class="title">{{ title }}</h2>
+      <div class="strip" role="tablist" :aria-label="title || null" :class.moving="moving">
+        <button :each="tab in list"
+                :key="String(tab.value)"
+                type="button"
+                role="tab"
+                :id="tabId(tab.value)"
+                :aria-selected="tab.value === model ? 'true' : 'false'"
+                :aria-controls="`${uid}-panel`"
+                :tabindex="tab.value === model ? 0 : -1"
+                :class.on="tab.value === model"
+                :disabled="tab.disabled"
+                @click="choose(tab)"
+                @keydown="key($event, tab)">
+          {{ tab.label }}
+          <span :if="tab.count !== undefined && tab.count !== null" class="count">{{ tab.count }}</span>
+        </button>
+        <span class="line" :style="line" aria-hidden="true"></span>
+      </div>
+      <button :if="isDismissible" type="button" class="close" title="Close" @click="ask()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+      </button>
+    </header>
+    <div class="middle" :style="height ? `height:min(${height}, calc(100dvh - 12rem))` : ''">
+      <div :if="$slots.bar" class="bar"><slot.bar /></div>
+      <div class="body" :class.tinted="isTinted" role="tabpanel" :id="`${uid}-panel`"
+           :aria-labelledby="model ? tabId(model) : null">
+        <Scrollable y fill><div class="content"><slot></slot></div></Scrollable>
+      </div>
+    </div>
+    <footer :if="$slots.foot" class="foot"><slot.foot /></footer>
+  </div>
+</dialog>
+
+<style scoped>
+  .modal {
+    max-height: calc(100dvh - 4rem);
+    padding: 0;
+    border: 0;
+    border-radius: var(--luu-radius-lg);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    box-shadow: var(--luu-shadow-lg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    overflow: hidden;
+  }
+  .modal[open] { animation: arrive var(--luu-duration-slow) var(--luu-ease-out); }
+  .modal.leaving { animation: leave var(--luu-duration) cubic-bezier(.4, 0, 1, 1) forwards; }
+  .modal::backdrop { background: var(--luu-overlay); backdrop-filter: blur(2px); }
+  .modal[open]::backdrop { animation: fade var(--luu-duration-slow) ease; }
+  /* The way out is keyframes of its own, not `fade` reversed: an animation
+     whose name stays the same is not started again, only turned round — and
+     one that has finished, turned round, is at its start at once. */
+  .modal.leaving::backdrop { animation: fade-out var(--luu-duration) ease forwards; }
+  /* Every modal comes in as a folio, as the page's own do: a sheet tipped away
+     at the bottom that swings upright, on a pivot a fifth of the way down so
+     the top barely moves and the foot travels — and leaves the same way. A
+     sub-modal is the exception: it comes out of a head, not out of nowhere. */
+  .modal { transform-origin: 50% 22%; }
+  @keyframes arrive {
+    from { opacity: 0; transform: perspective(1200px) rotateX(36deg) translateY(-14px) scale(.97); }
+    to { opacity: 1; transform: perspective(1200px) rotateX(0deg) translateY(0) scale(1); }
+  }
+  @keyframes leave {
+    from { opacity: 1; transform: perspective(1200px) rotateX(0deg) translateY(0) scale(1); }
+    to { opacity: 0; transform: perspective(1200px) rotateX(24deg) translateY(-10px) scale(.98); }
+  }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes fade-out { to { opacity: 0; } }
+
+  /* **Each part draws its own edge**, and the dialog none: a dark head's edge
+     is the head's own colour, so a dark head is not framed in the light line
+     the body has. First and last round the corners the dialog clips. */
+  .box > * {
+    border-inline: var(--luu-border-width) solid var(--luu-border);
+  }
+  .box > :first-child {
+    border-top: var(--luu-border-width) solid var(--luu-border);
+    border-top-left-radius: var(--luu-radius-lg);
+    border-top-right-radius: var(--luu-radius-lg);
+  }
+  .box > :last-child {
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+    border-bottom-left-radius: var(--luu-radius-lg);
+    border-bottom-right-radius: var(--luu-radius-lg);
+  }
+  .box { display: flex; flex-direction: column; max-height: inherit; }
+
+  /* The head is the tabs: they sit on its bottom edge, and the line under the
+     chosen one is the edge between the head and the body. */
+  .head {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--luu-space-4);
+    padding: 0 var(--luu-space-3) 0 var(--luu-space-5);
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+    /* Above anything a SubModal lays over the body — its sheet and its veil —
+       so a sheet comes out from under the head as it slides in, rather than
+       across it. Opaque for the same reason. */
+    position: relative;
+    z-index: 20;
+    background: var(--luu-surface);
+  }
+  /* The large modal's bar: the dark tone's own surface. */
+  .head.dark { color: var(--luu-fg); border-color: var(--luu-surface); }
+  .title {
+    flex: none;
+    align-self: center;
+    margin: 0;
+    max-width: 14rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--luu-text-lg);
+    font-weight: var(--luu-weight-bold);
+    line-height: var(--luu-leading-tight);
+  }
+  .strip {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    gap: var(--luu-space-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-bottom: -1px;
+  }
+  .strip button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--luu-space-2);
+    height: 3rem;
+    padding: 0 var(--luu-space-3);
+    border: 0;
+    background: transparent;
+    color: var(--luu-fg-muted);
+    font: inherit;
+    font-weight: var(--luu-weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--luu-duration) ease, background var(--luu-duration-fast) ease;
+  }
+  .strip button:hover:not(:disabled) { color: var(--luu-fg); }
+  .strip button:active:not(:disabled) {
+    background: var(--luu-active);
+    border-radius: var(--luu-radius-sm) var(--luu-radius-sm) 0 0;
+  }
+  .strip button.on { color: var(--luu-fg); }
+  .strip button:disabled { opacity: .45; cursor: default; }
+  .strip button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
+  .count {
+    min-width: 1.4em;
+    padding: 0 .35rem;
+    border-radius: var(--luu-radius-full);
+    background: var(--luu-surface);
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-xs);
+    text-align: center;
+    line-height: 1.6;
+  }
+  .on .count { background: var(--luu-accent-soft); color: var(--luu-accent); }
+  .line {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: var(--luu-accent);
+  }
+  .moving .line {
+    transition: transform var(--luu-duration-slow) var(--luu-ease),
+                width var(--luu-duration-slow) var(--luu-ease);
+  }
+
+  .close {
+    display: inline-flex;
+    align-self: center;
+    flex: none;
+    padding: var(--luu-space-1);
+    border: 0;
+    border-radius: var(--luu-radius-sm);
+    background: transparent;
+    color: var(--luu-fg-muted);
+    cursor: pointer;
+  }
+  .close:hover { background: var(--luu-hover); color: var(--luu-fg); }
+  .close:active { background: var(--luu-active); }
+  .close:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+  .middle { display: flex; flex-direction: column; min-height: 0; }
+  .bar { flex: none; }
+  /* A frame and a `Scrollable`; the content pads itself, so the padding
+     scrolls with it. */
+  .body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .content { padding: var(--luu-space-5); }
+  .body.tinted { background: var(--luu-bg); }
+  .foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--luu-space-2);
+    /* As tall as a row of buttons whatever is in it, so a foot holding a line
+       of text and one holding buttons are the same foot. */
+    box-sizing: content-box;
+    min-height: var(--luu-control-md);
+    padding: var(--luu-space-3) var(--luu-space-5);
+    border-top: var(--luu-border-width) solid var(--luu-border);
+    background: var(--luu-sunken);
+  }
+</style>

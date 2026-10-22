@@ -30,10 +30,11 @@ export const ui = $reactive({
   /// Which of the starter's two things is running, so the one that is says so
   /// on its own button rather than on both.
   continuing: false,
-  /// Whether the session history is open. It is the old tab strip, as a
-  /// popover: one session is on screen, so a strip was spending a row to
-  /// answer a question the column's head answers in words.
-  history: false,
+  /// The sessions dialog's tab — `new` (start one) or `history` (open an
+  /// earlier one) — or `null` while it is closed. One dialog with two tabs:
+  /// the `+` and the clock in the chat's head each open it on their own. See
+  /// `RECORD/2026-10-21.the-design-system-applied.completed.md`.
+  sessions: null,
   /// Two columns at a width that has room for three, chosen from the chat's
   /// head for as long as the page is open. Not a preference: `General →
   /// Columns` is the setting, and this is the button beside the work.
@@ -66,7 +67,7 @@ export const ui = $reactive({
 })
 
 export function openSettingsAt(section) {
-  ui.section = section === "models" ? "models" : "general"
+  ui.section = ["models", "appearance"].includes(section) ? section : "general"
   return openSettings()
 }
 
@@ -75,11 +76,20 @@ export function showSection(section) {
 }
 
 export function openHistory() {
-  ui.history = true
+  ui.sessions = "history"
 }
 
-export function closeHistory() {
-  ui.history = false
+/// The other tab, from inside the dialog. New prepares the starter the first
+/// time it is shown, as the `+` would have.
+export function showSessionsTab(tab) {
+  ui.sessions = tab
+  if (tab === "new" && !ui.starter) openStarter()
+}
+
+export function closeSessions() {
+  ui.sessions = null
+  ui.starter = null
+  ui.continuing = false
 }
 
 // ---- is the model actually there ------------------------------------------
@@ -127,6 +137,7 @@ export async function checkModel() {
 // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
 
 export async function openStarter(provider) {
+  ui.sessions = "new"
   if (!state.providers) await loadProviders()
   // What this session may be allowed to do, offered beside where it sends —
   // and chosen at the same moment, because it is the only one there is: a
@@ -176,8 +187,7 @@ export function editStarter(patch) {
 }
 
 export function closeStarter() {
-  ui.starter = null
-  ui.continuing = false
+  closeSessions()
 }
 
 export async function startSession() {
@@ -192,7 +202,7 @@ export async function startSession() {
   ui.starting = false
   if (ok) {
     setPlace(ui.starter.place || "|")
-    ui.starter = null
+    closeSessions()
     await checkModel()
   }
   return ok
@@ -212,7 +222,7 @@ export async function continueHere() {
   ui.starting = false
   ui.continuing = false
   if (ok) {
-    ui.starter = null
+    closeSessions()
     await checkModel()
   }
   return ok
