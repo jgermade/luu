@@ -1523,6 +1523,14 @@ The rest follows from that:
   (`turn_started`, a refusal, a plan at the gate) draws the real thing. It does not wait for
   `turn_started`, because a slow server made that look like a lost message. See
   [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
+- **A reply's prose is drawn from its Markdown** (`helpers/markdown.js`): headings, lists, quotes,
+  tables, rules, emphasis, code spans and `http:`/`https:`/`mailto:` links, the text escaped
+  first and a line break kept as one; a fenced block is a snippet before it gets there. What it
+  makes is only what jq79's `:html` sanitiser keeps, so a table, a rule and a task's box are
+  `div`s and `span`s with an `md-` class that `app.css` draws, and the transcript opens a link
+  in a new tab itself. The answer is a step smaller than the prompt (`.93em`), and a prompt is
+  marked by a `| ` before it in `--luu-black` (#333a3e, `luu.css`), drawn rather than written.
+  See [`RECORD/2026-10-22.replies-drawn-as-markdown.completed.md`](RECORD/2026-10-22.replies-drawn-as-markdown.completed.md).
 - **Components**: `web/components/` holds the components the theme does not have yet, which
   import nothing from the page. Everything arrives as props or slots, everything leaves as
   `:model` or `$emit`, and styles are scoped. `Modal` (the `<dialog>` every modal is, with the

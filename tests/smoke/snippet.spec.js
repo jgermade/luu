@@ -34,7 +34,21 @@ const PAGE = [
   "</script>",
   "</body></html>",
 ].join("\n")
-const REPLY = `Here it is:\n\n\`\`\`html\n${PAGE}\n\`\`\`\n`
+// Prose before the block, in the Markdown a model writes, and a tag in it that
+// must be shown rather than made.
+const PROSE = [
+  "Soy **luu**. Lo que carga:",
+  "",
+  "- one",
+  "- two",
+  "",
+  "El fichero `tokens.css`, en [la demo](https://example.com/). <b>raw</b>",
+  "",
+  "| a | b |",
+  "|---|--:|",
+  "| 1 | 2 |",
+].join("\n")
+const REPLY = `${PROSE}\n\nHere it is:\n\n\`\`\`html\n${PAGE}\n\`\`\`\n`
 
 function binary() {
   const named = process.env.LUU_BIN
@@ -112,4 +126,57 @@ test("an HTML block opens as a page in a frame that cannot reach the server", as
 
   await page.keyboard.press("Escape")
   await expect(modal).toHaveCount(0)
+})
+
+/**
+ * A reply's prose is drawn from its Markdown — escaped first, so a tag the
+ * model wrote is shown as the text it is — a step smaller than the prompt,
+ * which a bar in the page's black marks as one.
+ */
+test("a reply's Markdown is drawn, escaped, under a prompt marked with a bar", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  const picker = page.locator("dialog.modal").first()
+  await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
+  if (await picker.isVisible()) await picker.locator('button:has-text("Use this folder")').click()
+
+  const composer = page.locator(".composer input")
+  await expect(composer).toBeEnabled()
+  await composer.fill("what are you?")
+  await page.click('.composer button[type="submit"]')
+
+  const prose = page.locator("article.assistant .reply-md").last()
+  await expect(prose.locator("strong")).toHaveText("luu", { timeout: 30_000 })
+  await expect(prose.locator("li")).toHaveText(["one", "two"])
+  await expect(prose.locator("code")).toHaveText("tokens.css")
+  const link = prose.locator("a")
+  await expect(link).toHaveText("la demo")
+  await expect(link).toHaveAttribute("href", "https://example.com/")
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer")
+  await expect(prose).toContainText("<b>raw</b>")
+  await expect(prose.locator("b")).toHaveCount(0)
+  await expect(prose).not.toContainText("**")
+  // A table, out of what jq79's sanitiser keeps, laid out as one.
+  const cells = prose.locator(".md-table .md-cell")
+  await expect(cells).toHaveText(["a", "b", "1", "2"])
+  expect(await cells.nth(3).evaluate(el => [getComputedStyle(el).display, getComputedStyle(el).textAlign]))
+    .toEqual(["table-cell", "right"])
+  // A link opens beside the session, never in its place.
+  await page.route("https://example.com/**", route => route.fulfill({ body: "elsewhere" }))
+  const [popup] = await Promise.all([page.waitForEvent("popup"), link.click()])
+  await popup.close()
+  await expect(page).toHaveURL(`${BASE}/index.html`)
+
+  const asked = page.locator("article.user .text").last()
+  await expect(asked).toHaveText("what are you?")
+  const bar = await asked.evaluate(el => {
+    const before = getComputedStyle(el, "::before")
+    return { content: before.content, color: before.color }
+  })
+  expect(bar).toEqual({ content: '"| "', color: "rgb(51, 58, 62)" })
+  const size = async (/** @type {import("@playwright/test").Locator} */ at) =>
+    at.evaluate(el => parseFloat(getComputedStyle(el).fontSize))
+  const [askedSize, answerSize] = [await size(asked), await size(prose)]
+  expect(answerSize).toBeLessThan(askedSize)
+  expect(answerSize).toBeGreaterThan(askedSize * 0.85)
 })

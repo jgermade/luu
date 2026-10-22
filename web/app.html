@@ -65,6 +65,16 @@
   const { segments } = await import("@web/helpers/segments.js")
   const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
+  const { markdown } = await import("@web/helpers/markdown.js")
+  // A link in a reply opens beside luu, never in its place: jq79's `:html`
+  // keeps an `<a>`'s `href` and not its `target`, and a click that left the
+  // page would leave the session with it.
+  const openOutside = event => {
+    const link = event.target.closest?.("a[href]")
+    if (!link) return
+    event.preventDefault()
+    window.open(link.href, "_blank", "noopener,noreferrer")
+  }
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const { snippet, snippetHtml, copySnippet, previewable, previewSnippet } = await import("@web/lib/snippet.js")
 
@@ -851,7 +861,9 @@
             <div :if="!entry.parts" class="text">{{ entry.message.text }}</div>
             <div :if="entry.parts" class="parts">
               <div :each="part in entry.parts" :key="part.i">
-                <div :if="part.kind === 'text'" class="text">{{ part.text }}</div>
+                <!-- Its Markdown drawn, escaped first — see `helpers/markdown.js`. -->
+                <div :if="part.kind === 'text'" class="text reply-md" :html="markdown(part.text)"
+                     @click="openOutside($event)"></div>
                 <!-- A fenced block: plain markup rather than a component, so a
                      token updates it in place instead of mounting it again —
                      see `lib/snippet.js`. Coloured as it streams. -->
@@ -1590,6 +1602,11 @@
     margin-bottom: .2rem;
   }
   article.user .text { color: var(--luu-accent); }
+  /* A prompt is marked as one by a bar before it, in the page's black — drawn,
+     not written, so a copy of the prompt is the prompt. */
+  article.user .text::before { content: "| "; color: var(--luu-black); }
+  /* The answer a step smaller than what was asked, so the question leads. */
+  article.assistant .text { font-size: .93em; }
   /* With no speaker label, a question and its answer read as a pair only if
      they sit closer to each other than to the next pair. */
   article.user { margin-bottom: .45rem; }

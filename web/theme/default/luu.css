@@ -39,6 +39,9 @@
      there, a lighter grey as on the tree's. */
   --luu-chat-line: #a8a8a8;
   --luu-chat-hover: #ececec;
+  /* The page's black: not the text's near-black, a grey-blue one for marks
+     beside the text — the bar before a prompt in the chat. */
+  --luu-black: #333a3e;
 
   /* The sixteen colours a shell names, from the author's own terminal
      (`joshua.itermcolors` in github.com/jgermade/sh). Without them xterm
