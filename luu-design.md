@@ -937,6 +937,12 @@ access = "execute"
   while a turn runs, a proposal waits at the gate or an approved job is open, and
   otherwise swaps the agency, ends the old worker and writes a header line, so the
   fold's *last header wins* says from where on the session ran somewhere else.
+  **Since 2026-10-22 a session may name an environment instead**: `[shell.<name>]`,
+  `[network.<name>]` and `[files.<name>]` lists in `allow`/`ask`/`deny` zones, and
+  `[environment.<name>]` naming one of each with its runtime — resolved into the same sandbox
+  and worker, `allow` only for now, and recorded by each list's name and SHA-256 in the
+  header's posture (`record::FORMAT` 21), which a resume compares. See
+  [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
   **Settings → Runtimes writes the postures table**, naming a policy file out of the
   ones at the top of the checkout and never one the page types, and the server
   replaces the postures it offers at once. Postures are no longer read only at

@@ -42,6 +42,7 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
         agency_for: None,
         describe_for: None,
         postures: Default::default(),
+        environments: Default::default(),
         postures_path: None,
         // `named`: a destination handed to the server, which it keeps. One
         // nobody chose would follow the `config.toml` of whoever runs the

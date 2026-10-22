@@ -182,8 +182,11 @@ fn agency_factory() -> luu::serve::AgencyFactory {
 /// `[worker]` block and nothing else, like the binary's own.
 fn describe_factory() -> luu::serve::DescribeFactory {
     Arc::new(
-        |policy: Option<std::path::PathBuf>, runtime: Option<agent_core::worker::Runtime>| {
-            let path = policy.unwrap_or_else(|| "luu.toml".into());
+        |chosen: Option<luu::serve::Chosen>, runtime: Option<agent_core::worker::Runtime>| {
+            let path = match chosen {
+                Some(luu::serve::Chosen::File(path)) => path,
+                _ => "luu.toml".into(),
+            };
             let config = agent_core::worker::WorkerConfig::from_file(&path).unwrap_or_default();
             luu::serve::Where {
                 policy: path.display().to_string(),
@@ -207,11 +210,12 @@ fn describe_factory() -> luu::serve::DescribeFactory {
 fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory {
     // The runtime is not honoured here: no test builds a worker, and what the
     // routes decide about a variant is decided before this is called.
-    Arc::new(move |policy: Option<std::path::PathBuf>, _runtime| {
+    Arc::new(move |chosen: Option<luu::serve::Chosen>, _runtime| {
         let base = base.clone();
         Box::pin(async move {
-            let policy = match policy {
-                Some(path) => SandboxPolicy::from_file(&path)?,
+            let policy = match chosen {
+                Some(luu::serve::Chosen::File(path)) => SandboxPolicy::from_file(&path)?,
+                Some(luu::serve::Chosen::Environment(environment)) => environment.policy.clone(),
                 None => SandboxPolicy::default(),
             };
             Ok(Agency::new(
@@ -296,6 +300,7 @@ async fn server_storing_selecting(
         agency_for: Some(agency_factory_rooted(base.clone())),
         describe_for: None,
         postures: Default::default(),
+        environments: Default::default(),
         postures_path: None,
     })
     .await
@@ -347,6 +352,7 @@ async fn server_over_tree(base: &std::path::Path, access: Access) -> String {
         agency_for: Some(agency_factory_rooted(base.to_path_buf())),
         describe_for: None,
         postures: Default::default(),
+        environments: Default::default(),
         postures_path: None,
     })
     .await
@@ -483,6 +489,7 @@ async fn server_with_postures(
         agency_for: Some(agency_factory()),
         describe_for: Some(describe_factory()),
         postures,
+        environments: Default::default(),
         postures_path: Some("config.toml".into()),
     })
     .await

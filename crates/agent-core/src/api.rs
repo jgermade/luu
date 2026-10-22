@@ -1446,6 +1446,7 @@ mod tests {
                     runtime: "docker (luu-worker:dev)".into(),
                     enforcement: "kernel".into(),
                     network: false,
+                    lists: None,
                 }),
                 repeat: Some(crate::context::Repeat::Always),
                 prune: Some(crate::context::Prune::Never),

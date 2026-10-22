@@ -382,6 +382,19 @@ struct File {
     /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     posture: BTreeMap<String, Posture>,
+    /// `[shell.<name>]`, `[network.<name>]`, `[files.<name>]`: what a session
+    /// may run, reach and touch, as lists in three zones — and
+    /// `[environment.<name>]`, one of each and where they run. What postures
+    /// become. See [`crate::policies`] and
+    /// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    shell: BTreeMap<String, crate::policies::Zones>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    network: BTreeMap<String, crate::policies::Zones>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    files: BTreeMap<String, crate::policies::FilesList>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    environment: BTreeMap<String, crate::policies::Environment>,
     /// `[ui]`: what the debug page looks like, as opposed to where a run
     /// sends. Here because it is the same kind of thing as the two above —
     /// something written on this machine — and because the one setting in it
@@ -714,6 +727,7 @@ pub struct Config {
     default: Option<String>,
     providers: BTreeMap<String, Profile>,
     postures: BTreeMap<String, Posture>,
+    policies: crate::policies::Policies,
     ui: Option<Ui>,
     terminal: Option<Terminal>,
     sessions: Option<Sessions>,
@@ -771,6 +785,8 @@ pub enum ConfigError {
     NoSuchProfile { path: String, name: String },
     #[error("there is no [posture.{name}] in {path}")]
     NoSuchPosture { path: String, name: String },
+    #[error("{path}: {message}")]
+    Policies { path: String, message: String },
     #[error(
         "{path}: [provider.{profile}] names engine = \"{engine}\", and there is no [engine.{engine}]"
     )]
@@ -833,6 +849,12 @@ impl Config {
             default: file.default,
             providers: file.provider,
             postures: file.posture,
+            policies: crate::policies::Policies {
+                shell: file.shell,
+                network: file.network,
+                files: file.files,
+                environments: file.environment,
+            },
             ui: file.ui,
             terminal: file.terminal,
             sessions: file.sessions,
@@ -847,6 +869,13 @@ impl Config {
         config.check_messages(path)?;
         config.check_hosts(path)?;
         config.check_server(path)?;
+        config
+            .policies
+            .check(config.postures.keys())
+            .map_err(|message| ConfigError::Policies {
+                path: path.to_string(),
+                message,
+            })?;
         Ok(config)
     }
 
@@ -1045,6 +1074,11 @@ impl Config {
             // only thing the page writes, and a writer that dropped the
             // postures would delete them the first time somebody saved a URL.
             posture: self.postures.clone(),
+            // The lists and environments too, for the same reason.
+            shell: self.policies.shell.clone(),
+            network: self.policies.network.clone(),
+            files: self.policies.files.clone(),
+            environment: self.policies.environments.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             sessions: self.sessions,
@@ -1102,6 +1136,7 @@ impl Config {
             default,
             providers,
             postures: self.postures.clone(),
+            policies: self.policies.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             sessions: self.sessions,
@@ -1229,6 +1264,11 @@ impl Config {
     /// Every posture the file names.
     pub fn postures(&self) -> &BTreeMap<String, Posture> {
         &self.postures
+    }
+
+    /// Every list and environment the file names, already checked.
+    pub fn policies(&self) -> &crate::policies::Policies {
+        &self.policies
     }
 
     /// One posture by name, or the refusal that says where to write it.

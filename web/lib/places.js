@@ -1,6 +1,7 @@
 // @ts-check
 /// Where a session's commands may run, as a list a picker offers: the
-/// server's own policy file and every `[posture.<name>]` in `config.toml`,
+/// server's own policy file, every `[posture.<name>]` in `config.toml` and
+/// every `[environment.<name>]` beside them,
 /// each on its own runtime first and — where it is contained — on every other
 /// container runtime after it. One list for the terminal's foot, which moves
 /// a session, and the session starter, which opens one. See
@@ -37,7 +38,7 @@ export function placeOptions(postures) {
     (places || []).map(place => option(name, label, place, places[0]?.runtime))
   return [
     ...variants("", "server default", postures?.own),
-    ...Object.keys(postures?.postures || {}).flatMap(name =>
+    ...[...Object.keys(postures?.postures || {}), ...(postures?.environments || [])].flatMap(name =>
       variants(name, name, postures?.places?.[name])),
   ]
 }

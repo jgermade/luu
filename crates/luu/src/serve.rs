@@ -315,6 +315,9 @@ struct App {
     /// session already on a posture keeps the agency it was built with. See
     /// `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
     postures: std::sync::RwLock<std::collections::BTreeMap<String, crate::provider::Posture>>,
+    /// `[environment.<name>]`, resolved when this run started. Settings does
+    /// not write them yet, so they do not move under it.
+    environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
@@ -422,15 +425,24 @@ pub struct Where {
     pub gap: Option<String>,
 }
 
-/// How the server describes a posture without building it: a policy file
-/// (`None` is the server's own), on a container runtime other than the one it
-/// names where one is given.
+/// What a session is built from, by the name it gave: a posture's policy
+/// file, or an environment out of `config.toml`. `None` where one is taken is
+/// the server's own policy file. See [`crate::policies`].
+#[derive(Clone)]
+pub enum Chosen {
+    File(PathBuf),
+    Environment(Arc<crate::policies::Resolved>),
+}
+
+/// How the server describes a posture without building it: a policy file or
+/// an environment (`None` is the server's own), on a container runtime other
+/// than the one it names where one is given.
 pub type DescribeFactory =
-    Arc<dyn Fn(Option<PathBuf>, Option<agent_core::worker::Runtime>) -> Where + Send + Sync>;
+    Arc<dyn Fn(Option<Chosen>, Option<agent_core::worker::Runtime>) -> Where + Send + Sync>;
 
 pub type AgencyFactory = Arc<
     dyn Fn(
-            Option<PathBuf>,
+            Option<Chosen>,
             Option<agent_core::worker::Runtime>,
         ) -> futures_util::future::BoxFuture<'static, Result<Agency>>
         + Send
@@ -658,6 +670,9 @@ pub struct StdioOptions {
     /// `[posture.<name>]` out of `config.toml`, read once when this run
     /// started.
     pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+    /// `[environment.<name>]` out of the same file, resolved, read at the same
+    /// moment. See [`crate::policies`].
+    pub environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
     /// Where the file is, for the page to name. `None` on a machine with no
     /// state directory.
     pub postures_path: Option<String>,
@@ -727,6 +742,7 @@ impl App {
             agency_for,
             describe_for,
             postures,
+            environments,
             postures_path,
             icons,
             temperature,
@@ -938,6 +954,7 @@ impl App {
             agency_for,
             describe_for,
             postures: std::sync::RwLock::new(postures),
+            environments,
             postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
@@ -1151,6 +1168,9 @@ pub struct ServeOptions {
     /// `[posture.<name>]` out of `config.toml`, read once when this run
     /// started.
     pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+    /// `[environment.<name>]` out of the same file, resolved, read at the same
+    /// moment. See [`crate::policies`].
+    pub environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
     /// Where the file is, for the page to name. `None` on a machine with no
     /// state directory.
     pub postures_path: Option<String>,
@@ -1278,6 +1298,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         agency_for,
         describe_for,
         postures,
+        environments,
         postures_path,
         temperature,
         seed,
@@ -1318,6 +1339,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         agency_for,
         describe_for,
         postures,
+        environments,
         postures_path,
         temperature,
         seed,
@@ -3946,6 +3968,9 @@ struct PosturesView {
     /// The posture the live session named, when it named one.
     running: Option<String>,
     postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+    /// The environments a session may name, beside the postures: each is in
+    /// `places` too. See [`crate::policies`].
+    environments: Vec<String>,
 }
 
 /// What a session may be allowed to do, by name.
@@ -4540,7 +4565,7 @@ async fn get_icon(State(state): State<AppRouterState>, Path(id): Path<String>) -
 /// substitutable. A host posture has no variants, because its sandbox names
 /// paths on this machine and an image's `[[worker.paths]]` are not here. See
 /// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
-fn variants(describe: &DescribeFactory, policy: Option<PathBuf>) -> Vec<Where> {
+fn variants(describe: &DescribeFactory, policy: Option<Chosen>) -> Vec<Where> {
     let declared = describe(policy.clone(), None);
     let contained = declared
         .runtime
@@ -4565,11 +4590,19 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         None => (Vec::new(), Default::default()),
         Some(describe) => {
             let postures = app.postures();
+            let environments = app.environments.clone();
             blocking(move || {
-                let variants = |policy: Option<PathBuf>| variants(&describe, policy);
+                let variants = |chosen: Option<Chosen>| variants(&describe, chosen);
                 let places = postures
                     .iter()
-                    .map(|(name, posture)| (name.clone(), variants(Some(posture.policy.clone()))))
+                    .map(|(name, posture)| {
+                        let file = Chosen::File(posture.policy.clone());
+                        (name.clone(), variants(Some(file)))
+                    })
+                    .chain(environments.iter().map(|(name, environment)| {
+                        let chosen = Chosen::Environment(environment.clone());
+                        (name.clone(), variants(Some(chosen)))
+                    }))
                     .collect();
                 (variants(None), places)
             })
@@ -4583,6 +4616,7 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         choosable: app.agency_for.is_some(),
         running: app.posture.lock().await.clone(),
         postures: app.postures(),
+        environments: app.environments.keys().cloned().collect(),
     })
     .into_response()
 }
@@ -4646,7 +4680,9 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
     let (postures, policies) = {
         let base = base.clone();
         blocking(move || {
-            let place = |policy: Option<PathBuf>| describe.as_ref().map(|d| d(policy, None));
+            let place = |policy: Option<PathBuf>| {
+                describe.as_ref().map(|d| d(policy.map(Chosen::File), None))
+            };
             let postures: std::collections::BTreeMap<_, _> = postures
                 .into_iter()
                 .map(|(name, posture)| {
@@ -4799,16 +4835,22 @@ async fn build_image(
     let named = {
         let base = base.clone();
         let postures = app.postures();
+        let environments = app.environments.clone();
         let describe = app.describe_for.clone();
         blocking(move || {
-            let place = |policy: PathBuf| describe.as_ref().map(|d| d(Some(policy), None));
+            let place = |chosen: Chosen| describe.as_ref().map(|d| d(Some(chosen), None));
             let places: Vec<Option<Where>> = postures
                 .values()
-                .map(|posture| place(posture.policy.clone()))
+                .map(|posture| place(Chosen::File(posture.policy.clone())))
                 .chain(
                     crate::runtimes::policy_files(&base)
                         .into_iter()
-                        .map(|file| place(base.join(file.path))),
+                        .map(|file| place(Chosen::File(base.join(file.path)))),
+                )
+                .chain(
+                    environments
+                        .values()
+                        .map(|environment| place(Chosen::Environment(environment.clone()))),
                 )
                 .collect();
             images_of(places.iter())
@@ -6778,18 +6820,23 @@ async fn posture_for(
             )),
         };
     };
+    // A name is a posture's or an environment's — never both, which loading
+    // the file refuses — so the order they are looked in decides nothing.
     let policy = match asked {
         None => None,
-        Some(name) => match app.postures().get(name) {
-            Some(posture) => Some(posture.policy.clone()),
-            None => {
+        Some(name) => match (app.postures().get(name), app.environments.get(name)) {
+            (Some(posture), _) => Some(Chosen::File(posture.policy.clone())),
+            (None, Some(environment)) => Some(Chosen::Environment(environment.clone())),
+            (None, None) => {
                 let where_from = app
                     .postures_path
                     .clone()
                     .unwrap_or_else(|| "config.toml".to_string());
                 return Err((
                     StatusCode::BAD_REQUEST,
-                    format!("there is no [posture.{name}] in {where_from}"),
+                    format!(
+                        "there is no [posture.{name}] nor [environment.{name}] in {where_from}"
+                    ),
                 ));
             }
         },
@@ -7986,6 +8033,7 @@ mod tests {
             agency_for: None,
             describe_for: None,
             postures: Default::default(),
+            environments: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),
@@ -8125,6 +8173,7 @@ mod tests {
             runtime: "host".into(),
             enforcement: "kernel".into(),
             network: false,
+            lists: None,
         };
         let mut view = SessionView::new("s", "mock", "mock");
         view.started_at = 1_700_000_000_000;
@@ -8190,12 +8239,14 @@ mod tests {
             runtime: "docker (luu-worker:dev)".into(),
             enforcement: "kernel".into(),
             network: false,
+            lists: None,
         };
         let host = record::Posture {
             name: None,
             runtime: "host".into(),
             enforcement: "kernel".into(),
             network: false,
+            lists: None,
         };
 
         let mut view = SessionView::new("s", "mock", "mock");
@@ -8263,6 +8314,7 @@ mod tests {
                     runtime: "host".into(),
                     enforcement: "kernel".into(),
                     network: false,
+                    lists: None,
                 },
             )
             .is_some(),
@@ -8288,6 +8340,7 @@ mod tests {
             runtime: "host".into(),
             enforcement: "kernel".into(),
             network: false,
+            lists: None,
         };
         let sending = mock_destination("mock", "mock");
         let mut view = SessionView::new("s", "mock", "mock");
@@ -8377,6 +8430,7 @@ mod tests {
             runtime: "host".into(),
             enforcement: "kernel".into(),
             network: false,
+            lists: None,
         };
         let sending = mock_destination("mock", "mock");
         let mut view = SessionView::new("s", "mock", "mock");

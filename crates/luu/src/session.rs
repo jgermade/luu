@@ -110,6 +110,10 @@ pub struct Agency {
     /// prefix, and a prefix assembled inside the image is one that shifts every
     /// time the image is rebuilt.
     pub worker: Option<Arc<Worker>>,
+    /// The shell, network and files lists this agency was resolved from, as a
+    /// recording names them. `None` only where nothing resolved one — a test's
+    /// hand-built agency. See [`crate::policies`].
+    lists: Option<record::Lists>,
 }
 
 impl Agency {
@@ -128,7 +132,14 @@ impl Agency {
             sandbox,
             limits,
             worker,
+            lists: None,
         }
+    }
+
+    /// The lists it was resolved from, for the header.
+    pub fn with_lists(mut self, lists: record::Lists) -> Self {
+        self.lists = Some(lists);
+        self
     }
 
     /// What holds a turn no approved plan holds. See [`Agency::floor`].
@@ -148,6 +159,7 @@ impl Agency {
             },
             enforcement: self.sandbox.enforcement().as_str().to_string(),
             network: self.sandbox.network(),
+            lists: self.lists.clone(),
         }
     }
 

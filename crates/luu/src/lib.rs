@@ -41,6 +41,7 @@ pub mod hosts;
 pub mod icons;
 pub mod log;
 pub mod models;
+pub mod policies;
 pub mod provider;
 pub mod runtimes;
 pub mod secret;
@@ -1253,11 +1254,16 @@ impl SandboxArgs {
     /// `host`, which is the run every measurement in this repository was made
     /// under.
     fn worker_config(&self, path: &std::path::Path) -> Result<WorkerConfig> {
-        let mut worker_config = match path.exists() {
+        let worker_config = match path.exists() {
             true => WorkerConfig::from_file(path)
                 .with_context(|| format!("reading {}", path.display()))?,
             false => WorkerConfig::default(),
         };
+        Ok(self.worker_over(worker_config))
+    }
+
+    /// The flags over a `[worker]` — a policy file's, or an environment's.
+    fn worker_over(&self, mut worker_config: WorkerConfig) -> WorkerConfig {
         if let Some(runtime) = self.worker {
             worker_config.runtime = runtime;
         }
@@ -1267,7 +1273,7 @@ impl SandboxArgs {
         if let Some(timeout_ms) = self.worker_timeout_ms {
             worker_config.timeout_ms = timeout_ms;
         }
-        Ok(worker_config)
+        worker_config
     }
 
     /// Where a posture would run, **without building it**: the `[worker]`
@@ -1322,26 +1328,22 @@ impl SandboxArgs {
                 missing: Some(format!("{error:#}")),
                 gap: None,
             },
-            Ok(config) => {
-                let contained = config.runtime.is_contained();
-                let missing = match config.runtime.program() {
-                    Some(program) if agent_core::worker::which(program).is_none() => {
-                        Some(format!("`{program}` is not installed on this machine"))
-                    }
-                    Some(_) if config.image.is_none() => {
-                        Some("the policy file names no [worker] image".to_string())
-                    }
-                    _ => None,
-                };
-                serve::Where {
-                    policy: shown(&path),
-                    runtime: config.runtime.as_str().to_string(),
-                    image: config.image.filter(|_| contained),
-                    missing,
-                    gap: config.runtime.cannot().map(str::to_string),
-                }
-            }
+            Ok(config) => where_of(shown(&path), config),
         }
+    }
+
+    /// The same, for an environment out of `config.toml`: its runtime and
+    /// image, and the flags over them.
+    pub(crate) fn describe_environment(
+        &self,
+        environment: &policies::Resolved,
+        runtime: Option<agent_core::worker::Runtime>,
+    ) -> serve::Where {
+        let mut config = self.worker_over(environment.worker.clone());
+        if let Some(runtime) = runtime {
+            config.runtime = runtime;
+        }
+        where_of(format!("[environment.{}]", environment.name), config)
     }
 
     /// The same resolution, against a policy file a *session* named rather than
@@ -1372,19 +1374,59 @@ impl SandboxArgs {
         args.resolve().await
     }
 
+    /// The same, for an environment out of `config.toml`: its lists in place
+    /// of a policy file, and every flag over them as it is over a file.
+    pub(crate) async fn resolve_environment(
+        &self,
+        environment: &policies::Resolved,
+        runtime: Option<agent_core::worker::Runtime>,
+    ) -> Result<Agency> {
+        let mut args = self.clone();
+        if runtime.is_some() {
+            args.worker = runtime;
+        }
+        args.resolve_from(Some(environment)).await
+    }
+
     async fn resolve(&self) -> Result<Agency> {
+        self.resolve_from(None).await
+    }
+
+    /// A policy file — the one named, or `luu.toml` where it is — or an
+    /// environment, with the flags over either, built into an agency that
+    /// knows which lists it came from.
+    async fn resolve_from(&self, environment: Option<&policies::Resolved>) -> Result<Agency> {
         let base = std::env::current_dir().context("the working directory")?;
 
-        let explicit = self.sandbox.is_some();
-        let path = self.policy_path()?;
-        let mut policy = match (explicit, path.exists()) {
-            // An explicit --sandbox that is not there is an error: it was asked
-            // for, and falling back to the default would be a wider sandbox
-            // than the one the user named.
-            (true, false) => anyhow::bail!("--sandbox {}: no such file", path.display()),
-            (_, true) => SandboxPolicy::from_file(&path)
-                .with_context(|| format!("reading {}", path.display()))?,
-            (false, false) => SandboxPolicy::default(),
+        let (mut policy, worker_config, label) = match environment {
+            Some(environment) => (
+                environment.policy.clone(),
+                self.worker_over(environment.worker.clone()),
+                String::new(),
+            ),
+            None => {
+                let explicit = self.sandbox.is_some();
+                let path = self.policy_path()?;
+                let policy = match (explicit, path.exists()) {
+                    // An explicit --sandbox that is not there is an error: it
+                    // was asked for, and falling back to the default would be a
+                    // wider sandbox than the one the user named.
+                    (true, false) => anyhow::bail!("--sandbox {}: no such file", path.display()),
+                    (_, true) => SandboxPolicy::from_file(&path)
+                        .with_context(|| format!("reading {}", path.display()))?,
+                    (false, false) => SandboxPolicy::default(),
+                };
+                // The lists' name: the file's, or what stands in for an
+                // absent one.
+                let label = match path.exists() {
+                    true => path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string()),
+                    false => "built-in".to_string(),
+                };
+                (policy, self.worker_config(&path)?, label)
+            }
         };
 
         for granted in &self.allow_read {
@@ -1407,7 +1449,12 @@ impl SandboxArgs {
             };
         }
 
-        let worker_config = self.worker_config(&path)?;
+        // What the lists were, read back off what the session is granted — the
+        // flags above included — for the header.
+        let lists = match environment {
+            Some(environment) => environment.lists(&policy),
+            None => policies::lists_of_file(&label, &policy),
+        };
 
         let sandbox = Sandbox::new(&policy, &base)?;
         let worker = match worker_config.runtime.is_worker() {
@@ -1452,7 +1499,29 @@ impl SandboxArgs {
                 .with_max_steps(self.max_tool_steps)
                 .with_tool_timeout(std::time::Duration::from_millis(worker_config.timeout_ms)),
             worker,
-        ))
+        )
+        .with_lists(lists))
+    }
+}
+
+/// Where a `[worker]` would run, said without starting it: its runtime, its
+/// image where it has one, and what this machine lacks for it. `label` is the
+/// file or the environment it came from.
+fn where_of(label: String, config: WorkerConfig) -> serve::Where {
+    let contained = config.runtime.is_contained();
+    let missing = match config.runtime.program() {
+        Some(program) if agent_core::worker::which(program).is_none() => {
+            Some(format!("`{program}` is not installed on this machine"))
+        }
+        Some(_) if config.image.is_none() => Some(format!("{label} names no image")),
+        _ => None,
+    };
+    serve::Where {
+        policy: label,
+        runtime: config.runtime.as_str().to_string(),
+        image: config.image.filter(|_| contained),
+        missing,
+        gap: config.runtime.cannot().map(str::to_string),
     }
 }
 
@@ -2478,22 +2547,30 @@ pub async fn run() -> Result<()> {
         // same file. A config that will not load is not a reason to refuse to
         // serve: it is already reported where the providers are, and a machine
         // with none simply offers none.
-        let (postures, postures_path, ui, resend, server) = match crate::provider::Config::load() {
-            Ok((config, path)) => (
-                config.postures().clone(),
-                path.map(|path| path.display().to_string()),
-                config.ui().cloned(),
-                config.resend().unwrap_or_default(),
-                config.server(),
-            ),
-            Err(_) => (
-                Default::default(),
-                None,
-                None,
-                Default::default(),
-                Default::default(),
-            ),
-        };
+        let (postures, environments, postures_path, ui, resend, server) =
+            match crate::provider::Config::load() {
+                Ok((config, path)) => (
+                    config.postures().clone(),
+                    config
+                        .policies()
+                        .resolve_all()
+                        .into_iter()
+                        .map(|(name, resolved)| (name, std::sync::Arc::new(resolved)))
+                        .collect::<std::collections::BTreeMap<_, _>>(),
+                    path.map(|path| path.display().to_string()),
+                    config.ui().cloned(),
+                    config.resend().unwrap_or_default(),
+                    config.server(),
+                ),
+                Err(_) => (
+                    Default::default(),
+                    Default::default(),
+                    None,
+                    None,
+                    Default::default(),
+                    Default::default(),
+                ),
+            };
         // `[server]`, under the flags and the `LUU_*` variables. A file that
         // did not load says nothing here, and the address decides as it
         // always has — the stricter reading, not a guess.
@@ -2600,25 +2677,42 @@ pub async fn run() -> Result<()> {
             // resolved. A posture added to `config.toml` is offered by the
             // next run.
             postures: postures.clone(),
+            environments: environments.clone(),
             postures_path: postures_path.clone(),
             describe_for: Some({
                 let args = sandbox_args.clone();
                 std::sync::Arc::new(
-                    move |policy: Option<std::path::PathBuf>,
+                    move |chosen: Option<serve::Chosen>,
                           runtime: Option<agent_core::worker::Runtime>| {
-                        args.describe_posture(policy.as_deref(), runtime)
+                        match chosen {
+                            None => args.describe_posture(None, runtime),
+                            Some(serve::Chosen::File(policy)) => {
+                                args.describe_posture(Some(&policy), runtime)
+                            }
+                            Some(serve::Chosen::Environment(environment)) => {
+                                args.describe_environment(&environment, runtime)
+                            }
+                        }
                     },
                 )
             }),
             agency_for: Some({
                 let args = sandbox_args.clone();
                 std::sync::Arc::new(
-                    move |policy: Option<std::path::PathBuf>,
+                    move |chosen: Option<serve::Chosen>,
                           runtime: Option<agent_core::worker::Runtime>| {
                         let args = args.clone();
-                        Box::pin(
-                            async move { args.resolve_posture(policy.as_deref(), runtime).await },
-                        )
+                        Box::pin(async move {
+                            match chosen {
+                                None => args.resolve_posture(None, runtime).await,
+                                Some(serve::Chosen::File(policy)) => {
+                                    args.resolve_posture(Some(&policy), runtime).await
+                                }
+                                Some(serve::Chosen::Environment(environment)) => {
+                                    args.resolve_environment(&environment, runtime).await
+                                }
+                            }
+                        })
                             as futures_util::future::BoxFuture<'static, Result<_>>
                     },
                 )
@@ -2743,6 +2837,7 @@ pub async fn run() -> Result<()> {
             agency_for: None,
             describe_for: None,
             postures: Default::default(),
+            environments: Default::default(),
             postures_path: None,
             temperature,
             seed,
