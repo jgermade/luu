@@ -20,6 +20,7 @@
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Select = await import("@web/theme/default/components/select.html")
   const Checkbox = await import("@web/theme/default/components/checkbox.html")
+  const Segmented = await import("@web/theme/default/components/segmented.html")
 
   // False once it should leave: `SubModal` plays the exit, then `close`
   // unmounts it — after the exit, which the sheet does not announce.
@@ -525,11 +526,9 @@
           <span :if="!sameWindow && row.hint" class="dim hint">{{ row.hint }}</span>
         </span>
         <span :if="row.kind === 'model'" class="tcell">
-          <select :if="row.group !== 'tools'" class="transport" :value="row.transport"
-                  @change="setTransport(row.name, $event.target.value)">
-            <option value="fenced">fenced</option>
-            <option value="native">native</option>
-          </select>
+          <Segmented :if="row.group !== 'tools'" size="sm" :label="'Tool calls of ' + row.name"
+                     :options="['fenced', 'native']" :model="row.transport"
+                     @change="setTransport(row.name, $event.detail)" />
         </span>
         <span :if="row.kind === 'model' && row.note" class="rnote" :class.warn="row.transport === 'native'">{{ row.note }}</span>
       </li>
@@ -585,17 +584,13 @@
     border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
   }
   .win.invalid { border-color: var(--luu-bad, #c62828); }
-  .transport {
-    font: inherit; font-size: 12px; padding: .2rem .3rem;
-    border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
-  }
   .models { list-style: none; margin: 0; padding: 0; }
   .models li.head {
     font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--luu-fg-muted);
     margin-top: .7rem; padding-bottom: .2rem; border-bottom: 1px solid var(--luu-border);
   }
   .models li.model {
-    display: grid; grid-template-columns: minmax(0, 1fr) 14rem 5rem; gap: .2rem .6rem;
+    display: grid; grid-template-columns: minmax(0, 1fr) 14rem 8.5rem; gap: .2rem .6rem;
     align-items: center; padding: .3rem 0;
   }
   .models li.model.off .mname { color: var(--luu-fg-muted); text-decoration: line-through; }

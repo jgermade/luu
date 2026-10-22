@@ -688,8 +688,14 @@ test("the models are grouped by their tools and written as exceptions", async ({
     // Three groups, in this order, and *not said* is not *no*.
     await expect(form.locator("li.head")).toHaveText(["Tools", "Not said", "No tools"])
     const row = name => form.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) })
-    await expect(row("coder:7b").locator("select")).toHaveCount(0)
-    await expect(row("old:3b").locator("select")).toHaveValue("fenced")
+    await expect(row("coder:7b").getByRole("radiogroup")).toHaveCount(0)
+    const calls = row("old:3b").getByRole("radiogroup", { name: "Tool calls of old:3b" })
+    await expect(calls.getByRole("radio", { name: "fenced" })).toHaveAttribute("aria-checked", "true")
+    // A choice by hand is the model's own, and says what it costs.
+    await calls.getByRole("radio", { name: "native" }).click()
+    await expect(calls.getByRole("radio", { name: "native" })).toHaveAttribute("aria-checked", "true")
+    await expect(row("old:3b")).toContainText("it will likely refuse the turn")
+    await calls.getByRole("radio", { name: "fenced" }).click()
     await expect(row("old:3b")).toContainText("up to 8192")
 
     // Past what the model holds is refused before it is sent.
