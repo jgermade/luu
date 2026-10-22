@@ -1257,6 +1257,55 @@ test("Appearance draws its previews: editor, snippets, layout and the files them
   await expect(page.locator(".theme-preview .big-tree img")).toHaveCount(0)
 })
 
+/**
+ * The editors' icon packs are looked for behind the answer, never in it: the
+ * section is usable at once — what was found last listed, the default and
+ * *+ Add a theme* live — and the page asks again until the look is done, when
+ * what it found joins the list. The look is kept in the state directory, so
+ * the next server starts with it. See
+ * `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`, appended
+ * 2026-10-22.
+ */
+test("the editors' icon packs are looked for in the background and kept", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  // The real server first: opening Appearance starts a look, and its answer
+  // is written beside config.toml.
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  await expect.poll(() => existsSync(join(home, "icon-themes.detected.json")), { timeout: 15_000 }).toBe(true)
+  const kept = JSON.parse(readFileSync(join(home, "icon-themes.detected.json"), "utf8"))
+  expect(Array.isArray(kept.found)).toBe(true)
+  expect(typeof kept.at).toBe("number")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
+
+  // Then a server that is still looking, and then has found one.
+  let asked = 0
+  await page.route("**/api/icon-theme", async route => {
+    if (route.request().method() !== "GET") return route.fallback()
+    asked++
+    const found = asked < 3 ? [] : [{ path: "~/.cursor/extensions/pub.icons-1.0.0", name: "Pub icons", source: "Cursor" }]
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ path: null, editable: true, named: null, loaded: null, folder: null, found, looking: asked < 3 }),
+    })
+  })
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  const list = page.locator(".theme-list")
+  await expect(list).toContainText("looking in the editors' extensions…")
+  // Nothing waits on the look.
+  await expect(list.getByRole("radio", { name: /The tree's own/ })).toBeEnabled()
+  await expect(list.getByRole("button", { name: /Add a theme/ })).toBeEnabled()
+  // Asked again until it is done, and what it found joins the list.
+  await expect(list.getByRole("radio", { name: /Pub icons/ })).toBeVisible({ timeout: 10_000 })
+  await expect(list).not.toContainText("looking in the editors' extensions…")
+  expect(asked).toBe(3)
+  await page.unroute("**/api/icon-theme")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
+})
+
 /** A zip of `files` (path → text), stored rather than deflated: what a person
  *  makes of a theme folder, without a library to make it here. */
 function zipOf(files) {

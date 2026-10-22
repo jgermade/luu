@@ -117,6 +117,8 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   await say("uno")
   await page.click('button[title^="New session"]')
   await page.getByRole("dialog", { name: "Sessions" }).locator('button:has-text("Start session")').click()
+  // The dialog plays its way out, and the page is the dialog's until it has gone.
+  await expect(dialog).toHaveCount(0)
   await expect(page.locator(".transcript article.user")).toHaveCount(0)
   await say("dos")
   await say("dos más")
@@ -135,6 +137,8 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   // once another is — it holds nothing to open.
   await page.click('button[title^="New session"]')
   await page.getByRole("dialog", { name: "Sessions" }).locator('button:has-text("Start session")').click()
+  // The dialog plays its way out, and the page is the dialog's until it has gone.
+  await expect(dialog).toHaveCount(0)
   await expect(page.locator(".transcript article.user")).toHaveCount(0)
   await rowsAre(["*0t", "2t", "2t"])
   await pickOther()

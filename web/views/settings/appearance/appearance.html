@@ -26,14 +26,38 @@
   let iconError = ""
   let iconBusy = false
   let iconAsking = true
+  // The server answers at once with the editors' themes as it last found
+  // them, and looks again behind the answer (`looking`): asked again until it
+  // has finished, so what it finds joins the list under the person instead of
+  // the section waiting on it. See
+  // `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`, appended
+  // 2026-10-22.
+  let following = null
+  const follow = view => {
+    clearTimeout(following)
+    if (!view?.looking) return
+    following = setTimeout(() => {
+      loadIconTheme()
+        .then(next => {
+          // A choice made meanwhile answered with its own view; this one only
+          // adds what the look found.
+          iconView = { ...iconView, found: next.found, looking: next.looking }
+          if (!next.looking) askPreviews()
+          follow(next)
+        })
+        .catch(() => {})
+    }, 1500)
+  }
+  $destroyed(() => clearTimeout(following))
   loadIconTheme()
-    .then(view => { iconView = view })
+    .then(view => { iconView = view; follow(view) })
     .catch(error => { iconError = `${error.message || error}` })
     .finally(() => { iconAsking = false })
 
   const took = result => {
     if (result.ok) {
       iconView = result.view
+      follow(result.view)
       iconError = ""
       // A theme just imported has no drawing yet: asked again.
       askPreviews()
@@ -389,7 +413,7 @@
         drop any of them on this frame.
       </span>
 
-      <span :if="detected.length" class="group-name">Detected</span>
+      <span :if="detected.length || iconView?.looking" class="group-name">Detected</span>
       <button :each="theme in detected" :key="theme.path" type="button" role="radio" class="theme-option"
               :aria-checked="theme.path === iconView?.named ? 'true' : 'false'"
               :disabled="!iconView?.editable || iconBusy" :title="theme.path"
@@ -399,6 +423,9 @@
         <span class="tag">{{ theme.source }}</span>
       </button>
       <span :if="iconAsking" class="dim small">asking the server…</span>
+      <!-- What was found last is listed above; this is the look for more,
+           which nothing waits on. -->
+      <span :if="iconView?.looking" class="dim small looking">looking in the editors' extensions…</span>
 
     </div>
 

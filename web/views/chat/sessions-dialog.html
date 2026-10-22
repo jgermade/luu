@@ -156,7 +156,9 @@
 
 <!-- Accent-headed: a session starts here — the one dialog of the page that
      begins something rather than settles it. A bar whatever its size. -->
-<TabModal open title="Sessions" head="accent" tinted :tabs="TABS" :model="tab" width="38rem" height="26rem"
+<!-- Open until `closeSessions` says it is leaving, so it plays its exit
+     before it is unmounted. -->
+<TabModal :open="!ui.sessionsLeaving" title="Sessions" head="accent" tinted :tabs="TABS" :model="tab" width="38rem" height="26rem"
           @change="choose($event.detail)" @close="closeSessions()">
 
   <!-- ---- new session ---- -->

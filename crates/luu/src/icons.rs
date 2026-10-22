@@ -377,7 +377,7 @@ fn theme_json_in(dir: &Path) -> Option<PathBuf> {
 }
 
 /// A theme this machine has, for the preferences panel to offer.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Found {
     /// As it would be written into `config.toml`: `~/…` when it is under the
     /// home directory, so the file reads the same on every machine that has
@@ -385,7 +385,7 @@ pub struct Found {
     pub path: String,
     pub name: String,
     /// Where it was found: `luu` for an import, or the editor's name.
-    pub source: &'static str,
+    pub source: String,
 }
 
 /// The editors whose extension directories are looked in, relative to the
@@ -400,31 +400,40 @@ const EDITORS: &[(&str, &str)] = &[
 
 /// Every icon theme on this machine: the imports first, then each editor's
 /// installed extensions that declare one, newest version only.
-///
-/// Only a directory's own children are read, and only their `package.json`
-/// (or, for an import, the theme JSON), so this is cheap enough to run each
-/// time the panel opens.
-pub fn discover(imported: Option<&Path>, home: Option<&Path>) -> Vec<Found> {
-    let mut found = Vec::new();
-    if let Some(dir) = imported {
-        let mut here: Vec<Found> = children(dir)
-            .filter(|path| !hidden(path))
-            .filter_map(|path| {
-                let (_, label) = locate(&path).ok()?;
-                let name = label.unwrap_or_else(|| file_name(&path));
-                Some(Found {
-                    path: tilde(&path, home),
-                    name,
-                    source: "luu",
-                })
+pub fn discover(imported_into: Option<&Path>, home: Option<&Path>) -> Vec<Found> {
+    let mut found = imported_into
+        .map(|dir| imported(dir, home))
+        .unwrap_or_default();
+    found.extend(home.map(detected).unwrap_or_default());
+    found
+}
+
+/// The themes imported into luu's own folder: a handful, in luu's own state
+/// directory, read as the page asks.
+pub fn imported(dir: &Path, home: Option<&Path>) -> Vec<Found> {
+    let mut here: Vec<Found> = children(dir)
+        .filter(|path| !hidden(path))
+        .filter_map(|path| {
+            let (_, label) = locate(&path).ok()?;
+            let name = label.unwrap_or_else(|| file_name(&path));
+            Some(Found {
+                path: tilde(&path, home),
+                name,
+                source: "luu".to_string(),
             })
-            .collect();
-        here.sort_by(|a, b| a.name.cmp(&b.name));
-        found.extend(here);
-    }
-    let Some(home) = home else {
-        return found;
-    };
+        })
+        .collect();
+    here.sort_by(|a, b| a.name.cmp(&b.name));
+    here
+}
+
+/// The themes each editor has installed: one `package.json` read per
+/// extension of every editor in [`EDITORS`]. That is the read that has taken
+/// over a minute on a disk whose endpoint security holds every open, so
+/// nothing a person waits on calls this — [`Detected`] does, on a thread of
+/// its own, and keeps the answer.
+pub fn detected(home: &Path) -> Vec<Found> {
+    let mut found = Vec::new();
     for (relative, source) in EDITORS {
         // Newest version of each extension: an editor keeps the old directory
         // around for a while after an update.
@@ -449,13 +458,142 @@ pub fn discover(imported: Option<&Path>, home: Option<&Path>) -> Vec<Found> {
             .map(|(_, path, name)| Found {
                 path: tilde(&path, Some(home)),
                 name,
-                source,
+                source: source.to_string(),
             })
             .collect();
         here.sort_by(|a, b| a.name.cmp(&b.name));
         found.extend(here);
     }
     found
+}
+
+/// The editors' icon themes as last found: kept in memory and in a file in
+/// the state directory, and looked for again on a thread of its own.
+///
+/// **A person never waits on the editors' folders.** Settings is answered at
+/// once with what was found last — in this process, or in the file a previous
+/// one left — and [`Detected::refresh`] starts a new look behind it, which the
+/// page follows until it is done. The file is what makes the first answer after
+/// a restart a list rather than a wait. See
+/// `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`, appended
+/// 2026-10-22.
+pub struct Detected {
+    file: Option<PathBuf>,
+    state: std::sync::Mutex<Looked>,
+}
+
+#[derive(Default)]
+struct Looked {
+    /// `None` until a look has finished, here or in the file.
+    found: Option<Vec<Found>>,
+    /// When the last look finished, in milliseconds since the epoch.
+    at: Option<u64>,
+    looking: bool,
+}
+
+/// What the file holds.
+#[derive(Serialize, Deserialize)]
+struct Saved {
+    at: u64,
+    found: Vec<Found>,
+}
+
+/// What a caller is told: the list as it stands, and whether a look is on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub found: Option<Vec<Found>>,
+    pub looking: bool,
+    pub at: Option<u64>,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+impl Detected {
+    /// What `file` holds, if it holds a list; nothing looked for yet.
+    pub fn new(file: Option<PathBuf>) -> Self {
+        let saved = file
+            .as_deref()
+            .and_then(|file| std::fs::read(file).ok())
+            .and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok());
+        Self {
+            file,
+            state: std::sync::Mutex::new(Looked {
+                found: saved.as_ref().map(|saved| saved.found.clone()),
+                at: saved.map(|saved| saved.at),
+                looking: false,
+            }),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Looked> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        let state = self.lock();
+        Snapshot {
+            found: state.found.clone(),
+            looking: state.looking,
+            at: state.at,
+        }
+    }
+
+    /// Looks again on a thread of its own, unless a look is on or one
+    /// finished within `fresh`. Returns whether it started one. The answer
+    /// replaces the list and is written to the file; a file that cannot be
+    /// written leaves the list in memory, which is all a page needs.
+    pub fn refresh(
+        self: &std::sync::Arc<Self>,
+        home: Option<PathBuf>,
+        fresh: std::time::Duration,
+    ) -> bool {
+        {
+            let mut state = self.lock();
+            let recent = state
+                .at
+                .is_some_and(|at| now_ms().saturating_sub(at) < fresh.as_millis() as u64);
+            if state.looking || recent {
+                return false;
+            }
+            state.looking = true;
+        }
+        let this = std::sync::Arc::clone(self);
+        let started = std::thread::Builder::new()
+            .name("luu-icon-themes".into())
+            .spawn(move || {
+                let found = home.as_deref().map(detected).unwrap_or_default();
+                let at = now_ms();
+                if let Some(file) = &this.file {
+                    let saved = Saved {
+                        at,
+                        found: found.clone(),
+                    };
+                    if let Ok(bytes) = serde_json::to_vec_pretty(&saved) {
+                        // Beside it first, then over it: a reader never sees half.
+                        let beside = file.with_extension("json.part");
+                        if std::fs::write(&beside, bytes).is_ok() {
+                            let _ = std::fs::rename(&beside, file);
+                        }
+                    }
+                }
+                let mut state = this.lock();
+                state.found = Some(found);
+                state.at = Some(at);
+                state.looking = false;
+            });
+        if started.is_err() {
+            self.lock().looking = false;
+            return false;
+        }
+        true
+    }
 }
 
 /// The label of the icon theme an extension declares, if it declares one.
@@ -789,12 +927,56 @@ mod tests {
         extension(&imported, "mine", "Mine");
 
         let found = discover(Some(&imported), Some(home.path()));
-        let names: Vec<_> = found.iter().map(|f| (f.name.as_str(), f.source)).collect();
+        let names: Vec<_> = found
+            .iter()
+            .map(|f| (f.name.as_str(), f.source.as_str()))
+            .collect();
         assert_eq!(names, vec![("Mine", "luu"), ("Great", "VS Code")]);
         assert_eq!(
             found[1].path,
             "~/.vscode/extensions/pub.great-icons-2.1.121"
         );
+    }
+
+    /// A look runs behind the caller, keeps its answer in the file, and a
+    /// second `Detected` over the same file starts with that answer — no look,
+    /// no wait.
+    #[test]
+    fn detected_themes_are_looked_for_behind_and_kept() {
+        let home = tempdir::Dir::new("icons-detected");
+        extension(
+            &home.path().join(".cursor/extensions"),
+            "pub.icons-1.0.0",
+            "Pub",
+        );
+        let file = home.path().join("icon-themes.detected.json");
+
+        let detected = std::sync::Arc::new(Detected::new(Some(file.clone())));
+        assert_eq!(detected.snapshot().found, None);
+        let fresh = std::time::Duration::from_secs(60);
+        assert!(detected.refresh(Some(home.path().to_path_buf()), fresh));
+        // A second ask while it looks starts nothing.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while detected.snapshot().looking {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the look never finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let found = detected.snapshot().found.expect("an answer");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (found[0].name.as_str(), found[0].source.as_str()),
+            ("Pub", "Cursor")
+        );
+        // Fresh: asked again at once, it does not look again.
+        assert!(!detected.refresh(Some(home.path().to_path_buf()), fresh));
+
+        let restarted = Detected::new(Some(file));
+        let snapshot = restarted.snapshot();
+        assert_eq!(snapshot.found, Some(found));
+        assert!(!snapshot.looking);
     }
 
     fn picked(dir: &Path) -> Vec<(String, Vec<u8>)> {

@@ -35,6 +35,10 @@ export const ui = $reactive({
   /// the `+` and the clock in the chat's head each open it on their own. See
   /// `RECORD/2026-10-21.the-design-system-applied.completed.md`.
   sessions: null,
+  /// The sessions dialog on its way out: `:open` goes false and it plays its
+  /// exit, and `sessions` goes `null` — unmounting it — once that is over. A
+  /// dialog unmounted at once has no exit to play.
+  sessionsLeaving: false,
   /// Two columns at a width that has room for three, chosen from the chat's
   /// head for as long as the page is open. Not a preference: `General →
   /// Columns` is the setting, and this is the button beside the work.
@@ -76,20 +80,42 @@ export function showSection(section) {
 }
 
 export function openHistory() {
+  stayOpen()
   ui.sessions = "history"
 }
 
 /// The other tab, from inside the dialog. New prepares the starter the first
 /// time it is shown, as the `+` would have.
 export function showSessionsTab(tab) {
+  stayOpen()
   ui.sessions = tab
   if (tab === "new" && !ui.starter) openStarter()
 }
 
+// The way out, in two steps: the dialog is told it is closed and plays its
+// exit, and is unmounted when the exit is over — the theme's own duration, so
+// reduced motion is no wait at all.
+let leaving = null
+const exitMs = () => {
+  const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
+  return Number.isFinite(ms) ? ms : 0
+}
+/// Opened again while it was leaving: it stays.
+function stayOpen() {
+  clearTimeout(leaving)
+  ui.sessionsLeaving = false
+}
+
 export function closeSessions() {
-  ui.sessions = null
-  ui.starter = null
-  ui.continuing = false
+  if (!ui.sessions || ui.sessionsLeaving) return
+  ui.sessionsLeaving = true
+  clearTimeout(leaving)
+  leaving = setTimeout(() => {
+    ui.sessions = null
+    ui.starter = null
+    ui.continuing = false
+    ui.sessionsLeaving = false
+  }, exitMs())
 }
 
 // ---- is the model actually there ------------------------------------------
@@ -137,6 +163,7 @@ export async function checkModel() {
 // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
 
 export async function openStarter(provider) {
+  stayOpen()
   ui.sessions = "new"
   if (!state.providers) await loadProviders()
   // What this session may be allowed to do, offered beside where it sends —

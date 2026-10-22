@@ -1261,6 +1261,9 @@ somebody names one, the same way the sandbox waits to be told where `~/.cargo` i
 read into an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
 reaches the filesystem. **Settings → Appearance → Icons pack chooses it** — the tree's own shapes, then the themes
 imported into `<state dir>/icon-themes/`, then VS Code, VSCodium, Cursor and Windsurf extensions —
+**looked for behind the answer, never in it**: `GET /api/icon-theme` lists the editors' themes as
+last found, kept in `<state dir>/icon-themes.detected.json` so a restart starts with them, and a
+thread of its own looks again (at most once a minute) while the page asks until `looking` is false —
 each drawn beside the list (`GET /api/icon-theme/previews`, one request for all of them), and *Add a
 theme* imports a folder, a zip (opened in the page) or a theme JSON with its icons, picked or
 dropped on the frame; one that draws nothing is refused. With none chosen the tree draws its own
@@ -2234,7 +2237,9 @@ the stuck request) from a blocked runtime (the tick stops). See
 `config.toml` (`load_config`, `config_path`, `write_config`), the icon-theme
 routes, and what `/api/engines` asks the disk. On 2026-09-30 a read of a
 `package.json` per installed extension took 147 s, and nothing else was
-served while it ran. On the pool the same wait is one slow request. The
+served while it ran. On the pool the same wait is one slow request — and
+that read is no longer a request at all: the editors' themes are looked for
+on a thread of their own and kept (`icons::Detected`). The
 session store's SQLite writes are the exception still on the runtime. See
 [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
 

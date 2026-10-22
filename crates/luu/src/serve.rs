@@ -322,6 +322,9 @@ struct App {
     /// Settings writes a new one — see [`put_icon_theme`]. The page follows
     /// through the manifest's `revision`, which is in every icon's URL.
     icons: std::sync::RwLock<Arc<crate::icons::Theme>>,
+    /// The editors' icon themes as last found, looked for again behind
+    /// whoever asks — see [`crate::icons::Detected`].
+    detected: Arc<crate::icons::Detected>,
     /// The model servers this server started, and the downloads of luu's own
     /// copies. Children of this process — see [`Serving::run`] for how they
     /// stop with it, and `crate::engines` for the rest.
@@ -937,6 +940,7 @@ impl App {
             postures: std::sync::RwLock::new(postures),
             postures_path,
             icons: std::sync::RwLock::new(icons),
+            detected: Arc::new(crate::icons::Detected::new(detected_file())),
             engines: Arc::default(),
             tasks: Arc::default(),
             inflight: Arc::default(),
@@ -4164,7 +4168,36 @@ struct IconThemeView {
     error: Option<String>,
     /// Where an import is written.
     folder: Option<String>,
+    /// The imports, then the editors' themes as last found.
     found: Vec<crate::icons::Found>,
+    /// Whether the editors' folders are being looked in now: the page asks
+    /// again until they are not, and the list grows under it.
+    looking: bool,
+}
+
+/// How long a look in the editors' folders answers for before Settings opening
+/// again starts another. Extensions are installed by hand, rarely.
+const DETECTED_FRESH: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `<state dir>/icon-themes.detected.json`, where the last look is kept.
+fn detected_file() -> Option<std::path::PathBuf> {
+    Some(
+        crate::provider::Config::path_for_writing()?
+            .parent()?
+            .join("icon-themes.detected.json"),
+    )
+}
+
+/// The imports, read now, and the editors' themes as last found — never a
+/// look in the editors' folders, which is [`crate::icons::Detected`]'s.
+fn known_icon_themes(state: &AppRouterState) -> (Vec<crate::icons::Found>, bool) {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut found = icon_theme_folder()
+        .map(|folder| crate::icons::imported(&folder, home.as_deref()))
+        .unwrap_or_default();
+    let detected = state.app.detected.snapshot();
+    found.extend(detected.found.unwrap_or_default());
+    (found, detected.looking)
 }
 
 /// `<state dir>/icon-themes`, beside `config.toml`.
@@ -4190,6 +4223,9 @@ fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
     };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let folder = icon_theme_folder();
+    // Behind the answer, never in it: the list below is what was found last.
+    state.app.detected.refresh(home, DETECTED_FRESH);
+    let (found, looking) = known_icon_themes(state);
     IconThemeView {
         path: path
             .or_else(crate::provider::Config::path_for_writing)
@@ -4209,7 +4245,8 @@ fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
                 .unwrap_or_else(|| "icon theme".into())
         }),
         error,
-        found: crate::icons::discover(folder.as_deref(), home.as_deref()),
+        found,
+        looking,
         folder: folder.map(|folder| folder.display().to_string()),
     }
 }
@@ -4230,17 +4267,15 @@ async fn get_icon_theme(State(state): State<AppRouterState>) -> Response {
 /// about themes and nothing else. What a theme may point at is already
 /// confined to its own folder by [`crate::icons::load`]. See
 /// `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`.
-async fn get_icon_theme_previews() -> Response {
-    let answer = blocking(|| {
+async fn get_icon_theme_previews(State(state): State<AppRouterState>) -> Response {
+    let answer = blocking(move || {
         let named = crate::provider::Config::load()
             .ok()
             .and_then(|(config, _)| config.ui().and_then(|ui| ui.icon_theme.clone()));
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        let folder = icon_theme_folder();
-        let mut paths: Vec<String> = crate::icons::discover(folder.as_deref(), home.as_deref())
-            .into_iter()
-            .map(|found| found.path)
-            .collect();
+        // The themes the list offers as it stands; the page asks again once a
+        // look in the editors' folders has found more.
+        let (found, _) = known_icon_themes(&state);
+        let mut paths: Vec<String> = found.into_iter().map(|found| found.path).collect();
         if let Some(named) = named.map(|named| named.display().to_string())
             && !paths.contains(&named)
         {
@@ -7953,6 +7988,7 @@ mod tests {
             postures: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
+            detected: Arc::new(crate::icons::Detected::new(None)),
             engines: Arc::default(),
             tasks: Arc::default(),
             inflight: Arc::default(),

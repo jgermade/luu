@@ -424,6 +424,14 @@ test("choosing another provider in the dialog lists that provider's models", asy
   // A session starts here: the accent's head, not the dark island.
   await expect(starter.locator("header")).toHaveClass(/\btone-accent\b/)
   await expect(starter.locator("header")).not.toHaveAttribute("data-tone", "dark")
+  // It leaves as it came, with an animation, and is unmounted after: ESC
+  // plays the way out before the dialog goes.
+  await starter.evaluate(d => Promise.all(d.getAnimations().map(a => a.finished)))
+  await page.keyboard.press("Escape")
+  await expect(starter).toHaveClass(/\bleaving\b/)
+  await expect(starter).toHaveCount(0)
+  await page.click('.chat .acts button[title*="New session"]')
+  await expect(starter).toBeVisible()
   const provider = starter.locator("select").first()
   const model = starter.locator('input[list="starter-models"]')
 
