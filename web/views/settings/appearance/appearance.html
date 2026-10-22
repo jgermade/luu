@@ -327,7 +327,7 @@
 </section>
 
 <section class="pane-group files-group">
-  <h3>Files Theme</h3>
+  <h3>Icons pack</h3>
   <!-- The icon theme, chosen here rather than only named in `config.toml`. It
        is written to that file and applied live, which is the one thing in this
        section that is not in `localStorage`: the server is what serves the icons,
@@ -352,7 +352,7 @@
        @dragleave="dragLeave()" @drop="dropped($event)">
     <!-- The options: the default, then luu's own, then the editors', then
          a way to add one. -->
-    <div class="theme-list" role="radiogroup" aria-label="Files theme" @mouseleave="previewing = null">
+    <div class="theme-list" role="radiogroup" aria-label="Icons pack" @mouseleave="previewing = null">
       <span class="group-name">Default</span>
       <button type="button" role="radio" class="theme-option"
               :aria-checked="!iconView?.named ? 'true' : 'false'"
@@ -497,9 +497,12 @@
   .mini-editor, .mini-chat { box-sizing: border-box; height: 9rem; overflow: hidden; }
   /* Each preview at the size chosen for what it shows. */
   .mini-chat-scaled { display: flex; flex-direction: column; gap: .5rem; zoom: var(--luu-chat-zoom, 1); }
-  .big-tree { zoom: var(--luu-tree-zoom, 1); }
+  /* The rows take the size, and the list does not: its height is the twelve
+     rows at the default size, so choosing another moves nothing under it, and
+     a larger one scrolls. */
+  .big-tree li { zoom: var(--luu-tree-zoom, 1); }
   .size-choice { margin-top: var(--luu-space-1); }
-  .tree-size { justify-content: flex-start; }
+  .tree-size { justify-content: flex-start; margin-top: var(--luu-space-4); }
 
   /* A file as the content column draws it, in the editor's tone: the island
      re-points every colour, so these rules name tokens and not colours. */
@@ -690,7 +693,12 @@
   .theme-preview { transition: opacity var(--luu-duration) ease; }
   .theme-preview.applying { opacity: .5; }
   .preview-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .big-tree { margin: 0; padding: .5rem .25rem; list-style: none; font-size: 13px; }
+  .big-tree {
+    box-sizing: border-box;
+    height: calc(12 * 1.6rem + 1rem);
+    overflow: auto;
+    margin: 0; padding: .5rem .25rem; list-style: none; font-size: 13px;
+  }
   .big-tree li { display: flex; align-items: center; gap: .3rem; height: 1.6rem; border-radius: 4px; }
   .big-tree img, .big-tree .glyph { width: 16px; height: 16px; flex: none; }
   /* The sprite's caret points right: a closed folder as it is, an open one

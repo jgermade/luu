@@ -4,6 +4,7 @@
   // moved to Appearance on 2026-10-21. See
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
   const { workspace, openPicker } = await import("@web/lib/workspace.js")
+  const { state } = await import("@web/lib/store.js")
 </script>
 
 <div class="general-pane pane-main">
@@ -28,8 +29,6 @@
     <dt>Working dir</dt>
     <dd>
       <span class="path">{{ workspace.base || "—" }}</span>
-      <!-- The folder's own name, as the picker and a host's address name it. -->
-      <span :if="workspace.base" class="dim path">(:{{ workspace.base.split("/").filter(Boolean).pop() }})</span>
     </dd>
     <dt>Looking at</dt>
     <dd>
@@ -40,6 +39,17 @@
       The folder <code>luu serve</code> was started in is the ceiling; what is
       chosen is a subdirectory of it. Nothing here widens what the panels can
       reach — the sandbox already decided that.
+    </dd>
+    <!-- luu's own directory, the one every path of luu's own is written
+         under as `:luu` — so this is where the name is given. -->
+    <dt>Config dir</dt>
+    <dd>
+      <span class="path">{{ state.settings?.home || "—" }}</span>
+      <span :if="state.settings?.home" class="dim path">(:luu)</span>
+    </dd>
+    <dd class="note">
+      Where <code>config.toml</code>, the sessions, the keys and the logs are kept.
+      Chosen on the first run; <code>LUU_HOME</code> moves it.
     </dd>
   </dl>
 </section>

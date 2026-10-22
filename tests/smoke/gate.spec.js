@@ -421,6 +421,9 @@ test("choosing another provider in the dialog lists that provider's models", asy
   await page.click('.chat .acts button[title*="New session"]')
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
+  // A session starts here: the accent's head, not the dark island.
+  await expect(starter.locator("header")).toHaveClass(/\btone-accent\b/)
+  await expect(starter.locator("header")).not.toHaveAttribute("data-tone", "dark")
   const provider = starter.locator("select").first()
   const model = starter.locator('input[list="starter-models"]')
 

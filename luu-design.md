@@ -1259,7 +1259,7 @@ this machine already has, named by `[ui] icon-theme` in `config.toml` — an ext
 or a theme JSON — and nothing is vendored: the page draws its own file and folder until
 somebody names one, the same way the sandbox waits to be told where `~/.cargo` is. The theme is
 read into an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
-reaches the filesystem. **Settings → Appearance → Files Theme chooses it** — the tree's own shapes, then the themes
+reaches the filesystem. **Settings → Appearance → Icons pack chooses it** — the tree's own shapes, then the themes
 imported into `<state dir>/icon-themes/`, then VS Code, VSCodium, Cursor and Windsurf extensions —
 each drawn beside the list (`GET /api/icon-theme/previews`, one request for all of them), and *Add a
 theme* imports a folder, a zip (opened in the page) or a theme JSON with its icons, picked or
@@ -1722,23 +1722,32 @@ by a checkbox the program pre-ticked. A key typed into the form is written to a
 file before `config.toml` is, and the file holds a path, for the reason the
 provider section gives.
 
-**The form connects before it writes.** It is two halves: *where it is* —
-name, backend, URL, and for `openai` and `anthropic` an optional key — and, once **Connect**
-has spoken to it, *what it serves*. Connect sends the candidate as typed to
+**The form connects before it writes.** It is a sheet over Settings — the
+theme's `SubModal` — with two tabs: **Connection**, *where it is* — name,
+backend, URL, and for `openai` and `anthropic` an optional key, which luu writes
+to a file of its own and the form never names — and **Models**, *what it
+serves*, shut until **Connect** has spoken to it. Connect sits in the sheet's
+foot, a step back from *Add provider*, and sends the candidate as typed to
 `POST /api/providers/probe`, which answers with the list, what the server says
 of each model (`Backend::facts`), or the server's own refusal — a `401` lands
 on the key field — and **writes nothing**: a provider being added is not in the
-file, and one being edited is in it with the values being replaced. On an
-answer the first half folds to one line with *Change* under it, and the models
-follow, grouped by what the server said of their tools — *tools*, *not said*,
-*no tools*, because a server that says nothing has not said *no*. Each has a
-window, prefilled and capped by what the server reports: on Ollama a choice
-under the training maximum (`/api/show`), on llama-server or vLLM the server's
-own `n_ctx`, which a smaller number only budgets under. The default is a radio
-that can be cleared — none is *the first listed*. Models outside *tools* get a
-transport select, fenced or native, and the models without tools can be left
-out of the pickers. *Save without connecting* stays, for a server that is off.
-An edit opens folded and asks the saved provider the same, through
+file, and one being edited is in it with the values being replaced. An answer
+opens the Models tab, with the count of what it lists, and the connection stays
+as it was typed; changing what it was asked with shuts the tab again. The models
+are grouped by what the server said of their tools — *tools*, *not said*, *no
+tools*, because a server that says nothing has not said *no*. Each has a window,
+prefilled and capped by what the server reports: on Ollama a choice under the
+training maximum (`/api/show`), on llama-server or vLLM the server's own
+`n_ctx`, which a smaller number only budgets under. The default is a radio that
+can be cleared — none is *the first listed* — and what the server says of it
+fills the Anthropic keys' placeholders: the thinking and effort it takes, and
+the cap a reply gets when nothing is typed, which a model that takes less than
+the profile's cap is written as an exception of its own. Models outside *tools*
+get a transport select, fenced or native, and the models without tools can be
+left out of the pickers. Saving without connecting stays, for a server that is
+off. **The form does not make a provider the default** — the list does, with
+*make default*, and opens the form only for a remote host to be typed. An edit
+asks the saved provider the same, through
 `GET /api/providers/{name}/models?facts=1` — the picker's route, which without
 `facts` pays no per-model request and lists only what is switched on. Behind
 the loopback door, because it spends the key. See

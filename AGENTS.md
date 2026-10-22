@@ -154,10 +154,10 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # On a first visit it asks which folder to look at: a subdirectory of the one
 # `serve` was started in, which is the ceiling and is not negotiable from the
 # browser. Settings has sections down the side — General (the workspace),
-# Appearance (editor, chat, layout, files theme, sizes), Engines, Models, Runtimes and
+# Appearance (editor, chat, layout, icons pack, sizes), Engines, Models, Runtimes and
 # Sessions (resend and authority) — and everything in Appearance a person can
 # *change* is kept in `localStorage`, because it is a fact about the screen rather
-# than about the run. The files theme is the exception: it is `[ui] icon-theme`
+# than about the run. The icons pack is the exception: it is `[ui] icon-theme`
 # in `config.toml`, because the server serves the icons, and with none chosen the
 # page says the tree's own shapes are a fallback and names that key.
 #

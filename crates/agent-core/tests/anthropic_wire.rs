@@ -383,8 +383,13 @@ async fn a_refusal_before_the_stream_is_the_servers_own_words() {
 #[tokio::test]
 async fn the_listing_says_each_models_limit() {
     const MODELS: &str = "{\"data\":[\
-        {\"id\":\"claude-opus-5-5\",\"type\":\"model\",\"max_input_tokens\":1000000,\"max_tokens\":128000,\"capabilities\":{\"thinking\":{\"supported\":true}}},\
-        {\"id\":\"claude-haiku-4-5\",\"type\":\"model\",\"max_input_tokens\":200000}\
+        {\"id\":\"claude-opus-5-5\",\"type\":\"model\",\"max_input_tokens\":1000000,\"max_tokens\":128000,\"capabilities\":{\
+            \"thinking\":{\"supported\":true,\"types\":{\"enabled\":{\"supported\":false},\"adaptive\":{\"supported\":true}}},\
+            \"effort\":{\"supported\":true,\"low\":{\"supported\":true},\"medium\":{\"supported\":true},\"high\":{\"supported\":true},\"xhigh\":{\"supported\":true},\"max\":{\"supported\":true}}}},\
+        {\"id\":\"claude-haiku-4-5\",\"type\":\"model\",\"max_input_tokens\":200000,\"max_tokens\":64000,\"capabilities\":{\
+            \"thinking\":{\"supported\":true,\"types\":{\"enabled\":{\"supported\":true},\"adaptive\":{\"supported\":false}}},\
+            \"effort\":{\"supported\":false}}},\
+        {\"id\":\"compatible\",\"type\":\"model\",\"max_input_tokens\":131072}\
     ],\"has_more\":false}";
     let (address, served) = stub(vec![
         ("200 OK", "application/json", MODELS),
@@ -393,17 +398,37 @@ async fn the_listing_says_each_models_limit() {
     .await;
     let backend = Anthropic::new(format!("http://{address}")).with_api_key("k");
     let models = backend.models().await.expect("a listing");
-    assert_eq!(models, ["claude-opus-5-5", "claude-haiku-4-5"]);
+    assert_eq!(
+        models,
+        ["claude-opus-5-5", "claude-haiku-4-5", "compatible"]
+    );
     let facts = backend.facts(&models).await.expect("facts");
+    let words = |w: &[&str]| Some(w.iter().map(|w| w.to_string()).collect::<Vec<_>>());
     assert_eq!(
         facts["claude-opus-5-5"],
         ModelFacts {
             window: Some(1_000_000),
             window_is: Some(WindowIs::Limit),
             tools: Some(true),
+            max_tokens: Some(128_000),
+            thinking: words(&["adaptive"]),
+            effort: words(&["low", "medium", "high", "xhigh", "max"]),
         }
     );
-    assert_eq!(facts["claude-haiku-4-5"].tools, None);
+    // A budget and no adaptive, in config.toml's words; and effort said to
+    // be none, which is not the same as nothing said.
+    assert_eq!(facts["claude-haiku-4-5"].thinking, words(&["budget"]));
+    assert_eq!(facts["claude-haiku-4-5"].effort, words(&[]));
+    assert_eq!(facts["claude-haiku-4-5"].max_tokens, Some(64_000));
+    // A listing with no capability tree says nothing of tools or thinking.
+    assert_eq!(
+        facts["compatible"],
+        ModelFacts {
+            window: Some(131_072),
+            window_is: Some(WindowIs::Limit),
+            ..Default::default()
+        }
+    );
 
     let seen = served.await.expect("the stub");
     assert!(

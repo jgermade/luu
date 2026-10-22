@@ -449,6 +449,7 @@ impl Backend for OpenAi {
                     tools: props
                         .pointer("/chat_template_caps/supports_tools")
                         .and_then(serde_json::Value::as_bool),
+                    ..Default::default()
                 };
                 if facts != super::ModelFacts::default() {
                     return Ok(models.iter().map(|m| (m.clone(), facts.clone())).collect());
@@ -468,7 +469,7 @@ impl Backend for OpenAi {
                             super::ModelFacts {
                                 window: Some(window),
                                 window_is: Some(super::WindowIs::Served),
-                                tools: None,
+                                ..Default::default()
                             },
                         );
                     }

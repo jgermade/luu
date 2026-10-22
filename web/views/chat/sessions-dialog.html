@@ -154,9 +154,9 @@
   }
 </script>
 
-<!-- Dark-headed, though it is under the size that would make it so: it is
-     the session's own dialog, a bar like the column's head it is opened from. -->
-<TabModal open title="Sessions" head="dark" tinted :tabs="TABS" :model="tab" width="38rem" height="26rem"
+<!-- Accent-headed: a session starts here — the one dialog of the page that
+     begins something rather than settles it. A bar whatever its size. -->
+<TabModal open title="Sessions" head="accent" tinted :tabs="TABS" :model="tab" width="38rem" height="26rem"
           @change="choose($event.detail)" @close="closeSessions()">
 
   <!-- ---- new session ---- -->

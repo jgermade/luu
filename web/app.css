@@ -82,6 +82,9 @@ body {
   outline: 2px solid var(--luu-accent);
   outline-offset: -1px;
 }
+:where(input[type="number"]) { appearance: textfield; -moz-appearance: textfield; }
+:where(input[type="number"])::-webkit-inner-spin-button,
+:where(input[type="number"])::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 :where(input[type="checkbox"], input[type="radio"]) {
   flex: none;
   accent-color: var(--luu-accent);
@@ -282,6 +285,11 @@ textarea[disabled][disabled] { opacity: .6; }
    their own; the reset is for the page-wide ones (`h3`, `p`, `.refused`,
    `.error`) that keep theirs everywhere else. */
 .pane-main { padding: 1.25rem 1.75rem 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+/* In Settings, 4rem of room under the last block of a section: the pane ends
+   in air rather than at a control, and a section's pinned foot is still at the
+   pane's bottom edge, because it is the content that is padded and not the
+   pane that scrolls it. */
+.modal-body.pane .pane-main { padding-bottom: 4rem; }
 .pane-group { display: flex; flex-direction: column; gap: .6rem; }
 .modal-body :is(.pane-main, .pane-group) > * { margin-block: 0; }
 /* A body with a pinned foot keeps its grey, which moves with it; what a bounce

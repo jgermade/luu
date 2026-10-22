@@ -1,7 +1,7 @@
 // @ts-check
 /// A zip, opened in the browser: its files as `{ path, blob }`, in order.
 ///
-/// For an icon theme added as a zip (Settings → Appearance → Files Theme). The
+/// For an icon theme added as a zip (Settings → Appearance → Icons pack). The
 /// server takes a theme as the files of one folder, the way a directory picker
 /// sends them, so a zip is read here and sent the same way — no zip reader on
 /// the server, and no dependency here: the central directory is a few fixed

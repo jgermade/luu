@@ -828,6 +828,29 @@ impl Block {
     }
 }
 
+/// What one branch of Claude's capability tree says a model takes, named
+/// as `config.toml` names it: `{"supported": false}` is *none*, each
+/// `{"<name>": {"supported": true}}` under `at` is one, and a branch that is
+/// supported without saying which is nothing said.
+fn said_of(branch: &Value, at: &str, names: &[(&str, &str)]) -> Option<Vec<String>> {
+    if branch.get("supported").and_then(Value::as_bool) == Some(false) {
+        return Some(Vec::new());
+    }
+    let under = branch.pointer(at)?;
+    let taken: Vec<String> = names
+        .iter()
+        .filter(|(api, _)| {
+            under
+                .pointer(&format!("/{api}/supported"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .map(|(_, ours)| ours.to_string())
+        .collect();
+    let named = names.iter().any(|(api, _)| under.get(*api).is_some());
+    named.then_some(taken)
+}
+
 fn arguments(json: &str) -> Value {
     match json.trim() {
         "" => json!({}),
@@ -854,10 +877,12 @@ impl Backend for Anthropic {
     }
 
     /// Claude's listing says, per model, `max_input_tokens` — the most a
-    /// request may carry, which luu budgets under — and the capability tree.
-    /// Its presence is read as *a Claude model*, and every one of those takes
-    /// `tools`: the field is the API's, not a capability a model may lack. A
-    /// server that lists without either says nothing of it.
+    /// request may carry, which luu budgets under — `max_tokens`, the most a
+    /// reply may be, and the capability tree: which thinking and which effort
+    /// levels it takes. The tree's presence is read as *a Claude model*, and
+    /// every one of those takes `tools`: the field is the API's, not a
+    /// capability a model may lack. A server that lists without any of it
+    /// says nothing of it.
     fn facts<'a>(
         &'a self,
         models: &'a [String],
@@ -876,10 +901,30 @@ impl Backend for Anthropic {
                     .and_then(Value::as_u64)
                     .filter(|n| *n > 0)
                     .and_then(|n| u32::try_from(n).ok());
+                let capabilities = entry.get("capabilities");
                 let facts = ModelFacts {
                     window,
                     window_is: window.map(|_| WindowIs::Limit),
-                    tools: entry.get("capabilities").map(|_| true),
+                    tools: capabilities.map(|_| true),
+                    max_tokens: entry
+                        .get("max_tokens")
+                        .and_then(Value::as_u64)
+                        .filter(|n| *n > 0)
+                        .and_then(|n| u32::try_from(n).ok()),
+                    thinking: capabilities.and_then(|c| {
+                        said_of(
+                            c.get("thinking")?,
+                            "/types",
+                            &[("adaptive", "adaptive"), ("enabled", "budget")],
+                        )
+                    }),
+                    effort: capabilities.and_then(|c| {
+                        said_of(
+                            c.get("effort")?,
+                            "",
+                            &["low", "medium", "high", "xhigh", "max"].map(|l| (l, l)),
+                        )
+                    }),
                 };
                 if facts != ModelFacts::default() {
                     said.insert(id.to_string(), facts);

@@ -213,6 +213,18 @@ pub struct ModelFacts {
     pub window_is: Option<WindowIs>,
     /// Whether the model takes a `tools` field.
     pub tools: Option<bool>,
+    /// The most one reply may be, thinking included — Anthropic's
+    /// `max_tokens` in its listing. The form shows it beside `max-tokens`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// The thinking the model takes, in `config.toml`'s words: `adaptive`,
+    /// `budget`. Empty is *none*, which the server said; `None` is that it
+    /// said nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Vec<String>>,
+    /// The `effort` levels the model takes, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
