@@ -427,6 +427,16 @@
            which nothing waits on. -->
       <span :if="iconView?.looking" class="dim small looking">looking in the editors' extensions…</span>
 
+      <!-- Item 15 of `ROADMAP/2026-09-17`, kept through every redesign: the
+           first person to meet an unconfigured tree read a working fallback
+           as a broken panel, so the page says why the tree looks as it does.
+           In the frame, at the foot of the list, level with the preview's. -->
+      <!-- Held in place when a theme is chosen, only not shown: a line that
+           came and went moved the list over it, and the pane's height. -->
+      <p class="lead-note fallback-note" :class.unseen="!(iconView && !iconView.named)">
+        With none chosen, the tree draws its own shapes — a fallback, not a failure.
+      </p>
+
     </div>
 
     <!-- What the option under the pointer draws, or the one in use: a tree as
@@ -450,16 +460,6 @@
       </ul>
     </div>
   </div>
-  <!-- Item 15 of `ROADMAP/2026-09-17`, kept through every redesign: the first
-       person to meet an unconfigured tree read a working fallback as a broken
-       panel, so the page says why the tree looks as it does. Under the frame,
-       so its coming and going with the choice moves nothing above it. -->
-  <!-- Held in place when a theme is chosen, only not shown: the section is
-       at the bottom of the pane, and a line that came and went changed the
-       pane's height and, with the scroll at its end, moved the frame. -->
-  <p class="lead-note" :class.unseen="!(iconView && !iconView.named)">
-    With none chosen, the tree draws its own shapes — a fallback, not a failure.
-  </p>
   <div class="choice size-choice tree-size">
     <span class="choice-name">Size</span>
     <Segmented label="Files size" size="sm" :options="SIZE_OPTIONS" :model="prefs.treeSize"
@@ -689,6 +689,11 @@
     font-weight: 600;
     pointer-events: none;
   }
+  /* The list as tall as the preview, so its last line sits at the frame's
+     foot; the preview keeps its own height when the list is the taller. */
+  .files-duo { align-items: stretch; }
+  .files-duo .theme-preview { align-self: start; }
+  .fallback-note { margin-top: auto; padding-top: var(--luu-space-3); }
   .files-frame {
     padding: var(--luu-space-4);
     border: 1px solid var(--luu-border);

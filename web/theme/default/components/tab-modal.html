@@ -34,6 +34,8 @@
   // chosen starts at the top of its panel. The `bar` slot is above the body
   // and does not scroll with it: a search over what the body lists. It pads
   // itself; a tab with nothing for it leaves it empty and takes no room.
+  // The focus starts on an `autofocus` element inside, if there is one, and
+  // on the chosen tab otherwise.
   // `tinted` grounds the body in the page's grey — lighter than the foot's —
   // so white boxes and rows sit on it, as cards sit on the page. As with `Modal`, ESC, the
   // backdrop and the close button only emit `close` — the owner closes it with
@@ -84,8 +86,10 @@
     dialog.showModal()
     wide = dialog.offsetWidth >= LARGE
     requestAnimationFrame(place)
-    // The focus starts on the tab that is chosen, so the arrows work at once.
-    requestAnimationFrame(() => $self("button[role=tab].on")?.focus())
+    // The focus starts on what the body marks `autofocus` — the search a view
+    // was opened to use — or else on the tab that is chosen, so the arrows
+    // work at once. A frame after `showModal()`, which focuses on its own.
+    requestAnimationFrame(() => ($self("dialog [autofocus]") || $self("button[role=tab].on"))?.focus())
   }
   const hide = () => {
     const dialog = $self("dialog")
