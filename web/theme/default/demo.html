@@ -39,7 +39,7 @@
     ["scrollable", "Scrollable"], ["progress", "Progress · Spinner"], ["kbd", "Kbd"],
     ["text-input", "TextInput"], ["textarea", "Textarea"], ["select", "Select"],
     ["checkbox", "Checkbox"], ["radio-group", "RadioGroup"], ["switch", "Switch"],
-    ["segmented", "Segmented"], ["field", "Field"],
+    ["segmented", "Choice segmented"], ["sizes", "Sizes"], ["field", "Field"],
     ["input-container", "InputContainer"], ["typeahead", "Typeahead"],
     ["tabs", "Tabs"], ["anchors", "Section · AnchorNav"], ["menu", "Menu"], ["tooltip", "Tooltip"], ["modals", "Modals"],
   ]
@@ -267,6 +267,10 @@
     warn: { title: "Runs on the host", text: "This posture has no container: a command the model asks for runs as you, on this machine." },
     bad: { title: "Remove workstation?", text: "Its key file stays on disk, and the sessions that used it keep their history." },
   }
+  // The heads' tones, as buttons: the same names say the same thing.
+  const BUTTON_TONES = ["dark", "accent", "ok", "warn", "bad"]
+  // Every control at each of its sizes, side by side.
+  const CONTROL_SIZES = ["sm", "md", "lg"]
   let modalHead = "accent"
   let headed = false
   let tabHead = "auto"
@@ -676,13 +680,18 @@
     <Section id="button" title="Button" divided>
       <template :slot.lead><code>primary</code> is the one thing a view asks for, <code>secondary</code>
         the rest, <code>ghost</code> an action that should not compete with content,
-        <code>danger</code> one that loses something.</template>
+        <code>danger</code> one that loses something — and the tones a modal's head takes,
+        <code>dark</code>, <code>accent</code>, <code>ok</code>, <code>warn</code> and <code>bad</code>.</template>
       <div class="demo">
         <div class="row">
           <Button variant="primary" @click="clicks++">Primary</Button>
           <Button @click="clicks++">Secondary</Button>
           <Button variant="ghost" @click="clicks++">Ghost</Button>
           <Button variant="danger" @click="clicks++">Danger</Button>
+        </div>
+        <div class="row tones">
+          <Button :each="t in BUTTON_TONES" :key="t" :variant="t" @click="clicks++">{{ t }}</Button>
+          <Button variant="ok" disabled>ok, disabled</Button>
         </div>
         <div class="row">
           <Button size="sm" variant="primary">Small</Button>
@@ -949,8 +958,9 @@
     </Section>
 
     <!-- ---- segmented ---------------------------------------------------- -->
-    <Section id="segmented" title="Segmented" divided>
-      <template :slot.lead>Two to five short answers side by side. One radio group to the keyboard.</template>
+    <Section id="segmented" title="Choice segmented" divided>
+      <template :slot.lead>Two to five short answers side by side. One radio group to the keyboard.
+        <code>&lt;Segmented&gt;</code>, sized as every other control is.</template>
       <div class="demo stack">
         <Segmented label="Columns" :model="layout" :options="[{ value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }]" />
         <Segmented label="Tone" size="sm" :model="tone" :options="['light', 'dark']" />
@@ -960,6 +970,24 @@
         <Segmented label="Disabled" disabled model="a" :options="['a', 'b']" />
         <p class="state">layout: <code>{{ layout }}</code> · tone: <code>{{ tone }}</code> ·
           repeat: <code>{{ repeat }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- sizes: one row per size, every control on it ------------------- -->
+    <Section id="sizes" title="Sizes" divided>
+      <template :slot.lead>One <code>size</code> for every control — <code>sm</code>, <code>md</code>,
+        <code>lg</code> — read from <code>--luu-control-sm|md|lg</code>: the same height, the same
+        corners and the same type, so a row of them lines up whatever is on it.</template>
+      <div class="demo stack">
+        <div :each="z in CONTROL_SIZES" :key="z" class="row size-row" :data-size="z">
+          <code class="size-name">{{ z }} · {{ read[`control-${z}`] || "" }}</code>
+          <span class="cell"><Button :size="z" variant="primary">Save</Button></span>
+          <span class="cell"><Button :size="z">Cancel</Button></span>
+          <span class="cell wide"><TextInput :size="z" placeholder="a name" :label="`Name, ${z}`" /></span>
+          <span class="cell wide"><Select :size="z" :model="backend" :options="BACKENDS" :label="`Backend, ${z}`" /></span>
+          <span class="cell"><Segmented :size="z" :label="`Columns, ${z}`" :model="layout" :options="['two', 'three']" /></span>
+          <span class="cell wide"><Typeahead :size="z" :label="`Model, ${z}`" :options="TA_MODELS" placeholder="a model" /></span>
+        </div>
       </div>
     </Section>
 
@@ -1439,6 +1467,11 @@
     font-family: var(--luu-font-mono);
     font-size: var(--luu-text-sm);
   }
+  .size-row { align-items: center; }
+  .size-row .cell { display: flex; flex: none; }
+  .size-row .cell.wide { width: 8rem; }
+  .size-row .cell.wide > * { flex: 1; }
+  .size-name { width: 6rem; color: var(--luu-fg-muted); }
   .modal-kinds { gap: 0; padding: 0; }
   .modal-kind { display: flex; flex-direction: column; gap: var(--luu-space-3); padding: var(--luu-space-5); }
   .modal-kind + .modal-kind { border-top: var(--luu-border-width) solid var(--luu-border); }

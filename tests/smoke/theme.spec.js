@@ -87,7 +87,7 @@ test("every section renders, and the tokens are read back from the CSS", async (
   const errors = await demo(page)
   // Every link in the index has its section, and every section its link.
   const ids = await page.locator(".index a").evaluateAll(links => links.map(a => a.hash.slice(1)))
-  expect(ids).toHaveLength(25)
+  expect(ids).toHaveLength(26)
   for (const id of ids) await expect(page.locator(`section#${id}`)).toHaveCount(1)
   // The page's ground, as the computed style has it.
   await expect(page.locator(".swatch").first().locator(".value")).toHaveText("#f4f5f8")
@@ -423,6 +423,64 @@ test("a sub-modal comes out of its parent's head, and ESC closes it alone", asyn
   await expect(sub).toBeHidden()
   await expect(parent.locator("[inert]")).toHaveCount(0)
 
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The heads' tones as buttons: the ground each tone's token computes to, the
+ * solid badge's ink on it, and `dark` the island the dark head is.
+ */
+test("a button takes the tones a modal's head takes", async ({ page }) => {
+  const errors = await demo(page)
+  const computed = token => page.evaluate(name => {
+    const probe = document.createElement("div")
+    probe.style.background = `var(${name})`
+    document.body.append(probe)
+    const colour = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return colour
+  }, token)
+  const ink = await computed("--luu-on-accent")
+  const tones = page.locator("#button .tones")
+  for (const tone of ["accent", "ok", "warn", "bad"]) {
+    const button = tones.getByRole("button", { name: tone, exact: true })
+    const painted = await button.evaluate(b => [getComputedStyle(b).backgroundColor, getComputedStyle(b).color])
+    expect(painted).toEqual([await computed(`--luu-${tone}`), ink])
+    await expect(button).not.toHaveAttribute("data-tone", "dark")
+  }
+  await expect(tones.getByRole("button", { name: "dark", exact: true })).toHaveAttribute("data-tone", "dark")
+  // A tone's hover is a step from its ground, not the theme's grey.
+  const ok = tones.getByRole("button", { name: "ok", exact: true })
+  await ok.hover()
+  await expect.poll(() => ok.evaluate(b => getComputedStyle(b).backgroundColor)).not.toBe(await computed("--luu-ok"))
+  expect(await ok.evaluate(b => getComputedStyle(b).backgroundColor)).not.toBe(await computed("--luu-hover"))
+  await expect(tones.getByRole("button", { name: "ok, disabled" })).toBeDisabled()
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * One `size` for every control: at sm, md and lg a Button, a TextInput, a
+ * Select, a Choice segmented and a Typeahead are each as tall as the token
+ * says, and on one row their tops line up.
+ */
+test("every control is as tall as its size's token", async ({ page }) => {
+  const errors = await demo(page)
+  await expect(page.locator("#segmented-title")).toContainText("Choice segmented")
+  for (const size of ["sm", "md", "lg"]) {
+    const row = page.locator(`#sizes .size-row[data-size="${size}"]`)
+    const boxes = await row.evaluate(r => [...r.querySelectorAll(".cell")].map(cell => {
+      const box = cell.querySelector(".btn, .field, .select, .seg").getBoundingClientRect()
+      return { h: Math.round(box.height), top: Math.round(box.top) }
+    }))
+    const token = await page.evaluate(z => parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue(`--luu-control-${z}`)), size)
+    expect(boxes).toHaveLength(6)
+    expect(new Set(boxes.map(b => b.h)), `heights at ${size}`).toEqual(new Set([token]))
+    expect(new Set(boxes.map(b => b.top)).size, `tops at ${size}`).toBe(1)
+  }
+  // A number is typed: no arrows beside it.
+  await expect.poll(() => page.locator('#text-input input[type="number"]').first()
+    .evaluate(i => getComputedStyle(i).appearance)).toBe("textfield")
   expect(errors, "the page logged errors").toEqual([])
 })
 

@@ -128,6 +128,14 @@
     dialog.show()
     window.addEventListener("keydown", escape, true)
     parent?.addEventListener("close", parentClosed)
+    // Opened while the parent is still swinging in, it was placed against a
+    // parent that moves: placed again when the parent lands, and whenever the
+    // parent changes size.
+    parent?.addEventListener("animationend", landed)
+    if (parent) {
+      sizes = new ResizeObserver(() => fit())
+      sizes.observe(parent)
+    }
     requestAnimationFrame(() => {
       placeLine()
       const first = $self("button[role=tab].on") ||
@@ -144,6 +152,9 @@
     unveil()
     window.removeEventListener("keydown", escape, true)
     parent?.removeEventListener("close", parentClosed)
+    parent?.removeEventListener("animationend", landed)
+    sizes?.disconnect()
+    sizes = null
   }
   // The parent closed under it — its own close button is lit, and closes both.
   // This one goes at once, gives back what it made inert, and tells its owner,
@@ -153,6 +164,9 @@
   // this one's, asking its owner to close it, reaches the parent dialog under
   // the same name — taken for the parent's, it closed the sheet at once, and
   // its way out never played.
+  let sizes = null
+  // The parent's own animation, not one of its children's bubbling up.
+  const landed = event => { if (event.target === parent) fit() }
   const parentClosed = event => {
     if (event.target !== parent) return
     done()
@@ -206,6 +220,8 @@
   $destroyed(() => {
     window.removeEventListener("resize", fit)
     window.removeEventListener("keydown", escape, true)
+    parent?.removeEventListener("animationend", landed)
+    sizes?.disconnect()
     unveil()
   })
   $: isOpen ? requestAnimationFrame(show) : hide()
@@ -379,7 +395,7 @@
     text-align: center;
     line-height: 1.6;
   }
-  .on .count { background: var(--luu-accent-soft); color: var(--luu-accent); }
+  button.on .count { background: var(--luu-accent-soft); color: var(--luu-accent); }
   .line {
     position: absolute;
     left: 0;
