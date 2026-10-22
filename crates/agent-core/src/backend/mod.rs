@@ -171,6 +171,27 @@ pub enum BackendError {
     Malformed(String),
 }
 
+impl BackendError {
+    /// A failure to reach the server, **with its causes**. `reqwest`'s own line
+    /// is `error sending request for url (…)` whatever went wrong; whether it
+    /// was the certificate, the name or the connection is in the source chain,
+    /// and a person fixing it needs that part — on an intercepted network it is
+    /// `invalid peer certificate: UnknownIssuer`, and nothing above it says so.
+    pub fn transport(error: &(dyn std::error::Error + 'static)) -> Self {
+        let mut text = error.to_string();
+        let mut source = error.source();
+        while let Some(cause) = source {
+            let line = cause.to_string();
+            if !text.contains(&line) {
+                text.push_str(": ");
+                text.push_str(&line);
+            }
+            source = cause.source();
+        }
+        Self::Transport(text)
+    }
+}
+
 pub type ChunkStream<'a> = Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>> + Send + 'a>>;
 
 /// Object-safe on purpose: the turn loop holds a `dyn Backend`, so swapping
@@ -178,6 +199,32 @@ pub type ChunkStream<'a> = Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>
 /// How long a model listing may take. Not the generation timeout: nothing is
 /// being generated, and the caller is a page waiting on a request.
 pub const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What a server says of one model it lists, before anything is sent to it.
+/// Every field is `None` where it said nothing — which is not *no*.
+///
+/// See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ModelFacts {
+    /// The most this model will hold, by the server's account.
+    pub window: Option<u32>,
+    /// Whose number `window` is, which decides what a person may do with it.
+    pub window_is: Option<WindowIs>,
+    /// Whether the model takes a `tools` field.
+    pub tools: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowIs {
+    /// What the model was trained to hold. A ceiling: luu chooses the window
+    /// per request under it (Ollama's `num_ctx`), and the server's own default
+    /// is something else again.
+    Trained,
+    /// What the server was started with. A fact: one number for every request,
+    /// so a smaller one is a budget luu keeps and a larger one is a lie.
+    Served,
+}
 
 /// A future a `dyn Backend` can hand back. Boxed for the same reason
 /// [`ChunkStream`] is: the turn loop holds a `dyn Backend`.
@@ -208,6 +255,18 @@ pub trait Backend: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
+    /// What the server says of each of `models`: its window and its tools.
+    /// Asked by a person connecting a provider, never by a turn. The default
+    /// says nothing about anything; a model missing from the answer is one
+    /// nothing was said about.
+    fn facts<'a>(
+        &'a self,
+        models: &'a [String],
+    ) -> BackendFuture<'a, std::collections::BTreeMap<String, ModelFacts>> {
+        let _ = models;
+        Box::pin(async { Ok(std::collections::BTreeMap::new()) })
+    }
+
     /// What to tell a caller **once**, before it measures anything, about a
     /// constraint this destination cannot render or cannot be trusted to
     /// honour. `None` is not a promise the constraint worked — only that
@@ -221,5 +280,34 @@ pub trait Backend: Send + Sync {
     fn constrain_caveat(&self, constraint: &Constraint) -> Option<String> {
         let _ = constraint;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The causes, in order and once each: the top line alone said nothing of
+    /// which of them it was.
+    #[test]
+    fn a_transport_error_says_its_causes() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("error sending request for url (https://x/v1/models)")]
+        struct Top(#[source] Middle);
+        #[derive(Debug, thiserror::Error)]
+        #[error("client error (Connect)")]
+        struct Middle(#[source] std::io::Error);
+
+        let error = Top(Middle(std::io::Error::other(
+            "invalid peer certificate: UnknownIssuer",
+        )));
+        let BackendError::Transport(text) = BackendError::transport(&error) else {
+            unreachable!("transport() builds a Transport")
+        };
+        assert_eq!(
+            text,
+            "error sending request for url (https://x/v1/models): client error (Connect): \
+             invalid peer certificate: UnknownIssuer"
+        );
     }
 }

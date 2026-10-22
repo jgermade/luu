@@ -139,6 +139,105 @@ export function withSpecs(groups, specs) {
   return at < 0 ? [...groups, tools] : [...groups.slice(0, at), tools, ...groups.slice(at)]
 }
 
+/// What a bucket holds, one item each, where a bucket is a list of things
+/// rather than one text: the tools by name, the map's files, the folded jobs,
+/// each earlier message, this turn's fragments by path. The system text and
+/// the question are one thing each and are not listed.
+///
+/// Takes [`group`]'s (or [`withSpecs`]'s) groups and returns `{ [bucket]: {
+/// chars, items: [{ label, where, path, tag, title, chars, muted }] } }`. `chars` is
+/// an item's part of its bucket's text, so a caller holding the bucket's count
+/// can say roughly what each item costs — roughly, because the count is the
+/// bucket's and the split is by characters. `where` is what tells two items
+/// apart after the label (a directory, a role, a description), and `path` says
+/// it is a directory, whose end is the part worth keeping; `muted` is a
+/// line that stands for what was left out, and costs nothing of its own.
+///
+/// Read back from the text the way [`paint`] is, and with its rule: a chunk
+/// that does not look like an item is not listed rather than guessed at.
+export function contents(groups) {
+  const found = {}
+  for (const g of groups) {
+    const list = LISTS[g.bucket]
+    if (!list) continue
+    const text = g.entries.map(e => e.text).join("\n\n")
+    const items = list(g.entries, text)
+    if (items.length) found[g.bucket] = { chars: text.length, items }
+  }
+  return found
+}
+
+const chunks = text => text.split(/\n{2,}/)
+
+/// `crates/x/src/lib.rs:1-15` → `lib.rs:1-15` under `crates/x/src`.
+const asPath = path => {
+  const cut = path.lastIndexOf("/")
+  return cut < 0
+    ? { label: path, where: "", path: true }
+    : { label: path.slice(cut + 1), where: path.slice(0, cut), path: true }
+}
+
+const firstLine = text => text.split("\n").find(line => line.trim()) || ""
+
+/// A fragment's head: `// path` at the start of a message or after a blank
+/// line, where the path has a dot or a slash in it — which is what tells it
+/// from a comment inside the code it carries. A span cited instead of sent
+/// says why after a dash.
+const FRAGMENT_HEAD = /(?:^|\n\n)\/\/ (\S*[./]\S*)(?: — \d+ tokens, (superseded|pruned))?(?=\n|$)/g
+
+const LISTS = {
+  // `name — description` over its parameters, in the prompt and in the
+  // native specs alike. The intro's `tool` fence starts with a backtick and
+  // its prose has spaces, so neither reads as a name.
+  tools: (_, text) => chunks(text).flatMap(chunk => {
+    const [head = "", body = ""] = chunk.split("\n")
+    const named = /^([A-Za-z_][\w.:-]*)(?: — (.*))?$/.exec(head)
+    return named && body.trimStart().startsWith("{")
+      ? [{ label: named[1], where: named[2] || "", title: head, chars: chunk.length }]
+      : []
+  }),
+  // A file is its path on a line of its own, then its definitions indented
+  // under it. The `#` lines are the map's header, and one of them says how
+  // many files the budget left out.
+  map: (_, text) => chunks(text).flatMap(chunk => {
+    const [head = "", ...definitions] = chunk.split("\n")
+    const more = /^# (\d+) more file/.exec(head)
+    if (more) return [{ label: `${more[1]} more left out`, where: "", muted: true, chars: 0 }]
+    if (!head || head.startsWith("#") || /^\s/.test(head)) return []
+    const n = definitions.length
+    return [{ ...asPath(head), title: `${head} — ${n} definition${n === 1 ? "" : "s"}`, chars: chunk.length }]
+  }),
+  // The objective is on the line the fold opens with, after its tag.
+  summaries: entries => entries.flatMap((entry, i) => {
+    const tag = /^\[(job|draft) closed\] (.*)/.exec(entry.text)
+    if (!tag) return []
+    const asked = entries[i - 1]?.role === "user" ? entries[i - 1].text.length : 0
+    return [{ label: tag[2], where: tag[1], title: firstLine(entry.text), chars: entry.text.length + asked }]
+  }),
+  // A message by its first line — except a question that carried files,
+  // whose first line is a file's head: it is named by what was asked, which
+  // comes after them, and says how many files it carried.
+  history: entries => entries.map(entry => {
+    const files = entry.role === "user" ? [...entry.text.matchAll(FRAGMENT_HEAD)].length : 0
+    const said = files ? entry.text.slice(entry.text.lastIndexOf("\n\n") + 2) : entry.text
+    return {
+      label: firstLine(said),
+      where: files ? `${entry.role} · ${files} file${files === 1 ? "" : "s"}` : entry.role,
+      title: entry.text.slice(0, 400),
+      chars: entry.text.length,
+    }
+  }),
+  // One item per fragment, from its head to the next one.
+  code: (_, text) => {
+    const heads = [...text.matchAll(FRAGMENT_HEAD)]
+    return heads.map((m, i) => {
+      const from = m.index + (m[0].startsWith("\n") ? 2 : 0)
+      const to = heads[i + 1]?.index ?? text.length
+      return { ...asPath(m[1]), tag: m[2] || "", title: m[1], chars: to - from }
+    })
+  },
+}
+
 /// The prompt as sent, cut at the role markers the renderer wrote
 /// (`<|System|>`, `<|User|>`, `<|Assistant|>`). A prompt with no markers —
 /// another renderer — is one block.

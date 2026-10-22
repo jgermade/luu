@@ -1367,6 +1367,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/settings.json", get(get_settings))
         .route("/api/providers", get(get_providers).put(put_providers))
         .route("/api/providers.json", get(get_providers))
+        .route("/api/providers/probe", post(probe_provider))
         .route("/api/providers/{name}/models", get(get_provider_models))
         .route("/api/resend", get(get_resend).put(put_resend))
         .route("/api/authority", get(get_authority).put(put_authority))
@@ -1375,6 +1376,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // directory. The import is the one body on this API that is not
         // small, so it alone gets a larger limit.
         .route("/api/icon-theme", get(get_icon_theme).put(put_icon_theme))
+        .route("/api/icon-theme/previews", get(get_icon_theme_previews))
         .route(
             "/api/icon-theme/import",
             post(import_icon_theme).layer(axum::extract::DefaultBodyLimit::max(
@@ -1411,6 +1413,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // every path.
         .route("/api/workspace/tree", get(get_workspace_tree))
         .route("/api/workspace/file", get(get_workspace_file))
+        .route("/api/workspace/rename", post(post_workspace_rename))
         .route("/api/workspace/git-status", get(get_workspace_git_status))
         .route("/api/workspace/git-diff", get(get_workspace_git_diff))
         .route("/api/workspace/events", get(get_workspace_events))
@@ -1529,11 +1532,25 @@ async fn asset_handler(uri: Uri) -> Response {
     serve_asset(uri.path().trim_start_matches('/')).await
 }
 
+/// One embedded file, or a folder's `index.html`.
+///
+/// A folder is served at its path with the slash — `theme/default/` — because
+/// that is where its page's relative URLs resolve from. Without the slash it
+/// redirects there, relatively, so the same answer holds under a host's prefix.
+/// See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
 async fn serve_asset(path: &str) -> Response {
-    match Ui::get(path) {
-        Some(file) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response()
+    let file = match path.is_empty() || path.ends_with('/') {
+        true => format!("{path}index.html"),
+        false => path.to_owned(),
+    };
+    match Ui::get(&file) {
+        Some(found) => {
+            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime.as_ref())], found.data).into_response()
+        }
+        None if Ui::get(&format!("{path}/index.html")).is_some() => {
+            let folder = path.rsplit('/').next().unwrap_or(path);
+            axum::response::Redirect::permanent(&format!("{folder}/")).into_response()
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
@@ -3478,6 +3495,9 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         _ => None,
     };
 
+    // What a session nobody named is named from, once this turn is over —
+    // see [`name_session`]. Kept before the task takes the prompt.
+    let named_from = prompt.clone();
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel(256);
         let forwarder = {
@@ -3665,7 +3685,162 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         if let Some(proposal) = parse_plan(&answered) {
             offer(&app, proposal, PlanSource::Model).await;
         }
+
+        // Last, so it never holds up the turn: a session's first turn is over
+        // and the person has the answer before a title is asked for.
+        name_session(
+            app.clone(),
+            sending.backend.clone(),
+            sending.model.clone(),
+            sending.budget.limit,
+            named_from,
+        )
+        .await;
     });
+}
+
+/// What a session's own model is asked to be called by. See [`name_session`].
+const NAMING: &str = "Name the conversation below. Reply with only its title: two to six \
+                      words, in the language it is written in. No quotes, no final period.";
+
+/// How long a title may take. A thinking model thinks first, and the thinking
+/// is what this waits for; past it there is no name rather than a late one.
+const NAMING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether a session is still called by what it was born as: `live` in
+/// memory, its id once stored. A title anything else gave it is a name.
+fn unnamed(title: &str, id: &str) -> bool {
+    title == LIVE_SESSION || title == id || title.starts_with("session-")
+}
+
+/// A model's answer, as a title: the first line outside its thinking, without
+/// a label, quotes or a closing period, whitespace collapsed, at most sixty
+/// characters cut at a word. `None` for an answer with nothing in it, which
+/// names nothing rather than naming badly.
+fn tidy_title(answer: &str) -> Option<String> {
+    const MAX: usize = 60;
+    let visible = agent_core::tools::mask_thinking(answer);
+    // A label on a line of its own is not the title; the line after it is.
+    let line = visible
+        .lines()
+        .map(|line| {
+            // Markdown around a label as well as around the title:
+            // `**Title:** The name`.
+            let line = line.trim().trim_start_matches(['*', '#', '_', ' ']);
+            let line = ["Title:", "title:", "Título:", "Titulo:"]
+                .iter()
+                .find_map(|label| line.strip_prefix(label))
+                .unwrap_or(line);
+            line.trim_start_matches(['*', '_', ' '])
+                .trim()
+                .trim_matches(|c: char| "\"'`«»“”‘’*#".contains(c))
+                .trim()
+                .trim_end_matches(['.', ':', ';'])
+                .trim()
+        })
+        .find(|line| !line.is_empty())?;
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let mut title = String::new();
+    for word in &words {
+        if title.chars().count() + 1 + word.chars().count() > MAX {
+            break;
+        }
+        if !title.is_empty() {
+            title.push(' ');
+        }
+        title.push_str(word);
+    }
+    // One word longer than the limit is still a word: its first sixty.
+    if title.is_empty() {
+        title = words.first()?.chars().take(MAX).collect();
+    }
+    (!title.is_empty()).then_some(title)
+}
+
+/// A name for a session nobody named, asked of the destination it already
+/// sends to, from its first prompt, once its first turn has ended.
+///
+/// Nothing here can fail a turn: every way out is *no name*. Not on the mock,
+/// which answers from a script and would hand this call the next reply a test
+/// wrote; not where `[sessions] auto-name = false`; not over a title somebody
+/// gave; and not into a session that is no longer the one on screen. The
+/// request carries the turn's own window, because Ollama reloads a model asked
+/// for another `num_ctx`. See
+/// `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
+async fn name_session(
+    app: Arc<App>,
+    backend: Arc<dyn Backend>,
+    model: String,
+    window: Option<u32>,
+    prompt: String,
+) {
+    let id = app.session_id.lock().await.clone();
+    {
+        let view = app.view.lock().await;
+        if view.turns.len() != 1 || !unnamed(&view.title, &id) {
+            return;
+        }
+    }
+    if backend.name() == "mock" {
+        return;
+    }
+    let wanted = match load_config().await {
+        Ok((config, _)) => config.sessions().auto_name,
+        Err(_) => false,
+    };
+    if !wanted {
+        return;
+    }
+
+    let request = CompletionRequest {
+        model,
+        messages: vec![
+            agent_core::backend::Message::system(NAMING),
+            agent_core::backend::Message::user(prompt.chars().take(2000).collect::<String>()),
+        ],
+        context_limit: window,
+        ..Default::default()
+    };
+    // No field caps an answer's length, so the stream is read here and dropped
+    // — which drops the request — at the first full line outside the thinking.
+    let mut answer = String::new();
+    let read = async {
+        let mut stream = backend.stream(request);
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(agent_core::backend::Chunk::Text(text)) => {
+                    answer.push_str(&text);
+                    let visible = agent_core::tools::mask_thinking(&answer);
+                    if visible.trim_start().contains('\n') && tidy_title(&answer).is_some() {
+                        break;
+                    }
+                }
+                Ok(agent_core::backend::Chunk::Done { .. }) => break,
+                Err(_) => {
+                    answer.clear();
+                    break;
+                }
+            }
+        }
+    };
+    let _ = tokio::time::timeout(NAMING_TIMEOUT, read).await;
+    let Some(title) = tidy_title(&answer) else {
+        return;
+    };
+
+    // The session may have moved on while the model answered: another one
+    // opened, or a name given by hand.
+    if *app.session_id.lock().await != id {
+        return;
+    }
+    {
+        let mut view = app.view.lock().await;
+        if !unnamed(&view.title, &id) {
+            return;
+        }
+        view.title = title;
+    }
+    app.checkpoint().await;
 }
 
 /// The plan a resumed session comes back holding, if a person never answered it.
@@ -3786,6 +3961,7 @@ fn workspace_error(error: workspace::Error) -> Response {
         // and a client that asked for something outside it asked wrongly.
         workspace::Error::Refused(_) => StatusCode::BAD_REQUEST,
         workspace::Error::Missing(_) => StatusCode::NOT_FOUND,
+        workspace::Error::Taken(_) => StatusCode::CONFLICT,
         workspace::Error::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, error.to_string()).into_response()
@@ -3818,6 +3994,66 @@ async fn get_workspace_file(
     match workspace::file(sandbox.as_ref(), &query.path).await {
         Ok(file) => Json(file).into_response(),
         Err(error) => workspace_error(error),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RenameRequest {
+    /// The entry, as the tree names it.
+    path: String,
+    /// Its new name: a name, never a path.
+    name: String,
+}
+
+/// A file or a folder renamed from the tree: the one write the workspace
+/// panel makes. `{ path }` back is the new path, which the page re-points its
+/// open tab and its expanded folders at; the tree itself follows from the
+/// disk's own event, like any other change.
+///
+/// **From this machine only**, as Settings' writes and the engines are: a
+/// rename is a person at the keyboard, and a page on another site that
+/// rebinds its DNS to 127.0.0.1 must not be one. What it may reach is the
+/// sandbox's answer for `read-write`. See
+/// `RECORD/2026-10-21.the-tree-renames.completed.md`.
+async fn post_workspace_rename(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<RenameRequest>,
+) -> Response {
+    if let Err(refused) = workspace_writable(&state, &headers) {
+        return *refused;
+    }
+    let sandbox = workspace_sandbox(&state).await;
+    match workspace::rename(sandbox.as_ref(), &request.path, &request.name).await {
+        Ok(path) => Json(serde_json::json!({ "path": path })).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
+/// Whether this request may change the workspace: a server bound on loopback,
+/// asked by the name it was dialled by. [`engines_allowed`]'s two halves, with
+/// the refusals said about files.
+fn workspace_writable(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), Box<Response>> {
+    let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
+    if !state.providers_editable {
+        return Err(refuse(
+            "this server is bound off loopback, and renaming changes this machine's files. \
+             Rename from a browser on the machine itself."
+                .to_string(),
+        ));
+    }
+    let host = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .unwrap_or("");
+    match host_is_loopback(host) {
+        true => Ok(()),
+        false => Err(refuse(format!(
+            "Host `{host}` is not this machine, and only this machine renames its files"
+        ))),
     }
 }
 
@@ -3968,6 +4204,53 @@ fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
 
 async fn get_icon_theme(State(state): State<AppRouterState>) -> Response {
     Json(blocking(move || icon_theme_view(&state)).await).into_response()
+}
+
+/// Every icon theme Settings offers, drawn: what each one shows for a few
+/// names a person knows ([`crate::icons::SAMPLES`]), so they can be told apart
+/// before one is chosen. `{ samples: [{ name, dir }], previews: { path: [url |
+/// null] } }`, keyed by the path as the list names it.
+///
+/// **One request for all of them**, because finding them reads a
+/// `package.json` per installed extension, which is the read that has taken
+/// minutes on this disk; and **only the themes that list offers**, plus the
+/// one named in `config.toml` — never a path the page sends — so this answers
+/// about themes and nothing else. What a theme may point at is already
+/// confined to its own folder by [`crate::icons::load`]. See
+/// `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`.
+async fn get_icon_theme_previews() -> Response {
+    let answer = blocking(|| {
+        let named = crate::provider::Config::load()
+            .ok()
+            .and_then(|(config, _)| config.ui().and_then(|ui| ui.icon_theme.clone()));
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let folder = icon_theme_folder();
+        let mut paths: Vec<String> = crate::icons::discover(folder.as_deref(), home.as_deref())
+            .into_iter()
+            .map(|found| found.path)
+            .collect();
+        if let Some(named) = named.map(|named| named.display().to_string())
+            && !paths.contains(&named)
+        {
+            paths.push(named);
+        }
+        let previews: std::collections::BTreeMap<String, Vec<Option<String>>> = paths
+            .into_iter()
+            .filter_map(|path| {
+                let theme =
+                    crate::icons::load(&crate::provider::expand_home(std::path::Path::new(&path)))
+                        .ok()?;
+                Some((path, crate::icons::preview(&theme)))
+            })
+            .collect();
+        let samples: Vec<_> = crate::icons::SAMPLES
+            .iter()
+            .map(|(name, dir)| serde_json::json!({ "name": name, "dir": dir }))
+            .collect();
+        serde_json::json!({ "samples": samples, "previews": previews })
+    })
+    .await;
+    Json(answer).into_response()
 }
 
 /// Filesystem work a handler cannot avoid, on the blocking pool instead of a
@@ -5258,6 +5541,10 @@ struct ProvidersView {
     /// a turn in flight, or turns already sent to the old one.
     #[serde(skip_serializing_if = "Option::is_none")]
     waiting: Option<String>,
+    /// Provider name → what may be said about its key file without saying what
+    /// is in it. Read from disk here rather than kept in `config.toml`, where
+    /// even two ends of a key would be two ends of a key in every backup.
+    keys: std::collections::BTreeMap<String, crate::secret::Preview>,
 }
 
 async fn providers_view(
@@ -5270,6 +5557,25 @@ async fn providers_view(
             destination.settings.profile.clone(),
             destination.settings.follows_default,
         )
+    };
+    let keys = {
+        let paths: Vec<(String, PathBuf)> = config
+            .profiles()
+            .iter()
+            .filter_map(|(name, profile)| {
+                Some((
+                    name.clone(),
+                    crate::provider::expand_home(profile.key_file.as_ref()?),
+                ))
+            })
+            .collect();
+        blocking(move || {
+            paths
+                .into_iter()
+                .map(|(name, path)| (name, crate::secret::preview(&path)))
+                .collect()
+        })
+        .await
     };
     Ok(ProvidersView {
         path: shown_path(path).await,
@@ -5305,6 +5611,7 @@ async fn providers_view(
                 )
             }
         },
+        keys,
     })
 }
 
@@ -5346,6 +5653,19 @@ struct ProviderModels {
     /// does not look missing. See `models::LocalModel::runs_on`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     unavailable: Vec<Unavailable>,
+    /// What the server says of each model, only when the provider form asked
+    /// (`?facts=1`): one request per model on Ollama is not a cost the chat's
+    /// picker should pay every time it opens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    facts: Option<std::collections::BTreeMap<String, agent_core::backend::ModelFacts>>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ModelsAsk {
+    /// The provider form: every model, switched off or not, with what the
+    /// server says of each.
+    #[serde(default)]
+    facts: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -5359,7 +5679,9 @@ struct Unavailable {
 async fn get_provider_models(
     State(state): State<AppRouterState>,
     Path(name): Path<String>,
+    Query(ask): Query<ModelsAsk>,
 ) -> Response {
+    let for_form = ask.facts.is_some_and(|value| value != "0");
     let name = bare(&name);
     let (config, path) = match load_config().await {
         Ok(loaded) => loaded,
@@ -5444,6 +5766,17 @@ async fn get_provider_models(
             Err(error) => (Vec::new(), Some(error.to_string())),
         },
     };
+    let profile = config.profiles().get(name).cloned().unwrap_or_default();
+    let facts = match for_form && local_engine.is_none() && !models.is_empty() {
+        true => Some(backend.facts(&models).await.unwrap_or_default()),
+        false => None,
+    };
+    // The pickers offer what is switched on; the form sees everything, since
+    // it is where a model is switched back on.
+    let models: Vec<String> = match for_form {
+        true => models,
+        false => models.into_iter().filter(|m| profile.offers(m)).collect(),
+    };
 
     // Last used with *this profile*, then what the profile itself says, then
     // whatever the provider listed first. The first of those is why the store
@@ -5471,6 +5804,7 @@ async fn get_provider_models(
         suggested_from,
         labels,
         unavailable,
+        facts,
     })
     .into_response()
 }
@@ -5496,16 +5830,152 @@ struct Declaration {
     host: String,
 }
 
+/// What a **candidate** destination answers, before anything about it is saved.
+///
+/// `GET /api/providers/{name}/models` cannot do this: it resolves through
+/// `config.toml`, where a provider being added is absent and one being edited
+/// still holds the values being replaced — so it would test the destination
+/// somebody is changing *away from* and call it a test. Saving first is the
+/// other way, and it writes a broken profile in order to discover that it is
+/// broken. **This writes nothing.** See
+/// `RECORD/2026-10-20.probing-a-destination.completed.md`.
+#[derive(serde::Deserialize)]
+struct ProbeAsk {
+    backend: crate::provider::BackendKind,
+    #[serde(default)]
+    url: Option<String>,
+    /// The key as typed, for a form whose key is not on disk yet. Falls back
+    /// to `key_file`, so testing a saved provider retypes nothing.
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    key_file: Option<PathBuf>,
+}
+
+#[derive(serde::Serialize)]
+struct Probed {
+    models: Vec<String>,
+    /// What the server says of each model — its window and its tools — for
+    /// the form to fill in rather than ask. A model it said nothing of is
+    /// absent.
+    facts: std::collections::BTreeMap<String, agent_core::backend::ModelFacts>,
+    /// The server's own refusal, which is the useful one: a 401 names the key,
+    /// a connection error names the URL.
+    error: Option<String>,
+}
+
+async fn probe_provider(
+    State(state): State<AppRouterState>,
+    Json(ask): Json<ProbeAsk>,
+) -> Response {
+    // The same door the writes are behind. A probe is not a write, but it
+    // spends the key, and that is close enough to belong on this side of it.
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "providers are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let url = ask
+        .url
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .or_else(|| ask.backend.default_url().map(str::to_string))
+        .unwrap_or_default();
+    let typed = ask
+        .key
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty());
+    let key = match (typed, ask.key_file) {
+        (Some(key), _) => Some(key),
+        (None, Some(path)) => {
+            let path = crate::provider::expand_home(&path);
+            match blocking(move || {
+                crate::secret::read(
+                    &path,
+                    "the API key file",
+                    "hands the key to anyone who can read it here",
+                )
+            })
+            .await
+            {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    return Json(Probed {
+                        models: Vec::new(),
+                        facts: Default::default(),
+                        error: Some(format!("{error:#}")),
+                    })
+                    .into_response();
+                }
+            }
+        }
+        (None, None) => None,
+    };
+    let backend = crate::probe_backend(ask.backend, &url, key);
+    let (models, error) = match backend.models().await {
+        Ok(models) => (models, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    let facts = match models.is_empty() {
+        true => Default::default(),
+        false => backend.facts(&models).await.unwrap_or_default(),
+    };
+    Json(Probed {
+        models,
+        facts,
+        error,
+    })
+    .into_response()
+}
+
 #[derive(serde::Deserialize)]
 struct ProvidersEdit {
     default: Option<String>,
     #[serde(default)]
     providers: std::collections::BTreeMap<String, crate::provider::Profile>,
+    /// Provider name → the key as typed, for the one field `config.toml` must
+    /// never hold. **Deserialize-only, and there is no field anywhere that
+    /// sends one back**: `Profile` is serialized into the file *and* into the
+    /// view the page reads, so a secret on it would land in both.
+    /// See `RECORD/2026-10-20.a-key-typed-into-the-form.completed.md`.
+    #[serde(default)]
+    keys: std::collections::BTreeMap<String, String>,
+}
+
+/// The key files the edit asked for, written before `config.toml` so the file
+/// never points at one that is not there. Answers with the `key-file` each
+/// profile should carry.
+///
+/// A failed config write afterwards leaves an orphan `0600` file, which is the
+/// right way round: deleting what may be the only copy of a credential because
+/// a *different* write was refused is worse than leaving it.
+fn write_keys(
+    state_dir: &std::path::Path,
+    providers: &std::collections::BTreeMap<String, crate::provider::Profile>,
+    keys: &std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<std::collections::BTreeMap<String, PathBuf>> {
+    let mut written = std::collections::BTreeMap::new();
+    for (name, key) in keys {
+        if key.trim().is_empty() {
+            continue;
+        }
+        // The path the form gave, if it gave one: somebody adopting a key file
+        // they already have should not have to retype the secret to move it.
+        let shown = providers
+            .get(name)
+            .and_then(|profile| profile.key_file.clone())
+            .unwrap_or_else(|| state_dir.join(format!("{name}.key")));
+        crate::secret::write(&crate::provider::expand_home(&shown), key)?;
+        written.insert(name.clone(), shown);
+    }
+    Ok(written)
 }
 
 async fn put_providers(
     State(state): State<AppRouterState>,
-    Json(edit): Json<ProvidersEdit>,
+    Json(mut edit): Json<ProvidersEdit>,
 ) -> Response {
     if !state.providers_editable {
         return (
@@ -5530,6 +6000,32 @@ async fn put_providers(
         .await
         .map(|(config, _)| config)
         .unwrap_or_default();
+    // Before the config write, so nothing in the file ever names a key file
+    // that was not created.
+    if !edit.keys.is_empty() {
+        let state_dir = path.parent().unwrap_or(&path).to_path_buf();
+        let providers = edit.providers.clone();
+        let keys = edit.keys.clone();
+        match blocking(move || write_keys(&state_dir, &providers, &keys)).await {
+            Ok(written) => {
+                for (name, key_file) in written {
+                    if let Some(profile) = edit.providers.get_mut(&name) {
+                        profile.key_file = Some(key_file);
+                    }
+                }
+            }
+            Err(error) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(WriteRefused {
+                        message: format!("{error:#}"),
+                        declaration: None,
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
     let config = current.from_parts(edit.default, edit.providers);
     // Checked by the loader that will read it back, so the rule a remote
     // default has to declare itself is enforced here by being the same rule.
@@ -6011,15 +6507,37 @@ async fn put_authority(
 }
 
 async fn list_sessions(State(state): State<AppRouterState>) -> Response {
-    let live = state.app.view.lock().await.summary();
-    let mut sessions = vec![live];
+    // The live session's last turn, from the fold in memory: the store saves
+    // a moment after a turn ends, and a list asked for in that moment would
+    // otherwise place a session just written to where it was before.
+    let (mut live, last_turn) = {
+        let view = state.app.view.lock().await;
+        // A turn's time is counted from the session's start.
+        let last = view
+            .turns
+            .last()
+            .map(|turn| view.started_at + turn.started_at_ms);
+        (view.summary(), last)
+    };
     let active_id = state.app.session_id.lock().await.clone();
+    let mut stored = Vec::new();
     if let Some(store) = &state.app.store {
         match store.lock().await.list() {
-            Ok(stored) => sessions.extend(stored.into_iter().filter(|row| row.id != active_id)),
+            Ok(rows) => stored = rows,
             Err(error) => eprintln!("warning: could not list the session store: {error:#}"),
         }
     }
+    // The live row stands for the stored session it is, so it carries that
+    // session's `written_at`: a client ordering by it puts the live session
+    // where it was last written to, and opening one does not move it. A
+    // session not stored yet counts from when it started.
+    let saved = stored
+        .iter()
+        .find(|row| row.id == active_id)
+        .and_then(|row| row.written_at);
+    live.written_at = last_turn.max(saved).or(Some(live.started_at));
+    let mut sessions = vec![live];
+    sessions.extend(stored.into_iter().filter(|row| row.id != active_id));
     Json(sessions).into_response()
 }
 
@@ -7281,6 +7799,48 @@ mod tests {
     use agent_core::sandbox::SandboxPolicy;
 
     use super::*;
+
+    /// What comes back from the model, as the title a session gets: the
+    /// first line outside the thinking, without the decoration small models
+    /// put around a one-line answer, and nothing from an answer that is empty.
+    #[test]
+    fn a_model_s_answer_is_tidied_into_a_title() {
+        let t = |answer: &str| tidy_title(answer);
+        assert_eq!(
+            t("Configurar un proveedor"),
+            Some("Configurar un proveedor".into())
+        );
+        assert_eq!(
+            t("\"Configurar un proveedor.\""),
+            Some("Configurar un proveedor".into())
+        );
+        assert_eq!(
+            t("**Title:** Fixing the menu height"),
+            Some("Fixing the menu height".into())
+        );
+        assert_eq!(
+            t("Title:\nFixing the menu height\nmore"),
+            Some("Fixing the menu height".into())
+        );
+        assert_eq!(
+            t("<think>the user asks about keys</think>\n\nAPI keys in the form"),
+            Some("API keys in the form".into())
+        );
+        assert_eq!(t("<think>still thinking"), None);
+        assert_eq!(t("  \n "), None);
+        let long = "word ".repeat(30);
+        let cut = t(&long).unwrap();
+        assert!(cut.chars().count() <= 60 && !cut.ends_with(' '), "{cut:?}");
+        assert_eq!(t(&"x".repeat(80)).unwrap().chars().count(), 60);
+    }
+
+    /// Born `live`, stored as its id: both are no name yet; anything else is.
+    #[test]
+    fn a_session_is_unnamed_until_something_names_it() {
+        assert!(unnamed("live", "session-1-a"));
+        assert!(unnamed("session-1-a", "session-1-a"));
+        assert!(!unnamed("Configurar un proveedor", "session-1-a"));
+    }
 
     const PLAN: &str = "```plan\n{\"objective\":\"add a flag\",\"tasks\":[\"read the CLI\"],\
                         \"files\":[\"Cargo.toml\"],\"commands\":[]}\n```";

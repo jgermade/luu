@@ -71,7 +71,7 @@ function xterm() {
 }
 
 /// The sixteen a shell names, as xterm calls them and as the panel's tokens
-/// do (`--ansi-yellow`, `--ansi-bright-yellow`).
+/// do (`--luu-ansi-yellow`, `--luu-ansi-bright-yellow`).
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
 
 /// The panel's own colours, read where xterm draws: the panel is dark whatever
@@ -83,15 +83,15 @@ function theme(host) {
   const palette = {}
   for (const name of ANSI) {
     const bright = `bright${name[0].toUpperCase()}${name.slice(1)}`
-    if (token(`--ansi-${name}`)) palette[name] = token(`--ansi-${name}`)
-    if (token(`--ansi-bright-${name}`)) palette[bright] = token(`--ansi-bright-${name}`)
+    if (token(`--luu-ansi-${name}`)) palette[name] = token(`--luu-ansi-${name}`)
+    if (token(`--luu-ansi-bright-${name}`)) palette[bright] = token(`--luu-ansi-bright-${name}`)
   }
   return {
     ...palette,
-    background: token("--bg"),
-    foreground: token("--fg"),
-    cursor: token("--accent"),
-    selectionBackground: token("--selected") || token("--line"),
+    background: token("--luu-bg"),
+    foreground: token("--luu-fg"),
+    cursor: token("--luu-accent"),
+    selectionBackground: token("--luu-selected") || token("--luu-border"),
   }
 }
 

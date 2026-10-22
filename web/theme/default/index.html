@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>luu — default theme</title>
+<link rel="icon" href="../../logo.svg" type="image/svg+xml">
+<!-- The theme's tokens and nothing of the app's: the components draw with
+     these alone, and this page is where that is seen to be true. `luu.css`
+     is the theme's too, for the file icons' colours, which only the tree
+     uses and so no component reads. -->
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./luu.css">
+<!-- The theme last chosen here, before the first paint, so a dark page does
+     not open white. -->
+<script>
+  try {
+    const chosen = localStorage.getItem("luu.theme-demo") || "auto"
+    const dark = chosen === "dark" || (chosen === "auto" && matchMedia("(prefers-color-scheme: dark)").matches)
+    document.documentElement.dataset.theme = dark ? "dark" : "light"
+  } catch {}
+</script>
+<style>
+  * { box-sizing: border-box; }
+  html { background: var(--luu-bg); }
+  body {
+    margin: 0;
+    background: var(--luu-bg);
+    color: var(--luu-fg);
+    font: var(--luu-text-md)/var(--luu-leading) var(--luu-font-sans);
+  }
+</style>
+</head>
+<body>
+<main id="demo"></main>
+<!-- `@theme/` is this folder and `@web/` the page's, as the app's own map
+     says; before the first module script, the only place a map is read. -->
+<script type="importmap">{ "imports": { "@theme/": "./", "@web/": "../../" } }</script>
+<script type="module">
+  import { C79 } from "../../vendor/jq79.js"
+  C79.fetch("./demo.html").mount("#demo")
+</script>
+</body>
+</html>

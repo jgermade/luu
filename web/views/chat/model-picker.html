@@ -77,9 +77,11 @@
     }
   }
 
-  const focusOn = name => {
+  const focusOn = async name => {
     focus = name
-    load(name)
+    grow(name)
+    await load(name)
+    grow(name)
   }
 
   const toggle = async event => {
@@ -98,24 +100,30 @@
     // models it is choosing among.
     const first = names.includes(current) ? current : names[0] || ""
     height = fit(first)
-    focusOn(first)
-    await load(first)
-    height = fit(first)
+    await focusOn(first)
   }
 
-  // The columns' height, in rem: enough for the providers and for the list
-  // the menu opened on, and then **fixed** while it is open — a height that
-  // followed the focused provider moved the menu's top edge each time the
-  // pointer crossed another, because it opens upward. A longer list scrolls
-  // in its column. The ceiling is the CSS's.
+  // The columns' height, in rem: enough for the providers and for the lists
+  // focused since the menu opened, and it **never shrinks** while it is open —
+  // a height that followed the focused provider moved the menu's top edge each
+  // time the pointer crossed another, because it opens upward. Growing moves
+  // it once, for a list that would not have fitted. A longer list than the
+  // ceiling scrolls in its column; the ceiling is the CSS's.
   let height = 0
+  const grow = name => { height = Math.max(height, fit(name)) }
   const fit = name => {
     const providers = names.length * 2.5 + .6
     const listed = lists[name]
-    const models = listed
-      ? 2 + Math.max(1, listed.models.length + listed.unavailable.length) * 1.65
+    if (!listed) return Math.max(8, providers)
+    // The reason is the one thing in this column whose height is its text's
+    // length rather than a row count: ~58 characters fit the width at this
+    // size. A provider that answers nothing — 401, nothing listening — says so
+    // here, and left uncounted it was a three-line message in 3.65rem.
+    const reason = listed.reason && !listed.models.length
+      ? Math.ceil(listed.reason.length / 58) * 1.4 + .4
       : 0
-    return Math.max(8, providers, models)
+    const rows = Math.max(1, listed.models.length + listed.unavailable.length)
+    return Math.max(8, providers, 2 + reason + rows * 1.65)
   }
 
   const choose = async (provider, model) => {
@@ -268,9 +276,9 @@
     align-items: center;
     gap: .3rem;
     min-width: 0;
-    background: var(--bg);
-    color: var(--fg);
-    border: 1px solid var(--line);
+    background: var(--luu-bg);
+    color: var(--luu-fg);
+    border: 1px solid var(--luu-border);
     border-radius: 6px;
     font: inherit;
     font-size: 11px;
@@ -279,9 +287,9 @@
     padding: .1rem .45rem .1rem .55rem;
     cursor: pointer;
   }
-  .face:hover, .face.open { border-color: var(--accent); }
+  .face:hover, .face.open { border-color: var(--luu-accent); }
   .face .profile {
-    color: var(--dim);
+    color: var(--luu-fg-muted);
     flex: 0 1 auto;
     max-width: 8rem;
     min-width: 0;
@@ -289,7 +297,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .face .sep { color: var(--dim); opacity: .6; flex: none; }
+  .face .sep { color: var(--luu-fg-muted); opacity: .6; flex: none; }
   .face .model-name {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -321,7 +329,7 @@
     min-width: 0;
     max-width: 14rem;
     font-size: 11px;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
     white-space: nowrap;
     overflow: hidden;
     flex: 0 1 auto;
@@ -332,24 +340,24 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .engine .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--accent); }
-  .engine.stopping .dot { background: var(--warn); }
-  .engine.stopping, .engine.downloading, .engine.starting { color: var(--fg); }
+  .engine .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--luu-accent); }
+  .engine.stopping .dot { background: var(--luu-warn); }
+  .engine.stopping, .engine.downloading, .engine.starting { color: var(--luu-fg); }
   .engine.stopping .dot, .engine.downloading .dot, .engine.starting .dot { animation: pulse 1s ease-in-out infinite; }
-  .engine.ready { color: var(--b-history); }
-  .engine.ready .dot { background: var(--b-history); }
-  .engine.failed { color: var(--bad); cursor: help; }
-  .engine.failed .dot { background: var(--bad); }
-  .engine .from { color: var(--dim); }
-  .engine .secs { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .engine.ready { color: var(--luu-bucket-history); }
+  .engine.ready .dot { background: var(--luu-bucket-history); }
+  .engine.failed { color: var(--luu-bad); cursor: help; }
+  .engine.failed .dot { background: var(--luu-bad); }
+  .engine .from { color: var(--luu-fg-muted); }
+  .engine .secs { color: var(--luu-fg-muted); font-variant-numeric: tabular-nums; }
   @keyframes pulse { 50% { opacity: .3; } }
   @media (prefers-reduced-motion: reduce) { .engine .dot { animation: none; } }
   .menu {
     position: fixed;
     z-index: 41;
     width: min(40rem, 92vw);
-    background: var(--raised);
-    border: 1px solid var(--line);
+    background: var(--luu-raised);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     box-shadow: 0 8px 24px rgb(0 0 0 / .25);
     display: flex;
@@ -358,15 +366,17 @@
   .cols {
     display: grid;
     grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
-    /* Fitted once, then fixed: see `fit`. */
-    height: min(50vh, 20rem, var(--rows, 12rem));
+    /* A floor of its own, then `fit`'s measurement, then the viewport: the
+       old `min()` had only a ceiling, so a measured height could lower the
+       menu and never raise it. */
+    height: min(max(16rem, var(--rows, 18rem)), 60vh, 30rem);
   }
   .providers {
     list-style: none;
     margin: 0;
     padding: .3rem;
     overflow-y: auto;
-    border-right: 1px solid var(--line);
+    border-right: 1px solid var(--luu-border);
   }
   .prov {
     display: flex;
@@ -378,15 +388,15 @@
     border: 0;
     border-radius: 6px;
     padding: .35rem .4rem;
-    color: var(--fg);
+    color: var(--luu-fg);
     font: inherit;
     font-size: 12px;
     cursor: pointer;
   }
   .prov .text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
   .prov .text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .prov.on { background: var(--sunken); }
-  .prov.current strong { color: var(--accent); }
+  .prov.on { background: var(--luu-sunken); }
+  .prov.current strong { color: var(--luu-accent); }
   .prov .go { width: 10px; height: 10px; opacity: .4; flex: none; }
   .models { overflow-y: auto; padding: .3rem 0; }
   .models header { padding: .2rem .8rem .3rem; }
@@ -401,15 +411,15 @@
     font: inherit;
     font-size: 12px;
     font-weight: 400;
-    color: var(--fg);
+    color: var(--luu-fg);
     cursor: pointer;
   }
-  .model:hover:not(:disabled):not(.off) { background: var(--sunken); }
-  .model.on { color: var(--accent); }
-  .model.off { color: var(--dim); cursor: help; }
+  .model:hover:not(:disabled):not(.off) { background: var(--luu-sunken); }
+  .model.on { color: var(--luu-accent); }
+  .model.off { color: var(--luu-fg-muted); cursor: help; }
   .model.off .name { font-style: italic; }
-  .model .warn { color: var(--warn); }
-  .check { width: 1em; flex: none; color: var(--accent); }
+  .model .warn { color: var(--luu-warn); }
+  .check { width: 1em; flex: none; color: var(--luu-accent); }
   .model .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pad { margin: 0; padding: .2rem .8rem; }
   .menu footer {
@@ -417,7 +427,7 @@
     gap: .5rem;
     align-items: center;
     flex-wrap: wrap;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--luu-border);
     padding: .4rem .8rem;
   }
   .menu footer .grow { flex: 1; }

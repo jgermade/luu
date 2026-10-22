@@ -6,11 +6,20 @@
   // table have nothing to do with each other, and stacking them made the second
   // one the reward for scrolling past the first. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { closeSettings } = await import("@web/lib/store.js")
+  const { closeSettings, state } = await import("@web/lib/store.js")
   const { ui } = await import("@web/lib/ui.js")
   const Modal = await import("@web/components/modal.html")
+  // Mounted here as well as in `app.html`, and the duplication is the point:
+  // `Modal` decides it is a child by looking for an open `dialog.modal` above
+  // it **in the DOM**, so the same component is a sheet inside Settings here
+  // and a window of its own there. Both are reached from Settings, so opened
+  // from it they belong in it.
+  const SessionsDialog = await import("@web/views/chat/sessions-dialog.html")
+  const Project = await import("@web/views/inspector/tree/project.html")
+  const { workspace } = await import("@web/lib/workspace.js")
 
   const SettingsGeneral = await import("./general/general.html")
+  const SettingsAppearance = await import("./appearance/appearance.html")
   const SettingsModels = await import("./models/models.html")
   const SettingsEngines = await import("./engines/engines.html")
   const SettingsRuntimes = await import("./runtimes/runtimes.html")
@@ -22,6 +31,9 @@
     // names comes first. Resend and Authority are one section, Sessions —
     // see `views/settings/sessions/sessions.html`.
     { value: "general", label: "General", icon: "i-sliders" },
+    // How the page looks on this screen: the editor and the chat's code, the
+    // columns, the tree's icons. See `appearance/appearance.html`.
+    { value: "appearance", label: "Appearance", icon: "i-palette" },
     { value: "engines", label: "Engines", icon: "i-chip" },
     { value: "models", label: "Models", icon: "i-server" },
     // Where a session's commands run: the container runtimes, their images,
@@ -100,6 +112,8 @@
       <div class="stage">
         <div :if="mounted('general')" class="section" data-section="general" :class="phase('general')"
              :aria-hidden="String(shown !== 'general')"><SettingsGeneral /></div>
+        <div :if="mounted('appearance')" class="section" data-section="appearance" :class="phase('appearance')"
+             :aria-hidden="String(shown !== 'appearance')"><SettingsAppearance /></div>
         <div :if="mounted('engines')" class="section" data-section="engines" :class="phase('engines')"
              :aria-hidden="String(shown !== 'engines')"><SettingsEngines /></div>
         <div :if="mounted('runtimes')" class="section" data-section="runtimes" :class="phase('runtimes')"
@@ -111,6 +125,11 @@
       </div>
     </section>
   </div>
+
+  <!-- Inside the dialog, so they open as sheets over Settings rather than as
+       a second window on top of it. -->
+  <SessionsDialog :if="ui.sessions" />
+  <Project :if="workspace.picker.open" />
 </Modal>
 
 <style scoped>
@@ -125,8 +144,8 @@
   .rail-col {
     padding: .6rem .4rem;
     /* Its ground and inks are the chat's — `.rail-col` in `app.css`. */
-    border-right: 1px solid var(--line);
-    background: var(--chat-bg);
+    border-right: 1px solid var(--luu-border);
+    background: var(--luu-chat-bg);
     overflow-y: auto;
     height: 100%;
     box-sizing: border-box;
@@ -138,8 +157,14 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     box-sizing: border-box;
-    display: block;
-    padding: 1.25rem 1.75rem 2.5rem;
+    /* A column all the way down to each section's own pane, so a pinned foot's
+       `margin-top: auto` reaches the bottom when the content is shorter than
+       the pane — see RECORD/2026-10-08.settings-design-system-and-folio. */
+    display: flex;
+    flex-direction: column;
+    /* Nothing: each section pads itself, and a section's foot reaches the
+       pane's edges because nothing here holds it in. */
+    padding: 0;
     scroll-padding-bottom: 4rem;
   }
   /* One section in the flow, which is what the pane scrolls; the others laid
@@ -147,9 +172,10 @@
      known. The chosen one fades in as the one it replaces fades out. */
   .stage {
     position: relative;
-    min-height: 100%;
+    flex: 1 0 auto;
     box-sizing: border-box;
-    display: block;
+    display: flex;
+    flex-direction: column;
   }
   .section {
     position: absolute;
@@ -173,8 +199,9 @@
     visibility: visible;
     pointer-events: auto;
     transition: opacity .22s ease-in .06s;
-    min-height: 100%;
-    display: block;
+    flex: 1 0 auto;
+    display: flex;
+    flex-direction: column;
   }
   @media (prefers-reduced-motion: reduce) {
     .pane, .section, .section.on, .section.leaving { transition: none; }

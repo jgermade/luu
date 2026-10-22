@@ -1,0 +1,97 @@
+<script :setup="{
+  model = '',
+  placeholder = '',
+  rows = 3,
+  disabled = false,
+  readonly = false,
+  invalid = false,
+  resize = 'vertical',
+  autosize = false,
+  mono = false,
+  id = '',
+  name = '',
+  label = ''
+}">
+  // Several lines of text: a note, a prompt, a policy. `autosize` grows the
+  // box with what is written, from `rows` up, instead of scrolling inside it.
+  // `mono` is for text whose columns mean something — TOML, a command.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Textarea :model="note" rows="4" autosize placeholder="what the plan may not do" />
+  //
+  // `input` on every keystroke and `change` when committed, with the value in
+  // `$event.detail`.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isReadonly = flag(readonly)
+  $: isInvalid = flag(invalid)
+  $: isAutosize = flag(autosize)
+  $: isMono = flag(mono)
+
+  $: val = model ?? ""
+
+  const fit = () => {
+    const box = $self("textarea")
+    if (!isAutosize || !box) return
+    box.style.height = "auto"
+    box.style.height = `${box.scrollHeight + 2}px`
+  }
+  const typed = event => {
+    const v = event.target.value
+    $updateModel(v)
+    $emit("input", v)
+    fit()
+  }
+
+  await $mounted()
+  // A value set from outside changes the height as much as typing does.
+  $: (val, requestAnimationFrame(fit))
+</script>
+
+<textarea :rows="rows"
+          :value="val"
+          :placeholder="placeholder || null"
+          :disabled="isDisabled"
+          :readonly="isReadonly"
+          :id="id || null"
+          :name="name || null"
+          :aria-label="label || null"
+          :aria-invalid="isInvalid ? 'true' : null"
+          :class.invalid="isInvalid"
+          :class.mono="isMono"
+          :style="`resize:${isAutosize ? 'none' : resize}`"
+          @input="typed($event)"
+          @change="$emit('change', $event.target.value)"></textarea>
+
+<style scoped>
+  textarea {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: var(--luu-space-2) var(--luu-space-3);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    outline: none;
+    transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease;
+  }
+  textarea:hover:not(:disabled) { border-color: var(--luu-border-strong); }
+  textarea:focus {
+    border-color: var(--luu-focus);
+    box-shadow: 0 0 0 1px var(--luu-focus);
+  }
+  textarea::placeholder { color: var(--luu-fg-subtle); }
+  textarea:disabled { opacity: .55; background: var(--luu-sunken); cursor: not-allowed; }
+  .invalid, .invalid:hover:not(:disabled) { border-color: var(--luu-bad); }
+  .invalid:focus { border-color: var(--luu-bad); box-shadow: 0 0 0 1px var(--luu-bad); }
+  .mono { font-family: var(--luu-font-mono); font-size: var(--luu-text-sm); }
+</style>

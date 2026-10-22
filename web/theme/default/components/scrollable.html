@@ -1,7 +1,12 @@
 <script :setup="{ x = false, y = false, background = '', max = '', frame = '', fill = false, autoscroll = '', overscroll = 'contain' }">
   // Something that scrolls, on a ground that does not.
   //
-  //     <Scrollable :y="true" frame="well" max="16rem"><pre>…</pre></Scrollable>
+  //   <Scrollable y frame="well" max="16rem"><pre>…</pre></Scrollable>
+  //   <Scrollable y fill autoscroll="bottom">…the transcript…</Scrollable>
+  //
+  // **Part of the default theme**: draws only with `tokens.css`, and the
+  // theme's other components scroll through it — a modal's body, a menu's
+  // list. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
   //
   // **Two elements because a bounce takes one with it.** Pulled past either
   // end, a scroller's own background goes with its content — Chrome paints it
@@ -12,10 +17,9 @@
   // `x`, `y` — the axes that scroll. `background` — the ground, any CSS value;
   // without one the ground is the `frame`'s, or whatever is behind. `max` — the
   // scroller's cap, which is what makes it scroll vertically at all. `frame` —
-  // a global class for the ground's border and corners (`well`, in `app.css`):
-  // the host of a component lays out as `display: contents`, so a class on
-  // `<Scrollable>` itself would reach nothing. `fill` — take the height a flex
-  // column gives it instead of a `max`: the chat's transcript.
+  // `well`: a sunken ground with a border and rounded corners, for a block of
+  // the machine's words. `fill` — take the height a flex column gives it
+  // instead of a `max`: the chat's transcript, a modal's body.
   //
   // `autoscroll="bottom"` — **follows the end while it is at the end**: when
   // what is inside grows (a reply streaming in, a fold opening) and the
@@ -29,8 +33,16 @@
   // scrolling the modal or the page behind it. `auto` gives the chaining back,
   // `none` also drops the bounce.
   //
-  // What goes inside is the caller's, and so are its styles — except that a
-  // `pre` in here stops being a scroller of its own (`app.css`), since this is.
+  // What goes inside is the caller's, and so are its styles: padding included —
+  // the scroller pads nothing, so a body that wants room puts it on itself.
+  // The app makes a `pre` in here stop being a scroller of its own (`app.css`,
+  // `[data-scrollable] > pre`), since this is.
+
+  // A bare attribute (`<Scrollable y>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: onX = flag(x)
+  $: onY = flag(y)
+  $: filling = flag(fill)
 
   // How close to the end still counts as at it: a fraction of a pixel is
   // what a zoomed page leaves. It was a line (24px), and a trackpad scrolls a
@@ -89,9 +101,9 @@
   }
 </script>
 
-<div class="ground" :class="frame" :class.fill="fill"
+<div class="ground" :class.well="frame === 'well'" :class.fill="filling"
      :style="background ? `background: ${background}` : ''">
-  <div class="scroller" data-scrollable :class.x="x" :class.y="y"
+  <div class="scroller" data-scrollable :class.x="onX" :class.y="onY"
        :style="`overscroll-behavior: ${overscroll || 'contain'};${max ? ` max-height: ${max};` : ''}`"><slot /></div>
 </div>
 
@@ -102,4 +114,12 @@
   .scroller.y { overflow-y: auto; }
   .ground.fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .ground.fill > .scroller { flex: 1; min-height: 0; }
+  /* A well: the frame and ground of a block of the machine's words. The
+     corners clip the scroller, so its content does not draw over them. */
+  .well {
+    overflow: hidden;
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-sunken);
+  }
 </style>

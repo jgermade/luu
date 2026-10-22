@@ -16,7 +16,7 @@
   // nobody can reach from the surface they actually use is a narrowing nobody
   // applies.
   const { state, loadResend, saveResend } = await import("@web/lib/store.js")
-  const Segmented = await import("@web/components/segmented.html")
+  const Segmented = await import("@web/theme/default/components/segmented.html")
   const SaveButton = await import("@web/components/save-button.html")
   const PathText = await import("@web/components/path-text.html")
 
@@ -77,18 +77,18 @@
 
 <div class="ds-diagram">
   <div class="ds-diagram-node">
-    <div style="font-weight:600;color:var(--b-system);">Prefijo de sistema</div>
-    <div style="font-size:10px;color:var(--dim);">Definiciones y herramientas</div>
+    <div style="font-weight:600;color:var(--luu-bucket-system);">Prefijo de sistema</div>
+    <div style="font-size:10px;color:var(--luu-fg-muted);">Definiciones y herramientas</div>
   </div>
   <div class="ds-diagram-arrow">➔</div>
   <div class="ds-diagram-node">
-    <div style="font-weight:600;color:var(--b-history);">Historial (Resend)</div>
-    <div style="font-size:10px;color:var(--dim);">Turnos pasados podados</div>
+    <div style="font-weight:600;color:var(--luu-bucket-history);">Historial (Resend)</div>
+    <div style="font-size:10px;color:var(--luu-fg-muted);">Turnos pasados podados</div>
   </div>
   <div class="ds-diagram-arrow">➔</div>
   <div class="ds-diagram-node">
-    <div style="font-weight:600;color:var(--accent);">Turno activo</div>
-    <div style="font-size:10px;color:var(--dim);">Prompt y respuesta viva</div>
+    <div style="font-weight:600;color:var(--luu-accent);">Turno activo</div>
+    <div style="font-size:10px;color:var(--luu-fg-muted);">Prompt y respuesta viva</div>
   </div>
 </div>
 
@@ -225,13 +225,13 @@
   }
   h3:first-child { margin-top: 0; }
   .path { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
-  .note b, .caveat b { color: var(--fg); font-weight: 600; }
-  /* `--warn-bg` is the ground under anything bordered in `--warn` — the gate,
+  .note b, .caveat b { color: var(--luu-fg); font-weight: 600; }
+  /* `--luu-warn-soft` is the ground under anything bordered in `--luu-warn` — the gate,
      a refusal — and this is the third: a save that did part of what it said. */
   .waiting {
-    border: 1px solid var(--warn);
+    border: 1px solid var(--luu-warn);
     border-radius: 6px;
-    background: var(--warn-bg);
+    background: var(--luu-warn-soft);
     padding: .6rem .8rem;
     margin-top: 1rem;
     font-size: 13px;
@@ -248,26 +248,26 @@
     font-size: 11px;
     padding: .15rem .5rem;
     border-radius: 4px;
-    border: 1px solid var(--line);
-    background: var(--sunken, rgba(0, 0, 0, .04));
-    color: var(--dim);
+    border: 1px solid var(--luu-border);
+    background: var(--luu-sunken, rgba(0, 0, 0, .04));
+    color: var(--luu-fg-muted);
   }
   .rule-pill strong {
-    color: var(--fg);
+    color: var(--luu-fg);
     margin-right: .2rem;
   }
   .rule-pill.accent {
-    border-color: var(--accent);
-    background: var(--selected, rgba(47, 91, 189, .08));
-    color: var(--fg);
+    border-color: var(--luu-accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .08));
+    color: var(--luu-fg);
   }
   .rule-pill.accent strong {
-    color: var(--accent);
+    color: var(--luu-accent);
   }
   .rule-pill.warn {
-    border-color: var(--warn);
-    background: var(--warn-bg, rgba(138, 93, 18, .08));
+    border-color: var(--luu-warn);
+    background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
   }
-  .waiting ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--dim); }
+  .waiting ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--luu-fg-muted); }
   .waiting li + li { margin-top: .3rem; }
 </style>

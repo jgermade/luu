@@ -1,0 +1,293 @@
+<script :setup>
+  // Sessions, in one dialog with two tabs: **New session** — where it sends,
+  // which model, what it may run — and **History** — the earlier ones, with a
+  // search. The `+` and the clock in the chat's head open it on their own tab;
+  // they were two modals until 2026-10-21. See
+  // `RECORD/2026-10-21.the-design-system-applied.completed.md`, and for what
+  // each tab decides, `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`
+  // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
+  const { state, resumeSession, deleteSession, refreshSessionsList } = await import("@web/lib/store.js")
+  const {
+    ui, loadModels, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
+  } = await import("@web/lib/ui.js")
+  const { placeOptions } = await import("@web/lib/places.js")
+  const TabModal = await import("@web/theme/default/components/tab-modal.html")
+  const InputContainer = await import("@web/theme/default/components/input-container.html")
+  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const Button = await import("@web/theme/default/components/button.html")
+
+  const TABS = [
+    { value: "new", label: "New session" },
+    { value: "history", label: "History" },
+  ]
+  // The tab is the store's, so the head's buttons choose it; a click on a tab
+  // here goes the same way.
+  $: tab = ui.sessions || "new"
+  const choose = next => showSessionsTab(next)
+
+  // ---- new session -----------------------------------------------------------
+  //
+  // Starting a session: the one moment its destination is chosen. Nothing
+  // switches inside a session — every per-turn number is backend-specific, and
+  // one label over two backends is a comparison nobody can make.
+
+  $: profileNames = Object.keys(state.providers?.providers || {})
+  // Every posture on every runtime it can run on, as the terminal's foot
+  // offers them; the last one used is chosen to begin with (`openStarter`).
+  // Empty where nobody has written a posture down, and where a surface cannot
+  // choose one at all — over stdio the process is the session.
+  $: places = state.postures?.choosable ? placeOptions(state.postures) : []
+  $: chosenPosture = (ui.starter?.place || "|").split("|")[0]
+  // Each field's line under its box: what it is, where its value came from,
+  // or what will not work about it.
+  $: providerSaid = ui.starter?.provider === state.providers?.default
+    ? "the file's default"
+    : "where the session sends"
+  $: modelWarning = ui.starter?.reason
+    ? `Could not list this provider's models: ${ui.starter.reason}. Type one — a model that is not pulled yet is still a name worth writing down.`
+    : ""
+  $: modelSaid = ui.starter?.loading
+    ? "asking the provider…"
+    : ui.starter?.from
+      ? `from ${ui.starter.from}`
+      : !ui.starter?.models?.length
+        ? "This provider offers no list, so the model is whatever you type."
+        : `${ui.starter.models.length} on offer`
+  $: placeChoices = places.map(p => ({
+    value: p.value, label: `${p.name} — ${p.label}`, disabled: p.disabled, title: p.title,
+  }))
+  $: placeSaid = chosenPosture
+    ? `${state.postures?.postures[chosenPosture]?.policy} — chosen now: a session's jobs are approved against what it may do.`
+    : "what its commands may do"
+  $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
+  // What stands in the way of *either* action: the server refuses both while a
+  // turn is in flight or a proposal is unanswered, and a button that fails when
+  // pressed is worse than one that says why it will not.
+  $: busy = state.status === "running"
+    ? "a turn is running"
+    : proposed
+      ? "a proposal is waiting at the gate"
+      : ""
+  $: cannotContinue = busy
+    || (state.replay
+      ? "this is a recording"
+      : !state.session
+        ? "no session is open"
+        : !state.messages.length
+          ? "this session has no turns yet — start one instead"
+          : !state.settings?.store
+            ? "this server keeps no session store, so nothing can be resumed"
+            : "")
+
+  // ---- history ---------------------------------------------------------------
+  //
+  // The earlier sessions: a search over them and the list, in the order they
+  // were last written to.
+
+  let query = ""
+  // Deleting asks twice: the first click on a row's × arms it.
+  let armed = ""
+  let error = ""
+  let switching = ""
+
+  // Asked again on every opening: the counts move with every turn.
+  refreshSessionsList()
+
+  // The search is what a person opening History came to use. The dialog puts
+  // the focus on its chosen tab first; this takes it a frame or two later.
+  const focusSearch = (frames = 30) => {
+    const input = document.querySelector("dialog[open] .sessions-search input")
+    if (input) input.focus()
+    else if (frames > 0) requestAnimationFrame(() => focusSearch(frames - 1))
+  }
+  const later = (fn, frames = 3) => frames ? requestAnimationFrame(() => later(fn, frames - 1)) : fn()
+  $: tab === "history" && later(() => focusSearch())
+
+  const named = s => !!s?.title && s.title !== "live" && !s.title.startsWith("session-")
+  const nameOf = s => named(s) ? s.title : "Untitled session"
+  // Case and accents folded, so `configuracion` finds *Configuración*.
+  const fold = text => (text || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+  const when = s => {
+    const ms = s.written_at ?? s.started_at
+    if (!ms) return ""
+    const date = new Date(ms)
+    const today = new Date().toDateString() === date.toDateString()
+    return today
+      ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      : date.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+  }
+  const isCurrent = s => s.id === state.currentSessionId
+
+  // The order the server's `written_at` gives, and a session nothing was sent
+  // in left out unless it is the one on screen — it holds nothing to open.
+  $: listed = [...(state.sessions || [])]
+    .filter(s => s.turns > 0 || isCurrent(s))
+    .sort((a, b) => (b.written_at ?? b.started_at ?? 0) - (a.written_at ?? a.started_at ?? 0))
+  $: words = fold(query).split(/\s+/).filter(Boolean)
+  $: rows = words.length
+    ? listed.filter(s => {
+      const hay = fold(`${nameOf(s)} ${s.id}`)
+      return words.every(word => hay.includes(word))
+    })
+    : listed
+
+  const pick = async s => {
+    if (switching) return
+    if (isCurrent(s)) return closeSessions()
+    switching = s.id
+    error = ""
+    const ok = await resumeSession(s.id)
+    switching = ""
+    if (ok) return closeSessions()
+    // A turn still running is the usual one: the server refuses to leave it.
+    error = state.error || "the session could not be opened"
+  }
+
+  const remove = async (s, event) => {
+    event.stopPropagation()
+    if (armed !== s.id) {
+      armed = s.id
+      return
+    }
+    armed = ""
+    await deleteSession(s.id)
+  }
+</script>
+
+<!-- Dark-headed, though it is under the size that would make it so: it is
+     the session's own dialog, a bar like the column's head it is opened from. -->
+<TabModal open title="Sessions" head="dark" tinted :tabs="TABS" :model="tab" width="38rem" height="26rem"
+          @change="choose($event.detail)" @close="closeSessions()">
+
+  <!-- ---- new session ---- -->
+  <div :if="tab === 'new'" class="panel">
+    <p :if="!profileNames.length" class="refused">
+      There are no providers in <code>config.toml</code> yet. Write one in
+      Settings → Models first — a session can only be sent somewhere this
+      machine has already named.
+    </p>
+
+    <!-- One box per thing chosen: its name in the border, what it is or
+         where its value came from under it. -->
+    <div class="fields" :if="profileNames.length">
+      <InputContainer label="Provider" type="select" :options="profileNames"
+                      :model="ui.starter?.provider" :description="providerSaid"
+                      @change="loadModels($event.detail)" />
+
+      <InputContainer label="Model" list="starter-models" :model="ui.starter?.model"
+                      :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
+                      :warning="modelWarning" :description="modelSaid"
+                      @input="editStarter({ model: $event.detail })" />
+      <datalist id="starter-models">
+        <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
+      </datalist>
+
+      <!-- What the session may do, which is not where it sends. Offered only
+           where somebody has written one down: the names come from
+           `config.toml`, and a page cannot add to them. -->
+      <InputContainer :if="places.length > 1" label="Runs" type="select" select-class="place"
+                      :options="placeChoices" :model="ui.starter?.place" :description="placeSaid"
+                      @change="editStarter({ place: $event.detail })" />
+    </div>
+
+    <p class="dim small" :if="profileNames.length">
+      <strong>Start session</strong> opens an empty one there.
+      <strong>Continue here</strong> keeps the history on screen and moves it —
+      the session's stream gains a header saying where it changed, so the turns
+      before it are not read as comparable with the ones after.
+      Neither changes the file, and neither touches a turn that is running.
+    </p>
+    <p class="dim small" :if="profileNames.length && cannotContinue">
+      Cannot continue: {{ cannotContinue }}.
+    </p>
+    <p class="dim small" :if="profileNames.length && busy">
+      Cannot start one either: {{ busy }}.
+    </p>
+  </div>
+
+  <!-- History's search, above the list and still while it scrolls: close to
+       the tabs it belongs to, and clear of the rows. -->
+  <template :slot.bar>
+    <div :if="tab === 'history'" class="sessions-search">
+      <TextInput size="lg" :model="query" placeholder="Search by name" label="Search sessions" clearable
+                 @input="armed = ''" />
+    </div>
+  </template>
+
+  <!-- ---- history ---- -->
+  <div :if="tab === 'history'" class="panel">
+    <p :if="error" class="error">{{ error }}</p>
+
+    <ul :if="rows.length" class="sessions" @click="armed = ''">
+      <li :each="s in rows" :key="s.id" :class.on="isCurrent(s)">
+        <button type="button" class="pick" :title="s.id" :disabled="!!switching" @click="pick(s)">
+          <span class="name" :class.untitled="!named(s)">{{ nameOf(s) }}</span>
+          <span class="facts dim">
+            {{ when(s) }} · {{ s.turns }} {{ s.turns === 1 ? "turn" : "turns" }}<span :if="isCurrent(s)"> · open</span><span :if="switching === s.id"> · opening…</span>
+          </span>
+        </button>
+        <!-- Only where the server would take it: not the session on screen. -->
+        <button :if="!isCurrent(s) && s.id !== 'live'" type="button" class="close"
+                :class.armed="armed === s.id"
+                :title="armed === s.id ? 'Click again to delete this session and its stream' : 'Delete this session'"
+                @click="remove(s, $event)">
+          <svg class="ic"><use href="#i-close"/></svg>
+        </button>
+      </li>
+    </ul>
+    <p :if="!rows.length && words.length" class="dim">No session matches “{{ query.trim() }}”.</p>
+    <p :if="!listed.length" class="dim">No sessions yet.</p>
+  </div>
+
+  <!-- The foot is the tab's: the two ways out of New, and how many there are
+       in History. -->
+  <template :slot.foot>
+    <span :if="tab === 'history'" class="dim small count">
+      {{ listed.length }} {{ listed.length === 1 ? "session" : "sessions" }}
+    </span>
+    <Button :if="tab === 'new'" :disabled="!profileNames.length || ui.starting || !!cannotContinue"
+            title="Keep this session's history and move it to the chosen destination"
+            @click="continueHere()">{{ ui.starting && ui.continuing ? "Moving…" : "Continue here" }}</Button>
+    <Button :if="tab === 'new'" variant="primary" :disabled="!profileNames.length || ui.starting || !!busy"
+            @click="startSession()">{{ ui.starting && !ui.continuing ? "Starting…" : "Start session" }}</Button>
+  </template>
+</TabModal>
+
+<style scoped>
+  .panel { display: flex; flex-direction: column; gap: var(--luu-space-3); }
+  .panel > p { margin: 0; }
+  .fields { display: flex; flex-direction: column; gap: var(--luu-space-4); }
+  .count { margin-right: auto; }
+  /* White over the body's grey: the search is part of the head's side of the
+     dialog, the list part of the body's. */
+  .sessions-search {
+    padding: var(--luu-space-3) var(--luu-space-5) var(--luu-space-4);
+    border-bottom: 1px solid var(--luu-border);
+    background: var(--luu-surface);
+  }
+
+  .sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .sessions li { display: flex; align-items: center; border-radius: 6px; }
+  /* On the body's grey a row lifts to white under the pointer. */
+  .sessions li:hover { background: var(--luu-surface); }
+  .sessions li.on { background: color-mix(in srgb, var(--luu-accent) 10%, transparent); }
+  .pick {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; align-items: flex-start; gap: .1rem;
+    background: none; border: none; color: inherit; text-align: left;
+    padding: .45rem .6rem; cursor: pointer; font: inherit;
+  }
+  .pick:active:not(:disabled) { background: var(--luu-active); border-radius: 6px; }
+  .name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .sessions li.on .name { font-weight: 600; }
+  .name.untitled { color: var(--luu-fg-muted); font-style: italic; }
+  .facts { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .close {
+    flex: none; background: none; border: none; color: var(--luu-fg-muted);
+    padding: .3rem; margin-right: .3rem; border-radius: 4px; cursor: pointer; opacity: .5;
+  }
+  .close:hover { opacity: 1; background: var(--luu-hover); }
+  .close:active { background: var(--luu-active); }
+  .close.armed { opacity: 1; color: var(--luu-bad); background: var(--luu-bad-soft); }
+  .close .ic { width: 12px; height: 12px; }
+</style>

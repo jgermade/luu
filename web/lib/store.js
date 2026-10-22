@@ -477,6 +477,9 @@ function onProtocol(message) {
       }
       state.turn = null
       state.status = idle()
+      // The first turn of a session nobody named is when the server asks its
+      // model for a name.
+      if (!isReplay && state.messages.filter(m => m.role === "user").length === 1) watchForName()
       // A window the server said is learned in the background, after the
       // session starts; the end of a turn is when the page asks again, so the
       // context indicator is not left reading `/ —` over a window luu knows.
@@ -1031,6 +1034,25 @@ export async function loadProviders() {
   }
 }
 
+/// What a destination answers, before anything about it is saved.
+///
+/// Takes the form's own fields rather than a profile name: the provider being
+/// added is not in the file, and the one being edited is in it with the values
+/// being replaced. Writes nothing either way.
+export async function probeProvider(body) {
+  try {
+    const res = await fetch("./api/providers/probe", {
+      method: "POST",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) return { models: [], error: await res.text() }
+    return await res.json()
+  } catch (e) {
+    return { models: [], error: `${e}` }
+  }
+}
+
 /// This machine's `[resend]` table, and what the live session is under.
 ///
 /// Fetched by the section that draws it, like the providers: two questions with
@@ -1123,7 +1145,16 @@ export async function saveAuthority(body) {
   }
 }
 
-export function closeSettings() {
+export async function closeSettings() {
+  // The sheets Settings owns go with it. They are mounted *inside* its dialog
+  // while it is open and at the top level while it is not, so leaving one set
+  // would re-open it as a window of its own the moment this flag flips.
+  const { ui } = await import("@web/lib/ui.js")
+  const { closePicker } = await import("@web/lib/workspace.js")
+  ui.starter = null
+  // Refuses while the first-visit picker is forced, which is the one case
+  // where there is nothing behind it to go back to.
+  closePicker()
   state.settingsOpen = false
 }
 
@@ -1175,8 +1206,14 @@ export async function saveProviders(body) {
       // leaves this machine and has not said so. The server names the host and
       // the caller asks for it to be typed — the declaration is produced by a
       // person, which is the whole content of the rule.
-      const refused = await res.json().catch(() => null)
-      state.providersError = refused?.message || "the write was refused"
+      // JSON when the loader refused the file; plain text when the request
+      // never reached it — a body that would not deserialize, a server bound
+      // off loopback. Either way the server's own words, never a stand-in that
+      // hides which of them it was.
+      const text = await res.text().catch(() => "")
+      let refused = null
+      try { refused = JSON.parse(text) } catch { /* plain text */ }
+      state.providersError = refused?.message || text.trim() || `the write was refused (${res.status})`
       return { ok: false, declaration: refused?.declaration || null }
     }
     state.providers = await res.json()
@@ -1276,6 +1313,29 @@ export async function refreshLiveSession() {
   }
 }
 
+/// A session nobody named is given one by its own model a moment after its
+/// first turn ends (`serve::name_session`). Nothing on the wire says when, so
+/// the list is asked for again a few times, further apart each time, and the
+/// asking stops at the name or after half a minute. See
+/// `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
+const named = s => !!s?.title && s.title !== "live" && !s.title.startsWith("session-")
+let naming = null
+function watchForName() {
+  if (naming) return
+  const delays = [1500, 3000, 5000, 8000, 12000]
+  let i = 0
+  const next = async () => {
+    await refreshSessionsList()
+    const current = (state.sessions || []).find(s => s.id === state.currentSessionId)
+    if (named(current) || i >= delays.length) {
+      naming = null
+      return
+    }
+    naming = setTimeout(next, delays[i++])
+  }
+  naming = setTimeout(next, 500)
+}
+
 export async function refreshSessionsList() {
   try {
     const res = await fetch("./api/sessions", { headers: apiHeaders() })
@@ -1326,9 +1386,13 @@ export async function newSession(choice) {
 /// A provider that is not running answers with an empty list and a reason —
 /// see `serve::ProviderModels`. That is not an error state in the page either:
 /// the field it fills is a suggestion beside an input somebody may type into.
-export async function providerModels(name) {
+/// `facts` is the provider form's ask: every model, switched off or not, with
+/// what the server says of each — one request per model on Ollama, which the
+/// pickers do not pay.
+export async function providerModels(name, { facts = false } = {}) {
   try {
-    const res = await fetch(`./api/providers/${encodeURIComponent(name)}/models`, {
+    const query = facts ? "?facts=1" : ""
+    const res = await fetch(`./api/providers/${encodeURIComponent(name)}/models${query}`, {
       headers: apiHeaders(),
     })
     if (!res.ok) return { models: [], reason: await res.text(), suggested: null }

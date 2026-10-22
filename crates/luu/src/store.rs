@@ -51,7 +51,11 @@ use rusqlite::Connection;
 /// [`SessionStore::stream`] answers with nothing rather than with a stream
 /// folded back out of a view — that would invent line orders and timings the
 /// session never had.
-const SCHEMA: i32 = 3;
+///
+/// **4 is when a session was last written to** (`written_at`): what the
+/// history is ordered by, so opening a session does not move it — only a turn
+/// does. Rows from before it take their `saved_at`, the nearest thing they have.
+const SCHEMA: i32 = 4;
 
 /// Where the store lives when nobody says otherwise.
 ///
@@ -81,6 +85,12 @@ const EVENTS: &str = "CREATE TABLE IF NOT EXISTS events (
 /// Added by migration rather than written into the `CREATE`, so a store made
 /// by an older build gains it without its rows being touched.
 const PROVIDER_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN provider TEXT;";
+
+/// The same, for when a session last gained a turn. A row from before it gets
+/// its last save, which is when it was last written to unless it was only
+/// opened since — the best a store that never kept the fact can say.
+const WRITTEN_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN written_at INTEGER;
+                              UPDATE sessions SET written_at = saved_at;";
 
 pub struct SessionStore {
     connection: Connection,
@@ -128,6 +138,7 @@ impl SessionStore {
                     );",
                 )?;
                 connection.execute_batch(EVENTS)?;
+                connection.execute_batch(WRITTEN_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before the stream was kept. Its sessions stay
@@ -137,6 +148,7 @@ impl SessionStore {
             1 => {
                 connection.execute_batch(EVENTS)?;
                 connection.execute_batch(PROVIDER_COLUMN)?;
+                connection.execute_batch(WRITTEN_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before a session could name the profile it ran on.
@@ -144,6 +156,12 @@ impl SessionStore {
             // true answer for a session recorded when nothing asked.
             2 => {
                 connection.execute_batch(PROVIDER_COLUMN)?;
+                connection.execute_batch(WRITTEN_COLUMN)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            // A store from before the history was ordered by writing.
+            3 => {
+                connection.execute_batch(WRITTEN_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -219,9 +237,15 @@ impl SessionStore {
     pub fn save(&self, view: &SessionView, provider: Option<&str>) -> Result<()> {
         let summary = view.summary();
         self.connection.execute(
+            // `written_at` moves when the turn count does and at no other
+            // save: a resume, a rename or a settings change saves the row too,
+            // and none of them is somebody writing in the session. A session
+            // with no turns yet counts from when it started.
             "INSERT INTO sessions
-                 (id, title, backend, model, started_at, turns, record, view, saved_at, provider)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 (id, title, backend, model, started_at, turns, record, view, saved_at, provider,
+                  written_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                     CASE WHEN ?6 > 0 THEN ?9 ELSE ?5 END)
              ON CONFLICT(id) DO UPDATE SET
                  title = excluded.title,
                  backend = excluded.backend,
@@ -231,7 +255,10 @@ impl SessionStore {
                  record = excluded.record,
                  view = excluded.view,
                  saved_at = excluded.saved_at,
-                 provider = excluded.provider",
+                 provider = excluded.provider,
+                 written_at = CASE WHEN excluded.turns <> sessions.turns
+                                   THEN excluded.saved_at
+                                   ELSE sessions.written_at END",
             rusqlite::params![
                 summary.id,
                 summary.title,
@@ -338,11 +365,14 @@ impl SessionStore {
         )))
     }
 
-    /// What `GET /api/sessions` lists, newest first.
+    /// What `GET /api/sessions` lists: the one last written to first. Opening
+    /// one does not move it; a turn in it does.
     pub fn list(&self) -> Result<Vec<SessionSummary>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, title, backend, model, started_at, turns, record
-             FROM sessions ORDER BY started_at DESC, id DESC",
+            "SELECT id, title, backend, model, started_at, turns, record,
+                    COALESCE(written_at, started_at) AS written
+             FROM sessions
+             ORDER BY written DESC, started_at DESC, id DESC",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(SessionSummary {
@@ -353,6 +383,7 @@ impl SessionStore {
                 started_at: row.get::<_, i64>(4)? as u64,
                 turns: row.get::<_, i64>(5)? as usize,
                 record: row.get(6)?,
+                written_at: Some(row.get::<_, i64>(7)? as u64),
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -392,6 +423,37 @@ mod tests {
             serde_json::to_value(&loaded).unwrap(),
             serde_json::to_value(&view).unwrap(),
         );
+    }
+
+    /// The history is ordered by writing, not by opening. A save with the same
+    /// turns — what a resume, a rename or a settings change does — leaves a
+    /// session where it was; a turn moves it to the top.
+    #[test]
+    fn opening_a_session_does_not_move_it_and_writing_in_it_does() {
+        let store = SessionStore::in_memory().expect("a store");
+        let started = |id: &str, at: u64| {
+            let mut view = SessionView::new(id, "mock", "mock");
+            view.started_at = at;
+            view
+        };
+        for (id, at) in [("a", 1), ("b", 2), ("c", 3)] {
+            store.save(&started(id, at), None).expect("saving");
+        }
+        let order = || -> Vec<String> { store.list().unwrap().into_iter().map(|s| s.id).collect() };
+        assert_eq!(order(), ["c", "b", "a"]);
+
+        // Opened: saved again with nothing new in it.
+        store.save(&started("a", 1), None).expect("saving");
+        assert_eq!(order(), ["c", "b", "a"], "a resume is not a write");
+
+        // Written in.
+        let mut written = started("a", 1);
+        written.turns.push(
+            serde_json::from_value(serde_json::json!({ "turn": 1, "prompt": "hola", "text": "hola", "started_at_ms": 4 }))
+                .expect("a turn"),
+        );
+        store.save(&written, None).expect("saving");
+        assert_eq!(order(), ["a", "c", "b"]);
     }
 
     #[test]
@@ -584,7 +646,11 @@ mod tests {
         view.record = Some("runs/one.jsonl".into());
         store.save(&view, None).expect("saving");
 
-        let listed = store.list().expect("listing");
+        let mut listed = store.list().expect("listing");
+        // The one column that is the store's and not the fold's: when it was
+        // written to, which a fold cannot know about itself.
+        assert!(listed[0].written_at.is_some());
+        listed[0].written_at = None;
         assert_eq!(
             serde_json::to_value(&listed[0]).unwrap(),
             serde_json::to_value(view.summary()).unwrap(),

@@ -1,7 +1,11 @@
 //! The workspace, as the person at the browser looks at it: a file tree, what
 //! git says changed, and the contents of one file or one diff.
 //!
-//! **Read-only, and outside the job gate on purpose.** Every other way this
+//! **Read-only but for a rename, and outside the job gate on purpose.** A
+//! person renaming a file or a folder from the tree is the one write here
+//! ([`rename`]): typed by hand, about one entry, and bounded the way a read
+//! is plus `read-write` — see
+//! `RECORD/2026-10-21.the-tree-renames.completed.md`. Every other way this
 //! program touches the filesystem is a *model's* action — `read_file` and
 //! `run_command` are tools, and a tool call is held until somebody approves the
 //! job that proposed it. Nothing here is proposed by anything: a person clicked
@@ -185,6 +189,8 @@ pub enum Error {
     Refused(String),
     /// It is not there.
     Missing(String),
+    /// What it would become is already there.
+    Taken(String),
     /// Something under it failed — a read, a spawn, a decode.
     Failed(String),
 }
@@ -192,7 +198,9 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Refused(why) | Error::Missing(why) | Error::Failed(why) => write!(f, "{why}"),
+            Error::Refused(why) | Error::Missing(why) | Error::Taken(why) | Error::Failed(why) => {
+                write!(f, "{why}")
+            }
         }
     }
 }
@@ -217,6 +225,79 @@ fn resolve(sandbox: &Sandbox, relative: &str) -> Result<PathBuf, Error> {
         )));
     }
     Ok(check.path)
+}
+
+/// A new name for one entry, beside where it is: never a path, so a rename
+/// cannot become a move, and never one that is already taken, so it cannot
+/// overwrite. Both ends go through the sandbox for `read-write`, which is the
+/// check `write_file` makes: a posture that only reads refuses it here too.
+///
+/// Answers the entry's new path, relative to the base and `/`-separated, as
+/// [`Entry::path`] spells it.
+pub async fn rename(sandbox: &Sandbox, relative: &str, name: &str) -> Result<String, Error> {
+    let relative = relative.trim_start_matches('/').trim_end_matches('/');
+    if relative.is_empty() {
+        return Err(Error::Refused(
+            "the folder itself is not renamed from here".into(),
+        ));
+    }
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        return Err(Error::Refused(format!(
+            "`{name}` is not a name: it is empty, a dot, or holds a separator"
+        )));
+    }
+    let from = writable(sandbox, relative)?;
+    if tokio::fs::symlink_metadata(&from).await.is_err() {
+        return Err(Error::Missing(format!("{relative}: not found")));
+    }
+    let renamed = match relative.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{name}"),
+        None => name.to_string(),
+    };
+    if renamed == relative {
+        return Ok(renamed);
+    }
+    let to = writable(sandbox, &renamed)?;
+    // Asked first rather than left to `rename`, which replaces a file that is
+    // there on every platform this runs on. A case-only rename on a
+    // case-insensitive disk finds *itself* here, and is allowed.
+    if let Ok(there) = tokio::fs::symlink_metadata(&to).await {
+        let same = tokio::fs::symlink_metadata(&from)
+            .await
+            .is_ok_and(|here| same_entry(&here, &there));
+        if !same {
+            return Err(Error::Taken(format!("{renamed}: already exists")));
+        }
+    }
+    tokio::fs::rename(&from, &to)
+        .await
+        .map_err(|error| Error::Failed(format!("{relative} → {name}: {error}")))?;
+    Ok(renamed)
+}
+
+/// A path the sandbox grants `read-write` on, resolved as [`resolve`] does.
+fn writable(sandbox: &Sandbox, relative: &str) -> Result<PathBuf, Error> {
+    let check = sandbox.check_path(&sandbox.base().join(relative), Access::ReadWrite);
+    if !check.verdict.allowed {
+        return Err(Error::Refused(format!(
+            "{relative}: {}",
+            check.verdict.rule
+        )));
+    }
+    Ok(check.path)
+}
+
+/// Whether two `stat`s are one entry on disk.
+#[cfg(unix)]
+fn same_entry(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn same_entry(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// The path an entry is known by: relative to the base, `/`-separated.
@@ -511,8 +592,15 @@ pub async fn diff(sandbox: &Sandbox, relative: &str, staged: bool) -> Result<Dif
 /// also why the `/dev/null` and `~/.gitconfig` findings in
 /// `RECORD/2026-09-15.git-could-not-open-dev-null.completed.md` do not reach
 /// it — a child here inherits the server's own environment.
+///
+/// **Without the optional locks.** `git status` otherwise rewrites the index
+/// to refresh its stat cache, under `.git/index.lock`, and a child killed
+/// mid-write — `kill_on_drop`, the timeout, a server stopped — leaves the lock
+/// behind, and the person's own next `git commit` refused. A reader in the
+/// background should not write, which is what the variable is for.
 async fn git(base: &Path, args: &[&str]) -> Result<String, Error> {
     let run = Command::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
         .arg(base)
         .args(args)
@@ -746,6 +834,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A file and a folder take a new name beside where they are; a name that
+    /// is taken, a path for a name, the base itself and a posture that only
+    /// reads are each refused, and nothing on disk moves for any of them.
+    #[tokio::test]
+    async fn an_entry_is_renamed_in_place_and_nothing_else_is() {
+        let root = std::env::temp_dir().join(format!("luu-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "a").unwrap();
+        std::fs::write(root.join("src/b.rs"), "b").unwrap();
+        let mut policy = agent_core::sandbox::SandboxPolicy::default();
+        policy.allow(&root, Access::ReadWrite);
+        let sandbox = Sandbox::new(&policy, &root).unwrap();
+
+        assert_eq!(
+            rename(&sandbox, "src/a.rs", "c.rs").await.unwrap(),
+            "src/c.rs"
+        );
+        assert_eq!(std::fs::read_to_string(root.join("src/c.rs")).unwrap(), "a");
+        assert!(!root.join("src/a.rs").exists());
+        assert_eq!(
+            rename(&sandbox, "src/deep", "deeper").await.unwrap(),
+            "src/deeper"
+        );
+        assert!(root.join("src/deeper").is_dir());
+
+        // Taken: `b.rs` is still `b`, and `c.rs` is still `a`.
+        assert!(matches!(
+            rename(&sandbox, "src/c.rs", "b.rs").await,
+            Err(Error::Taken(_))
+        ));
+        assert_eq!(std::fs::read_to_string(root.join("src/b.rs")).unwrap(), "b");
+        assert_eq!(std::fs::read_to_string(root.join("src/c.rs")).unwrap(), "a");
+        // A name, not a path: no moving it up, or anywhere.
+        for name in ["../c.rs", "x/c.rs", "..", ".", "  "] {
+            assert!(
+                matches!(
+                    rename(&sandbox, "src/c.rs", name).await,
+                    Err(Error::Refused(_))
+                ),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            rename(&sandbox, "", "x").await,
+            Err(Error::Refused(_))
+        ));
+        assert!(matches!(
+            rename(&sandbox, "src/gone.rs", "x.rs").await,
+            Err(Error::Missing(_))
+        ));
+        assert!(matches!(
+            rename(&sandbox, "../outside", "x").await,
+            Err(Error::Refused(_))
+        ));
+
+        // A posture that only reads cannot rename, whatever the name. Its rules
+        // replaced rather than added to: the default grants `read-write` on
+        // `.`, and a rule beside it would not take that away.
+        let reading = agent_core::sandbox::SandboxPolicy {
+            paths: vec![agent_core::sandbox::PathRule::new(&root, Access::Read)],
+            ..Default::default()
+        };
+        let reading = Sandbox::new(&reading, &root).unwrap();
+        assert!(matches!(
+            rename(&reading, "src/c.rs", "d.rs").await,
+            Err(Error::Refused(_))
+        ));
+        assert!(root.join("src/c.rs").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A folder outside any repository is said to be one, not failed on; a
     /// repository with nothing changed is an empty map, not `None`.
     #[tokio::test]
@@ -771,6 +931,55 @@ mod tests {
             assert_eq!(git_status(&repo).await.unwrap(), Some(BTreeMap::new()));
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Asking leaves the index alone. A file touched without being changed is
+    /// the case where `git status` would refresh its stat cache by rewriting
+    /// `.git/index` — under the lock a killed child leaves behind.
+    #[tokio::test]
+    async fn asking_git_writes_nothing_into_the_repository() {
+        let repo = std::env::temp_dir().join(format!("luu-nolock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        if !run(&["init", "-q"]) {
+            return;
+        }
+        std::fs::write(repo.join("a.txt"), "same\n").unwrap();
+        assert!(run(&["add", "a.txt"]) && run(&["commit", "-qm", "a"]));
+        // Same bytes, a later mtime: the index's stat for it is now stale.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(repo.join("a.txt"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let index = || {
+            std::fs::metadata(repo.join(".git/index"))
+                .unwrap()
+                .modified()
+                .unwrap()
+        };
+        let before = index();
+
+        assert_eq!(git_status(&repo).await.unwrap(), Some(BTreeMap::new()));
+        assert_eq!(index(), before, "git status rewrote the index");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// The count is the file's, not the payload's, and the two agree exactly

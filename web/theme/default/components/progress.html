@@ -1,0 +1,68 @@
+<script :setup="{ amount = null, max = 100, tone = 'accent', size = 'md', label = '' }">
+  // How far along something is: a download, a model loading, the window
+  // filling. An `amount` of `null` is *working, no idea how far* and slides
+  // instead of filling. `tone` colours the fill, so a window at 95% can say
+  // so in `bad`.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Progress :amount="bytes" :max="total" label="Downloading qwen2.5" />
+  //   <Progress label="Starting the engine" />
+  //
+  // Not `value`: jq79 keeps `:value` for an element's own value and never
+  // hands it to a component.
+
+  $: known = amount !== null && amount !== undefined && amount !== ""
+  $: share = known ? Math.max(0, Math.min(1, Number(amount) / (Number(max) || 1))) : 0
+</script>
+
+<div class="progress"
+     :class.sm="size === 'sm'"
+     :class.lg="size === 'lg'"
+     :class.tone-ok="tone === 'ok'"
+     :class.tone-warn="tone === 'warn'"
+     :class.tone-bad="tone === 'bad'"
+     :class.indeterminate="!known"
+     role="progressbar"
+     aria-valuemin="0"
+     :aria-valuemax="known ? String(max) : null"
+     :aria-valuenow="known ? String(amount) : null"
+     :aria-label="label || null">
+  <span class="fill" :style="known ? `transform:scaleX(${share})` : ''"></span>
+</div>
+
+<style scoped>
+  .progress {
+    --ink: var(--luu-accent);
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    height: 6px;
+    border-radius: var(--luu-radius-full);
+    background: var(--luu-sunken);
+    box-shadow: inset 0 0 0 var(--luu-border-width) var(--luu-border);
+  }
+  .sm { height: 3px; }
+  .lg { height: 10px; }
+  .tone-ok { --ink: var(--luu-ok); }
+  .tone-warn { --ink: var(--luu-warn); }
+  .tone-bad { --ink: var(--luu-bad); }
+
+  .fill {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--ink);
+    transform-origin: left;
+    transition: transform var(--luu-duration-slow) var(--luu-ease);
+  }
+  .indeterminate .fill {
+    width: 40%;
+    animation: slide calc(var(--luu-duration-slow) * 4) var(--luu-ease) infinite;
+  }
+  @keyframes slide {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(250%); }
+  }
+</style>

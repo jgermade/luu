@@ -1,0 +1,31 @@
+<script :setup="{ size = 'md' }">
+  // A key, or a chord of them: what to press. The keys are the slot's text,
+  // one `Kbd` per key — `<Kbd>⌘</Kbd><Kbd>K</Kbd>`.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+</script>
+
+<kbd :class.sm="size === 'sm'"><slot></slot></kbd>
+
+<style scoped>
+  kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.6em;
+    padding: .05rem .35rem;
+    /* Longhands: jq79 re-serialises a scoped rule, and a `var()` shorthand
+       that a later longhand overrides comes back empty. */
+    border-style: solid;
+    border-color: var(--luu-border);
+    border-width: var(--luu-border-width) var(--luu-border-width) 2px;
+    border-radius: var(--luu-radius-sm);
+    background: var(--luu-surface);
+    color: var(--luu-fg-muted);
+    font-family: var(--luu-font-mono);
+    font-size: var(--luu-text-xs);
+    line-height: var(--luu-leading);
+  }
+  .sm { padding: 0 .25rem; font-size: 10px; }
+</style>

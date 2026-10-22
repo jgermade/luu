@@ -1,0 +1,738 @@
+<script :setup>
+  // How the page looks, on this screen: the editor and the chat's code, the
+  // columns, the tree's icons. Moved out of General on 2026-10-21, which keeps
+  // the workspace. None of it is in `config.toml` but the icon theme, which
+  // the server serves; the rest is a fact about the screen somebody is reading
+  // from, and one server answers two people on two machines. See
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
+  // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
+  const { prefs, setEditor, setEditorTone, setSnippetTone, setLayout, setSize, monacoAvailable } =
+    await import("@web/lib/prefs.js")
+  const { loadIconTheme, saveIconTheme, importThemeFiles, themeFromFiles, themeFromDrop, loadIconPreviews, glyphFor } =
+    await import("@web/lib/workspace.js")
+  const Menu = await import("@web/theme/default/components/menu.html")
+  const Segmented = await import("@web/theme/default/components/segmented.html")
+
+  // The icon theme: the server's view of it, what is typed into the path, and
+  // the last refusal, in the loader's own words.
+  //
+  // Asked without being awaited, as Monaco is below. The answer reads a
+  // `package.json` per installed extension, and on a machine whose endpoint
+  // security holds file opens that has taken over a minute, during which this
+  // whole section rendered nothing: the theme, the editor and the layout
+  // waited on a question only the icon rows ask. See
+  // `RECORD/2026-10-01.the-page-in-web.completed.md`.
+  let iconView = null
+  let iconError = ""
+  let iconBusy = false
+  let iconAsking = true
+  loadIconTheme()
+    .then(view => { iconView = view })
+    .catch(error => { iconError = `${error.message || error}` })
+    .finally(() => { iconAsking = false })
+
+  const took = result => {
+    if (result.ok) {
+      iconView = result.view
+      iconError = ""
+      // A theme just imported has no drawing yet: asked again.
+      askPreviews()
+    } else {
+      iconError = result.error
+    }
+    return result.ok
+  }
+  const useTheme = async path => {
+    iconBusy = true
+    took(await saveIconTheme(path))
+    iconBusy = false
+  }
+  // A theme added: a folder, a zip or a theme JSON, picked or dropped on the
+  // frame — gathered into the files of one folder (`workspace.js`), and sent.
+  // A zip that will not open is said here, in the same place the server's
+  // refusals are.
+  const importEntries = async gather => {
+    iconBusy = true
+    try {
+      const entries = await gather()
+      if (entries.length) took(await importThemeFiles(entries))
+    } catch (error) {
+      iconError = `It could not be read: ${error.message || error}`
+    } finally {
+      iconBusy = false
+    }
+  }
+  const importPicked = async event => {
+    const files = [...(event.target.files || [])]
+    event.target.value = ""
+    if (!files.length) return
+    await importEntries(() => themeFromFiles(files))
+  }
+  const ADD = [
+    { value: "folder", label: "A folder…" },
+    { value: "file", label: "A zip or a JSON…" },
+  ]
+  const pickAdd = which => $self(which === "folder" ? "input.pick-folder" : "input.pick-file")?.click()
+
+  // Dropped on the frame. `dragging` counts enters against leaves, because
+  // both fire for every child the pointer crosses on its way.
+  let dragging = 0
+  const canDrop = event => !!iconView?.editable && !iconBusy &&
+    [...(event.dataTransfer?.types || [])].includes("Files")
+  const dragEnter = event => {
+    if (!canDrop(event)) return
+    event.preventDefault()
+    dragging++
+  }
+  const dragOver = event => {
+    if (!canDrop(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+  }
+  const dragLeave = () => { dragging = Math.max(0, dragging - 1) }
+  const dropped = async event => {
+    if (!canDrop(event)) return
+    event.preventDefault()
+    dragging = 0
+    const transfer = event.dataTransfer
+    await importEntries(() => themeFromDrop(transfer))
+  }
+
+  const SIZE_OPTIONS = [
+    { value: "s", label: "Small" },
+    { value: "m", label: "Default" },
+    { value: "l", label: "Large" },
+  ]
+  const TONES = [
+    { value: "dark", label: "Dark" },
+    { value: "light", label: "Light" },
+  ]
+
+  // What each icon theme draws, for its card: asked once, beside the view,
+  // and not awaited for the same reason the view is not.
+  let iconPreviews = { samples: [], previews: {} }
+  // `false` once asked and not answered: a server older than the previews
+  // (started before `/api/icon-theme/previews` existed) answers 404.
+  let previewsHere = null
+  const askPreviews = () => loadIconPreviews().then(answer => {
+    iconPreviews = answer
+    previewsHere = answer.samples.length > 0
+  })
+  askPreviews()
+  // The options, in the order a person looks for them: the tree's own shapes,
+  // what has been imported into luu's own folder, then what the editors on
+  // this machine have installed. A theme named by a path in `config.toml` that
+  // neither list holds is offered with the detected ones, so it is not lost.
+  $: local = (iconView?.found || []).filter(t => t.source === "luu")
+  $: detected = [
+    ...(iconView?.found || []).filter(t => t.source !== "luu"),
+    ...(iconView?.named && !(iconView.found || []).some(t => t.path === iconView.named)
+      ? [{ path: iconView.named, name: iconView.loaded || iconView.named, source: "config.toml" }]
+      : []),
+  ]
+  // The preview is of the option under the pointer or the keyboard, and
+  // otherwise of the one in use. `""` is the tree's own shapes.
+  let previewing = null
+  // The one clicked, while it is being applied: shown, dimmed, until the
+  // server says it is in use — not the one before it, which the option losing
+  // its focus as the list is disabled would otherwise bring back for a moment.
+  let applying = null
+  $: shown = applying ?? previewing ?? (iconView?.named || "")
+  $: shownName = shown === ""
+    ? "The tree's own"
+    : [...local, ...detected].find(t => t.path === shown)?.name || shown
+  // A tree, as the inspector draws one: `src` open with two files in it.
+  // Which rows are folders is the page's to know, so the tree is drawn right
+  // even with no answer from the server; only the icons are the server's.
+  // The same rows for every option, so the preview never changes height under
+  // the pointer: the server's samples, as a tree — one of each kind of file.
+  const TREE = [["src", 0, true], ["main.rs", 1], ["index.ts", 1], ["tests", 0, true],
+    ["Cargo.toml", 0], ["package.json", 0], ["README.md", 0], ["logo.svg", 0],
+    ["index.html", 0], ["deploy.sh", 0], ["demo.mp4", 0], ["release.zip", 0]]
+  $: drawnTree = TREE.map(([name, depth, dir = false]) => {
+    const at = iconPreviews.samples.findIndex(sample => sample.name === name)
+    const open = name === "src"
+    return {
+      name, depth, dir, open, glyph: glyphFor(name, dir, open),
+      icon: shown === "" || at < 0 ? null : iconPreviews.previews[shown]?.[at] ?? null,
+    }
+  })
+  const choose = async path => {
+    if (!iconView?.editable || iconBusy) return
+    if ((path || "") === (iconView?.named || "")) return
+    applying = path || ""
+    await useTheme(path || null)
+    applying = null
+  }
+
+  // The mini editor and the snippet are drawn with the theme's own tokens
+  // (`--luu-hl-*`, `--luu-code-*`) inside an island of the chosen tone, so
+  // what they show is what a file and a reply will look like, not a picture
+  // of it. One line of Rust, split into what the highlighter calls its parts.
+  const CODE = [
+    [["keyword", "fn "], ["function", "main"], ["punctuation", "() {"]],
+    [["plain", "    "], ["comment", "// the window, in tokens"]],
+    [["plain", "    "], ["keyword", "let "], ["variable", "window"], ["punctuation", ": "], ["type", "u32"], ["operator", " = "], ["number", "8_192"], ["punctuation", ";"]],
+    [["plain", "    "], ["function", "println!"], ["punctuation", "("], ["string", "\"{window}\""], ["punctuation", ");"]],
+    [["punctuation", "}"]],
+  ]
+
+  // Whether Monaco is on this machine. Asked once — the answer is whether
+  // `npm install` was run in `web/`, and that does not change while
+  // the page is open.
+  let monacoHere = null
+  monacoAvailable().then(found => { monacoHere = found })
+  $: editors = [
+    { value: "own", label: "This page" },
+    { value: "monaco", label: "Monaco", disabled: monacoHere === false },
+  ]
+</script>
+
+<div class="appearance-pane pane-main">
+<div class="ds-hero">
+  <div class="ds-hero-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3a9 9 0 1 0 0 18c1 0 1.6-.8 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6h1.9a4.7 4.7 0 0 0 4.7-4.7C21 6.6 17 3 12 3z"/>
+      <path d="M7.5 12.5h.01M9.2 8h.01M14.3 7.3h.01M17.2 10.7h.01" stroke-width="2.6"/>
+    </svg>
+  </div>
+  <div class="ds-hero-body">
+    <h4 class="ds-hero-title">Editor y apariencia</h4>
+    <p class="ds-hero-desc">Personaliza la visualización de código, paleta de colores y el comportamiento de las columnas.</p>
+  </div>
+</div>
+
+<!-- Two columns of one width, each a thing that draws code and its choices
+     over what they change: the editor — what draws a file, and in which tone —
+     and the chat's snippets. -->
+<section class="pane-group code-group">
+  <div class="duo">
+    <div class="preview-col editor-col">
+      <h3>Editor</h3>
+      <!-- Both of the editor's choices on one line; the second wraps under
+           the first only when the column has no room for both. -->
+      <div class="choices">
+        <div class="choice">
+          <span class="choice-name">Engine</span>
+          <Segmented label="Editor engine" size="sm" :options="editors" :model="prefs.editor"
+                     @change="setEditor($event.detail)" />
+        </div>
+        <div class="choice">
+          <span class="choice-name">Theme</span>
+          <Segmented label="Editor theme" size="sm" :options="TONES" :model="prefs.editorTone"
+                     @change="setEditorTone($event.detail)" />
+        </div>
+      </div>
+      <div class="mini-editor" :data-tone="prefs.editorTone === 'dark' ? 'dark' : 'light'"
+           :class.monaco="prefs.editor === 'monaco'">
+        <div class="mini-tab"><span class="hl-function">●</span> main.rs</div>
+        <div class="mini-code">
+          <ol class="mini-lines">
+            <li :each="line, i in CODE" :key="i">
+              <span class="gutter"><span class="fold">{{ i === 0 ? "⌄" : "" }}</span>{{ i + 1 }}</span>
+              <code><span :each="part, j in line" :key="j" :class="`hl-${part[0]}`">{{ part[1] }}</span></code>
+            </li>
+          </ol>
+          <div class="minimap" aria-hidden="true">
+            <span :each="line, i in CODE" :key="i" :style="`width:${18 + (i * 37) % 60}%`"></span>
+          </div>
+        </div>
+      </div>
+      <p :if="monacoHere === false" class="caveat small">
+        Monaco is not installed: run <code>make install</code> (or <code>npm install</code> in
+        <code>web/</code>) and reload.
+      </p>
+      <p :if="monacoHere !== false" class="note small">
+        <b>This page</b> paints a file in a third of Monaco's time, and the whole of it stays
+        findable with Ctrl+F. <b>Monaco</b> adds folding and jumping to a symbol.
+      </p>
+      <div class="choice size-choice">
+        <span class="choice-name">Text size</span>
+        <Segmented label="Editor text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.editorSize"
+                   @change="setSize('editor', $event.detail)" />
+      </div>
+    </div>
+
+    <div class="preview-col snippets-col">
+      <h3>Chat</h3>
+      <div class="choice">
+        <span class="choice-name">Snippet theme</span>
+        <Segmented label="Snippet colours" size="sm" :options="TONES" :model="prefs.snippetTone"
+                   @change="setSnippetTone($event.detail)" />
+      </div>
+      <div class="mini-chat">
+       <div class="mini-chat-scaled">
+        <p class="mini-reply">The window is set once, at the top:</p>
+        <div class="mini-snippet" :data-tone="prefs.snippetTone === 'dark' ? 'dark' : 'light'">
+          <div class="mini-snippet-head"><span>rust</span><span>copy</span></div>
+          <pre><code><span :each="line, i in CODE.slice(1, 4)" :key="i" class="mini-snippet-line"><span :each="part, j in line" :key="j" :class="`hl-${part[0]}`">{{ part[1] }}</span></span></code></pre>
+        </div>
+       </div>
+      </div>
+      <p class="note small">
+        The code blocks in the chat's replies, in Sublime Text 3's <b>Monokai</b>: its own dark
+        ground, or its hues darkened to read on white.
+      </p>
+      <div class="choice size-choice">
+        <span class="choice-name">Text size</span>
+        <Segmented label="Chat text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.chatSize"
+                   @change="setSize('chat', $event.detail)" />
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pane-group">
+  <h3>Layout</h3>
+  <!-- Each choice as the page it makes: the columns drawn with the theme's own
+       grounds — dark heads and feet, the tree's grey, the editor's code in the
+       chosen tone, the chat's grey — so the picture is the page, small. -->
+  <!-- Each choice as the page it makes, plainly: the columns, their dark heads
+       and feet, and the content on the editor's ground. -->
+  <div class="ds-card-grid layout-preview-grid">
+    <div class="ds-preview-card" :class.active="prefs.layout === 'responsive'" @click="setLayout('responsive')"
+         role="button" tabindex="0" @keydown="($event.key === 'Enter' || $event.key === ' ') && setLayout('responsive')">
+      <div class="mini-stage">
+        <div class="mini-app">
+          <div class="m-col m-insp"><div class="m-bar" data-tone="dark"></div><div class="m-body"><i style="width:70%"></i><i style="width:50%"></i><i style="width:62%"></i></div><div class="m-bar" data-tone="dark"></div></div>
+          <div class="m-col m-cont" :data-tone="prefs.editorTone === 'dark' ? 'dark' : 'light'"><div class="m-bar" data-tone="dark"></div><div class="m-body"><i style="width:70%"></i><i style="width:50%"></i><i style="width:62%"></i></div><div class="m-bar" data-tone="dark"></div></div>
+          <div class="m-col m-chat"><div class="m-bar" data-tone="dark"></div><div class="m-body"><i style="width:70%"></i><i style="width:50%"></i><i style="width:62%"></i></div><div class="m-bar" data-tone="dark"></div></div>
+        </div>
+      </div>
+      <div class="ds-preview-label">
+        <span>Responsive</span>
+        <span :if="prefs.layout === 'responsive'" class="ds-badge ds-badge-accent">In use</span>
+      </div>
+      <span class="ds-preview-caption">Three columns — inspector, content, chat — from 1260px; below it two,
+        the second switching between content and chat.</span>
+    </div>
+
+    <div class="ds-preview-card" :class.active="prefs.layout === 'two'" @click="setLayout('two')"
+         role="button" tabindex="0" @keydown="($event.key === 'Enter' || $event.key === ' ') && setLayout('two')">
+      <div class="mini-stage">
+        <div class="mini-app">
+          <div class="m-col m-insp"><div class="m-bar" data-tone="dark"></div><div class="m-body"><i style="width:70%"></i><i style="width:50%"></i><i style="width:62%"></i></div><div class="m-bar" data-tone="dark"></div></div>
+          <div class="m-col m-cont" :data-tone="prefs.editorTone === 'dark' ? 'dark' : 'light'"><div class="m-bar" data-tone="dark"><i class="m-switch"><b class="on"></b><b></b></i></div><div class="m-body"><i style="width:70%"></i><i style="width:50%"></i><i style="width:62%"></i></div><div class="m-bar" data-tone="dark"></div></div>
+        </div>
+      </div>
+      <div class="ds-preview-label">
+        <span>Always two</span>
+        <span :if="prefs.layout === 'two'" class="ds-badge ds-badge-accent">In use</span>
+      </div>
+      <span class="ds-preview-caption">Two columns at any width, the second switching between content and
+        chat — for a wide screen with a wide chat on it.</span>
+    </div>
+  </div>
+
+</section>
+
+<section class="pane-group files-group">
+  <h3>Files Theme</h3>
+  <!-- The icon theme, chosen here rather than only named in `config.toml`. It
+       is written to that file and applied live, which is the one thing in this
+       section that is not in `localStorage`: the server is what serves the icons,
+       so it is the server that has to know. See
+       `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`. -->
+  <p class="lead-note">
+    Any VS Code icon theme on this machine, as <code>[ui] icon-theme</code> in
+    <code>config.toml</code>. It applies at once.
+  </p>
+  <p :if="iconView?.error" class="caveat">It did not load: {{ iconView.error }}</p>
+  <p :if="iconView?.refused" class="refused">{{ iconView.refused }}</p>
+  <p :if="iconError" class="error">{{ iconError }}</p>
+
+  <p :if="previewsHere === false" class="caveat small">
+    This server cannot draw the previews yet: it was started before it could.
+    Restart <code>luu serve</code> to see each theme's icons.
+  </p>
+
+  <!-- One light frame round the list and its preview. -->
+  <div class="duo files-duo files-frame" :class.dropping="dragging > 0"
+       @dragenter="dragEnter($event)" @dragover="dragOver($event)"
+       @dragleave="dragLeave()" @drop="dropped($event)">
+    <!-- The options: the default, then luu's own, then the editors', then
+         a way to add one. -->
+    <div class="theme-list" role="radiogroup" aria-label="Files theme" @mouseleave="previewing = null">
+      <span class="group-name">Default</span>
+      <button type="button" role="radio" class="theme-option"
+              :aria-checked="!iconView?.named ? 'true' : 'false'"
+              :disabled="!iconView?.editable || iconBusy"
+              @click="choose('')" @mouseenter="previewing = ''" @focus="previewing = ''" @blur="previewing = null">
+        <span class="option-name">The tree's own</span>
+        <span class="tag">a file and a folder</span>
+      </button>
+
+      <span class="group-name">Installed in :luu</span>
+      <span :if="!local.length && !iconAsking" class="dim small empty-group">None yet.</span>
+      <button :each="theme in local" :key="theme.path" type="button" role="radio" class="theme-option"
+              :aria-checked="theme.path === iconView?.named ? 'true' : 'false'"
+              :disabled="!iconView?.editable || iconBusy" :title="theme.path"
+              @click="choose(theme.path)" @mouseenter="previewing = theme.path"
+              @focus="previewing = theme.path" @blur="previewing = null">
+        <span class="option-name">{{ theme.name }}</span>
+      </button>
+
+      <!-- Adding one: a folder copied into luu's own, so it no longer depends
+           on where it came from nor on an editor updating it. It lands in
+           this group, so it is offered here. -->
+      <!-- One input cannot offer folders and files at once, so two, behind a
+           menu. -->
+      <div class="add">
+        <Menu size="sm" :label="iconBusy ? 'Importing…' : '+ Add a theme'" :items="ADD"
+              :disabled="!iconView?.editable || iconBusy" @select="pickAdd($event.detail)" />
+        <input class="pick-folder" type="file" webkitdirectory hidden @change="importPicked($event)">
+        <input class="pick-file" type="file" multiple hidden
+               accept=".zip,.json,application/zip,application/json,image/*" @change="importPicked($event)">
+      </div>
+      <span class="dim small add-note">
+        An extension's folder, a zip of one, or a theme JSON with its icons — or
+        drop any of them on this frame.
+      </span>
+
+      <span :if="detected.length" class="group-name">Detected</span>
+      <button :each="theme in detected" :key="theme.path" type="button" role="radio" class="theme-option"
+              :aria-checked="theme.path === iconView?.named ? 'true' : 'false'"
+              :disabled="!iconView?.editable || iconBusy" :title="theme.path"
+              @click="choose(theme.path)" @mouseenter="previewing = theme.path"
+              @focus="previewing = theme.path" @blur="previewing = null">
+        <span class="option-name">{{ theme.name }}</span>
+        <span class="tag">{{ theme.source }}</span>
+      </button>
+      <span :if="iconAsking" class="dim small">asking the server…</span>
+
+    </div>
+
+    <!-- What the option under the pointer draws, or the one in use: a tree as
+         the inspector shows one, on its ground. -->
+    <div class="theme-preview" :class.applying="applying !== null" aria-live="polite">
+      <div class="preview-head">
+        <span class="preview-title">{{ shownName }}</span>
+        <!-- Always there, hidden when it does not apply: a badge that came and
+             went with the pointer moved the head a pixel, and the page with it. -->
+        <span class="ds-badge ds-badge-accent" :class.unseen="shown !== (iconView?.named || '')"
+              :aria-hidden="shown !== (iconView?.named || '') ? 'true' : null">In use</span>
+      </div>
+      <ul class="big-tree">
+        <li :each="row in drawnTree" :key="row.name" :style="`padding-left:${0.5 + row.depth * 1.1}rem`">
+          <svg :if="row.dir" class="ic caret" :class.open="row.open"><use href="#i-caret"/></svg>
+          <span :if="!row.dir" class="caret-space"></span>
+          <img :if="row.icon" :src="row.icon" alt="">
+          <svg :if="!row.icon" class="ic glyph" :class.folder="row.dir" :data-kind="row.glyph.kind || null"><use :href="row.glyph.id"/></svg>
+          <span>{{ row.name }}</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <!-- Item 15 of `ROADMAP/2026-09-17`, kept through every redesign: the first
+       person to meet an unconfigured tree read a working fallback as a broken
+       panel, so the page says why the tree looks as it does. Under the frame,
+       so its coming and going with the choice moves nothing above it. -->
+  <!-- Held in place when a theme is chosen, only not shown: the section is
+       at the bottom of the pane, and a line that came and went changed the
+       pane's height and, with the scroll at its end, moved the frame. -->
+  <p class="lead-note" :class.unseen="!(iconView && !iconView.named)">
+    With none chosen, the tree draws its own shapes — a fallback, not a failure.
+  </p>
+  <div class="choice size-choice tree-size">
+    <span class="choice-name">Size</span>
+    <Segmented label="Files size" size="sm" :options="SIZE_OPTIONS" :model="prefs.treeSize"
+               @change="setSize('tree', $event.detail)" />
+    <span class="dim small">the tree's text and icons</span>
+  </div>
+</section>
+
+
+</div>
+
+<style scoped>
+  /* A column, padded and spaced by `.pane-main` (app.css); the pane pads
+     nothing. */
+  .appearance-pane { flex: 1 0 auto; }
+  .path {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+  .note b, .caveat b { color: var(--luu-fg); font-weight: 600; }
+  /* One line: the field takes what is left and shrinks for the button,
+     rather than wrapping it onto a line of its own. */
+  .row { display: flex; flex-wrap: nowrap; align-items: center; gap: .5rem; }
+  .pick {
+    border: 1px solid var(--luu-border);
+    border-radius: 6px;
+    background: var(--luu-bg);
+    color: var(--luu-fg);
+    font-size: 12px;
+    font-weight: 500;
+    padding: .25rem .7rem;
+    cursor: pointer;
+  }
+  .pick:hover { border-color: var(--luu-accent); }
+  .pick.off { opacity: .5; cursor: default; pointer-events: none; }
+  /* ---- the editor and the snippets ----
+     Half and half: the editor and the snippets, each its choices over its
+     preview. One under the other when the pane is too narrow for both — the
+     pane's width decides, not the window's. */
+  .code-group { container-type: inline-size; }
+  .duo {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--luu-space-5);
+    align-items: start;
+  }
+  @container (max-width: 36rem) {
+    .duo { grid-template-columns: minmax(0, 1fr); }
+  }
+  .preview-col { display: flex; flex-direction: column; gap: var(--luu-space-2); min-width: 0; }
+  .preview-col h3 { margin: 0 0 var(--luu-space-1); }
+  .choice { display: flex; align-items: center; justify-content: space-between; gap: var(--luu-space-3); }
+  .choices { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--luu-space-2) var(--luu-space-5); }
+  .choices .choice { justify-content: flex-start; }
+  .choice-name { font-size: 13px; font-weight: 600; color: var(--luu-fg); }
+  .preview-col .note, .preview-col .caveat { margin: 0; font-size: 12px; line-height: 1.5; color: var(--luu-fg-muted); }
+  .preview-col .caveat { color: var(--luu-warn); }
+
+  /* The two previews are one height, so the columns read as a pair and their
+     notes start level. */
+  .mini-editor, .mini-chat { box-sizing: border-box; height: 9rem; overflow: hidden; }
+  /* Each preview at the size chosen for what it shows. */
+  .mini-chat-scaled { display: flex; flex-direction: column; gap: .5rem; zoom: var(--luu-chat-zoom, 1); }
+  .big-tree { zoom: var(--luu-tree-zoom, 1); }
+  .size-choice { margin-top: var(--luu-space-1); }
+  .tree-size { justify-content: flex-start; }
+
+  /* A file as the content column draws it, in the editor's tone: the island
+     re-points every colour, so these rules name tokens and not colours. */
+  .mini-editor {
+    border: 1px solid var(--luu-border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--luu-code-ground);
+    color: var(--luu-code-ink);
+  }
+  .mini-tab {
+    display: inline-flex;
+    gap: .35rem;
+    padding: .3rem .7rem;
+    border-right: 1px solid var(--luu-border);
+    border-bottom: 2px solid var(--luu-accent);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font-size: 11px;
+    font-style: italic;
+  }
+  .mini-tab .hl-function { font-style: normal; font-size: 8px; }
+  .mini-code { display: flex; border-top: 1px solid var(--luu-border); }
+  .mini-lines {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: .5rem 0;
+    list-style: none;
+    font-family: ui-monospace, monospace;
+    /* A pixel under the editor's own size, at whichever size is chosen. */
+    font-size: calc(var(--luu-editor-font, 12px) - 1px);
+    line-height: 1.6;
+  }
+  .mini-lines li { display: flex; white-space: pre; }
+  .gutter {
+    flex: none;
+    width: 2.6rem;
+    padding-right: .6rem;
+    color: var(--luu-code-gutter);
+    text-align: right;
+  }
+  .fold { display: inline-block; width: .9rem; text-align: left; visibility: hidden; }
+  .monaco .fold { visibility: visible; }
+  .mini-lines code { font: inherit; overflow: hidden; text-overflow: ellipsis; }
+  /* Monaco's: a minimap down the right edge. This page draws none. */
+  .minimap {
+    display: none;
+    flex: none;
+    flex-direction: column;
+    gap: 3px;
+    width: 3.2rem;
+    padding: .6rem .4rem;
+    border-left: 1px solid var(--luu-border);
+  }
+  .monaco .minimap { display: flex; }
+  .minimap span { height: 2px; border-radius: 1px; background: var(--luu-code-gutter); opacity: .55; }
+
+  /* A reply in the chat, and its code block in the snippets' tone. */
+  .mini-chat {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    padding: .7rem;
+    border-radius: 8px;
+    background: var(--luu-chat-bg);
+    color: var(--luu-chat-fg);
+  }
+  .mini-reply { margin: 0; font-size: 12px; }
+  .mini-snippet {
+    border: 1px solid var(--luu-border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--luu-code-ground);
+    color: var(--luu-code-ink);
+  }
+  .mini-snippet-head {
+    display: flex;
+    justify-content: space-between;
+    padding: .2rem .6rem;
+    border-bottom: 1px solid var(--luu-border);
+    background: var(--luu-surface);
+    color: var(--luu-fg-muted);
+    font-size: 10px;
+  }
+  .mini-snippet pre {
+    margin: 0;
+    padding: .5rem .6rem;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .mini-snippet-line { display: block; white-space: pre; }
+
+  /* ---- the files theme: the options, and a preview ---- */
+  .files-group { container-type: inline-size; }
+  .lead-note { margin: 0; font-size: 12px; color: var(--luu-fg-muted); }
+  .theme-list { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .group-name {
+    margin: var(--luu-space-3) 0 2px;
+    color: var(--luu-fg-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .group-name:first-child { margin-top: 0; }
+  .theme-option {
+    display: flex;
+    align-items: center;
+    gap: var(--luu-space-2);
+    padding: .45rem .6rem;
+    /* A faint edge, so each option reads as one before it is chosen; the
+       chosen one's edge is the accent. */
+    border: 1px solid color-mix(in srgb, var(--luu-border) 60%, transparent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--luu-fg);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .theme-option:hover:not(:disabled), .theme-option:focus-visible { background: var(--luu-surface); }
+  .theme-option:active:not(:disabled) { background: var(--luu-active); }
+  .theme-option[aria-checked="true"] {
+    border-color: var(--luu-accent);
+    background: color-mix(in srgb, var(--luu-accent) 8%, var(--luu-surface));
+  }
+  .theme-option:disabled { cursor: default; opacity: .6; }
+  .theme-option:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; }
+  .empty-group { padding: .2rem .6rem; }
+  .option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .add { align-self: flex-start; margin-top: var(--luu-space-1); }
+  .add-note { padding: 0 .1rem; }
+  /* A drop lands anywhere on the frame, which says so while something is
+     carried over it. */
+  .files-frame.dropping {
+    position: relative;
+    border-color: var(--luu-accent);
+    border-style: dashed;
+    background: color-mix(in srgb, var(--luu-accent) 5%, var(--luu-surface));
+  }
+  .files-frame.dropping::after {
+    content: "Drop a folder, a zip or a JSON";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--luu-surface) 70%, transparent);
+    color: var(--luu-accent);
+    font-weight: 600;
+    pointer-events: none;
+  }
+  .files-frame {
+    padding: var(--luu-space-4);
+    border: 1px solid var(--luu-border);
+    border-radius: 10px;
+    background: var(--luu-surface);
+  }
+  .files-frame .theme-option:hover:not(:disabled),
+  .files-frame .theme-option:focus-visible { background: var(--luu-bg); }
+
+  /* The preview: a tree as the inspector draws it, on its ground. */
+  .theme-preview {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--luu-border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--luu-tree-bg);
+  }
+  .preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--luu-space-2);
+    padding: .5rem .75rem;
+    border-bottom: 1px solid var(--luu-border);
+    background: var(--luu-surface);
+  }
+  .preview-head .unseen, .lead-note.unseen { visibility: hidden; }
+  .theme-preview { transition: opacity var(--luu-duration) ease; }
+  .theme-preview.applying { opacity: .5; }
+  .preview-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .big-tree { margin: 0; padding: .5rem .25rem; list-style: none; font-size: 13px; }
+  .big-tree li { display: flex; align-items: center; gap: .3rem; height: 1.6rem; border-radius: 4px; }
+  .big-tree img, .big-tree .glyph { width: 16px; height: 16px; flex: none; }
+  /* The sprite's caret points right: a closed folder as it is, an open one
+     turned down. */
+  .big-tree .caret { width: 12px; height: 12px; flex: none; color: var(--luu-fg-muted); }
+  .big-tree .caret.open { transform: rotate(90deg); }
+  .caret-space { width: 12px; flex: none; }
+
+  .tag {
+    margin-left: .3rem;
+    padding: 0 .35rem;
+    border-radius: 999px;
+    background: var(--luu-sunken);
+    color: var(--luu-fg-muted);
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  /* ---- the layout, drawn ----
+     The page, small and plain: dark heads and feet, a few bars of content in
+     each column, the content on the editor's ground. The same grounds as the
+     page, by token, so a theme that changes the page changes these. */
+  .mini-stage { padding: .5rem; border-radius: 6px; background: var(--luu-sunken); }
+  .mini-app {
+    display: flex;
+    gap: 1px;
+    height: 96px;
+    overflow: hidden;
+    border: 1px solid var(--luu-divider);
+    border-radius: 4px;
+    background: var(--luu-divider);
+  }
+  .m-col { display: flex; flex-direction: column; min-width: 0; }
+  .m-insp { width: 24%; background: var(--luu-tree-bg); }
+  .m-cont { flex: 1; background: var(--luu-code-ground); }
+  .m-chat { width: 30%; background: var(--luu-chat-bg); }
+  .m-bar { flex: none; display: flex; align-items: center; height: 10px; padding: 0 5px; background: var(--luu-bar); }
+  .m-body { flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 8px 7px; }
+  .m-body i { display: block; height: 4px; border-radius: 2px; background: var(--luu-fg-muted); opacity: .35; }
+  .m-cont .m-body i { background: var(--luu-code-gutter); opacity: .6; }
+  /* The second column's switch, content | chat. */
+  .m-switch { display: flex; gap: 1px; margin-left: auto; }
+  .m-switch b { width: 9px; height: 5px; border-radius: 1px; background: var(--luu-fg-muted); opacity: .5; }
+  .m-switch b.on { background: var(--luu-accent); opacity: 1; }
+</style>

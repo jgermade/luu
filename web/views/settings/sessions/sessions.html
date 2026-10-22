@@ -10,7 +10,7 @@
   const SettingsAuthority = await import("./authority.html")
 </script>
 
-<div class="sessions-pane">
+<div class="sessions-pane pane-main">
   <div class="ds-hero">
     <div class="ds-hero-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -24,36 +24,33 @@
     </div>
   </div>
 
-  <section class="part" id="sessions-resend">
+  <section class="part pane-group" id="sessions-resend">
     <h2>Resend</h2>
     <SettingsResend />
   </section>
 
-  <section class="part" id="sessions-authority">
+  <section class="part pane-group" id="sessions-authority">
     <h2>Authority</h2>
     <SettingsAuthority />
   </section>
 </div>
 
 <style scoped>
-  .sessions-pane {
-    display: block;
-    min-height: 100%;
-  }
-  #sessions-authority {
-    display: block;
-  }
+  /* A column, padded and spaced by `.pane-main` (app.css); the pane pads
+     nothing. */
+  .sessions-pane { flex: 1 0 auto; }
+  /* Apart by the pane's gap, and by a rule: the space above the line is the
+     gap's, the space below it the part's own. */
   .part + .part {
-    margin-top: 1.6rem;
     padding-top: 1.2rem;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--luu-border);
   }
   h2 {
-    margin: 0 0 .4rem;
+    margin: 0;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .06em;
     text-transform: uppercase;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
   }
 </style>

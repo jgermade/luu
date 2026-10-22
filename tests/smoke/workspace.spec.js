@@ -235,3 +235,76 @@ test("the tab shows a changed file's diff in a modal", async ({ page }) => {
 
   expect(errors, "the page logged errors").toEqual([])
 })
+
+/**
+ * The pencil renames, in place: a file, its open tab following it; a name
+ * that is taken, refused where it was typed with nothing moved; ESC putting
+ * the name back; and a folder, staying open under its new name. The one
+ * write the tree makes — see `RECORD/2026-10-21.the-tree-renames.completed.md`.
+ */
+test("the pencil renames a file or a folder in place", async ({ page }) => {
+  const work = join(scratch, "work")
+  mkdirSync(join(work, "names/inner"), { recursive: true })
+  writeFileSync(join(work, "names/hello.txt"), "hello\n")
+  writeFileSync(join(work, "names/taken.txt"), "taken\n")
+  writeFileSync(join(work, "names/inner/deep.txt"), "deep\n")
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  const picker = page.locator("dialog.modal").first()
+  await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
+  if (await picker.isVisible()) await picker.locator('button:has-text("Use this folder")').click()
+  await page.click('.inspector .tabs button:has-text("Files")')
+  const tree = page.locator(".inspector .tree")
+  const node = name => tree.locator(".node", { has: page.locator(`.name:text-is("${name}")`) })
+  await node("names").locator("button.row").click()
+  await node("hello.txt").locator("button.row").click()
+  await expect(page.locator(".content .code-rows li").first()).toContainText("hello")
+
+  // The field starts on the name, with what is before the extension chosen.
+  await node("hello.txt").hover()
+  await node("hello.txt").getByRole("button", { name: "Rename hello.txt" }).click()
+  const field = tree.getByRole("textbox", { name: "New name for hello.txt" })
+  await expect(field).toBeFocused()
+  expect(await field.evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
+
+  // Taken: said under the row, the field still open, nothing moved.
+  await field.fill("taken.txt")
+  await field.press("Enter")
+  await expect(tree.getByRole("alert")).toContainText("already exists")
+  await expect(field).toBeVisible()
+  expect(readFileSync(join(work, "names/taken.txt"), "utf8")).toBe("taken\n")
+
+  await field.fill("hi.txt")
+  await field.press("Enter")
+  await expect(node("hi.txt")).toBeVisible()
+  await expect(node("hello.txt")).toHaveCount(0)
+  expect(readFileSync(join(work, "names/hi.txt"), "utf8")).toBe("hello\n")
+  // The open tab followed the file.
+  await expect(page.locator(".content .col-head")).toContainText("hi.txt")
+
+  // F2 on a row starts it, and ESC puts the name back.
+  await node("hi.txt").locator("button.row").focus()
+  await page.keyboard.press("F2")
+  await expect(tree.getByRole("textbox", { name: "New name for hi.txt" })).toBeFocused()
+  await page.keyboard.type("nope")
+  await page.keyboard.press("Escape")
+  await expect(tree.locator(".node.renaming")).toHaveCount(0)
+  expect(existsSync(join(work, "names/hi.txt"))).toBe(true)
+
+  // A folder, open: it stays open under its new name, with what is in it.
+  await node("inner").locator("button.row").click()
+  await expect(node("deep.txt")).toBeVisible()
+  await node("inner").hover()
+  await node("inner").getByRole("button", { name: "Rename inner" }).click()
+  const folder = tree.getByRole("textbox", { name: "New name for inner" })
+  await folder.fill("outer")
+  await folder.press("Enter")
+  await expect(node("outer")).toBeVisible()
+  await expect(node("deep.txt").locator("button.row")).toHaveAttribute("title", "names/outer/deep.txt")
+  expect(existsSync(join(work, "names/outer/deep.txt"))).toBe(true)
+
+  expect(errors, "the page threw").toEqual([])
+})

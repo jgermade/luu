@@ -1,0 +1,77 @@
+<script :setup="{ label = '', control = '', hint = '', error = '', required = false, optional = false, layout = 'stack' }">
+  // A control and what is said about it: its name above (or beside, with
+  // `layout="inline"`), a hint under it, and an error in place of the hint
+  // when there is one. The control is the slot.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Field label="URL" control="url" hint="where the server listens" :error="urlError">
+  //     <TextInput id="url" :model="url" :invalid="!!urlError" />
+  //   </Field>
+  //
+  // `control` is the id of the control in the slot, so a click on the label
+  // focuses it. A `hint` slot takes the place of the `hint` prop for a hint
+  // with markup in it.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isRequired = flag(required)
+  $: isOptional = flag(optional)
+</script>
+
+<div class="field" :class.inline="layout === 'inline'">
+  <label :if="label" class="label" :for="control || null">
+    {{ label }}
+    <span :if="isRequired" class="mark" aria-hidden="true">*</span>
+    <span :if="isOptional" class="optional">optional</span>
+  </label>
+  <div class="control">
+    <slot></slot>
+    <p :if="error" class="problem" role="alert">{{ error }}</p>
+    <p :if="!error && $slots.hint" class="hint"><slot.hint /></p>
+    <p :if="!error && !$slots.hint && hint" class="hint">{{ hint }}</p>
+  </div>
+</div>
+
+<style scoped>
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-1);
+    min-width: 0;
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    color: var(--luu-fg);
+  }
+  .inline {
+    display: grid;
+    grid-template-columns: minmax(7rem, 10rem) 1fr;
+    align-items: start;
+    gap: var(--luu-space-4);
+  }
+  .inline .label { padding-top: calc((var(--luu-control-md) - 1em * var(--luu-leading)) / 2); }
+
+  .label {
+    font-weight: var(--luu-weight-medium);
+    color: var(--luu-fg);
+  }
+  .mark { color: var(--luu-bad); margin-left: .1rem; }
+  .optional {
+    margin-left: var(--luu-space-1);
+    color: var(--luu-fg-subtle);
+    font-size: var(--luu-text-xs);
+    font-weight: var(--luu-weight-regular);
+  }
+
+  .control {
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-1);
+    min-width: 0;
+  }
+  .hint, .problem { margin: 0; font-size: var(--luu-text-sm); }
+  .hint { color: var(--luu-fg-muted); }
+  .problem { color: var(--luu-bad); }
+</style>

@@ -23,8 +23,8 @@
   .hunk-head {
     font-family: ui-monospace, monospace;
     font-size: 11px;
-    color: var(--dim);
-    background: var(--sunken);
+    color: var(--luu-fg-muted);
+    background: var(--luu-sunken);
     padding: .2rem .8rem;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -37,11 +37,11 @@
     white-space: pre;
     padding-right: .8rem;
   }
-  .line .sign { flex: none; width: 1.6rem; text-align: center; color: var(--dim); user-select: none; }
+  .line .sign { flex: none; width: 1.6rem; text-align: center; color: var(--luu-fg-muted); user-select: none; }
   /* Tinted by the same accents the rest of the page uses for the same
      meanings: history-green is what was added, bad-red what left. */
-  .line.add { background: color-mix(in srgb, var(--b-history) 14%, transparent); }
-  .line.del { background: color-mix(in srgb, var(--bad) 14%, transparent); }
-  .line.add .sign { color: var(--b-history); }
-  .line.del .sign { color: var(--bad); }
+  .line.add { background: color-mix(in srgb, var(--luu-bucket-history) 14%, transparent); }
+  .line.del { background: color-mix(in srgb, var(--luu-bad) 14%, transparent); }
+  .line.add .sign { color: var(--luu-bucket-history); }
+  .line.del .sign { color: var(--luu-bad); }
 </style>

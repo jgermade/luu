@@ -57,7 +57,7 @@ pub enum BackendKind {
 impl BackendKind {
     /// Where this backend is when nothing said otherwise. The mock is nowhere,
     /// which is why it is `None` rather than a URL nobody dials.
-    fn default_url(self) -> Option<&'static str> {
+    pub fn default_url(self) -> Option<&'static str> {
         match self {
             Self::Mock => None,
             Self::Ollama => Some(DEFAULT_OLLAMA_URL),
@@ -116,6 +116,56 @@ pub struct Profile {
     /// See `RECORD/2026-09-30.native-tool-calls.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<ToolCalls>,
+    /// What differs for one model from the rest of this profile, by the name
+    /// the server lists it under. **Exceptions, never a catalogue**: a model
+    /// with no entry takes the profile's values, so one pulled tomorrow needs
+    /// no edit. See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub models: std::collections::BTreeMap<String, ModelEntry>,
+}
+
+/// One model's exceptions to its profile. Every key optional, absent meaning
+/// the profile's.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ModelEntry {
+    /// On Ollama the `num_ctx` luu sends; elsewhere the budget luu keeps under
+    /// what the server holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u32>,
+    /// Written by the provider form from what the server said of the model's
+    /// tools, or chosen there, so a run resolves it without asking anyone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<ToolCalls>,
+    /// `false` leaves the model out of the pickers. Naming it with `-m` still
+    /// reaches it: typing a model is choosing it.
+    #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for ModelEntry {
+    fn default() -> Self {
+        Self {
+            context_limit: None,
+            tool_calls: None,
+            enabled: true,
+        }
+    }
+}
+
+fn enabled() -> bool {
+    true
+}
+
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
+}
+
+impl Profile {
+    /// Whether the pickers offer `model`: everything but what is switched off.
+    pub fn offers(&self, model: &str) -> bool {
+        self.models.get(model).is_none_or(|entry| entry.enabled)
+    }
 }
 
 /// The two tool transports. See [`Profile::tool_calls`].
@@ -224,6 +274,10 @@ struct File {
     /// machine's account. See [`Terminal`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     terminal: Option<Terminal>,
+    /// `[sessions]`: what the server does with a session on its own. See
+    /// [`Sessions`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sessions: Option<Sessions>,
     /// `[resend]`: how much of the history a turn pays for again. In this file
     /// and not in `localStorage` for the reason the providers are — it changes
     /// the bytes a run sends, which is a fact about the run and not about the
@@ -342,6 +396,24 @@ pub struct Ui {
     /// page's own two glyphs — see `crate::icons`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_theme: Option<PathBuf>,
+}
+
+/// `[sessions]`. One setting so far.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Sessions {
+    /// Whether a session nobody named is given a name by its own model, from
+    /// its first prompt, when its first turn ends. On unless the file says
+    /// `false`: it is a call per session, and on a hosted API that is money.
+    /// See `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
+    #[serde(default = "enabled")]
+    pub auto_name: bool,
+}
+
+impl Default for Sessions {
+    fn default() -> Self {
+        Self { auto_name: true }
+    }
 }
 
 /// `[terminal]`. One setting so far.
@@ -525,6 +597,7 @@ pub struct Config {
     postures: BTreeMap<String, Posture>,
     ui: Option<Ui>,
     terminal: Option<Terminal>,
+    sessions: Option<Sessions>,
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
@@ -637,6 +710,7 @@ impl Config {
             postures: file.posture,
             ui: file.ui,
             terminal: file.terminal,
+            sessions: file.sessions,
             resend: file.resend,
             authority: file.authority,
             engines: file.engine,
@@ -800,6 +874,7 @@ impl Config {
             posture: self.postures.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
+            sessions: self.sessions,
             resend: self.resend,
             authority: self.authority.clone(),
             engine: self.engines.clone(),
@@ -856,6 +931,7 @@ impl Config {
             postures: self.postures.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
+            sessions: self.sessions,
             resend: self.resend,
             authority: self.authority.clone(),
             engines: self.engines.clone(),
@@ -969,6 +1045,12 @@ impl Config {
     /// says nothing.
     pub fn terminal(&self) -> Terminal {
         self.terminal.unwrap_or_default()
+    }
+
+    /// What the server does with a session on its own, defaulted where the
+    /// file says nothing.
+    pub fn sessions(&self) -> Sessions {
+        self.sessions.unwrap_or_default()
     }
 
     /// Every posture the file names.
@@ -1172,32 +1254,38 @@ pub fn resolve(
         (false, None) => DestinationFrom::Default,
     };
 
+    let model = flags
+        .model
+        .map(str::to_string)
+        .or_else(|| profile.model.clone())
+        // Then the model its engine loads: what the session is on is what
+        // that server holds, and the built-in default would name another.
+        .or_else(|| {
+            config
+                .engines
+                .get(profile.engine.as_deref()?)?
+                .model
+                .clone()
+        })
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    // The model's own exceptions, one level under the profile's: a flag, then
+    // the model, then the profile.
+    let entry = profile.models.get(&model).cloned().unwrap_or_default();
+    let window = entry.context_limit.or(profile.context_limit);
+
     Ok(Resolved {
         kind,
         url,
-        model: flags
-            .model
-            .map(str::to_string)
-            .or(profile.model)
-            // Then the model its engine loads: what the session is on is what
-            // that server holds, and the built-in default would name another.
-            .or_else(|| {
-                config
-                    .engines
-                    .get(profile.engine.as_deref()?)?
-                    .model
-                    .clone()
-            })
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+        model,
         key_file: flags
             .api_key_file
             .map(Path::to_path_buf)
             .or(profile.key_file.map(|path| expand_home(&path))),
         context_limit: match flags.context_limit {
-            0 => profile.context_limit.unwrap_or(0),
+            0 => window.unwrap_or(0),
             named => named,
         },
-        window_from: match (flags.context_limit, profile.context_limit) {
+        window_from: match (flags.context_limit, window) {
             (0, None) => WindowFrom::Unset,
             (0, Some(_)) => WindowFrom::Profile,
             _ => WindowFrom::Flag,
@@ -1214,7 +1302,11 @@ pub fn resolve(
         },
         // The flag over the profile, and fenced where neither says: the
         // transport every earlier recording was made under.
-        tool_calls: flags.tool_calls.or(profile.tool_calls).unwrap_or_default(),
+        tool_calls: flags
+            .tool_calls
+            .or(entry.tool_calls)
+            .or(profile.tool_calls)
+            .unwrap_or_default(),
         profile: name,
         // A flag beats the file here exactly as it does field by field above,
         // and the mock is a destination when somebody typed it.
@@ -1302,6 +1394,14 @@ mod tests {
         // A misspelling is an error, never a silent default.
         assert!(Config::from_toml("[terminal]\nhost = \"sometimes\"\n", "c").is_err());
         assert!(Config::from_toml("[terminal]\nhots = \"always\"\n", "c").is_err());
+
+        // `[sessions]`: naming on unless the file says otherwise, kept
+        // through a write, and a misspelling refused.
+        assert!(none.sessions().auto_name);
+        let off = Config::from_toml("[sessions]\nauto-name = false\n", "c").expect("loads");
+        assert!(!off.sessions().auto_name);
+        assert!(off.render().unwrap().contains("auto-name = false"));
+        assert!(Config::from_toml("[sessions]\nautoname = false\n", "c").is_err());
     }
 
     #[test]
@@ -1333,6 +1433,62 @@ mod tests {
         // And the file round-trips through the writer with the table in it.
         let written = config(text).unwrap().render().unwrap();
         assert!(written.contains("[engine.gemma]"), "{written}");
+    }
+
+    /// A model's own entry sits between the flag and the profile, for the
+    /// window and the transport alike, and a model without one is the
+    /// profile's. See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
+    #[test]
+    fn a_model_s_own_entry_is_between_the_flag_and_the_profile() {
+        let text = "[provider.local]\nbackend = \"ollama\"\nmodel = \"big\"\n\
+                    context-limit = 16384\ntool-calls = \"native\"\n\n\
+                    [provider.local.models.big]\ncontext-limit = 32768\n\n\
+                    [provider.local.models.\"old:7b\"]\ntool-calls = \"fenced\"\nenabled = false\n";
+        let on = |model: Option<&'static str>, window: u32| {
+            resolved(
+                text,
+                Flags {
+                    provider: Some("local"),
+                    model,
+                    context_limit: window,
+                    ..Default::default()
+                },
+            )
+        };
+
+        let big = on(None, 0);
+        assert_eq!(
+            (big.context_limit, big.tool_calls),
+            (32768, ToolCalls::Native)
+        );
+        assert_eq!(big.window_from, WindowFrom::Profile);
+        let old = on(Some("old:7b"), 0);
+        assert_eq!(
+            (old.context_limit, old.tool_calls),
+            (16384, ToolCalls::Fenced)
+        );
+        let other = on(Some("other"), 0);
+        assert_eq!(
+            (other.context_limit, other.tool_calls),
+            (16384, ToolCalls::Native)
+        );
+        assert_eq!(on(None, 4096).context_limit, 4096);
+
+        // Off in the pickers, and still reached by name.
+        let loaded = config(text).unwrap();
+        let profile = &loaded.profiles()["local"];
+        assert!(profile.offers("big") && profile.offers("other") && !profile.offers("old:7b"));
+
+        // Written back as the exceptions it holds, and nothing for the rest.
+        let written = config(text).unwrap().render().unwrap();
+        assert!(written.contains("[provider.local.models.big]"), "{written}");
+        assert!(written.contains("enabled = false"), "{written}");
+        assert_eq!(written.matches("enabled").count(), 1, "{written}");
+        assert!(config(&written).is_ok());
+        assert!(
+            config("[provider.x.models.m]\nwindow = 3\n").is_err(),
+            "a misspelling"
+        );
     }
 
     fn resolved_with_flag(text: &str) -> Resolved {

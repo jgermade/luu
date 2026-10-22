@@ -38,6 +38,18 @@ function keptWidth(key) {
   }
 }
 
+/// A remembered list of names out of `allowed`, or `[]`. Anything else in the
+/// stored value — a card that was renamed, a hand edit — is dropped rather
+/// than kept as a name nothing answers to.
+function keptList(key, allowed) {
+  try {
+    const found = JSON.parse(localStorage.getItem(key) || "[]")
+    return Array.isArray(found) ? found.filter(name => allowed.includes(name)) : []
+  } catch {
+    return []
+  }
+}
+
 /// Any string, or the fallback: for a value whose allowed set is the server's
 /// to say, and checked against it where it is used.
 function keptText(key, fallback) {
@@ -56,6 +68,10 @@ function keep(key, value) {
   }
 }
 
+/// The debug panel's cards, by the name `views/inspector/debug/debug.html`
+/// folds them under.
+const DEBUG_CARDS = ["turn", "context", "prefix", "tools", "compaction", "prompt"]
+
 export const prefs = $reactive({
   /// `auto` | `light` | `dark`. **`dark` is what a browser with nothing
   /// remembered gets**, and deliberately: every screenshot and every record in
@@ -63,8 +79,8 @@ export const prefs = $reactive({
   /// quietly reinterpret all of them. `auto` is a choice, not the absence of
   /// one.
   // Light only, for now: the dark theme is off while the page's palette is
-  // reworked. Its tokens stay in `app.css`, because the columns' heads and
-  // feet are drawn with them.
+  // reworked. Its tokens stay in the theme, because the columns' heads and
+  // feet are drawn with them (`data-tone="dark"`).
   theme: "light",
   /// `own` | `monaco`. What draws a file in the content column. `monaco` is an
   /// npm dependency of this directory rather than a payload in the tree, so it
@@ -87,6 +103,10 @@ export const prefs = $reactive({
   /// Which panel the inspector is showing. Was in `app.html`; it is the same
   /// kind of fact as the four above and belongs with them.
   inspector: kept("luu.inspector.mode", ["files", "git", "debug"], "debug"),
+  /// The debug panel's cards that are folded. Every card is open unless
+  /// somebody folded it, because each of them is one of the panels the design
+  /// says justify the page — folding is a person making room, not a default.
+  debugFolded: keptList("luu.debug.folded", DEBUG_CARDS),
   /// `manual` | `auto`. Whether the page answers the job gate itself.
   ///
   /// **`auto` is a person deciding once instead of per job, and never the
@@ -108,9 +128,23 @@ export const prefs = $reactive({
   /// offered, because a posture can leave `config.toml` and a runtime this
   /// machine.
   place: keptText("luu.place", "|"),
+  /// `s` | `m` | `l`: how big the tree, the editor and the chat are drawn,
+  /// each on its own. `m` is the size each was before it could be chosen.
+  treeSize: kept("luu.size.tree", ["s", "m", "l"], "m"),
+  editorSize: kept("luu.size.editor", ["s", "m", "l"], "m"),
+  chatSize: kept("luu.size.chat", ["s", "m", "l"], "m"),
 })
 
-/// Dark is `:root`'s own palette in `app.css`, so light is the attribute. Set
+/// The sizes, as the page applies them: the tree and the chat are scaled whole
+/// — text and icons together, since both are full of fixed pixel sizes — and
+/// the editor's text is a size of its own, because its rows are measured in
+/// lines (`lh`) and Monaco takes a font size, not a scale.
+export const SIZES = {
+  zoom: { s: 0.9, m: 1, l: 1.15 },
+  editorPx: { s: 11, m: 12, l: 14 },
+}
+
+/// Light is the theme's `:root` and dark is `data-theme="dark"` on it. Set
 /// unconditionally while the dark theme is off — see `prefs.theme`.
 function paint() {
   document.documentElement.setAttribute("data-theme", "light")
@@ -121,8 +155,27 @@ function paintTones() {
   document.documentElement.setAttribute("data-snippet-tone", prefs.snippetTone)
 }
 
+/// On the root, so every surface that draws the tree, the editor or the chat
+/// reads one value: `--luu-tree-zoom`, `--luu-chat-zoom`, `--luu-editor-font`.
+function paintSizes() {
+  const root = document.documentElement.style
+  root.setProperty("--luu-tree-zoom", String(SIZES.zoom[prefs.treeSize]))
+  root.setProperty("--luu-chat-zoom", String(SIZES.zoom[prefs.chatSize]))
+  root.setProperty("--luu-editor-font", `${SIZES.editorPx[prefs.editorSize]}px`)
+}
+
 paint()
 paintTones()
+paintSizes()
+
+/// `tree` | `editor` | `chat`, and `s` | `m` | `l`.
+export function setSize(which, size) {
+  const key = { tree: "treeSize", editor: "editorSize", chat: "chatSize" }[which]
+  if (!key) return
+  prefs[key] = size
+  keep(`luu.size.${which}`, size)
+  paintSizes()
+}
 export function setEditorTone(which) {
   prefs.editorTone = which
   keep("luu.editor-tone", which)
@@ -162,6 +215,15 @@ export function setPane(which) {
 export function setInspector(which) {
   prefs.inspector = which
   keep("luu.inspector.mode", which)
+}
+
+/// Folds one of the debug panel's cards, or opens it again.
+export function toggleDebugCard(name) {
+  if (!DEBUG_CARDS.includes(name)) return
+  prefs.debugFolded = prefs.debugFolded.includes(name)
+    ? prefs.debugFolded.filter(card => card !== name)
+    : [...prefs.debugFolded, name]
+  keep("luu.debug.folded", JSON.stringify(prefs.debugFolded))
 }
 
 /// `null` forgets the width, which is what a double click on the handle asks.

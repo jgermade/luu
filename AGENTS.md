@@ -147,12 +147,13 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # The chat names its session instead of spending a row on tabs.
 # On a first visit it asks which folder to look at: a subdirectory of the one
 # `serve` was started in, which is the ceiling and is not negotiable from the
-# browser. Settings has sections down the side — General (theme, editor, layout,
-# files, folder), Engines, Models, and Sessions (resend and authority) — and everything in
-# General a person can *change* is kept in `localStorage`, because it is a fact
-# about the screen rather than about the run. Files is the exception and is read-only: it names the icon theme that
-# drew the tree, or says the two shapes are a fallback and names the key below
-# that replaces them.
+# browser. Settings has sections down the side — General (the workspace),
+# Appearance (editor, chat, layout, files theme, sizes), Engines, Models, Runtimes and
+# Sessions (resend and authority) — and everything in Appearance a person can
+# *change* is kept in `localStorage`, because it is a fact about the screen rather
+# than about the run. The files theme is the exception: it is `[ui] icon-theme`
+# in `config.toml`, because the server serves the icons, and with none chosen the
+# page says the tree's own shapes are a fallback and names that key.
 #
 # Engines are model servers luu starts: `[engine.<name>]` in config.toml
 # (llama-server, mlx-serve or ollama; a binary found here, a path, or luu's own
@@ -187,7 +188,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #
 # Monaco and xterm.js are the optional dependencies and they are *node* ones,
 # in `web/package.json` rather than vendored into the tree: `make install`
-# fetches them and the binary serves them from disk. `General → editor` offers
+# fetches them and the binary serves them from disk. `Appearance → Editor` offers
 # Monaco only where it is installed, and without it the page draws every file
 # itself, which is the default either way — see
 # RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md for the

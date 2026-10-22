@@ -52,14 +52,18 @@
   </div>
 
   <section class="modal-body">
-    <p :if="!state.budget" class="dim">
-      Nothing has been sent in this session yet. The context is measured when a
-      turn is built, so it is here from the first prompt on.
-    </p>
-    <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
-                 :budget="state.budget"
-                 :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
-                 :window="state.settings?.window || null" :answer="answer" />
+    <!-- The content pads itself, and so does the foot beside it: the body
+         holds both and pads neither. -->
+    <div class="modal-main">
+      <p :if="!state.budget" class="dim">
+        Nothing has been sent in this session yet. The context is measured when a
+        turn is built, so it is here from the first prompt on.
+      </p>
+      <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
+                   :budget="state.budget"
+                   :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
+                   :window="state.settings?.window || null" :answer="answer" />
+    </div>
   </section>
 </Modal>
 
@@ -69,12 +73,12 @@
     flex-wrap: wrap;
     gap: .4rem 1.4rem;
     padding: .7rem 1rem;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--luu-border);
     font-size: 12px;
   }
   .facts div { display: flex; flex-direction: column; gap: .1rem; }
-  .k { color: var(--dim); font-size: 11px; }
+  .k { color: var(--luu-fg-muted); font-size: 11px; }
   .facts b { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .warn { color: var(--warn); }
-  .dim { color: var(--dim); }
+  .warn { color: var(--luu-warn); }
+  .dim { color: var(--luu-fg-muted); }
 </style>

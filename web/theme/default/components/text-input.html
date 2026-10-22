@@ -1,0 +1,183 @@
+<script :setup="{
+  model = '',
+  type = 'text',
+  placeholder = '',
+  size = 'md',
+  disabled = false,
+  readonly = false,
+  invalid = false,
+  warn = false,
+  clearable = false,
+  prefix = '',
+  suffix = '',
+  autofocus = false,
+  inputmode = '',
+  list = '',
+  id = '',
+  name = '',
+  label = ''
+}">
+  // One line of text: a name, a URL, a port, a search. `prefix` and `suffix`
+  // are text the value is read with (`https://`, `tokens`), not part of it.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <TextInput :model="url" placeholder="http://127.0.0.1:11434" clearable />
+  //   <TextInput :model="window" type="number" suffix="tokens" />
+  //   <TextInput :model="port" size="num" :warn="badPort" />
+  //
+  // `size` is `sm`, `md`, `lg`, or `num` for a number: a narrow box that does
+  // not stretch. `warn` is a border in the warning tone — *this will not do
+  // what you think* — where `invalid` is *this is wrong*.
+  //
+  // The value goes up through `:model` and as `input` on every keystroke;
+  // `change` when it is committed (blur, Enter), and `enter` on Enter alone,
+  // all with the value in `$event.detail`; `keydown`, `focus` and `blur`
+  // pass the native event on, in `$event.detail` too. `label` names the field for a
+  // screen reader when no `Field` around it does. A fixed value is
+  // `model="…"`: jq79 keeps `:value` for an element's own and never hands it
+  // to a component.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isReadonly = flag(readonly)
+  $: isInvalid = flag(invalid)
+  $: isWarn = flag(warn)
+  $: isClearable = flag(clearable)
+  $: isAutofocus = flag(autofocus)
+
+  $: val = model ?? ""
+
+  const typed = event => {
+    const v = event.target.value
+    $updateModel(v)
+    $emit("input", v)
+  }
+  const committed = event => $emit("change", event.target.value)
+  const key = event => {
+    if (event.key === "Enter") $emit("enter", event.target.value)
+    $emit("keydown", event)
+  }
+  const clear = () => {
+    if (isDisabled || isReadonly) return
+    $updateModel("")
+    $emit("input", "")
+    $emit("change", "")
+    $self("input")?.focus()
+  }
+</script>
+
+<div class="field"
+     :class.sm="size === 'sm'"
+     :class.lg="size === 'lg'"
+     :class.num="size === 'num'"
+     :class.invalid="isInvalid"
+     :class.warned="isWarn && !isInvalid"
+     :class.disabled="isDisabled">
+  <span :if="prefix" class="affix">{{ prefix }}</span>
+  <input :type="type"
+         :value="val"
+         :placeholder="placeholder || null"
+         :disabled="isDisabled"
+         :readonly="isReadonly"
+         :autofocus="isAutofocus"
+         :inputmode="inputmode || null"
+         :list="list || null"
+         :id="id || null"
+         :name="name || null"
+         :aria-label="label || null"
+         :aria-invalid="isInvalid ? 'true' : null"
+         @input="typed($event)"
+         @change="committed($event)"
+         @keydown="key($event)"
+         @focus="$emit('focus', $event)"
+         @blur="$emit('blur', $event)">
+  <button :if="isClearable && val && !isDisabled && !isReadonly" type="button" class="clear"
+          tabindex="-1" title="Clear" @click="clear()">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+  </button>
+  <span :if="suffix" class="affix">{{ suffix }}</span>
+</div>
+
+<style scoped>
+  .field {
+    --h: var(--luu-control-md);
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+    height: var(--h);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease;
+  }
+  .field:hover:not(.disabled) { border-color: var(--luu-border-strong); }
+  .field:focus-within {
+    border-color: var(--luu-focus);
+    box-shadow: 0 0 0 1px var(--luu-focus);
+  }
+  .invalid, .invalid:hover:not(.disabled) { border-color: var(--luu-bad); }
+  .invalid:focus-within { border-color: var(--luu-bad); box-shadow: 0 0 0 1px var(--luu-bad); }
+  /* `warned`, not `warn`: a page's own `.warn` is a line of text saying why,
+     often right beside this box. */
+  .warned, .warned:hover:not(.disabled) { border-color: var(--luu-warn); }
+  .warned:focus-within { border-color: var(--luu-warn); box-shadow: 0 0 0 1px var(--luu-warn); }
+  .disabled { opacity: .55; background: var(--luu-sunken); }
+  .num { width: 7.5rem; flex: none; }
+  .sm { --h: var(--luu-control-sm); font-size: var(--luu-text-sm); }
+  .lg { --h: var(--luu-control-lg); font-size: var(--luu-text-lg); }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 var(--luu-space-3);
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    outline: none;
+  }
+  .sm input { padding: 0 var(--luu-space-2); }
+  input::placeholder { color: var(--luu-fg-subtle); }
+  /* Against a page whose own rule dims a disabled element: the box is dimmed
+     once, here, and not again inside it. */
+  input:disabled { cursor: not-allowed; opacity: 1; }
+
+  .affix {
+    padding: 0 var(--luu-space-3);
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-sm);
+    white-space: nowrap;
+    user-select: none;
+  }
+  .affix:first-child { padding-right: 0; }
+  .affix:last-child { padding-left: 0; }
+
+  .clear {
+    display: inline-flex;
+    padding: 2px;
+    margin-right: var(--luu-space-2);
+    border: 0;
+    border-radius: var(--luu-radius-sm);
+    background: transparent;
+    color: var(--luu-fg-subtle);
+    cursor: pointer;
+  }
+  .clear:hover { color: var(--luu-fg); background: var(--luu-hover); }
+  .clear:active { background: var(--luu-active); }
+  .clear svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+</style>

@@ -1,0 +1,76 @@
+<script :setup="{ name = '', title = '', summary = '' }">
+  // One of the debug panel's cards: a title that folds it, the card in one
+  // phrase while it is folded, and the body while it is not.
+  //
+  //   <Card name="context" title="Context" :summary="`${used}% used`">
+  //     <template :slot.action><button …>open →</button></template>
+  //     …
+  //   </Card>
+  //
+  // `name` is what the fold is remembered under (`prefs.debugFolded`), so a
+  // person who folded the prompt finds it folded after a reload. `summary` is
+  // drawn only while folded: an open card says it in its body, with the
+  // numbers. `action` is a control on the head's far side that is not the
+  // fold — the prompt's *open →* — and stays there folded or not.
+  const { prefs, toggleDebugCard } = await import("@web/lib/prefs.js")
+
+  $: open = !prefs.debugFolded.includes(name)
+</script>
+
+<section class="card" :class.folded="!open">
+  <header class="card-head">
+    <h2>
+      <button type="button" class="fold" :aria-expanded="open ? 'true' : 'false'"
+              @click="toggleDebugCard(name)">
+        <span class="title">{{ title }}</span>
+        <svg class="ic caret" :class.open="open"><use href="#i-caret"/></svg>
+        <span :if="!open && summary" class="summary">{{ summary }}</span>
+      </button>
+    </h2>
+    <slot.action />
+  </header>
+  <div :if="open" class="card-body"><slot /></div>
+</section>
+
+<style scoped>
+  .card {
+    border: 1px solid var(--luu-border);
+    border-radius: 12px;
+    background: var(--luu-surface);
+    padding: .55rem .8rem .7rem;
+    margin-bottom: .6rem;
+  }
+  .card.folded { padding-bottom: .55rem; }
+  .card-head { display: flex; align-items: center; gap: .5rem; }
+  h2 { flex: 1; min-width: 0; margin: 0; font: inherit; }
+  .fold {
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+    width: 100%;
+    background: none;
+    border: 0;
+    padding: .15rem 0;
+    color: var(--luu-fg);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+  .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .caret { flex: none; width: 12px; height: 12px; color: var(--luu-fg-muted); transition: transform .15s; }
+  /* The phrase a folded card is, at the far side — where an open card has
+     nothing, because its body says it. */
+  .summary {
+    margin-left: auto;
+    color: var(--luu-fg-muted);
+    font-weight: normal;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .card-body { margin-top: .45rem; font-size: 13px; }
+</style>

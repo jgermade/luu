@@ -1,0 +1,428 @@
+<script :setup="{
+  open = false,
+  title = '',
+  tabs = [],
+  model = '',
+  width = '40rem',
+  height = '',
+  dismissible = true
+}">
+  // A modal inside a modal: a sheet that comes down out of its parent's head
+  // and covers the parent's body only — the parent's head stays lit, so it is
+  // still clear whose form this is, and its close button still closes both.
+  // With `tabs`, its head is a strip of them, as `TabModal`'s is.
+  //
+  // **Part of the default theme**: imports only the theme's own `Scrollable`,
+  // which its body scrolls through, and draws only with `tokens.css`. See
+  // `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Modal :open="editing" title="workstation" @close="editing = false">
+  //     …
+  //     <SubModal :open="adding" title="Add a model" @close="adding = false">
+  //       …
+  //       <template :slot.foot><Button variant="primary">Add</Button></template>
+  //     </SubModal>
+  //   </Modal>
+  //
+  // Written anywhere inside the parent `Modal` or `TabModal`. **Opened with
+  // `show()`, not `showModal()`**: a second modal would make everything under
+  // it inert, the parent's head included. What the top layer would have done
+  // is done here: the rest of the parent is made `inert`, a veil covers the
+  // parent's body and asks to close when clicked, and ESC is caught before it
+  // reaches the parent, so it closes this one alone. As with the others, ESC,
+  // the veil and the close button only emit `close`; the owner closes it with
+  // `:open`. A tab is a string or `{ value, label, count, disabled }`, chosen
+  // through `:model` and as `change`; the owner shows the panel it names.
+  //
+  // **Narrower than its parent**, and centred under its head: `width` (40rem)
+  // at most, and always 1.5rem in from each side, so it reads as a sheet laid
+  // over the parent and not as the parent's body changing.
+
+  const Scrollable = await import("./scrollable.html")
+
+  // A bare attribute (`<X dismissible>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isOpen = flag(open)
+  $: isDismissible = flag(dismissible)
+
+  const uid = `luu-sub-${Math.random().toString(36).slice(2, 9)}`
+  const tabId = value => `${uid}-tab-${String(value).replace(/[^\w-]/g, "_")}`
+  $: list = tabs.map(t => typeof t === "string" ? { value: t, label: t } : t)
+  $: usable = list.filter(t => !t.disabled)
+
+  // ---- where it goes ---------------------------------------------------------
+
+  // The parent dialog, and the parent's body in the viewport's pixels.
+  let parent = null
+  let room = null
+  const fit = () => {
+    if (!parent?.open) return
+    const outer = parent.getBoundingClientRect()
+    // The parent's head is its first header: the one before its body, where
+    // this is written.
+    const head = parent.querySelector("header")?.getBoundingClientRect()
+    const top = head ? head.bottom : outer.top
+    // The parent's lower corners, so the veil rounds where the parent does —
+    // read from it, so a parent of another radius is followed too.
+    const style = getComputedStyle(parent)
+    room = {
+      top, left: outer.left, width: outer.width, height: outer.bottom - top,
+      corners: `0 0 ${style.borderBottomRightRadius} ${style.borderBottomLeftRadius}`,
+    }
+  }
+  // The veil covers the parent's body; the sheet starts where it does and is
+  // as tall as its content, up to that.
+  $: covered = room
+    ? `top:${room.top}px;left:${room.left}px;width:${room.width}px;height:${room.height}px;border-radius:${room.corners}`
+    : "display:none"
+  // In CSS rather than here, so `width` can be any length: the narrower of
+  // it and the parent less 1.5rem a side, centred on the parent.
+  const sheetFor = (at, wide) => {
+    if (!at) return ""
+    const w = `min(${wide}, ${at.width}px - 3rem)`
+    return `top:${at.top}px;left:calc(${at.left}px + (${at.width}px - ${w}) / 2);width:${w};max-height:${at.height}px`
+  }
+  $: sheet = sheetFor(room, width)
+
+  // What `inert` was put on, to give back: at each level from this up to the
+  // parent, the siblings that are not on the way — but the parent's head.
+  let veiled = []
+  const veil = from => {
+    for (let at = from; at && at !== parent; at = at.parentElement) {
+      for (const sibling of at.parentElement?.children || []) {
+        if (sibling === at || sibling.inert) continue
+        if (sibling.tagName === "HEADER" && sibling.parentElement?.closest("dialog") === parent) continue
+        sibling.inert = true
+        veiled.push(sibling)
+      }
+    }
+  }
+  const unveil = () => {
+    for (const element of veiled) element.inert = false
+    veiled = []
+  }
+
+  // ESC, on the window and before anything else: the parent is the modal, and
+  // its `cancel` would close it. Taken here, it closes this one.
+  const escape = event => {
+    if (event.key !== "Escape" || !$self("dialog")?.open) return
+    event.preventDefault()
+    event.stopPropagation()
+    ask()
+  }
+
+  // ---- open and close --------------------------------------------------------
+
+  let leaving = false
+  const exit = () => {
+    const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
+    return Number.isFinite(ms) ? ms : 0
+  }
+  const show = () => {
+    const dialog = $self("dialog")
+    if (!dialog || dialog.open) return
+    parent = dialog.parentElement?.closest("dialog[open]") ?? null
+    leaving = false
+    fit()
+    veil($self(".sub-root"))
+    dialog.show()
+    window.addEventListener("keydown", escape, true)
+    parent?.addEventListener("close", parentClosed)
+    requestAnimationFrame(() => {
+      placeLine()
+      const first = $self("button[role=tab].on") ||
+        // `:scope >`: a selector is matched against the whole document, and
+        // the parent's own `.body` is an ancestor of everything in here.
+        dialog.querySelector(":scope > .body :is(input, select, textarea, button):not(:disabled)")
+      first?.focus()
+    })
+  }
+  const done = () => {
+    const dialog = $self("dialog")
+    dialog?.close()
+    leaving = false
+    unveil()
+    window.removeEventListener("keydown", escape, true)
+    parent?.removeEventListener("close", parentClosed)
+  }
+  // The parent closed under it — its own close button is lit, and closes both.
+  // This one goes at once, gives back what it made inert, and tells its owner,
+  // so a parent opened again does not open with this still in it.
+  //
+  // The parent's own `close` only: a component's `$emit("close")` bubbles, and
+  // this one's, asking its owner to close it, reaches the parent dialog under
+  // the same name — taken for the parent's, it closed the sheet at once, and
+  // its way out never played.
+  const parentClosed = event => {
+    if (event.target !== parent) return
+    done()
+    $emit("close")
+  }
+  const hide = () => {
+    const dialog = $self("dialog")
+    if (!dialog?.open || leaving) return
+    const ms = exit()
+    if (!ms) return done()
+    leaving = true
+    setTimeout(done, ms)
+  }
+  const ask = () => {
+    if (isDismissible) $emit("close")
+  }
+
+  // ---- the tabs, when it has them ------------------------------------------
+
+  let at = null
+  let moving = false
+  const placeLine = () => {
+    const on = $self("button[role=tab].on")
+    if (!on || !on.offsetWidth) return
+    at = { x: on.offsetLeft, w: on.offsetWidth }
+    if (!moving) requestAnimationFrame(() => { moving = true })
+  }
+  const choose = tab => {
+    if (tab.disabled || tab.value === model) return
+    $updateModel(tab.value)
+    $emit("change", tab.value)
+    const body = $self(".body [data-scrollable]")
+    if (body) body.scrollTop = 0
+  }
+  const STEP = { ArrowRight: 1, ArrowLeft: -1 }
+  const key = (e, tab) => {
+    const i = usable.indexOf(tab)
+    const next =
+      e.key === "Home" ? usable[0] :
+      e.key === "End" ? usable[usable.length - 1] :
+      e.key in STEP ? usable[(i + STEP[e.key] + usable.length) % usable.length] :
+      null
+    if (!next) return
+    e.preventDefault()
+    choose(next)
+    $self(`#${tabId(next.value)}`)?.focus()
+  }
+
+  await $mounted()
+  window.addEventListener("resize", fit)
+  $destroyed(() => {
+    window.removeEventListener("resize", fit)
+    window.removeEventListener("keydown", escape, true)
+    unveil()
+  })
+  $: isOpen ? requestAnimationFrame(show) : hide()
+  $: (model, list, requestAnimationFrame(placeLine))
+  $: line = at ? `width:${at.w}px;transform:translateX(${at.x}px)` : "display:none"
+</script>
+
+<div class="sub-root">
+  <div class="veil" :class.shown="isOpen || leaving" :class.leaving="leaving" :style="covered"
+       @click="ask()"></div>
+  <dialog class="sub" :class.leaving="leaving" :style="sheet" :aria-label="title || null">
+    <header class="head" :class.tabbed="list.length > 0">
+      <span class="bullet" aria-hidden="true"></span>
+      <strong :if="title" class="title">{{ title }}</strong>
+      <div :if="list.length" class="strip" role="tablist" :aria-label="title || null" :class.moving="moving">
+        <button :each="tab in list"
+                :key="String(tab.value)"
+                type="button"
+                role="tab"
+                :id="tabId(tab.value)"
+                :aria-selected="tab.value === model ? 'true' : 'false'"
+                :aria-controls="`${uid}-panel`"
+                :tabindex="tab.value === model ? 0 : -1"
+                :class.on="tab.value === model"
+                :disabled="tab.disabled"
+                @click="choose(tab)"
+                @keydown="key($event, tab)">
+          {{ tab.label }}
+          <span :if="tab.count !== undefined && tab.count !== null" class="count">{{ tab.count }}</span>
+        </button>
+        <span class="line" :style="line" aria-hidden="true"></span>
+      </div>
+      <button :if="isDismissible" type="button" class="close" title="Close" @click="ask()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+      </button>
+    </header>
+    <div class="body" :id="`${uid}-panel`"
+         :role="list.length ? 'tabpanel' : null"
+         :aria-labelledby="list.length && model ? tabId(model) : null"
+         :style="height ? `flex:none;height:${height}` : ''">
+      <Scrollable y fill><div class="content"><slot></slot></div></Scrollable>
+    </div>
+    <footer :if="$slots.foot" class="foot"><slot.foot /></footer>
+  </dialog>
+</div>
+
+<style scoped>
+  .sub-root { display: contents; }
+
+  /* Over the parent's body only, with its head left lit above. */
+  .veil {
+    position: fixed;
+    z-index: 15;
+    display: none;
+    background: var(--luu-overlay);
+    backdrop-filter: blur(2px);
+  }
+  .veil.shown { display: block; animation: fade var(--luu-duration) ease; }
+  /* The way out is keyframes of its own, not `fade` reversed: an animation
+     whose name stays the same is not started again, only turned round — and
+     one that has finished, turned round, is at its start at once. */
+  .veil.leaving { animation: fade-out var(--luu-duration) ease forwards; }
+
+  /* A sheet: the width of the parent, from under its head down, as far as its
+     content goes. */
+  .sub {
+    position: fixed;
+    z-index: 16;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    line-height: var(--luu-leading);
+    overflow: visible;
+  }
+  .sub[open] {
+    display: flex;
+    flex-direction: column;
+    animation: sheet var(--luu-duration-slow) var(--luu-ease-out);
+  }
+  .sub.leaving { animation: sheet-out var(--luu-duration) ease forwards; }
+  @keyframes sheet { from { opacity: 0; transform: translateY(-24px); } }
+  @keyframes sheet-out { to { opacity: 0; transform: translateY(-16px); } }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes fade-out { to { opacity: 0; } }
+
+  /* The sheet itself: its own edge on three sides, none along the top — it
+     comes out of the head above it. */
+  .head, .body, .foot {
+    background: var(--luu-surface);
+    border-inline: var(--luu-border-width) solid var(--luu-border);
+  }
+  .sub > :last-child {
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+    border-radius: 0 0 var(--luu-radius-lg) var(--luu-radius-lg);
+    box-shadow: var(--luu-shadow-lg);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: var(--luu-space-2);
+    padding: var(--luu-space-3) var(--luu-space-3) var(--luu-space-2) var(--luu-space-5);
+  }
+  .head.tabbed {
+    align-items: flex-end;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+  }
+  .bullet {
+    flex: none;
+    align-self: center;
+    width: 6px;
+    height: 6px;
+    border-radius: var(--luu-radius-full);
+    background: var(--luu-accent);
+  }
+  .title {
+    flex: none;
+    align-self: center;
+    font-size: var(--luu-text-md);
+    font-weight: var(--luu-weight-bold);
+  }
+  .head:not(.tabbed) .title { flex: 1; }
+
+  .strip {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    gap: var(--luu-space-1);
+    margin-left: var(--luu-space-2);
+    margin-bottom: -1px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .strip button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--luu-space-2);
+    height: 2.5rem;
+    padding: 0 var(--luu-space-3);
+    border: 0;
+    background: transparent;
+    color: var(--luu-fg-muted);
+    font: inherit;
+    font-weight: var(--luu-weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--luu-duration) ease, background var(--luu-duration-fast) ease;
+  }
+  .strip button:hover:not(:disabled) { color: var(--luu-fg); }
+  .strip button:active:not(:disabled) {
+    background: var(--luu-active);
+    border-radius: var(--luu-radius-sm) var(--luu-radius-sm) 0 0;
+  }
+  .strip button.on { color: var(--luu-fg); }
+  .strip button:disabled { opacity: .45; cursor: default; }
+  .strip button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
+  .count {
+    min-width: 1.4em;
+    padding: 0 .35rem;
+    border-radius: var(--luu-radius-full);
+    background: var(--luu-sunken);
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-xs);
+    text-align: center;
+    line-height: 1.6;
+  }
+  .on .count { background: var(--luu-accent-soft); color: var(--luu-accent); }
+  .line {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: var(--luu-accent);
+  }
+  .moving .line {
+    transition: transform var(--luu-duration-slow) var(--luu-ease),
+                width var(--luu-duration-slow) var(--luu-ease);
+  }
+
+  .close {
+    display: inline-flex;
+    align-self: center;
+    flex: none;
+    margin-left: auto;
+    padding: var(--luu-space-1);
+    border: 0;
+    border-radius: var(--luu-radius-sm);
+    background: transparent;
+    color: var(--luu-fg-muted);
+    cursor: pointer;
+  }
+  .close:hover { background: var(--luu-hover); color: var(--luu-fg); }
+  .close:active { background: var(--luu-active); }
+  .close:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+  /* A frame and a `Scrollable`; the content pads itself, so the padding
+     scrolls with it. */
+  .body { display: flex; flex-direction: column; min-height: 0; }
+  .content { padding: var(--luu-space-4) var(--luu-space-5); }
+  .foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--luu-space-2);
+    box-sizing: content-box;
+    min-height: var(--luu-control-md);
+    padding: var(--luu-space-3) var(--luu-space-5);
+    border-top: var(--luu-border-width) solid var(--luu-border);
+    background: var(--luu-sunken);
+  }
+</style>

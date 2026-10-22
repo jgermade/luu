@@ -1,0 +1,357 @@
+<script :setup="{
+  model = '',
+  options = [],
+  placeholder = '',
+  label = '',
+  size = 'md',
+  disabled = false,
+  invalid = false,
+  strict = false,
+  loading = false,
+  empty = 'Nothing matches',
+  id = '',
+  name = ''
+}">
+  // A name typed, with what it could be listed under it as it is typed: a
+  // model out of the ones a provider has pulled, a file out of a tree. A text
+  // field and a list in one control — the ARIA combobox — where a `Select`
+  // would make a person scroll a list they could have filtered.
+  //
+  // **Part of the default theme**: imports only the theme's own `Scrollable`,
+  // which its list scrolls through, and draws only with `tokens.css`. See
+  // `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Typeahead label="Model" :model="model" :options="models"
+  //              placeholder="a model name" @select="pick($event.detail)" />
+  //
+  // An option is a string or `{ value, label, description, disabled }`. The
+  // list opens on typing, on the arrow keys and on a click; the arrows move in
+  // it, Enter takes the one marked, ESC closes it, and the part of each option
+  // that matches what was typed is marked. What is typed goes up through
+  // `:model` and as `input`; an option taken goes up as `select` and `change`.
+  // **What is typed is a value too**, unless `strict`: then leaving the field
+  // on something no option is puts back the last value that was one. The list
+  // opens in the top layer (`popover`), so a modal or a column does not clip it.
+
+  const Scrollable = await import("./scrollable.html")
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isInvalid = flag(invalid)
+  $: isStrict = flag(strict)
+  $: isLoading = flag(loading)
+
+  const uid = Math.random().toString(36).slice(2, 9)
+  const listId = `luu-typeahead-${uid}`
+  const optionId = i => `${listId}-${i}`
+
+  $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
+  $: text = model ?? ""
+  $: query = String(text).trim().toLowerCase()
+  // Everything while nothing is typed, and once an option has been taken —
+  // a list filtered down to the one already chosen offers no other.
+  let filtering = false
+  $: shown = !filtering || !query
+    ? items
+    : items.filter(item =>
+        String(item.label).toLowerCase().includes(query) || String(item.value).toLowerCase().includes(query))
+  // The label in three parts around what matched, for the mark.
+  const parts = label => {
+    const at = filtering && query ? String(label).toLowerCase().indexOf(query) : -1
+    if (at < 0) return [String(label), "", ""]
+    const s = String(label)
+    return [s.slice(0, at), s.slice(at, at + query.length), s.slice(at + query.length)]
+  }
+
+  let open = false
+  let marked = -1
+  let kept = text
+
+  const place = () => {
+    const box = $self(".field")
+    const list = $self(".list")
+    if (!box || !list) return
+    const r = box.getBoundingClientRect()
+    const h = list.offsetHeight
+    const below = r.bottom + 4 + h <= window.innerHeight || r.top - 4 - h < 0
+    list.style.left = `${r.left}px`
+    list.style.width = `${r.width}px`
+    list.style.top = `${below ? r.bottom + 4 : r.top - 4 - h}px`
+  }
+  const show = () => {
+    if (isDisabled || open) return
+    const list = $self(".list")
+    if (!list) return
+    open = true
+    list.showPopover()
+    place()
+  }
+  const hide = () => {
+    if (!open) return
+    open = false
+    marked = -1
+    $self(".list")?.hidePopover()
+  }
+
+  // The opener: the whole list, whatever is typed, and the focus back in the
+  // field so the keys work on it.
+  const toggle = () => {
+    if (open) return hide()
+    filtering = false
+    show()
+    $self("input")?.focus()
+  }
+
+  const take = item => {
+    if (!item || item.disabled) return
+    $updateModel(item.value)
+    kept = item.value
+    filtering = false
+    $emit("select", item.value)
+    $emit("change", item.value)
+    hide()
+  }
+
+  const typed = event => {
+    const v = event.target.value
+    $updateModel(v)
+    $emit("input", v)
+    filtering = true
+    marked = -1
+    show()
+    requestAnimationFrame(place)
+  }
+
+  const usable = () => shown.map((item, i) => item.disabled ? -1 : i).filter(i => i >= 0)
+  const move = step => {
+    const can = usable()
+    if (!can.length) return
+    const at = can.indexOf(marked)
+    marked = at < 0 ? (step > 0 ? can[0] : can[can.length - 1]) : can[(at + step + can.length) % can.length]
+    // The list follows the mark, and nothing else does: `scrollIntoView`
+    // would scroll every box around it, the page included.
+    requestAnimationFrame(() => {
+      const list = $self(".list [data-scrollable]")
+      const option = $self(`#${optionId(marked)}`)
+      if (!list || !option) return
+      const top = option.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop
+      const bottom = top + option.offsetHeight
+      if (top < list.scrollTop) list.scrollTop = top
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight
+    })
+  }
+
+  const key = event => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault()
+      if (!open) show()
+      move(event.key === "ArrowDown" ? 1 : -1)
+    } else if (event.key === "Enter" && open && marked >= 0) {
+      event.preventDefault()
+      take(shown[marked])
+    } else if (event.key === "Escape" && open) {
+      // Closes the list and nothing else: a modal around it stays open.
+      event.preventDefault()
+      event.stopPropagation()
+      hide()
+    } else if (event.key === "Tab") {
+      hide()
+    }
+  }
+
+  const left = () => {
+    hide()
+    if (!isStrict) {
+      if (text !== kept) {
+        kept = text
+        $emit("change", text)
+      }
+      return
+    }
+    const exact = items.find(item => String(item.value) === String(text))
+    if (exact || text === "") return (kept = text)
+    $updateModel(kept)
+  }
+
+  await $mounted()
+  const away = () => open && place()
+  window.addEventListener("resize", away)
+  window.addEventListener("scroll", away, true)
+  $destroyed(() => {
+    window.removeEventListener("resize", away)
+    window.removeEventListener("scroll", away, true)
+  })
+</script>
+
+<div class="typeahead">
+  <div class="field"
+       :class.sm="size === 'sm'"
+       :class.lg="size === 'lg'"
+       :class.invalid="isInvalid"
+       :class.off="isDisabled">
+    <input type="text"
+           role="combobox"
+           autocomplete="off"
+           aria-autocomplete="list"
+           :aria-expanded="open ? 'true' : 'false'"
+           :aria-controls="listId"
+           :aria-activedescendant="open && marked >= 0 ? optionId(marked) : null"
+           :aria-label="label || null"
+           :aria-invalid="isInvalid ? 'true' : null"
+           :value="text"
+           :placeholder="placeholder || null"
+           :disabled="isDisabled"
+           :id="id || null"
+           :name="name || null"
+           @input="typed($event)"
+           @keydown="key($event)"
+           @click="show()"
+           @blur="left()">
+    <span :if="isLoading" class="busy" aria-hidden="true"></span>
+    <button type="button" class="opener" tabindex="-1" :disabled="isDisabled"
+            :aria-label="open ? 'Close the list' : 'Show the list'"
+            @pointerdown="$event.preventDefault()"
+            @click="toggle()">
+      <svg viewBox="0 0 24 24" aria-hidden="true" :class.up="open"><path d="M7 10l5 5 5-5" /></svg>
+    </button>
+  </div>
+  <!-- A pointer down on the list keeps the focus in the field, so the click
+       that follows lands on an option rather than on a list that the field's
+       blur has already closed. -->
+  <!-- The popover is the ground and the frame; the options scroll inside it,
+       capped at what the window has room for less the frame. -->
+  <div class="list" popover="manual" @pointerdown="$event.preventDefault()">
+  <Scrollable y :max="`calc(min(18rem, 45vh) - 2 * var(--luu-border-width))`">
+  <ul class="options" :id="listId" role="listbox" :aria-label="label || null">
+    <li :each="item, i in shown"
+        :key="String(item.value)"
+        :id="optionId(i)"
+        role="option"
+        :aria-selected="i === marked ? 'true' : 'false'"
+        :aria-disabled="item.disabled ? 'true' : null"
+        :class.marked="i === marked"
+        :class.chosen="String(item.value) === String(kept)"
+        @pointermove="item.disabled || (marked = i)"
+        @click="take(item)">
+      <span class="text">{{ parts(item.label)[0] }}<mark :if="parts(item.label)[1]">{{ parts(item.label)[1] }}</mark>{{ parts(item.label)[2] }}</span>
+      <span :if="item.description" class="description">{{ item.description }}</span>
+    </li>
+    <li :if="!shown.length" class="nothing" role="presentation">{{ isLoading ? "Asking…" : empty }}</li>
+  </ul>
+  </Scrollable>
+  </div>
+</div>
+
+<style scoped>
+  .typeahead { display: block; width: 100%; min-width: 0; }
+  .field {
+    --h: var(--luu-control-md);
+    display: flex;
+    align-items: center;
+    height: var(--h);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease;
+  }
+  .field:hover:not(.off) { border-color: var(--luu-border-strong); }
+  .field:focus-within { border-color: var(--luu-focus); box-shadow: 0 0 0 1px var(--luu-focus); }
+  .invalid, .invalid:hover:not(.off) { border-color: var(--luu-bad); }
+  .invalid:focus-within { border-color: var(--luu-bad); box-shadow: 0 0 0 1px var(--luu-bad); }
+  .off { opacity: .55; background: var(--luu-sunken); }
+  .sm { --h: var(--luu-control-sm); font-size: var(--luu-text-sm); }
+  .lg { --h: var(--luu-control-lg); font-size: var(--luu-text-lg); }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 var(--luu-space-3);
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    outline: none;
+  }
+  input::placeholder { color: var(--luu-fg-subtle); }
+  input:disabled { opacity: 1; cursor: not-allowed; }
+
+  .busy {
+    width: 12px;
+    height: 12px;
+    margin-right: var(--luu-space-1);
+    border: 2px solid var(--luu-fg-subtle);
+    border-right-color: transparent;
+    border-radius: var(--luu-radius-full);
+    animation: spin calc(var(--luu-duration-slow) * 2.5) linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(1turn); } }
+
+  .opener {
+    display: inline-flex;
+    align-self: stretch;
+    align-items: center;
+    padding: 0 var(--luu-space-2);
+    border: 0;
+    border-radius: 0 var(--luu-radius-md) var(--luu-radius-md) 0;
+    background: transparent;
+    color: var(--luu-fg-muted);
+    cursor: pointer;
+  }
+  .opener:hover:not(:disabled) { color: var(--luu-fg); background: var(--luu-hover); }
+  .opener:active:not(:disabled) { background: var(--luu-active); }
+  .opener:disabled { opacity: 1; cursor: not-allowed; }
+  .opener svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform var(--luu-duration) var(--luu-ease);
+  }
+  .opener svg.up { transform: rotate(180deg); }
+
+  .list {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    padding: 0;
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    box-shadow: var(--luu-shadow-lg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+  }
+  .options { margin: 0; padding: var(--luu-space-1); list-style: none; }
+  li[role="option"] {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: var(--luu-space-1) var(--luu-space-2);
+    border-radius: var(--luu-radius-sm);
+    cursor: pointer;
+  }
+  li.marked { background: var(--luu-selected); }
+  li[role="option"]:active { background: var(--luu-active); }
+  li.chosen .text { font-weight: var(--luu-weight-medium); }
+  li[aria-disabled="true"] { opacity: .45; cursor: default; }
+  mark {
+    background: none;
+    color: var(--luu-accent);
+    font-weight: var(--luu-weight-bold);
+  }
+  .description { color: var(--luu-fg-muted); font-size: var(--luu-text-xs); }
+  .nothing {
+    padding: var(--luu-space-2);
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-sm);
+  }
+</style>

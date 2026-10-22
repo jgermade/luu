@@ -421,3 +421,53 @@ async fn the_window_is_read_off_the_server_where_it_says() {
         .unwrap();
     assert_eq!(window, None);
 }
+
+/// What a server says of each model, for the provider form: llama-server's
+/// `/props` is said of every model it lists, vLLM's `max_model_len` of each
+/// one and nothing of tools, and a server that says neither is left saying
+/// nothing — an empty answer, not an error. See
+/// `RECORD/2026-10-21.connecting-a-provider.completed.md`.
+#[tokio::test]
+async fn the_facts_are_what_the_server_says_and_no_more() {
+    use agent_core::backend::{ModelFacts, WindowIs};
+    let models = vec!["only".to_string()];
+
+    let llama = json_server(vec![(
+        "/props",
+        r#"{"default_generation_settings":{"n_ctx":32768},"chat_template_caps":{"supports_tools":true}}"#,
+    )])
+    .await;
+    let facts = OpenAi::new(format!("http://{llama}/v1"))
+        .facts(&models)
+        .await
+        .unwrap();
+    assert_eq!(
+        facts["only"],
+        ModelFacts {
+            window: Some(32768),
+            window_is: Some(WindowIs::Served),
+            tools: Some(true),
+        }
+    );
+
+    let vllm = json_server(vec![(
+        "/v1/models",
+        r#"{"data":[{"id":"qwen","max_model_len":16384},{"id":"other"}]}"#,
+    )])
+    .await;
+    let names = vec!["qwen".to_string(), "other".to_string()];
+    let facts = OpenAi::new(format!("http://{vllm}/v1"))
+        .facts(&names)
+        .await
+        .unwrap();
+    assert_eq!(facts["qwen"].window, Some(16384));
+    assert_eq!(facts["qwen"].tools, None);
+    assert!(!facts.contains_key("other"), "nothing said is no entry");
+
+    let silent = json_server(vec![("/v1/models", r#"{"data":[{"id":"only"}]}"#)]).await;
+    let facts = OpenAi::new(format!("http://{silent}/v1"))
+        .facts(&models)
+        .await
+        .unwrap();
+    assert!(facts.is_empty());
+}

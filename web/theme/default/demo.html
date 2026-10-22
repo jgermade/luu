@@ -1,0 +1,1569 @@
+<script :setup>
+  // The default theme, on one page: its tokens, then every component in its
+  // variants, sizes, tones and states, with what each one is bound to printed
+  // beside it — a binding that goes wrong shows here before it shows in a
+  // screen. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  // The page imports the components and nothing of the app's: no store, no
+  // `app.css`. What it shows is the theme alone.
+  const Button = await import("@theme/components/button.html")
+  const Badge = await import("@theme/components/badge.html")
+  const Card = await import("@theme/components/card.html")
+  const Alert = await import("@theme/components/alert.html")
+  const Progress = await import("@theme/components/progress.html")
+  const Spinner = await import("@theme/components/spinner.html")
+  const Kbd = await import("@theme/components/kbd.html")
+  const TextInput = await import("@theme/components/text-input.html")
+  const Textarea = await import("@theme/components/textarea.html")
+  const Select = await import("@theme/components/select.html")
+  const Checkbox = await import("@theme/components/checkbox.html")
+  const RadioGroup = await import("@theme/components/radio-group.html")
+  const Switch = await import("@theme/components/switch.html")
+  const Segmented = await import("@theme/components/segmented.html")
+  const Field = await import("@theme/components/field.html")
+  const Tabs = await import("@theme/components/tabs.html")
+  const Menu = await import("@theme/components/menu.html")
+  const Modal = await import("@theme/components/modal.html")
+  const Tooltip = await import("@theme/components/tooltip.html")
+  const InputContainer = await import("@theme/components/input-container.html")
+  const Typeahead = await import("@theme/components/typeahead.html")
+  const Section = await import("@theme/components/section.html")
+  const Scrollable = await import("@theme/components/scrollable.html")
+  const AnchorNav = await import("@theme/components/anchor-nav.html")
+  const TabModal = await import("@theme/components/tab-modal.html")
+  const SubModal = await import("@theme/components/sub-modal.html")
+
+  const SECTIONS = [
+    ["colours", "Colours"], ["foundations", "Type · Shape · Motion"], ["files", "File icons"],
+    ["button", "Button"], ["badge", "Badge"], ["alert", "Alert"], ["card", "Card"],
+    ["scrollable", "Scrollable"], ["progress", "Progress · Spinner"], ["kbd", "Kbd"],
+    ["text-input", "TextInput"], ["textarea", "Textarea"], ["select", "Select"],
+    ["checkbox", "Checkbox"], ["radio-group", "RadioGroup"], ["switch", "Switch"],
+    ["segmented", "Segmented"], ["field", "Field"],
+    ["input-container", "InputContainer"], ["typeahead", "Typeahead"],
+    ["tabs", "Tabs"], ["anchors", "Section · AnchorNav"], ["menu", "Menu"], ["tooltip", "Tooltip"], ["modals", "Modals"],
+  ]
+  const ANCHORS = SECTIONS.map(([id, label]) => ({ id, label }))
+
+  // ---- the theme ------------------------------------------------------------
+
+  // `auto` is the system's: `prefers-color-scheme`, followed as it changes.
+  const THEMES = [
+    { value: "auto", label: "Auto", icon: "M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM8 20h8M12 16v4" },
+    { value: "light", label: "Light", icon: "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8zM12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" },
+    { value: "dark", label: "Dark", icon: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" },
+  ]
+  const system = window.matchMedia("(prefers-color-scheme: dark)")
+  let theme = (() => {
+    try { return localStorage.getItem("luu.theme-demo") || "auto" } catch { return "auto" }
+  })()
+  const applyTheme = t => {
+    document.documentElement.dataset.theme = t === "auto" ? (system.matches ? "dark" : "light") : t
+    try { localStorage.setItem("luu.theme-demo", t) } catch {}
+    // Read a frame later: by then the colours are re-pointed, and the reader
+    // below exists.
+    requestAnimationFrame(() => readTokens())
+  }
+  $: applyTheme(theme)
+  const followSystem = () => theme === "auto" && applyTheme("auto")
+  system.addEventListener("change", followSystem)
+  $destroyed(() => system.removeEventListener("change", followSystem))
+
+  // Read back from the computed style, so the page shows what the CSS says
+  // rather than a copy of it; again whenever the theme moves.
+  const COLOURS = [
+    ["Grounds", ["bg", "sunken", "surface", "hover", "selected"]],
+    ["Lines and ink", ["border", "border-strong", "fg", "fg-muted", "fg-subtle"]],
+    ["Accent", ["accent", "accent-hover", "on-accent", "accent-soft", "focus"]],
+    ["Tones", ["ok", "ok-soft", "warn", "warn-soft", "bad", "bad-soft"]],
+  ]
+  const TEXT = ["xs", "sm", "md", "lg", "xl", "2xl"]
+  const SPACE = [1, 2, 3, 4, 5, 6, 7, 8]
+  const RADII = ["sm", "md", "lg", "full"]
+  const SHADOWS = ["sm", "md", "lg"]
+  const CONTROLS = ["sm", "md", "lg"]
+  const MOTION = ["ease", "ease-out", "duration-fast", "duration", "duration-slow"]
+  // `files.svg`'s symbols, each with the kind that colours it and what a tree
+  // draws it for. The extensions are a sample: the whole list is `glyphFor`'s,
+  // in `web/lib/workspace.js`, which this page does not import.
+  const GLYPHS = [
+    { id: "i-folder", kind: "folder", names: "a folder, shut" },
+    { id: "i-folder-open", kind: "folder", names: "a folder, open" },
+    { id: "i-file", kind: "", names: "a file of no kind" },
+    { id: "i-file-code", kind: "code", names: ".rs .ts .py .go" },
+    { id: "i-file-markup", kind: "markup", names: ".html .css .xml" },
+    { id: "i-file-data", kind: "data", names: ".json .toml .yaml .lock" },
+    { id: "i-file-doc", kind: "doc", names: ".md .txt README" },
+    { id: "i-file-image", kind: "image", names: ".png .svg .webp" },
+    { id: "i-file-media", kind: "media", names: ".mp3 .mp4 .webm" },
+    { id: "i-file-archive", kind: "archive", names: ".zip .tar.gz .7z" },
+    { id: "i-file-shell", kind: "shell", names: ".sh .zsh Makefile" },
+  ]
+  // A tree as the inspector draws one: `[name, depth, symbol, kind]`.
+  const TREE_ROWS = [
+    ["crates", 0, "i-folder-open", "folder"], ["main.rs", 1, "i-file-code", "code"],
+    ["Cargo.toml", 1, "i-file-data", "data"], ["web", 0, "i-folder", "folder"],
+    ["index.html", 0, "i-file-markup", "markup"], ["README.md", 0, "i-file-doc", "doc"],
+    ["logo.svg", 0, "i-file-image", "image"], ["deploy.sh", 0, "i-file-shell", "shell"],
+    ["demo.mp4", 0, "i-file-media", "media"], ["release.zip", 0, "i-file-archive", "archive"],
+    ["LICENSE-MIT", 0, "i-file", ""],
+  ]
+
+  let read = {}
+  const readTokens = () => {
+    const style = getComputedStyle(document.documentElement)
+    const all = [
+      ...COLOURS.flatMap(([, names]) => names),
+      ...TEXT.map(t => `text-${t}`), ...SPACE.map(s => `space-${s}`),
+      ...RADII.map(r => `radius-${r}`), ...SHADOWS.map(s => `shadow-${s}`),
+      ...CONTROLS.map(c => `control-${c}`), ...MOTION,
+    ]
+    read = Object.fromEntries(all.map(n => [n, style.getPropertyValue(`--luu-${n}`).trim()]))
+  }
+
+  // ---- the components' state ------------------------------------------------
+
+  let clicks = 0
+  let saving = false
+  const save = () => {
+    saving = true
+    setTimeout(() => { saving = false }, 1200)
+  }
+
+  let alerts = { info: true, ok: true, warn: true, bad: true }
+  const dismiss = tone => { alerts = { ...alerts, [tone]: false } }
+
+  let picked = ""
+
+  // A log that grows, for `autoscroll="bottom"`: a line every so often while
+  // it streams, the way a reply or an install's output arrives.
+  const LOG_LINES = [
+    "resolving qwen2.5-coder:7b", "pulling manifest", "pulling 60e05f210007… 12%",
+    "pulling 60e05f210007… 48%", "pulling 60e05f210007… 100%", "verifying sha256 digest",
+    "writing manifest", "loading the model into memory", "warming the cache", "ready",
+  ]
+  let log = LOG_LINES.slice(0, 3)
+  let streaming = null
+  const stream = () => {
+    if (streaming) {
+      clearInterval(streaming)
+      streaming = null
+      return
+    }
+    streaming = setInterval(() => {
+      log = [...log, `${String(log.length + 1).padStart(3, "0")}  ${LOG_LINES[log.length % LOG_LINES.length]}`]
+    }, 400)
+  }
+  const WIDE = "cargo run --release --bin luu -- serve --bind 127.0.0.1:7878 --no-store --log debug --icon-theme ~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-2.1.121"
+
+  // The bars fill as the page scrolls past them, all of it in sight: empty
+  // when the last of them has come up whole from the bottom of the window,
+  // full when the first reaches the header. Whole percents, so a scroll of a
+  // pixel redraws nothing. Each bar takes that share through a timing function
+  // of its own — one eases in, one eases out — and the thick one runs the
+  // other way, full to empty, its tone easing off as it drains.
+  let progress = 0
+  $: easedIn = Math.round(100 * (progress / 100) ** 3)
+  $: easedOut = Math.round(100 * (1 - (1 - progress / 100) ** 3))
+  $: drained = 100 - progress
+  $: windowTone = drained > 90 ? "bad" : drained > 75 ? "warn" : "accent"
+  let passQueued = false
+  const pass = () => {
+    if (passQueued) return
+    passQueued = true
+    requestAnimationFrame(() => {
+      passQueued = false
+      const bars = document.querySelectorAll("#progress [role=progressbar][aria-valuenow]")
+      if (!bars.length) return
+      const first = bars[0].getBoundingClientRect().top
+      const last = bars[bars.length - 1].getBoundingClientRect().bottom
+      const top = document.querySelector(".top")?.getBoundingClientRect().bottom || 0
+      const share = (innerHeight - last) / (innerHeight - top - (last - first))
+      progress = Math.round(100 * Math.max(0, Math.min(1, share)))
+    })
+  }
+
+  let name = "workstation"
+  let url = ""
+  let port = "11434"
+  let secret = ""
+  let lastEnter = ""
+
+  let note = "Never write outside the working tree."
+  let policy = "[sandbox]\nnetwork = false\ncommands = [\"ls\", \"cat\"]\n"
+
+  let backend = "ollama"
+  let model = ""
+  const BACKENDS = ["ollama", "openai", "anthropic", "mock"]
+  const MODELS = [
+    { value: "qwen2.5-coder:7b", label: "qwen2.5-coder 7B" },
+    { value: "qwen2.5-coder:14b", label: "qwen2.5-coder 14B" },
+    { value: "llama3.1:8b", label: "llama 3.1 8B" },
+    { value: "deepseek-r1:32b", label: "deepseek-r1 32B", disabled: true, title: "does not fit in this machine" },
+  ]
+
+  let isDefault = true
+  let remote = false
+  let files = { a: true, b: false, c: true }
+  $: allFiles = files.a && files.b && files.c
+  $: someFiles = (files.a || files.b || files.c) && !allFiles
+  const setAll = v => { files = { a: v, b: v, c: v } }
+
+  let host = "loopback"
+  const HOSTS = [
+    { value: "loopback", label: "loopback", description: "a shell for this machine's own browser" },
+    { value: "always", label: "always", description: "a shell for whoever holds the token" },
+    { value: "never", label: "never", description: "no host shell; containers only" },
+  ]
+  let resend = "once"
+
+  let autoName = true
+  let sounds = false
+
+  let layout = "three"
+  let tone = "dark"
+  let repeat = "once"
+
+  let formName = ""
+  let formUrl = "http://192.168.1.20:11434"
+  $: urlError = formUrl && !/^https?:\/\//.test(formUrl) ? "a URL starts with http:// or https://" : ""
+  $: nameError = formName && !/^[a-z0-9-]+$/.test(formName) ? "lowercase letters, digits and dashes" : ""
+
+  let tab = "context"
+  const TABS = [
+    { value: "context", label: "Context", count: 7 },
+    { value: "answer", label: "Answer" },
+    { value: "calls", label: "Calls", count: 2 },
+    { value: "raw", label: "Raw", disabled: true },
+  ]
+  let small = "files"
+
+  let acted = ""
+  const SESSION_MENU = [
+    { value: "rename", label: "Rename", hint: "F2" },
+    { value: "copy", label: "Copy as text", hint: "⌘C" },
+    { value: "move", label: "Move to…", disabled: true },
+    "-",
+    { value: "delete", label: "Delete", danger: true },
+  ]
+
+  let asking = false
+  let editing = false
+  let locked = false
+  let large = false
+  let deleted = 0
+  const remove = () => { deleted += 1; asking = false }
+
+  let icUrl = ""
+  let icName = "Work Station"
+  let icWindow = "32768"
+  $: icNameError = icName && !/^[a-z0-9-]+$/.test(icName) ? "lowercase letters, digits and dashes" : ""
+
+  const TA_MODELS = [
+    { value: "qwen2.5-coder:7b", label: "qwen2.5-coder:7b", description: "ollama · 4.7 GB" },
+    { value: "qwen2.5-coder:14b", label: "qwen2.5-coder:14b", description: "ollama · 9.0 GB" },
+    { value: "qwen2.5-coder:32b", label: "qwen2.5-coder:32b", description: "ollama · 20 GB" },
+    { value: "qwen3:8b", label: "qwen3:8b", description: "ollama · 5.2 GB" },
+    { value: "llama3.1:8b", label: "llama3.1:8b", description: "ollama · 4.9 GB" },
+    { value: "llama3.2:3b", label: "llama3.2:3b", description: "ollama · 2.0 GB" },
+    { value: "gemma3:12b", label: "gemma3:12b", description: "ollama · 8.1 GB" },
+    { value: "gemma3:27b", label: "gemma3:27b", description: "does not fit in this machine", disabled: true },
+    { value: "deepseek-r1:14b", label: "deepseek-r1:14b", description: "ollama · 9.0 GB" },
+    { value: "mistral-small:24b", label: "mistral-small:24b", description: "ollama · 14 GB" },
+    { value: "phi4:14b", label: "phi4:14b", description: "ollama · 9.1 GB" },
+  ]
+  let taModel = ""
+  let taPicked = ""
+  let taStrict = "ollama"
+
+  const MINI = [
+    { id: "mini-draft", label: "Draft" },
+    { id: "mini-gate", label: "Gate" },
+    { id: "mini-plan", label: "Plan" },
+    { id: "mini-fold", label: "Fold" },
+  ]
+  let miniAt = ""
+
+  let tabbing = false
+
+  // ---- integrating it --------------------------------------------------------
+  //
+  // What a page writes to draw with this theme, by step: the files it loads,
+  // a component in a `:setup`, the controls' values in and out, the tokens it
+  // may change, the file icons. Each snippet as it would be pasted. A closing
+  // script tag is written `<\/script>` here only so it does not close this one.
+  let integrating = false
+  let integrationTab = "load"
+  const INTEGRATION = [
+    {
+      value: "load", label: "Load it",
+      lead: "Two stylesheets and an import map. tokens.css is all a component draws with; luu.css is luu's own surfaces and the file icons' colours, and a page that is not luu can leave it out.",
+      snippets: [{ name: "index.html", code: `<link rel="stylesheet" href="/theme/default/tokens.css">
+<link rel="stylesheet" href="/theme/default/luu.css">
+
+<!-- Before the first module script: the only place a map is read. -->
+<script type="importmap">{ "imports": { "@theme/": "/theme/default/" } }<\/script>
+<script type="module">
+  import { C79 } from "/vendor/jq79.js"
+  C79.fetch("./app.html").mount("#app")
+<\/script>` }],
+    },
+    {
+      value: "components", label: "Components",
+      lead: "Imported in the :setup that uses them, and written as tags. Props in, events out; a modal is open while its owner says so, and close only asks.",
+      snippets: [{ name: "app.html", code: `<script :setup>
+  const Button = await import("@theme/components/button.html")
+  const Modal = await import("@theme/components/modal.html")
+
+  let asking = false
+  const remove = () => { asking = false }
+<\/script>
+
+<Button variant="danger" @click="asking = true">Delete…</Button>
+
+<Modal :open="asking" title="Delete this session?" @close="asking = false">
+  Its stream goes with it.
+  <template :slot.foot>
+    <Button @click="asking = false">Keep it</Button>
+    <Button variant="danger" @click="remove()">Delete</Button>
+  </template>
+</Modal>` }],
+    },
+    {
+      value: "forms", label: "Forms",
+      lead: "A control's value is :model, written back as it changes. An event's value is in $event.detail: a component emits, it never hands on a native event. A bare attribute is on.",
+      snippets: [{ name: "settings.html", code: `<script :setup>
+  const TextInput = await import("@theme/components/text-input.html")
+  const Select = await import("@theme/components/select.html")
+  const Switch = await import("@theme/components/switch.html")
+  const Typeahead = await import("@theme/components/typeahead.html")
+
+  let name = "workstation"
+  let backend = "ollama"
+  let offline = false
+  let picked = ""
+  const MODELS = ["qwen2.5-coder:7b", "llama3.1:8b", "gemma3:12b"]
+<\/script>
+
+<TextInput label="Name" :model="name" clearable />
+<Select label="Backend" :model="backend" :options="['ollama', 'openai', 'anthropic']" />
+<Switch label="Offline" :model="offline" description="no request leaves this machine" />
+<Typeahead label="Model" :options="MODELS" @select="picked = $event.detail" />` }],
+    },
+    {
+      value: "tokens", label: "Tokens",
+      lead: "Every colour, size and duration is a --luu-* custom property. Change one on :root and every component that uses it follows; a dark island is an attribute.",
+      snippets: [
+        { name: "brand.css", code: `/* After tokens.css: the accent and the corners, in both tones. */
+:root, [data-tone="light"] {
+  --luu-accent: #6d28d9;
+  --luu-accent-hover: #5b21b6;
+  --luu-radius-md: 10px;
+}
+:root[data-theme="dark"], [data-tone="dark"] {
+  --luu-accent: #a78bfa;
+}` },
+        { name: "tones.html", code: `<!-- The page: light or dark. -->
+<html data-theme="dark">
+
+<!-- One part of it dark on a light page, with the theme's own dark values. -->
+<header data-tone="dark">…</header>` },
+      ],
+    },
+    {
+      value: "icons", label: "File icons",
+      lead: "files.svg is a sprite with no colour of its own: a folder open and shut, and a sheet per kind of file. The --luu-glyph-* tokens in luu.css fill and stroke it.",
+      snippets: [
+        { name: "tree.html", code: `<svg class="glyph folder"><use href="/theme/default/files.svg#i-folder"/></svg>
+<svg class="glyph" data-kind="code"><use href="/theme/default/files.svg#i-file-code"/></svg>` },
+        { name: "tree.css", code: `.glyph {
+  width: 16px; height: 16px; stroke-width: 1.6;
+  fill: var(--luu-glyph-file-fill); stroke: var(--luu-glyph-file-stroke);
+}
+.glyph.folder { fill: var(--luu-glyph-folder-fill); stroke: var(--luu-glyph-folder-stroke); }
+.glyph[data-kind="code"] { --kind: var(--luu-glyph-code); }
+.glyph[data-kind]:not(.folder) {
+  stroke: var(--kind);
+  fill: color-mix(in srgb, var(--kind) 12%, var(--luu-glyph-file-fill));
+}` },
+      ],
+    },
+  ]
+  $: integrationShown = INTEGRATION.find(tab => tab.value === integrationTab) || INTEGRATION[0]
+  // Copied, for a moment, on the button that copied it.
+  let copied = ""
+  const copy = async (key, code) => {
+    try {
+      await navigator.clipboard.writeText(code)
+      copied = key
+      setTimeout(() => { if (copied === key) copied = "" }, 1400)
+    } catch {}
+  }
+  let tmTab = "connection"
+  let tmUrl = "http://192.168.1.20:11434"
+  let tmWindow = "32768"
+  let tmNative = true
+  let tmModels = { "qwen2.5-coder:7b": true, "qwen2.5-coder:14b": true, "llama3.1:8b": false }
+  $: tmOn = Object.values(tmModels).filter(Boolean).length
+  $: TM_TABS = [
+    { value: "connection", label: "Connection" },
+    { value: "models", label: "Models", count: tmOn },
+    { value: "limits", label: "Limits" },
+    { value: "history", label: "History", disabled: true },
+  ]
+  let tmSaved = 0
+
+  let parentOpen = false
+  let adding = false
+  let testing = false
+  let testTab = "request"
+  let newModel = ""
+  let added = []
+  const addModel = () => {
+    if (newModel.trim()) added = [...added, newModel.trim()]
+    newModel = ""
+    adding = false
+  }
+
+  // ---- where the reader was -------------------------------------------------
+  //
+  // The page is drawn after it loads, so the browser's own restoring of the
+  // scroll on a reload finds a page too short to scroll and lands at the top.
+  // It is taken over: the position is kept for this tab as the page scrolls,
+  // and put back once the sections are drawn — or, the first time, the
+  // section the address names.
+  //
+  // Kept as the section at the top of the window and how far into it, not as
+  // a `scrollY`: a component that draws a little later than the rest — a
+  // `Menu` waits for the `Scrollable` it imports — makes what is above taller
+  // after the position is put back, and a number of pixels from the top of
+  // the page lands short by that much. A section's own place does not move
+  // with what is above it, and the browser's scroll anchoring keeps it there
+  // as the page settles.
+  const KEPT = "luu.theme-demo.scroll"
+  try { history.scrollRestoration = "manual" } catch {}
+  const here = () => {
+    const at = SECTIONS.map(([id]) => document.getElementById(id))
+      .find(section => section && section.getBoundingClientRect().bottom > 0)
+    return at ? { id: at.id, top: Math.round(at.getBoundingClientRect().top) } : { y: Math.round(window.scrollY) }
+  }
+  const keepNow = () => {
+    try { sessionStorage.setItem(KEPT, JSON.stringify(here())) } catch {}
+  }
+  let keepQueued = false
+  const keep = () => {
+    if (keepQueued) return
+    keepQueued = true
+    requestAnimationFrame(() => {
+      keepQueued = false
+      keepNow()
+    })
+  }
+  const restore = () => {
+    let kept = null
+    try { kept = JSON.parse(sessionStorage.getItem(KEPT) || "null") } catch {}
+    const section = kept?.id ? document.getElementById(kept.id) : null
+    if (section) return window.scrollTo(0, window.scrollY + section.getBoundingClientRect().top - kept.top)
+    if (Number.isFinite(kept?.y)) return window.scrollTo(0, kept.y)
+    const target = location.hash ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null
+    target?.scrollIntoView()
+  }
+
+  await $mounted()
+  // Read once laid out, and a frame after every theme change.
+  $: (theme, requestAnimationFrame(readTokens))
+  // Two frames: one for the components to draw, one for their layout.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    restore()
+    window.addEventListener("scroll", keep, { passive: true })
+    pass()
+  }))
+  window.addEventListener("scroll", pass, { passive: true })
+  window.addEventListener("resize", pass)
+  window.addEventListener("pagehide", keepNow)
+  $destroyed(() => {
+    window.removeEventListener("scroll", pass)
+    window.removeEventListener("resize", pass)
+    window.removeEventListener("scroll", keep)
+    window.removeEventListener("pagehide", keepNow)
+  })
+</script>
+
+<div class="page">
+  <header class="top">
+    <div class="brand">
+      <img src="../../logo.svg" alt="" width="22" height="22">
+      <div>
+        <h1>Default theme</h1>
+        <p>luu's design system: tokens and components, served from <code>web/theme/default/</code></p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <Button size="sm" @click="integrating = true">
+        <svg class="btn-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>
+        Integrate
+      </Button>
+      <Segmented label="Theme" size="sm" icons-only :model="theme" :options="THEMES" />
+    </div>
+  </header>
+
+  <!-- How a page uses the theme: snippets to paste, a tab per step. -->
+  <TabModal :open="integrating" title="Integrate" :tabs="INTEGRATION" :model="integrationTab"
+            width="52rem" height="30rem" @close="integrating = false">
+    <p class="integration-lead">{{ integrationShown.lead }}</p>
+    <div :each="snippet in integrationShown.snippets" :key="integrationShown.value + snippet.name" class="snippet">
+      <div class="snippet-head">
+        <code>{{ snippet.name }}</code>
+        <Button size="sm" variant="ghost" @click="copy(integrationShown.value + snippet.name, snippet.code)">
+          {{ copied === integrationShown.value + snippet.name ? "Copied" : "Copy" }}
+        </Button>
+      </div>
+      <Scrollable x background="var(--luu-code-ground)"><pre class="snippet-code">{{ snippet.code }}</pre></Scrollable>
+    </div>
+    <template :slot.foot>
+      <span class="integration-foot">Every component's own header says what it takes, in
+        <code>web/theme/default/components/</code>.</span>
+      <Button variant="primary" @click="integrating = false">Done</Button>
+    </template>
+  </TabModal>
+
+  <div class="index">
+    <AnchorNav label="Sections" :items="ANCHORS" offset="96" />
+  </div>
+
+  <main class="content">
+
+    <!-- ---- colours ------------------------------------------------------ -->
+    <Section id="colours" title="Colours" divided>
+      <template :slot.lead>Every colour the components draw with, from <code>tokens.css</code>, read back
+        from the computed style. Overriding one of these on <code>:root</code> changes every
+        component that uses it.</template>
+
+      <div :each="group in COLOURS" :key="group[0]" class="token-group">
+        <h3>{{ group[0] }}</h3>
+        <div class="swatches">
+          <div :each="n in group[1]" :key="n" class="swatch">
+            <span class="chip" :style="`background:var(--luu-${n})`"></span>
+            <code>--luu-{{ n }}</code>
+            <span class="value">{{ read[n] }}</span>
+          </div>
+        </div>
+      </div>
+
+    </Section>
+
+    <!-- ---- type, shape, motion ------------------------------------------ -->
+    <Section id="foundations" title="Type · Shape · Motion" divided>
+      <template :slot.lead>The rest of <code>tokens.css</code>: the type scale, spacing, radii, shadows,
+        control heights and motion.</template>
+
+      <div class="token-group">
+        <h3>Type</h3>
+        <div class="type-scale">
+          <div :each="t in TEXT" :key="t" class="type-row">
+            <code>--luu-text-{{ t }} · {{ read[`text-${t}`] }}</code>
+            <span :style="`font-size:var(--luu-text-${t})`">Context is what earns its place</span>
+          </div>
+        </div>
+        <p class="note">
+          <span>Sans: <span class="sample">The quick brown fox · 0123456789</span></span>
+          <span>Mono: <code class="sample">fn context() -&gt; Window</code></span>
+          <span>Weights: <span style="font-weight:var(--luu-weight-regular)">regular</span> ·
+            <span style="font-weight:var(--luu-weight-medium)">medium</span> ·
+            <span style="font-weight:var(--luu-weight-bold)">bold</span></span>
+        </p>
+      </div>
+
+      <div class="token-group">
+        <h3>Space</h3>
+        <div class="space-scale">
+          <div :each="s in SPACE" :key="s" class="space-row">
+            <code>--luu-space-{{ s }}</code>
+            <span class="bar" :style="`width:var(--luu-space-${s})`"></span>
+            <span class="value">{{ read[`space-${s}`] }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="token-group split">
+        <div>
+          <h3>Radius</h3>
+          <div class="shapes">
+            <div :each="r in RADII" :key="r" class="shape">
+              <span class="box" :style="`border-radius:var(--luu-radius-${r})`"></span>
+              <code>{{ r }} · {{ read[`radius-${r}`] }}</code>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Shadow</h3>
+          <div class="shapes">
+            <div :each="s in SHADOWS" :key="s" class="shape">
+              <span class="box raised" :style="`box-shadow:var(--luu-shadow-${s})`"></span>
+              <code>{{ s }}</code>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Control height</h3>
+          <div class="shapes">
+            <div :each="c in CONTROLS" :key="c" class="shape">
+              <span class="box control" :style="`height:var(--luu-control-${c})`"></span>
+              <code>{{ c }} · {{ read[`control-${c}`] }}</code>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="token-group">
+        <h3>Motion</h3>
+        <dl class="motion">
+          <div :each="m in MOTION" :key="m" class="motion-row">
+            <dt><code>--luu-{{ m }}</code></dt>
+            <dd>{{ read[m] }}</dd>
+          </div>
+        </dl>
+        <p class="note">Under <code>prefers-reduced-motion: reduce</code> the three durations are
+          <code>0ms</code>, so every component stops moving without a media query of its own.</p>
+      </div>
+    </Section>
+
+    <!-- ---- file icons --------------------------------------------------- -->
+    <Section id="files" title="File icons" divided>
+      <template :slot.lead>The tree's own shapes, from <code>files.svg</code>: what a tree draws when no
+        icon theme is chosen. A folder open and shut, and a sheet per kind of file. The sprite holds no
+        colour; the <code>--luu-glyph-*</code> tokens in <code>luu.css</code> fill and stroke it, so it
+        follows the tone.</template>
+
+      <div class="glyphs">
+        <div :each="g in GLYPHS" :key="g.id" class="glyph-tile">
+          <svg class="glyph big" :class.folder="g.kind === 'folder'" :data-kind="g.kind || null"><use :href="`./files.svg#${g.id}`"/></svg>
+          <code>#{{ g.id }}</code>
+          <span class="value">{{ g.kind === "folder" ? "--luu-glyph-folder-*" : g.kind ? `--luu-glyph-${g.kind}` : "--luu-glyph-file-*" }}</span>
+          <span class="glyph-names">{{ g.names }}</span>
+        </div>
+      </div>
+
+      <div class="token-group">
+        <h3>In a tree</h3>
+        <ul class="glyph-tree">
+          <li :each="row in TREE_ROWS" :key="row[0]" :style="`padding-left:${0.5 + row[1] * 1.1}rem`">
+            <svg class="glyph" :class.folder="row[3] === 'folder'" :data-kind="row[3] || null"><use :href="`./files.svg#${row[2]}`"/></svg>
+            {{ row[0] }}
+          </li>
+        </ul>
+      </div>
+    </Section>
+
+    <!-- ---- button ------------------------------------------------------- -->
+    <Section id="button" title="Button" divided>
+      <template :slot.lead><code>primary</code> is the one thing a view asks for, <code>secondary</code>
+        the rest, <code>ghost</code> an action that should not compete with content,
+        <code>danger</code> one that loses something.</template>
+      <div class="demo">
+        <div class="row">
+          <Button variant="primary" @click="clicks++">Primary</Button>
+          <Button @click="clicks++">Secondary</Button>
+          <Button variant="ghost" @click="clicks++">Ghost</Button>
+          <Button variant="danger" @click="clicks++">Danger</Button>
+        </div>
+        <div class="row">
+          <Button size="sm" variant="primary">Small</Button>
+          <Button variant="primary">Medium</Button>
+          <Button size="lg" variant="primary">Large</Button>
+          <Button square title="Settings" label="Settings">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </Button>
+          <Button>
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            provider
+          </Button>
+        </div>
+        <div class="row">
+          <Button variant="primary" :loading="saving" @click="save()">Save</Button>
+          <Button disabled>Disabled</Button>
+          <Button variant="primary" disabled>Disabled</Button>
+        </div>
+        <div class="row"><Button block variant="primary">Block</Button></div>
+        <p class="state">clicks: <code>{{ clicks }}</code> · saving: <code>{{ saving }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- badge -------------------------------------------------------- -->
+    <Section id="badge" title="Badge" divided>
+      <template :slot.lead>What state something is in, in a word. Five tones, soft or solid, with a dot
+        for a status read at a glance.</template>
+      <div class="demo">
+        <div class="row">
+          <Badge>neutral</Badge>
+          <Badge tone="accent">accent</Badge>
+          <Badge tone="ok">ok</Badge>
+          <Badge tone="warn">warn</Badge>
+          <Badge tone="bad">bad</Badge>
+        </div>
+        <div class="row">
+          <Badge solid>neutral</Badge>
+          <Badge tone="accent" solid>accent</Badge>
+          <Badge tone="ok" solid>ok</Badge>
+          <Badge tone="warn" solid>warn</Badge>
+          <Badge tone="bad" solid>bad</Badge>
+        </div>
+        <div class="row">
+          <Badge tone="ok" dot>ready</Badge>
+          <Badge tone="warn" dot>loading model</Badge>
+          <Badge tone="bad" dot>not answering</Badge>
+          <Badge size="sm" tone="accent">sm</Badge>
+          <Badge size="lg" tone="accent">lg</Badge>
+        </div>
+      </div>
+    </Section>
+
+    <!-- ---- alert -------------------------------------------------------- -->
+    <Section id="alert" title="Alert" divided>
+      <template :slot.lead>A message about the view around it. <code>bad</code> is announced as an
+        alert, the rest as a status.</template>
+      <div class="demo stack">
+        <Alert :if="alerts.info" title="Sessions name themselves" dismissible @dismiss="dismiss('info')">
+          From their first prompt, by the model they send to. Rename one to keep its name.
+        </Alert>
+        <Alert :if="alerts.ok" tone="ok" title="Connected" dismissible @dismiss="dismiss('ok')">
+          <code>workstation</code> answered with 12 models.
+        </Alert>
+        <Alert :if="alerts.warn" tone="warn" title="Not on this machine" dismissible @dismiss="dismiss('warn')">
+          The URL is on your network, so the profile needs <code>remote = true</code>.
+        </Alert>
+        <Alert :if="alerts.bad" tone="bad" title="Could not list this provider's models" dismissible @dismiss="dismiss('bad')">
+          connection refused at 127.0.0.1:11434
+        </Alert>
+        <Alert tone="neutral">A neutral note, with no title.</Alert>
+        <div class="row">
+          <Button size="sm" @click="alerts = { info: true, ok: true, warn: true, bad: true }">Bring them back</Button>
+        </div>
+      </div>
+    </Section>
+
+    <!-- ---- card --------------------------------------------------------- -->
+    <Section id="card" title="Card" divided>
+      <template :slot.lead>A surface that groups one thing. A head when it has a title or actions, a
+        foot when it has one; <code>interactive</code> when the card itself is what to click.</template>
+      <div class="demo grid">
+        <Card title="workstation" subtitle="ollama · 192.168.1.20:11434">
+          <template :slot.actions>
+            <Badge tone="ok" dot size="sm">ready</Badge>
+            <Menu size="sm" variant="ghost" title="More" :items="SESSION_MENU" @select="acted = $event.detail">
+              <template :slot.trigger>⋯</template>
+            </Menu>
+          </template>
+          12 models · window 32k · tool calls native
+          <template :slot.foot>
+            <Button size="sm" variant="ghost">Remove</Button>
+            <Button size="sm">Edit</Button>
+          </template>
+        </Card>
+        <Card title="Plain">Only a title and content.</Card>
+        <Card interactive title="Interactive" subtitle="the whole card is a button" @click="picked = 'interactive card'">
+          Click or press Enter.
+        </Card>
+        <Card :padded="false">
+          <div class="unpadded">Unpadded: the content draws to the edge.</div>
+        </Card>
+      </div>
+      <p class="state">picked: <code>{{ picked || "—" }}</code></p>
+    </Section>
+
+    <!-- ---- scrollable --------------------------------------------------- -->
+    <Section id="scrollable" title="Scrollable" divided>
+      <template :slot.lead>Something that scrolls, on a ground that does not: pulled past an end, the
+        gap shows the content's own ground, never the page's. A wheel that reaches the end stops
+        there instead of scrolling the page behind. The theme's modals, menus and typeahead scroll
+        through it.</template>
+      <div class="demo stack">
+        <div class="split-row">
+          <div>
+            <h3>A well, <code>y</code>, <code>max="8rem"</code></h3>
+            <Scrollable y frame="well" max="8rem"><pre class="scroll-pre">{{ LOG_LINES.join("\n") }}</pre></Scrollable>
+          </div>
+          <div>
+            <h3>Following the end, <code>autoscroll="bottom"</code></h3>
+            <Scrollable y frame="well" max="8rem" autoscroll="bottom"><pre class="scroll-pre">{{ log.join("\n") }}</pre></Scrollable>
+            <div class="row">
+              <Button size="sm" @click="stream()">{{ streaming ? "Stop" : "Stream lines" }}</Button>
+              <span class="state">{{ log.length }} lines · scroll up and it stays put</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Sideways, <code>x</code>, on a ground of its own</h3>
+          <div class="wide-frame" data-tone="dark">
+            <Scrollable x background="var(--luu-code-ground)"><pre class="scroll-pre wide">{{ WIDE }}</pre></Scrollable>
+          </div>
+        </div>
+      </div>
+    </Section>
+
+    <!-- ---- progress ----------------------------------------------------- -->
+    <Section id="progress" title="Progress · Spinner" divided>
+      <template :slot.lead>How far along something is, or that it is happening with nothing to measure
+        it by. An <code>amount</code> of <code>null</code> slides instead of filling.</template>
+      <div class="demo stack">
+        <Progress :amount="easedIn" label="Downloading" />
+        <Progress :amount="easedOut" tone="ok" size="sm" />
+        <Progress :amount="drained" :tone="windowTone" size="lg" label="Window" />
+        <Progress label="Starting the engine" />
+        <p class="state">scrolled through: <code>{{ progress }}%</code> · ease-in:
+          <code>{{ easedIn }}</code> · ease-out: <code>{{ easedOut }}</code> · reversed:
+          <code>{{ drained }}</code>, <code>{{ windowTone }}</code></p>
+        <div class="row">
+          <Spinner size="sm" /> <Spinner /> <Spinner size="lg" tone="accent" />
+          <span class="muted"><Spinner size="sm" /> asking the provider…</span>
+        </div>
+      </div>
+    </Section>
+
+    <!-- ---- kbd ---------------------------------------------------------- -->
+    <Section id="kbd" title="Kbd" divided>
+      <template :slot.lead>What to press, one key per <code>Kbd</code>.</template>
+      <div class="demo">
+        <p class="row">
+          <span><Kbd>⌘</Kbd> <Kbd>K</Kbd> opens the palette</span>
+          <span><Kbd>Esc</Kbd> closes what is open</span>
+          <span><Kbd size="sm">⇧</Kbd> <Kbd size="sm">Enter</Kbd> a new line</span>
+        </p>
+      </div>
+    </Section>
+
+    <!-- ---- text input --------------------------------------------------- -->
+    <Section id="text-input" title="TextInput" divided>
+      <template :slot.lead>One line of text. <code>prefix</code> and <code>suffix</code> are what the
+        value is read with, not part of it.</template>
+      <div class="demo stack narrow">
+        <TextInput :model="name" placeholder="a name" label="Name" />
+        <TextInput :model="url" placeholder="http://127.0.0.1:11434" clearable label="URL"
+                   @enter="lastEnter = $event.detail" />
+        <TextInput :model="port" type="number" prefix="port" suffix="tcp" label="Port" />
+        <TextInput :model="secret" type="password" placeholder="a key" label="Key" />
+        <div class="row">
+          <TextInput size="sm" placeholder="small" label="small" />
+          <TextInput size="lg" placeholder="large" label="large" />
+        </div>
+        <TextInput invalid model="not a url" label="Invalid" />
+        <TextInput disabled model="disabled" label="Disabled" />
+        <p class="state">name: <code>{{ JSON.stringify(name) }}</code> · url:
+          <code>{{ JSON.stringify(url) }}</code> · port: <code>{{ JSON.stringify(port) }}</code> ·
+          last Enter: <code>{{ JSON.stringify(lastEnter) }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- textarea ----------------------------------------------------- -->
+    <Section id="textarea" title="Textarea" divided>
+      <template :slot.lead>Several lines. <code>autosize</code> grows with what is written;
+        <code>mono</code> is for text whose columns mean something.</template>
+      <div class="demo stack narrow">
+        <Textarea :model="note" rows="2" autosize label="Note" />
+        <Textarea :model="policy" rows="4" mono label="Policy" />
+        <Textarea invalid placeholder="invalid" rows="2" label="Invalid" />
+        <p class="state">note: <code>{{ JSON.stringify(note) }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- select ------------------------------------------------------- -->
+    <Section id="select" title="Select" divided>
+      <template :slot.lead>One answer out of a list, as the platform's own <code>&lt;select&gt;</code>:
+        its menu, its keyboard, its behaviour on a phone.</template>
+      <div class="demo stack narrow">
+        <Select :model="backend" :options="BACKENDS" label="Backend" />
+        <Select :model="model" :options="MODELS" placeholder="choose a model" label="Model" />
+        <div class="row">
+          <Select size="sm" model="small" :options="['small']" label="small" />
+          <Select size="lg" model="large" :options="['large']" label="large" />
+        </div>
+        <Select invalid model="invalid" :options="['invalid']" label="Invalid" />
+        <Select disabled model="disabled" :options="['disabled']" label="Disabled" />
+        <p class="state">backend: <code>{{ backend }}</code> · model: <code>{{ model || "—" }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- checkbox ----------------------------------------------------- -->
+    <Section id="checkbox" title="Checkbox" divided>
+      <template :slot.lead>Yes or no inside a form that is saved later, or several items picked from a
+        list. <code>indeterminate</code> is <em>some of them</em>.</template>
+      <div class="demo stack">
+        <Checkbox :model="isDefault" label="Default" description="what a run with no -p sends to" />
+        <Checkbox :model="remote" label="Remote" />
+        <div class="stack tight">
+          <Checkbox :model="allFiles" :indeterminate="someFiles" @change="setAll($event.detail)">
+            <strong>All files</strong>
+          </Checkbox>
+          <div class="indent stack tight">
+            <Checkbox :model="files.a" label="src/serve.rs" />
+            <Checkbox :model="files.b" label="src/store.rs" />
+            <Checkbox :model="files.c" label="web/app.html" />
+          </div>
+        </div>
+        <Checkbox disabled label="Disabled" />
+        <Checkbox disabled model="true" label="Disabled and checked" />
+        <p class="state">default: <code>{{ isDefault }}</code> · remote: <code>{{ remote }}</code> ·
+          files: <code>{{ JSON.stringify(files) }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- radio group -------------------------------------------------- -->
+    <Section id="radio-group" title="RadioGroup" divided>
+      <template :slot.lead>One answer out of a few, each worth a line of explanation.</template>
+      <div class="demo stack">
+        <RadioGroup label="Host shell" :model="host" :options="HOSTS" />
+        <RadioGroup label="Repeat" direction="row" :model="resend"
+                    :options="['once', 'always', { value: 'never', label: 'never', disabled: true }]" />
+        <p class="state">host: <code>{{ host }}</code> · repeat: <code>{{ resend }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- switch ------------------------------------------------------- -->
+    <Section id="switch" title="Switch" divided>
+      <template :slot.lead>On or off, in force as soon as it moves.</template>
+      <div class="demo stack">
+        <Switch :model="autoName" label="Name sessions" description="from their first prompt" />
+        <Switch :model="sounds" label="Sound when a turn ends" />
+        <Switch size="sm" :model="sounds" label="Small" />
+        <Switch disabled label="Disabled" />
+        <Switch disabled model="true" label="Disabled and on" />
+        <p class="state">autoName: <code>{{ autoName }}</code> · sounds: <code>{{ sounds }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- segmented ---------------------------------------------------- -->
+    <Section id="segmented" title="Segmented" divided>
+      <template :slot.lead>Two to five short answers side by side. One radio group to the keyboard.</template>
+      <div class="demo stack">
+        <Segmented label="Columns" :model="layout" :options="[{ value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }]" />
+        <Segmented label="Tone" size="sm" :model="tone" :options="['light', 'dark']" />
+        <Segmented label="Repeat" size="lg" :model="repeat"
+                   :options="['once', 'always', { value: 'never', label: 'never', disabled: true }]" />
+        <div class="narrow"><Segmented label="Block" block :model="layout" :options="['two', 'three']" /></div>
+        <Segmented label="Disabled" disabled model="a" :options="['a', 'b']" />
+        <p class="state">layout: <code>{{ layout }}</code> · tone: <code>{{ tone }}</code> ·
+          repeat: <code>{{ repeat }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- field -------------------------------------------------------- -->
+    <Section id="field" title="Field" divided>
+      <template :slot.lead>A control and what is said about it: its name, a hint, and an error in place of
+        the hint when there is one.</template>
+      <div class="demo grid two">
+        <div class="stack">
+          <Field label="Name" control="f-name" required :error="nameError" hint="how -p names it">
+            <TextInput id="f-name" :model="formName" placeholder="workstation" :invalid="!!nameError" />
+          </Field>
+          <Field label="URL" control="f-url" :error="urlError">
+            <TextInput id="f-url" :model="formUrl" :invalid="!!urlError" clearable />
+            <template :slot.hint>where the server listens, <code>/v1</code> included for OpenAI</template>
+          </Field>
+          <Field label="Backend" control="f-backend" optional>
+            <Select id="f-backend" :model="backend" :options="BACKENDS" />
+          </Field>
+        </div>
+        <div class="stack">
+          <Field layout="inline" label="Window" control="f-window" hint="tokens the server allows">
+            <TextInput id="f-window" type="number" model="32768" suffix="tokens" />
+          </Field>
+          <Field layout="inline" label="Tool calls">
+            <Segmented label="Tool calls" :options="['fenced', 'native']" model="fenced" />
+          </Field>
+          <Field layout="inline" label="Remote">
+            <Switch :model="remote" description="the URL is not this machine" />
+          </Field>
+        </div>
+      </div>
+    </Section>
+
+    <!-- ---- input container ---------------------------------------------- -->
+    <Section id="input-container" title="InputContainer" divided>
+      <template :slot.lead>One control and what is said about it, in one box: its name inside the
+        border, an <code>input</code> or a <code>select</code> under it, and what it is for under the
+        box — or what is wrong with it, in its place. The whole box is what is clicked.</template>
+      <div class="demo grid two">
+        <div class="stack">
+          <InputContainer label="URL" :model="icUrl" placeholder="http://127.0.0.1:11434"
+                          description="where the server listens, /v1 included for OpenAI" />
+          <InputContainer label="Backend" type="select" :model="backend" :options="BACKENDS"
+                          description="how it is spoken to" />
+          <InputContainer label="Name" required :model="icName" :error="icNameError"
+                          description="how -p names it" />
+        </div>
+        <div class="stack">
+          <InputContainer label="Window" type="number" :model="icWindow"
+                          description="tokens the server allows" />
+          <InputContainer label="Model" type="select" placeholder="choose a model"
+                          :model="model" :options="MODELS" />
+          <InputContainer label="Disabled" disabled model="read only here" />
+        </div>
+      </div>
+      <p class="state">url: <code>{{ JSON.stringify(icUrl) }}</code> · backend: <code>{{ backend }}</code> ·
+        name: <code>{{ JSON.stringify(icName) }}</code> · window: <code>{{ icWindow }}</code></p>
+    </Section>
+
+    <!-- ---- typeahead ----------------------------------------------------- -->
+    <Section id="typeahead" title="Typeahead" divided>
+      <template :slot.lead>A name typed, with what it could be listed under it as it is typed. The
+        arrows move in the list, Enter takes one, ESC closes it; what matched is marked. What is
+        typed is a value too — unless <code>strict</code>, which puts the last real one back.</template>
+      <div class="demo stack narrow">
+        <Typeahead label="Model" :model="taModel" :options="TA_MODELS" placeholder="a model name"
+                   @select="taPicked = $event.detail" />
+        <Typeahead label="Backend, strict" strict :model="taStrict" :options="BACKENDS"
+                   placeholder="one of the backends" />
+        <Typeahead label="Small" size="sm" :options="TA_MODELS" placeholder="small" />
+        <Typeahead label="Loading" loading :options="[]" placeholder="asking the provider…" />
+        <Typeahead label="Disabled" disabled model="qwen2.5-coder:7b" :options="TA_MODELS" />
+        <p class="state">typed: <code>{{ JSON.stringify(taModel) }}</code> · taken:
+          <code>{{ JSON.stringify(taPicked) }}</code> · strict: <code>{{ JSON.stringify(taStrict) }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- tabs --------------------------------------------------------- -->
+    <Section id="tabs" title="Tabs" divided>
+      <template :slot.lead>Views of one thing, one at a time. Only the strip is drawn; the owner shows
+        the panel the model names.</template>
+      <div class="demo stack">
+        <Tabs label="Turn" :model="tab" :items="TABS" />
+        <div class="panel">
+          <p :if="tab === 'context'">The context: system, tools, map, history, prompt.</p>
+          <p :if="tab === 'answer'">The answer as the model wrote it.</p>
+          <p :if="tab === 'calls'">Each tool call, its arguments and its output.</p>
+        </div>
+        <Tabs size="sm" label="Inspector" :model="small" :items="['files', 'git', 'context']" />
+        <p class="state">tab: <code>{{ tab }}</code> · small: <code>{{ small }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- section, anchor nav ------------------------------------------ -->
+    <Section id="anchors" title="Section · AnchorNav" divided>
+      <template :slot.lead>A part of a page that can be linked to, and an index that marks the one
+        being read. This page is made of them; below, the same two inside a box that scrolls on its
+        own, followed without answering the page's scrolling.</template>
+      <div class="demo">
+        <div class="mini">
+          <AnchorNav label="Inside the box" :items="MINI" offset="8" :model="miniAt" />
+          <Scrollable y frame="well" max="14rem"><div class="mini-body">
+            <Section :each="m in MINI" :key="m.id" :id="m.id" :title="m.label" level="3">
+              <template :slot.lead>What happens in the {{ m.label.toLowerCase() }}.</template>
+              <p class="filler">A section long enough to scroll past: what the model may read, what
+                it may write, what the person approved, and what the fold kept of it after.</p>
+              <p class="filler">The index beside it marks this one while its title is above the
+                line, and the last one at the very bottom, however short.</p>
+            </Section>
+          </div></Scrollable>
+        </div>
+        <p class="state">reading: <code>{{ miniAt || "—" }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- menu --------------------------------------------------------- -->
+    <Section id="menu" title="Menu" divided>
+      <template :slot.lead>Actions behind a button, in the top layer. The arrows move inside it; ESC and
+        a click outside close it.</template>
+      <div class="demo">
+        <div class="row">
+          <Menu label="Session" :items="SESSION_MENU" @select="acted = $event.detail" />
+          <Menu label="Aligned to the end" align="end" :items="['first', 'second', 'third']"
+                @select="acted = $event.detail" />
+          <Menu size="sm" variant="ghost" title="More" :items="SESSION_MENU" @select="acted = $event.detail">
+            <template :slot.trigger>
+              <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </template>
+          </Menu>
+          <Menu label="Disabled" disabled :items="['x']" />
+        </div>
+        <p class="state">selected: <code>{{ acted || "—" }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- tooltip ------------------------------------------------------ -->
+    <Section id="tooltip" title="Tooltip" divided>
+      <template :slot.lead>A word about what is under the pointer or the focus. Flips to the other side
+        when there is no room.</template>
+      <div class="demo">
+        <div class="row">
+          <Tooltip text="Above, after a moment"><Button>top</Button></Tooltip>
+          <Tooltip text="Below" placement="bottom"><Button>bottom</Button></Tooltip>
+          <Tooltip text="On the left" placement="left"><Button>left</Button></Tooltip>
+          <Tooltip text="On the right" placement="right"><Button>right</Button></Tooltip>
+          <Tooltip text="1.5k of 8k tokens sent"><Badge tone="accent">1.5k / 8k</Badge></Tooltip>
+        </div>
+      </div>
+    </Section>
+
+    <!-- ---- modals: three kinds of one thing -------------------------------- -->
+    <Section id="modals" title="Modals">
+      <template :slot.lead>A view over the page that has to be answered or left: plain, with tabs for
+        its head, or as a sheet inside another. All three open the same way — the folio — and a
+        large one has a dark head.</template>
+      <!-- One box, three parts: each its line of what it is, its buttons and what
+           they did. -->
+      <div class="demo modal-kinds">
+        <!-- ---- modal -------------------------------------------------------- -->
+        <div id="modal" class="modal-kind">
+          <h4 class="kind-title">Modal</h4>
+          <p class="kind-lead">The platform's <code>&lt;dialog&gt;</code>. ESC, the backdrop and the close
+            button ask to close; the owner decides. A large one has a dark head, a small one a head
+            that is part of its body.</p>
+            <div class="row">
+              <Button variant="danger" @click="asking = true">Delete a session…</Button>
+              <Button @click="editing = true">A form…</Button>
+              <Button @click="locked = true">No way back…</Button>
+              <Button @click="large = true">A large one…</Button>
+              <p class="state">deleted: <code>{{ deleted }}</code></p>
+          </div>
+
+          <Modal :open="asking" title="Delete this session?" width="26rem" @close="asking = false">
+            Its stream goes with it, and nothing brings it back.
+            <template :slot.foot>
+              <Button @click="asking = false">Keep it</Button>
+              <Button variant="danger" @click="remove()">Delete</Button>
+            </template>
+          </Modal>
+
+          <Modal :open="editing" title="New session" @close="editing = false">
+            <div class="stack">
+              <Field label="Provider" control="m-provider">
+                <Select id="m-provider" :model="backend" :options="BACKENDS" />
+              </Field>
+              <Field label="Model" control="m-model" hint="a model that is not pulled yet is still a name">
+                <TextInput id="m-model" :model="model" placeholder="a model name" />
+              </Field>
+            </div>
+            <template :slot.foot>
+              <Button variant="ghost" @click="editing = false">Cancel</Button>
+              <Button variant="primary" @click="editing = false">Start session</Button>
+            </template>
+          </Modal>
+
+          <Modal :open="large" title="Context of turn 12" width="48rem" @close="large = false">
+            <p class="muted-line">A large modal has a dark head, a bar like the page's own; a small one
+              has a head that is part of its body. <code>head="auto"</code> decides by the width it is
+              drawn at, and <code>dark</code> or <code>integrated</code> say it outright.</p>
+            <Progress :amount="5400" :max="8192" label="Window" />
+            <template :slot.foot>
+              <Button @click="large = false">Close</Button>
+            </template>
+          </Modal>
+
+          <Modal :open="locked" title="Choose a folder" :dismissible="false">
+            ESC, the backdrop and the close button do nothing here: the only way out is an answer.
+            <template :slot.foot>
+              <Button variant="primary" @click="locked = false">This one</Button>
+            </template>
+          </Modal>
+        </div>
+
+        <!-- ---- tab modal ---------------------------------------------------- -->
+        <div id="tab-modal" class="modal-kind">
+          <h4 class="kind-title">TabModal</h4>
+          <p class="kind-lead">A modal whose head is its tabs: several views of one thing, chosen where a
+            title would be. The owner shows the panel the model names; a fixed <code>height</code>
+            keeps the dialog still as the tabs change.</p>
+            <div class="row">
+              <Button @click="tabbing = true">workstation…</Button>
+              <p class="state">tab: <code>{{ tmTab }}</code> · saved: <code>{{ tmSaved }}</code></p>
+          </div>
+
+          <TabModal :open="tabbing" title="workstation" :tabs="TM_TABS" :model="tmTab" height="17rem"
+                    @close="tabbing = false">
+            <div :if="tmTab === 'connection'" class="stack">
+              <InputContainer label="URL" :model="tmUrl" description="where the server listens" />
+              <InputContainer label="Backend" type="select" :model="backend" :options="BACKENDS"
+                              description="how it is spoken to" />
+            </div>
+            <div :if="tmTab === 'models'" class="stack tight">
+              <p class="muted-line">What a session on this provider is offered.</p>
+              <Checkbox :model="tmModels['qwen2.5-coder:7b']" label="qwen2.5-coder:7b" description="4.7 GB · tools" />
+              <Checkbox :model="tmModels['qwen2.5-coder:14b']" label="qwen2.5-coder:14b" description="9.0 GB · tools" />
+              <Checkbox :model="tmModels['llama3.1:8b']" label="llama3.1:8b" description="4.9 GB · no tools" />
+            </div>
+            <div :if="tmTab === 'limits'" class="stack">
+              <InputContainer label="Window" type="number" :model="tmWindow" description="tokens the server allows" />
+              <Switch :model="tmNative" label="Native tool calls" description="the server's own tools field" />
+            </div>
+            <template :slot.foot>
+              <Button variant="ghost" @click="tabbing = false">Cancel</Button>
+              <Button variant="primary" @click="tmSaved++, tabbing = false">Save</Button>
+            </template>
+          </TabModal>
+        </div>
+
+        <!-- ---- sub modal ---------------------------------------------------- -->
+        <div id="sub-modal" class="modal-kind">
+          <h4 class="kind-title">SubModal</h4>
+          <p class="kind-lead">A modal inside a modal: a sheet that comes down out of its parent's head
+            and covers the parent's body only. The parent's head stays lit — its close button closes
+            both — and ESC closes the sheet alone. With <code>tabs</code>, its head is a strip of them.</p>
+            <div class="row">
+              <Button @click="parentOpen = true">Edit a provider…</Button>
+              <p class="state">added: <code>{{ JSON.stringify(added) }}</code> · test tab: <code>{{ testTab }}</code></p>
+          </div>
+
+          <!-- Large, as Settings is: wide and nearly as tall as the window, so the
+               sheets have the room a real form inside one has. -->
+          <Modal :open="parentOpen" title="workstation" width="64rem" height="calc(100dvh - 7.5rem)"
+                 @close="parentOpen = false">
+            <div class="stack">
+              <InputContainer label="URL" :model="tmUrl" description="where the server listens" />
+              <div class="row">
+                <Button @click="adding = true">Add a model…</Button>
+                <Button @click="testing = true">Test the connection…</Button>
+              </div>
+              <p class="muted-line">Models added: {{ added.length ? added.join(", ") : "none" }}.</p>
+            </div>
+            <template :slot.foot>
+              <Button variant="primary" @click="parentOpen = false">Done</Button>
+            </template>
+
+            <SubModal :open="adding" title="Add a model" @close="adding = false">
+              <InputContainer label="Model" :model="newModel" placeholder="qwen2.5-coder:7b"
+                              description="a name the provider knows, or will once it is pulled" />
+              <template :slot.foot>
+                <Button variant="ghost" @click="adding = false">Cancel</Button>
+                <Button variant="primary" @click="addModel()">Add</Button>
+              </template>
+            </SubModal>
+
+            <SubModal :open="testing" title="Test" :tabs="[{ value: 'request', label: 'Request' }, { value: 'response', label: 'Response' }]"
+                      :model="testTab" height="9rem" @close="testing = false">
+              <pre :if="testTab === 'request'" class="code">GET http://192.168.1.20:11434/api/tags</pre>
+              <pre :if="testTab === 'response'" class="code">200 OK · 12 models · 41 ms</pre>
+              <template :slot.foot>
+                <Button @click="testing = false">Close</Button>
+              </template>
+            </SubModal>
+          </Modal>
+        </div>
+      </div>
+    </Section>
+  </main>
+</div>
+
+<style scoped>
+  .page {
+    display: grid;
+    grid-template-columns: 12rem minmax(0, 1fr);
+    grid-template-areas: "top top" "index content";
+    max-width: 72rem;
+    margin: 0 auto;
+    padding: 0 var(--luu-space-6) var(--luu-space-8);
+    column-gap: var(--luu-space-7);
+  }
+
+  .top {
+    grid-area: top;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--luu-space-4);
+    padding: var(--luu-space-4) 0;
+    background: var(--luu-bg);
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+  }
+  .brand { display: flex; align-items: center; gap: var(--luu-space-3); }
+  .top-actions { display: flex; align-items: center; gap: var(--luu-space-3); }
+  .btn-ic {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .integration-lead { margin: 0 0 var(--luu-space-4); color: var(--luu-fg-muted); max-width: 44rem; }
+  .snippet {
+    margin-bottom: var(--luu-space-4);
+    overflow: hidden;
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+  }
+  .snippet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--luu-space-1) var(--luu-space-1) var(--luu-space-1) var(--luu-space-3);
+    border-bottom: var(--luu-border-width) solid var(--luu-border);
+    background: var(--luu-sunken);
+    font-size: var(--luu-text-xs);
+  }
+  .snippet-code {
+    margin: 0;
+    padding: var(--luu-space-3);
+    color: var(--luu-code-ink);
+    font-family: var(--luu-font-mono);
+    font-size: var(--luu-text-sm);
+    line-height: var(--luu-leading);
+    white-space: pre;
+  }
+  .integration-foot { margin-right: auto; color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
+  .brand img { flex: none; }
+  h1 { margin: 0; font-size: var(--luu-text-xl); line-height: var(--luu-leading-tight); }
+  .brand p { margin: 0; color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
+
+  .index {
+    grid-area: index;
+    position: sticky;
+    top: 5rem;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    padding-top: var(--luu-space-6);
+    max-height: calc(100dvh - 5rem);
+    overflow: auto;
+  }
+
+  /* The sections are `Section`s, each spacing and dividing itself; the column
+     only stacks them. A link to one lands under the sticky head with room to
+     spare, not against its line: the head is 4.5rem, the offset 6. */
+  .content {
+    grid-area: content;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-7);
+    padding-top: var(--luu-space-7);
+    --luu-anchor-offset: 6rem;
+  }
+  h3 {
+    margin: 0 0 var(--luu-space-2);
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-sm);
+    font-weight: var(--luu-weight-bold);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  code { font-family: var(--luu-font-mono); font-size: .92em; }
+  /* The page's own icons, sized here: a component's scoped style does not
+     reach what this page puts in its slots. */
+  .icon { width: 16px; height: 16px; flex: none; }
+
+  .demo {
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-4);
+    padding: var(--luu-space-5);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-lg);
+    background: var(--luu-surface);
+  }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--luu-space-3); margin: 0; }
+  .stack { display: flex; flex-direction: column; gap: var(--luu-space-3); }
+  .stack.tight { gap: var(--luu-space-2); }
+  .indent { padding-left: var(--luu-space-6); }
+  .narrow { max-width: 26rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: var(--luu-space-4); }
+  .grid.two { grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); }
+  .demo.grid { display: grid; }
+  .state { margin: 0; color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
+  .state code { color: var(--luu-fg); }
+  .muted { color: var(--luu-fg-muted); display: inline-flex; align-items: center; gap: var(--luu-space-2); }
+  .panel {
+    padding: var(--luu-space-3) var(--luu-space-4);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-sunken);
+  }
+  .panel p { margin: 0; }
+  .unpadded {
+    padding: var(--luu-space-6) var(--luu-space-4);
+    border-radius: var(--luu-radius-lg);
+    background: linear-gradient(135deg, var(--luu-accent-soft), var(--luu-sunken));
+  }
+
+  /* ---- tokens ---- */
+  .token-group { margin-top: var(--luu-space-6); }
+
+  .mini { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: var(--luu-space-4); }
+  /* The box is a `Scrollable` well — the scroller AnchorNav follows, its
+     ground and frame outside it; this pads and spaces the sections in it. */
+  .mini-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--luu-space-5);
+    padding: var(--luu-space-2) var(--luu-space-3);
+    --luu-anchor-offset: var(--luu-space-2);
+  }
+  .filler { margin: 0; color: var(--luu-fg-muted); }
+  .filler + .filler { margin-top: var(--luu-space-2); }
+  .code {
+    margin: 0;
+    padding: var(--luu-space-3);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-sunken);
+    font-family: var(--luu-font-mono);
+    font-size: var(--luu-text-sm);
+  }
+  .modal-kinds { gap: 0; padding: 0; }
+  .modal-kind { display: flex; flex-direction: column; gap: var(--luu-space-3); padding: var(--luu-space-5); }
+  .modal-kind + .modal-kind { border-top: var(--luu-border-width) solid var(--luu-border); }
+  .kind-title { margin: 0; font-size: var(--luu-text-lg); }
+  .kind-lead { margin: 0; max-width: 44rem; color: var(--luu-fg-muted); }
+  .muted-line { margin: 0 0 var(--luu-space-1); color: var(--luu-fg-muted); }
+  .token-group.split {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: var(--luu-space-6);
+  }
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+    gap: var(--luu-space-3);
+  }
+  .swatch {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--luu-text-xs);
+  }
+  .chip {
+    height: 3rem;
+    margin-bottom: var(--luu-space-1);
+    border-radius: var(--luu-radius-md);
+    box-shadow: inset 0 0 0 var(--luu-border-width) var(--luu-border);
+  }
+  .value { color: var(--luu-fg-muted); font-family: var(--luu-font-mono); font-size: var(--luu-text-xs); }
+
+  /* The glyphs as the app's `.ic.glyph` draws them (`web/app.css`): a white
+     sheet, a yellow folder, and a sheet of a kind edged in its colour on a
+     tint of it. */
+  .glyph {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    fill: var(--luu-glyph-file-fill);
+    stroke: var(--luu-glyph-file-stroke);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .glyph.big { width: 40px; height: 40px; stroke-width: 1.2; }
+  .glyph.folder { fill: var(--luu-glyph-folder-fill); stroke: var(--luu-glyph-folder-stroke); }
+  .glyph[data-kind="code"] { --kind: var(--luu-glyph-code); }
+  .glyph[data-kind="markup"] { --kind: var(--luu-glyph-markup); }
+  .glyph[data-kind="data"] { --kind: var(--luu-glyph-data); }
+  .glyph[data-kind="doc"] { --kind: var(--luu-glyph-doc); }
+  .glyph[data-kind="image"] { --kind: var(--luu-glyph-image); }
+  .glyph[data-kind="media"] { --kind: var(--luu-glyph-media); }
+  .glyph[data-kind="archive"] { --kind: var(--luu-glyph-archive); }
+  .glyph[data-kind="shell"] { --kind: var(--luu-glyph-shell); }
+  .glyph[data-kind]:not(.folder) {
+    stroke: var(--kind);
+    fill: color-mix(in srgb, var(--kind) 12%, var(--luu-glyph-file-fill));
+  }
+  .glyphs {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+    gap: var(--luu-space-3);
+  }
+  .glyph-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--luu-space-3);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-sunken);
+    color: var(--luu-fg);
+    font-size: var(--luu-text-xs);
+  }
+  .glyph-tile .glyph { margin-bottom: var(--luu-space-2); }
+  .glyph-names { color: var(--luu-fg-muted); }
+  .glyph-tree {
+    max-width: 20rem;
+    margin: 0;
+    padding: var(--luu-space-2) 0;
+    list-style: none;
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-sunken);
+    font-size: var(--luu-text-sm);
+  }
+  .glyph-tree li {
+    display: flex;
+    align-items: center;
+    gap: var(--luu-space-2);
+    padding-block: 2px;
+    padding-right: var(--luu-space-3);
+  }
+
+  .split-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: var(--luu-space-5);
+  }
+  .scroll-pre {
+    margin: 0;
+    padding: var(--luu-space-3);
+    font-family: var(--luu-font-mono);
+    font-size: var(--luu-text-sm);
+    line-height: var(--luu-leading);
+  }
+  /* No ground of its own: the `Scrollable`'s is the one that shows, and the
+     one that stays when the line is pulled past its end. */
+  .scroll-pre.wide { color: var(--luu-code-ink); white-space: pre; }
+  /* A dark island, so the code's ground is not the card's white; the corners
+     clip the ground under them. */
+  .wide-frame { overflow: hidden; border-radius: var(--luu-radius-md); }
+
+  .type-scale { display: flex; flex-direction: column; gap: var(--luu-space-2); }
+  .type-row { display: grid; grid-template-columns: 13rem 1fr; align-items: baseline; gap: var(--luu-space-4); }
+  .type-row code { color: var(--luu-fg-muted); font-size: var(--luu-text-xs); }
+  .note {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--luu-space-2) var(--luu-space-6);
+    margin: var(--luu-space-3) 0 0;
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-sm);
+  }
+  .sample { color: var(--luu-fg); }
+
+  .space-scale { display: flex; flex-direction: column; gap: var(--luu-space-1); }
+  .space-row {
+    display: grid;
+    grid-template-columns: 9rem auto 1fr;
+    align-items: center;
+    gap: var(--luu-space-3);
+    font-size: var(--luu-text-xs);
+  }
+  .bar { height: 10px; border-radius: 2px; background: var(--luu-accent); }
+
+  .shapes { display: flex; flex-wrap: wrap; gap: var(--luu-space-4); }
+  .shape { display: flex; flex-direction: column; align-items: center; gap: var(--luu-space-2); font-size: var(--luu-text-xs); }
+  .box {
+    width: 3.5rem;
+    height: 3.5rem;
+    border: var(--luu-border-width) solid var(--luu-border-strong);
+    background: var(--luu-accent-soft);
+  }
+  .box.raised { border-color: var(--luu-border); background: var(--luu-surface); border-radius: var(--luu-radius-md); }
+  .box.control { width: 5rem; border-radius: var(--luu-radius-md); background: var(--luu-surface); }
+
+  .motion {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--luu-space-1) var(--luu-space-4);
+    margin: 0;
+    font-size: var(--luu-text-sm);
+  }
+  .motion-row { display: contents; }
+  .motion dd { margin: 0; font-family: var(--luu-font-mono); color: var(--luu-fg-muted); }
+
+  /* A phone: the index goes, the page is one column. */
+  @media (max-width: 760px) {
+    .page {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "top" "content";
+      padding: 0 var(--luu-space-4) var(--luu-space-8);
+    }
+    .index { display: none; }
+    .brand p { display: none; }
+    .type-row { grid-template-columns: 1fr; gap: 0; }
+  }
+</style>

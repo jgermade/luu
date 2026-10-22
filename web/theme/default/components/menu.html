@@ -1,0 +1,225 @@
+<script :setup="{ items = [], label = '', title = '', align = 'start', size = 'md', variant = 'secondary', disabled = false }">
+  // A list of actions behind a button: what to do with a session, a file, a
+  // row. It opens in the platform's top layer (`popover`), so no container
+  // clips it and no z-index has to win.
+  //
+  // **Part of the default theme**: imports only the theme's own `Scrollable`,
+  // which its list scrolls through, and draws only with `tokens.css`. See
+  // `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Menu label="Session" :items="[
+  //     { value: 'rename', label: 'Rename', hint: 'F2' },
+  //     { value: 'copy', label: 'Copy as text' },
+  //     '-',
+  //     { value: 'delete', label: 'Delete', danger: true },
+  //   ]" @select="act($event.detail)" />
+  //
+  // An item is a string, `'-'` for a separator, or `{ value, label, hint,
+  // disabled, danger }`. Choosing one emits `select` with its value and
+  // closes. The arrows, Home and End move inside it; ESC and a click outside
+  // close it, which is the popover's own behaviour. `align` is `start` or
+  // `end`, the trigger's edge the menu lines up with. The `trigger` slot
+  // replaces the label, for an icon.
+
+  const Scrollable = await import("./scrollable.html")
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+
+  $: entries = items.map(i =>
+    i === "-" ? { separator: true } : typeof i === "string" ? { value: i, label: i } : i)
+  const id = `luu-menu-${Math.random().toString(36).slice(2, 9)}`
+  let open = false
+
+  // Under the trigger, or above it when there is no room below; inside the
+  // window either way.
+  const place = () => {
+    const trigger = $self(".trigger")
+    const list = $self(".list")
+    if (!trigger || !list) return
+    const t = trigger.getBoundingClientRect()
+    const w = list.offsetWidth
+    const h = list.offsetHeight
+    const below = t.bottom + 4 + h <= window.innerHeight
+    const top = below ? t.bottom + 4 : Math.max(4, t.top - 4 - h)
+    let left = align === "end" ? t.right - w : t.left
+    left = Math.min(Math.max(4, left), window.innerWidth - w - 4)
+    list.style.top = `${top}px`
+    list.style.left = `${left}px`
+  }
+
+  const usable = () => [...($self(".list")?.querySelectorAll("button:not(:disabled)") || [])]
+  const toggled = event => {
+    open = event.newState === "open"
+    if (!open) return
+    place()
+    requestAnimationFrame(() => usable()[0]?.focus())
+  }
+
+  const pick = entry => {
+    if (entry.disabled) return
+    $self(".list")?.hidePopover()
+    $self(".trigger")?.focus()
+    $emit("select", entry.value)
+  }
+
+  const key = e => {
+    const buttons = usable()
+    const i = buttons.indexOf(document.activeElement)
+    const next =
+      e.key === "ArrowDown" ? buttons[(i + 1) % buttons.length] :
+      e.key === "ArrowUp" ? buttons[(i - 1 + buttons.length) % buttons.length] :
+      e.key === "Home" ? buttons[0] :
+      e.key === "End" ? buttons[buttons.length - 1] :
+      null
+    if (!next) return
+    e.preventDefault()
+    next.focus()
+  }
+
+  await $mounted()
+  const away = () => open && place()
+  window.addEventListener("resize", away)
+  window.addEventListener("scroll", away, true)
+  $destroyed(() => {
+    window.removeEventListener("resize", away)
+    window.removeEventListener("scroll", away, true)
+  })
+</script>
+
+<span class="menu">
+  <button type="button"
+          class="trigger"
+          :class.sm="size === 'sm'"
+          :class.ghost="variant === 'ghost'"
+          :class.open="open"
+          :popovertarget="id"
+          :disabled="isDisabled"
+          :title="title || null"
+          aria-haspopup="menu"
+          :aria-expanded="open ? 'true' : 'false'">
+    <span :if="!$slots.trigger">{{ label }}</span>
+    <slot.trigger />
+    <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5" /></svg>
+  </button>
+  <div class="list" :id="id" popover role="menu" :aria-label="label || null"
+       @toggle="toggled($event)" @keydown="key($event)">
+    <!-- The popover is the ground and the frame; the entries scroll inside
+         it, capped at what the window has room for less the frame. -->
+    <Scrollable y :max="`calc(min(24rem, 100vh - 8px) - 2 * var(--luu-border-width))`"><div class="entries">
+    <!-- A wrapper per entry, because `:each` on a <template> draws nothing;
+         `display: contents` keeps it out of the layout. -->
+    <div :each="entry, i in entries" :key="i" class="entry" role="none">
+      <hr :if="entry.separator" role="separator">
+      <button :if="!entry.separator"
+              type="button"
+              role="menuitem"
+              :class.danger="entry.danger"
+              :disabled="entry.disabled"
+              @click="pick(entry)">
+        <span class="text">{{ entry.label }}</span>
+        <span :if="entry.hint" class="hint">{{ entry.hint }}</span>
+      </button>
+    </div>
+    </div></Scrollable>
+  </div>
+</span>
+
+<style scoped>
+  .menu { display: inline-flex; }
+
+  .trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--luu-space-1);
+    height: var(--luu-control-md);
+    padding: 0 var(--luu-space-2) 0 var(--luu-space-3);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    font-weight: var(--luu-weight-medium);
+    box-shadow: var(--luu-shadow-sm);
+    cursor: pointer;
+  }
+  .trigger.sm { height: var(--luu-control-sm); font-size: var(--luu-text-sm); padding: 0 var(--luu-space-1) 0 var(--luu-space-2); }
+  .trigger.ghost { border-color: transparent; background: transparent; box-shadow: none; color: var(--luu-fg-muted); }
+  .trigger:hover:not(:disabled), .trigger.open { background: var(--luu-hover); color: var(--luu-fg); }
+  .trigger:active:not(:disabled) { background: var(--luu-active); }
+  .trigger:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+  .trigger:disabled { opacity: .5; cursor: default; }
+  .caret {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: var(--luu-fg-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform var(--luu-duration) var(--luu-ease);
+  }
+  .open .caret { transform: rotate(180deg); }
+
+  .list {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    min-width: 11rem;
+    max-width: min(20rem, calc(100vw - 8px));
+    padding: 0;
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    box-shadow: var(--luu-shadow-lg);
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    opacity: 0;
+    transform: translateY(-4px) scale(.98);
+    transition: opacity var(--luu-duration-fast) ease,
+                transform var(--luu-duration) var(--luu-ease-out),
+                display var(--luu-duration-fast) allow-discrete,
+                overlay var(--luu-duration-fast) allow-discrete;
+  }
+  .entries { padding: var(--luu-space-1); }
+  .list:popover-open { opacity: 1; transform: none; }
+  @starting-style {
+    .list:popover-open { opacity: 0; transform: translateY(-4px) scale(.98); }
+  }
+
+  .entry { display: contents; }
+  .list button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--luu-space-4);
+    width: 100%;
+    padding: var(--luu-space-1) var(--luu-space-2);
+    border: 0;
+    border-radius: var(--luu-radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .list button:hover:not(:disabled), .list button:focus-visible {
+    background: var(--luu-selected);
+    outline: none;
+  }
+  .list button:active:not(:disabled) { background: var(--luu-selected-hover); }
+  .list button.danger:active:not(:disabled) { background: color-mix(in srgb, var(--luu-bad) 20%, transparent); }
+  .list button:disabled { opacity: .45; cursor: default; }
+  .list button.danger { color: var(--luu-bad); }
+  .list button.danger:hover:not(:disabled), .list button.danger:focus-visible { background: var(--luu-bad-soft); }
+  .hint { color: var(--luu-fg-subtle); font-size: var(--luu-text-xs); font-family: var(--luu-font-mono); }
+  hr {
+    height: 1px;
+    margin: var(--luu-space-1) calc(-1 * var(--luu-space-1));
+    border: 0;
+    background: var(--luu-border);
+  }
+</style>

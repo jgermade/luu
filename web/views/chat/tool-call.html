@@ -9,7 +9,7 @@
   // place for what the model sent. See
   // `RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`.
 
-  const Scrollable = await import("@web/components/scrollable.html")
+  const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const { answerCall } = await import("@web/lib/store.js")
 
   let open = false
@@ -78,11 +78,11 @@
   <div :if="held" class="question">
     <p class="why">The draft may not write this. Allow it once?
       <span class="dim">— {{ held.refused }}</span></p>
-    <div :if="writes !== null" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="16rem"><pre>{{ writes }}</pre></Scrollable></div>
+    <div :if="writes !== null" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre>{{ writes }}</pre></Scrollable></div>
     <div :if="replaces" class="label">replaces</div>
-    <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="10rem"><pre class="bad">{{ replaces.old }}</pre></Scrollable></div>
+    <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="10rem"><pre class="bad">{{ replaces.old }}</pre></Scrollable></div>
     <div :if="replaces" class="label">with</div>
-    <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="10rem"><pre class="ok">{{ replaces.new }}</pre></Scrollable></div>
+    <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="10rem"><pre class="ok">{{ replaces.new }}</pre></Scrollable></div>
     <div class="answers">
       <button type="button" class="primary" :disabled="answered" @click="answer(true)">Allow once</button>
       <button type="button" :disabled="answered" @click="answer(false)">Deny</button>
@@ -97,25 +97,25 @@
     </div>
     <div :if="call?.error" class="line bad">{{ call.error }}</div>
     <div class="label">arguments</div>
-    <div class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="16rem"><pre>{{ pretty }}</pre></Scrollable></div>
+    <div class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre>{{ pretty }}</pre></Scrollable></div>
     <div :if="call?.command?.stderr" class="label">stderr</div>
-    <div :if="call?.command?.stderr" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="16rem"><pre class="bad">{{ call.command.stderr }}</pre></Scrollable></div>
+    <div :if="call?.command?.stderr" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre class="bad">{{ call.command.stderr }}</pre></Scrollable></div>
     <div :if="call?.output" class="label">
       output <span class="dim">· {{ call.output.length }} bytes</span>
       <span :if="call.truncated" class="warn">· cut</span>
     </div>
-    <div :if="call?.output" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="16rem"><pre>{{ call.output }}</pre></Scrollable></div>
+    <div :if="call?.output" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre>{{ call.output }}</pre></Scrollable></div>
     <div :if="!call && part?.raw" class="label">what the model wrote</div>
-    <div :if="!call && part?.raw" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="16rem"><pre>{{ part.raw }}</pre></Scrollable></div>
+    <div :if="!call && part?.raw" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre>{{ part.raw }}</pre></Scrollable></div>
   </div>
 </div>
 
 <style scoped>
   .call {
     margin: .35rem 0;
-    border: 1px solid var(--line, #c8c8c8);
+    border: 1px solid var(--luu-border, #c8c8c8);
     border-radius: 6px;
-    background: var(--sunken, #eef0f4);
+    background: var(--luu-sunken, #eef0f4);
     font-size: 12px;
     white-space: normal;
   }
@@ -136,46 +136,46 @@
   .head:disabled { cursor: default; }
   .caret { width: 12px; height: 12px; flex: none; transition: transform .15s; }
   .caret.open { transform: rotate(90deg); }
-  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--dim, #5b6472); }
-  .dot.ok { background: var(--b-history, #4c8a2e); }
-  .dot.bad { background: var(--bad, #c43d55); }
-  .dot.busy { background: var(--accent, #2f5bbd); animation: pulse 1s ease-in-out infinite; }
-  .dot.ask { background: var(--warn, #b7791f); animation: pulse 1s ease-in-out infinite; }
-  .name { color: var(--accent, #2f5bbd); font-weight: 600; flex: none; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--luu-fg-muted, #5b6472); }
+  .dot.ok { background: var(--luu-bucket-history, #4c8a2e); }
+  .dot.bad { background: var(--luu-bad, #c43d55); }
+  .dot.busy { background: var(--luu-accent, #2f5bbd); animation: pulse 1s ease-in-out infinite; }
+  .dot.ask { background: var(--luu-warn, #b7791f); animation: pulse 1s ease-in-out infinite; }
+  .name { color: var(--luu-accent, #2f5bbd); font-weight: 600; flex: none; }
   .subject {
     flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--fg, #1a1d23);
+    color: var(--luu-fg, #1a1d23);
     font-family: var(--mono, ui-monospace, monospace);
   }
-  .status { flex: none; color: var(--dim, #5b6472); }
-  .status.ok { color: var(--b-history, #4c8a2e); }
-  .status.ask { color: var(--warn, #b7791f); font-weight: 600; }
-  .question { padding: .1rem .6rem .55rem; border-top: 1px solid var(--line, #c8c8c8); }
+  .status { flex: none; color: var(--luu-fg-muted, #5b6472); }
+  .status.ok { color: var(--luu-bucket-history, #4c8a2e); }
+  .status.ask { color: var(--luu-warn, #b7791f); font-weight: 600; }
+  .question { padding: .1rem .6rem .55rem; border-top: 1px solid var(--luu-border, #c8c8c8); }
   .why { margin: .4rem 0 .2rem; overflow-wrap: anywhere; }
   .answers { display: flex; gap: .4rem; margin-top: .5rem; }
   .answers button {
     padding: .25rem .7rem;
-    border: 1px solid var(--line, #c8c8c8);
+    border: 1px solid var(--luu-border, #c8c8c8);
     border-radius: 5px;
-    background: var(--bg, #fff);
+    background: var(--luu-bg, #fff);
     color: inherit;
     font: inherit;
     cursor: pointer;
   }
-  .answers button.primary { background: var(--accent, #2f5bbd); border-color: var(--accent, #2f5bbd); color: #fff; }
+  .answers button.primary { background: var(--luu-accent, #2f5bbd); border-color: var(--luu-accent, #2f5bbd); color: #fff; }
   .answers button:disabled { opacity: .5; cursor: default; }
-  pre.ok { color: var(--b-history, #4c8a2e); }
-  .status.bad, .bad { color: var(--bad, #c43d55); }
-  .warn { color: var(--warn, #b7791f); }
-  .dim, .took { color: var(--dim, #5b6472); }
+  pre.ok { color: var(--luu-bucket-history, #4c8a2e); }
+  .status.bad, .bad { color: var(--luu-bad, #c43d55); }
+  .warn { color: var(--luu-warn, #b7791f); }
+  .dim, .took { color: var(--luu-fg-muted, #5b6472); }
   .took { flex: none; }
-  .body { padding: .1rem .6rem .5rem; border-top: 1px solid var(--line, #c8c8c8); }
+  .body { padding: .1rem .6rem .5rem; border-top: 1px solid var(--luu-border, #c8c8c8); }
   .line { margin-top: .35rem; overflow-wrap: anywhere; }
-  .label { margin-top: .45rem; color: var(--dim, #5b6472); }
+  .label { margin-top: .45rem; color: var(--luu-fg-muted, #5b6472); }
   /* Each block is a Scrollable: its ground does not move when it bounces. */
   .out { margin: .2rem 0 0; }
   pre {

@@ -6,11 +6,11 @@
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
   const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
     await import("@web/lib/runtimes.js")
-  const Scrollable = await import("@web/components/scrollable.html")
+  const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
   const { state } = await import("@web/lib/store.js")
-  const TextInput = await import("@web/components/text-input.html")
-  const SelectInput = await import("@web/components/select-input.html")
+  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const Select = await import("@web/theme/default/components/select.html")
 
   let view = null
   let error = ""
@@ -125,7 +125,7 @@
   $: unused = (view?.policies || []).filter(p => !names.some(n => view.postures[n].policy === p.path))
 </script>
 
-<div class="runtimes-pane">
+<div class="runtimes-pane pane-main">
   <div class="ds-hero">
     <div class="ds-hero-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -140,166 +140,168 @@
     </div>
   </div>
 
-  <p class="dim small">
-    Un runtime es utilizable cuando está instalado, responde a comprobaciones y cuenta con las imágenes declaradas en las políticas.
-    <span :if="view?.path">Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />.</span>
-    <span :if="!view && !error" class="skeleton-pulse">Comprobando runtimes instalados…</span>
-  </p>
-  <p :if="view && !view.editable" class="refused">{{ view.refused }}</p>
-  <p :if="error" class="error">{{ error }}</p>
+  <section class="pane-group">
 
-  <div :if="!view && !error" class="runtime-placeholders">
-    <div :each="name in ['docker', 'podman', 'nerdctl', 'colima', 'container']" :key="name" class="runtime-skeleton">
+    <p class="dim small">
+      Un runtime es utilizable cuando está instalado, responde a comprobaciones y cuenta con las imágenes declaradas en las políticas.
+      <span :if="view?.path">Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />.</span>
+      <span :if="!view && !error" class="skeleton-pulse">Comprobando runtimes instalados…</span>
+    </p>
+    <p :if="view && !view.editable" class="refused">{{ view.refused }}</p>
+    <p :if="error" class="error">{{ error }}</p>
+
+    <div :if="!view && !error" class="runtime-placeholders">
+      <div :each="name in ['docker', 'podman', 'nerdctl', 'colima', 'container']" :key="name" class="runtime-skeleton">
+        <header>
+          <strong>{{ name }}</strong>
+          <span class="skeleton-badge skeleton-pulse">comprobando…</span>
+        </header>
+        <div class="skeleton-body">
+          <span class="skeleton-bar" style="width: 14rem;"></span>
+        </div>
+      </div>
+    </div>
+
+    <section :each="r in view?.runtimes || []" :key="r.runtime" class="runtime" :class.off="!r.path">
       <header>
-        <strong>{{ name }}</strong>
-        <span class="skeleton-badge skeleton-pulse">comprobando…</span>
+        <strong>{{ r.runtime }}</strong>
+        <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
+        <code :if="r.path" class="dim small">{{ r.path }}</code>
       </header>
-      <div class="skeleton-body">
-        <span class="skeleton-bar" style="width: 14rem;"></span>
-      </div>
-    </div>
-  </div>
-
-  <section :each="r in view?.runtimes || []" :key="r.runtime" class="runtime" :class.off="!r.path">
-    <header>
-      <strong>{{ r.runtime }}</strong>
-      <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
-      <code :if="r.path" class="dim small">{{ r.path }}</code>
-    </header>
-    <!-- Installed from here where Homebrew can do it with the person's own
-         authority; said, as a command, where it would take root. -->
-    <p :if="!r.path" class="small hint">
-      <button :if="r.install && taskOf('install', r.runtime)?.state !== 'running'" type="button"
-              :disabled="!view?.editable || !!busy" @click="install(r.runtime)">install</button>
-      <code :if="r.install">{{ r.install }}</code>
-      <span :if="!r.install" class="dim">{{ (r.hint || "").replaceAll("`", "") }}</span>
-      <span :if="!r.install && r.install_refused" class="dim"> — {{ r.install_refused }}</span>
+      <!-- Installed from here where Homebrew can do it with the person's own
+           authority; said, as a command, where it would take root. -->
+      <p :if="!r.path" class="small hint">
+        <button :if="r.install && taskOf('install', r.runtime)?.state !== 'running'" type="button"
+                :disabled="!view?.editable || !!busy" @click="install(r.runtime)">install</button>
+        <code :if="r.install">{{ r.install }}</code>
+        <span :if="!r.install" class="dim">{{ (r.hint || "").replaceAll("`", "") }}</span>
+        <span :if="!r.install && r.install_refused" class="dim"> — {{ r.install_refused }}</span>
+      </p>
+      <p :if="r.answers === false" class="warn small">
+        {{ r.detail }}
+        <button :if="r.startable && taskOf('start', r.runtime)?.state !== 'running'" type="button" class="link"
+                :disabled="!view?.editable || !!busy" @click="start(r.runtime)">start it</button>
+      </p>
+      <div :if="showing(taskOf('install', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
+      <div :if="showing(taskOf('start', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
+      <p :if="r.path && r.gap" class="dim small">{{ r.gap }}</p>
+      <ul :if="r.answers" class="images">
+        <li :each="i in r.images" :key="i.image">
+          <code>{{ i.image }}</code>
+          <span :if="i.present" class="state up">built</span>
+          <span :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" class="state down">not built</span>
+          <button :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
+                  :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image)">build</button>
+          <span :if="buildOf(r.runtime, i.image)?.state === 'running'" class="state">building…</span>
+          <span :if="buildOf(r.runtime, i.image)?.state === 'failed'" class="state down">the last build failed</span>
+          <div :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre></Scrollable></div>
+        </li>
+        <li :if="!r.images.length" class="dim small">No policy file here names an image.</li>
+      </ul>
+    </section>
+    <p class="dim small">
+      <button type="button" class="link" :disabled="!!busy || !view" @click="check()">check again</button>
+      <span :if="busy === 'check'"> · asking each runtime…</span>
     </p>
-    <p :if="r.answers === false" class="warn small">
-      {{ r.detail }}
-      <button :if="r.startable && taskOf('start', r.runtime)?.state !== 'running'" type="button" class="link"
-              :disabled="!view?.editable || !!busy" @click="start(r.runtime)">start it</button>
-    </p>
-    <div :if="showing(taskOf('install', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
-    <div :if="showing(taskOf('start', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
-    <p :if="r.path && r.gap" class="dim small">{{ r.gap }}</p>
-    <ul :if="r.answers" class="images">
-      <li :each="i in r.images" :key="i.image">
-        <code>{{ i.image }}</code>
-        <span :if="i.present" class="state up">built</span>
-        <span :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" class="state down">not built</span>
-        <button :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
-                :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image)">build</button>
-        <span :if="buildOf(r.runtime, i.image)?.state === 'running'" class="state">building…</span>
-        <span :if="buildOf(r.runtime, i.image)?.state === 'failed'" class="state down">the last build failed</span>
-        <div :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre></Scrollable></div>
-      </li>
-      <li :if="!r.images.length" class="dim small">No policy file here names an image.</li>
-    </ul>
   </section>
-  <p class="dim small">
-    <button type="button" class="link" :disabled="!!busy || !view" @click="check()">check again</button>
-    <span :if="busy === 'check'"> · asking each runtime…</span>
-  </p>
 
-  <h3>Postures</h3>
-  <p class="dim small">
-    What a session may do and where it runs, by the policy file that decides
-    both. A new posture names one of the policy files in
-    <code>{{ view?.base || "este repositorio" }}</code>; any other path is written in config.toml by hand.
-  </p>
-  <dl class="settings postures">
-    <div class="row">
-      <dt><span class="dim">server default</span></dt>
-      <dd><span class="dim">the policy file <code>luu serve</code> was started with</span></dd>
-    </div>
-    <div :if="!view && !error" class="row skeleton-row">
-      <dt><span class="skeleton-bar" style="width: 5rem;"></span></dt>
-      <dd><span class="skeleton-bar" style="width: 14rem;"></span></dd>
-    </div>
-    <div :each="name in names" :key="name" class="row">
-      <dt><strong>{{ name }}</strong></dt>
-      <dd>
-        <code>{{ view.postures[name].policy }}</code>
-        · {{ runs(view.postures[name].place) }}
-        <span :if="view.postures[name].place?.missing" class="warn small">— {{ view.postures[name].place.missing }}</span>
-        <span :if="view.running === name" class="tag">the live session</span>
-        <button :if="view.running !== name" type="button" class="link"
-                :disabled="!view?.editable || !!busy" @click="remove(name)">remove</button>
-      </dd>
-    </div>
-  </dl>
-  <div :if="adding" class="adding">
-    <input type="text" placeholder="name" :value="adding.name"
-           @input="adding = { ...adding, name: $event.target.value }">
-    <select :value="adding.policy" @change="adding = { ...adding, policy: $event.target.value }">
-      <option value="">a policy file…</option>
-      <option :each="p in view?.policies || []" :key="p.path" :value="p.path"
-              :selected="adding.policy === p.path">{{ p.path }} · {{ runs(p.place) }}</option>
-    </select>
-    <button type="button" :disabled="!adding.name || !adding.policy || !!busy" @click="add()">add</button>
-    <button type="button" class="link" @click="adding = null">cancel</button>
-  </div>
-  <p :if="!adding" class="small">
-    <button type="button" class="add" :disabled="!view?.editable || !(view?.policies || []).length"
-            @click="adding = { name: '', policy: unused[0]?.path || view.policies[0]?.path || '' }">+ posture</button>
-  </p>
-
-  <h3>Host shell</h3>
-  <p class="dim small">
-    A session on the host gets its terminal on this machine, with your account.
-    Who may open one: <code>[terminal] host</code>.
-  </p>
-  <div class="hosts">
-    <label :each="o in HOSTS" :key="o.value" :title="o.title">
-      <div class="host-header">
-        <input type="radio" name="host-shell" :value="o.value" :checked="(view?.host_shell ?? 'loopback') === o.value"
-               :disabled="!view?.editable || !!busy" @change="host(o.value)">
-        <span>{{ o.label }}</span>
+  <section class="pane-group">
+    <h3>Postures</h3>
+    <p class="dim small">
+      What a session may do and where it runs, by the policy file that decides
+      both. A new posture names one of the policy files in
+      <code>{{ view?.base || "este repositorio" }}</code>; any other path is written in config.toml by hand.
+    </p>
+    <dl class="settings postures">
+      <div class="row">
+        <dt><span class="dim">server default</span></dt>
+        <dd><span class="dim">the policy file <code>luu serve</code> was started with</span></dd>
       </div>
-      <span class="host-caption">{{ o.title }}</span>
-    </label>
-  </div>
+      <div :if="!view && !error" class="row skeleton-row">
+        <dt><span class="skeleton-bar" style="width: 5rem;"></span></dt>
+        <dd><span class="skeleton-bar" style="width: 14rem;"></span></dd>
+      </div>
+      <div :each="name in names" :key="name" class="row">
+        <dt><strong>{{ name }}</strong></dt>
+        <dd>
+          <code>{{ view.postures[name].policy }}</code>
+          · {{ runs(view.postures[name].place) }}
+          <span :if="view.postures[name].place?.missing" class="warn small">— {{ view.postures[name].place.missing }}</span>
+          <span :if="view.running === name" class="tag">the live session</span>
+          <button :if="view.running !== name" type="button" class="link"
+                  :disabled="!view?.editable || !!busy" @click="remove(name)">remove</button>
+        </dd>
+      </div>
+    </dl>
+    <div :if="adding" class="adding">
+      <input type="text" placeholder="name" :value="adding.name"
+             @input="adding = { ...adding, name: $event.target.value }">
+      <select :value="adding.policy" @change="adding = { ...adding, policy: $event.target.value }">
+        <option value="">a policy file…</option>
+        <option :each="p in view?.policies || []" :key="p.path" :value="p.path"
+                :selected="adding.policy === p.path">{{ p.path }} · {{ runs(p.place) }}</option>
+      </select>
+      <button type="button" :disabled="!adding.name || !adding.policy || !!busy" @click="add()">add</button>
+      <button type="button" class="link" @click="adding = null">cancel</button>
+    </div>
+    <p :if="!adding" class="small">
+      <button type="button" class="add" :disabled="!view?.editable || !(view?.policies || []).length"
+              @click="adding = { name: '', policy: unused[0]?.path || view.policies[0]?.path || '' }">+ posture</button>
+    </p>
+  </section>
+
+  <section class="pane-group">
+    <h3>Host shell</h3>
+    <p class="dim small">
+      A session on the host gets its terminal on this machine, with your account.
+      Who may open one: <code>[terminal] host</code>.
+    </p>
+    <div class="hosts">
+      <label :each="o in HOSTS" :key="o.value" :title="o.title">
+        <div class="host-header">
+          <input type="radio" name="host-shell" :value="o.value" :checked="(view?.host_shell ?? 'loopback') === o.value"
+                 :disabled="!view?.editable || !!busy" @change="host(o.value)">
+          <span>{{ o.label }}</span>
+        </div>
+        <span class="host-caption">{{ o.title }}</span>
+      </label>
+    </div>  </section>
+
 </div>
 
 <style scoped>
-  .runtimes-pane {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 100%;
-  }
-  h3:first-child { margin-top: 0; }
+  /* A column, padded and spaced by `.pane-main` (app.css); the pane pads
+     nothing. */
+  .runtimes-pane { flex: 1 0 auto; }
   .runtime {
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     padding: .75rem 1rem;
-    margin: .6rem 0;
     box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
   }
   .runtime.off { opacity: .7; }
   .runtime header { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-  .runtime header strong { font-size: 14px; font-weight: 600; color: var(--fg); text-transform: capitalize; }
+  .runtime header strong { font-size: 14px; font-weight: 600; color: var(--luu-fg); text-transform: capitalize; }
   .runtime p { margin: .35rem 0 0; }
   .state {
     font-size: 11px;
     padding: .15rem .45rem;
     border-radius: 4px;
-    border: 1px solid var(--line);
-    background: var(--sunken, rgba(0, 0, 0, .03));
-    color: var(--dim);
+    border: 1px solid var(--luu-border);
+    background: var(--luu-sunken, rgba(0, 0, 0, .03));
+    color: var(--luu-fg-muted);
   }
   .state.up {
-    color: var(--ok);
-    border-color: var(--ok);
+    color: var(--luu-ok);
+    border-color: var(--luu-ok);
     background: rgba(74, 122, 28, .08);
     font-weight: 500;
   }
   .state.down {
-    color: var(--warn);
-    border-color: var(--warn);
-    background: var(--warn-bg, rgba(138, 93, 18, .08));
+    color: var(--luu-warn);
+    border-color: var(--luu-warn);
+    background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
   }
   .images { list-style: none; margin: .5rem 0 0; padding: 0; }
   .images li {
@@ -319,7 +321,7 @@
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
   }
   /* Each row is a `div` holding its `dt` and `dd`, which HTML allows in a
      `dl`, so the pair spans the grid's two columns as one. */
@@ -331,28 +333,27 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
     gap: .65rem;
-    margin-top: .6rem;
   }
   .hosts label {
     display: flex;
     flex-direction: column;
     gap: .3rem;
     padding: .75rem 1rem;
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     cursor: pointer;
     transition: all .15s ease;
     box-shadow: 0 1px 3px rgba(0, 0, 0, .03);
   }
   .hosts label:hover {
-    background: var(--sunken, rgba(0, 0, 0, .02));
-    border-color: var(--accent);
+    background: var(--luu-sunken, rgba(0, 0, 0, .02));
+    border-color: var(--luu-accent);
   }
   .hosts label:has(input:checked) {
-    border-color: var(--accent);
-    background: var(--selected, rgba(47, 91, 189, .06));
-    box-shadow: 0 0 0 1px var(--accent);
+    border-color: var(--luu-accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .06));
+    box-shadow: 0 0 0 1px var(--luu-accent);
   }
   .host-header {
     display: flex;
@@ -360,11 +361,11 @@
     gap: .5rem;
     font-weight: 600;
     font-size: 13px;
-    color: var(--fg);
+    color: var(--luu-fg);
   }
   .host-caption {
     font-size: 11px;
-    color: var(--dim);
+    color: var(--luu-fg-muted);
     line-height: 1.35;
   }
   .runtime-placeholders {
@@ -374,8 +375,8 @@
     margin: .6rem 0;
   }
   .runtime-skeleton {
-    background: var(--panel, #ffffff);
-    border: 1px solid var(--line);
+    background: var(--luu-surface, #ffffff);
+    border: 1px solid var(--luu-border);
     border-radius: 8px;
     padding: .75rem 1rem;
     display: flex;

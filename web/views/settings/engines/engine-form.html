@@ -9,9 +9,9 @@
   const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("@web/lib/engines.js")
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
-  const TextInput = await import("@web/components/text-input.html")
-  const SelectInput = await import("@web/components/select-input.html")
-  const Checkbox = await import("@web/components/checkbox.html")
+  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const Select = await import("@web/theme/default/components/select.html")
+  const Checkbox = await import("@web/theme/default/components/checkbox.html")
 
   // False once it should leave: `Modal` plays the exit, then `close` unmounts.
   let open = true
@@ -136,133 +136,137 @@
 
 <Modal :title="editing ? 'Engine ' + editing : 'Add an engine'" width="34rem" :open="open" @close="close?.()">
   <section class="modal-body">
-    <dl class="settings form">
-      <dt>Name</dt>
-      <dd>
-        <TextInput :model="name" placeholder="gemma" :disabled="!!editing" :warn="badName || clash" />
-        <span :if="badName" class="warn">letters, digits, <code>-</code> and <code>_</code></span>
-        <span :if="clash" class="warn">already an engine of that name</span>
-      </dd>
+    <!-- The content pads itself, and so does the foot beside it: the body
+         holds both and pads neither. -->
+    <div class="modal-main">
+      <dl class="settings form">
+        <dt>Name</dt>
+        <dd>
+          <TextInput :model="name" placeholder="gemma" :disabled="!!editing" :warn="badName || clash" />
+          <span :if="badName" class="warn">letters, digits, <code>-</code> and <code>_</code></span>
+          <span :if="clash" class="warn">already an engine of that name</span>
+        </dd>
 
-      <dt>Kind</dt>
-      <dd>
-        <SelectInput :model="kind" :disabled="!!editing"
-                     @change="binary = 'managed', path = '', variant = ''">
-          <option value="llama">llama.cpp — llama-server, 12 MB, GGUF, one model per server</option>
-          <option value="mlx">mlx — mlx-serve, Apple Silicon, MLX and GGUF</option>
-          <option value="ollama">ollama — its own model store and its own MLX, 160 MB</option>
-        </SelectInput>
-      </dd>
+        <dt>Kind</dt>
+        <dd>
+          <Select :model="kind" :disabled="!!editing"
+                       @change="binary = 'managed', path = '', variant = ''">
+            <option value="llama">llama.cpp — llama-server, 12 MB, GGUF, one model per server</option>
+            <option value="mlx">mlx — mlx-serve, Apple Silicon, MLX and GGUF</option>
+            <option value="ollama">ollama — its own model store and its own MLX, 160 MB</option>
+          </Select>
+        </dd>
 
-      <dt>Binary</dt>
-      <dd>
-        <SelectInput :model="binary">
-          <option value="managed">luu's own copy{{ haveCopy ? " — downloaded" : " — downloaded when you press download" }}</option>
-          <option :each="p in found" :key="p" :value="p">{{ p }}</option>
-          <option value="">whichever is found first on this machine</option>
-          <option value="custom">a path…</option>
-        </SelectInput>
-      </dd>
-      <dd :if="binary === 'custom'">
-        <TextInput :model="path" :placeholder="`/opt/homebrew/bin/${bin}`" :warn="badPath" />
-        <span :if="badPath" class="warn">must be a file named <code>{{ bin }}</code></span>
-      </dd>
-      <dd :if="binary === 'custom'" class="note">
-        From here, only a file named <code>{{ bin }}</code>. Anything else is
-        written in <code>config.toml</code> by hand.
-      </dd>
-      <dd :if="!found.length && binary !== 'managed'" class="note">
-        No <code>{{ bin }}</code> was found on this machine.
-      </dd>
+        <dt>Binary</dt>
+        <dd>
+          <Select :model="binary">
+            <option value="managed">luu's own copy{{ haveCopy ? " — downloaded" : " — downloaded when you press download" }}</option>
+            <option :each="p in found" :key="p" :value="p">{{ p }}</option>
+            <option value="">whichever is found first on this machine</option>
+            <option value="custom">a path…</option>
+          </Select>
+        </dd>
+        <dd :if="binary === 'custom'">
+          <TextInput :model="path" :placeholder="`/opt/homebrew/bin/${bin}`" :warn="badPath" />
+          <span :if="badPath" class="warn">must be a file named <code>{{ bin }}</code></span>
+        </dd>
+        <dd :if="binary === 'custom'" class="note">
+          From here, only a file named <code>{{ bin }}</code>. Anything else is
+          written in <code>config.toml</code> by hand.
+        </dd>
+        <dd :if="!found.length && binary !== 'managed'" class="note">
+          No <code>{{ bin }}</code> was found on this machine.
+        </dd>
 
-      <dt :if="binary === 'managed'">Version</dt>
-      <dd :if="binary === 'managed'">
-        <TextInput size="num" :model="version" :placeholder="pinned" />
-        <span class="dim">a release tag; empty is the one luu pins</span>
-      </dd>
-      <dt :if="binary === 'managed' && kind === 'llama'">Variant</dt>
-      <dd :if="binary === 'managed' && kind === 'llama'">
-        <TextInput size="num" :model="variant" placeholder="—" />
-        <span class="dim"><code>vulkan</code>, <code>cuda-12.8</code>, <code>rocm-10.0</code> on Linux; empty is CPU/Metal</span>
-      </dd>
+        <dt :if="binary === 'managed'">Version</dt>
+        <dd :if="binary === 'managed'">
+          <TextInput size="num" :model="version" :placeholder="pinned" />
+          <span class="dim">a release tag; empty is the one luu pins</span>
+        </dd>
+        <dt :if="binary === 'managed' && kind === 'llama'">Variant</dt>
+        <dd :if="binary === 'managed' && kind === 'llama'">
+          <TextInput size="num" :model="variant" placeholder="—" />
+          <span class="dim"><code>vulkan</code>, <code>cuda-12.8</code>, <code>rocm-10.0</code> on Linux; empty is CPU/Metal</span>
+        </dd>
 
-      <dt>Port</dt>
-      <dd>
-        <TextInput size="num" :model="port" :placeholder="String(defaultPort(kind))" :warn="badPort" />
-        <span :if="badPort" class="warn">a port is 1–65535</span>
-      </dd>
+        <dt>Port</dt>
+        <dd>
+          <TextInput size="num" :model="port" :placeholder="String(defaultPort(kind))" :warn="badPort" />
+          <span :if="badPort" class="warn">a port is 1–65535</span>
+        </dd>
 
-      <dt :if="kind !== 'ollama'">Model</dt>
-      <dd :if="kind !== 'ollama'">
-        <SelectInput :model="model">
-          <option value="">none — named in the arguments below</option>
-          <option :if="model && !loadable.some(m => m.reference === model)" :value="model">
-            {{ modelLabel(model) }} — not found on this machine
-          </option>
-          <option :each="m in loadable" :key="m.reference" :value="m.reference">
-            {{ m.label }} · {{ gb(m.size) }}
-          </option>
-          <option :each="m in unloadable" :key="m.reference" disabled
-                  :title="m.cannot[kind]">
-            ⚠ {{ m.label }}
-          </option>
-        </SelectInput>
-      </dd>
-      <dd :if="kind !== 'ollama'" class="note">
-        What this machine already has, where each tool keeps it — nothing is
-        copied. A session that picks another from the chat restarts the engine
-        on it.
-      </dd>
-      <!-- The greyed ones, with why: a native select shows no tooltip on a
-           disabled option everywhere, so the reasons are also written out. -->
-      <dd :if="kind !== 'ollama' && unloadable.length" class="caveat">
-        <span class="warn">⚠</span> {{ unloadable.length }} on this machine this engine cannot load:
-        <span :each="m in unloadable" :key="m.reference" class="blocked"
-              :title="m.cannot[kind]">{{ m.label }}</span>
-        <span class="dim">— {{ unloadable[0].cannot[kind] }}{{ unloadable.length > 1 ? " (hover each for its own reason)" : "" }}</span>
-        <span :if="!catalog.length">None found in {{ Object.values(roots).filter(Boolean).join(", ") }}.</span>
-      </dd>
+        <dt :if="kind !== 'ollama'">Model</dt>
+        <dd :if="kind !== 'ollama'">
+          <Select :model="model">
+            <option value="">none — named in the arguments below</option>
+            <option :if="model && !loadable.some(m => m.reference === model)" :value="model">
+              {{ modelLabel(model) }} — not found on this machine
+            </option>
+            <option :each="m in loadable" :key="m.reference" :value="m.reference">
+              {{ m.label }} · {{ gb(m.size) }}
+            </option>
+            <option :each="m in unloadable" :key="m.reference" disabled
+                    :title="m.cannot[kind]">
+              ⚠ {{ m.label }}
+            </option>
+          </Select>
+        </dd>
+        <dd :if="kind !== 'ollama'" class="note">
+          What this machine already has, where each tool keeps it — nothing is
+          copied. A session that picks another from the chat restarts the engine
+          on it.
+        </dd>
+        <!-- The greyed ones, with why: a native select shows no tooltip on a
+             disabled option everywhere, so the reasons are also written out. -->
+        <dd :if="kind !== 'ollama' && unloadable.length" class="caveat">
+          <span class="warn">⚠</span> {{ unloadable.length }} on this machine this engine cannot load:
+          <span :each="m in unloadable" :key="m.reference" class="blocked"
+                :title="m.cannot[kind]">{{ m.label }}</span>
+          <span class="dim">— {{ unloadable[0].cannot[kind] }}{{ unloadable.length > 1 ? " (hover each for its own reason)" : "" }}</span>
+          <span :if="!catalog.length">None found in {{ Object.values(roots).filter(Boolean).join(", ") }}.</span>
+        </dd>
 
-      <dt>Arguments</dt>
-      <dd>
-        <TextInput :model="args"
-                   :placeholder="kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : ''" />
-      </dd>
-      <dd :if="kind === 'llama'" class="note">
-        After <code>--host 127.0.0.1 --port</code> and the model's
-        <code>-m</code>, which luu adds. Without a model above, name one here:
-        <code>-hf &lt;repo&gt;</code> (downloaded on first start, so the first
-        wait is long) or <code>-m &lt;file.gguf&gt;</code>. Then the tuning:
-        <code>-c</code>, <code>-ngl</code>, <code>-fa</code>. There is no
-        shell, so write paths whole: <code>~</code> is not expanded.
-      </dd>
-      <dd :if="kind === 'mlx'" class="note">
-        After <code>--serve --host 127.0.0.1 --port</code> and the model's
-        <code>--model</code>, which luu adds. <code>mlx-serve --help</code> has
-        the rest: KV-cache quantization, speculative decoding, the context.
-        Needs macOS 26.2 or later.
-      </dd>
-      <dd :if="kind === 'ollama'" class="note">
-        After <code>serve</code>. The models are ollama's own —
-        <code>ollama pull</code> them, and the provider's model names one.
-      </dd>
+        <dt>Arguments</dt>
+        <dd>
+          <TextInput :model="args"
+                     :placeholder="kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : ''" />
+        </dd>
+        <dd :if="kind === 'llama'" class="note">
+          After <code>--host 127.0.0.1 --port</code> and the model's
+          <code>-m</code>, which luu adds. Without a model above, name one here:
+          <code>-hf &lt;repo&gt;</code> (downloaded on first start, so the first
+          wait is long) or <code>-m &lt;file.gguf&gt;</code>. Then the tuning:
+          <code>-c</code>, <code>-ngl</code>, <code>-fa</code>. There is no
+          shell, so write paths whole: <code>~</code> is not expanded.
+        </dd>
+        <dd :if="kind === 'mlx'" class="note">
+          After <code>--serve --host 127.0.0.1 --port</code> and the model's
+          <code>--model</code>, which luu adds. <code>mlx-serve --help</code> has
+          the rest: KV-cache quantization, speculative decoding, the context.
+          Needs macOS 26.2 or later.
+        </dd>
+        <dd :if="kind === 'ollama'" class="note">
+          After <code>serve</code>. The models are ollama's own —
+          <code>ollama pull</code> them, and the provider's model names one.
+        </dd>
 
-      <dt>Ready within</dt>
-      <dd>
-        <TextInput size="num" :model="readyTimeout" placeholder="120"
-                   @input="readyTimeout = $event" />
-        <span class="dim">seconds a session waits for it to answer</span>
-      </dd>
+        <dt>Ready within</dt>
+        <dd>
+          <TextInput size="num" :model="readyTimeout" placeholder="120"
+                     @input="readyTimeout = $event.detail" />
+          <span class="dim">seconds a session waits for it to answer</span>
+        </dd>
 
-      <dt :if="!editing">Provider</dt>
-      <dd :if="!editing">
-        <Checkbox :model="withProvider" @change="withProvider = $event">
-          also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
-        </Checkbox>
-      </dd>
-    </dl>
+        <dt :if="!editing">Provider</dt>
+        <dd :if="!editing">
+          <Checkbox :model="withProvider" @change="withProvider = $event.detail">
+            also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
+          </Checkbox>
+        </dd>
+      </dl>
 
-    <p :if="error" class="error">{{ error }}</p>
+      <p :if="error" class="error">{{ error }}</p>
+    </div>
 
     <div class="modal-foot">
       <div class="modal-actions">
@@ -280,5 +284,5 @@
   .form input.w-num { width: 8rem; margin-right: .4rem; }
   .form label { display: flex; gap: .4rem; align-items: center; }
   .blocked { font-style: italic; margin-right: .4rem; cursor: help; text-decoration: underline dotted; }
-  .warn { color: var(--warn); }
+  .warn { color: var(--luu-warn); }
 </style>

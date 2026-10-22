@@ -92,9 +92,9 @@
     display: inline-flex;
     align-items: center;
     gap: .3rem;
-    background: var(--bg, #f4f5f8);
-    color: var(--fg, #1a1d23);
-    border: 1px solid var(--line, #c8c8c8);
+    background: var(--luu-bg, #f4f5f8);
+    color: var(--luu-fg, #1a1d23);
+    border: 1px solid var(--luu-border, #c8c8c8);
     border-radius: 6px;
     font: inherit;
     font-size: 11px;
@@ -103,7 +103,7 @@
     padding: .1rem .45rem .1rem .55rem;
     cursor: pointer;
   }
-  .face:hover:not(:disabled), .face.open { border-color: var(--accent, #2f5bbd); }
+  .face:hover:not(:disabled), .face.open { border-color: var(--luu-accent, #2f5bbd); }
   .face:disabled { opacity: .5; cursor: default; }
   .caret {
     width: 11px;
@@ -121,8 +121,8 @@
     z-index: 41;
     min-width: 14rem;
     max-width: min(22rem, 90vw);
-    background: var(--raised, #fff);
-    border: 1px solid var(--line, #c8c8c8);
+    background: var(--luu-raised, #fff);
+    border: 1px solid var(--luu-border, #c8c8c8);
     border-radius: 8px;
     box-shadow: 0 8px 24px rgb(0 0 0 / .25);
     padding: .3rem;
@@ -136,15 +136,15 @@
     border: 0;
     border-radius: 6px;
     padding: .35rem .5rem;
-    color: var(--fg, #1a1d23);
+    color: var(--luu-fg, #1a1d23);
     font: inherit;
     cursor: pointer;
   }
-  .opt:hover:not(:disabled), .opt:focus-visible { background: var(--sunken, #eceef2); outline: none; }
+  .opt:hover:not(:disabled), .opt:focus-visible { background: var(--luu-sunken, #eceef2); outline: none; }
   .opt:disabled { opacity: .5; cursor: default; }
-  .opt.on .label { color: var(--accent, #2f5bbd); }
-  .check { width: 1em; flex: none; font-size: 12px; color: var(--accent, #2f5bbd); }
+  .opt.on .label { color: var(--luu-accent, #2f5bbd); }
+  .check { width: 1em; flex: none; font-size: 12px; color: var(--luu-accent, #2f5bbd); }
   .text { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
   .label { font-size: 12px; font-weight: 500; }
-  .hint { font-size: 11px; color: var(--dim, #5b6472); line-height: 1.4; }
+  .hint { font-size: 11px; color: var(--luu-fg-muted, #5b6472); line-height: 1.4; }
 </style>

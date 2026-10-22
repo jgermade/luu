@@ -1,0 +1,167 @@
+<script :setup="{
+  variant = 'secondary',
+  size = 'md',
+  type = 'button',
+  disabled = false,
+  loading = false,
+  block = false,
+  square = false,
+  title = '',
+  label = ''
+}">
+  // A button. `variant` is what it does to the page: `primary` is the one
+  // thing a view asks for, `secondary` the rest, `ghost` an action that should
+  // not compete with content, `danger` one that loses something.
+  //
+  // **Part of the default theme**: imports nothing, and draws only with
+  // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
+  //
+  //   <Button variant="primary" @click="save()">Save</Button>
+  //   <Button square title="Close" @click="close()"><svg …/></Button>
+  //   <Button :loading="saving">Saving</Button>
+  //
+  // **`click` is re-emitted**, with the native event in `$event.detail`: jq79
+  // binds `@click` on a component to its `$emit` and nothing else. It is not
+  // emitted while disabled or loading. `square` is for an icon alone, and
+  // then `title` is its name — `label` is the same thing for a screen reader
+  // when the tooltip would be noise. An icon is sized by whoever writes it: a
+  // scoped style does not reach what arrives through a slot.
+
+  // A bare attribute (`<X disabled>`) arrives as "", and means on.
+  const flag = v => v === "" || v === true || v === "true"
+  $: isDisabled = flag(disabled)
+  $: isLoading = flag(loading)
+  $: isBlock = flag(block)
+  $: isSquare = flag(square)
+
+  const click = event => {
+    if (isDisabled || isLoading) return
+    $emit("click", event)
+  }
+</script>
+
+<button class="btn"
+        :type="type"
+        :class.primary="variant === 'primary'"
+        :class.ghost="variant === 'ghost'"
+        :class.danger="variant === 'danger'"
+        :class.sm="size === 'sm'"
+        :class.lg="size === 'lg'"
+        :class.block="isBlock"
+        :class.square="isSquare"
+        :class.loading="isLoading"
+        :disabled="isDisabled"
+        :aria-busy="isLoading ? 'true' : null"
+        :aria-label="label || null"
+        :title="title || null"
+        @click="click($event)">
+  <span :if="isLoading" class="spin" aria-hidden="true"></span>
+  <span class="content"><slot></slot></span>
+</button>
+
+<style scoped>
+  .btn {
+    --h: var(--luu-control-md);
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--luu-space-2);
+    height: var(--h);
+    min-width: var(--h);
+    padding: 0 var(--luu-space-3);
+    border: var(--luu-border-width) solid var(--luu-border);
+    border-radius: var(--luu-radius-md);
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font: inherit;
+    font-family: var(--luu-font-sans);
+    font-size: var(--luu-text-md);
+    font-weight: var(--luu-weight-medium);
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: var(--luu-shadow-sm);
+    transition: background var(--luu-duration-fast) ease,
+                border-color var(--luu-duration-fast) ease,
+                color var(--luu-duration-fast) ease,
+                transform var(--luu-duration-fast) ease;
+  }
+  .btn:hover:not(:disabled) {
+    background: var(--luu-hover);
+    border-color: var(--luu-border-strong);
+  }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:focus-visible {
+    outline: 2px solid var(--luu-focus);
+    outline-offset: 2px;
+  }
+  .btn:disabled {
+    opacity: .5;
+    cursor: default;
+    box-shadow: none;
+  }
+
+  .primary {
+    background: var(--luu-accent);
+    border-color: var(--luu-accent);
+    color: var(--luu-on-accent);
+  }
+  .primary:hover:not(:disabled) {
+    background: var(--luu-accent-hover);
+    border-color: var(--luu-accent-hover);
+  }
+  .danger {
+    background: var(--luu-bad);
+    border-color: var(--luu-bad);
+    color: var(--luu-on-accent);
+  }
+  .danger:hover:not(:disabled) {
+    background: var(--luu-bad-hover);
+    border-color: var(--luu-bad-hover);
+  }
+  .ghost {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--luu-fg-muted);
+  }
+  .ghost:hover:not(:disabled) {
+    background: var(--luu-hover);
+    border-color: transparent;
+    color: var(--luu-fg);
+  }
+  /* Pressed, per variant: a step past its hover, so a press reads as one even
+     under a finger, where there is no hover before it. After every variant's
+     hover, which it has to outrank at the same weight. */
+  .btn:active:not(:disabled) { background: var(--luu-active); }
+  .primary:active:not(:disabled) { background: var(--luu-accent-active); border-color: var(--luu-accent-active); }
+  .danger:active:not(:disabled) { background: var(--luu-bad-active); border-color: var(--luu-bad-active); }
+  .ghost:active:not(:disabled) { background: var(--luu-active); }
+
+  .sm { --h: var(--luu-control-sm); padding: 0 var(--luu-space-2); font-size: var(--luu-text-sm); }
+  .lg { --h: var(--luu-control-lg); padding: 0 var(--luu-space-4); font-size: var(--luu-text-lg); }
+  .block { display: flex; width: 100%; }
+  .square { padding: 0; width: var(--h); }
+
+  .content {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--luu-space-2);
+  }
+  /* The label keeps its width while the spinner is over it, so a button does
+     not resize when it starts working — and keeps its name: transparent, not
+     hidden, which would take it out of the accessibility tree. */
+  .loading { cursor: progress; }
+  .loading .content { opacity: 0; }
+  .spin {
+    position: absolute;
+    width: 1em;
+    height: 1em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: var(--luu-radius-full);
+    animation: spin calc(var(--luu-duration-slow) * 2.5) linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(1turn); } }
+</style>

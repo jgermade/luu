@@ -207,12 +207,16 @@ fn what_the_store_gives_back_is_what_folding_the_record_produces() {
     assert_eq!(listed.len(), recordings.len());
     for (id, lines) in &recordings {
         let summary = SessionView::from_record(id.clone(), lines).summary();
-        let row = listed
+        let mut row = listed
             .iter()
             .find(|row| &row.id == id)
-            .unwrap_or_else(|| panic!("{id} is not in the listing"));
+            .unwrap_or_else(|| panic!("{id} is not in the listing"))
+            .clone();
+        // When it was last written to is the store's own fact, not the fold's.
+        assert!(row.written_at.is_some(), "{id} has no written_at");
+        row.written_at = None;
         assert_eq!(
-            serde_json::to_value(row).expect("the listed row"),
+            serde_json::to_value(&row).expect("the listed row"),
             serde_json::to_value(&summary).expect("the fold's own summary"),
         );
     }
