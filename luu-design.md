@@ -1544,7 +1544,10 @@ The rest follows from that:
   modal whose head is its tabs, with a `bar` above its body for a search) and `SubModal` (a sheet
   out of a modal's head over its body, with or without tabs) — and
   a demo of the components at `/theme/default/` — a folder path serves its `index.html`, and
-  without the slash redirects to it. **`app.css` declares no colour of its own**: `index.html`
+  without the slash redirects to it. Each of the demo's sections says how it is used:
+  *Integrate* beside its title opens a modal of its own, a tab per component when it has
+  several, each snippet the file of a parent component that uses it (`usage.js`), coloured by
+  `/api/highlight` where there is a server to ask. **`app.css` declares no colour of its own**: `index.html`
   loads both theme files first, and every rule reads `--luu-*`. Light is `:root` and dark is a
   dark root **or any `[data-tone="dark"]` element**, so which surfaces are dark — the heads, the
   feet, a modal's head, the terminal, and the editor and snippets by their tone preference — is

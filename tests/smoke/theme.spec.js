@@ -641,26 +641,59 @@ test("tabs, menus, tooltips and modals open, move and close", async ({ page }) =
 })
 
 /**
- * The head's *Integrate* opens what a page writes to use the theme: a tab per
- * step, each snippet with a button that copies it as written.
+ * How a section is used: its *Integrate*, beside its title, opens that
+ * section's own — a `Modal` for one component, a `TabModal` with a tab per
+ * component for several — each snippet a parent component that uses it,
+ * coloured by the server's highlighter, and copied as written. The head's
+ * *Integrate* is what a page loads first.
  */
-test("the integration snippets open from the head, by step, and copy", async ({ page, context }) => {
+test("each section opens how it is used, a tab per component, coloured", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"])
   const errors = await demo(page)
-  await page.locator(".top").getByRole("button", { name: "Integrate" }).click()
-  const dialog = page.getByRole("dialog", { name: "Integrate" })
-  await expect(dialog).toBeVisible()
-  await expect(dialog.getByRole("tab", { name: "Load it" })).toHaveAttribute("aria-selected", "true")
-  await expect(dialog.locator(".snippet-code").first()).toContainText('href="/theme/default/tokens.css"')
 
+  // The page's own: the files it loads.
+  await page.locator(".top").getByRole("button", { name: "Integrate" }).click()
+  let dialog = page.getByRole("dialog", { name: "Load the theme" })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("tab")).toHaveCount(0)
+  await expect(dialog.locator(".snippet-code").first()).toContainText('href="/theme/default/tokens.css"')
   await dialog.getByRole("button", { name: "Copy" }).first().click()
   await expect(dialog.getByRole("button", { name: "Copied" })).toHaveCount(1)
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("</script>")
+  await dialog.getByRole("button", { name: "Done" }).click()
+  await expect(dialog).toBeHidden()
 
-  await dialog.getByRole("tab", { name: "Tokens" }).click()
-  await expect(dialog.locator(".snippet")).toHaveCount(2)
-  await expect(dialog.locator(".snippet-code").first()).toContainText("--luu-accent")
+  // Every section has one, and one component is a plain modal: the Button,
+  // used in a parent that imports it, written as a tag, coloured.
+  await expect(page.locator(".content section.section > .head").getByRole("button", { name: "Integrate" })).toHaveCount(26)
+  await page.locator("#button").getByRole("button", { name: "Integrate" }).first().click()
+  dialog = page.getByRole("dialog", { name: "Button" })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("tab")).toHaveCount(0)
+  const code = dialog.locator(".snippet-code").first()
+  await expect(code).toContainText('await import("@theme/components/button.html")')
+  await expect(code).toContainText("<Button variant=\"ok\"")
+  await expect(code.locator(".hl-tag").first()).toBeVisible()
+  await expect(code.locator(".hl-keyword").first()).toBeVisible()
+  // A colour of its own, not the text's.
+  const [tag, ink] = await code.evaluate(el => [
+    getComputedStyle(el.querySelector(".hl-tag")).color,
+    getComputedStyle(el).color,
+  ])
+  expect(tag).not.toBe(ink)
+  await page.keyboard.press("Escape")
+  await expect(dialog).toBeHidden()
 
+  // Several components: a tab each, each with its own parent.
+  await page.locator("#modals").getByRole("button", { name: "Integrate" }).first().click()
+  dialog = page.getByRole("dialog", { name: "Modals" })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("tab")).toHaveText(["Modal", "TabModal", "SubModal"])
+  await expect(dialog.locator(".snippet-code").first()).toContainText("<Modal :open=")
+  await dialog.getByRole("tab", { name: "SubModal" }).click()
+  await expect(dialog.locator(".snippet-head code")).toHaveText("workstation.html")
+  await expect(dialog.locator(".snippet-code").first()).toContainText("<SubModal :open=")
+  await expect(dialog.locator(".snippet-code .hl-tag").first()).toBeVisible()
   await dialog.getByRole("button", { name: "Done" }).click()
   await expect(dialog).toBeHidden()
   expect(errors, "the page logged errors").toEqual([])
