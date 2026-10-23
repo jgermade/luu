@@ -935,6 +935,7 @@ impl Context {
                     outcome,
                     duration_ms: call_view.duration_ms.unwrap_or(0),
                     asked: call_view.asked,
+                    grant: call_view.grant,
                 });
             }
 
@@ -4485,6 +4486,7 @@ mod tests {
             outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
             duration_ms: 1,
             asked: None,
+            grant: None,
         }
     }
 
@@ -4516,6 +4518,7 @@ mod tests {
             outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
             duration_ms: 1,
             asked: None,
+            grant: None,
         }
     }
 
@@ -4950,6 +4953,7 @@ mod tool_turn_tests {
             outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
             duration_ms: 1,
             asked: None,
+            grant: None,
         }
     }
 

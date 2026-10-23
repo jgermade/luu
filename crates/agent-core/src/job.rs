@@ -898,6 +898,7 @@ mod tests {
             },
             duration_ms: 0,
             asked: None,
+            grant: None,
         }
     }
 

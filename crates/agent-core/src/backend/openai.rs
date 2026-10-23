@@ -92,7 +92,7 @@ impl Default for OpenAi {
 /// `host:port` out of a base URL, for the backend's name. Falls back to the
 /// whole string rather than to something invented: a name nobody can trace back
 /// to an endpoint is the failure this exists to avoid.
-fn host_of(base_url: &str) -> String {
+pub(super) fn host_of(base_url: &str) -> String {
     base_url
         .split_once("://")
         .map(|(_, rest)| rest)
@@ -299,8 +299,10 @@ fn parse_event(payload: &[u8]) -> Result<Parsed, BackendError> {
 }
 
 /// The `data:` payload of one SSE line, or `None` for a line that is not one —
-/// a blank separator, or a `:` comment some servers send as a heartbeat.
-fn payload_of(line: &[u8]) -> Option<&[u8]> {
+/// a blank separator, or a `:` comment some servers send as a heartbeat. The
+/// Anthropic backend reads its stream with this too: the same SSE, with an
+/// `event:` line before each `data:` that says what the payload already does.
+pub(super) fn payload_of(line: &[u8]) -> Option<&[u8]> {
     let text = line.strip_prefix(b"data:")?;
     let payload = match text.first() {
         Some(b' ') => &text[1..],
@@ -447,6 +449,7 @@ impl Backend for OpenAi {
                     tools: props
                         .pointer("/chat_template_caps/supports_tools")
                         .and_then(serde_json::Value::as_bool),
+                    ..Default::default()
                 };
                 if facts != super::ModelFacts::default() {
                     return Ok(models.iter().map(|m| (m.clone(), facts.clone())).collect());
@@ -466,7 +469,7 @@ impl Backend for OpenAi {
                             super::ModelFacts {
                                 window: Some(window),
                                 window_is: Some(super::WindowIs::Served),
-                                tools: None,
+                                ..Default::default()
                             },
                         );
                     }

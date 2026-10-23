@@ -56,9 +56,21 @@
   --luu-bad-active: #82182b;
   --luu-bad-soft: #fbe9ec;
 
-  /* The ring a focused control draws, and the dim behind a modal. */
+  /* The ring a focused field draws in its border, and the dim behind a
+     modal. */
   --luu-focus: #2f5bbd;
-  --luu-overlay: rgba(17, 20, 26, .42);
+  /* The outline anything else draws when focused from the keyboard — a
+     button, a tab, a link, a box, a switch — and the button a closed modal
+     hands the focus back to: one thin grey line, the same in both tones, that
+     says where the focus is without competing with what is chosen. */
+  --luu-outline-width: 1px;
+  --luu-outline-color: #999;
+  /* What a modal lays over the page behind it: a mid grey, the same for
+     every dialog — the page's `Modal`, `TabModal`. A sheet over its parent
+     (`SubModal`) lays a darker one over the parent's body, so the sheet
+     reads as above a dialog and not above the page. */
+  --luu-overlay: rgba(100, 100, 100, .55);
+  --luu-overlay-sheet: rgba(50, 50, 50, .55);
 
   /* ---- type --------------------------------------------------------------- */
 
@@ -127,7 +139,7 @@
 :root[data-theme="dark"], [data-tone="dark"] {
   --luu-bg: #111111;
   --luu-sunken: #0a0a0a;
-  --luu-surface: #191919;
+  --luu-surface: #232323;
   --luu-hover: #222222;
   --luu-active: #2e2e2e;
   --luu-selected: #2a3241;
@@ -156,7 +168,8 @@
   --luu-bad-soft: #2a1519;
 
   --luu-focus: #7aa2f7;
-  --luu-overlay: rgba(0, 0, 0, .56);
+  --luu-overlay: rgba(100, 100, 100, .55);
+  --luu-overlay-sheet: rgba(50, 50, 50, .55);
 
   --luu-shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
   --luu-shadow-md: 0 4px 12px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);

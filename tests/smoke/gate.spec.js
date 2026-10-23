@@ -84,9 +84,10 @@ test.beforeAll(async () => {
   // Its own state directory, so the run reads no `config.toml` of the person
   // running it and writes nothing into theirs.
   home = mkdtempSync(join(tmpdir(), "luu-gate-"))
-  // And one posture in it, so the starter dialog has something to offer. The
-  // policy file is wider than the server's own in the one way the page shows —
-  // `network` — so "which one is in force" is answerable from the browser.
+  // And one posture in it, for the gate's tests to start their sessions on
+  // through the API. The policy file is wider than the server's own in the one
+  // way the page shows — `network` — so "which one is in force" is answerable
+  // from the browser.
   writeFileSync(
     join(home, "wide.toml"),
     '[sandbox]\nnetwork = true\ncommands = ["ls"]\n\n' +
@@ -211,10 +212,10 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`: what the
   // turn in front of the gate already has. Approving is a decision about what to
   // *add*, and a panel that states one term is a panel that reads as a yes to a
-  // list. The floor grants no writes by construction, so that is a sentence.
+  // list. Since 2026-10-23 it writes only to its scratch, and says where.
   const floor = gate.locator("p.floor")
   await expect(floor).toContainText("unapproved, a turn reads")
-  await expect(floor).toContainText("writes nothing")
+  await expect(floor).toContainText("writes only to .tmp")
   // The draft is open behind it, holding the turn that opened it.
   await expect(page.locator("article.assistant")).not.toHaveCount(0)
 
@@ -290,7 +291,10 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // And the answer to it, which the prompt it was measured from cannot hold:
   // it was written after. Marked as not sent, because the next turn sends it.
   const answered = context.locator('.group[data-bucket="answer"]')
-  await expect(answered.locator("pre")).toContainText(ANSWER)
+  // The turn as it went: what the model said up to its call, what the call
+  // gave back, and the reply after it — the answer last.
+  await expect(answered.locator(".entry.result")).toHaveCount(1)
+  await expect(answered.locator(".entry.reply pre").last()).toContainText(ANSWER)
   await expect(answered.locator("header")).toContainText("not sent yet")
   await context.locator(".modal-head button", { hasText: "close" }).click()
   await expect(context).toBeHidden()
@@ -402,11 +406,13 @@ test("the inspector can be pointed at a turn that has ended", async ({ page }) =
 })
 
 /**
- * Choosing another provider in the dialog asks that provider for its models. A
- * component's event is a CustomEvent carrying the value in `detail`; handing
- * the event itself on asked for `[provider.[object CustomEvent]]`, and the
- * dialog could neither list models nor go back. Nothing is started, so the
- * session the tests above read is left alone.
+ * Choosing another provider in the dialog asks that provider for its models,
+ * in the two columns the chat's dropup has: a provider in focus lists its
+ * own, and a model chosen is the choice. A component's event is a
+ * CustomEvent carrying the value in `detail`; handing the event itself on
+ * asked for `[provider.[object CustomEvent]]`, and the dialog could neither
+ * list models nor go back. Nothing is started, so the session the tests above
+ * read is left alone.
  */
 test("choosing another provider in the dialog lists that provider's models", async ({ page }) => {
   const errors = []
@@ -421,19 +427,41 @@ test("choosing another provider in the dialog lists that provider's models", asy
   await page.click('.chat .acts button[title*="New session"]')
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
-  const provider = starter.locator("select").first()
-  const model = starter.locator('input[list="starter-models"]')
+  // A session starts here: the accent's head, not the dark island.
+  // Its own head, first: the delete confirmation inside it has one too.
+  const head = starter.locator("header").first()
+  await expect(head).toHaveClass(/\btone-accent\b/)
+  await expect(head).not.toHaveAttribute("data-tone", "dark")
+  // It leaves as it came, with an animation, and is unmounted after: ESC
+  // plays the way out before the dialog goes.
+  await starter.evaluate(d => Promise.all(d.getAnimations().map(a => a.finished)))
+  await page.keyboard.press("Escape")
+  await expect(starter).toHaveClass(/\bleaving\b/)
+  await expect(starter).toHaveCount(0)
+  await page.click('.chat .acts button[title*="New session"]')
+  await expect(starter).toBeVisible()
+  const sends = starter.locator(".sends")
+  const chosen = sends.locator(".sends-head")
+  await expect(chosen).toContainText("here · mock")
+  await expect(sends.locator(".prov.current")).toContainText("here")
 
-  await provider.selectOption("there")
-  await expect(model).toHaveValue("mock-there")
-  await expect(starter.locator(".said.warning")).toHaveCount(0)
-  await provider.selectOption("here")
-  await expect(model).toHaveValue("mock")
+  // Another provider in focus lists its own models; choosing one is the choice.
+  await sends.locator(".prov strong", { hasText: /^there$/ }).click()
+  // The profile's own model first, whether or not the provider lists it.
+  await expect(sends.locator(".models button.model").first()).toContainText("mock-there")
+  await sends.locator(".models button.model", { hasText: "mock-there" }).click()
+  await expect(chosen).toContainText("there · mock-there")
+  await expect(sends.locator(".prov.current")).toContainText("there")
+  // By its name exactly: `there` has `here` in it.
+  await sends.locator(".prov strong", { hasText: /^here$/ }).click()
+  await sends.locator(".models button.model .name", { hasText: /^mock$/ }).click()
+  await expect(chosen).toContainText("here · mock")
 
   // And what is typed is a name, not an event.
-  await model.fill("typed-by-hand")
-  await model.blur()
-  await expect(model).toHaveValue("typed-by-hand")
+  const typed = sends.locator(".typed input")
+  await typed.fill("typed-by-hand")
+  await typed.press("Enter")
+  await expect(chosen).toContainText("here · typed-by-hand")
 
   await starter.getByRole("button", { name: "Close" }).click()
   await expect(starter).toBeHidden()
@@ -442,23 +470,26 @@ test("choosing another provider in the dialog lists that provider's models", asy
 
 /**
  * A session picks what it may do, at the one moment it can — the same dialog
- * that asks where it sends. **Last in the file on purpose**: these tests share
- * one server, and starting a session ends the one the tests above are reading.
- * See
- * `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+ * that asks where it sends: where it runs, and one list of each axis. This
+ * server's `config.toml` has no lists, so each is the empty one. **Last in the
+ * file on purpose**: these tests share one server, and starting a session ends
+ * the one the tests above are reading. See
+ * `RECORD/2026-09-08.a-session-picks-its-executor.completed.md` and
+ * `RECORD/2026-10-22.policies-not-postures.WIP.md`, *every session from lists*.
  */
-test("a session is started on a posture, and the page says which", async ({ page }) => {
+test("a session is made from where it runs and its lists, and the page says which", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
 
   // The server's own policy file, before anything is chosen. In Settings →
-  // Models, which is where what this server resolved now lives.
+  // Models, which is where what this server resolved lives: its card says
+  // the session names no posture. (It was a *Posture* row until `190d5be`;
+  // this test looked for that row until 2026-10-23.)
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
-  await expect(page.locator("dt", { hasText: "Posture" }).first()).toBeVisible()
-  await expect(page.locator(".settings dd").filter({ hasText: "this server's own" }))
-    .toBeVisible()
+  const posture = page.locator(".stat-pill", { hasText: "Sandbox / Postura" })
+  await expect(posture.locator(".stat-value")).toHaveText("Servidor host")
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
@@ -470,37 +501,34 @@ test("a session is started on a posture, and the page says which", async ({ page
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
 
-  // Offered by name, out of config.toml. The page cannot add to the list: a
-  // posture is a policy file, and one the browser could write is a sandbox the
-  // browser could widen.
-  // Named by posture and by where it runs, as the terminal's foot names them.
-  const picker = starter.locator("select.place")
-  await expect(picker.locator("option")).toHaveText([
-    "server default — host",
-    "wide — host",
-  ])
-  await picker.selectOption("wide|")
+  // Nothing to start from — a posture is a name a session gives through the
+  // API, as the gate's tests below do. Where it runs, out of what this
+  // machine has, and the lists: none in the file, so the empty one each.
+  await expect(starter.locator("select.preset")).toHaveCount(0)
+  await expect(starter.locator("select.runtime")).toHaveValue("host|")
+  for (const kind of ["shell", "network", "files"]) {
+    await expect(starter.locator(`select.list-${kind} option`)).toHaveText(["empty"])
+  }
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
 
   // The next session is offered where this one runs.
   await page.click('.chat .acts button[title*="New session"]')
-  await expect(starter.locator("select.place")).toHaveValue("wide|")
+  await expect(starter.locator("select.runtime")).toHaveValue("host|")
   await starter.getByRole("button", { name: "Close" }).click()
   await expect(starter).toBeHidden()
 
-  // And it is in force: Models opens on what this server resolved, and it
-  // resolved the file the posture named. Reached from the composer's second
-  // row, which is where the destination is reported now — the two tags that
-  // used to be in the page header.
+  // And it is in force: Models opens on what this server resolved, named by
+  // its lists, and with nothing in them it reaches no network. Reached from
+  // the composer's second row, which is where the destination is reported now
+  // — the two tags that used to be in the page header.
   await page.click(".options .dest")
   await page.locator('.options .menu button:has-text("providers…")').click()
   await expect(page.locator("dialog.modal").first()).toBeVisible()
   await expect(page.locator(".modal .rail button.on")).toHaveText("Models")
-  const said = page.locator(".settings")
-  await expect(said).toContainText("wide")
-  await expect(said).toContainText("network allowed")
-  await expect(page.locator("pre.sandbox")).toContainText("ls")
+  await expect(posture.locator(".stat-value")).toHaveText("empty")
+  await page.locator(".sandbox-toggle summary").click()
+  await expect(page.locator("pre.sandbox")).not.toContainText("network allowed")
 })
 
 /**
@@ -562,18 +590,21 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // No cog: it moved to the inspector's foot, which is the column that is
   // always on screen. See
   // `RECORD/2026-09-16.the-modals-are-dialogs.completed.md`. What is here: a
-  // new session, the history, copying the conversation, and — at this width,
-  // where three columns fit — the switch to two.
-  await expect(page.locator(".chat .acts button")).toHaveCount(4)
+  // new session, the history, the session's permissions, copying the
+  // conversation, and — at this width, where three columns fit — the switch
+  // to two.
+  await expect(page.locator(".chat .acts button")).toHaveCount(5)
   await expect(page.locator(".chat .acts button").last()).toHaveClass(/columns/)
   await expect(page.locator('.inspector .col-foot button[title="Settings"]')).toHaveCount(1)
   // Drawn rather than typed since phase 7 of the three-pane record — this used
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  // 23, and Appearance's palette since 2026-10-21. The tree's own shapes are
-  // the theme's, in `theme/default/files.svg`, not the page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(24)
+  // 23, Appearance's palette since 2026-10-21, and since 2026-10-23 the
+  // permissions' shield and a session's archive, restore and delete. The
+  // tree's own shapes are the theme's, in `theme/default/files.svg`, not the
+  // page's.
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(28)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be
@@ -582,12 +613,12 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   const sessions = page.getByRole("dialog", { name: "Sessions" })
   await expect(sessions.locator("ul.sessions li").first()).toBeVisible()
   await expect(sessions.locator("ul.sessions li.on")).toHaveCount(1)
-  await expect(sessions.locator("ul.sessions li.on .close")).toHaveCount(0)
+  await expect(sessions.locator("ul.sessions li.on .row-acts")).toHaveCount(0)
   // One dialog, two tabs: the clock opens it on History, the `+` on New
   // session, and either tab is a click away from the other.
   await expect(sessions.getByRole("tab", { selected: true })).toHaveText("History")
   await sessions.getByRole("tab", { name: "New session" }).click()
-  await expect(sessions.getByRole("combobox", { name: "Provider" })).toBeVisible()
+  await expect(sessions.getByRole("listbox", { name: "Providers" })).toBeVisible()
   await expect(sessions.getByRole("button", { name: "Start session" })).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(sessions).toHaveCount(0)
@@ -1151,8 +1182,8 @@ test("the editor setting offers Monaco where it is installed and says so where i
  * Starts a session on the wide posture and leaves a gate open on it. The two
  * tests below each want their own, because approving one consumes it.
  *
- * **Its plan is empty, and that is not a shortcut.** A session started from the
- * page builds its own backend out of `config.toml` (`crate::backend_for`), so
+ * **Its plan is empty, and that is not a shortcut.** A session started on a
+ * provider builds its own backend out of `config.toml` (`crate::backend_for`), so
  * it never sees the queue `--mock-reply` filled: the call gets the default
  * mock's paragraph, no `plan` block parses, and the proposal falls back to the
  * draft's own objective declaring nothing — which is the ordinary case for a
@@ -1164,16 +1195,18 @@ test("the editor setting offers Monaco where it is installed and says so where i
  * a person asks for one over the draft.
  */
 async function gateOnWidePosture(page) {
+  // Named through the API: the dialog makes a session from lists, and a
+  // posture is a name a session gives. The provider is named too, so the
+  // session builds its backend out of `config.toml`, as one from the dialog.
+  const started = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ posture: "wide", provider: "here" }),
+  })
+  expect(started.ok, await started.clone().text()).toBe(true)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
-
-  await page.click('.chat .acts button[title*="New session"]')
-  const starter = page.getByRole("dialog", { name: "Sessions" })
-  await expect(starter).toBeVisible()
-  await starter.locator("select.place").selectOption("wide|")
-  await starter.locator('button:has-text("Start session")').click()
-  await expect(starter).toBeHidden({ timeout: 30_000 })
 
   const composer = page.locator(".composer input")
   await expect(composer).toBeEnabled()

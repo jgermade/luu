@@ -7,3 +7,4 @@ tests/smoke/playwright-report/
 records/
 *.jsonl
 .DS_Store
+.env

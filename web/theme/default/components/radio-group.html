@@ -110,10 +110,10 @@
     transform: scale(0);
     transition: transform var(--luu-duration) var(--luu-ease-out);
   }
-  .option:hover:not(.off) .dot, .on .dot { border-color: var(--luu-accent); }
+  .option:hover:not(.off) .dot, .option.on .dot { border-color: var(--luu-accent); }
   .option:active:not(.off) .dot { transform: scale(.88); }
-  .on .dot::after { transform: scale(1); }
-  input:focus-visible + .dot { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+  .option.on .dot::after { transform: scale(1); }
+  input:focus-visible + .dot { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 2px; }
 
   .text { display: flex; flex-direction: column; gap: .1rem; }
   .label { font-weight: var(--luu-weight-medium); }

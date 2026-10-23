@@ -34,6 +34,8 @@
   // chosen starts at the top of its panel. The `bar` slot is above the body
   // and does not scroll with it: a search over what the body lists. It pads
   // itself; a tab with nothing for it leaves it empty and takes no room.
+  // The focus starts on an `autofocus` element inside, if there is one, and
+  // on the chosen tab otherwise.
   // `tinted` grounds the body in the page's grey — lighter than the foot's —
   // so white boxes and rows sit on it, as cards sit on the page. As with `Modal`, ESC, the
   // backdrop and the close button only emit `close` — the owner closes it with
@@ -44,6 +46,11 @@
   // that is part of its body. `head` is `auto` for that, or `dark` or
   // `integrated` to say it outright. The dark head is a `data-tone="dark"`
   // island, so it draws with the theme's own dark values.
+  //
+  // **Or a head in a tone**, whatever the size: `accent`, `ok`, `warn` or
+  // `bad` is the same bar in that tone's strong colour, with the ink a solid
+  // `Badge` has on it — and the tabs, their counts and the line under the
+  // chosen one in that ink, since the accent's line would vanish on accent.
 
   const Scrollable = await import("./scrollable.html")
 
@@ -66,6 +73,8 @@
   const LARGE = 640
   let wide = false
   $: dark = head === "dark" || (head === "auto" && wide)
+  const TONES = ["accent", "ok", "warn", "bad"]
+  $: tone = TONES.includes(head) ? head : null
   const exit = () => {
     const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
     return Number.isFinite(ms) ? ms : 0
@@ -77,8 +86,10 @@
     dialog.showModal()
     wide = dialog.offsetWidth >= LARGE
     requestAnimationFrame(place)
-    // The focus starts on the tab that is chosen, so the arrows work at once.
-    requestAnimationFrame(() => $self("button[role=tab].on")?.focus())
+    // The focus starts on what the body marks `autofocus` — the search a view
+    // was opened to use — or else on the tab that is chosen, so the arrows
+    // work at once. A frame after `showModal()`, which focuses on its own.
+    requestAnimationFrame(() => ($self("dialog [autofocus]") || $self("button[role=tab].on"))?.focus())
   }
   const hide = () => {
     const dialog = $self("dialog")
@@ -146,7 +157,13 @@
         @cancel="cancel($event)"
         @click="backdrop($event)">
   <div class="box">
-    <header class="head" :class.dark="dark" :data-tone="dark ? 'dark' : null">
+    <header class="head" :class.dark="dark"
+            :class.toned="!!tone"
+            :class.tone-accent="tone === 'accent'"
+            :class.tone-ok="tone === 'ok'"
+            :class.tone-warn="tone === 'warn'"
+            :class.tone-bad="tone === 'bad'"
+            :data-tone="dark ? 'dark' : null">
       <h2 :if="title" class="title">{{ title }}</h2>
       <div class="strip" role="tablist" :aria-label="title || null" :class.moving="moving">
         <button :each="tab in list"
@@ -254,6 +271,13 @@
   }
   /* The large modal's bar: the dark tone's own surface. */
   .head.dark { color: var(--luu-fg); border-color: var(--luu-surface); }
+  /* A head in a tone: the same bar, in the tone's strong colour and the ink a
+     solid badge has on it. Its own edge, as the dark one's. */
+  .head.toned { background: var(--ink); color: var(--luu-on-accent); border-color: var(--ink); }
+  .tone-accent { --ink: var(--luu-accent); }
+  .tone-ok { --ink: var(--luu-ok); }
+  .tone-warn { --ink: var(--luu-warn); }
+  .tone-bad { --ink: var(--luu-bad); }
   .title {
     flex: none;
     align-self: center;
@@ -298,7 +322,7 @@
   }
   .strip button.on { color: var(--luu-fg); }
   .strip button:disabled { opacity: .45; cursor: default; }
-  .strip button:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
+  .strip button:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: -2px; border-radius: var(--luu-radius-sm); }
   .count {
     min-width: 1.4em;
     padding: 0 .35rem;
@@ -309,7 +333,7 @@
     text-align: center;
     line-height: 1.6;
   }
-  .on .count { background: var(--luu-accent-soft); color: var(--luu-accent); }
+  button.on .count { background: var(--luu-accent-soft); color: var(--luu-accent); }
   .line {
     position: absolute;
     left: 0;
@@ -322,6 +346,15 @@
     transition: transform var(--luu-duration-slow) var(--luu-ease),
                 width var(--luu-duration-slow) var(--luu-ease);
   }
+  /* On a tone the strip is drawn in the head's ink: a tab not chosen a step
+     back from it, the chosen one and its line in it whole. */
+  .toned .strip button { color: color-mix(in srgb, var(--luu-on-accent) 72%, transparent); }
+  .toned .strip button:hover:not(:disabled), .toned .strip button.on { color: var(--luu-on-accent); }
+  .toned .strip button:active:not(:disabled) { background: color-mix(in srgb, var(--luu-on-accent) 16%, transparent); }
+  .toned .strip button:focus-visible { outline-color: var(--luu-on-accent); }
+  .toned .count { background: color-mix(in srgb, var(--luu-on-accent) 18%, transparent); color: inherit; }
+  .toned button.on .count { background: color-mix(in srgb, var(--luu-on-accent) 28%, transparent); color: var(--luu-on-accent); }
+  .toned .line { background: var(--luu-on-accent); }
 
   .close {
     display: inline-flex;
@@ -336,7 +369,11 @@
   }
   .close:hover { background: var(--luu-hover); color: var(--luu-fg); }
   .close:active { background: var(--luu-active); }
-  .close:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .close:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 1px; }
+  .toned .close { color: inherit; opacity: .8; }
+  .toned .close:hover { opacity: 1; color: inherit; background: color-mix(in srgb, currentColor 16%, transparent); }
+  .toned .close:active { background: color-mix(in srgb, currentColor 26%, transparent); }
+  .toned .close:focus-visible { outline-color: currentColor; }
   .close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 
   .middle { display: flex; flex-direction: column; min-height: 0; }

@@ -10,6 +10,7 @@ use std::pin::Pin;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 
+pub mod anthropic;
 pub mod mock;
 pub mod native;
 pub mod ollama;
@@ -212,6 +213,18 @@ pub struct ModelFacts {
     pub window_is: Option<WindowIs>,
     /// Whether the model takes a `tools` field.
     pub tools: Option<bool>,
+    /// The most one reply may be, thinking included — Anthropic's
+    /// `max_tokens` in its listing. The form shows it beside `max-tokens`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// The thinking the model takes, in `config.toml`'s words: `adaptive`,
+    /// `budget`. Empty is *none*, which the server said; `None` is that it
+    /// said nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Vec<String>>,
+    /// The `effort` levels the model takes, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -224,6 +237,11 @@ pub enum WindowIs {
     /// What the server was started with. A fact: one number for every request,
     /// so a smaller one is a budget luu keeps and a larger one is a lie.
     Served,
+    /// The most the API accepts in one request, by its own listing —
+    /// Anthropic's `max_input_tokens`. A ceiling like `Trained`, with no
+    /// default under it: with nothing chosen, all of it is the window. See
+    /// `RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`.
+    Limit,
 }
 
 /// A future a `dyn Backend` can hand back. Boxed for the same reason
@@ -279,6 +297,16 @@ pub trait Backend: Send + Sync {
     /// does.
     fn constrain_caveat(&self, constraint: &Constraint) -> Option<String> {
         let _ = constraint;
+        None
+    }
+
+    /// What to tell a caller **once** about pinned sampling this destination
+    /// has nowhere to put, or may refuse — the same rule as
+    /// [`Self::constrain_caveat`], for `temperature` and `seed`. A header that
+    /// says `seed: 42` over a run that sent none is two runs looking alike
+    /// that were not.
+    fn sampling_caveat(&self, temperature: Option<f32>, seed: Option<u32>) -> Option<String> {
+        let _ = (temperature, seed);
         None
     }
 }

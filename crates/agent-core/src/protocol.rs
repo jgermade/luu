@@ -98,7 +98,45 @@ use crate::turn::{EndReason, TurnEvent};
 /// both tagged enums, the rule 2 named; and `Authority` gains `person`, which a
 /// reader of a verdict's stamp meets as a new value. `tool_result.asked` is
 /// additive. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
-pub const VERSION: u32 = 9;
+///
+/// **10 is a yes that lasts the session**: [`ClientMessage::AnswerCall`] gains
+/// `session`, [`ServerMessage::Granted`] and [`ServerMessage::Revoked`] say what
+/// a session may now do without asking and what it may no longer, and
+/// [`ClientMessage::RevokeGrant`] takes one back. `tool_result.grant` is
+/// additive. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+///
+/// **11 is a no that lasts the session**: [`ClientMessage::AnswerCall`] with
+/// `session` and not `allow`, and [`ServerMessage::Forbidden`] saying what a
+/// session's drafts are now refused without asking. [`ServerMessage::Revoked`]
+/// takes back either. A new variant of a tagged enum, the rule 2 named.
+pub const VERSION: u32 = 11;
+
+/// How long a person's answer lasts — a yes, or since protocol 11 a no.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantScope {
+    /// This call.
+    Once,
+    /// Every draft of this session, until it is taken back.
+    Session,
+}
+
+/// What a session's answer is about: a program `run_command` runs, or a path
+/// the file tools write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantKind {
+    Command,
+    Write,
+}
+
+/// One thing a person answered for the session — allowed or forbidden: the
+/// program by its name, or the path as the sandbox resolved it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Grant {
+    pub kind: GrantKind,
+    pub target: String,
+}
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -238,7 +276,15 @@ pub enum ClientMessage {
         turn: TurnId,
         step: u32,
         allow: bool,
+        /// For the rest of the session, not only this call: with `allow` a yes
+        /// that lasts (protocol 10), without it a no that does (11). Absent is
+        /// once, which is what every answer before protocol 10 meant.
+        #[serde(default)]
+        session: bool,
     },
+    /// Takes back what a person answered for the session, yes or no: the next
+    /// call it covered is asked again.
+    RevokeGrant { kind: GrantKind, target: String },
     /// Close it: from here its turns are sent as their summary.
     #[serde(alias = "close_task")]
     CloseJob {
@@ -543,6 +589,37 @@ pub enum ServerMessage {
         /// nobody was asked.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         asked: Option<bool>,
+        /// What decided it when a person's answer did: this call, or the
+        /// session — an answer given now, or one given earlier, in which case
+        /// nobody was asked. The verdict says which way: a yes let it through,
+        /// a no for the session (protocol 11) refused it. Absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grant: Option<GrantScope>,
+    },
+    /// A person allowed `target` for the rest of the session, answering the
+    /// call at `turn`, `step`. A draft's call that needs it runs without
+    /// asking until it is revoked. A line of the stream, so a resume has it.
+    Granted {
+        turn: TurnId,
+        step: u32,
+        kind: GrantKind,
+        target: String,
+    },
+    /// A person refused `target` for the rest of the session, answering the
+    /// call at `turn`, `step`. A draft's call that needs it is refused without
+    /// asking until it is taken back. Protocol 11.
+    Forbidden {
+        turn: TurnId,
+        step: u32,
+        kind: GrantKind,
+        target: String,
+    },
+    /// What a person answered for the session about `target`, yes or no,
+    /// taken back. The answer is not forgotten: the session's list keeps it,
+    /// marked.
+    Revoked {
+        kind: GrantKind,
+        target: String,
     },
 }
 
@@ -588,6 +665,7 @@ impl ServerMessage {
                     outcome,
                     duration_ms,
                     asked,
+                    grant,
                     ..
                 } = *outcome;
                 Self::ToolResult {
@@ -601,6 +679,7 @@ impl ServerMessage {
                     duration_ms,
                     command: outcome.command,
                     asked,
+                    grant,
                 }
             }
         })
@@ -617,6 +696,8 @@ impl ServerMessage {
             | Self::ToolCall { turn, .. }
             | Self::CallHeld { turn, .. }
             | Self::ToolResult { turn, .. }
+            | Self::Granted { turn, .. }
+            | Self::Forbidden { turn, .. }
             // The turn that cut, not the turns that left: this is a thing the
             // selection for `turn` did.
             | Self::Evicted { turn, .. }
@@ -634,6 +715,7 @@ impl ServerMessage {
             | Self::JobClosed { .. }
             | Self::JobReopened { .. }
             | Self::JobRejected { .. }
+            | Self::Revoked { .. }
             | Self::Refused { .. } => None,
         }
     }

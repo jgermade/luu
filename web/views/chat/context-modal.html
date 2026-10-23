@@ -62,7 +62,7 @@
       <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
                    :budget="state.budget"
                    :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
-                   :window="state.settings?.window || null" :answer="answer" />
+                   :window="state.settings?.window || null" :answer="answer" :tools="state.tools || []" />
     </div>
   </section>
 </Modal>

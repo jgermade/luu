@@ -39,7 +39,7 @@
     ["scrollable", "Scrollable"], ["progress", "Progress · Spinner"], ["kbd", "Kbd"],
     ["text-input", "TextInput"], ["textarea", "Textarea"], ["select", "Select"],
     ["checkbox", "Checkbox"], ["radio-group", "RadioGroup"], ["switch", "Switch"],
-    ["segmented", "Segmented"], ["field", "Field"],
+    ["segmented", "Choice segmented"], ["sizes", "Sizes"], ["field", "Field"],
     ["input-container", "InputContainer"], ["typeahead", "Typeahead"],
     ["tabs", "Tabs"], ["anchors", "Section · AnchorNav"], ["menu", "Menu"], ["tooltip", "Tooltip"], ["modals", "Modals"],
   ]
@@ -254,6 +254,27 @@
   let deleted = 0
   const remove = () => { deleted += 1; asking = false }
 
+  // Every head a modal can have, and a dialog worth opening under each: the
+  // tones say what it is about before it is read. Small, at 30rem, so `auto`
+  // shows the integrated head and every other value shows itself.
+  const HEADS = ["auto", "integrated", "dark", "accent", "ok", "warn", "bad"]
+  const HEAD_COPY = {
+    auto: { title: "Head: auto", text: "Decided by the width it is drawn at. This one is 30rem, so its head is part of its body; from 40rem it would be dark." },
+    integrated: { title: "Rename the session", text: "Part of its body: a small question that belongs to the page under it." },
+    dark: { title: "Context of turn 12", text: "A bar like the page's own columns, for a view as large as a page." },
+    accent: { title: "Connect a provider", text: "Something to set up: luu speaks to it before anything is saved." },
+    ok: { title: "Connected", text: "12 models from 192.168.1.20:11434, every one of them with tools." },
+    warn: { title: "Runs on the host", text: "This posture has no container: a command the model asks for runs as you, on this machine." },
+    bad: { title: "Remove workstation?", text: "Its key file stays on disk, and the sessions that used it keep their history." },
+  }
+  // The heads' tones, as buttons: the same names say the same thing.
+  const BUTTON_TONES = ["dark", "accent", "ok", "warn", "bad"]
+  // Every control at each of its sizes, side by side.
+  const CONTROL_SIZES = ["sm", "md", "lg"]
+  let modalHead = "accent"
+  let headed = false
+  let tabHead = "auto"
+
   let icUrl = ""
   let icName = "Work Station"
   let icWindow = "32768"
@@ -288,108 +309,67 @@
 
   // ---- integrating it --------------------------------------------------------
   //
-  // What a page writes to draw with this theme, by step: the files it loads,
-  // a component in a `:setup`, the controls' values in and out, the tokens it
-  // may change, the file icons. Each snippet as it would be pasted. A closing
-  // script tag is written `<\/script>` here only so it does not close this one.
-  let integrating = false
-  let integrationTab = "load"
-  const INTEGRATION = [
-    {
-      value: "load", label: "Load it",
-      lead: "Two stylesheets and an import map. tokens.css is all a component draws with; luu.css is luu's own surfaces and the file icons' colours, and a page that is not luu can leave it out.",
-      snippets: [{ name: "index.html", code: `<link rel="stylesheet" href="/theme/default/tokens.css">
-<link rel="stylesheet" href="/theme/default/luu.css">
+  // How each section is used, out of `usage.js`: the Integrate beside a
+  // section's title opens that section's own — a `Modal` for a section of one
+  // component, a `TabModal` with a tab per component for a section of several
+  // — and each snippet is the file of a parent component that uses it, as it
+  // would be pasted. The head's Integrate is what a page loads before any of
+  // them, in the same shape.
+  //
+  // `usageId` stays when the modal closes, so what it shows is still there
+  // while it plays its way out.
+  const { USAGE, SETUP } = await import("@theme/usage.js")
+  let usageOpen = false
+  let usageId = "setup"
+  let usagePart = "load"
+  $: usageOf = usageId === "setup" ? SETUP : USAGE[usageId]
+  $: usageSingle = usageOf.parts.length === 1
+  $: usageShown = usageOf.parts.find(part => part.value === usagePart) || usageOf.parts[0]
+  const slotOf = (id, part, snippet) => id + ":" + part + ":" + snippet
+  const openUsage = id => {
+    const of = id === "setup" ? SETUP : USAGE[id]
+    usageId = id
+    usagePart = of.parts[0].value
+    usageOpen = true
+    for (const part of of.parts) {
+      for (const snippet of part.snippets) paint(slotOf(id, part.value, snippet.name), snippet)
+    }
+  }
 
-<!-- Before the first module script: the only place a map is read. -->
-<script type="importmap">{ "imports": { "@theme/": "/theme/default/" } }<\/script>
-<script type="module">
-  import { C79 } from "/vendor/jq79.js"
-  C79.fetch("./app.html").mount("#app")
-<\/script>` }],
-    },
-    {
-      value: "components", label: "Components",
-      lead: "Imported in the :setup that uses them, and written as tags. Props in, events out; a modal is open while its owner says so, and close only asks.",
-      snippets: [{ name: "app.html", code: `<script :setup>
-  const Button = await import("@theme/components/button.html")
-  const Modal = await import("@theme/components/modal.html")
-
-  let asking = false
-  const remove = () => { asking = false }
-<\/script>
-
-<Button variant="danger" @click="asking = true">Delete…</Button>
-
-<Modal :open="asking" title="Delete this session?" @close="asking = false">
-  Its stream goes with it.
-  <template :slot.foot>
-    <Button @click="asking = false">Keep it</Button>
-    <Button variant="danger" @click="remove()">Delete</Button>
-  </template>
-</Modal>` }],
-    },
-    {
-      value: "forms", label: "Forms",
-      lead: "A control's value is :model, written back as it changes. An event's value is in $event.detail: a component emits, it never hands on a native event. A bare attribute is on.",
-      snippets: [{ name: "settings.html", code: `<script :setup>
-  const TextInput = await import("@theme/components/text-input.html")
-  const Select = await import("@theme/components/select.html")
-  const Switch = await import("@theme/components/switch.html")
-  const Typeahead = await import("@theme/components/typeahead.html")
-
-  let name = "workstation"
-  let backend = "ollama"
-  let offline = false
-  let picked = ""
-  const MODELS = ["qwen2.5-coder:7b", "llama3.1:8b", "gemma3:12b"]
-<\/script>
-
-<TextInput label="Name" :model="name" clearable />
-<Select label="Backend" :model="backend" :options="['ollama', 'openai', 'anthropic']" />
-<Switch label="Offline" :model="offline" description="no request leaves this machine" />
-<Typeahead label="Model" :options="MODELS" @select="picked = $event.detail" />` }],
-    },
-    {
-      value: "tokens", label: "Tokens",
-      lead: "Every colour, size and duration is a --luu-* custom property. Change one on :root and every component that uses it follows; a dark island is an attribute.",
-      snippets: [
-        { name: "brand.css", code: `/* After tokens.css: the accent and the corners, in both tones. */
-:root, [data-tone="light"] {
-  --luu-accent: #6d28d9;
-  --luu-accent-hover: #5b21b6;
-  --luu-radius-md: 10px;
-}
-:root[data-theme="dark"], [data-tone="dark"] {
-  --luu-accent: #a78bfa;
-}` },
-        { name: "tones.html", code: `<!-- The page: light or dark. -->
-<html data-theme="dark">
-
-<!-- One part of it dark on a light page, with the theme's own dark values. -->
-<header data-tone="dark">…</header>` },
-      ],
-    },
-    {
-      value: "icons", label: "File icons",
-      lead: "files.svg is a sprite with no colour of its own: a folder open and shut, and a sheet per kind of file. The --luu-glyph-* tokens in luu.css fill and stroke it.",
-      snippets: [
-        { name: "tree.html", code: `<svg class="glyph folder"><use href="/theme/default/files.svg#i-folder"/></svg>
-<svg class="glyph" data-kind="code"><use href="/theme/default/files.svg#i-file-code"/></svg>` },
-        { name: "tree.css", code: `.glyph {
-  width: 16px; height: 16px; stroke-width: 1.6;
-  fill: var(--luu-glyph-file-fill); stroke: var(--luu-glyph-file-stroke);
-}
-.glyph.folder { fill: var(--luu-glyph-folder-fill); stroke: var(--luu-glyph-folder-stroke); }
-.glyph[data-kind="code"] { --kind: var(--luu-glyph-code); }
-.glyph[data-kind]:not(.folder) {
-  stroke: var(--kind);
-  fill: color-mix(in srgb, var(--kind) 12%, var(--luu-glyph-file-fill));
-}` },
-      ],
-    },
-  ]
-  $: integrationShown = INTEGRATION.find(tab => tab.value === integrationTab) || INTEGRATION[0]
+  // Coloured by the server's highlighter — the one that colours luu's files
+  // and a reply's fenced blocks, so a snippet here wears the same classes —
+  // asked once per snippet, by the file's extension. On a host with no server
+  // to ask, the snippet stays plain.
+  let lit = {}
+  const asked = new Set()
+  const paint = async (slot, snippet) => {
+    if (asked.has(slot)) return
+    asked.add(slot)
+    try {
+      const answer = await fetch("../../api/highlight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: snippet.name.split(".").pop(), text: snippet.code }),
+      })
+      const found = answer.ok ? await answer.json() : null
+      if (found?.language) lit = { ...lit, [slot]: found.lines }
+    } catch {}
+  }
+  const escape = text => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  // A `kind` is a capture name out of the highlighter, never the snippet's own
+  // text, which is escaped. `colours` is `lit`, handed in by the template so
+  // the binding reads it and redraws when the colours arrive.
+  const codeHtml = (slot, code, colours) => {
+    const lines = colours[slot]
+    if (!lines) return escape(code)
+    return lines
+      .map(line => line
+        .map(chunk => chunk.kind
+          ? `<span class="hl-${chunk.kind.replace(/[^\w.-]/g, "")}">${escape(chunk.text)}</span>`
+          : escape(chunk.text))
+        .join(""))
+      .join("\n")
+  }
   // Copied, for a moment, on the button that copied it.
   let copied = ""
   const copy = async (key, code) => {
@@ -499,7 +479,7 @@
       </div>
     </div>
     <div class="top-actions">
-      <Button size="sm" @click="integrating = true">
+      <Button size="sm" @click="openUsage('setup')">
         <svg class="btn-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>
         Integrate
       </Button>
@@ -507,23 +487,45 @@
     </div>
   </header>
 
-  <!-- How a page uses the theme: snippets to paste, a tab per step. -->
-  <TabModal :open="integrating" title="Integrate" :tabs="INTEGRATION" :model="integrationTab"
-            width="52rem" height="30rem" @close="integrating = false">
-    <p class="integration-lead">{{ integrationShown.lead }}</p>
-    <div :each="snippet in integrationShown.snippets" :key="integrationShown.value + snippet.name" class="snippet">
+  <!-- How a section is used: its own modal, opened from beside its title — a
+       tab per component when it has several — and a snippet per file. The
+       body is the same in both; only the head differs. -->
+  <Modal :open="usageOpen && usageSingle" :title="usageOf.title" width="52rem"
+         @close="usageOpen = false">
+    <p class="integration-lead">{{ usageShown.lead }}</p>
+    <div :each="snippet in usageShown.snippets" :key="slotOf(usageId, usageShown.value, snippet.name)" class="snippet">
       <div class="snippet-head">
         <code>{{ snippet.name }}</code>
-        <Button size="sm" variant="ghost" @click="copy(integrationShown.value + snippet.name, snippet.code)">
-          {{ copied === integrationShown.value + snippet.name ? "Copied" : "Copy" }}
+        <Button size="sm" variant="ghost" @click="copy(slotOf(usageId, usageShown.value, snippet.name), snippet.code)">
+          {{ copied === slotOf(usageId, usageShown.value, snippet.name) ? "Copied" : "Copy" }}
         </Button>
       </div>
-      <Scrollable x background="var(--luu-code-ground)"><pre class="snippet-code">{{ snippet.code }}</pre></Scrollable>
+      <Scrollable x background="var(--luu-code-ground)"><pre class="snippet-code"><code
+        :html="codeHtml(slotOf(usageId, usageShown.value, snippet.name), snippet.code, lit)"></code></pre></Scrollable>
     </div>
     <template :slot.foot>
       <span class="integration-foot">Every component's own header says what it takes, in
         <code>web/theme/default/components/</code>.</span>
-      <Button variant="primary" @click="integrating = false">Done</Button>
+      <Button variant="primary" @click="usageOpen = false">Done</Button>
+    </template>
+  </Modal>
+  <TabModal :open="usageOpen && !usageSingle" :title="usageOf.title" :tabs="usageOf.parts" :model="usagePart"
+            width="52rem" height="32rem" @close="usageOpen = false">
+    <p class="integration-lead">{{ usageShown.lead }}</p>
+    <div :each="snippet in usageShown.snippets" :key="slotOf(usageId, usageShown.value, snippet.name)" class="snippet">
+      <div class="snippet-head">
+        <code>{{ snippet.name }}</code>
+        <Button size="sm" variant="ghost" @click="copy(slotOf(usageId, usageShown.value, snippet.name), snippet.code)">
+          {{ copied === slotOf(usageId, usageShown.value, snippet.name) ? "Copied" : "Copy" }}
+        </Button>
+      </div>
+      <Scrollable x background="var(--luu-code-ground)"><pre class="snippet-code"><code
+        :html="codeHtml(slotOf(usageId, usageShown.value, snippet.name), snippet.code, lit)"></code></pre></Scrollable>
+    </div>
+    <template :slot.foot>
+      <span class="integration-foot">Every component's own header says what it takes, in
+        <code>web/theme/default/components/</code>.</span>
+      <Button variant="primary" @click="usageOpen = false">Done</Button>
     </template>
   </TabModal>
 
@@ -535,6 +537,8 @@
 
     <!-- ---- colours ------------------------------------------------------ -->
     <Section id="colours" title="Colours" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('colours')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>Every colour the components draw with, from <code>tokens.css</code>, read back
         from the computed style. Overriding one of these on <code>:root</code> changes every
         component that uses it.</template>
@@ -554,6 +558,8 @@
 
     <!-- ---- type, shape, motion ------------------------------------------ -->
     <Section id="foundations" title="Type · Shape · Motion" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('foundations')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>The rest of <code>tokens.css</code>: the type scale, spacing, radii, shadows,
         control heights and motion.</template>
 
@@ -630,6 +636,8 @@
 
     <!-- ---- file icons --------------------------------------------------- -->
     <Section id="files" title="File icons" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('files')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>The tree's own shapes, from <code>files.svg</code>: what a tree draws when no
         icon theme is chosen. A folder open and shut, and a sheet per kind of file. The sprite holds no
         colour; the <code>--luu-glyph-*</code> tokens in <code>luu.css</code> fill and stroke it, so it
@@ -657,15 +665,22 @@
 
     <!-- ---- button ------------------------------------------------------- -->
     <Section id="button" title="Button" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('button')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead><code>primary</code> is the one thing a view asks for, <code>secondary</code>
         the rest, <code>ghost</code> an action that should not compete with content,
-        <code>danger</code> one that loses something.</template>
+        <code>danger</code> one that loses something — and the tones a modal's head takes,
+        <code>dark</code>, <code>accent</code>, <code>ok</code>, <code>warn</code> and <code>bad</code>.</template>
       <div class="demo">
         <div class="row">
           <Button variant="primary" @click="clicks++">Primary</Button>
           <Button @click="clicks++">Secondary</Button>
           <Button variant="ghost" @click="clicks++">Ghost</Button>
           <Button variant="danger" @click="clicks++">Danger</Button>
+        </div>
+        <div class="row tones">
+          <Button :each="t in BUTTON_TONES" :key="t" :variant="t" @click="clicks++">{{ t }}</Button>
+          <Button variant="ok" disabled>ok, disabled</Button>
         </div>
         <div class="row">
           <Button size="sm" variant="primary">Small</Button>
@@ -691,6 +706,8 @@
 
     <!-- ---- badge -------------------------------------------------------- -->
     <Section id="badge" title="Badge" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('badge')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>What state something is in, in a word. Five tones, soft or solid, with a dot
         for a status read at a glance.</template>
       <div class="demo">
@@ -720,6 +737,8 @@
 
     <!-- ---- alert -------------------------------------------------------- -->
     <Section id="alert" title="Alert" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('alert')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>A message about the view around it. <code>bad</code> is announced as an
         alert, the rest as a status.</template>
       <div class="demo stack">
@@ -744,6 +763,8 @@
 
     <!-- ---- card --------------------------------------------------------- -->
     <Section id="card" title="Card" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('card')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>A surface that groups one thing. A head when it has a title or actions, a
         foot when it has one; <code>interactive</code> when the card itself is what to click.</template>
       <div class="demo grid">
@@ -773,6 +794,8 @@
 
     <!-- ---- scrollable --------------------------------------------------- -->
     <Section id="scrollable" title="Scrollable" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('scrollable')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>Something that scrolls, on a ground that does not: pulled past an end, the
         gap shows the content's own ground, never the page's. A wheel that reaches the end stops
         there instead of scrolling the page behind. The theme's modals, menus and typeahead scroll
@@ -803,6 +826,8 @@
 
     <!-- ---- progress ----------------------------------------------------- -->
     <Section id="progress" title="Progress · Spinner" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('progress')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>How far along something is, or that it is happening with nothing to measure
         it by. An <code>amount</code> of <code>null</code> slides instead of filling.</template>
       <div class="demo stack">
@@ -822,6 +847,8 @@
 
     <!-- ---- kbd ---------------------------------------------------------- -->
     <Section id="kbd" title="Kbd" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('kbd')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>What to press, one key per <code>Kbd</code>.</template>
       <div class="demo">
         <p class="row">
@@ -834,6 +861,8 @@
 
     <!-- ---- text input --------------------------------------------------- -->
     <Section id="text-input" title="TextInput" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('text-input')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>One line of text. <code>prefix</code> and <code>suffix</code> are what the
         value is read with, not part of it.</template>
       <div class="demo stack narrow">
@@ -856,6 +885,8 @@
 
     <!-- ---- textarea ----------------------------------------------------- -->
     <Section id="textarea" title="Textarea" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('textarea')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>Several lines. <code>autosize</code> grows with what is written;
         <code>mono</code> is for text whose columns mean something.</template>
       <div class="demo stack narrow">
@@ -868,6 +899,8 @@
 
     <!-- ---- select ------------------------------------------------------- -->
     <Section id="select" title="Select" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('select')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>One answer out of a list, as the platform's own <code>&lt;select&gt;</code>:
         its menu, its keyboard, its behaviour on a phone.</template>
       <div class="demo stack narrow">
@@ -885,6 +918,8 @@
 
     <!-- ---- checkbox ----------------------------------------------------- -->
     <Section id="checkbox" title="Checkbox" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('checkbox')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>Yes or no inside a form that is saved later, or several items picked from a
         list. <code>indeterminate</code> is <em>some of them</em>.</template>
       <div class="demo stack">
@@ -909,6 +944,8 @@
 
     <!-- ---- radio group -------------------------------------------------- -->
     <Section id="radio-group" title="RadioGroup" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('radio-group')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>One answer out of a few, each worth a line of explanation.</template>
       <div class="demo stack">
         <RadioGroup label="Host shell" :model="host" :options="HOSTS" />
@@ -920,6 +957,8 @@
 
     <!-- ---- switch ------------------------------------------------------- -->
     <Section id="switch" title="Switch" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('switch')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>On or off, in force as soon as it moves.</template>
       <div class="demo stack">
         <Switch :model="autoName" label="Name sessions" description="from their first prompt" />
@@ -932,8 +971,11 @@
     </Section>
 
     <!-- ---- segmented ---------------------------------------------------- -->
-    <Section id="segmented" title="Segmented" divided>
-      <template :slot.lead>Two to five short answers side by side. One radio group to the keyboard.</template>
+    <Section id="segmented" title="Choice segmented" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('segmented')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
+      <template :slot.lead>Two to five short answers side by side. One radio group to the keyboard.
+        <code>&lt;Segmented&gt;</code>, sized as every other control is.</template>
       <div class="demo stack">
         <Segmented label="Columns" :model="layout" :options="[{ value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }]" />
         <Segmented label="Tone" size="sm" :model="tone" :options="['light', 'dark']" />
@@ -946,8 +988,30 @@
       </div>
     </Section>
 
+    <!-- ---- sizes: one row per size, every control on it ------------------- -->
+    <Section id="sizes" title="Sizes" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('sizes')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
+      <template :slot.lead>One <code>size</code> for every control — <code>sm</code>, <code>md</code>,
+        <code>lg</code> — read from <code>--luu-control-sm|md|lg</code>: the same height, the same
+        corners and the same type, so a row of them lines up whatever is on it.</template>
+      <div class="demo stack">
+        <div :each="z in CONTROL_SIZES" :key="z" class="row size-row" :data-size="z">
+          <code class="size-name">{{ z }} · {{ read[`control-${z}`] || "" }}</code>
+          <span class="cell"><Button :size="z" variant="primary">Save</Button></span>
+          <span class="cell"><Button :size="z">Cancel</Button></span>
+          <span class="cell wide"><TextInput :size="z" placeholder="a name" :label="`Name, ${z}`" /></span>
+          <span class="cell wide"><Select :size="z" :model="backend" :options="BACKENDS" :label="`Backend, ${z}`" /></span>
+          <span class="cell"><Segmented :size="z" :label="`Columns, ${z}`" :model="layout" :options="['two', 'three']" /></span>
+          <span class="cell wide"><Typeahead :size="z" :label="`Model, ${z}`" :options="TA_MODELS" placeholder="a model" /></span>
+        </div>
+      </div>
+    </Section>
+
     <!-- ---- field -------------------------------------------------------- -->
     <Section id="field" title="Field" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('field')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>A control and what is said about it: its name, a hint, and an error in place of
         the hint when there is one.</template>
       <div class="demo grid two">
@@ -979,6 +1043,8 @@
 
     <!-- ---- input container ---------------------------------------------- -->
     <Section id="input-container" title="InputContainer" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('input-container')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>One control and what is said about it, in one box: its name inside the
         border, an <code>input</code> or a <code>select</code> under it, and what it is for under the
         box — or what is wrong with it, in its place. The whole box is what is clicked.</template>
@@ -1005,6 +1071,8 @@
 
     <!-- ---- typeahead ----------------------------------------------------- -->
     <Section id="typeahead" title="Typeahead" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('typeahead')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>A name typed, with what it could be listed under it as it is typed. The
         arrows move in the list, Enter takes one, ESC closes it; what matched is marked. What is
         typed is a value too — unless <code>strict</code>, which puts the last real one back.</template>
@@ -1023,6 +1091,8 @@
 
     <!-- ---- tabs --------------------------------------------------------- -->
     <Section id="tabs" title="Tabs" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('tabs')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>Views of one thing, one at a time. Only the strip is drawn; the owner shows
         the panel the model names.</template>
       <div class="demo stack">
@@ -1039,6 +1109,8 @@
 
     <!-- ---- section, anchor nav ------------------------------------------ -->
     <Section id="anchors" title="Section · AnchorNav" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('anchors')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>A part of a page that can be linked to, and an index that marks the one
         being read. This page is made of them; below, the same two inside a box that scrolls on its
         own, followed without answering the page's scrolling.</template>
@@ -1061,6 +1133,8 @@
 
     <!-- ---- menu --------------------------------------------------------- -->
     <Section id="menu" title="Menu" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('menu')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>Actions behind a button, in the top layer. The arrows move inside it; ESC and
         a click outside close it.</template>
       <div class="demo">
@@ -1081,6 +1155,8 @@
 
     <!-- ---- tooltip ------------------------------------------------------ -->
     <Section id="tooltip" title="Tooltip" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('tooltip')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>A word about what is under the pointer or the focus. Flips to the other side
         when there is no room.</template>
       <div class="demo">
@@ -1096,6 +1172,8 @@
 
     <!-- ---- modals: three kinds of one thing -------------------------------- -->
     <Section id="modals" title="Modals">
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('modals')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>A view over the page that has to be answered or left: plain, with tabs for
         its head, or as a sheet inside another. All three open the same way — the folio — and a
         large one has a dark head.</template>
@@ -1107,7 +1185,8 @@
           <h4 class="kind-title">Modal</h4>
           <p class="kind-lead">The platform's <code>&lt;dialog&gt;</code>. ESC, the backdrop and the close
             button ask to close; the owner decides. A large one has a dark head, a small one a head
-            that is part of its body.</p>
+            that is part of its body — and any of them a head in a tone, <code>accent</code>,
+            <code>ok</code>, <code>warn</code> or <code>bad</code>, whatever its size.</p>
             <div class="row">
               <Button variant="danger" @click="asking = true">Delete a session…</Button>
               <Button @click="editing = true">A form…</Button>
@@ -1115,6 +1194,21 @@
               <Button @click="large = true">A large one…</Button>
               <p class="state">deleted: <code>{{ deleted }}</code></p>
           </div>
+          <div class="row heads">
+            <Segmented label="Modal head" size="sm" :model="modalHead" :options="HEADS" />
+            <Button @click="headed = true">With this head…</Button>
+          </div>
+
+          <Modal :open="headed" :title="HEAD_COPY[modalHead].title" :head="modalHead" width="30rem"
+                 @close="headed = false">
+            <p class="muted-line">{{ HEAD_COPY[modalHead].text }}</p>
+            <p class="muted-line"><code>head="{{ modalHead }}"</code></p>
+            <template :slot.foot>
+              <Button :if="modalHead === 'bad'" variant="ghost" @click="headed = false">Keep it</Button>
+              <Button :if="modalHead === 'bad'" variant="danger" @click="headed = false">Remove</Button>
+              <Button :if="modalHead !== 'bad'" variant="primary" @click="headed = false">Done</Button>
+            </template>
+          </Modal>
 
           <Modal :open="asking" title="Delete this session?" width="26rem" @close="asking = false">
             Its stream goes with it, and nothing brings it back.
@@ -1142,7 +1236,8 @@
           <Modal :open="large" title="Context of turn 12" width="48rem" @close="large = false">
             <p class="muted-line">A large modal has a dark head, a bar like the page's own; a small one
               has a head that is part of its body. <code>head="auto"</code> decides by the width it is
-              drawn at, and <code>dark</code> or <code>integrated</code> say it outright.</p>
+              drawn at, and <code>dark</code> or <code>integrated</code> say it outright — or a tone,
+            for a head that says what the dialog is about.</p>
             <Progress :amount="5400" :max="8192" label="Window" />
             <template :slot.foot>
               <Button @click="large = false">Close</Button>
@@ -1162,14 +1257,18 @@
           <h4 class="kind-title">TabModal</h4>
           <p class="kind-lead">A modal whose head is its tabs: several views of one thing, chosen where a
             title would be. The owner shows the panel the model names; a fixed <code>height</code>
-            keeps the dialog still as the tabs change.</p>
+            keeps the dialog still as the tabs change. Its head takes the same values as a
+            <code>Modal</code>'s, and on a tone the tabs and their line are drawn in its ink.</p>
+            <div class="row heads">
+              <Segmented label="Tab modal head" size="sm" :model="tabHead" :options="HEADS" />
+            </div>
             <div class="row">
               <Button @click="tabbing = true">workstation…</Button>
-              <p class="state">tab: <code>{{ tmTab }}</code> · saved: <code>{{ tmSaved }}</code></p>
+              <p class="state">tab: <code>{{ tmTab }}</code> · saved: <code>{{ tmSaved }}</code> · head: <code>{{ tabHead }}</code></p>
           </div>
 
           <TabModal :open="tabbing" title="workstation" :tabs="TM_TABS" :model="tmTab" height="17rem"
-                    @close="tabbing = false">
+                    :head="tabHead" @close="tabbing = false">
             <div :if="tmTab === 'connection'" class="stack">
               <InputContainer label="URL" :model="tmUrl" description="where the server listens" />
               <InputContainer label="Backend" type="select" :model="backend" :options="BACKENDS"
@@ -1401,6 +1500,11 @@
     font-family: var(--luu-font-mono);
     font-size: var(--luu-text-sm);
   }
+  .size-row { align-items: center; }
+  .size-row .cell { display: flex; flex: none; }
+  .size-row .cell.wide { width: 8rem; }
+  .size-row .cell.wide > * { flex: 1; }
+  .size-name { width: 6rem; color: var(--luu-fg-muted); }
   .modal-kinds { gap: 0; padding: 0; }
   .modal-kind { display: flex; flex-direction: column; gap: var(--luu-space-3); padding: var(--luu-space-5); }
   .modal-kind + .modal-kind { border-top: var(--luu-border-width) solid var(--luu-border); }

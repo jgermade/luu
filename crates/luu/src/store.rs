@@ -55,7 +55,11 @@ use rusqlite::Connection;
 /// **4 is when a session was last written to** (`written_at`): what the
 /// history is ordered by, so opening a session does not move it — only a turn
 /// does. Rows from before it take their `saved_at`, the nearest thing they have.
-const SCHEMA: i32 = 4;
+///
+/// **5 is archiving** (`archived_at`): a session put away from the history
+/// without being deleted, `NULL` for one that is not. Rows from before it are
+/// not archived, which is what they were.
+const SCHEMA: i32 = 5;
 
 /// Where the store lives when nobody says otherwise.
 ///
@@ -91,6 +95,10 @@ const PROVIDER_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN provider TEXT;";
 /// opened since — the best a store that never kept the fact can say.
 const WRITTEN_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN written_at INTEGER;
                               UPDATE sessions SET written_at = saved_at;";
+
+/// When a session was archived, or `NULL`. Never touched by a save: the
+/// upsert names its columns, and this is not one of them.
+const ARCHIVED_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN archived_at INTEGER;";
 
 pub struct SessionStore {
     connection: Connection,
@@ -139,6 +147,7 @@ impl SessionStore {
                 )?;
                 connection.execute_batch(EVENTS)?;
                 connection.execute_batch(WRITTEN_COLUMN)?;
+                connection.execute_batch(ARCHIVED_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before the stream was kept. Its sessions stay
@@ -149,6 +158,7 @@ impl SessionStore {
                 connection.execute_batch(EVENTS)?;
                 connection.execute_batch(PROVIDER_COLUMN)?;
                 connection.execute_batch(WRITTEN_COLUMN)?;
+                connection.execute_batch(ARCHIVED_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before a session could name the profile it ran on.
@@ -157,11 +167,18 @@ impl SessionStore {
             2 => {
                 connection.execute_batch(PROVIDER_COLUMN)?;
                 connection.execute_batch(WRITTEN_COLUMN)?;
+                connection.execute_batch(ARCHIVED_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before the history was ordered by writing.
             3 => {
                 connection.execute_batch(WRITTEN_COLUMN)?;
+                connection.execute_batch(ARCHIVED_COLUMN)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            // A store from before a session could be archived.
+            4 => {
+                connection.execute_batch(ARCHIVED_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -370,7 +387,7 @@ impl SessionStore {
     pub fn list(&self) -> Result<Vec<SessionSummary>> {
         let mut statement = self.connection.prepare(
             "SELECT id, title, backend, model, started_at, turns, record,
-                    COALESCE(written_at, started_at) AS written
+                    COALESCE(written_at, started_at) AS written, archived_at
              FROM sessions
              ORDER BY written DESC, started_at DESC, id DESC",
         )?;
@@ -384,9 +401,21 @@ impl SessionStore {
                 turns: row.get::<_, i64>(5)? as usize,
                 record: row.get(6)?,
                 written_at: Some(row.get::<_, i64>(7)? as u64),
+                archived_at: row.get::<_, Option<i64>>(8)?.map(|at| at as u64),
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Puts a session away from the history, or back: `at` is when, `None` to
+    /// restore it. Nothing else of the row moves — it is still resumable,
+    /// and its stream is untouched. Whether there was such a session.
+    pub fn archive(&self, id: &str, at: Option<u64>) -> Result<bool> {
+        let changed = self.connection.execute(
+            "UPDATE sessions SET archived_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, at.map(|at| at as i64)],
+        )?;
+        Ok(changed > 0)
     }
 
     /// Removes the session and the stream it was folded from, together. Two
@@ -454,6 +483,38 @@ mod tests {
         );
         store.save(&written, None).expect("saving");
         assert_eq!(order(), ["a", "c", "b"]);
+    }
+
+    /// Archived is a column beside the fold: a save — the next checkpoint of
+    /// a session resumed from the archive, say — does not undo it, and
+    /// restoring clears it.
+    #[test]
+    fn a_session_archived_stays_archived_until_restored() {
+        let store = SessionStore::in_memory().expect("a store");
+        store.save(&view("one"), None).expect("saving");
+        store.save(&view("two"), None).expect("saving");
+        let archived = |id: &str| {
+            store
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == id)
+                .and_then(|s| s.archived_at)
+        };
+        assert_eq!(archived("one"), None);
+
+        assert!(store.archive("one", Some(42)).expect("archiving"));
+        assert_eq!(archived("one"), Some(42));
+        assert_eq!(archived("two"), None, "only the one asked for");
+        store.save(&view("one"), None).expect("saving again");
+        assert_eq!(archived("one"), Some(42), "a save does not restore it");
+
+        assert!(store.archive("one", None).expect("restoring"));
+        assert_eq!(archived("one"), None);
+        assert!(
+            !store.archive("nowhere", Some(1)).expect("asking"),
+            "no such session"
+        );
     }
 
     #[test]

@@ -13,6 +13,12 @@
   // thing a view asks for, `secondary` the rest, `ghost` an action that should
   // not compete with content, `danger` one that loses something.
   //
+  // **And the tones a `Modal`'s head takes**, solid: `accent` (the same as
+  // `primary`), `ok`, `warn`, `bad` (the same as `danger`), in the tone's
+  // strong colour and the ink a solid `Badge` has on it — and `dark`, a
+  // `data-tone="dark"` island, the dark head's own colours in a secondary
+  // button. A head and the button under it can say the same thing.
+  //
   // **Part of the default theme**: imports nothing, and draws only with
   // `tokens.css`. See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
   //
@@ -42,9 +48,13 @@
 
 <button class="btn"
         :type="type"
-        :class.primary="variant === 'primary'"
+        :class.primary="variant === 'primary' || variant === 'accent'"
         :class.ghost="variant === 'ghost'"
-        :class.danger="variant === 'danger'"
+        :class.danger="variant === 'danger' || variant === 'bad'"
+        :class.toned="variant === 'ok' || variant === 'warn'"
+        :class.tone-ok="variant === 'ok'"
+        :class.tone-warn="variant === 'warn'"
+        :data-tone="variant === 'dark' ? 'dark' : null"
         :class.sm="size === 'sm'"
         :class.lg="size === 'lg'"
         :class.block="isBlock"
@@ -93,7 +103,7 @@
   }
   .btn:active:not(:disabled) { transform: translateY(1px); }
   .btn:focus-visible {
-    outline: 2px solid var(--luu-focus);
+    outline: var(--luu-outline-width) solid var(--luu-outline-color);
     outline-offset: 2px;
   }
   .btn:disabled {
@@ -120,6 +130,20 @@
     background: var(--luu-bad-hover);
     border-color: var(--luu-bad-hover);
   }
+  /* `ok` and `warn` have no hover token of their own: theirs step toward the
+     page's ink, the way the accent's own do — darker on a light page, lighter
+     on a dark one. */
+  .toned {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--luu-on-accent);
+  }
+  .tone-ok { --ink: var(--luu-ok); }
+  .tone-warn { --ink: var(--luu-warn); }
+  .toned:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--ink) 86%, var(--luu-fg));
+    border-color: color-mix(in srgb, var(--ink) 86%, var(--luu-fg));
+  }
   .ghost {
     background: transparent;
     border-color: transparent;
@@ -137,6 +161,10 @@
   .btn:active:not(:disabled) { background: var(--luu-active); }
   .primary:active:not(:disabled) { background: var(--luu-accent-active); border-color: var(--luu-accent-active); }
   .danger:active:not(:disabled) { background: var(--luu-bad-active); border-color: var(--luu-bad-active); }
+  .toned:active:not(:disabled) {
+    background: color-mix(in srgb, var(--ink) 72%, var(--luu-fg));
+    border-color: color-mix(in srgb, var(--ink) 72%, var(--luu-fg));
+  }
   .ghost:active:not(:disabled) { background: var(--luu-active); }
 
   .sm { --h: var(--luu-control-sm); padding: 0 var(--luu-space-2); font-size: var(--luu-text-sm); }

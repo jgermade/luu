@@ -6,19 +6,26 @@
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`, and for what
   // each tab decides, `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`
   // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
-  const { state, resumeSession, deleteSession, refreshSessionsList } = await import("@web/lib/store.js")
+  const { state, resumeSession, deleteSession, archiveSession, refreshSessionsList } = await import("@web/lib/store.js")
   const {
-    ui, loadModels, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
+    ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
+    chooseRuntime, chooseList,
   } = await import("@web/lib/ui.js")
-  const { placeOptions } = await import("@web/lib/places.js")
+  const { runtimeOptions } = await import("@web/lib/places.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Button = await import("@web/theme/default/components/button.html")
+  const SubModal = await import("@web/theme/default/components/sub-modal.html")
+  const ProviderModels = await import("./provider-models.html")
 
-  const TABS = [
+  // Three tabs: start one, the earlier ones, and the ones put away. An
+  // archived session is still there to restore — archiving keeps it out of
+  // the history's way without deleting it.
+  $: TABS = [
     { value: "new", label: "New session" },
     { value: "history", label: "History" },
+    { value: "archived", label: "Archived", count: archivedCount || undefined },
   ]
   // The tab is the store's, so the head's buttons choose it; a click on a tab
   // here goes the same way.
@@ -32,33 +39,55 @@
   // one label over two backends is a comparison nobody can make.
 
   $: profileNames = Object.keys(state.providers?.providers || {})
-  // Every posture on every runtime it can run on, as the terminal's foot
-  // offers them; the last one used is chosen to begin with (`openStarter`).
-  // Empty where nobody has written a posture down, and where a surface cannot
-  // choose one at all — over stdio the process is the session.
-  $: places = state.postures?.choosable ? placeOptions(state.postures) : []
-  $: chosenPosture = (ui.starter?.place || "|").split("|")[0]
-  // Each field's line under its box: what it is, where its value came from,
-  // or what will not work about it.
-  $: providerSaid = ui.starter?.provider === state.providers?.default
-    ? "the file's default"
-    : "where the session sends"
-  $: modelWarning = ui.starter?.reason
-    ? `Could not list this provider's models: ${ui.starter.reason}. Type one — a model that is not pulled yet is still a name worth writing down.`
-    : ""
-  $: modelSaid = ui.starter?.loading
-    ? "asking the provider…"
-    : ui.starter?.from
-      ? `from ${ui.starter.from}`
-      : !ui.starter?.models?.length
-        ? "This provider offers no list, so the model is whatever you type."
-        : `${ui.starter.models.length} on offer`
-  $: placeChoices = places.map(p => ({
-    value: p.value, label: `${p.name} — ${p.label}`, disabled: p.disabled, title: p.title,
-  }))
-  $: placeSaid = chosenPosture
-    ? `${state.postures?.postures[chosenPosture]?.policy} — chosen now: a session's jobs are approved against what it may do.`
-    : "what its commands may do"
+  // The choice of where it sends, said once beside the two columns' label:
+  // the provider, the model, and where that model came from.
+  $: sendsSaid = !ui.starter?.provider
+    ? "where the session sends"
+    : `${ui.starter.provider} · ${ui.starter.model || "its own model"}${ui.starter.provider === state.providers?.default ? " · the file's default" : ""}${ui.starter.from && ui.starter.model ? ` · from ${ui.starter.from}` : ""}`
+  // **Every session is made from where it runs and one list of each axis**,
+  // as asked: *siempre se podrá elegir el runtime y las políticas*. No
+  // preset: a list not chosen is the empty one, which allows nothing — the
+  // session reads its folder, writes to scratch, and asks the rest. The
+  // session records each list by name and hash. Over stdio the process is
+  // the session, and there is nothing to choose. See
+  // `RECORD/2026-10-22.policies-not-postures.WIP.md`, *every session from
+  // lists*.
+  $: choosable = !!state.postures?.choosable
+  $: runtimes = runtimeOptions(state.postures)
+  $: runtimeSaid = runtimes.find(r => r.value === ui.starter?.runtime)?.title
+    ? `where its commands run · ${runtimes.find(r => r.value === ui.starter?.runtime).title}`
+    : "where its commands run"
+
+  const KINDS = [
+    { key: "shell", label: "Shell" },
+    { key: "network", label: "Network" },
+    { key: "files", label: "Files" },
+  ]
+  const listNames = kind => Object.keys(ui.starter?.policies?.[kind] || {}).sort()
+  // A list at a glance: how much is in each zone, `*` where a zone takes any.
+  const zonesOf = (kind, name) => {
+    const list = ui.starter?.policies?.[kind]?.[name]
+    if (!list) return ""
+    return ["allow", "deny"]
+      .map(zone => {
+        const entries = list[zone] || []
+        return entries.length ? `${zone} ${entries.includes("*") ? "*" : entries.length}` : ""
+      })
+      .filter(Boolean).join(" · ") || "names nothing: asks"
+  }
+  const EMPTY_SAID = {
+    shell: "runs nothing without asking",
+    network: "reaches nothing without asking",
+    files: "reads the folder, asks to write",
+  }
+  const listOptions = kind => [
+    { value: "", label: "empty" },
+    ...listNames(kind).map(name => ({ value: name, label: name })),
+  ]
+  const listSaid = kind => {
+    const name = ui.starter?.lists?.[kind]
+    return name ? zonesOf(kind, name) : EMPTY_SAID[kind]
+  }
   $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
   // What stands in the way of *either* action: the server refuses both while a
   // turn is in flight or a proposal is unanswered, and a button that fails when
@@ -85,23 +114,27 @@
   // were last written to.
 
   let query = ""
-  // Deleting asks twice: the first click on a row's × arms it.
-  let armed = ""
   let error = ""
   let switching = ""
+  // The session a delete is being confirmed for, or `null`: deleting goes for
+  // good, so it is asked in a sheet of its own, with archiving offered beside.
+  let confirming = null
 
   // Asked again on every opening: the counts move with every turn.
   refreshSessionsList()
 
-  // The search is what a person opening History came to use. The dialog puts
-  // the focus on its chosen tab first; this takes it a frame or two later.
+  // The search is what a person opening History came to use. Opened there,
+  // the dialog focuses it itself — it is `autofocus`, which `TabModal` puts
+  // first; it used to focus its tab a frame after this had focused the
+  // search, and the search lost. Moved to History from New, the dialog is
+  // already open, so this does it.
   const focusSearch = (frames = 30) => {
     const input = document.querySelector("dialog[open] .sessions-search input")
     if (input) input.focus()
     else if (frames > 0) requestAnimationFrame(() => focusSearch(frames - 1))
   }
   const later = (fn, frames = 3) => frames ? requestAnimationFrame(() => later(fn, frames - 1)) : fn()
-  $: tab === "history" && later(() => focusSearch())
+  $: (tab === "history" || tab === "archived") && later(() => focusSearch())
 
   const named = s => !!s?.title && s.title !== "live" && !s.title.startsWith("session-")
   const nameOf = s => named(s) ? s.title : "Untitled session"
@@ -120,16 +153,22 @@
 
   // The order the server's `written_at` gives, and a session nothing was sent
   // in left out unless it is the one on screen — it holds nothing to open.
+  // An archived one is in its own tab, newest put away first.
   $: listed = [...(state.sessions || [])]
-    .filter(s => s.turns > 0 || isCurrent(s))
+    .filter(s => !s.archived_at && (s.turns > 0 || isCurrent(s)))
     .sort((a, b) => (b.written_at ?? b.started_at ?? 0) - (a.written_at ?? a.started_at ?? 0))
+  $: archived = [...(state.sessions || [])]
+    .filter(s => s.archived_at)
+    .sort((a, b) => b.archived_at - a.archived_at)
+  $: archivedCount = archived.length
   $: words = fold(query).split(/\s+/).filter(Boolean)
-  $: rows = words.length
-    ? listed.filter(s => {
+  const matching = list => words.length
+    ? list.filter(s => {
       const hay = fold(`${nameOf(s)} ${s.id}`)
       return words.every(word => hay.includes(word))
     })
-    : listed
+    : list
+  $: rows = matching(tab === "archived" ? archived : listed)
 
   const pick = async s => {
     if (switching) return
@@ -143,20 +182,23 @@
     error = state.error || "the session could not be opened"
   }
 
-  const remove = async (s, event) => {
-    event.stopPropagation()
-    if (armed !== s.id) {
-      armed = s.id
-      return
-    }
-    armed = ""
-    await deleteSession(s.id)
+  // Archived, or back in the history.
+  const archive = async (s, yes) => {
+    error = ""
+    if (!(await archiveSession(s.id, yes))) error = state.error || "the session could not be moved"
+  }
+  const remove = async () => {
+    const s = confirming
+    confirming = null
+    if (s) await deleteSession(s.id)
   }
 </script>
 
-<!-- Dark-headed, though it is under the size that would make it so: it is
-     the session's own dialog, a bar like the column's head it is opened from. -->
-<TabModal open title="Sessions" head="dark" tinted :tabs="TABS" :model="tab" width="38rem" height="26rem"
+<!-- Accent-headed: a session starts here — the one dialog of the page that
+     begins something rather than settles it. A bar whatever its size. -->
+<!-- Open until `closeSessions` says it is leaving, so it plays its exit
+     before it is unmounted. -->
+<TabModal :open="!ui.sessionsLeaving" title="Sessions" head="accent" tinted :tabs="TABS" :model="tab" width="46rem" height="38rem"
           @change="choose($event.detail)" @close="closeSessions()">
 
   <!-- ---- new session ---- -->
@@ -167,27 +209,36 @@
       machine has already named.
     </p>
 
-    <!-- One box per thing chosen: its name in the border, what it is or
-         where its value came from under it. -->
+    <!-- One box per thing chosen: its name in the border, what it is under
+         it. Three rows: where it runs, what it may use, where it sends. -->
     <div class="fields" :if="profileNames.length">
-      <InputContainer label="Provider" type="select" :options="profileNames"
-                      :model="ui.starter?.provider" :description="providerSaid"
-                      @change="loadModels($event.detail)" />
+      <div :if="choosable" class="row two" data-row="where">
+        <InputContainer label="Runtime" type="select" select-class="runtime"
+                        :options="runtimes" :model="ui.starter?.runtime" :description="runtimeSaid"
+                        :disabled="runtimes.length < 2"
+                        @change="chooseRuntime($event.detail)" />
+      </div>
 
-      <InputContainer label="Model" list="starter-models" :model="ui.starter?.model"
-                      :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
-                      :warning="modelWarning" :description="modelSaid"
-                      @input="editStarter({ model: $event.detail })" />
-      <datalist id="starter-models">
-        <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
-      </datalist>
+      <div :if="choosable" class="row three" data-row="lists">
+        <InputContainer :each="kind in KINDS" :key="kind.key" :label="kind.label" type="select"
+                        :select-class="'list-' + kind.key"
+                        :options="listOptions(kind.key)" :model="ui.starter?.lists?.[kind.key] || ''"
+                        :description="listSaid(kind.key)"
+                        @change="chooseList(kind.key, $event.detail)" />
+      </div>
 
-      <!-- What the session may do, which is not where it sends. Offered only
-           where somebody has written one down: the names come from
-           `config.toml`, and a page cannot add to them. -->
-      <InputContainer :if="places.length > 1" label="Runs" type="select" select-class="place"
-                      :options="placeChoices" :model="ui.starter?.place" :description="placeSaid"
-                      @change="editStarter({ place: $event.detail })" />
+      <!-- Where it sends: the chat's dropup, laid in the dialog — the
+           providers, and the models of the one in focus. -->
+      <div class="sends" data-row="sends">
+        <div class="sends-head">
+          <span class="sends-label">Provider and model</span>
+          <span class="dim small">{{ sendsSaid }}</span>
+        </div>
+        <div class="sends-box">
+          <ProviderModels :provider="ui.starter?.provider || ''" :model="ui.starter?.model || ''" typable
+                          @choose="editStarter({ provider: $event.detail.provider, model: $event.detail.model })" />
+        </div>
+      </div>
     </div>
 
     <p class="dim small" :if="profileNames.length">
@@ -208,9 +259,9 @@
   <!-- History's search, above the list and still while it scrolls: close to
        the tabs it belongs to, and clear of the rows. -->
   <template :slot.bar>
-    <div :if="tab === 'history'" class="sessions-search">
-      <TextInput size="lg" :model="query" placeholder="Search by name" label="Search sessions" clearable
-                 @input="armed = ''" />
+    <div :if="tab === 'history' || tab === 'archived'" class="sessions-search">
+      <TextInput size="lg" :model="query" placeholder="Search by name" label="Search sessions" clearable autofocus
+                 @input="query = $event.detail" />
     </div>
   </template>
 
@@ -218,7 +269,7 @@
   <div :if="tab === 'history'" class="panel">
     <p :if="error" class="error">{{ error }}</p>
 
-    <ul :if="rows.length" class="sessions" @click="armed = ''">
+    <ul :if="rows.length" class="sessions">
       <li :each="s in rows" :key="s.id" :class.on="isCurrent(s)">
         <button type="button" class="pick" :title="s.id" :disabled="!!switching" @click="pick(s)">
           <span class="name" :class.untitled="!named(s)">{{ nameOf(s) }}</span>
@@ -226,18 +277,64 @@
             {{ when(s) }} · {{ s.turns }} {{ s.turns === 1 ? "turn" : "turns" }}<span :if="isCurrent(s)"> · open</span><span :if="switching === s.id"> · opening…</span>
           </span>
         </button>
-        <!-- Only where the server would take it: not the session on screen. -->
-        <button :if="!isCurrent(s) && s.id !== 'live'" type="button" class="close"
-                :class.armed="armed === s.id"
-                :title="armed === s.id ? 'Click again to delete this session and its stream' : 'Delete this session'"
-                @click="remove(s, $event)">
-          <svg class="ic"><use href="#i-close"/></svg>
-        </button>
+        <!-- Only where the server would take them: not the session on screen. -->
+        <span :if="!isCurrent(s) &amp;&amp; s.id !== 'live'" class="row-acts">
+          <button type="button" class="act archive" title="Archive: out of the history, kept to restore"
+                  :aria-label="`Archive ${nameOf(s)}`" @click="archive(s, true)">
+            <svg class="ic"><use href="#i-archive"/></svg>
+          </button>
+          <button type="button" class="act delete" title="Delete this session and its stream"
+                  :aria-label="`Delete ${nameOf(s)}`" @click="confirming = s">
+            <svg class="ic"><use href="#i-trash"/></svg>
+          </button>
+        </span>
       </li>
     </ul>
-    <p :if="!rows.length && words.length" class="dim">No session matches “{{ query.trim() }}”.</p>
+    <p :if="!rows.length &amp;&amp; words.length" class="dim">No session matches “{{ query.trim() }}”.</p>
     <p :if="!listed.length" class="dim">No sessions yet.</p>
   </div>
+
+  <!-- ---- archived ---- -->
+  <div :if="tab === 'archived'" class="panel">
+    <p :if="error" class="error">{{ error }}</p>
+    <ul :if="rows.length" class="sessions archived">
+      <li :each="s in rows" :key="s.id">
+        <span class="pick" :title="s.id">
+          <span class="name" :class.untitled="!named(s)">{{ nameOf(s) }}</span>
+          <span class="facts dim">
+            {{ when(s) }} · {{ s.turns }} {{ s.turns === 1 ? "turn" : "turns" }} · archived {{ when({ written_at: s.archived_at }) }}
+          </span>
+        </span>
+        <span class="row-acts">
+          <button type="button" class="act restore" title="Restore it to the history"
+                  :aria-label="`Restore ${nameOf(s)}`" @click="archive(s, false)">
+            <svg class="ic"><use href="#i-restore"/></svg>
+          </button>
+          <button type="button" class="act delete" title="Delete this session and its stream"
+                  :aria-label="`Delete ${nameOf(s)}`" @click="confirming = s">
+            <svg class="ic"><use href="#i-trash"/></svg>
+          </button>
+        </span>
+      </li>
+    </ul>
+    <p :if="!rows.length &amp;&amp; words.length" class="dim">No archived session matches “{{ query.trim() }}”.</p>
+    <p :if="!archived.length" class="dim">Nothing archived. A session archived from History waits here, to restore or delete.</p>
+  </div>
+
+  <!-- Deleting goes for good: asked in a sheet of its own, with the way to
+       keep it out of the way without losing it beside. -->
+  <SubModal :open="!!confirming" title="Delete session" width="26rem" @close="confirming = null">
+    <p class="confirm">
+      <b>{{ confirming ? nameOf(confirming) : "" }}</b> and its stream are deleted for good: it cannot be
+      opened again, and this cannot be undone.
+    </p>
+    <p :if="confirming &amp;&amp; !confirming.archived_at" class="dim small">To keep it out of the history without losing it, archive it instead.</p>
+    <template :slot.foot>
+      <Button variant="ghost" @click="confirming = null">Cancel</Button>
+      <Button :if="confirming &amp;&amp; !confirming.archived_at" @click="archive(confirming, true), confirming = null">Archive</Button>
+      <Button variant="danger" @click="remove()">Delete</Button>
+    </template>
+  </SubModal>
 
   <!-- The foot is the tab's: the two ways out of New, and how many there are
        in History. -->
@@ -257,6 +354,25 @@
   .panel { display: flex; flex-direction: column; gap: var(--luu-space-3); }
   .panel > p { margin: 0; }
   .fields { display: flex; flex-direction: column; gap: var(--luu-space-4); }
+  .row { display: grid; gap: var(--luu-space-3); align-items: start; }
+  .row.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sends { display: flex; flex-direction: column; gap: .35rem; }
+  .sends-head { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
+  .sends-head .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sends-label { font-size: 12px; font-weight: 600; color: var(--luu-accent); }
+  /* One height, as the dropup's body: lists arriving do not move the rows. */
+  .sends-box {
+    height: 13rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 8px;
+    background: var(--luu-surface);
+    overflow: hidden;
+  }
+  /* A phone's width: one under the other. */
+  @media (max-width: 36rem) {
+    .row.two, .row.three { grid-template-columns: minmax(0, 1fr); }
+  }
   .count { margin-right: auto; }
   /* White over the body's grey: the search is part of the head's side of the
      dialog, the list part of the body's. */
@@ -282,12 +398,20 @@
   .sessions li.on .name { font-weight: 600; }
   .name.untitled { color: var(--luu-fg-muted); font-style: italic; }
   .facts { font-size: 11px; font-variant-numeric: tabular-nums; }
-  .close {
-    flex: none; background: none; border: none; color: var(--luu-fg-muted);
-    padding: .3rem; margin-right: .3rem; border-radius: 4px; cursor: pointer; opacity: .5;
+  /* A row's actions: quiet until the row is pointed at, then each lights
+     under the pointer — a delete in the bad tone. */
+  .row-acts { flex: none; display: flex; gap: .1rem; margin-right: .3rem; opacity: .45; }
+  .sessions li:hover .row-acts, .row-acts:focus-within { opacity: 1; }
+  .act {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; color: var(--luu-fg-muted);
+    padding: .3rem; border-radius: 4px; cursor: pointer;
   }
-  .close:hover { opacity: 1; background: var(--luu-hover); }
-  .close:active { background: var(--luu-active); }
-  .close.armed { opacity: 1; color: var(--luu-bad); background: var(--luu-bad-soft); }
-  .close .ic { width: 12px; height: 12px; }
+  .act:hover { background: var(--luu-hover); color: var(--luu-fg); }
+  .act:active { background: var(--luu-active); }
+  .act.delete:hover { background: var(--luu-bad-soft); color: var(--luu-bad); }
+  .act .ic { width: 14px; height: 14px; }
+  /* Not opened from here: restored first. */
+  .sessions.archived .pick { cursor: default; }
+  .confirm { margin: 0 0 .5rem; overflow-wrap: anywhere; }
 </style>

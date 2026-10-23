@@ -75,7 +75,7 @@
     transition: background var(--luu-duration) ease;
   }
   .track:disabled { cursor: default; opacity: 1; }
-  .track:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: 2px; }
+  .track:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 2px; }
   .track.on { background: var(--luu-accent); }
 
   .thumb {
@@ -89,7 +89,7 @@
     box-shadow: var(--luu-shadow-sm);
     transition: transform var(--luu-duration-slow) var(--luu-ease);
   }
-  .on .thumb { transform: translateX(calc(var(--w) - var(--h))); }
+  .track.on .thumb { transform: translateX(calc(var(--w) - var(--h))); }
   /* Pressed: the thumb gives under the finger, wherever it is. */
   .track:active:not(:disabled) .thumb { transform: scale(.85); }
   .track.on:active:not(:disabled) .thumb { transform: translateX(calc(var(--w) - var(--h))) scale(.85); }

@@ -172,6 +172,65 @@ async function chooseFolder(page) {
   }
 }
 
+/**
+ * Settings → General names two directories: the one `serve` was started in,
+ * as a path, and luu's own, which is the one every path of luu's is written
+ * under as `:luu`.
+ */
+test("General names the working dir and the config dir, and only the second is :luu", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("General")')
+  const general = page.locator(".general-pane dl.settings")
+  const row = name => general.locator(`dt:text-is("${name}") + dd`)
+  await expect(row("Working dir")).not.toContainText("(:")
+  await expect(row("Config dir")).toContainText(home)
+  await expect(row("Config dir")).toContainText("(:luu)")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
+})
+
+/**
+ * Settings → Appearance → Interface: the page's own light or dark, or the
+ * system's. Remembered by this browser, and `auto` follows the system as it
+ * changes. Light when nothing was chosen, as the page has been since
+ * 2026-10-02.
+ */
+test("the interface theme is light, dark, or the system's, and is remembered", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.emulateMedia({ colorScheme: "light" })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const root = page.locator("html")
+  await expect(root).toHaveAttribute("data-theme", "light")
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  const theme = page.getByRole("radiogroup", { name: "Interface theme" })
+  await expect(theme.getByRole("radio", { checked: true })).toHaveText("Light")
+
+  await theme.getByRole("radio", { name: "Dark" }).click()
+  await expect(root).toHaveAttribute("data-theme", "dark")
+  // The page's grounds follow it, not only the components'.
+  await expect(page.locator(".col.inspector")).not.toHaveCSS("background-color", "rgb(237, 237, 237)")
+  await page.reload()
+  await expect(root).toHaveAttribute("data-theme", "dark")
+
+  // Auto: the system's, as it changes.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  await theme.getByRole("radio", { name: "Auto" }).click()
+  await expect(root).toHaveAttribute("data-theme", "light")
+  await page.emulateMedia({ colorScheme: "dark" })
+  await expect(root).toHaveAttribute("data-theme", "dark")
+  await page.emulateMedia({ colorScheme: "light" })
+  await expect(root).toHaveAttribute("data-theme", "light")
+
+  await theme.getByRole("radio", { name: "Light" }).click()
+  await expect(root).toHaveAttribute("data-theme", "light")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
+})
+
 test("the resend rules are chosen from the page, and a save says what it did not do", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
@@ -190,7 +249,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // Resend and Authority are one section now, in this order, and the rail
   // puts Engines before Models; Appearance is General's other half since
   // 2026-10-21.
-  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Appearance", "Engines", "Models", "Runtimes", "Sessions"])
+  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Appearance", "Engines", "Models", "Runtimes", "Policies", "Sessions"])
   await expect(page.locator("#sessions-resend h2")).toHaveText("Resend")
   await expect(page.locator("#sessions-authority h2")).toHaveText("Authority")
 
@@ -474,17 +533,23 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   // A name the table already has is refused before it is sent.
   await form.locator("dd input").first().fill("here")
   await expect(form.locator(".warn")).toContainText("already a provider")
-  await expect(form.locator("button.save")).toBeDisabled()
+  await expect(form.getByRole("button", { name: "Add provider" })).toBeDisabled()
+  // No *Default* in it: a provider is made the default from the list.
+  await expect(form.getByText("what every run that names no provider")).toHaveCount(0)
 
-  // Connected first: the models are chosen from what it serves, not typed.
+  // Connected first: the models are chosen from what it serves, not typed —
+  // on a tab of their own, shut until the server has answered.
   const server = await fakeOpenAi(["tiny", "tiny-q4"])
   await form.locator("dd input").first().fill("local")
   await form.locator("select.backend").selectOption("openai")
   await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(server.at)
-  await form.locator("button.connect").click()
-  await expect(form.locator(".summary")).toContainText("2 models")
+  await expect(form.getByRole("tab", { name: /Models/ })).toBeDisabled()
+  await form.getByRole("button", { name: "Connect" }).click()
+  await expect(form.getByRole("tab", { name: /Models/ })).toBeEnabled()
+  await expect(form.getByRole("tab", { name: /Models/ })).toContainText("2")
+  await form.getByRole("tab", { name: /Models/ }).click()
   await form.locator('label.pick:has-text("tiny") input').first().click()
-  await form.locator("button.save").click()
+  await form.getByRole("button", { name: "Add provider" }).click()
   await expect(form).toHaveCount(0)
 
   // Written on its own, and in the list without a second save.
@@ -501,16 +566,16 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   // Not asked to be the default, so the mock still is.
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
 
-  // Edited in its own form, which opens folded on what the file has and asks
-  // the provider what it serves.
+  // Edited in its own form, which opens on what the file has and asks the
+  // provider what it serves: its Models tab is open on the answer.
   const row = name => page.locator(".modal ul.providers li.profile", { has: page.locator(`.name:text-is("${name}")`) })
   await row("local").locator("button.edit").click()
   const edit = page.getByRole("dialog", { name: "Provider local" })
-  await expect(edit.locator(".summary")).toBeVisible()
+  await edit.getByRole("tab", { name: /Models/ }).click()
   const pick = name => edit.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) }).locator('input[type="radio"]')
   await expect(pick("tiny")).toBeChecked()
   await pick("tiny-q4").click()
-  await edit.locator("button.save").click()
+  await edit.getByRole("button", { name: "Save" }).click()
   await expect(edit).toHaveCount(0)
   server.close()
   expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
@@ -522,20 +587,17 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   const scratch = page.getByRole("dialog", { name: "Add a provider" })
   await scratch.locator("dd input").first().fill("scratch")
   await scratch.locator("select.backend").selectOption("mock")
-  await scratch.locator("button.save").click()
+  await scratch.getByRole("button", { name: "Add provider" }).click()
   await expect(scratch).toHaveCount(0)
   await row("scratch").locator("button.edit").click()
   const renaming = page.getByRole("dialog", { name: "Provider scratch" })
-  // An edit opens folded on the summary; the name is under *Change*.
-  await renaming.locator("button.change").click()
   await renaming.locator("dd input").first().fill("scratch2")
-  await renaming.locator("button.save").click()
+  await renaming.getByRole("button", { name: "Save" }).click()
   await expect(names).toHaveText(["here", "local", "scratch2"])
   await row("scratch2").locator("button.edit").click()
   const removing = page.getByRole("dialog", { name: "Provider scratch2" })
-  await removing.locator("button.remove").click()
-  await expect(removing.locator("button.remove")).toHaveText("Remove scratch2?")
-  await removing.locator("button.remove").click()
+  await removing.getByRole("button", { name: "Remove", exact: true }).click()
+  await removing.getByRole("button", { name: "Remove scratch2?" }).click()
   await expect(removing).toHaveCount(0)
   await expect(names).toHaveText(["here", "local"])
   expect(readFileSync(join(home, "config.toml"), "utf8")).not.toContain("scratch")
@@ -576,28 +638,42 @@ test("a destination is connected to before it is saved, and connecting writes no
 
     // The wrong key: the server's 401, the form still open, the key in focus.
     const key = form.locator('input[type="password"]')
+    // No *Key file*: luu places the key's file itself.
+    await expect(form.getByText("Key file", { exact: true })).toHaveCount(0)
     await key.fill("sk-wrong")
-    await form.locator("button.connect").click()
+    await form.getByRole("button", { name: "Connect" }).click()
     await expect(form.locator("p.error")).toContainText("401")
-    await expect(form.locator(".summary")).toHaveCount(0)
+    await expect(form.getByRole("tab", { name: /Models/ })).toBeDisabled()
     await expect(key).toBeFocused()
 
-    // The right one: folded to a line, and what it serves below it, with
-    // nothing chosen for them.
+    // The right one: the Models tab opens with what it serves, and nothing
+    // is chosen for them. The connection stays where it was, unfolded.
     await key.fill("sk-right")
-    await form.locator("button.connect").click()
-    await expect(form.locator(".summary")).toContainText("hosted · OpenAI-compatible")
-    await expect(form.locator(".summary")).toContainText("2 models")
+    await form.getByRole("button", { name: "Connect" }).click()
+    const models = form.getByRole("tab", { name: /Models/ })
+    await expect(models).toBeEnabled()
+    await expect(models).toContainText("2")
+    await expect(form.locator('input[placeholder="http://127.0.0.1:8080/v1"]')).toBeVisible()
+    await models.click()
     await expect(form.locator("li.model .mname")).toHaveText(["abab-7", "abab-8"])
     await expect(form.locator('li.model input[type="radio"]:checked')).toHaveCount(0)
     // Nothing said about tools by this server: one group, *not said*.
     await expect(form.locator("li.head")).toHaveText(["Not said"])
 
-    // Changed, and a field the answer was asked with changes: the answer goes.
-    await form.locator("button.change").click()
+    // A field the answer was asked with changes: the answer goes, and the
+    // Models tab shuts with it.
+    await form.getByRole("tab", { name: "Connection" }).click()
     await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill(`${server.at}/`)
+    await expect(models).toBeDisabled()
     await expect(form.locator("li.model")).toHaveCount(0)
-    await expect(form.locator("button.save")).toHaveText("Save without connecting")
+    // Cancel on the left, alone; Connect beside the save, a step back from it.
+    const foot = form.locator("footer button")
+    await expect(foot).toHaveText(["Cancel", "Connect", "Add provider"])
+    const [cancel, connect] = await Promise.all([
+      form.getByRole("button", { name: "Cancel" }).boundingBox(),
+      form.getByRole("button", { name: "Connect" }).boundingBox(),
+    ])
+    expect((connect?.x ?? 0) - ((cancel?.x ?? 0) + (cancel?.width ?? 0))).toBeGreaterThan(100)
 
     // Two connections, and the file is as it was.
     expect(readFileSync(join(home, "config.toml"), "utf8")).toBe(before)
@@ -646,24 +722,32 @@ test("the models are grouped by their tools and written as exceptions", async ({
     const form = page.getByRole("dialog", { name: "Add a provider" })
     await form.locator("dd input").first().fill("grouped")
     await form.locator('input[placeholder="http://127.0.0.1:11434"]').fill(at)
-    await form.locator("button.connect").click()
+    await form.getByRole("button", { name: "Connect" }).click()
+    await form.getByRole("tab", { name: /Models/ }).click()
 
     // Three groups, in this order, and *not said* is not *no*.
     await expect(form.locator("li.head")).toHaveText(["Tools", "Not said", "No tools"])
     const row = name => form.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) })
-    await expect(row("coder:7b").locator("select")).toHaveCount(0)
-    await expect(row("old:3b").locator("select")).toHaveValue("fenced")
+    await expect(row("coder:7b").getByRole("radiogroup")).toHaveCount(0)
+    const calls = row("old:3b").getByRole("radiogroup", { name: "Tool calls of old:3b" })
+    await expect(calls.getByRole("radio", { name: "fenced" })).toHaveAttribute("aria-checked", "true")
+    // A choice by hand is the model's own, and says what it costs.
+    await calls.getByRole("radio", { name: "native" }).click()
+    await expect(calls.getByRole("radio", { name: "native" })).toHaveAttribute("aria-checked", "true")
+    await expect(row("old:3b")).toContainText("it will likely refuse the turn")
+    await calls.getByRole("radio", { name: "fenced" }).click()
     await expect(row("old:3b")).toContainText("up to 8192")
 
     // Past what the model holds is refused before it is sent.
+    const add = form.getByRole("button", { name: "Add provider" })
     await row("old:3b").locator("input.win").fill("9000")
-    await expect(form.locator("button.save")).toBeDisabled()
+    await expect(add).toBeDisabled()
     await row("old:3b").locator("input.win").fill("4096")
-    await expect(form.locator("button.save")).toBeEnabled()
+    await expect(add).toBeEnabled()
 
     await form.locator(".leave label").click()
     await expect(row("old:3b")).toContainText("left out")
-    await form.locator("button.save").click()
+    await add.click()
     await expect(form).toHaveCount(0)
 
     const written = readFileSync(join(home, "config.toml"), "utf8")
@@ -696,6 +780,147 @@ test("the models are grouped by their tools and written as exceptions", async ({
   } finally {
     fake.close()
   }
+})
+
+/**
+ * An Anthropic-compatible provider: the key goes as `x-api-key`, the listing's
+ * `max_input_tokens` caps each window, a Claude model is one that takes tools,
+ * and what the listing says of the default model — its thinking, its effort,
+ * its `max_tokens` — is what the three placeholders say. The Messages API's own
+ * keys are written to the profile, a model that takes less than the cap gets
+ * its own, and native calls, the backend's default, are not written. See
+ * `RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`.
+ */
+test("an anthropic provider connects with its key and writes its thinking", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const LEVELS = Object.fromEntries(["low", "medium", "high", "xhigh", "max"].map(l => [l, { supported: true }]))
+  const MODELS = [
+    {
+      id: "claude-opus-5-5", max_input_tokens: 1000000, max_tokens: 128000,
+      capabilities: {
+        thinking: { supported: true, types: { adaptive: { supported: true }, enabled: { supported: false } } },
+        effort: { supported: true, ...LEVELS },
+      },
+    },
+    {
+      id: "claude-haiku-4-5", max_input_tokens: 200000, max_tokens: 8192,
+      capabilities: {
+        thinking: { supported: true, types: { adaptive: { supported: false }, enabled: { supported: true } } },
+        effort: { supported: false },
+      },
+    },
+  ]
+  const fake = createServer((req, res) => {
+    if (!req.url.startsWith("/v1/models")) return res.writeHead(404).end()
+    if (req.headers["x-api-key"] !== "sk-ant-right" || !req.headers["anthropic-version"]) {
+      return res.writeHead(401, { "content-type": "application/json" })
+        .end('{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}')
+    }
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ data: MODELS, has_more: false }))
+  })
+  await new Promise(done => fake.listen(0, "127.0.0.1", done))
+  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fake.address()).port}`
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    await page.locator('.modal button.add:has-text("+ provider")').click()
+    const form = page.getByRole("dialog", { name: "Add a provider" })
+    await form.locator("dd input").first().fill("claude")
+    await form.locator("select.backend").selectOption("anthropic")
+    await form.locator('input[placeholder="http://127.0.0.1:8080"]').fill(at)
+
+    const key = form.locator('input[type="password"]')
+    await key.fill("sk-ant-wrong")
+    await form.getByRole("button", { name: "Connect" }).click()
+    await expect(form.locator("p.error")).toContainText("401")
+    await expect(key).toBeFocused()
+
+    // Before anything is said of a model, the placeholders are luu's own.
+    const firstThinking = form.locator("select.thinking option").first()
+    await expect(firstThinking).toHaveText("the server's default")
+    await expect(form.locator("input.max-tokens")).toHaveAttribute("placeholder", "16384")
+
+    await key.fill("sk-ant-right")
+    await form.getByRole("button", { name: "Connect" }).click()
+    const modelsTab = form.getByRole("tab", { name: /Models/ })
+    await expect(modelsTab).toContainText("2")
+    // None chosen, so the first listed answers for the placeholders.
+    await expect(firstThinking).toHaveText("the server's default — claude-opus-5-5 takes adaptive")
+    await expect(form.locator("select.effort option").first())
+      .toHaveText("the server's default — claude-opus-5-5: low · medium · high · xhigh · max")
+    await expect(form.locator("input.max-tokens")).toHaveAttribute("placeholder", "16384")
+    await expect(form.locator(".max-tokens + .dim")).toContainText("takes up to 128000")
+
+    await modelsTab.click()
+    await expect(form.locator("li.head")).toHaveText(["Tools"])
+    const row = name => form.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) })
+    await expect(row("claude-haiku-4-5")).toContainText("up to 200000")
+    // Haiku as the default: the placeholders follow it.
+    await row("claude-haiku-4-5").locator('input[type="radio"]').click()
+    await form.getByRole("tab", { name: "Connection" }).click()
+    await expect(firstThinking).toHaveText("the server's default — claude-haiku-4-5 takes a budget")
+    await expect(form.locator("select.effort option").first()).toHaveText("the server's default — claude-haiku-4-5 takes none")
+    await expect(form.locator("input.max-tokens")).toHaveAttribute("placeholder", "8192")
+
+    // A budget that does not fit under a model's cap is refused before it is
+    // sent — Haiku's 8192, whatever the profile's.
+    const add = form.getByRole("button", { name: "Add provider" })
+    await form.locator("select.thinking").selectOption("budget")
+    await form.locator("input.budget").fill("9000")
+    await expect(add).toBeDisabled()
+    await form.locator("select.thinking").selectOption("adaptive")
+    await form.locator("select.effort").selectOption("high")
+    // Past what the default model takes is refused too.
+    await form.locator("input.max-tokens").fill("32000")
+    await expect(add).toBeDisabled()
+    await modelsTab.click()
+    await row("claude-opus-5-5").locator('input[type="radio"]').click()
+    await expect(add).toBeEnabled()
+    await add.click()
+    await expect(form).toHaveCount(0)
+
+    const written = readFileSync(join(home, "config.toml"), "utf8")
+    const table = written.slice(written.indexOf("[provider.claude]"))
+    expect(table).toContain('backend = "anthropic"')
+    expect(table).toContain('model = "claude-opus-5-5"')
+    expect(table).toContain('thinking = "adaptive"')
+    expect(table).toContain('effort = "high"')
+    expect(table).toContain("max-tokens = 32000")
+    expect(table).toContain("key-file = ")
+    // The model that takes less than the profile's cap gets its own.
+    expect(table).toMatch(/\[provider\.claude\.models\."?claude-haiku-4-5"?\]\nmax-tokens = 8192\n/)
+    // Native is what an anthropic profile resolves to: nothing to write.
+    expect(table).not.toContain("tool-calls")
+
+    const all = await (await fetch(`${BASE}/api/providers/claude/models?facts=1`)).json()
+    expect(all.facts["claude-opus-5-5"]).toEqual({
+      window: 1000000, window_is: "limit", tools: true,
+      max_tokens: 128000, thinking: ["adaptive"], effort: ["low", "medium", "high", "xhigh", "max"],
+    })
+
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    delete now.providers.claude
+    const put = await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: now.default ?? null, providers: now.providers }),
+    })
+    expect(put.ok).toBe(true)
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    fake.close()
+  }
+
+  expect(errors).toEqual([])
 })
 
 /**
@@ -811,11 +1036,29 @@ test("a new default and the chat's picker both move the session without a restar
   await page.click(".options .dest")
   const menu = page.locator(".options .menu")
   const models = menu.locator(".models")
+  await expect(menu).toBeVisible()
+  // One height from the moment it opens: it opens upward, and a list that
+  // arrived and grew it moved its top edge while the person read it.
+  const top = (await menu.boundingBox()).y
   await expect(menu.locator(".prov.on")).toContainText("here")
   await expect(models.locator("button.model.on")).toHaveText(/mock/)
   await menu.locator(".prov", { hasText: "local" }).hover()
   await expect(menu.locator(".prov.on")).toContainText("local")
   await expect(models.locator("button.model")).toHaveText(/tiny/)
+  expect((await menu.boundingBox()).y).toBe(top)
+  // The row under the pointer changes its ink as well as its ground.
+  // The accent as the menu draws it: the chat's foot is a dark island.
+  const accent = await menu.evaluate(element => {
+    const probe = document.createElement("span")
+    probe.style.color = "var(--luu-accent)"
+    element.append(probe)
+    const color = getComputedStyle(probe).color
+    probe.remove()
+    return color
+  })
+  await expect(menu.locator(".prov", { hasText: "local" })).toHaveCSS("color", accent)
+  await models.locator("button.model", { hasText: "tiny" }).hover()
+  await expect(models.locator("button.model", { hasText: "tiny" })).toHaveCSS("color", accent)
   await models.locator("button.model", { hasText: "tiny" }).click()
   await expect(menu).toHaveCount(0)
   await expect(page.locator(".options .dest")).toContainText("local")
@@ -1052,7 +1295,13 @@ test("Appearance draws its previews: editor, snippets, layout and the files them
   const rootVar = name => page.evaluate(n => document.documentElement.style.getPropertyValue(n), name)
   await pane.getByRole("radiogroup", { name: "Editor text size" }).getByRole("radio", { name: "Large" }).click()
   await pane.getByRole("radiogroup", { name: "Chat text size" }).getByRole("radio", { name: "Small" }).click()
+  const treeHeight = () => page.locator(".big-tree").evaluate(t => t.getBoundingClientRect().height)
+  const before = await treeHeight()
   await pane.getByRole("radiogroup", { name: "Files size" }).getByRole("radio", { name: "Large" }).click()
+  // The rows grow and the list does not: it scrolls instead.
+  expect(await treeHeight()).toBe(before)
+  await expect.poll(() => page.locator(".big-tree").evaluate(t => t.scrollHeight > t.clientHeight)).toBe(true)
+  await expect(pane.getByRole("heading", { name: "Icons pack" })).toBeVisible()
   expect(await rootVar("--luu-editor-font")).toBe("14px")
   expect(await rootVar("--luu-chat-zoom")).toBe("0.9")
   expect(await rootVar("--luu-tree-zoom")).toBe("1.15")
@@ -1070,6 +1319,55 @@ test("Appearance draws its previews: editor, snippets, layout and the files them
   await expect(page.locator(".appearance-pane")).toContainText("Restart luu serve")
   await expect(page.locator(".theme-preview .big-tree .caret")).toHaveCount(2)
   await expect(page.locator(".theme-preview .big-tree img")).toHaveCount(0)
+})
+
+/**
+ * The editors' icon packs are looked for behind the answer, never in it: the
+ * section is usable at once — what was found last listed, the default and
+ * *+ Add a theme* live — and the page asks again until the look is done, when
+ * what it found joins the list. The look is kept in the state directory, so
+ * the next server starts with it. See
+ * `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`, appended
+ * 2026-10-22.
+ */
+test("the editors' icon packs are looked for in the background and kept", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  // The real server first: opening Appearance starts a look, and its answer
+  // is written beside config.toml.
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  await expect.poll(() => existsSync(join(home, "icon-themes.detected.json")), { timeout: 15_000 }).toBe(true)
+  const kept = JSON.parse(readFileSync(join(home, "icon-themes.detected.json"), "utf8"))
+  expect(Array.isArray(kept.found)).toBe(true)
+  expect(typeof kept.at).toBe("number")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
+
+  // Then a server that is still looking, and then has found one.
+  let asked = 0
+  await page.route("**/api/icon-theme", async route => {
+    if (route.request().method() !== "GET") return route.fallback()
+    asked++
+    const found = asked < 3 ? [] : [{ path: "~/.cursor/extensions/pub.icons-1.0.0", name: "Pub icons", source: "Cursor" }]
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ path: null, editable: true, named: null, loaded: null, folder: null, found, looking: asked < 3 }),
+    })
+  })
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  const list = page.locator(".theme-list")
+  await expect(list).toContainText("looking in the editors' extensions…")
+  // Nothing waits on the look.
+  await expect(list.getByRole("radio", { name: /The tree's own/ })).toBeEnabled()
+  await expect(list.getByRole("button", { name: /Add a theme/ })).toBeEnabled()
+  // Asked again until it is done, and what it found joins the list.
+  await expect(list.getByRole("radio", { name: /Pub icons/ })).toBeVisible({ timeout: 10_000 })
+  await expect(list).not.toContainText("looking in the editors' extensions…")
+  expect(asked).toBe(3)
+  await page.unroute("**/api/icon-theme")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
 })
 
 /** A zip of `files` (path → text), stored rather than deflated: what a person

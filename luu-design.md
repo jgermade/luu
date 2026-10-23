@@ -118,12 +118,20 @@ and have no write bit to take — and stamps `Authority::Draft`, so a refusal sa
 the floor refused rather than sending someone to edit `luu.toml`. `chat` keeps
 the policy file: a floor is the gate's shadow, and `chat` has no gate.
 
+**Since 2026-10-23 the floor writes to its scratch** and nowhere else: `.tmp` at
+the top of the working directory — made when it is missing, with a `.gitignore`
+that ignores it whole — and the system's temporary folder, or in a container the
+container's own `/tmp` (an in-image path beside the image's toolchain, since the
+host's is not inside it). *El modo draft solo debe poder leer, y escribir en
+carpetas temporales.* The floor is `session::draft_floor`: `read_only`, then the
+scratch at read-write, the narrower rule winning under the read-only tree.
+
 **The refusal names the draft, one turn in.** `Authority::Draft` carries an
 `Option<JobId>`: `None` on the first prompt of a session, where the sandbox is
 chosen before `open_draft` runs and there is genuinely nothing to name, and the
 draft's id on every prompt after it — stamped by `serve` from the context it is
 already reading, and only where the live job really is a draft. So a denial
-reads *the floor for draft 3, which grants no writes*, the way one inside an
+reads *the floor for draft 3, which writes only to scratch*, the way one inside an
 approved job has always read *the approved plan for job 7*, and a reader stops
 having to join the refusal's turn to the line that opened its job.
 
@@ -134,9 +142,9 @@ rather than a decision about what to **add**. `/api/settings` carries the
 session's floor beside its posture (`reads`, `commands`, `network`, resolved in
 Rust and never re-derived in the page, because a second resolution of a policy
 is a second sandbox), and the gate prints it under the asks: *unapproved, a turn
-reads `.` · runs `rg`, `ls` — and writes nothing*. There is no `writes` field on
-the wire: the floor grants none by construction, so it is a sentence rather than
-an always-empty list. See
+reads `.` · runs `rg`, `ls` — and writes only to .tmp · /tmp; anything else is
+asked of you first*. `writes` is on the wire since the floor has some, and it is
+the scratch and nothing more. See
 [`RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`](RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md).
 
 **A write the floor refuses is asked about, once, where the policy file would
@@ -159,9 +167,40 @@ not where `[approvals] required` — an unsigned click would be the one widening
 that skips the signature. The question travels on the turn's own event channel,
 behind the `tool_call` it is about: published directly, it overtook it and the
 page had no call to hang it on. `protocol::VERSION` 9 and `record::FORMAT` 20
-carry it, and the gate's floor sentence says *writes nothing without asking you,
+carry it, and the gate's floor sentence said *writes nothing without asking you,
 one call at a time* where `floor.asks` is true. See
 [`RECORD/2026-10-02.a-refused-write-asks.completed.md`](RECORD/2026-10-02.a-refused-write-asks.completed.md).
+
+**Since 2026-10-23 an answer may last the session, and a command may be asked about.** The
+`Ask` carries a `Ceiling` rather than a sandbox: it decides per refused call whether nobody is
+asked, a person is, or a person already answered for the session — a yes runs it, a no refuses
+it (`crate::grants`). **Two zones**: a `run_command` whose program the floor does not run is
+asked unless the shell list denies it — the allowlist refuses before the program starts, so it
+can be paused as a write can — and a yes runs it **with everything it implies**, the folder
+writable and the session's network (to be looked at again). A write is asked inside the working
+directory and under no files `deny`; outside the folder nothing is asked. The question is
+*Allow* or *Deny*, with an *Apply to session* box: ticked, a yes is a `granted` line on the
+stream and a no a `forbidden` one, each listed under the draft with a × that sends
+`revoke_grant`. Taken back is a `revoked` line, and the session's list keeps the answer, marked
+(`api::SessionAnswer`); a resume puts back what was not taken back, and a new session starts
+with nothing. Still only in a draft, never for what `deny` names, and not where approvals must
+be signed. At the gate, a plan on a session built from lists may get whatever they do not deny
+(`Agency::gate_sandbox`) — its commands, the folder to write, any host where none is denied —
+since approving it is that person's yes, for the job; a policy file stays the outer bound. `protocol::VERSION`
+11, `record::FORMAT` 23. See
+[`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+
+**What was granted and refused is read in one place, so the lists can start lax and be
+narrowed.** *Permissions*, a dialog from the shield in the chat's head. **Activity** is every
+call of the session in one of four words — *granted* (a list, the floor or a yes for the
+session), *granted once*, *denied* (a no for this call), *forbidden* (a list, the floor or a no
+for the session) — and each word leads to what decided it: the answer on **Granted** or
+**Forbidden**, which list every answer for the session, taken back included, with *Revoke* or
+*Lift*; or the rule on **Policies** — the program's entry in the shell list, or the files rule
+with the longest path that covers it, or a note that a program in neither zone is asked — which
+shows the three lists zone by zone and what a draft does without asking. It reads `/api/settings`' `lists` (`policies::ListsView`: the
+environment's lists as written, or a policy file's grants as `allow`) and the calls and answers
+the page already holds; it edits nothing — that is Settings'.
 
 It is only as strong as `enforcement`: under `best-effort` there is no Landlock,
 so a subprocess started by a draft turn can write anyway — true of every path
@@ -223,8 +262,9 @@ One boundary does three jobs, which is the argument for it:
   it *is* the `SandboxPolicy` for that task. One informed approval beats a prompt
   per tool call, which is what trains people to click yes without reading. The
   one exception is a draft's dead end — a write the floor refuses and the policy
-  file allows — which is asked about once rather than refused; see the floor
-  above.
+  file allows, or since 2026-10-23 a command the shell list leaves to a person —
+  which is asked about rather than refused, once or for the session; see the
+  floor above.
 - **The transcript gets its grouping**: a closed task collapses to its summary in the
   UI — the view collapses exactly what the context collapses.
 
@@ -937,6 +977,31 @@ access = "execute"
   while a turn runs, a proposal waits at the gate or an approved job is open, and
   otherwise swaps the agency, ends the old worker and writes a header line, so the
   fold's *last header wins* says from where on the session ran somewhere else.
+  **Since 2026-10-22 a session may name an environment instead**: `[shell.<name>]`,
+  `[network.<name>]` and `[files.<name>]` lists in two zones, `allow` and `deny` — what
+  neither names is asked (**since 2026-10-23**; the loader refuses an `ask` zone) — and
+  `[environment.<name>]` naming one of each with its runtime — resolved into the same sandbox
+  and worker, with the working directory read whatever the files list says, and recorded by
+  each list's name and SHA-256 in the header's posture (`record::FORMAT` 21), which a resume
+  compares. See
+  [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+  **Settings → Policies edits the lists**: each by name, its entries by zone (a files list in
+  `allow` only, since a files `deny` is refused until it can be held), new, renamed (the
+  environments that name it follow in the same write) and deleted (not while an environment
+  names it), sent whole to `PUT /api/policies` and checked by the loader that reads the file
+  back; the environments are resolved again on every save, so the next session on one runs
+  under the lists as written. The live session keeps what it was built with.
+  **The new session's dialog makes every session from a runtime and three lists** (since
+  2026-10-23; there is no preset to start from): where it runs — this machine, or an image a
+  posture or an environment names, on any container runtime this machine has
+  (`/api/postures`' `runtimes`), so the page never names an image of its own; the shell,
+  network and files lists by name, an unchosen one the empty list (read the folder, ask the
+  rest), what the last session used offered first; and where it sends, in the chat dropup's two
+  columns (`provider-models.html`, one component for both). `POST /api/sessions` with `lists`
+  and no posture is `Policies::compose`, named by its lists and recorded with
+  `record::Composed` — the runtime and image it was asked with (`record::FORMAT` 24) — so a
+  resume from the history asks for the same again; with a posture or an environment it is as
+  before (`resolve_with` swaps an environment's lists; a posture's lists are its policy file).
   **Settings → Runtimes writes the postures table**, naming a policy file out of the
   ones at the top of the checkout and never one the page types, and the server
   replaces the postures it offers at once. Postures are no longer read only at
@@ -1088,11 +1153,14 @@ whole page could reach for it, because it can. See
 [`RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md`](RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md).
 
 Preferences live in `prefs.js` and in `localStorage`: theme
-(auto/light/dark, where auto is `prefers-color-scheme` resolved live in JS rather than a second
-copy of the light palette), which editor draws a file, the layout, and who answers the gate.
-None of it is in `config.toml`, which says where a run *sends* — a fact about the run, not about
-the screen somebody reads from. Dark stays the default for a browser with nothing remembered,
-because every screenshot and every record here was taken against it.
+(auto/light/dark, chosen in Settings → Appearance → Interface, where auto is
+`prefers-color-scheme` resolved live in JS rather than a second copy of the light palette), which
+editor draws a file, the layout, and who answers the gate. None of it is in `config.toml`, which
+says where a run *sends* — a fact about the run, not about the screen somebody reads from.
+**Light is the default** for a browser with nothing remembered: the page went light on
+2026-10-02 and was light only until 2026-10-23, so every screenshot and record since was taken
+against it. Dark re-points the page's own grounds and the chat's inks too (`luu.css`, on the
+root only, so a dark island on a light page keeps the light page around it).
 
 **The chat has a name, not a tab strip.** One session is on screen, so a strip was spending a row
 to answer a question the head answers in words; the strip lives on as the **History** tab of
@@ -1102,7 +1170,11 @@ it on New session and the clock on History, one dialog of one height
 History is a search over the names and ids, and the list in the order sessions were last
 **written** to, so opening one does not move it and a turn in it does (`written_at`, a store
 column since schema 4, which the live row carries from its own last turn), with the sessions
-nothing was sent in left out. **A session names itself**: when its first turn ends and nobody
+nothing was sent in left out. **A third tab, Archived**, holds what was put away without being
+deleted: a History row archives or deletes, an Archived row restores or deletes, and a delete is
+confirmed in a sheet over the dialog that offers archiving instead. Archiving is `archived_at`, a
+store column since schema 5 that no save touches, set by `PATCH /api/sessions/{id}` with
+`archived`; the session on screen is neither archived nor deleted. **A session names itself**: when its first turn ends and nobody
 named it, the server asks the same model for a two-to-six-word title from the first prompt, with
 the turn's own window, and drops the stream at the first line of answer or at sixty seconds —
 never over a name somebody gave, never on the mock, and not at all under `[sessions] auto-name =
@@ -1122,6 +1194,12 @@ through `Sandbox::check_path` against that base and the root is a prefix the pag
 *lists* by. A picker that could climb above the base would be a browser control that moves the
 sandbox. Paths stay base-relative everywhere they are sent, and the root is applied to what is
 shown — a second spelling for the same file is a second chance to get the prefix wrong.
+**The base is the working directory**: where `luu` was started, or what `--workdir`
+(`LUU_WORKDIR`) names, the process moving there before anything reads it. In production that is
+the project, `luu` being a binary on the `PATH`; in this repository it is luu's own source, so
+`make up` reads the checkout's `.env` for `LUU_WORKDIR` (`.env.example`). luu itself never reads a
+`.env`: a project's own would decide what luu may reach. See
+[`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
 
 **What is not there is said where it is missing.** No providers at all: the chat column's body is
 a placeholder with the one button that fixes it, opening Settings on Models — rather than a modal
@@ -1259,8 +1337,11 @@ this machine already has, named by `[ui] icon-theme` in `config.toml` — an ext
 or a theme JSON — and nothing is vendored: the page draws its own file and folder until
 somebody names one, the same way the sandbox waits to be told where `~/.cargo` is. The theme is
 read into an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
-reaches the filesystem. **Settings → Appearance → Files Theme chooses it** — the tree's own shapes, then the themes
+reaches the filesystem. **Settings → Appearance → Icons pack chooses it** — the tree's own shapes, then the themes
 imported into `<state dir>/icon-themes/`, then VS Code, VSCodium, Cursor and Windsurf extensions —
+**looked for behind the answer, never in it**: `GET /api/icon-theme` lists the editors' themes as
+last found, kept in `<state dir>/icon-themes.detected.json` so a restart starts with them, and a
+thread of its own looks again (at most once a minute) while the page asks until `looking` is false —
 each drawn beside the list (`GET /api/icon-theme/previews`, one request for all of them), and *Add a
 theme* imports a folder, a zip (opened in the page) or a theme JSON with its icons, picked or
 dropped on the frame; one that draws nothing is refused. With none chosen the tree draws its own
@@ -1509,7 +1590,11 @@ The rest follows from that:
   same partial over total. The indicator reads the newest turn whether it happened live or came
   back from the server, so a reload does not leave it empty. A click opens `context-modal.html`, the same grouped view
   about that turn, with the window's use, the answer's reserve and what the server counted, and
-  the answer to it last, marked as not sent yet. See
+  the answer to it last, marked as not sent yet — **as the turn went**, where it used tools:
+  each reply up to its call, what that call gave back as the model got it, and what the next call
+  sent, cut where each call's step ended (`ToolCallView.at`, kept by the page and the server's
+  fold alike). A card in the chat shows the first lines of its result under it without being
+  opened. See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
 - **The transcript follows its end while it is at its end** (`Scrollable`'s `autoscroll`): any
   scroll up leaves it at once, and only scrolling back to the end picks it up again. The chat's
@@ -1520,6 +1605,14 @@ The rest follows from that:
   (`turn_started`, a refusal, a plan at the gate) draws the real thing. It does not wait for
   `turn_started`, because a slow server made that look like a lost message. See
   [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
+- **A reply's prose is drawn from its Markdown** (`helpers/markdown.js`): headings, lists, quotes,
+  tables, rules, emphasis, code spans and `http:`/`https:`/`mailto:` links, the text escaped
+  first and a line break kept as one; a fenced block is a snippet before it gets there. What it
+  makes is only what jq79's `:html` sanitiser keeps, so a table, a rule and a task's box are
+  `div`s and `span`s with an `md-` class that `app.css` draws, and the transcript opens a link
+  in a new tab itself. The answer is a step smaller than the prompt (`.93em`), and a prompt is
+  marked by a `| ` before it in `--luu-black` (#333a3e, `luu.css`), drawn rather than written.
+  See [`RECORD/2026-10-22.replies-drawn-as-markdown.completed.md`](RECORD/2026-10-22.replies-drawn-as-markdown.completed.md).
 - **Components**: `web/components/` holds the components the theme does not have yet, which
   import nothing from the page. Everything arrives as props or slots, everything leaves as
   `:model` or `$emit`, and styles are scoped. `Modal` (the `<dialog>` every modal is, with the
@@ -1541,7 +1634,10 @@ The rest follows from that:
   modal whose head is its tabs, with a `bar` above its body for a search) and `SubModal` (a sheet
   out of a modal's head over its body, with or without tabs) — and
   a demo of the components at `/theme/default/` — a folder path serves its `index.html`, and
-  without the slash redirects to it. **`app.css` declares no colour of its own**: `index.html`
+  without the slash redirects to it. Each of the demo's sections says how it is used:
+  *Integrate* beside its title opens a modal of its own, a tab per component when it has
+  several, each snippet the file of a parent component that uses it (`usage.js`), coloured by
+  `/api/highlight` where there is a server to ask. **`app.css` declares no colour of its own**: `index.html`
   loads both theme files first, and every rule reads `--luu-*`. Light is `:root` and dark is a
   dark root **or any `[data-tone="dark"]` element**, so which surfaces are dark — the heads, the
   feet, a modal's head, the terminal, and the editor and snippets by their tone preference — is
@@ -1549,7 +1645,7 @@ The rest follows from that:
   inks for its grey. The page's form controls are the theme's: `TextInput`, `Select`,
   `Textarea`, `Checkbox`, `Segmented`. `app.css`'s rules for bare `input`, `select`, `textarea`,
   `button` and `pre` are `:where()`, so they weigh nothing against a component's scoped style. A
-  bare boolean attribute (`<Button disabled>`) is on; a large modal (40rem and up, as drawn) has a dark head — a `data-tone="dark"` island — and a small one a head that is part of its body, in the theme's `Modal` and `TabModal` and the page's own `Modal`;
+  bare boolean attribute (`<Button disabled>`) is on; a large modal (40rem and up, as drawn) has a dark head — a `data-tone="dark"` island — and a small one a head that is part of its body, in the theme's `Modal` and `TabModal` and the page's own `Modal`, and the theme's two take a head in a tone as well — `head="accent"`, `ok`, `warn` or `bad`, the same bar in the tone's strong colour with a solid badge's ink, whatever the size;
   every pressable component has a pressed state
   (`--luu-active` and its accent and danger twins); no class a component uses on its own elements is
   one of `app.css`'s; a value is never a prop named `value` or
@@ -1722,23 +1818,32 @@ by a checkbox the program pre-ticked. A key typed into the form is written to a
 file before `config.toml` is, and the file holds a path, for the reason the
 provider section gives.
 
-**The form connects before it writes.** It is two halves: *where it is* —
-name, backend, URL, and for `openai` an optional key — and, once **Connect**
-has spoken to it, *what it serves*. Connect sends the candidate as typed to
+**The form connects before it writes.** It is a sheet over Settings — the
+theme's `SubModal` — with two tabs: **Connection**, *where it is* — name,
+backend, URL, and for `openai` and `anthropic` an optional key, which luu writes
+to a file of its own and the form never names — and **Models**, *what it
+serves*, shut until **Connect** has spoken to it. Connect sits in the sheet's
+foot, a step back from *Add provider*, and sends the candidate as typed to
 `POST /api/providers/probe`, which answers with the list, what the server says
 of each model (`Backend::facts`), or the server's own refusal — a `401` lands
 on the key field — and **writes nothing**: a provider being added is not in the
-file, and one being edited is in it with the values being replaced. On an
-answer the first half folds to one line with *Change* under it, and the models
-follow, grouped by what the server said of their tools — *tools*, *not said*,
-*no tools*, because a server that says nothing has not said *no*. Each has a
-window, prefilled and capped by what the server reports: on Ollama a choice
-under the training maximum (`/api/show`), on llama-server or vLLM the server's
-own `n_ctx`, which a smaller number only budgets under. The default is a radio
-that can be cleared — none is *the first listed*. Models outside *tools* get a
-transport select, fenced or native, and the models without tools can be left
-out of the pickers. *Save without connecting* stays, for a server that is off.
-An edit opens folded and asks the saved provider the same, through
+file, and one being edited is in it with the values being replaced. An answer
+opens the Models tab, with the count of what it lists, and the connection stays
+as it was typed; changing what it was asked with shuts the tab again. The models
+are grouped by what the server said of their tools — *tools*, *not said*, *no
+tools*, because a server that says nothing has not said *no*. Each has a window,
+prefilled and capped by what the server reports: on Ollama a choice under the
+training maximum (`/api/show`), on llama-server or vLLM the server's own
+`n_ctx`, which a smaller number only budgets under. The default is a radio that
+can be cleared — none is *the first listed* — and what the server says of it
+fills the Anthropic keys' placeholders: the thinking and effort it takes, and
+the cap a reply gets when nothing is typed, which a model that takes less than
+the profile's cap is written as an exception of its own. Models outside *tools*
+get a transport select, fenced or native, and the models without tools can be
+left out of the pickers. Saving without connecting stays, for a server that is
+off. **The form does not make a provider the default** — the list does, with
+*make default*, and opens the form only for a remote host to be typed. An edit
+asks the saved provider the same, through
 `GET /api/providers/{name}/models?facts=1` — the picker's route, which without
 `facts` pays no per-model request and lists only what is switched on. Behind
 the loopback door, because it spends the key. See
@@ -1766,7 +1871,8 @@ for itself** — a browser deciding it from `backend == "mock"` is the same clas
 of mistake as a second `is_this_machine` in JavaScript.
 
 **A provider lists what it serves.** `Backend::models` reads Ollama's
-`/api/tags` and an OpenAI-compatible `/models`, so a model is chosen from what
+`/api/tags`, an OpenAI-compatible `/models` and an Anthropic-compatible
+`/v1/models`, so a model is chosen from what
 is actually pulled rather than typed from memory. A provider that is not running
 is not an error here: the list comes back empty with the reason beside it, and
 the field stays typable, because a model that has not been pulled yet is a
@@ -1927,8 +2033,9 @@ against it; baselines need a real model.
 
 ## Inference backend
 
-**Two are built, behind one trait**: `ollama` (`POST /api/chat`, NDJSON) and
-`openai` (`POST /chat/completions`, SSE) — the second is not a hosted-API feature,
+**Three are built, behind one trait**: `ollama` (`POST /api/chat`, NDJSON),
+`openai` (`POST /chat/completions`, SSE), and `anthropic` (`POST /v1/messages`,
+SSE — [below](#the-anthropic-compatible-backend-and-the-thinking-it-keeps)). The second is not a hosted-API feature,
 it is how `llama-server`, vLLM and LM Studio are reached, which is five of the six
 machines in [`ROADMAP/2026-09-01/machines.md`](ROADMAP/2026-09-01/machines.md) plus
 two hosted endpoints. Binding `llama-cpp-rs` directly, for KV-cache control across
@@ -1951,6 +2058,70 @@ usage at all unless `stream_options.include_usage` is on the request, and some
 report none even then. `None` is *not reported*; zero would claim the server saw
 an empty prompt, in exactly the number the budget panel plots against ours. See
 [`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
+
+### The Anthropic-compatible backend, and the thinking it keeps
+
+**A third is built**: `anthropic` (`POST /v1/messages`, SSE), for Anthropic's own
+API and the ones that copied its shape — MiniMax, DeepSeek, Moonshot, Z.ai, and the
+`/v1/messages` of `llama-server` and Ollama. The URL is what their docs give as
+`ANTHROPIC_BASE_URL` (`https://api.minimax.io/anthropic`), and `/v1/messages` is
+appended, as the SDKs do; the key is `x-api-key`, never a bearer; the version is
+`2023-06-01`, which every compatible server was written against and which still
+takes a pinned `temperature` — Claude 4.7 and later refuse one, the others decide.
+`--seed` has no field on this API and the run says so before it measures.
+
+**What it shares with `openai`**: there is no field for the window, so
+`--context-limit` is budgeted against, not sent, and said. **What it does not**:
+`max_tokens` is required, so it is the backend's own — 16 384 unless a profile says
+`max-tokens` — and never `--reserve`, which is a budget and would end every thinking
+block at 512 tokens. And the prompt is three numbers: `input_tokens` leaves out what
+the cache served, so `prompt_tokens` is `input + cache_creation + cache_read`, or a
+cached prompt would read as a short one.
+
+**A thinking block streams up as `<think>…</think>`** — the reasoning everything
+above the backend already masks before it looks for a call and the page folds — and
+**goes back signed, or not at all.** The backend keeps each reply that carried
+thinking, as the blocks the server sent, under the hash of the model, the tools,
+every message before it and its own text. A request sends a held reply back as those
+blocks — signature and `tool_use` id included — exactly when that prefix comes back
+byte for byte; any other reply goes back as its text with the thinking cut out,
+because reasoning sent as text teaches a model to write `<think>` into its answers.
+That is the server's own check computed on this side: a signature binds the
+conversation before it, and a change before one reply is a change before every reply
+after it, so what stops being replayed is always the leading run the check allows.
+Inside a turn it always holds — the loop appends to a copy and never re-selects — so
+**interleaved thinking works on every step of a tool loop**; across turns it holds
+until luu evicts, folds or prunes. No beta header, nothing per host. The memory is
+the process's: a resumed session replays nothing from before, and the store keeps
+text, never a signature.
+
+**The rest of what the API offers, taken where it fits the design**: native
+`tool_use` / `tool_result` blocks by default on this backend (thinking between calls
+only exists between `tool_use` blocks, and no recording predates the backend), one
+call per reply (`disable_parallel_tool_use`, since a replayed `tool_use` without its
+result is refused), `cache_control` on the system block and on the last block of the
+history — the stable prefix is byte-identical by design, and on Claude it is cached
+only if marked — `output_config.format` for `Constraint::Schema`, and nothing for a
+grammar, which is said. A profile, or one model, may say:
+
+```toml
+[provider.claude]
+backend = "anthropic"
+url = "https://api.anthropic.com"
+key-file = "~/.luu/claude.key"
+model = "claude-opus-5-5"
+thinking = "adaptive"     # {type: adaptive, display: summarized}; "off"; or a budget: 4096
+effort = "high"           # output_config.effort: low … max
+max-tokens = 32000        # the cap on one reply, thinking included
+```
+
+Absent sends nothing — the server's default — except `max-tokens`. The three are
+refused on any other backend's profile, and a budget that does not fit under the cap
+is refused where the file is rather than at a first turn. `GET /v1/models` answers
+Connect: Claude's listing carries `max_input_tokens`, a ceiling luu budgets under
+(`WindowIs::Limit`), and its capability tree, read as *a Claude model*, all of which
+take tools; a `404` is a server that does not list. See
+[`RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`](RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md).
 
 ### Where a model lives
 
@@ -2159,7 +2330,9 @@ the stuck request) from a blocked runtime (the tick stops). See
 `config.toml` (`load_config`, `config_path`, `write_config`), the icon-theme
 routes, and what `/api/engines` asks the disk. On 2026-09-30 a read of a
 `package.json` per installed extension took 147 s, and nothing else was
-served while it ran. On the pool the same wait is one slow request. The
+served while it ran. On the pool the same wait is one slow request — and
+that read is no longer a request at all: the editors' themes are looked for
+on a thread of their own and kept (`icons::Detected`). The
 session store's SQLite writes are the exception still on the runtime. See
 [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
 

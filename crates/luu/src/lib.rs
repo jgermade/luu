@@ -10,7 +10,8 @@ use agent_core::agent::{DEFAULT_MAX_STEPS, SchemaRetry, run_agent_turn};
 use agent_core::api::{Counts, SessionView, Tokens};
 use agent_core::approval::{Approval, Approvers, Signer};
 use agent_core::backend::{
-    Backend, CompletionRequest, Constraint, mock::Mock, ollama::Ollama, openai::OpenAi,
+    Backend, CompletionRequest, Constraint, anthropic::Anthropic, mock::Mock, ollama::Ollama,
+    openai::OpenAi,
 };
 use agent_core::context::{
     Budget, Context as AgentContext, Counter, Eviction, Fragment, Prune, Repeat, Results,
@@ -35,11 +36,13 @@ pub mod auth;
 pub mod config;
 pub mod engines;
 pub mod export;
+pub mod grants;
 pub mod highlight;
 pub mod hosts;
 pub mod icons;
 pub mod log;
 pub mod models;
+pub mod policies;
 pub mod provider;
 pub mod runtimes;
 pub mod secret;
@@ -60,6 +63,14 @@ use tokio::sync::{mpsc, watch};
     about = "Local AI agent, built for small models"
 )]
 struct Cli {
+    /// The working directory: the tree the agent reads and writes, and where
+    /// `luu.toml` is looked for. Where `luu` was started, unless this names
+    /// another. In this repository's development it comes from `.env`, which
+    /// `make up` loads — the checkout is luu's own source, not the project
+    /// being worked on.
+    #[arg(long, global = true, value_name = "PATH", env = "LUU_WORKDIR")]
+    workdir: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -332,9 +343,16 @@ enum Command {
         #[arg(long)]
         openai_url: Option<String>,
 
-        /// A file holding the bearer token for `--backend openai`. Omitted
-        /// means no `Authorization` header at all, which is what a local
-        /// server wants. A file rather than a flag or an env var, for the
+        /// Where the Anthropic-compatible server is — what its docs give as
+        /// `ANTHROPIC_BASE_URL`, without `/v1`: Anthropic's API, MiniMax,
+        /// DeepSeek, Moonshot, Z.ai, or a local server's `/v1/messages`.
+        /// Defaults to the profile's URL, then to `http://127.0.0.1:8080`.
+        #[arg(long)]
+        anthropic_url: Option<String>,
+
+        /// A file holding the key for `--backend openai` (a bearer token) or
+        /// `--backend anthropic` (`x-api-key`). Omitted means no key header
+        /// at all, which is what a local server wants. A file rather than a flag or an env var, for the
         /// reason `crate::secret` gives — and its mode is checked there, as the
         /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
@@ -539,9 +557,16 @@ enum Command {
         #[arg(long)]
         openai_url: Option<String>,
 
-        /// A file holding the bearer token for `--backend openai`. Omitted
-        /// means no `Authorization` header at all, which is what a local
-        /// server wants.
+        /// Where the Anthropic-compatible server is — what its docs give as
+        /// `ANTHROPIC_BASE_URL`, without `/v1`: Anthropic's API, MiniMax,
+        /// DeepSeek, Moonshot, Z.ai, or a local server's `/v1/messages`.
+        /// Defaults to the profile's URL, then to `http://127.0.0.1:8080`.
+        #[arg(long)]
+        anthropic_url: Option<String>,
+
+        /// A file holding the key for `--backend openai` (a bearer token) or
+        /// `--backend anthropic` (`x-api-key`). Omitted means no key header
+        /// at all, which is what a local server wants.
         #[arg(long, value_name = "PATH")]
         api_key_file: Option<std::path::PathBuf>,
 
@@ -744,9 +769,16 @@ enum Command {
         #[arg(long)]
         openai_url: Option<String>,
 
-        /// A file holding the bearer token for `--backend openai`. Omitted
-        /// means no `Authorization` header at all, which is what a local
-        /// server wants. A file rather than a flag or an env var, for the
+        /// Where the Anthropic-compatible server is — what its docs give as
+        /// `ANTHROPIC_BASE_URL`, without `/v1`: Anthropic's API, MiniMax,
+        /// DeepSeek, Moonshot, Z.ai, or a local server's `/v1/messages`.
+        /// Defaults to the profile's URL, then to `http://127.0.0.1:8080`.
+        #[arg(long)]
+        anthropic_url: Option<String>,
+
+        /// A file holding the key for `--backend openai` (a bearer token) or
+        /// `--backend anthropic` (`x-api-key`). Omitted means no key header
+        /// at all, which is what a local server wants. A file rather than a flag or an env var, for the
         /// reason `crate::secret` gives — and its mode is checked there, as the
         /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
@@ -1223,11 +1255,16 @@ impl SandboxArgs {
     /// `host`, which is the run every measurement in this repository was made
     /// under.
     fn worker_config(&self, path: &std::path::Path) -> Result<WorkerConfig> {
-        let mut worker_config = match path.exists() {
+        let worker_config = match path.exists() {
             true => WorkerConfig::from_file(path)
                 .with_context(|| format!("reading {}", path.display()))?,
             false => WorkerConfig::default(),
         };
+        Ok(self.worker_over(worker_config))
+    }
+
+    /// The flags over a `[worker]` — a policy file's, or an environment's.
+    fn worker_over(&self, mut worker_config: WorkerConfig) -> WorkerConfig {
         if let Some(runtime) = self.worker {
             worker_config.runtime = runtime;
         }
@@ -1237,7 +1274,7 @@ impl SandboxArgs {
         if let Some(timeout_ms) = self.worker_timeout_ms {
             worker_config.timeout_ms = timeout_ms;
         }
-        Ok(worker_config)
+        worker_config
     }
 
     /// Where a posture would run, **without building it**: the `[worker]`
@@ -1292,26 +1329,27 @@ impl SandboxArgs {
                 missing: Some(format!("{error:#}")),
                 gap: None,
             },
-            Ok(config) => {
-                let contained = config.runtime.is_contained();
-                let missing = match config.runtime.program() {
-                    Some(program) if agent_core::worker::which(program).is_none() => {
-                        Some(format!("`{program}` is not installed on this machine"))
-                    }
-                    Some(_) if config.image.is_none() => {
-                        Some("the policy file names no [worker] image".to_string())
-                    }
-                    _ => None,
-                };
-                serve::Where {
-                    policy: shown(&path),
-                    runtime: config.runtime.as_str().to_string(),
-                    image: config.image.filter(|_| contained),
-                    missing,
-                    gap: config.runtime.cannot().map(str::to_string),
-                }
-            }
+            Ok(config) => where_of(shown(&path), config),
         }
+    }
+
+    /// The same, for an environment out of `config.toml`: its runtime and
+    /// image, and the flags over them.
+    pub(crate) fn describe_environment(
+        &self,
+        environment: &policies::Resolved,
+        runtime: Option<agent_core::worker::Runtime>,
+    ) -> serve::Where {
+        let mut config = self.worker_over(environment.worker.clone());
+        if let Some(runtime) = runtime {
+            config.runtime = runtime;
+        }
+        let named = match environment.composed {
+            // Made from lists by name: there is no table to point at.
+            true => format!("lists {}", environment.name),
+            false => format!("[environment.{}]", environment.name),
+        };
+        where_of(named, config)
     }
 
     /// The same resolution, against a policy file a *session* named rather than
@@ -1342,19 +1380,62 @@ impl SandboxArgs {
         args.resolve().await
     }
 
+    /// The same, for an environment out of `config.toml`: its lists in place
+    /// of a policy file, and every flag over them as it is over a file.
+    pub(crate) async fn resolve_environment(
+        &self,
+        environment: std::sync::Arc<policies::Resolved>,
+        runtime: Option<agent_core::worker::Runtime>,
+    ) -> Result<Agency> {
+        let mut args = self.clone();
+        if runtime.is_some() {
+            args.worker = runtime;
+        }
+        Ok(args
+            .resolve_from(Some(&environment))
+            .await?
+            .with_environment(environment))
+    }
+
     async fn resolve(&self) -> Result<Agency> {
+        self.resolve_from(None).await
+    }
+
+    /// A policy file — the one named, or `luu.toml` where it is — or an
+    /// environment, with the flags over either, built into an agency that
+    /// knows which lists it came from.
+    async fn resolve_from(&self, environment: Option<&policies::Resolved>) -> Result<Agency> {
         let base = std::env::current_dir().context("the working directory")?;
 
-        let explicit = self.sandbox.is_some();
-        let path = self.policy_path()?;
-        let mut policy = match (explicit, path.exists()) {
-            // An explicit --sandbox that is not there is an error: it was asked
-            // for, and falling back to the default would be a wider sandbox
-            // than the one the user named.
-            (true, false) => anyhow::bail!("--sandbox {}: no such file", path.display()),
-            (_, true) => SandboxPolicy::from_file(&path)
-                .with_context(|| format!("reading {}", path.display()))?,
-            (false, false) => SandboxPolicy::default(),
+        let (mut policy, worker_config, label) = match environment {
+            Some(environment) => (
+                environment.policy.clone(),
+                self.worker_over(environment.worker.clone()),
+                String::new(),
+            ),
+            None => {
+                let explicit = self.sandbox.is_some();
+                let path = self.policy_path()?;
+                let policy = match (explicit, path.exists()) {
+                    // An explicit --sandbox that is not there is an error: it
+                    // was asked for, and falling back to the default would be a
+                    // wider sandbox than the one the user named.
+                    (true, false) => anyhow::bail!("--sandbox {}: no such file", path.display()),
+                    (_, true) => SandboxPolicy::from_file(&path)
+                        .with_context(|| format!("reading {}", path.display()))?,
+                    (false, false) => SandboxPolicy::default(),
+                };
+                // The lists' name: the file's, or what stands in for an
+                // absent one.
+                let label = match path.exists() {
+                    true => path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string()),
+                    false => "built-in".to_string(),
+                };
+                (policy, self.worker_config(&path)?, label)
+            }
         };
 
         for granted in &self.allow_read {
@@ -1377,7 +1458,12 @@ impl SandboxArgs {
             };
         }
 
-        let worker_config = self.worker_config(&path)?;
+        // What the lists were, read back off what the session is granted — the
+        // flags above included — for the header.
+        let lists = match environment {
+            Some(environment) => environment.lists(&policy),
+            None => policies::lists_of_file(&label, &policy),
+        };
 
         let sandbox = Sandbox::new(&policy, &base)?;
         let worker = match worker_config.runtime.is_worker() {
@@ -1392,8 +1478,10 @@ impl SandboxArgs {
                     .with_binary(self.worker_binary.clone())
                     // The image's own trees, which the host must not try to
                     // resolve: `/usr/local/cargo` is the image's toolchain and
-                    // is not a directory here.
-                    .with_paths(worker_config.paths.clone())
+                    // is not a directory here. And, in a container, its own
+                    // `/tmp`: the scratch a draft may write to there, since the
+                    // host's temporary folder is not inside it.
+                    .with_paths(scratch_in_image(&worker_config))
                     // The seam's clock: how long a call with no clock of its
                     // own may take before the worker is treated as stuck. See
                     // `RECORD/2026-09-05.a-clock-at-the-seam.completed.md`.
@@ -1422,7 +1510,43 @@ impl SandboxArgs {
                 .with_max_steps(self.max_tool_steps)
                 .with_tool_timeout(std::time::Duration::from_millis(worker_config.timeout_ms)),
             worker,
-        ))
+        )
+        .with_lists(lists))
+    }
+}
+
+/// A worker's in-image paths, with the container's `/tmp` writable where it
+/// runs in one. See `session::draft_floor`.
+fn scratch_in_image(config: &WorkerConfig) -> Vec<agent_core::sandbox::PathRule> {
+    let mut paths = config.paths.clone();
+    let tmp = std::path::Path::new("/tmp");
+    if config.runtime.is_contained() && !paths.iter().any(|rule| rule.path == tmp) {
+        paths.push(agent_core::sandbox::PathRule::new(
+            tmp,
+            agent_core::sandbox::Access::ReadWrite,
+        ));
+    }
+    paths
+}
+
+/// Where a `[worker]` would run, said without starting it: its runtime, its
+/// image where it has one, and what this machine lacks for it. `label` is the
+/// file or the environment it came from.
+fn where_of(label: String, config: WorkerConfig) -> serve::Where {
+    let contained = config.runtime.is_contained();
+    let missing = match config.runtime.program() {
+        Some(program) if agent_core::worker::which(program).is_none() => {
+            Some(format!("`{program}` is not installed on this machine"))
+        }
+        Some(_) if config.image.is_none() => Some(format!("{label} names no image")),
+        _ => None,
+    };
+    serve::Where {
+        policy: label,
+        runtime: config.runtime.as_str().to_string(),
+        image: config.image.filter(|_| contained),
+        missing,
+        gap: config.runtime.cannot().map(str::to_string),
     }
 }
 
@@ -1575,6 +1699,7 @@ struct ModelArgs<'a> {
     model: Option<&'a str>,
     ollama_url: Option<&'a str>,
     openai_url: Option<&'a str>,
+    anthropic_url: Option<&'a str>,
     api_key_file: Option<&'a std::path::Path>,
     tool_calls: Option<provider::ToolCalls>,
     /// What this run budgets against, and 0 for "nothing said" — in which case
@@ -1644,6 +1769,7 @@ fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resol
             model: args.model,
             ollama_url: args.ollama_url,
             openai_url: args.openai_url,
+            anthropic_url: args.anthropic_url,
             api_key_file: args.api_key_file,
             context_limit: args.context_limit,
             tool_calls: args.tool_calls,
@@ -1695,17 +1821,44 @@ pub(crate) fn build_backend(
                 eprintln!("note: {caveat}");
             }
             let mut backend = OpenAi::new(&resolved.url);
-            if let Some(path) = &resolved.key_file {
-                let key = crate::secret::read(
-                    path,
-                    "the API key file",
-                    "hands the key to anyone who can read it here",
-                )?;
+            if let Some(key) = api_key(resolved)? {
+                backend = backend.with_api_key(key);
+            }
+            Box::new(backend)
+        }
+        BackendKind::Anthropic => {
+            // The same sentence, for the same reason: `max_tokens` caps the
+            // reply, and there is nowhere on this API to send the window.
+            if announce && let Some(caveat) = Anthropic::window_caveat(Some(resolved.context_limit))
+            {
+                eprintln!("note: {caveat}");
+            }
+            let keys = resolved.messages;
+            let mut backend = Anthropic::new(&resolved.url)
+                .with_thinking(keys.thinking)
+                .with_effort(keys.effort);
+            if let Some(max_tokens) = keys.max_tokens {
+                backend = backend.with_max_tokens(max_tokens);
+            }
+            if let Some(key) = api_key(resolved)? {
                 backend = backend.with_api_key(key);
             }
             Box::new(backend)
         }
     })
+}
+
+/// The key a resolution names, read and its mode checked; `None` without a
+/// file, which sends no key header at all.
+fn api_key(resolved: &provider::Resolved) -> Result<Option<String>> {
+    let Some(path) = &resolved.key_file else {
+        return Ok(None);
+    };
+    Ok(Some(crate::secret::read(
+        path,
+        "the API key file",
+        "hands the key to anyone who can read it here",
+    )?))
 }
 
 /// A backend for a destination **nobody has saved**: the key arrives as a
@@ -1718,6 +1871,13 @@ pub(crate) fn probe_backend(kind: BackendKind, url: &str, key: Option<String>) -
         BackendKind::Ollama => Box::new(Ollama::new(url)),
         BackendKind::Openai => {
             let mut backend = OpenAi::new(url);
+            if let Some(key) = key {
+                backend = backend.with_api_key(key);
+            }
+            Box::new(backend)
+        }
+        BackendKind::Anthropic => {
+            let mut backend = Anthropic::new(url);
             if let Some(key) = key {
                 backend = backend.with_api_key(key);
             }
@@ -2128,7 +2288,14 @@ fn counter_name(counter: &Counter) -> String {
 }
 
 pub async fn run() -> Result<()> {
-    let Cli { command } = Cli::parse();
+    let Cli { workdir, command } = Cli::parse();
+    // Before anything reads it: every part of luu that needs the working
+    // directory asks the process for it, so moving the process there is what
+    // makes all of them agree.
+    if let Some(dir) = &workdir {
+        std::env::set_current_dir(dir)
+            .with_context(|| format!("--workdir {}: cannot work there", dir.display()))?;
+    }
 
     if let Command::Export {
         records,
@@ -2330,6 +2497,7 @@ pub async fn run() -> Result<()> {
         model,
         ollama_url,
         openai_url,
+        anthropic_url,
         api_key_file,
         tool_calls,
         mock_delay_ms,
@@ -2384,6 +2552,7 @@ pub async fn run() -> Result<()> {
             model: model.as_deref(),
             ollama_url: ollama_url.as_deref(),
             openai_url: openai_url.as_deref(),
+            anthropic_url: anthropic_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
             tool_calls,
             context_limit,
@@ -2403,22 +2572,30 @@ pub async fn run() -> Result<()> {
         // same file. A config that will not load is not a reason to refuse to
         // serve: it is already reported where the providers are, and a machine
         // with none simply offers none.
-        let (postures, postures_path, ui, resend, server) = match crate::provider::Config::load() {
-            Ok((config, path)) => (
-                config.postures().clone(),
-                path.map(|path| path.display().to_string()),
-                config.ui().cloned(),
-                config.resend().unwrap_or_default(),
-                config.server(),
-            ),
-            Err(_) => (
-                Default::default(),
-                None,
-                None,
-                Default::default(),
-                Default::default(),
-            ),
-        };
+        let (postures, environments, postures_path, ui, resend, server) =
+            match crate::provider::Config::load() {
+                Ok((config, path)) => (
+                    config.postures().clone(),
+                    config
+                        .policies()
+                        .resolve_all()
+                        .into_iter()
+                        .map(|(name, resolved)| (name, std::sync::Arc::new(resolved)))
+                        .collect::<std::collections::BTreeMap<_, _>>(),
+                    path.map(|path| path.display().to_string()),
+                    config.ui().cloned(),
+                    config.resend().unwrap_or_default(),
+                    config.server(),
+                ),
+                Err(_) => (
+                    Default::default(),
+                    Default::default(),
+                    None,
+                    None,
+                    Default::default(),
+                    Default::default(),
+                ),
+            };
         // `[server]`, under the flags and the `LUU_*` variables. A file that
         // did not load says nothing here, and the address decides as it
         // always has — the stricter reading, not a guess.
@@ -2525,25 +2702,42 @@ pub async fn run() -> Result<()> {
             // resolved. A posture added to `config.toml` is offered by the
             // next run.
             postures: postures.clone(),
+            environments: environments.clone(),
             postures_path: postures_path.clone(),
             describe_for: Some({
                 let args = sandbox_args.clone();
                 std::sync::Arc::new(
-                    move |policy: Option<std::path::PathBuf>,
+                    move |chosen: Option<serve::Chosen>,
                           runtime: Option<agent_core::worker::Runtime>| {
-                        args.describe_posture(policy.as_deref(), runtime)
+                        match chosen {
+                            None => args.describe_posture(None, runtime),
+                            Some(serve::Chosen::File(policy)) => {
+                                args.describe_posture(Some(&policy), runtime)
+                            }
+                            Some(serve::Chosen::Environment(environment)) => {
+                                args.describe_environment(&environment, runtime)
+                            }
+                        }
                     },
                 )
             }),
             agency_for: Some({
                 let args = sandbox_args.clone();
                 std::sync::Arc::new(
-                    move |policy: Option<std::path::PathBuf>,
+                    move |chosen: Option<serve::Chosen>,
                           runtime: Option<agent_core::worker::Runtime>| {
                         let args = args.clone();
-                        Box::pin(
-                            async move { args.resolve_posture(policy.as_deref(), runtime).await },
-                        )
+                        Box::pin(async move {
+                            match chosen {
+                                None => args.resolve_posture(None, runtime).await,
+                                Some(serve::Chosen::File(policy)) => {
+                                    args.resolve_posture(Some(&policy), runtime).await
+                                }
+                                Some(serve::Chosen::Environment(environment)) => {
+                                    args.resolve_environment(environment, runtime).await
+                                }
+                            }
+                        })
                             as futures_util::future::BoxFuture<'static, Result<_>>
                     },
                 )
@@ -2574,6 +2768,7 @@ pub async fn run() -> Result<()> {
         model,
         ollama_url,
         openai_url,
+        anthropic_url,
         api_key_file,
         tool_calls,
         mock_delay_ms,
@@ -2607,6 +2802,7 @@ pub async fn run() -> Result<()> {
             model: model.as_deref(),
             ollama_url: ollama_url.as_deref(),
             openai_url: openai_url.as_deref(),
+            anthropic_url: anthropic_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
             tool_calls,
             context_limit,
@@ -2666,6 +2862,7 @@ pub async fn run() -> Result<()> {
             agency_for: None,
             describe_for: None,
             postures: Default::default(),
+            environments: Default::default(),
             postures_path: None,
             temperature,
             seed,
@@ -2691,6 +2888,7 @@ pub async fn run() -> Result<()> {
         model,
         ollama_url,
         openai_url,
+        anthropic_url,
         api_key_file,
         tool_calls,
         mock_delay_ms,
@@ -2742,6 +2940,7 @@ pub async fn run() -> Result<()> {
         model: model.as_deref(),
         ollama_url: ollama_url.as_deref(),
         openai_url: openai_url.as_deref(),
+        anthropic_url: anthropic_url.as_deref(),
         api_key_file: api_key_file.as_deref(),
         tool_calls,
         context_limit,
@@ -2833,6 +3032,12 @@ pub async fn run() -> Result<()> {
     {
         eprintln!("note: {caveat}");
     }
+    // And the sampling it pinned, where the destination has nowhere to put
+    // it: a header saying `seed: 42` over a run that sent none is two runs
+    // looking alike that were not.
+    if let Some(caveat) = backend.sampling_caveat(temperature, seed) {
+        eprintln!("note: {caveat}");
+    }
     // The two arms diverge here. `Grammar` is honestly a first-attempt
     // constraint — prose stays reachable through the alternation — so it is
     // sent on every step below, unchanged from before. `Schema` has no
@@ -2898,7 +3103,7 @@ pub async fn run() -> Result<()> {
                 // The confirmation, as a check rather than a question. A plan
                 // that asks for what the sandbox does not grant does not run —
                 // the alternative is discovering it as a denial four turns in.
-                let unmet = plan.unmet(agency.sandbox.as_ref());
+                let unmet = plan.unmet(agency.gate_sandbox(&plan.commands).as_ref());
                 if !unmet.is_empty() {
                     anyhow::bail!(
                         "job `{objective}` asks for what the sandbox does not grant:\n  {}",
@@ -2924,7 +3129,7 @@ pub async fn run() -> Result<()> {
                 );
                 let id = approved.job;
                 narrowed = Some(std::sync::Arc::new(
-                    plan.narrow(agency.sandbox.as_ref(), id)
+                    plan.narrow(agency.gate_sandbox(&plan.commands).as_ref(), id)
                         .with_context(|| format!("resolving the plan of job `{objective}`"))?,
                 ));
                 if let Some(recorder) = &recorder {

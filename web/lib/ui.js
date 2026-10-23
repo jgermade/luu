@@ -12,11 +12,12 @@
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
 import { $reactive } from "@web/vendor/jq79.js"
-import { prefs, setPlace } from "./prefs.js"
-import { stillThere } from "./places.js"
+import { prefs, setStart } from "./prefs.js"
+import { runtimeOptions } from "./places.js"
+import { loadPolicies } from "./policies.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
-  newSession, resumeSession, apiHeaders,
+  newSession, resumeSession, apiHeaders, refreshSettings,
 } from "./store.js"
 
 export const ui = $reactive({
@@ -24,7 +25,7 @@ export const ui = $reactive({
   /// Sections rather than a scroll, because they are not steps.
   section: "general",
   /// The session starter, or `null` when it is closed. `{ provider, model,
-  /// models, reason, from, loading, posture }`.
+  /// models, reason, from, loading, runtime, lists, policies }`.
   starter: null,
   starting: false,
   /// Which of the starter's two things is running, so the one that is says so
@@ -35,6 +36,16 @@ export const ui = $reactive({
   /// the `+` and the clock in the chat's head each open it on their own. See
   /// `RECORD/2026-10-21.the-design-system-applied.completed.md`.
   sessions: null,
+  /// The sessions dialog on its way out: `:open` goes false and it plays its
+  /// exit, and `sessions` goes `null` — unmounting it — once that is over. A
+  /// dialog unmounted at once has no exit to play.
+  sessionsLeaving: false,
+  /// The permissions dialog's tab — `activity`, `granted`, `forbidden` or
+  /// `policies` — or `null` while it is closed, and the same way out as the
+  /// sessions dialog. What the session did and what decided it, so the lists
+  /// can start lax and be narrowed from it. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+  permissions: null,
+  permissionsLeaving: false,
   /// Two columns at a width that has room for three, chosen from the chat's
   /// head for as long as the page is open. Not a preference: `General →
   /// Columns` is the setting, and this is the button beside the work.
@@ -67,7 +78,7 @@ export const ui = $reactive({
 })
 
 export function openSettingsAt(section) {
-  ui.section = ["models", "appearance"].includes(section) ? section : "general"
+  ui.section = ["models", "appearance", "policies"].includes(section) ? section : "general"
   return openSettings()
 }
 
@@ -76,20 +87,88 @@ export function showSection(section) {
 }
 
 export function openHistory() {
+  stayOpen()
   ui.sessions = "history"
 }
 
 /// The other tab, from inside the dialog. New prepares the starter the first
 /// time it is shown, as the `+` would have.
 export function showSessionsTab(tab) {
+  stayOpen()
   ui.sessions = tab
   if (tab === "new" && !ui.starter) openStarter()
 }
 
+// The way out, in two steps: the dialog is told it is closed and plays its
+// exit, and is unmounted when the exit is over — the theme's own duration, so
+// reduced motion is no wait at all.
+let leaving = null
+const exitMs = () => {
+  const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
+  return Number.isFinite(ms) ? ms : 0
+}
+/// Opened again while it was leaving: it stays.
+function stayOpen() {
+  clearTimeout(leaving)
+  ui.sessionsLeaving = false
+}
+
 export function closeSessions() {
-  ui.sessions = null
-  ui.starter = null
-  ui.continuing = false
+  if (!ui.sessions || ui.sessionsLeaving) return
+  ui.sessionsLeaving = true
+  clearTimeout(leaving)
+  leaving = setTimeout(() => {
+    ui.sessions = null
+    ui.starter = null
+    ui.continuing = false
+    ui.sessionsLeaving = false
+  }, exitMs())
+}
+
+// ---- permissions -----------------------------------------------------------
+
+const PERMISSION_TABS = ["activity", "granted", "forbidden", "policies"]
+let permissionsLeaving = null
+
+/// Opens on the tab asked for, and asks for the lists again: Settings may
+/// have been read before this session's environment was.
+export function openPermissions(tab = "activity") {
+  clearTimeout(permissionsLeaving)
+  ui.permissionsLeaving = false
+  ui.permissions = PERMISSION_TABS.includes(tab) ? tab : "activity"
+  return refreshSettings()
+}
+
+export function showPermissionsTab(tab) {
+  if (PERMISSION_TABS.includes(tab)) ui.permissions = tab
+}
+
+/// Plays the dialog's way out, and resolves once it has gone — so whatever
+/// opens next waits for it. A dialog opened again meanwhile stays, and the
+/// promise never resolves: nothing should open over it.
+let permissionsClosed = Promise.resolve()
+export function closePermissions() {
+  if (!ui.permissions) return Promise.resolve()
+  if (ui.permissionsLeaving) return permissionsClosed
+  ui.permissionsLeaving = true
+  clearTimeout(permissionsLeaving)
+  permissionsClosed = new Promise(gone => {
+    permissionsLeaving = setTimeout(() => {
+      ui.permissions = null
+      ui.permissionsLeaving = false
+      gone()
+    }, exitMs())
+  })
+  return permissionsClosed
+}
+
+/// From the permissions dialog to a section of Settings: the dialog leaves
+/// first, with its exit, and Settings opens after. Opened at once, Settings
+/// unmounted the dialog mid-exit — the page mounts it only while Settings is
+/// closed — and it vanished.
+export async function permissionsToSettings(section) {
+  await closePermissions()
+  return openSettingsAt(section)
 }
 
 // ---- is the model actually there ------------------------------------------
@@ -137,12 +216,15 @@ export async function checkModel() {
 // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
 
 export async function openStarter(provider) {
+  stayOpen()
   ui.sessions = "new"
   if (!state.providers) await loadProviders()
   // What this session may be allowed to do, offered beside where it sends —
-  // and chosen at the same moment, because it is the only one there is: a
-  // posture is what a session's jobs are approved against, so it never moves.
-  if (!state.postures) await loadPostures()
+  // and chosen at the same moment, because it is the only one there is: what
+  // a session may do is what its jobs are approved against, so it never moves.
+  // Asked again on every opening, with the lists: Settings → Policies may
+  // have changed them since, and the images the runtimes offer with them.
+  const [policies] = await Promise.all([loadPolicies(), loadPostures()])
   ui.continuing = false
   const names = Object.keys(state.providers?.providers || {})
   const chosen = provider
@@ -157,12 +239,44 @@ export async function openStarter(provider) {
     reason: null,
     from: null,
     loading: false,
-    // Where the last session ran, if it still can — `"|"`, the server's own
-    // policy file on its own runtime, where it cannot. That is what every
-    // session got before a session could choose.
-    place: stillThere(state.postures, prefs.place),
+    // The tables of `config.toml`, and what the session is made from: where
+    // it runs and one list of each axis by name, `""` for the empty one.
+    // What the last session started with, where it still can; else this
+    // machine and the empty lists — read the folder, ask the rest.
+    policies: policies.ok ? policies.view : null,
+    ...rememberedStart(policies.ok ? policies.view : null),
   }
   if (chosen) await loadModels(chosen)
+}
+
+const KINDS = ["shell", "network", "files"]
+
+/// The runtime and lists the last session started with, each where it still
+/// is: a runtime this machine still offers, a list `config.toml` still has.
+function rememberedStart(policies) {
+  let kept = {}
+  try {
+    kept = JSON.parse(prefs.start || "{}") || {}
+  } catch {}
+  const options = runtimeOptions(state.postures)
+  const runtime = options.find(option => option.value === kept.runtime && !option.disabled)?.value
+    || options.find(option => !option.disabled)?.value
+    || "host|"
+  const lists = Object.fromEntries(KINDS.map(kind => {
+    const name = kept.lists?.[kind]
+    return [kind, name && policies?.[kind]?.[name] ? name : ""]
+  }))
+  return { runtime, lists }
+}
+
+/// Where the session's commands run: `runtime|image`.
+export function chooseRuntime(value) {
+  ui.starter = { ...ui.starter, runtime: value }
+}
+
+/// One of the three lists, by name; `""` is the empty one.
+export function chooseList(kind, name) {
+  ui.starter = { ...ui.starter, lists: { ...ui.starter.lists, [kind]: name } }
 }
 
 /// The list is fetched from the provider itself, so it is what is *pulled*
@@ -192,16 +306,20 @@ export function closeStarter() {
 
 export async function startSession() {
   ui.starting = true
-  const [posture, runtime] = (ui.starter.place || "|").split("|")
+  // Every session is made from a runtime and three lists, the empty ones
+  // left out — which the server reads as empty. Over stdio the process is
+  // the session, and there is nothing to choose.
+  const choosable = !!state.postures?.choosable
+  const [runtime, image] = (ui.starter.runtime || "host|").split("|")
+  const lists = Object.fromEntries(KINDS.map(kind => [kind, ui.starter.lists?.[kind]]).filter(([, name]) => name))
   const ok = await newSession({
     provider: ui.starter.provider,
     model: ui.starter.model,
-    posture: posture || undefined,
-    runtime: runtime || undefined,
+    ...(choosable ? { runtime, ...(image ? { image } : {}), lists } : {}),
   })
   ui.starting = false
   if (ok) {
-    setPlace(ui.starter.place || "|")
+    setStart(JSON.stringify({ runtime: ui.starter.runtime, lists: ui.starter.lists }))
     closeSessions()
     await checkModel()
   }

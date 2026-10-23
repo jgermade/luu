@@ -6,7 +6,7 @@
   // from, and one server answers two people on two machines. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
-  const { prefs, setEditor, setEditorTone, setSnippetTone, setLayout, setSize, monacoAvailable } =
+  const { prefs, setTheme, setEditor, setEditorTone, setSnippetTone, setLayout, setSize, monacoAvailable } =
     await import("@web/lib/prefs.js")
   const { loadIconTheme, saveIconTheme, importThemeFiles, themeFromFiles, themeFromDrop, loadIconPreviews, glyphFor } =
     await import("@web/lib/workspace.js")
@@ -26,14 +26,38 @@
   let iconError = ""
   let iconBusy = false
   let iconAsking = true
+  // The server answers at once with the editors' themes as it last found
+  // them, and looks again behind the answer (`looking`): asked again until it
+  // has finished, so what it finds joins the list under the person instead of
+  // the section waiting on it. See
+  // `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`, appended
+  // 2026-10-22.
+  let following = null
+  const follow = view => {
+    clearTimeout(following)
+    if (!view?.looking) return
+    following = setTimeout(() => {
+      loadIconTheme()
+        .then(next => {
+          // A choice made meanwhile answered with its own view; this one only
+          // adds what the look found.
+          iconView = { ...iconView, found: next.found, looking: next.looking }
+          if (!next.looking) askPreviews()
+          follow(next)
+        })
+        .catch(() => {})
+    }, 1500)
+  }
+  $destroyed(() => clearTimeout(following))
   loadIconTheme()
-    .then(view => { iconView = view })
+    .then(view => { iconView = view; follow(view) })
     .catch(error => { iconError = `${error.message || error}` })
     .finally(() => { iconAsking = false })
 
   const took = result => {
     if (result.ok) {
       iconView = result.view
+      follow(result.view)
       iconError = ""
       // A theme just imported has no drawing yet: asked again.
       askPreviews()
@@ -182,6 +206,13 @@
   // the page is open.
   let monacoHere = null
   monacoAvailable().then(found => { monacoHere = found })
+  // The page's own light or dark — not the editor's, nor the snippets', which
+  // are chosen apart below — or the system's, followed as it changes.
+  const THEMES = [
+    { value: "auto", label: "Auto" },
+    { value: "light", label: "Light" },
+    { value: "dark", label: "Dark" },
+  ]
   $: editors = [
     { value: "own", label: "This page" },
     { value: "monaco", label: "Monaco", disabled: monacoHere === false },
@@ -201,6 +232,20 @@
     <p class="ds-hero-desc">Personaliza la visualización de código, paleta de colores y el comportamiento de las columnas.</p>
   </div>
 </div>
+
+<!-- The page as a whole: light, dark, or the system's. -->
+<section class="pane-group ui-group">
+  <h3>Interface</h3>
+  <div class="choice">
+    <span class="choice-name">Theme</span>
+    <Segmented label="Interface theme" size="sm" :options="THEMES" :model="prefs.theme"
+               @change="setTheme($event.detail)" />
+  </div>
+  <p class="note small">
+    <b>Auto</b> follows the system's light or dark, and changes with it. The editor and the
+    chat's code keep their own themes, below.
+  </p>
+</section>
 
 <!-- Two columns of one width, each a thing that draws code and its choices
      over what they change: the editor — what draws a file, and in which tone —
@@ -327,7 +372,7 @@
 </section>
 
 <section class="pane-group files-group">
-  <h3>Files Theme</h3>
+  <h3>Icons pack</h3>
   <!-- The icon theme, chosen here rather than only named in `config.toml`. It
        is written to that file and applied live, which is the one thing in this
        section that is not in `localStorage`: the server is what serves the icons,
@@ -352,7 +397,7 @@
        @dragleave="dragLeave()" @drop="dropped($event)">
     <!-- The options: the default, then luu's own, then the editors', then
          a way to add one. -->
-    <div class="theme-list" role="radiogroup" aria-label="Files theme" @mouseleave="previewing = null">
+    <div class="theme-list" role="radiogroup" aria-label="Icons pack" @mouseleave="previewing = null">
       <span class="group-name">Default</span>
       <button type="button" role="radio" class="theme-option"
               :aria-checked="!iconView?.named ? 'true' : 'false'"
@@ -389,7 +434,7 @@
         drop any of them on this frame.
       </span>
 
-      <span :if="detected.length" class="group-name">Detected</span>
+      <span :if="detected.length || iconView?.looking" class="group-name">Detected</span>
       <button :each="theme in detected" :key="theme.path" type="button" role="radio" class="theme-option"
               :aria-checked="theme.path === iconView?.named ? 'true' : 'false'"
               :disabled="!iconView?.editable || iconBusy" :title="theme.path"
@@ -399,6 +444,19 @@
         <span class="tag">{{ theme.source }}</span>
       </button>
       <span :if="iconAsking" class="dim small">asking the server…</span>
+      <!-- What was found last is listed above; this is the look for more,
+           which nothing waits on. -->
+      <span :if="iconView?.looking" class="dim small looking">looking in the editors' extensions…</span>
+
+      <!-- Item 15 of `ROADMAP/2026-09-17`, kept through every redesign: the
+           first person to meet an unconfigured tree read a working fallback
+           as a broken panel, so the page says why the tree looks as it does.
+           In the frame, at the foot of the list, level with the preview's. -->
+      <!-- Held in place when a theme is chosen, only not shown: a line that
+           came and went moved the list over it, and the pane's height. -->
+      <p class="lead-note fallback-note" :class.unseen="!(iconView && !iconView.named)">
+        With none chosen, the tree draws its own shapes — a fallback, not a failure.
+      </p>
 
     </div>
 
@@ -423,16 +481,6 @@
       </ul>
     </div>
   </div>
-  <!-- Item 15 of `ROADMAP/2026-09-17`, kept through every redesign: the first
-       person to meet an unconfigured tree read a working fallback as a broken
-       panel, so the page says why the tree looks as it does. Under the frame,
-       so its coming and going with the choice moves nothing above it. -->
-  <!-- Held in place when a theme is chosen, only not shown: the section is
-       at the bottom of the pane, and a line that came and went changed the
-       pane's height and, with the scroll at its end, moved the frame. -->
-  <p class="lead-note" :class.unseen="!(iconView && !iconView.named)">
-    With none chosen, the tree draws its own shapes — a fallback, not a failure.
-  </p>
   <div class="choice size-choice tree-size">
     <span class="choice-name">Size</span>
     <Segmented label="Files size" size="sm" :options="SIZE_OPTIONS" :model="prefs.treeSize"
@@ -469,6 +517,11 @@
   }
   .pick:hover { border-color: var(--luu-accent); }
   .pick.off { opacity: .5; cursor: default; pointer-events: none; }
+  /* ---- the interface ---- */
+  .ui-group { display: flex; flex-direction: column; gap: var(--luu-space-2); }
+  .ui-group h3 { margin: 0 0 var(--luu-space-1); }
+  .ui-group .choice { justify-content: flex-start; }
+  .ui-group .note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--luu-fg-muted); }
   /* ---- the editor and the snippets ----
      Half and half: the editor and the snippets, each its choices over its
      preview. One under the other when the pane is too narrow for both — the
@@ -497,9 +550,12 @@
   .mini-editor, .mini-chat { box-sizing: border-box; height: 9rem; overflow: hidden; }
   /* Each preview at the size chosen for what it shows. */
   .mini-chat-scaled { display: flex; flex-direction: column; gap: .5rem; zoom: var(--luu-chat-zoom, 1); }
-  .big-tree { zoom: var(--luu-tree-zoom, 1); }
+  /* The rows take the size, and the list does not: its height is the twelve
+     rows at the default size, so choosing another moves nothing under it, and
+     a larger one scrolls. */
+  .big-tree li { zoom: var(--luu-tree-zoom, 1); }
   .size-choice { margin-top: var(--luu-space-1); }
-  .tree-size { justify-content: flex-start; }
+  .tree-size { justify-content: flex-start; margin-top: var(--luu-space-4); }
 
   /* A file as the content column draws it, in the editor's tone: the island
      re-points every colour, so these rules name tokens and not colours. */
@@ -633,7 +689,7 @@
     background: color-mix(in srgb, var(--luu-accent) 8%, var(--luu-surface));
   }
   .theme-option:disabled { cursor: default; opacity: .6; }
-  .theme-option:focus-visible { outline: 2px solid var(--luu-focus); outline-offset: -2px; }
+  .theme-option:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: -2px; }
   .empty-group { padding: .2rem .6rem; }
   .option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
   .add { align-self: flex-start; margin-top: var(--luu-space-1); }
@@ -659,6 +715,11 @@
     font-weight: 600;
     pointer-events: none;
   }
+  /* The list as tall as the preview, so its last line sits at the frame's
+     foot; the preview keeps its own height when the list is the taller. */
+  .files-duo { align-items: stretch; }
+  .files-duo .theme-preview { align-self: start; }
+  .fallback-note { margin-top: auto; padding-top: var(--luu-space-3); }
   .files-frame {
     padding: var(--luu-space-4);
     border: 1px solid var(--luu-border);
@@ -690,7 +751,12 @@
   .theme-preview { transition: opacity var(--luu-duration) ease; }
   .theme-preview.applying { opacity: .5; }
   .preview-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .big-tree { margin: 0; padding: .5rem .25rem; list-style: none; font-size: 13px; }
+  .big-tree {
+    box-sizing: border-box;
+    height: calc(12 * 1.6rem + 1rem);
+    overflow: auto;
+    margin: 0; padding: .5rem .25rem; list-style: none; font-size: 13px;
+  }
   .big-tree li { display: flex; align-items: center; gap: .3rem; height: 1.6rem; border-radius: 4px; }
   .big-tree img, .big-tree .glyph { width: 16px; height: 16px; flex: none; }
   /* The sprite's caret points right: a closed folder as it is, an open one

@@ -2,7 +2,7 @@
   // A setup script takes `await import(...)`; a static `import` statement is
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
-          approvePlan, declinePlan, requestPlan, closeJob, reopenJob,
+          approvePlan, declinePlan, requestPlan, closeJob, reopenJob, revokeGrant,
           renameSession,
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
@@ -10,7 +10,8 @@
   const { workspace, loadRoot, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor } =
     await import("@web/lib/workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, checkModel,
-          watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal } = await import("@web/lib/ui.js")
+          watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal,
+          openPermissions } = await import("@web/lib/ui.js")
   const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const { modelLabel } = await import("@web/lib/engines.js")
@@ -57,6 +58,12 @@
   const ToolCall = await import("@web/views/chat/tool-call.html")
   const TurnInspect = await import("@web/views/chat/turn-inspect.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
+  const PermissionsDialog = await import("@web/views/chat/permissions-dialog.html")
+  // What a person answered for the session and has not taken back: under the
+  // draft line, a yes and a no each with its ×. The whole list, taken back
+  // included, is the Permissions dialog's.
+  $: allowedNow = state.grants.filter(grant => grant.allow !== false && !grant.revoked)
+  $: forbiddenNow = state.grants.filter(grant => grant.allow === false && !grant.revoked)
   const DiffModal = await import("@web/views/editor/diff-modal.html")
   const DiffStrip = await import("@web/views/editor/diff-strip.html")
   const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
@@ -65,6 +72,16 @@
   const { segments } = await import("@web/helpers/segments.js")
   const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
+  const { markdown } = await import("@web/helpers/markdown.js")
+  // A link in a reply opens beside luu, never in its place: jq79's `:html`
+  // keeps an `<a>`'s `href` and not its `target`, and a click that left the
+  // page would leave the session with it.
+  const openOutside = event => {
+    const link = event.target.closest?.("a[href]")
+    if (!link) return
+    event.preventDefault()
+    window.open(link.href, "_blank", "noopener,noreferrer")
+  }
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const { snippet, snippetHtml, copySnippet, previewable, previewSnippet } = await import("@web/lib/snippet.js")
 
@@ -528,6 +545,9 @@
   </symbol>
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="m6.5 6.5 11 11m0-11-11 11"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4" rx="1"/><path d="M5 8.5v10a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5v-10M10 12.5h4"/></symbol>
+  <symbol id="i-restore" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9"/><path d="M4.5 4.5V9H9"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12M10 11v6M14 11v6"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <!-- A page and a folder, as the page's own chrome draws them: a tab, the
        inspector's foot, the switch to the content. The tree's own shapes —
@@ -592,6 +612,7 @@
   <!-- The chat head's column switch: Chrome's devtools "dock to right", a
        window with a panel down its right side. -->
   <symbol id="i-dock" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/><path d="M14.5 4.5H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-4.5z" style="fill: currentColor; stroke: none"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 19 6v5.5c0 4.3-2.9 7.8-7 9-4.1-1.2-7-4.7-7-9V6z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
 </svg>
 
@@ -785,6 +806,10 @@
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
         <button type="button" title="Earlier sessions"
                 @click="openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+        <button type="button" class="permissions" :disabled="!state.session"
+                title="Permissions — what this session may do, and what it did"
+                aria-label="Permissions"
+                @click="openPermissions()"><svg class="ic"><use href="#i-shield"/></svg></button>
         <button type="button" class="copy-chat" :disabled="!state.messages.length"
                 :title="copiedChat ? 'Copied' : 'Copy the conversation'"
                 :aria-label="copiedChat ? 'Copied' : 'Copy the conversation'"
@@ -851,7 +876,9 @@
             <div :if="!entry.parts" class="text">{{ entry.message.text }}</div>
             <div :if="entry.parts" class="parts">
               <div :each="part in entry.parts" :key="part.i">
-                <div :if="part.kind === 'text'" class="text">{{ part.text }}</div>
+                <!-- Its Markdown drawn, escaped first — see `helpers/markdown.js`. -->
+                <div :if="part.kind === 'text'" class="text reply-md" :html="markdown(part.text)"
+                     @click="openOutside($event)"></div>
                 <!-- A fenced block: plain markup rather than a component, so a
                      token updates it in place instead of mounting it again —
                      see `lib/snippet.js`. Coloured as it streams. -->
@@ -1024,18 +1051,19 @@
           <!-- The floor, which is what *not* approving leaves in place. Every
                line above says what the plan asks for; this one says what the
                turn that asked already has, so approving is visibly a decision
-               about what to add rather than a yes to a list. Writes are a
-               sentence and not a field: the floor grants none, by construction.
-               See
+               about what to add rather than a yes to a list. See
                `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
-               `asks` is the one exception it admits: a refused write the policy
-               allows is put to a person, once —
-               `RECORD/2026-10-02.a-refused-write-asks.completed.md`. -->
+               It writes only to its scratch — `.tmp` and the system's
+               temporary folder — since 2026-10-23, and what else it would
+               write, or run where a list leaves it to a person, is asked —
+               `RECORD/2026-10-22.policies-not-postures.WIP.md`. -->
           <p :if="floor" class="dim floor">
             unapproved, a turn reads {{ floor?.reads.length ? floor.reads.join(" · ") : "nothing" }}<span
               :if="floor?.commands.length"> · runs {{ floor?.commands.join(" · ") }}</span><span
-              :if="floor?.network"> · reaches the network</span> — and writes nothing<span
-              :if="floor?.asks"> without asking you, one call at a time</span>
+              :if="floor?.network"> · reaches the network</span> — and writes <span
+              :if="floor?.writes?.length">only to {{ floor.writes.join(" · ") }}</span><span
+              :if="!floor?.writes?.length">nothing</span><span
+              :if="floor?.asks">; anything else is asked of you first</span>
           </p>
           <p :if="!declares" class="dim warn">
             <span :if="prose">The planning call answered in prose, so the model
@@ -1130,6 +1158,31 @@
           <button type="button" class="link" :disabled="running || replaying" @click="closeJob(live?.id)">
             close &amp; fold
           </button>
+        </div>
+        <!-- What a person answered for the session: its drafts do these, or
+             are refused them, without asking until one is taken back. See
+             `crate::grants`. -->
+        <div :if="allowedNow.length" class="grants">
+          <button type="button" class="dim grants-open" title="What this session may do, and what it did"
+                  @click="openPermissions('granted')">allowed for the session:</button>
+          <span :each="grant in allowedNow" :key="grant.kind + ':' + grant.target" class="grant">
+            {{ grant.kind === "write" ? "write" : "run" }} <code>{{ grant.target }}</code><button
+              type="button" class="revoke" :disabled="replaying"
+              :title="`Take back: ask again before the next one`"
+              :aria-label="`Take back ${grant.kind === 'write' ? 'writing' : 'running'} ${grant.target}`"
+              @click="revokeGrant(grant.kind, grant.target)">×</button>
+          </span>
+        </div>
+        <div :if="forbiddenNow.length" class="grants">
+          <button type="button" class="dim grants-open" title="What this session may do, and what it did"
+                  @click="openPermissions('forbidden')">denied for the session:</button>
+          <span :each="grant in forbiddenNow" :key="grant.kind + ':' + grant.target" class="grant forbidden">
+            {{ grant.kind === "write" ? "write" : "run" }} <code>{{ grant.target }}</code><button
+              type="button" class="revoke" :disabled="replaying"
+              :title="`Lift: ask again before the next one`"
+              :aria-label="`Lift the no to ${grant.kind === 'write' ? 'writing' : 'running'} ${grant.target}`"
+              @click="revokeGrant(grant.kind, grant.target)">×</button>
+          </span>
         </div>
       </div>
     </div>
@@ -1232,6 +1285,7 @@
 <SessionsDialog :if="ui.sessions && !state.settingsOpen" />
 <TurnInspect :if="ui.inspecting != null" />
 <ContextModal :if="ui.contextOpen" />
+<PermissionsDialog :if="ui.permissions && !state.settingsOpen" />
 <DiffModal :if="ui.diff" />
 <SnippetPreview :if="snippet.preview !== null" />
 
@@ -1590,6 +1644,11 @@
     margin-bottom: .2rem;
   }
   article.user .text { color: var(--luu-accent); }
+  /* A prompt is marked as one by a bar before it, in the page's black — drawn,
+     not written, so a copy of the prompt is the prompt. */
+  article.user .text::before { content: "| "; color: var(--luu-black); }
+  /* The answer a step smaller than what was asked, so the question leads. */
+  article.assistant .text { font-size: .93em; }
   /* With no speaker label, a question and its answer read as a pair only if
      they sit closer to each other than to the next pair. */
   article.user { margin-bottom: .45rem; }
@@ -1820,6 +1879,30 @@
   }
   .live-job span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .live-job button { margin-left: auto; }
+  /* What a person allowed for the session, each one a chip with its ×. */
+  .grants {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem;
+    margin: 0 1rem .4rem; font-size: 12px;
+  }
+  .grant {
+    display: inline-flex; align-items: center; gap: .25rem;
+    padding: .05rem .1rem .05rem .45rem;
+    border: 1px solid var(--luu-border); border-radius: 999px;
+    background: var(--luu-bg);
+  }
+  .grant code { font-size: 11px; }
+  .grant.forbidden code { color: var(--luu-bad); text-decoration: line-through; }
+  .grants-open {
+    padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer;
+  }
+  .grants-open:hover { text-decoration: underline; }
+  .grant .revoke {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.1rem; height: 1.1rem; padding: 0;
+    border: 0; border-radius: 999px; background: none;
+    color: var(--luu-fg-muted); cursor: pointer; line-height: 1;
+  }
+  .grant .revoke:hover:not(:disabled) { background: var(--luu-hover); color: var(--luu-fg); }
 
   /* A closed task: one entry, where its turns were. */
   .fold {

@@ -447,6 +447,7 @@ async fn the_facts_are_what_the_server_says_and_no_more() {
             window: Some(32768),
             window_is: Some(WindowIs::Served),
             tools: Some(true),
+            ..Default::default()
         }
     );
 

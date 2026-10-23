@@ -110,6 +110,61 @@ pub struct Agency {
     /// prefix, and a prefix assembled inside the image is one that shifts every
     /// time the image is rebuilt.
     pub worker: Option<Arc<Worker>>,
+    /// The shell, network and files lists this agency was resolved from, as a
+    /// recording names them. `None` only where nothing resolved one — a test's
+    /// hand-built agency. See [`crate::policies`].
+    lists: Option<record::Lists>,
+    /// The environment it was built from, when it was one: its lists' `ask`
+    /// and `deny`, which the sandbox does not carry. See [`crate::grants`].
+    environment: Option<Arc<crate::policies::Resolved>>,
+}
+
+/// The folder of scratch a draft may write in, at the top of the working
+/// directory.
+pub const SCRATCH: &str = ".tmp";
+
+/// What a turn nobody approved may do: read what the session reads, and write
+/// only to scratch — `.tmp` at the top of the working directory, and the
+/// system's temporary folder. Everything else it would write is put to a
+/// person, or waits for a plan.
+///
+/// Until 2026-10-23 the floor wrote nothing at all, by construction
+/// (`RECORD/2026-09-21.the-drafts-floor.completed.md`); a draft that could not
+/// even leave a scratch file had a tool run fail on its own temporary output.
+/// Asked for in so many words: *el modo draft solo debe poder leer, y escribir
+/// en carpetas temporales (incluyendo .tmp en la raíz de la carpeta del
+/// proyecto)*. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+///
+/// `.tmp` is made when it is missing, with a `.gitignore` that ignores it
+/// whole, so it never shows as a change in the project. In a container the
+/// host's temporary folder is not there: the container's own `/tmp` is the
+/// worker's, added beside the image's paths where the worker is started.
+fn draft_floor(sandbox: &Sandbox, contained: bool) -> Sandbox {
+    let floor = sandbox.read_only();
+    let base = sandbox.base();
+    let scratch = base.join(SCRATCH);
+    if !scratch.exists() && std::fs::create_dir_all(&scratch).is_ok() {
+        let _ = std::fs::write(scratch.join(".gitignore"), "*\n");
+    }
+    let mut writable = vec![scratch];
+    if !contained {
+        writable.push(std::env::temp_dir());
+    }
+    let mut policy = floor.to_policy();
+    crate::policies::widen(
+        &mut policy,
+        Some(base),
+        writable
+            .into_iter()
+            .filter(|path| path.exists())
+            .map(|path| {
+                agent_core::sandbox::PathRule::new(path, agent_core::sandbox::Access::ReadWrite)
+            }),
+    );
+    match Sandbox::new(&policy, base) {
+        Ok(widened) => widened.under(floor.authority().clone()),
+        Err(_) => floor,
+    }
 }
 
 impl Agency {
@@ -122,13 +177,96 @@ impl Agency {
         limits: agent_core::agent::Limits,
         worker: Option<Arc<Worker>>,
     ) -> Self {
+        let contained = worker.as_ref().is_some_and(|worker| worker.is_contained());
         Self {
             tools,
-            floor: Arc::new(sandbox.read_only()),
+            floor: Arc::new(draft_floor(&sandbox, contained)),
             sandbox,
             limits,
             worker,
+            lists: None,
+            environment: None,
         }
+    }
+
+    /// The environment it was built from.
+    pub fn with_environment(mut self, environment: Arc<crate::policies::Resolved>) -> Self {
+        self.environment = Some(environment);
+        self
+    }
+
+    /// The environment it was built from, when it was one.
+    pub fn environment(&self) -> Option<&crate::policies::Resolved> {
+        self.environment.as_deref()
+    }
+
+    /// The lists it was built from, for the page: the environment's as
+    /// written, or the policy file's, all in `allow` — and the enforcement the
+    /// session runs under, flags included.
+    pub fn lists_view(&self) -> crate::policies::ListsView {
+        let mut view = match &self.environment {
+            Some(environment) => crate::policies::ListsView::of_environment(environment),
+            None => crate::policies::ListsView::of_policy(
+                self.lists
+                    .as_ref()
+                    .map(|lists| lists.shell.name.as_str())
+                    .unwrap_or("the policy file"),
+                &self.sandbox.to_policy(),
+                self.sandbox.base(),
+            ),
+        };
+        view.enforcement = self.sandbox.enforcement();
+        view
+    }
+
+    /// What the gate may grant a plan: the session's sandbox, and — where it
+    /// was built from lists — whatever they do not deny, since approving the
+    /// plan is a person's yes, for its job: the plan's `commands` but those
+    /// the shell list denies, the working directory to write, and any host
+    /// where the network list denies none. A posture's or the server's own
+    /// policy file is still the outer bound: nothing past it. See
+    /// `RECORD/2026-10-22.policies-not-postures.WIP.md`, *two zones*.
+    pub fn gate_sandbox(&self, commands: &[String]) -> Arc<Sandbox> {
+        let Some(environment) = &self.environment else {
+            return self.sandbox.clone();
+        };
+        let mut policy = self.sandbox.to_policy();
+        let shell = environment.shell();
+        for command in commands
+            .iter()
+            .filter(|command| !command.contains('/') && !shell.deny.contains(command))
+        {
+            if !policy.commands.contains(command) {
+                policy.allow_command(command);
+            }
+        }
+        let network = environment.network();
+        if network.deny.is_empty() {
+            // Any host: there is nothing to keep it from, and the egress list
+            // cannot say *all but these* — a deny keeps the plan to what is
+            // allowed, until the proxy can (row 47).
+            policy.network = true;
+            policy.egress.clear();
+        }
+        let base = self.sandbox.base();
+        crate::policies::widen(
+            &mut policy,
+            Some(base),
+            std::iter::once(agent_core::sandbox::PathRule::new(
+                ".",
+                agent_core::sandbox::Access::ReadWrite,
+            )),
+        );
+        match Sandbox::new(&policy, base) {
+            Ok(sandbox) => Arc::new(sandbox.under(self.sandbox.authority().clone())),
+            Err(_) => self.sandbox.clone(),
+        }
+    }
+
+    /// The lists it was resolved from, for the header.
+    pub fn with_lists(mut self, lists: record::Lists) -> Self {
+        self.lists = Some(lists);
+        self
     }
 
     /// What holds a turn no approved plan holds. See [`Agency::floor`].
@@ -148,6 +286,19 @@ impl Agency {
             },
             enforcement: self.sandbox.enforcement().as_str().to_string(),
             network: self.sandbox.network(),
+            lists: self.lists.clone(),
+            // As asked, before the flags: a resume asks the same, and the
+            // same flags are over it.
+            composed: self
+                .environment
+                .as_ref()
+                .filter(|environment| environment.composed)
+                .map(|environment| {
+                    Box::new(record::Composed {
+                        runtime: environment.worker.runtime.as_str().to_string(),
+                        image: environment.worker.image.clone(),
+                    })
+                }),
         }
     }
 

@@ -1,4 +1,4 @@
-<script :setup="{ prompt = '', toolSpecs = '', budget = null, asked = '', extraCalls = [], notes = [], window = null, answer = '' }">
+<script :setup="{ prompt = '', toolSpecs = '', budget = null, asked = '', extraCalls = [], notes = [], window = null, answer = '', tools = [] }">
   // What a prompt was made of, grouped by what each piece *is* — the system
   // text, the tools, the map, the folded jobs, the earlier exchanges, this
   // turn's code, its question — each in its bucket's colour and under its
@@ -21,6 +21,15 @@
   // context modal does, because "the context as it stands" includes the last
   // answer, and the prompt it was the answer to cannot. It was never sent, so
   // it has no bucket and no count; the next turn carries it in `history`.
+  //
+  // `tools` — the turn's calls, where the caller has them: then the answer is
+  // shown as the turn went rather than as one text. A turn that used a tool
+  // is several calls, and the first prompt above is only the first of them:
+  // each reply up to its call, what that call gave back — as the model got
+  // it — and what the next call sent, the round trips the line at the foot
+  // only summed. Cut where each call's step ended (`at`, which the store and
+  // the server's fold both keep); a turn recorded before that has the reply
+  // whole.
 
   // Group name → "all" | "scroll"; absent is the default (clipped if big).
   let modes = {}
@@ -37,7 +46,34 @@
         roles: new Set(g.entries.map(e => e.role)).size > 1 || ["history", "summaries"].includes(g.bucket),
       }
     })
-  $: reply = answer ? { big: answer.split("\n").length > BIG_LINES || answer.length > BIG_CHARS } : null
+  // What the model got back from a call, as `ToolOutcome::render` words it.
+  const resultOf = call => !call.verdict
+    ? "running…"
+    : [`[${call.name}] ${call.error || "ok"}`, call.output || "", call.truncated ? `[${call.name}] output cut` : ""]
+        .filter(Boolean).join("\n")
+  $: trips = (() => {
+    const calls = [...(tools || [])].sort((a, b) => a.step - b.step)
+    if (!answer || !calls.length || calls.some(call => typeof call.at !== "number")) return []
+    const out = []
+    let from = 0
+    calls.forEach(call => {
+      const said = answer.slice(from, call.at).trim()
+      if (said) out.push({ kind: "reply", key: `r${call.step}`, text: said })
+      out.push({
+        kind: "result", key: `t${call.step}`, name: call.name, text: resultOf(call),
+        refused: !!call.verdict && !call.verdict.allowed,
+      })
+      const next = (extraCalls || []).find(extra => extra.step === call.step + 1)
+      if (next) out.push({ kind: "call", key: `c${next.step}`, step: next.step, tokens: next.prompt_tokens, shared: next.shared_tokens })
+      from = call.at
+    })
+    const last = answer.slice(from).trim()
+    if (last) out.push({ kind: "reply", key: "last", text: last, last: true })
+    return out
+  })()
+  $: calledCount = trips.filter(entry => entry.kind === "result").length
+  $: replyText = trips.length ? trips.map(entry => entry.text || "").join("\n") : answer
+  $: reply = answer ? { big: replyText.split("\n").length > BIG_LINES || replyText.length > BIG_CHARS } : null
   $: buckets = (budget?.buckets || []).filter(b => b.tokens > 0)
   $: sent = buckets.filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
   // The tools bucket under the native transport: sent beside the prompt, and
@@ -96,16 +132,26 @@
     <header>
       <span class="swatch" style="background:var(--luu-bucket-history)"></span>
       <b class="b-history">answer</b>
-      <span class="dim">the reply to this prompt · not sent yet: the next turn carries it in history</span>
+      <span :if="!trips.length" class="dim">the reply to this prompt · not sent yet: the next turn carries it in history</span>
+      <span :if="trips.length" class="dim">the reply and its {{ calledCount }} round {{ calledCount === 1 ? "trip" : "trips" }} · each tool's result went into the next call; the last reply is not sent yet</span>
       <span class="grow"></span>
       <button :if="reply.big && !modes.answer" type="button" class="link" @click="mode('answer', 'all')">show all</button>
       <button :if="reply.big && !modes.answer" type="button" class="link" @click="mode('answer', 'scroll')">scroll</button>
       <button :if="reply.big && modes.answer" type="button" class="link" @click="mode('answer', null)">collapse</button>
     </header>
     <div class="body" :class="reply.big ? (modes.answer || 'clip') : 'all'">
-      <div class="entry">
+      <div :if="!trips.length" class="entry">
         <div class="role assistant">assistant</div>
         <pre class="b-history">{{ answer }}</pre>
+      </div>
+      <div :each="entry in trips" :key="entry.key" class="entry" :class="entry.kind">
+        <div :if="entry.kind === 'reply'" class="role assistant">assistant<span :if="entry.last"> · not sent yet</span></div>
+        <pre :if="entry.kind === 'reply'" class="b-history">{{ entry.text }}</pre>
+        <div :if="entry.kind === 'result'" class="role tool" :class.refused="entry.refused">tool · {{ entry.name }}<span :if="entry.refused"> · refused</span></div>
+        <pre :if="entry.kind === 'result'" class="b-tools">{{ entry.text }}</pre>
+        <div :if="entry.kind === 'call'" class="call-line">
+          → call {{ entry.step }} sent <b>{{ entry.tokens }}</b> tokens<span :if="entry.shared">, {{ entry.shared }} of them as the call before had them</span>
+        </div>
       </div>
     </div>
   </section>
@@ -162,6 +208,12 @@
   .body.scroll { max-height: 30rem; overflow: auto; }
   .entry + .entry { margin-top: .5rem; padding-top: .5rem; border-top: 1px dashed var(--luu-border); }
   .role { font-size: 11px; color: var(--luu-fg-muted); margin-bottom: .15rem; }
+  .role.refused { color: var(--luu-bad); }
+  /* The next call, between the result it carries and the reply it got: a
+     line rather than an entry, since nobody said it. */
+  .entry.call { padding-top: .35rem; }
+  .call-line { font-size: 11px; color: var(--luu-fg-muted); }
+  .call-line b { color: var(--luu-fg); font-weight: 600; }
   /* The card is the box: the page's own `pre` draws another inside it. */
   pre {
     margin: 0;

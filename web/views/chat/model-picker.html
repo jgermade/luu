@@ -22,6 +22,7 @@
     await import("@web/lib/store.js")
   const { ui, checkModel, openSettingsAt, switching: leavingFrom } = await import("@web/lib/ui.js")
   const { modelLabel } = await import("@web/lib/engines.js")
+  const ProviderModels = await import("./provider-models.html")
 
   let open = false
   // Where the menu goes: fixed, from the button's own box, because the chat
@@ -30,11 +31,6 @@
   let place = ""
   let switching = false
   let error = ""
-  // The provider whose models the second column shows.
-  let focus = ""
-  // name → { loading, models, reason, labels, unavailable }. Kept while the
-  // menu is open, so going back to a provider does not ask it twice.
-  let lists = {}
 
   $: names = Object.keys(state.providers?.providers || {})
   $: hasTurns = state.messages.length > 0
@@ -44,7 +40,6 @@
     : proposed ? "a proposal is waiting at the gate" : ""
   $: current = state.settings?.profile || ""
   $: currentModel = state.model || state.settings?.model || ""
-  $: shown = lists[focus] || null
   // The model being left, as the feedback names it: the server's `from` when
   // one engine restarts on another model, and this page's memory otherwise.
   $: leaving = ui.engine?.from || ui.switchedFrom || ""
@@ -57,32 +52,6 @@
     ui.engine.model ? `model ${modelLabel(ui.engine.model)}` : "",
     leaving ? `leaving ${modelLabel(leaving)}` : "",
   ].filter(Boolean).join(" · ")
-  $: profile = state.providers?.providers?.[focus] || {}
-
-  const load = async name => {
-    if (!name || lists[name]) return
-    lists = { ...lists, [name]: { loading: true, models: [], labels: {}, unavailable: [] } }
-    const answer = await providerModels(name)
-    const own = state.providers?.providers?.[name]?.model
-    const models = answer.models?.length ? answer.models : (own ? [own] : [])
-    lists = {
-      ...lists,
-      [name]: {
-        loading: false,
-        models,
-        reason: answer.reason || null,
-        labels: answer.labels || {},
-        unavailable: answer.unavailable || [],
-      },
-    }
-  }
-
-  const focusOn = async name => {
-    focus = name
-    grow(name)
-    await load(name)
-    grow(name)
-  }
 
   const toggle = async event => {
     open = !open
@@ -94,37 +63,18 @@
     const width = Math.min(640, window.innerWidth * 0.92)
     const left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8))
     place = `left:${left}px;bottom:${window.innerHeight - box.top + 6}px`
-    lists = {}
+    loaded = false
     await loadProviders()
-    // Opens on where the session is, so the second column starts on the
-    // models it is choosing among.
-    const first = names.includes(current) ? current : names[0] || ""
-    height = fit(first)
-    await focusOn(first)
+    loaded = true
   }
 
-  // The columns' height, in rem: enough for the providers and for the lists
-  // focused since the menu opened, and it **never shrinks** while it is open —
-  // a height that followed the focused provider moved the menu's top edge each
-  // time the pointer crossed another, because it opens upward. Growing moves
-  // it once, for a list that would not have fitted. A longer list than the
-  // ceiling scrolls in its column; the ceiling is the CSS's.
-  let height = 0
-  const grow = name => { height = Math.max(height, fit(name)) }
-  const fit = name => {
-    const providers = names.length * 2.5 + .6
-    const listed = lists[name]
-    if (!listed) return Math.max(8, providers)
-    // The reason is the one thing in this column whose height is its text's
-    // length rather than a row count: ~58 characters fit the width at this
-    // size. A provider that answers nothing — 401, nothing listening — says so
-    // here, and left uncounted it was a three-line message in 3.65rem.
-    const reason = listed.reason && !listed.models.length
-      ? Math.ceil(listed.reason.length / 58) * 1.4 + .4
-      : 0
-    const rows = Math.max(1, listed.models.length + listed.unavailable.length)
-    return Math.max(8, providers, 2 + reason + rows * 1.65)
-  }
+  // **One height, from the moment it opens.** The menu opens upward, so any
+  // change of height moves its top edge: it grew to fit each list as it
+  // loaded, and the content jumped while the models arrived. Now the body is
+  // a fixed box — the CSS's — whatever is loading in it, and a list longer
+  // than it scrolls in its column. Whether the providers have been asked yet,
+  // so *No providers yet* is not said while they are on their way.
+  let loaded = false
 
   const choose = async (provider, model) => {
     if (busy || switching) return
@@ -189,67 +139,16 @@
   <div :if="open" class="backdrop" @click="open = false"></div>
   <div :if="open" class="menu" role="dialog" aria-label="Provider and model"
        :style="place">
-    <p :if="!names.length" class="dim small pad">
-      No providers yet.
-      <button type="button" class="link" @click="open = false, openSettingsAt('models')">add one →</button>
-    </p>
+    <div :if="!names.length" class="body">
+      <p :if="loaded" class="dim small pad">
+        No providers yet.
+        <button type="button" class="link" @click="open = false, openSettingsAt('models')">add one →</button>
+      </p>
+    </div>
 
-    <div :if="names.length" class="cols" :style="height ? `--rows:${height}rem` : ''">
-      <!-- Providers. Hover or click puts one in focus; nothing is chosen until
-           a model is. -->
-      <ul class="providers" role="listbox" aria-label="Providers">
-        <li :each="name in names" :key="name">
-          <button type="button" class="prov" role="option"
-                  :class.on="name === focus" :class.current="name === current"
-                  :aria-selected="String(name === focus)"
-                  @click="focusOn(name)" @mouseenter="focusOn(name)" @focus="focusOn(name)">
-            <span class="check">{{ name === current ? "✓" : "" }}</span>
-            <span class="text">
-              <strong>{{ name }}</strong>
-              <span class="dim small">
-                {{ state.providers?.providers?.[name]?.backend || "ollama" }}{{ state.providers?.providers?.[name]?.engine ? " · luu starts it" : "" }}{{ state.providers?.providers?.[name]?.["tool-calls"] === "native" ? " · native tools" : "" }}
-              </span>
-            </span>
-            <svg class="ic go"><use href="#i-caret"/></svg>
-          </button>
-        </li>
-      </ul>
-
-      <!-- The focused provider's models. -->
-      <div class="models" role="listbox" aria-label="Models">
-        <header class="dim small">
-          <strong>{{ focus }}</strong>
-          <span :if="profile.engine">· engine {{ profile.engine }}</span>
-        </header>
-        <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
-        <p :if="shown?.reason && !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
-        <button :each="model in shown?.models || []" :key="model" type="button"
-                class="model" role="option"
-                :class.on="focus === current && model === currentModel"
-                :disabled="!!busy || switching"
-                @click="choose(focus, model)">
-          <span class="check">{{ focus === current && model === currentModel ? "✓" : "" }}</span>
-          <span class="name">{{ shown?.labels?.[model] || modelLabel(model) }}</span>
-        </button>
-        <!-- On this machine and not loadable by this provider's engine — an
-             MLX model under llama.cpp, ollama's own MLX under anything but
-             ollama. Shown rather than hidden, so a model on the disk does not
-             look missing; the tooltip is the server's own reason. Not a
-             button: a disabled one shows no tooltip in every browser. -->
-        <div :each="u in shown?.unavailable || []" :key="u.model"
-             class="model off" role="option" aria-disabled="true"
-             :title="u.reason">
-          <span class="check warn">⚠</span>
-          <span class="name">{{ u.label }}</span>
-        </div>
-        <!-- A provider whose list is empty is still a destination: its own
-             model, or the one the server picks. -->
-        <button :if="shown && !shown.loading && !shown.models.length" type="button"
-                class="model" :disabled="!!busy || switching" @click="choose(focus, '')">
-          <span class="check"></span>
-          <span class="name dim">use it with its own model</span>
-        </button>
-      </div>
+    <div :if="names.length" class="body">
+      <ProviderModels :provider="current" :model="currentModel" :disabled="!!busy || switching"
+                      @choose="choose($event.detail.provider, $event.detail.model)" />
     </div>
 
     <footer>
@@ -261,7 +160,7 @@
         This server keeps no sessions, so switching starts an empty one.
       </span>
       <span :if="switching" class="dim small">Switching…</span>
-      <span :if="error" class="error small">{{ error }}</span>
+      <span :if="error" class="error small" :title="error">{{ error }}</span>
       <span class="grow"></span>
       <button type="button" class="link" @click="open = false, openSettingsAt('models')">providers…</button>
     </footer>
@@ -363,72 +262,23 @@
     display: flex;
     flex-direction: column;
   }
-  .cols {
-    display: grid;
-    grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
-    /* A floor of its own, then `fit`'s measurement, then the viewport: the
-       old `min()` had only a ceiling, so a measured height could lower the
-       menu and never raise it. */
-    height: min(max(16rem, var(--rows, 18rem)), 60vh, 30rem);
-  }
-  .providers {
-    list-style: none;
-    margin: 0;
-    padding: .3rem;
-    overflow-y: auto;
-    border-right: 1px solid var(--luu-border);
-  }
-  .prov {
-    display: flex;
-    align-items: center;
-    gap: .4rem;
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: 0;
-    border-radius: 6px;
-    padding: .35rem .4rem;
-    color: var(--luu-fg);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .prov .text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-  .prov .text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .prov.on { background: var(--luu-sunken); }
-  .prov.current strong { color: var(--luu-accent); }
-  .prov .go { width: 10px; height: 10px; opacity: .4; flex: none; }
-  .models { overflow-y: auto; padding: .3rem 0; }
-  .models header { padding: .2rem .8rem .3rem; }
-  .model {
-    display: flex;
-    gap: .4rem;
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: 0;
-    padding: .25rem .8rem;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 400;
-    color: var(--luu-fg);
-    cursor: pointer;
-  }
-  .model:hover:not(:disabled):not(.off) { background: var(--luu-sunken); }
-  .model.on { color: var(--luu-accent); }
-  .model.off { color: var(--luu-fg-muted); cursor: help; }
-  .model.off .name { font-style: italic; }
-  .model .warn { color: var(--luu-warn); }
-  .check { width: 1em; flex: none; color: var(--luu-accent); }
-  .model .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* One height whatever it holds — loading, a list, a reason, nothing —
+     because a menu that opens upward moves its top edge with any change. */
+  .body { height: min(22rem, 60vh); }
   .pad { margin: 0; padding: .2rem .8rem; }
+  /* One line, for the reason the body is one height: a message that wrapped
+     here moved the top edge too. What does not fit is cut, and the error
+     keeps the whole of itself in its tooltip. */
   .menu footer {
     display: flex;
     gap: .5rem;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-height: 2.1rem;
     border-top: 1px solid var(--luu-border);
     padding: .4rem .8rem;
   }
+  .menu footer > span:not(.grow) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu footer .link { flex: none; }
   .menu footer .grow { flex: 1; }
 </style>

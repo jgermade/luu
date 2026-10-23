@@ -44,31 +44,74 @@ pub struct SchemaRetry {
     pub tool_names: Vec<&'static str>,
 }
 
+/// What a person answered about one call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    Deny,
+    /// This call, and only it.
+    Once,
+    /// This call, and every one like it in the session's drafts until it is
+    /// taken back. Remembering it is the asker's: the loop runs the call.
+    Session,
+    /// No to this call, and to every one like it in the session's drafts until
+    /// it is taken back: they are refused without asking. Remembering it is the
+    /// asker's, as with [`Self::Session`].
+    Forbid,
+}
+
 /// Somebody who can answer for one call the floor refused.
 ///
-/// `ask` resolves when they have: `true` is *allow once*, `false` is *deny*.
-/// What carries the question there — a socket, a pipe, a test's script — is the
-/// caller's business, the way where a tool runs is [`Executor`]'s.
+/// `ask` resolves when they have. What carries the question there — a socket,
+/// a pipe, a test's script — is the caller's business, the way where a tool
+/// runs is [`Executor`]'s.
 pub trait Asker: Send + Sync {
     fn ask<'a>(
         &'a self,
         step: u32,
         call: &'a ToolCall,
         refused: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>>;
 }
 
-/// What a draft's turn may escalate to: a person, and the sandbox their *allow
-/// once* runs the call under.
-///
-/// `wider` is the policy file's sandbox, stamped
-/// [`crate::sandbox::Authority::Person`] by the caller. A call is put to the
-/// person only when the turn's sandbox refuses its write and `wider` would allow
-/// it — so a click never reaches past what the policy file grants. See
+/// What a call the turn's sandbox refused may still become.
+pub enum Escalation {
+    /// Nothing: the refusal is the answer, and nobody is asked.
+    Refused,
+    /// A person already allowed it for the session: it runs under this, and
+    /// nobody is asked again.
+    Granted(Sandbox),
+    /// A person may allow it: a yes runs it under this.
+    Ask(Sandbox),
+    /// A person already refused it for the session: refused with
+    /// [`PERSON_FORBADE`], and nobody is asked again.
+    Forbidden,
+}
+
+/// How far a refused call may go, decided before anyone is asked — so a click
+/// never reaches past what the caller says a click may reach.
+pub trait Ceiling: Send + Sync {
+    fn escalate(&self, call: &ToolCall, refused_under: &Sandbox) -> Escalation;
+}
+
+/// A sandbox is the ceiling `a-refused-write-asks` built: a write the turn's
+/// sandbox refuses and this one allows is asked, and nothing else is. See
 /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+impl Ceiling for Sandbox {
+    fn escalate(&self, call: &ToolCall, refused_under: &Sandbox) -> Escalation {
+        match !writes_one_path(call, refused_under) && writes_one_path(call, self) {
+            true => Escalation::Ask(self.clone()),
+            false => Escalation::Refused,
+        }
+    }
+}
+
+/// What a draft's turn may escalate to: a person, and how far their yes may
+/// reach. The caller stamps what the ceiling hands back
+/// [`crate::sandbox::Authority::Person`]. See
+/// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
 #[derive(Clone, Copy)]
 pub struct Ask<'a> {
-    pub wider: &'a Sandbox,
+    pub ceiling: &'a dyn Ceiling,
     pub person: &'a dyn Asker,
 }
 
@@ -80,6 +123,12 @@ pub struct Ask<'a> {
 /// line. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`, *the run,
 /// and the no that was not heard*.
 pub const PERSON_REFUSED: &str = "a person was asked and refused this call. Do not retry it or call another tool about it: answer them in plain text.";
+
+/// What the model is told when a person refused calls like this one for the
+/// session — now, or earlier. The same instruction as [`PERSON_REFUSED`], for
+/// the same reason, and *for this session* so that it does not try again a
+/// turn later.
+pub const PERSON_FORBADE: &str = "a person refused calls like this one for the rest of this session. Do not retry it or call another tool about it: answer them in plain text.";
 
 /// How many tool calls one turn may make before it has to answer.
 ///
@@ -366,34 +415,53 @@ pub async fn run_agent_turn(
         let mut started = std::time::Instant::now();
         let mut result = run_call(tools, &call, sandbox, &limits).await;
 
-        // **The one question a draft may put to a person**: the floor refused
-        // a write the policy file would allow. Asked before the model sees the
-        // refusal, so a yes runs the same call — which did nothing the first
-        // time, because the file tools check before they touch — and a no is
-        // the model's answer. Neither `writes_one_path` reaches past the
-        // policy: a path it does not grant is refused without asking.
+        // **What a draft may put to a person**: a call the turn's sandbox
+        // refused and the ceiling says a click may reach. Asked before the
+        // model sees the refusal, so a yes runs the same call — which did
+        // nothing the first time, because the file tools and the command's
+        // allowlist check before they touch — and a no is the model's answer.
+        // What a person already allowed for the session runs without asking.
         let mut asked = None;
-        if let Some(ask) = ask
-            && !result.verdict.allowed
-            && !writes_one_path(&call, sandbox)
-            && writes_one_path(&call, ask.wider)
-        {
+        let mut grant = None;
+        let escalation = match ask {
+            Some(ask) if !result.verdict.allowed => ask.ceiling.escalate(&call, sandbox),
+            _ => Escalation::Refused,
+        };
+        if let Escalation::Granted(wider) = &escalation {
+            started = std::time::Instant::now();
+            result = run_call(tools, &call, wider, &limits).await;
+            grant = Some(crate::protocol::GrantScope::Session);
+        }
+        if let Escalation::Forbidden = &escalation {
+            result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
+            grant = Some(crate::protocol::GrantScope::Session);
+        }
+        if let (Some(ask), Escalation::Ask(wider)) = (ask, &escalation) {
             let mut cancelled = cancel.clone();
             let answer = tokio::select! {
                 answer = ask.person.ask(step, &call, &result.verdict.rule) => Some(answer),
                 _ = cancelled.wait_for(|cancelled| *cancelled) => None,
             };
             match answer {
-                Some(true) => {
+                Some(yes @ (Answer::Once | Answer::Session)) => {
                     // The clock is the call's, not the wait's: a person who
                     // took a minute to read it did not make the tool slow.
                     started = std::time::Instant::now();
-                    result = run_call(tools, &call, ask.wider, &limits).await;
+                    result = run_call(tools, &call, wider, &limits).await;
                     asked = Some(true);
+                    grant = Some(match yes {
+                        Answer::Session => crate::protocol::GrantScope::Session,
+                        _ => crate::protocol::GrantScope::Once,
+                    });
                 }
-                Some(false) => {
+                Some(Answer::Deny) => {
                     result = ToolOutcome::denied(Verdict::deny(PERSON_REFUSED));
                     asked = Some(false);
+                }
+                Some(Answer::Forbid) => {
+                    result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
+                    asked = Some(false);
+                    grant = Some(crate::protocol::GrantScope::Session);
                 }
                 // Cancelled while it waited: the refusal stands as the floor
                 // gave it, and the turn ends where a cancel ends any turn.
@@ -404,6 +472,7 @@ pub async fn run_agent_turn(
                         outcome: result,
                         duration_ms: started.elapsed().as_millis() as u64,
                         asked: None,
+                        grant: None,
                     };
                     let _ = events
                         .send(TurnEvent::ToolResult {
@@ -435,6 +504,7 @@ pub async fn run_agent_turn(
             outcome: result,
             duration_ms: started.elapsed().as_millis() as u64,
             asked,
+            grant,
         };
 
         let _ = events
@@ -1125,12 +1195,16 @@ mod tests {
     /// A person who answers every question the same way, and remembers what
     /// they were asked.
     struct Says {
-        answer: bool,
+        answer: Answer,
         asked: std::sync::Mutex<Vec<(u32, String, String)>>,
     }
 
     impl Says {
-        fn new(answer: bool) -> Self {
+        fn new(yes: bool) -> Self {
+            Self::answering(if yes { Answer::Once } else { Answer::Deny })
+        }
+
+        fn answering(answer: Answer) -> Self {
             Self {
                 answer,
                 asked: std::sync::Mutex::new(Vec::new()),
@@ -1144,7 +1218,7 @@ mod tests {
             step: u32,
             call: &'a ToolCall,
             refused: &'a str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {
             self.asked
                 .lock()
                 .unwrap()
@@ -1163,7 +1237,7 @@ mod tests {
             _step: u32,
             _call: &'a ToolCall,
             _refused: &'a str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {
             Box::pin(std::future::pending())
         }
     }
@@ -1176,13 +1250,24 @@ mod tests {
         person: &dyn Asker,
         cancel: watch::Receiver<bool>,
     ) -> (Vec<TurnEvent>, AgentOutcome) {
-        let backend = Scripted::new(replies);
-        let tools = crate::tools::Tools::standard();
-        let floor = fixture.sandbox.read_only();
         let wider = fixture
             .sandbox
             .clone()
             .under(crate::sandbox::Authority::Person(None));
+        draft_under(fixture, replies, &wider, person, cancel).await
+    }
+
+    /// The same, with whatever ceiling the test names.
+    async fn draft_under(
+        fixture: &Fixture,
+        replies: &[&str],
+        ceiling: &dyn Ceiling,
+        person: &dyn Asker,
+        cancel: watch::Receiver<bool>,
+    ) -> (Vec<TurnEvent>, AgentOutcome) {
+        let backend = Scripted::new(replies);
+        let tools = crate::tools::Tools::standard();
+        let floor = fixture.sandbox.read_only();
         let (tx, mut rx) = mpsc::channel(256);
         let drain = tokio::spawn(async move {
             let mut seen = Vec::new();
@@ -1206,10 +1291,7 @@ mod tests {
             &floor,
             Limits::default(),
             None,
-            Some(Ask {
-                wider: &wider,
-                person,
-            }),
+            Some(Ask { ceiling, person }),
             tx,
             cancel,
         )
@@ -1235,18 +1317,132 @@ mod tests {
         assert_eq!(asked[0].0, 1);
         assert_eq!(asked[0].1, "write_file");
         assert!(
-            asked[0].2.contains("grants no writes"),
+            asked[0].2.contains("writes only to scratch"),
             "the question carries the floor's own rule: {}",
             asked[0].2
         );
         let step = &outcome.steps[0];
         assert_eq!(step.asked, Some(true));
+        assert_eq!(step.grant, Some(crate::protocol::GrantScope::Once));
         assert!(step.outcome.verdict.allowed, "{:?}", step.outcome);
         assert_eq!(
             std::fs::read_to_string(fixture.root.join("example.html")).unwrap(),
             "<h1>hi</h1>"
         );
         assert!(step.result_text().starts_with("[write_file] ok"));
+    }
+
+    #[tokio::test]
+    async fn a_yes_for_the_session_runs_the_call_and_says_so() {
+        let fixture = Fixture::new("ask-session");
+        let person = Says::answering(Answer::Session);
+        let (_stop, cancel) = watch::channel(false);
+        let (_, outcome) = draft(&fixture, &[WRITES_EXAMPLE, "done"], &person, cancel).await;
+
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, Some(true));
+        assert_eq!(step.grant, Some(crate::protocol::GrantScope::Session));
+        assert!(step.outcome.verdict.allowed, "{:?}", step.outcome);
+        assert!(fixture.root.join("example.html").exists());
+    }
+
+    /// A ceiling that says the call was already allowed for the session.
+    struct AlreadyGranted(Sandbox);
+
+    impl Ceiling for AlreadyGranted {
+        fn escalate(&self, _call: &ToolCall, _refused_under: &Sandbox) -> Escalation {
+            Escalation::Granted(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn what_was_granted_for_the_session_runs_without_asking() {
+        let fixture = Fixture::new("ask-granted");
+        let ceiling = AlreadyGranted(
+            fixture
+                .sandbox
+                .clone()
+                .under(crate::sandbox::Authority::Person(None)),
+        );
+        let person = Says::new(false);
+        let (_stop, cancel) = watch::channel(false);
+        let (events, outcome) = draft_under(
+            &fixture,
+            &[WRITES_EXAMPLE, "done"],
+            &ceiling,
+            &person,
+            cancel,
+        )
+        .await;
+
+        assert!(
+            person.asked.lock().unwrap().is_empty(),
+            "nobody is asked again"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TurnEvent::CallHeld { .. })),
+            "and nothing is held"
+        );
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, None);
+        assert_eq!(step.grant, Some(crate::protocol::GrantScope::Session));
+        assert!(fixture.root.join("example.html").exists());
+    }
+
+    #[tokio::test]
+    async fn a_no_for_the_session_refuses_the_call_and_says_so() {
+        let fixture = Fixture::new("ask-forbid");
+        let person = Says::answering(Answer::Forbid);
+        let (_stop, cancel) = watch::channel(false);
+        let (_, outcome) = draft(&fixture, &[WRITES_EXAMPLE, "done"], &person, cancel).await;
+
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, Some(false));
+        assert_eq!(step.grant, Some(crate::protocol::GrantScope::Session));
+        assert!(!step.outcome.verdict.allowed);
+        assert_eq!(step.outcome.verdict.rule, PERSON_FORBADE);
+        assert!(!fixture.root.join("example.html").exists());
+    }
+
+    /// A ceiling that says the call was already refused for the session.
+    struct AlreadyForbidden;
+
+    impl Ceiling for AlreadyForbidden {
+        fn escalate(&self, _call: &ToolCall, _refused_under: &Sandbox) -> Escalation {
+            Escalation::Forbidden
+        }
+    }
+
+    #[tokio::test]
+    async fn what_was_forbidden_for_the_session_is_refused_without_asking() {
+        let fixture = Fixture::new("ask-forbidden");
+        let person = Says::new(true);
+        let (_stop, cancel) = watch::channel(false);
+        let (events, outcome) = draft_under(
+            &fixture,
+            &[WRITES_EXAMPLE, "done"],
+            &AlreadyForbidden,
+            &person,
+            cancel,
+        )
+        .await;
+
+        assert!(
+            person.asked.lock().unwrap().is_empty(),
+            "nobody is asked, even somebody who would say yes"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TurnEvent::CallHeld { .. }))
+        );
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, None);
+        assert_eq!(step.grant, Some(crate::protocol::GrantScope::Session));
+        assert_eq!(step.outcome.verdict.rule, PERSON_FORBADE);
+        assert!(!fixture.root.join("example.html").exists());
     }
 
     #[tokio::test]

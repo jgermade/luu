@@ -18,8 +18,8 @@ import { $reactive } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 9
-const FORMAT = 20
+const PROTOCOL = 11
+const FORMAT = 24
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -46,6 +46,9 @@ export const state = $reactive({
   // stderr, duration_ms }. Null everywhere else, because an in-process tool has
   // no exit code and a zero would be a lie about a fact that does not exist.
   tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms, command }]
+  // What a person answered for the session, in order: a yes (`allow`) or a
+  // no, and whether it was taken back since — marked, never dropped.
+  grants: [],             // [{ kind: "command" | "write", target, allow, turn, step, revoked }]
   // The model calls after the first one of this turn — the tool round trips.
   // The budget describes the first call only, while the backend's usage is
   // summed over all of them, so the two are comparable only with these added in.
@@ -490,7 +493,12 @@ function onProtocol(message) {
 
     // Pushed and then replaced rather than mutated: jq79 does not wake an
     // `:each` binding on a property assigned inside an array element.
-    case "tool_call":
+    case "tool_call": {
+      // Where in the reply this step ended — what has streamed so far,
+      // flushed or not — so the reply can be cut into what each round trip
+      // said. The server's fold says the same of a stored turn.
+      const last = state.messages[state.messages.length - 1]
+      const at = (last?.role === "assistant" ? last.text.length : 0) + pending.length
       state.tools = [...state.tools, {
         step: message.step,
         name: message.name,
@@ -503,8 +511,10 @@ function onProtocol(message) {
         command: null,
         held: null,
         asked: null,
+        at,
       }]
       break
+    }
 
     // The floor refused a write the policy file allows, and the turn is
     // waiting on a person: *allow once* or *deny*. It stays on the call it is
@@ -515,6 +525,27 @@ function onProtocol(message) {
         ? { ...call, held: { turn: message.turn, refused: message.refused } }
         : call)
       break
+
+    // A yes or a no for the session, and one taken back: what the session's
+    // drafts may do, or are refused, without asking. Taken back is a mark on
+    // the list, not a removal. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+    case "granted":
+    case "forbidden": {
+      const allow = message.type === "granted"
+      const same = g => !g.revoked && g.allow === allow && g.kind === message.kind && g.target === message.target
+      if (!state.grants.some(same)) {
+        state.grants = [...state.grants, {
+          kind: message.kind, target: message.target, allow,
+          turn: message.turn, step: message.step, revoked: false,
+        }]
+      }
+      break
+    }
+    case "revoked": {
+      const at = state.grants.findLastIndex(g => !g.revoked && g.kind === message.kind && g.target === message.target)
+      if (at >= 0) state.grants = state.grants.map((g, i) => i === at ? { ...g, revoked: true } : g)
+      break
+    }
 
     case "tool_result":
       state.tools = state.tools.map(call => call.step === message.step
@@ -531,6 +562,9 @@ function onProtocol(message) {
             // recording made before asking existed, and on every call nobody
             // was asked about.
             asked: message.asked ?? null,
+            // What let it through when a person's yes did: `once`, or
+            // `session` — given now, or earlier and nobody was asked.
+            grant: message.grant ?? null,
           }
         : call)
       break
@@ -820,6 +854,7 @@ function reset() {
   state.history = []
   state.selectedTurn = null
   state.jobs = []
+  state.grants = []
   state.tasks = []
   state.budget = null
   state.tools = []
@@ -963,12 +998,21 @@ export function approvePlan(amendment = {}) {
 export const approveJob = (_job, amendment) => approvePlan(amendment)
 export const approveTask = approveJob
 /// The answer to a held call: `allow` runs that one call once under the policy
-/// file; otherwise the model is told a person refused it. `turn` and `step`
+/// file; otherwise the model is told a person refused it. `session` makes
+/// either last: a yes runs every call like it without asking, a no refuses
+/// them without asking, until it is taken back. `turn` and `step`
 /// name the call, so an answer that raced the end of its turn is refused rather
 /// than applied to whatever is held next.
-export function answerCall(turn, step, allow) {
+export function answerCall(turn, step, allow, session = false) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
-  socket.send(JSON.stringify({ type: "answer_call", turn, step, allow }))
+  socket.send(JSON.stringify({ type: "answer_call", turn, step, allow, session }))
+}
+
+/// Takes back a yes or a no given for the session: the next call it covered is
+/// asked again. The answer stays on the session's list, marked.
+export function revokeGrant(kind, target) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type: "revoke_grant", kind, target }))
 }
 
 export function declinePlan() {
@@ -1244,6 +1288,7 @@ export async function refreshLiveSession() {
       replaced: j.replaced || null,
     }))
     state.tasks = state.jobs
+    state.grants = view.grants || []
 
     const msgs = []
     let id = 1
@@ -1355,7 +1400,7 @@ export async function refreshSessionsList() {
 /// machine.
 export async function newSession(choice) {
   const asked =
-    choice && (choice.provider || choice.model || choice.posture || choice.runtime) ? choice : null
+    choice && (choice.provider || choice.model || choice.posture || choice.runtime || choice.lists) ? choice : null
   try {
     const res = await fetch("./api/sessions", {
       method: "POST",
@@ -1411,6 +1456,11 @@ export async function providerModels(name, { facts = false } = {}) {
 /// the server still checks that the name resolves to the same three facts. See
 /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
 ///
+/// A session made from lists — every one the new session's dialog starts
+/// since 2026-10-23 — has no name to say: it is said back as what made it,
+/// its runtime and image and its lists by name, the empty ones left out as
+/// they were when it started (`record::Composed`).
+///
 /// `null` for a session recorded before the posture was in the header, for one
 /// that ran on the server's own policy file, and whenever the view cannot be
 /// read — all three mean *say nothing*, which is what every resume did before.
@@ -1418,12 +1468,22 @@ async function storedPosture(id) {
   try {
     const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, { headers: apiHeaders() })
     if (!res.ok) return null
-    const view = await res.json()
-    return view?.posture?.name ?? null
+    const posture = (await res.json())?.posture
+    if (posture?.composed) {
+      const lists = Object.fromEntries(["shell", "network", "files"]
+        .map(kind => [kind, posture.lists?.[kind]?.name])
+        .filter(([, name]) => name && name !== EMPTY))
+      const { runtime, image } = posture.composed
+      return { runtime, ...(image ? { image } : {}), lists }
+    }
+    return posture?.name ? { posture: posture.name } : null
   } catch {
     return null
   }
 }
+
+/// The name the record gives a list that was not chosen — `policies::EMPTY`.
+const EMPTY = "(empty)"
 
 /// Picks a stored session back up, optionally somewhere else.
 ///
@@ -1438,7 +1498,7 @@ export async function resumeSession(id, choice) {
   const posture = await storedPosture(id)
   const wanted = {
     ...(choice && (choice.provider || choice.model) ? choice : {}),
-    ...(posture ? { posture } : {}),
+    ...(posture || {}),
   }
   const asked = Object.keys(wanted).length ? wanted : null
   try {
@@ -1492,6 +1552,28 @@ export async function renameSession(id, title) {
     return true
   } catch (e) {
     state.error = `Could not rename session: ${e}`
+    return false
+  }
+}
+
+/// Puts a stored session away from the history (`archived`), or back. It is
+/// still there, still resumable: archiving is a column beside it, not the
+/// session. Not the one on screen, which the server refuses.
+export async function archiveSession(id, archived) {
+  try {
+    const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ archived }),
+    })
+    if (!res.ok) {
+      state.error = `Could not ${archived ? "archive" : "restore"} session: ${await res.text()}`
+      return false
+    }
+    await refreshSessionsList()
+    return true
+  } catch (e) {
+    state.error = `Could not ${archived ? "archive" : "restore"} session: ${e}`
     return false
   }
 }

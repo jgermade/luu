@@ -102,6 +102,11 @@
 </div>
 
 <style scoped>
+  /* No arrows on a number: it is typed, and a step of one is nothing in a
+     field that holds thousands of tokens. */
+  input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .field {
     --h: var(--luu-control-md);
     display: flex;

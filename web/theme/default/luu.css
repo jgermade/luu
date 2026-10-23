@@ -39,6 +39,9 @@
      there, a lighter grey as on the tree's. */
   --luu-chat-line: #a8a8a8;
   --luu-chat-hover: #ececec;
+  /* The page's black: not the text's near-black, a grey-blue one for marks
+     beside the text — the bar before a prompt in the chat. */
+  --luu-black: #333a3e;
 
   /* The sixteen colours a shell names, from the author's own terminal
      (`joshua.itermcolors` in github.com/jgermade/sh). Without them xterm
@@ -166,4 +169,25 @@
   --luu-hl-variable: #f8f8f2;
   --luu-hl-property: #f8f8f2;
   --luu-hl-punctuation: #f8f8f2;
+}
+
+/* The page's own greys and the chat's inks, on a dark page. Only on the root:
+   a dark island on a light page — a column's head, the content column in the
+   editor's dark tone — keeps the light page's tree and chat around it, so
+   these are not re-pointed there. The tree is the darkest ground, the chat a
+   step lighter, and a card on either is `--luu-surface`; the chat's inks keep
+   their 7:1 on its ground, as the light ones do on #dddddd. */
+:root[data-theme="dark"] {
+  --luu-divider: #2e2e2e;
+  --luu-tree-bg: #161616;
+  --luu-chat-bg: #1c1c1c;
+  --luu-chat-fg: #ececec;
+  --luu-chat-dim: #b4bcc8;
+  --luu-chat-accent: #9cb8ff;
+  --luu-chat-warn: #f2c27a;
+  --luu-chat-bad: #ff9aa8;
+  --luu-chat-ok: #b2dc84;
+  --luu-chat-line: #3c3c3c;
+  --luu-chat-hover: #262626;
+  --luu-black: #9aa6ad;
 }

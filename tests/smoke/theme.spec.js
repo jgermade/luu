@@ -87,7 +87,7 @@ test("every section renders, and the tokens are read back from the CSS", async (
   const errors = await demo(page)
   // Every link in the index has its section, and every section its link.
   const ids = await page.locator(".index a").evaluateAll(links => links.map(a => a.hash.slice(1)))
-  expect(ids).toHaveLength(25)
+  expect(ids).toHaveLength(26)
   for (const id of ids) await expect(page.locator(`section#${id}`)).toHaveCount(1)
   // The page's ground, as the computed style has it.
   await expect(page.locator(".swatch").first().locator(".value")).toHaveText("#f4f5f8")
@@ -281,6 +281,83 @@ test("a modal's head follows its size, and a tab modal's head is its tabs", asyn
   expect(errors, "the page logged errors").toEqual([])
 })
 
+/**
+ * A head in a tone, with and without tabs: the bar in the tone's strong
+ * colour and the solid badge's ink on it, whatever the size — and on a tab
+ * modal, the chosen tab and its line in that ink, since the accent's line
+ * would vanish on accent. Read against what the tokens compute to, so the
+ * test follows the theme rather than a copy of its values.
+ */
+test("a modal's head can be any tone, with tabs or without", async ({ page }) => {
+  const errors = await demo(page)
+  // What a token computes to, read off an element painted with it.
+  const computed = token => page.evaluate(name => {
+    const probe = document.createElement("div")
+    probe.style.background = `var(${name})`
+    document.body.append(probe)
+    const colour = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return colour
+  }, token)
+  const paint = locator => locator.evaluate(e => ({
+    bg: getComputedStyle(e).backgroundColor,
+    fg: getComputedStyle(e).color,
+  }))
+  const ink = await computed("--luu-on-accent")
+
+  const kind = page.locator("#modal")
+  const TITLES = { accent: "Connect a provider", ok: "Connected", warn: "Runs on the host", bad: "Remove workstation?" }
+  for (const [tone, title] of Object.entries(TITLES)) {
+    await kind.getByRole("radio", { name: tone, exact: true }).click()
+    await kind.getByRole("button", { name: "With this head…" }).click()
+    const dialog = page.getByRole("dialog", { name: title })
+    const head = dialog.locator("header")
+    await expect(head).toHaveClass(new RegExp(`\\btone-${tone}\\b`))
+    // A tone is not the dark island: the page's own values, re-pointed none.
+    await expect(head).not.toHaveAttribute("data-tone", "dark")
+    expect(await paint(head)).toEqual({ bg: await computed(`--luu-${tone}`), fg: ink })
+    await page.keyboard.press("Escape")
+    await expect(dialog).toBeHidden()
+  }
+  // The other three are still what they were: at 30rem, `auto` is part of the
+  // body, and `dark` says it outright whatever the size.
+  await kind.getByRole("radio", { name: "dark", exact: true }).click()
+  await kind.getByRole("button", { name: "With this head…" }).click()
+  await expect(page.getByRole("dialog", { name: "Context of turn 12" }).locator("header"))
+    .toHaveAttribute("data-tone", "dark")
+  await page.keyboard.press("Escape")
+  await kind.getByRole("radio", { name: "auto", exact: true }).click()
+  await kind.getByRole("button", { name: "With this head…" }).click()
+  const auto = page.getByRole("dialog", { name: "Head: auto" }).locator("header")
+  await expect(auto).not.toHaveAttribute("data-tone", "dark")
+  await expect(auto).not.toHaveClass(/\btoned\b/)
+  await page.keyboard.press("Escape")
+
+  // With tabs: the head in the tone, the chosen tab and its line in the ink.
+  const tabs = page.locator("#tab-modal")
+  await tabs.getByRole("radio", { name: "warn", exact: true }).click()
+  await tabs.getByRole("button", { name: "workstation…" }).click()
+  const tabbed = page.getByRole("dialog", { name: "workstation" })
+  const head = tabbed.locator("header")
+  await expect(head).toHaveClass(/\btone-warn\b/)
+  expect((await paint(head)).bg).toBe(await computed("--luu-warn"))
+  const chosen = tabbed.getByRole("tab", { selected: true })
+  await expect(chosen).toBeFocused()
+  expect((await paint(chosen)).fg).toBe(ink)
+  expect((await paint(tabbed.locator(".line"))).bg).toBe(ink)
+  // A tab not chosen is a step back from the ink, not the theme's grey.
+  const other = await paint(tabbed.getByRole("tab", { name: "Limits" }))
+  expect(other.fg).not.toBe(ink)
+  expect(other.fg).not.toBe(await computed("--luu-fg-muted"))
+  await page.keyboard.press("ArrowRight")
+  await expect(tabbed.getByRole("tab", { selected: true })).toHaveText(/Models/)
+  await page.keyboard.press("Escape")
+  await expect(tabbed).toBeHidden()
+  await expect(page.locator("#tab-modal .state")).toContainText("head: warn")
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
 test("a sub-modal comes out of its parent's head, and ESC closes it alone", async ({ page }) => {
   const errors = await demo(page)
   await page.locator("#sub-modal").getByRole("button", { name: "Edit a provider…" }).click()
@@ -346,6 +423,64 @@ test("a sub-modal comes out of its parent's head, and ESC closes it alone", asyn
   await expect(sub).toBeHidden()
   await expect(parent.locator("[inert]")).toHaveCount(0)
 
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The heads' tones as buttons: the ground each tone's token computes to, the
+ * solid badge's ink on it, and `dark` the island the dark head is.
+ */
+test("a button takes the tones a modal's head takes", async ({ page }) => {
+  const errors = await demo(page)
+  const computed = token => page.evaluate(name => {
+    const probe = document.createElement("div")
+    probe.style.background = `var(${name})`
+    document.body.append(probe)
+    const colour = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return colour
+  }, token)
+  const ink = await computed("--luu-on-accent")
+  const tones = page.locator("#button .tones")
+  for (const tone of ["accent", "ok", "warn", "bad"]) {
+    const button = tones.getByRole("button", { name: tone, exact: true })
+    const painted = await button.evaluate(b => [getComputedStyle(b).backgroundColor, getComputedStyle(b).color])
+    expect(painted).toEqual([await computed(`--luu-${tone}`), ink])
+    await expect(button).not.toHaveAttribute("data-tone", "dark")
+  }
+  await expect(tones.getByRole("button", { name: "dark", exact: true })).toHaveAttribute("data-tone", "dark")
+  // A tone's hover is a step from its ground, not the theme's grey.
+  const ok = tones.getByRole("button", { name: "ok", exact: true })
+  await ok.hover()
+  await expect.poll(() => ok.evaluate(b => getComputedStyle(b).backgroundColor)).not.toBe(await computed("--luu-ok"))
+  expect(await ok.evaluate(b => getComputedStyle(b).backgroundColor)).not.toBe(await computed("--luu-hover"))
+  await expect(tones.getByRole("button", { name: "ok, disabled" })).toBeDisabled()
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * One `size` for every control: at sm, md and lg a Button, a TextInput, a
+ * Select, a Choice segmented and a Typeahead are each as tall as the token
+ * says, and on one row their tops line up.
+ */
+test("every control is as tall as its size's token", async ({ page }) => {
+  const errors = await demo(page)
+  await expect(page.locator("#segmented-title")).toContainText("Choice segmented")
+  for (const size of ["sm", "md", "lg"]) {
+    const row = page.locator(`#sizes .size-row[data-size="${size}"]`)
+    const boxes = await row.evaluate(r => [...r.querySelectorAll(".cell")].map(cell => {
+      const box = cell.querySelector(".btn, .field, .select, .seg").getBoundingClientRect()
+      return { h: Math.round(box.height), top: Math.round(box.top) }
+    }))
+    const token = await page.evaluate(z => parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue(`--luu-control-${z}`)), size)
+    expect(boxes).toHaveLength(6)
+    expect(new Set(boxes.map(b => b.h)), `heights at ${size}`).toEqual(new Set([token]))
+    expect(new Set(boxes.map(b => b.top)).size, `tops at ${size}`).toBe(1)
+  }
+  // A number is typed: no arrows beside it.
+  await expect.poll(() => page.locator('#text-input input[type="number"]').first()
+    .evaluate(i => getComputedStyle(i).appearance)).toBe("textfield")
   expect(errors, "the page logged errors").toEqual([])
 })
 
@@ -506,26 +641,59 @@ test("tabs, menus, tooltips and modals open, move and close", async ({ page }) =
 })
 
 /**
- * The head's *Integrate* opens what a page writes to use the theme: a tab per
- * step, each snippet with a button that copies it as written.
+ * How a section is used: its *Integrate*, beside its title, opens that
+ * section's own — a `Modal` for one component, a `TabModal` with a tab per
+ * component for several — each snippet a parent component that uses it,
+ * coloured by the server's highlighter, and copied as written. The head's
+ * *Integrate* is what a page loads first.
  */
-test("the integration snippets open from the head, by step, and copy", async ({ page, context }) => {
+test("each section opens how it is used, a tab per component, coloured", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"])
   const errors = await demo(page)
-  await page.locator(".top").getByRole("button", { name: "Integrate" }).click()
-  const dialog = page.getByRole("dialog", { name: "Integrate" })
-  await expect(dialog).toBeVisible()
-  await expect(dialog.getByRole("tab", { name: "Load it" })).toHaveAttribute("aria-selected", "true")
-  await expect(dialog.locator(".snippet-code").first()).toContainText('href="/theme/default/tokens.css"')
 
+  // The page's own: the files it loads.
+  await page.locator(".top").getByRole("button", { name: "Integrate" }).click()
+  let dialog = page.getByRole("dialog", { name: "Load the theme" })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("tab")).toHaveCount(0)
+  await expect(dialog.locator(".snippet-code").first()).toContainText('href="/theme/default/tokens.css"')
   await dialog.getByRole("button", { name: "Copy" }).first().click()
   await expect(dialog.getByRole("button", { name: "Copied" })).toHaveCount(1)
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("</script>")
+  await dialog.getByRole("button", { name: "Done" }).click()
+  await expect(dialog).toBeHidden()
 
-  await dialog.getByRole("tab", { name: "Tokens" }).click()
-  await expect(dialog.locator(".snippet")).toHaveCount(2)
-  await expect(dialog.locator(".snippet-code").first()).toContainText("--luu-accent")
+  // Every section has one, and one component is a plain modal: the Button,
+  // used in a parent that imports it, written as a tag, coloured.
+  await expect(page.locator(".content section.section > .head").getByRole("button", { name: "Integrate" })).toHaveCount(26)
+  await page.locator("#button").getByRole("button", { name: "Integrate" }).first().click()
+  dialog = page.getByRole("dialog", { name: "Button" })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("tab")).toHaveCount(0)
+  const code = dialog.locator(".snippet-code").first()
+  await expect(code).toContainText('await import("@theme/components/button.html")')
+  await expect(code).toContainText("<Button variant=\"ok\"")
+  await expect(code.locator(".hl-tag").first()).toBeVisible()
+  await expect(code.locator(".hl-keyword").first()).toBeVisible()
+  // A colour of its own, not the text's.
+  const [tag, ink] = await code.evaluate(el => [
+    getComputedStyle(el.querySelector(".hl-tag")).color,
+    getComputedStyle(el).color,
+  ])
+  expect(tag).not.toBe(ink)
+  await page.keyboard.press("Escape")
+  await expect(dialog).toBeHidden()
 
+  // Several components: a tab each, each with its own parent.
+  await page.locator("#modals").getByRole("button", { name: "Integrate" }).first().click()
+  dialog = page.getByRole("dialog", { name: "Modals" })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("tab")).toHaveText(["Modal", "TabModal", "SubModal"])
+  await expect(dialog.locator(".snippet-code").first()).toContainText("<Modal :open=")
+  await dialog.getByRole("tab", { name: "SubModal" }).click()
+  await expect(dialog.locator(".snippet-head code")).toHaveText("workstation.html")
+  await expect(dialog.locator(".snippet-code").first()).toContainText("<SubModal :open=")
+  await expect(dialog.locator(".snippet-code .hl-tag").first()).toBeVisible()
   await dialog.getByRole("button", { name: "Done" }).click()
   await expect(dialog).toBeHidden()
   expect(errors, "the page logged errors").toEqual([])

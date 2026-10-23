@@ -29,6 +29,25 @@
     color: var(--luu-fg);
     font: var(--luu-text-md)/var(--luu-leading) var(--luu-font-sans);
   }
+  /* The code colours, for the integration snippets. Their spans arrive
+     through `:html`, which a component's scoped style does not reach, so the
+     rules are the page's, as `app.css` has them for the app; the values are
+     luu.css's `--luu-hl-*`. */
+  .hl-keyword { color: var(--luu-hl-keyword); }
+  .hl-operator { color: var(--luu-hl-operator); }
+  .hl-tag { color: var(--luu-hl-tag); }
+  .hl-string { color: var(--luu-hl-string); }
+  .hl-comment { color: var(--luu-hl-comment); font-style: italic; }
+  .hl-number { color: var(--luu-hl-number); }
+  .hl-constant { color: var(--luu-hl-constant); }
+  .hl-function { color: var(--luu-hl-function); }
+  .hl-attribute { color: var(--luu-hl-attribute); }
+  .hl-type { color: var(--luu-hl-type); font-style: italic; }
+  .hl-constructor { color: var(--luu-hl-constructor); }
+  .hl-variable { color: var(--luu-hl-variable); }
+  .hl-property { color: var(--luu-hl-property); }
+  .hl-punctuation { color: var(--luu-hl-punctuation); }
+  .hl-literal { color: var(--luu-hl-literal); }
 </style>
 </head>
 <body>

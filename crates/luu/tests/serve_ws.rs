@@ -182,8 +182,11 @@ fn agency_factory() -> luu::serve::AgencyFactory {
 /// `[worker]` block and nothing else, like the binary's own.
 fn describe_factory() -> luu::serve::DescribeFactory {
     Arc::new(
-        |policy: Option<std::path::PathBuf>, runtime: Option<agent_core::worker::Runtime>| {
-            let path = policy.unwrap_or_else(|| "luu.toml".into());
+        |chosen: Option<luu::serve::Chosen>, runtime: Option<agent_core::worker::Runtime>| {
+            let path = match chosen {
+                Some(luu::serve::Chosen::File(path)) => path,
+                _ => "luu.toml".into(),
+            };
             let config = agent_core::worker::WorkerConfig::from_file(&path).unwrap_or_default();
             luu::serve::Where {
                 policy: path.display().to_string(),
@@ -207,11 +210,12 @@ fn describe_factory() -> luu::serve::DescribeFactory {
 fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory {
     // The runtime is not honoured here: no test builds a worker, and what the
     // routes decide about a variant is decided before this is called.
-    Arc::new(move |policy: Option<std::path::PathBuf>, _runtime| {
+    Arc::new(move |chosen: Option<luu::serve::Chosen>, _runtime| {
         let base = base.clone();
         Box::pin(async move {
-            let policy = match policy {
-                Some(path) => SandboxPolicy::from_file(&path)?,
+            let policy = match chosen {
+                Some(luu::serve::Chosen::File(path)) => SandboxPolicy::from_file(&path)?,
+                Some(luu::serve::Chosen::Environment(environment)) => environment.policy.clone(),
                 None => SandboxPolicy::default(),
             };
             Ok(Agency::new(
@@ -296,6 +300,7 @@ async fn server_storing_selecting(
         agency_for: Some(agency_factory_rooted(base.clone())),
         describe_for: None,
         postures: Default::default(),
+        environments: Default::default(),
         postures_path: None,
     })
     .await
@@ -347,6 +352,7 @@ async fn server_over_tree(base: &std::path::Path, access: Access) -> String {
         agency_for: Some(agency_factory_rooted(base.to_path_buf())),
         describe_for: None,
         postures: Default::default(),
+        environments: Default::default(),
         postures_path: None,
     })
     .await
@@ -483,6 +489,7 @@ async fn server_with_postures(
         agency_for: Some(agency_factory()),
         describe_for: Some(describe_factory()),
         postures,
+        environments: Default::default(),
         postures_path: Some("config.toml".into()),
     })
     .await
@@ -491,6 +498,17 @@ async fn server_with_postures(
     let address = serving.address();
     tokio::spawn(serving.run());
     address.to_string()
+}
+
+/// A folder outside the checkout's tracked files and outside the draft's
+/// floor, for the tests whose failure is a write that should not have
+/// happened. Not the system's temporary folder: since 2026-10-23 a draft may
+/// write there (`session::draft_floor`). Cargo's own scratch for integration
+/// tests, under `target/`, which nothing tracks.
+fn outside_the_floor() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).expect("cargo's scratch for tests");
+    dir.canonicalize().expect("cargo's scratch for tests")
 }
 
 async fn next_message(socket: &mut Socket) -> Value {
@@ -1701,7 +1719,7 @@ async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
     // it at the checkout means a red run that also edits the repository. That
     // is how this test was first written and the first failing run replaced
     // `crates/luu/Cargo.toml` with the word `broken`.
-    let scratch = std::env::temp_dir().join(format!("luu-draft-floor-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-draft-floor-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by a draft\"}}}}\n```",
@@ -1777,7 +1795,7 @@ async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
 /// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
 #[tokio::test]
 async fn a_refusal_in_a_draft_names_the_draft_it_was_refused_in() {
-    let scratch = std::env::temp_dir().join(format!("luu-draft-named-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-draft-named-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by a draft\"}}}}\n```",
@@ -1847,7 +1865,7 @@ async fn a_refusal_in_a_draft_names_the_draft_it_was_refused_in() {
 /// floor, and nobody asked. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
 #[tokio::test]
 async fn a_write_the_floor_refuses_is_put_to_a_person_and_runs_once_on_a_yes() {
-    let scratch = std::env::temp_dir().join(format!("luu-allow-once-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-allow-once-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"allowed once\"}}}}\n```",
@@ -1913,6 +1931,104 @@ async fn a_write_the_floor_refuses_is_put_to_a_person_and_runs_once_on_a_yes() {
     let _ = std::fs::remove_file(&scratch);
 }
 
+/// **Deny, applied to the session**: a no that lasts. The same write, a step later, is
+/// refused without anyone being asked; taken back, it is asked again — and the
+/// session's list keeps the no, marked as taken back. Protocol 11. See
+/// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+#[tokio::test]
+async fn a_no_for_the_session_is_refused_unasked_until_it_is_taken_back() {
+    let scratch = outside_the_floor().join(format!("luu-forbid-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&scratch);
+    let call = format!(
+        "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":{{\"path\":{},\"content\":\"no\"}}}}\n```",
+        serde_json::to_string(&scratch.display().to_string()).expect("a path"),
+    );
+    let address = server_writable(
+        vec![
+            call.clone(),
+            call.clone(),
+            "Done.".into(),
+            call,
+            "Done.".into(),
+        ],
+        &scratch,
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
+    )
+    .await;
+    let (held, _) = until(&mut socket, "call_held").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": held["turn"], "step": held["step"],
+                           "allow": false, "session": true}),
+    )
+    .await;
+    // Said before the refusal it causes, so the page lists it first.
+    let (forbidden, _) = until(&mut socket, "forbidden").await;
+    assert_eq!(forbidden["kind"], "write");
+    assert_eq!(forbidden["target"], scratch.display().to_string());
+    assert_eq!(forbidden["step"], held["step"]);
+    let (first, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(first["asked"], false);
+    assert_eq!(first["grant"], "session");
+    assert_eq!(first["verdict"]["allowed"], false);
+
+    // The next one is refused, and nobody is asked.
+    let (second, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(second["step"], held["step"].as_u64().unwrap() + 1);
+    assert_eq!(second["verdict"]["allowed"], false);
+    assert_eq!(second["grant"], "session", "{second}");
+    assert!(second.get("asked").is_none(), "{second}");
+    assert!(
+        second["verdict"]["rule"]
+            .as_str()
+            .is_some_and(|rule| rule.contains("rest of this session")),
+        "{}",
+        second["verdict"]["rule"],
+    );
+    until(&mut socket, "ended").await;
+    assert!(!scratch.exists());
+
+    // Taken back: said, and kept on the list, marked.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "revoke_grant", "kind": "write",
+                           "target": scratch.display().to_string()}),
+    )
+    .await;
+    let (revoked, _) = until(&mut socket, "revoked").await;
+    assert_eq!(revoked["target"], scratch.display().to_string());
+    let view = get(&address, "/api/sessions/live").await;
+    let listed = view["grants"].as_array().expect("the session's answers");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["allow"], false);
+    assert_eq!(listed[0]["revoked"], true);
+
+    // And asked again.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "once more"}),
+    )
+    .await;
+    let (again, _) = until(&mut socket, "call_held").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": again["turn"], "step": again["step"],
+                           "allow": false}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+    let _ = std::fs::remove_file(&scratch);
+}
+
 /// The other half of the floor, and the half that says it is a floor rather
 /// than a wall: **a draft still reads.** Exploration is what it is for.
 #[tokio::test]
@@ -1942,7 +2058,7 @@ async fn a_draft_turn_still_reads_what_the_policy_file_grants() {
 /// goes through. The path is one nothing else reads, so the test can write it.
 #[tokio::test]
 async fn a_write_added_at_the_gate_goes_through() {
-    let scratch = std::env::temp_dir().join(format!("luu-write-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-write-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by the task\"}}}}\n```",
@@ -3035,11 +3151,27 @@ async fn the_settings_route_carries_the_floor_a_draft_runs_on() {
             .is_some_and(|text| text.contains("read-write")),
         "the session grants writes; the floor is what takes them away",
     );
-    // No `writes` key at all, deliberately: an always-empty list is a question
-    // mark where the panel says a sentence.
+    // It writes to its scratch and nowhere else: `.tmp` at the top of the
+    // tree, and the system's temporary folder. See `session::draft_floor`.
+    let writes: Vec<&str> = floor["writes"]
+        .as_array()
+        .expect("where it may write")
+        .iter()
+        .map(|path| path.as_str().expect("a path"))
+        .collect();
+    assert!(writes.contains(&".tmp"), "{writes:?}");
+    let temp = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temporary folder");
     assert!(
-        floor.get("writes").is_none(),
-        "the floor grants no writes by construction and says so in words",
+        writes
+            .iter()
+            .all(|path| *path == ".tmp" || *path == temp.display().to_string()),
+        "nothing but the scratch, and the temporary folder in full: {writes:?}",
+    );
+    assert!(
+        !reads.contains(&".tmp"),
+        "a folder it writes is listed once, as written"
     );
     assert_eq!(floor["network"], false, "the mock server reaches nothing");
     assert_eq!(

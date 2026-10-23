@@ -194,7 +194,30 @@ use crate::trace::TraceMessage;
 /// refused a write the policy file allows and a person was asked — and the
 /// `person` authority on a verdict's stamp. `tool_result.asked` is additive.
 /// See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
-pub const FORMAT: u32 = 20;
+///
+/// **21: the posture carries its `lists`**, the shell, network and files lists
+/// it resolved to, each by its name and the SHA-256 of what it holds. The three
+/// facts said *where* a session ran and not *what it could do there*: a command
+/// added to a policy file between two runs left them identical. Absent in every
+/// stream before it, which a resume reads as *unknown* and lets through, as it
+/// does a posture of `None`. See
+/// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+///
+/// **22 carries `granted` and `revoked`**, new lines on the protocol channel —
+/// a person's yes for the session, and one taken back — which a resume folds
+/// into what the session may do without asking; and `tool_result.grant`,
+/// additive. Protocol 10. See the same record, step 2a.
+///
+/// **23 carries `forbidden`**, a person's no for the session, folded as
+/// `granted` is; `revoked` takes back either, and the fold marks what it took
+/// back rather than dropping it. Protocol 11.
+///
+/// **24: a posture may be `composed`** — made from a runtime and three lists
+/// by name, as the new session's dialog makes every session, rather than from
+/// a posture or an environment of the file — with the runtime and image a
+/// resume makes it again on. Absent for every other posture, and in every
+/// stream before it.
+pub const FORMAT: u32 = 24;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -220,6 +243,66 @@ pub struct Posture {
     /// Whether the session could reach the network at all. The per-job grant
     /// narrows inside this and never widens it.
     pub network: bool,
+    /// The shell, network and files lists it resolved to — by name and by the
+    /// hash of what they hold, since a name is a label and the list behind it
+    /// can be edited tomorrow. `None` in a stream written before format 21.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lists: Option<Lists>,
+    /// Where it was made from a runtime and the three lists by name rather
+    /// than taken from a file: what a resume makes it again from, with the
+    /// lists' names. `None` for a posture, an environment or the server's own
+    /// policy file. Boxed: a header is the largest line by far, and this is
+    /// what tipped it over clippy's `large_enum_variant`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed: Option<Box<Composed>>,
+}
+
+/// What a composed posture ran on, by the words a new session asks with: the
+/// runtime's name, never the worker's label, and the image a container ran.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Composed {
+    pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+}
+
+/// The three lists a posture resolved to.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Lists {
+    pub shell: Hashed,
+    pub network: Hashed,
+    pub files: Hashed,
+}
+
+/// One list, by its name and the SHA-256 of its canonical contents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Hashed {
+    pub name: String,
+    /// Lower-case hex.
+    pub sha256: String,
+}
+
+impl Lists {
+    /// Whether two runs could do the same things: the hashes, never the names.
+    pub fn same(&self, other: &Self) -> bool {
+        self.shell.sha256 == other.shell.sha256
+            && self.network.sha256 == other.network.sha256
+            && self.files.sha256 == other.files.sha256
+    }
+
+    /// Each list as its name and the head of its hash, for a person to compare.
+    pub fn describe(&self) -> String {
+        let short = |list: &Hashed| {
+            let head: String = list.sha256.chars().take(8).collect();
+            format!("{} {head}", list.name)
+        };
+        format!(
+            "shell {}, network {}, files {}",
+            short(&self.shell),
+            short(&self.network),
+            short(&self.files)
+        )
+    }
 }
 
 impl Posture {
@@ -233,10 +316,18 @@ impl Posture {
     ///
     /// This is what a resume compares before it hands a person a gate. See
     /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+    ///
+    /// And since format 21 the lists, by their hashes, where both runs recorded
+    /// them: one that did not is *unknown*, and is let through as a posture of
+    /// `None` is.
     pub fn same_place(&self, other: &Self) -> bool {
         self.runtime == other.runtime
             && self.enforcement == other.enforcement
             && self.network == other.network
+            && match (&self.lists, &other.lists) {
+                (Some(mine), Some(theirs)) => mine.same(theirs),
+                _ => true,
+            }
     }
 
     /// The three facts, for a refusal that has to name both sides.
@@ -249,7 +340,15 @@ impl Posture {
             true => "network",
             false => "no network",
         };
-        format!("{}, {}, {network}", self.runtime, self.enforcement)
+        match &self.lists {
+            None => format!("{}, {}, {network}", self.runtime, self.enforcement),
+            Some(lists) => format!(
+                "{}, {}, {network}; {}",
+                self.runtime,
+                self.enforcement,
+                lists.describe()
+            ),
+        }
     }
 }
 
@@ -384,6 +483,43 @@ mod tests {
         assert!(matches!(parsed[1], RecordLine::Protocol { at_ms: 12, .. }));
     }
 
+    /// A composed posture says what made it, in the words a session asks
+    /// with; any other says nothing, so a stream from before 24 reads the same.
+    #[test]
+    fn a_composed_posture_says_its_runtime_and_image_and_another_says_nothing() {
+        let plain = Posture {
+            name: None,
+            runtime: "host".into(),
+            enforcement: "kernel".into(),
+            network: false,
+            lists: None,
+            composed: None,
+        };
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("composed").is_none());
+        let composed = Posture {
+            name: Some("rust · empty · project".into()),
+            runtime: "docker (luu-worker:dev)".into(),
+            composed: Some(Box::new(Composed {
+                runtime: "docker".into(),
+                image: Some("luu-worker:dev".into()),
+            })),
+            ..plain.clone()
+        };
+        let json = serde_json::to_value(&composed).unwrap();
+        assert_eq!(json["composed"]["runtime"], "docker");
+        assert_eq!(json["composed"]["image"], "luu-worker:dev");
+        let back: Posture = serde_json::from_value(json).unwrap();
+        assert_eq!(back, composed);
+        assert!(
+            composed.same_place(&Posture {
+                composed: None,
+                ..composed.clone()
+            }),
+            "how it was made is not where it ran"
+        );
+    }
+
     /// The comparison a resume makes before it hands a person a gate.
     #[test]
     fn two_postures_are_the_same_place_by_their_facts_and_never_by_their_name() {
@@ -392,6 +528,8 @@ mod tests {
             runtime: "docker (luu-worker:dev)".into(),
             enforcement: "kernel".into(),
             network: false,
+            lists: None,
+            composed: None,
         };
 
         assert!(
@@ -424,6 +562,63 @@ mod tests {
             network: true,
             ..contained.clone()
         }));
+    }
+
+    /// Since format 21: what the lists hold, by hash, where both runs said.
+    #[test]
+    fn the_lists_decide_by_their_hashes_and_unknown_is_let_through() {
+        let hashed = |name: &str, sha256: &str| Hashed {
+            name: name.into(),
+            sha256: sha256.into(),
+        };
+        let lists = Lists {
+            shell: hashed("rust", "aa"),
+            network: hashed("off", "bb"),
+            files: hashed("project", "cc"),
+        };
+        let listed = Posture {
+            name: Some("container".into()),
+            runtime: "host".into(),
+            enforcement: "kernel".into(),
+            network: false,
+            lists: Some(lists.clone()),
+            composed: None,
+        };
+
+        let renamed = Lists {
+            shell: hashed("dev", "aa"),
+            ..lists.clone()
+        };
+        assert!(
+            listed.same_place(&Posture {
+                lists: Some(renamed),
+                ..listed.clone()
+            }),
+            "a list renamed with the same contents is the same place",
+        );
+        let widened = Lists {
+            shell: hashed("rust", "dd"),
+            ..lists.clone()
+        };
+        assert!(
+            !listed.same_place(&Posture {
+                lists: Some(widened),
+                ..listed.clone()
+            }),
+            "a command added to the list is not",
+        );
+        assert!(
+            listed.same_place(&Posture {
+                lists: None,
+                ..listed.clone()
+            }),
+            "a stream from before format 21 says nothing, and is let through",
+        );
+        assert!(
+            listed
+                .describe()
+                .ends_with("shell rust aa, network off bb, files project cc")
+        );
     }
 
     /// Each of the three rules, both ways, through JSON and back.

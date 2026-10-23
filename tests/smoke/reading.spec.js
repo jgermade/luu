@@ -126,6 +126,28 @@ test("the chat says the model is reading what a call returned", async ({ page })
   await expect(answer.locator(".parts .text").last()).toHaveText("Done.", { timeout: 10_000 })
   await expect(answer.locator(".waiting")).toHaveCount(0)
 
+  // What came back, under the card without opening it: the first lines of
+  // what the model got, and how many more. Opened, the preview gives way to
+  // the body.
+  const call = answer.locator(".call").first()
+  await expect(call.locator(".preview pre")).toContainText("# luu")
+  await expect(call.locator(".preview .more")).toContainText(/\+\d+ lines/)
+  await call.locator(".preview").click()
+  await expect(call.locator(".preview")).toHaveCount(0)
+  await expect(call.locator(".body")).toBeVisible()
+
+  // The Context modal shows the turn as it went: the reply up to the call,
+  // what the call gave back, the call after it, and the last reply.
+  await page.locator(".options button.ctx").click()
+  const trips = page.locator("section.answer")
+  await expect(trips.locator("header")).toContainText("1 round trip")
+  await expect(trips.locator(".entry.reply .b-history").first()).toContainText('"read_file"')
+  await expect(trips.locator(".entry.result .role")).toHaveText("tool · read_file")
+  await expect(trips.locator(".entry.result pre")).toContainText("[read_file] ok")
+  await expect(trips.locator(".entry.call")).toContainText(/call 2 sent \d+ tokens/)
+  await expect(trips.locator(".entry.reply").last()).toContainText("not sent yet")
+  await expect(trips.locator(".entry.reply").last()).toContainText("Done.")
+
   expect(errors).toEqual([])
 })
 

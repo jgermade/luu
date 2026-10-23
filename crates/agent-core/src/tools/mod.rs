@@ -219,6 +219,9 @@ pub struct ToolStep {
     /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked: Option<bool>,
+    /// What let it through when a person's yes did: this call, or the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<crate::protocol::GrantScope>,
 }
 
 impl ToolStep {
@@ -477,27 +480,43 @@ const THINK_CLOSE: &str = "</think>";
 ///
 /// See `RECORD/2026-10-21.a-call-written-while-thinking.completed.md`.
 pub fn mask_thinking(text: &str) -> std::borrow::Cow<'_, str> {
-    if !text.contains(THINK_OPEN) && !text.contains(THINK_CLOSE) {
+    let spans = thinking_spans(text);
+    if spans.is_empty() {
         return std::borrow::Cow::Borrowed(text);
     }
     let mut bytes = text.as_bytes().to_vec();
+    for span in spans {
+        bytes[span].fill(b' ');
+    }
+    // Each span starts and ends on an ASCII tag or the end of the text, so
+    // blanking it whole leaves the rest exactly as it was.
+    std::borrow::Cow::Owned(String::from_utf8(bytes).expect("whole spans blanked with ASCII"))
+}
+
+/// Where the thinking is in `text`, tags included, in the three shapes
+/// [`mask_thinking`] names — which blanks these spans, and the Anthropic
+/// backend cuts them, because a reply sent back as text must not carry its
+/// reasoning as if it had been said.
+pub fn thinking_spans(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    if !text.contains(THINK_OPEN) && !text.contains(THINK_CLOSE) {
+        return spans;
+    }
     let mut at = 0;
     if let Some(close) = text.find(THINK_CLOSE)
         && !text[..close].contains(THINK_OPEN)
     {
         at = close + THINK_CLOSE.len();
-        bytes[..at].fill(b' ');
+        spans.push(0..at);
     }
     while let Some(open) = text[at..].find(THINK_OPEN).map(|found| at + found) {
         let end = text[open..]
             .find(THINK_CLOSE)
             .map_or(text.len(), |found| open + found + THINK_CLOSE.len());
-        bytes[open..end].fill(b' ');
+        spans.push(open..end);
         at = end;
     }
-    // Each span starts and ends on an ASCII tag or the end of the text, so
-    // blanking it whole leaves the rest exactly as it was.
-    std::borrow::Cow::Owned(String::from_utf8(bytes).expect("whole spans blanked with ASCII"))
+    spans
 }
 
 /// Where a reply landed against the tool-call format, for a probe that

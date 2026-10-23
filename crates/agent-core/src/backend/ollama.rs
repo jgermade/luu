@@ -173,6 +173,7 @@ fn show_facts(shown: &serde_json::Value) -> super::ModelFacts {
             .get("capabilities")
             .and_then(serde_json::Value::as_array)
             .map(|caps| caps.iter().any(|cap| cap == "tools")),
+        ..Default::default()
     }
 }
 

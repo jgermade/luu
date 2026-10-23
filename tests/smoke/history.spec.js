@@ -117,6 +117,8 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   await say("uno")
   await page.click('button[title^="New session"]')
   await page.getByRole("dialog", { name: "Sessions" }).locator('button:has-text("Start session")').click()
+  // The dialog plays its way out, and the page is the dialog's until it has gone.
+  await expect(dialog).toHaveCount(0)
   await expect(page.locator(".transcript article.user")).toHaveCount(0)
   await say("dos")
   await say("dos más")
@@ -135,6 +137,8 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   // once another is — it holds nothing to open.
   await page.click('button[title^="New session"]')
   await page.getByRole("dialog", { name: "Sessions" }).locator('button:has-text("Start session")').click()
+  // The dialog plays its way out, and the page is the dialog's until it has gone.
+  await expect(dialog).toHaveCount(0)
   await expect(page.locator(".transcript article.user")).toHaveCount(0)
   await rowsAre(["*0t", "2t", "2t"])
   await pickOther()
@@ -154,6 +158,65 @@ test("an earlier session loads when picked, and only writing in it moves it up",
   await expect(dialog.locator("ul.sessions li")).toHaveCount(0)
   await expect(dialog).toContainText("No session matches")
   await page.keyboard.press("Escape")
+
+  expect(errors).toEqual([])
+})
+
+/**
+ * An earlier session is archived — out of the history, kept — restored, and
+ * deleted only after a confirmation that offers archiving instead. After the
+ * test above, which leaves two sessions with turns: the one on screen, which
+ * offers neither, and one other. See
+ * `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`, appended
+ * 2026-10-23.
+ */
+test("an earlier session is archived, restored, and deleted after a confirmation", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  const dialog = page.getByRole("dialog", { name: "Sessions" })
+  await page.click('button[title="Earlier sessions"]')
+  const rows = dialog.locator("ul.sessions li")
+  await expect(rows).toHaveCount(2)
+  await expect(dialog.locator("ul.sessions li.on .row-acts")).toHaveCount(0)
+  const other = dialog.locator("ul.sessions li:not(.on)")
+  const id = await other.locator(".pick").getAttribute("title")
+
+  // Archived: out of History, into Archived.
+  await other.getByRole("button", { name: /^Archive / }).click()
+  await expect(rows).toHaveCount(1)
+  const archivedTab = dialog.getByRole("tab", { name: /Archived/ })
+  await expect(archivedTab).toContainText("1")
+  await archivedTab.click()
+  await expect(rows).toHaveCount(1)
+  await expect(rows.locator(".pick")).toHaveAttribute("title", id)
+  await expect(rows).toContainText("archived")
+  expect((await (await fetch(`${BASE}/api/sessions`)).json()).find(s => s.id === id).archived_at).toBeTruthy()
+
+  // Restored: back in History.
+  await rows.getByRole("button", { name: /^Restore / }).click()
+  await expect(rows).toHaveCount(0)
+  await expect(dialog).toContainText("Nothing archived")
+  await dialog.getByRole("tab", { name: "History" }).click()
+  await expect(rows).toHaveCount(2)
+
+  // Deleted from Archived, after a confirmation: cancelled first, then meant.
+  await dialog.locator("ul.sessions li:not(.on)").getByRole("button", { name: /^Archive / }).click()
+  await archivedTab.click()
+  await rows.getByRole("button", { name: /^Delete / }).click()
+  const confirm = page.getByRole("dialog", { name: "Delete session" })
+  await expect(confirm).toBeVisible()
+  await expect(confirm).toContainText("cannot be undone")
+  await confirm.getByRole("button", { name: "Cancel" }).click()
+  await expect(confirm).toBeHidden()
+  await expect(rows).toHaveCount(1)
+  await rows.getByRole("button", { name: /^Delete / }).click()
+  await confirm.getByRole("button", { name: "Delete" }).click()
+  await expect(rows).toHaveCount(0)
+  expect((await (await fetch(`${BASE}/api/sessions`)).json()).some(s => s.id === id)).toBe(false)
 
   expect(errors).toEqual([])
 })

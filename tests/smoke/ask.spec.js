@@ -8,19 +8,21 @@ import { fileURLToPath } from "node:url"
 
 /**
  * A write the floor refuses, put to the person in front of the page: the card
- * the call is drawn in shows what it would write and asks, and *Allow once*
+ * the call is drawn in shows what it would write and asks, and *Allow*
  * writes it. Against a live `luu serve` on the mock, under this checkout's own
  * `luu.toml`, which grants `.` at read-write — so the floor is what refuses.
  *
- * The file lands in `.tmp/`, which is gitignored: this test's success *is* a
+ * The file lands in `target/`, which is gitignored: this test's success *is* a
  * write into the checkout, and a red run must not be one into anything tracked.
+ * Not `.tmp/`, which was its home until a draft could write there without
+ * asking (2026-10-23).
  * See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
  */
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const PORT = 7901
 const BASE = `http://127.0.0.1:${PORT}`
-const TARGET = `.tmp/smoke-allow-once-${process.pid}.html`
+const TARGET = `target/smoke-allow-once-${process.pid}.html`
 const CONTENT = "<h1>allowed once</h1>"
 
 const WRITE = `Creating it.
@@ -129,10 +131,10 @@ test("a write the draft may not make is asked, and allowed once from the chat", 
   await expect(card.locator(".name")).toHaveText("write_file")
   await expect(card.locator(".status")).toHaveText("waiting for you")
   await expect(card.locator(".question pre")).toHaveText(CONTENT)
-  await expect(card.locator(".why")).toContainText("grants no writes")
+  await expect(card.locator(".why")).toContainText("writes only to scratch")
   expect(existsSync(join(root, TARGET)), "nothing is written before the answer").toBe(false)
 
-  await card.locator('button:has-text("Allow once")').click()
+  await card.locator('button:text-is("Allow")').click()
 
   const done = page.locator(".call", { hasText: "write_file" })
   await expect(done.locator(".status")).toHaveText("allowed once", { timeout: 15_000 })
@@ -163,7 +165,7 @@ test("a page that reloads while a call is held gets the question back", async ({
   await expect(card).toBeVisible({ timeout: 15_000 })
   await expect(card.locator(".question pre")).toHaveText(CONTENT)
 
-  await card.locator('button:has-text("Allow once")').click()
+  await card.locator('button:text-is("Allow")').click()
   await expect.poll(() => existsSync(target), { timeout: 15_000 }).toBe(true)
   expect(readFileSync(target, "utf8")).toBe(CONTENT)
 })
