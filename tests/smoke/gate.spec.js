@@ -427,8 +427,10 @@ test("choosing another provider in the dialog lists that provider's models", asy
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
   // A session starts here: the accent's head, not the dark island.
-  await expect(starter.locator("header")).toHaveClass(/\btone-accent\b/)
-  await expect(starter.locator("header")).not.toHaveAttribute("data-tone", "dark")
+  // Its own head, first: the delete confirmation inside it has one too.
+  const head = starter.locator("header").first()
+  await expect(head).toHaveClass(/\btone-accent\b/)
+  await expect(head).not.toHaveAttribute("data-tone", "dark")
   // It leaves as it came, with an animation, and is unmounted after: ESC
   // plays the way out before the dialog goes.
   await starter.evaluate(d => Promise.all(d.getAnimations().map(a => a.finished)))
@@ -598,10 +600,11 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  // 23, Appearance's palette since 2026-10-21 and the permissions' shield
-  // since 2026-10-23. The tree's own shapes are the theme's, in
-  // `theme/default/files.svg`, not the page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(25)
+  // 23, Appearance's palette since 2026-10-21, and since 2026-10-23 the
+  // permissions' shield and a session's archive, restore and delete. The
+  // tree's own shapes are the theme's, in `theme/default/files.svg`, not the
+  // page's.
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(28)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be
@@ -610,7 +613,7 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   const sessions = page.getByRole("dialog", { name: "Sessions" })
   await expect(sessions.locator("ul.sessions li").first()).toBeVisible()
   await expect(sessions.locator("ul.sessions li.on")).toHaveCount(1)
-  await expect(sessions.locator("ul.sessions li.on .close")).toHaveCount(0)
+  await expect(sessions.locator("ul.sessions li.on .row-acts")).toHaveCount(0)
   // One dialog, two tabs: the clock opens it on History, the `+` on New
   // session, and either tab is a click away from the other.
   await expect(sessions.getByRole("tab", { selected: true })).toHaveText("History")

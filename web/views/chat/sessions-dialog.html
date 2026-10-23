@@ -6,7 +6,7 @@
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`, and for what
   // each tab decides, `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`
   // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
-  const { state, resumeSession, deleteSession, refreshSessionsList } = await import("@web/lib/store.js")
+  const { state, resumeSession, deleteSession, archiveSession, refreshSessionsList } = await import("@web/lib/store.js")
   const {
     ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
     choosePlace, chooseList,
@@ -16,11 +16,16 @@
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Button = await import("@web/theme/default/components/button.html")
+  const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const ProviderModels = await import("./provider-models.html")
 
-  const TABS = [
+  // Three tabs: start one, the earlier ones, and the ones put away. An
+  // archived session is still there to restore — archiving keeps it out of
+  // the history's way without deleting it.
+  $: TABS = [
     { value: "new", label: "New session" },
     { value: "history", label: "History" },
+    { value: "archived", label: "Archived", count: archivedCount || undefined },
   ]
   // The tab is the store's, so the head's buttons choose it; a click on a tab
   // here goes the same way.
@@ -125,10 +130,11 @@
   // were last written to.
 
   let query = ""
-  // Deleting asks twice: the first click on a row's × arms it.
-  let armed = ""
   let error = ""
   let switching = ""
+  // The session a delete is being confirmed for, or `null`: deleting goes for
+  // good, so it is asked in a sheet of its own, with archiving offered beside.
+  let confirming = null
 
   // Asked again on every opening: the counts move with every turn.
   refreshSessionsList()
@@ -144,7 +150,7 @@
     else if (frames > 0) requestAnimationFrame(() => focusSearch(frames - 1))
   }
   const later = (fn, frames = 3) => frames ? requestAnimationFrame(() => later(fn, frames - 1)) : fn()
-  $: tab === "history" && later(() => focusSearch())
+  $: (tab === "history" || tab === "archived") && later(() => focusSearch())
 
   const named = s => !!s?.title && s.title !== "live" && !s.title.startsWith("session-")
   const nameOf = s => named(s) ? s.title : "Untitled session"
@@ -163,16 +169,22 @@
 
   // The order the server's `written_at` gives, and a session nothing was sent
   // in left out unless it is the one on screen — it holds nothing to open.
+  // An archived one is in its own tab, newest put away first.
   $: listed = [...(state.sessions || [])]
-    .filter(s => s.turns > 0 || isCurrent(s))
+    .filter(s => !s.archived_at && (s.turns > 0 || isCurrent(s)))
     .sort((a, b) => (b.written_at ?? b.started_at ?? 0) - (a.written_at ?? a.started_at ?? 0))
+  $: archived = [...(state.sessions || [])]
+    .filter(s => s.archived_at)
+    .sort((a, b) => b.archived_at - a.archived_at)
+  $: archivedCount = archived.length
   $: words = fold(query).split(/\s+/).filter(Boolean)
-  $: rows = words.length
-    ? listed.filter(s => {
+  const matching = list => words.length
+    ? list.filter(s => {
       const hay = fold(`${nameOf(s)} ${s.id}`)
       return words.every(word => hay.includes(word))
     })
-    : listed
+    : list
+  $: rows = matching(tab === "archived" ? archived : listed)
 
   const pick = async s => {
     if (switching) return
@@ -186,14 +198,15 @@
     error = state.error || "the session could not be opened"
   }
 
-  const remove = async (s, event) => {
-    event.stopPropagation()
-    if (armed !== s.id) {
-      armed = s.id
-      return
-    }
-    armed = ""
-    await deleteSession(s.id)
+  // Archived, or back in the history.
+  const archive = async (s, yes) => {
+    error = ""
+    if (!(await archiveSession(s.id, yes))) error = state.error || "the session could not be moved"
+  }
+  const remove = async () => {
+    const s = confirming
+    confirming = null
+    if (s) await deleteSession(s.id)
   }
 </script>
 
@@ -267,9 +280,9 @@
   <!-- History's search, above the list and still while it scrolls: close to
        the tabs it belongs to, and clear of the rows. -->
   <template :slot.bar>
-    <div :if="tab === 'history'" class="sessions-search">
+    <div :if="tab === 'history' || tab === 'archived'" class="sessions-search">
       <TextInput size="lg" :model="query" placeholder="Search by name" label="Search sessions" clearable autofocus
-                 @input="armed = ''" />
+                 @input="query = $event.detail" />
     </div>
   </template>
 
@@ -277,7 +290,7 @@
   <div :if="tab === 'history'" class="panel">
     <p :if="error" class="error">{{ error }}</p>
 
-    <ul :if="rows.length" class="sessions" @click="armed = ''">
+    <ul :if="rows.length" class="sessions">
       <li :each="s in rows" :key="s.id" :class.on="isCurrent(s)">
         <button type="button" class="pick" :title="s.id" :disabled="!!switching" @click="pick(s)">
           <span class="name" :class.untitled="!named(s)">{{ nameOf(s) }}</span>
@@ -285,18 +298,64 @@
             {{ when(s) }} · {{ s.turns }} {{ s.turns === 1 ? "turn" : "turns" }}<span :if="isCurrent(s)"> · open</span><span :if="switching === s.id"> · opening…</span>
           </span>
         </button>
-        <!-- Only where the server would take it: not the session on screen. -->
-        <button :if="!isCurrent(s) && s.id !== 'live'" type="button" class="close"
-                :class.armed="armed === s.id"
-                :title="armed === s.id ? 'Click again to delete this session and its stream' : 'Delete this session'"
-                @click="remove(s, $event)">
-          <svg class="ic"><use href="#i-close"/></svg>
-        </button>
+        <!-- Only where the server would take them: not the session on screen. -->
+        <span :if="!isCurrent(s) &amp;&amp; s.id !== 'live'" class="row-acts">
+          <button type="button" class="act archive" title="Archive: out of the history, kept to restore"
+                  :aria-label="`Archive ${nameOf(s)}`" @click="archive(s, true)">
+            <svg class="ic"><use href="#i-archive"/></svg>
+          </button>
+          <button type="button" class="act delete" title="Delete this session and its stream"
+                  :aria-label="`Delete ${nameOf(s)}`" @click="confirming = s">
+            <svg class="ic"><use href="#i-trash"/></svg>
+          </button>
+        </span>
       </li>
     </ul>
-    <p :if="!rows.length && words.length" class="dim">No session matches “{{ query.trim() }}”.</p>
+    <p :if="!rows.length &amp;&amp; words.length" class="dim">No session matches “{{ query.trim() }}”.</p>
     <p :if="!listed.length" class="dim">No sessions yet.</p>
   </div>
+
+  <!-- ---- archived ---- -->
+  <div :if="tab === 'archived'" class="panel">
+    <p :if="error" class="error">{{ error }}</p>
+    <ul :if="rows.length" class="sessions archived">
+      <li :each="s in rows" :key="s.id">
+        <span class="pick" :title="s.id">
+          <span class="name" :class.untitled="!named(s)">{{ nameOf(s) }}</span>
+          <span class="facts dim">
+            {{ when(s) }} · {{ s.turns }} {{ s.turns === 1 ? "turn" : "turns" }} · archived {{ when({ written_at: s.archived_at }) }}
+          </span>
+        </span>
+        <span class="row-acts">
+          <button type="button" class="act restore" title="Restore it to the history"
+                  :aria-label="`Restore ${nameOf(s)}`" @click="archive(s, false)">
+            <svg class="ic"><use href="#i-restore"/></svg>
+          </button>
+          <button type="button" class="act delete" title="Delete this session and its stream"
+                  :aria-label="`Delete ${nameOf(s)}`" @click="confirming = s">
+            <svg class="ic"><use href="#i-trash"/></svg>
+          </button>
+        </span>
+      </li>
+    </ul>
+    <p :if="!rows.length &amp;&amp; words.length" class="dim">No archived session matches “{{ query.trim() }}”.</p>
+    <p :if="!archived.length" class="dim">Nothing archived. A session archived from History waits here, to restore or delete.</p>
+  </div>
+
+  <!-- Deleting goes for good: asked in a sheet of its own, with the way to
+       keep it out of the way without losing it beside. -->
+  <SubModal :open="!!confirming" title="Delete session" width="26rem" @close="confirming = null">
+    <p class="confirm">
+      <b>{{ confirming ? nameOf(confirming) : "" }}</b> and its stream are deleted for good: it cannot be
+      opened again, and this cannot be undone.
+    </p>
+    <p :if="confirming &amp;&amp; !confirming.archived_at" class="dim small">To keep it out of the history without losing it, archive it instead.</p>
+    <template :slot.foot>
+      <Button variant="ghost" @click="confirming = null">Cancel</Button>
+      <Button :if="confirming &amp;&amp; !confirming.archived_at" @click="archive(confirming, true), confirming = null">Archive</Button>
+      <Button variant="danger" @click="remove()">Delete</Button>
+    </template>
+  </SubModal>
 
   <!-- The foot is the tab's: the two ways out of New, and how many there are
        in History. -->
@@ -360,12 +419,20 @@
   .sessions li.on .name { font-weight: 600; }
   .name.untitled { color: var(--luu-fg-muted); font-style: italic; }
   .facts { font-size: 11px; font-variant-numeric: tabular-nums; }
-  .close {
-    flex: none; background: none; border: none; color: var(--luu-fg-muted);
-    padding: .3rem; margin-right: .3rem; border-radius: 4px; cursor: pointer; opacity: .5;
+  /* A row's actions: quiet until the row is pointed at, then each lights
+     under the pointer — a delete in the bad tone. */
+  .row-acts { flex: none; display: flex; gap: .1rem; margin-right: .3rem; opacity: .45; }
+  .sessions li:hover .row-acts, .row-acts:focus-within { opacity: 1; }
+  .act {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; color: var(--luu-fg-muted);
+    padding: .3rem; border-radius: 4px; cursor: pointer;
   }
-  .close:hover { opacity: 1; background: var(--luu-hover); }
-  .close:active { background: var(--luu-active); }
-  .close.armed { opacity: 1; color: var(--luu-bad); background: var(--luu-bad-soft); }
-  .close .ic { width: 12px; height: 12px; }
+  .act:hover { background: var(--luu-hover); color: var(--luu-fg); }
+  .act:active { background: var(--luu-active); }
+  .act.delete:hover { background: var(--luu-bad-soft); color: var(--luu-bad); }
+  .act .ic { width: 14px; height: 14px; }
+  /* Not opened from here: restored first. */
+  .sessions.archived .pick { cursor: default; }
+  .confirm { margin: 0 0 .5rem; overflow-wrap: anywhere; }
 </style>

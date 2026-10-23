@@ -598,6 +598,10 @@ pub struct SessionSummary {
     /// from a fold, which does not know when it was stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub written_at: Option<u64>,
+    /// When it was archived — put away from the history without being
+    /// deleted — or `None` for one that is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<u64>,
 }
 
 /// One answer a person gave for the session, as the session's list keeps it.
@@ -771,6 +775,7 @@ impl SessionView {
             turns: self.turns.len(),
             record: self.record.clone(),
             written_at: None,
+            archived_at: None,
         }
     }
 

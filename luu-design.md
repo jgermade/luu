@@ -1162,7 +1162,11 @@ it on New session and the clock on History, one dialog of one height
 History is a search over the names and ids, and the list in the order sessions were last
 **written** to, so opening one does not move it and a turn in it does (`written_at`, a store
 column since schema 4, which the live row carries from its own last turn), with the sessions
-nothing was sent in left out. **A session names itself**: when its first turn ends and nobody
+nothing was sent in left out. **A third tab, Archived**, holds what was put away without being
+deleted: a History row archives or deletes, an Archived row restores or deletes, and a delete is
+confirmed in a sheet over the dialog that offers archiving instead. Archiving is `archived_at`, a
+store column since schema 5 that no save touches, set by `PATCH /api/sessions/{id}` with
+`archived`; the session on screen is neither archived nor deleted. **A session names itself**: when its first turn ends and nobody
 named it, the server asks the same model for a two-to-six-word title from the first prompt, with
 the turn's own window, and drops the stream at the first line of answer or at sixty seconds —
 never over a name somebody gave, never on the mock, and not at all under `[sessions] auto-name =

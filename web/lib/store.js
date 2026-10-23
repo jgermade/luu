@@ -1541,6 +1541,28 @@ export async function renameSession(id, title) {
   }
 }
 
+/// Puts a stored session away from the history (`archived`), or back. It is
+/// still there, still resumable: archiving is a column beside it, not the
+/// session. Not the one on screen, which the server refuses.
+export async function archiveSession(id, archived) {
+  try {
+    const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ archived }),
+    })
+    if (!res.ok) {
+      state.error = `Could not ${archived ? "archive" : "restore"} session: ${await res.text()}`
+      return false
+    }
+    await refreshSessionsList()
+    return true
+  } catch (e) {
+    state.error = `Could not ${archived ? "archive" : "restore"} session: ${e}`
+    return false
+  }
+}
+
 export async function deleteSession(id) {
   try {
     const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, {

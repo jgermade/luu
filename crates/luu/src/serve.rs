@@ -8032,11 +8032,15 @@ async fn resume_session(
     Json(summary).into_response()
 }
 
-/// What a rename asks for. One field, because one field is all a page may
-/// change about a session that is not deleting it.
+/// What a page may change about a stored session short of deleting it: its
+/// title, and whether it is archived — put away from the history, still
+/// there to restore. Either or both.
 #[derive(serde::Deserialize)]
 struct Rename {
-    title: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    archived: Option<bool>,
 }
 
 /// Names a session.
@@ -8051,13 +8055,43 @@ struct Rename {
 /// An empty title is refused rather than stored: a session with no name is a
 /// row nobody can pick out of the history, and the default (the id) is a better
 /// name than nothing.
+///
+/// **Archiving** is the same kind of change: a column beside the fold, not the
+/// fold — the session is still resumable and its stream is untouched. The
+/// session on screen is not archived: it is the one being written to.
 async fn rename_session(
     State(state): State<AppRouterState>,
     Path(id): Path<String>,
     Json(asked): Json<Rename>,
 ) -> Response {
     let id = bare(&id);
-    let title = asked.title.trim().to_string();
+    if let Some(archived) = asked.archived {
+        let active_id = state.app.session_id.lock().await.clone();
+        if id == LIVE_SESSION || id == active_id {
+            return (
+                StatusCode::BAD_REQUEST,
+                "the session on screen is not archived: start or open another first",
+            )
+                .into_response();
+        }
+        let Some(store_mutex) = &state.app.store else {
+            return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
+        };
+        let at = archived.then(crate::session::now_ms);
+        return match store_mutex.lock().await.archive(id, at) {
+            Ok(true) => Json(serde_json::json!({ "id": id, "archived_at": at })).into_response(),
+            Ok(false) => not_found("session"),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        };
+    }
+    let Some(title) = asked.title else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "nothing to change: name a title or archived",
+        )
+            .into_response();
+    };
+    let title = title.trim().to_string();
     if title.is_empty() {
         return (StatusCode::BAD_REQUEST, "a session's title cannot be empty").into_response();
     }
