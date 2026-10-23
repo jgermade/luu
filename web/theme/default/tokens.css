@@ -65,7 +65,9 @@
      says where the focus is without competing with what is chosen. */
   --luu-outline-width: 1px;
   --luu-outline-color: #999;
-  --luu-overlay: rgba(17, 20, 26, .42);
+  /* What a modal lays over the page behind it: a mid grey, the same for
+     every dialog — the page's `Modal`, `TabModal`, a `SubModal`'s sheet. */
+  --luu-overlay: rgba(128, 128, 128, .55);
 
   /* ---- type --------------------------------------------------------------- */
 
@@ -163,7 +165,7 @@
   --luu-bad-soft: #2a1519;
 
   --luu-focus: #7aa2f7;
-  --luu-overlay: rgba(0, 0, 0, .56);
+  --luu-overlay: rgba(128, 128, 128, .55);
 
   --luu-shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
   --luu-shadow-md: 0 4px 12px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
