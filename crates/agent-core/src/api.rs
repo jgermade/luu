@@ -594,6 +594,47 @@ pub struct SessionSummary {
     pub written_at: Option<u64>,
 }
 
+/// One answer a person gave for the session, as the session's list keeps it.
+///
+/// Taken back is a mark, not a removal: the list is what was decided and
+/// when, and what is in force is the part not taken back. The defaults read a
+/// view stored under protocol 10, which had only yeses and kept no call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionAnswer {
+    pub kind: crate::protocol::GrantKind,
+    pub target: String,
+    /// A yes ([`ServerMessage::Granted`]) or a no ([`ServerMessage::Forbidden`]).
+    #[serde(default = "yes")]
+    pub allow: bool,
+    /// The call it answered.
+    #[serde(default)]
+    pub turn: TurnId,
+    #[serde(default)]
+    pub step: u32,
+    /// Taken back since ([`ServerMessage::Revoked`]).
+    #[serde(default)]
+    pub revoked: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl SessionAnswer {
+    /// What it is about.
+    pub fn grant(&self) -> crate::protocol::Grant {
+        crate::protocol::Grant {
+            kind: self.kind,
+            target: self.target.clone(),
+        }
+    }
+
+    /// In force: not taken back.
+    pub fn holds(&self) -> bool {
+        !self.revoked
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionView {
     pub id: String,
@@ -634,10 +675,11 @@ pub struct SessionView {
     /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
     #[serde(default)]
     pub posture: Option<record::Posture>,
-    /// What a person allowed for the session, in the order they allowed it,
-    /// less what was taken back. Empty in a stream before protocol 10.
+    /// What a person answered for the session — yes and, since protocol 11,
+    /// no — in the order they answered, what was taken back marked rather than
+    /// dropped. Empty in a stream before protocol 10.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub grants: Vec<crate::protocol::Grant>,
+    pub grants: Vec<SessionAnswer>,
     /// The three resend rules the stream's **last** header names — what this
     /// session's turns were rendered under.
     ///
@@ -1246,20 +1288,45 @@ impl SessionView {
                     call.held = None;
                 }
             }
-            // What the session may do without asking, as the stream last left
-            // it: a resume picks up the grants a person gave.
-            ServerMessage::Granted { kind, target, .. } => {
-                let grant = crate::protocol::Grant {
-                    kind: *kind,
-                    target: target.clone(),
-                };
-                if !self.grants.contains(&grant) {
-                    self.grants.push(grant);
+            // What a person answered for the session, as the stream last left
+            // it: a resume picks up what is in force, and the page lists it all.
+            ServerMessage::Granted {
+                turn,
+                step,
+                kind,
+                target,
+            }
+            | ServerMessage::Forbidden {
+                turn,
+                step,
+                kind,
+                target,
+            } => {
+                let allow = matches!(message, ServerMessage::Granted { .. });
+                let already = self.grants.iter().any(|answer| {
+                    answer.holds()
+                        && answer.allow == allow
+                        && answer.kind == *kind
+                        && answer.target == *target
+                });
+                if !already {
+                    self.grants.push(SessionAnswer {
+                        kind: *kind,
+                        target: target.clone(),
+                        allow,
+                        turn: *turn,
+                        step: *step,
+                        revoked: false,
+                    });
                 }
             }
+            // Marked, not dropped: the answer stays on the list, taken back.
             ServerMessage::Revoked { kind, target } => {
-                self.grants
-                    .retain(|grant| !(grant.kind == *kind && grant.target == *target));
+                if let Some(answer) = self.grants.iter_mut().rev().find(|answer| {
+                    answer.holds() && answer.kind == *kind && answer.target == *target
+                }) {
+                    answer.revoked = true;
+                }
             }
         }
     }
@@ -2056,21 +2123,30 @@ mod tests {
             },
         }
     }
-    /// What a person allowed for the session is folded from the stream, so a
-    /// resume has it; what was taken back is not.
+    /// What a person answered for the session is folded from the stream, so a
+    /// resume has it; what was taken back stays on the list, marked.
     #[test]
     fn grants_are_folded_and_taken_back() {
-        use crate::protocol::{Grant, GrantKind};
+        use crate::protocol::GrantKind;
         let mut view = SessionView::new("s", "mock", "mock");
-        let granted = |target: &str| ServerMessage::Granted {
-            turn: 1,
+        let granted = |turn: TurnId, target: &str| ServerMessage::Granted {
+            turn,
             step: 1,
             kind: GrantKind::Command,
             target: target.into(),
         };
-        view.apply_protocol(0, &granted("git"));
-        view.apply_protocol(0, &granted("git"));
-        view.apply_protocol(0, &granted("npm"));
+        view.apply_protocol(0, &granted(1, "git"));
+        view.apply_protocol(0, &granted(1, "git"));
+        view.apply_protocol(0, &granted(2, "npm"));
+        view.apply_protocol(
+            0,
+            &ServerMessage::Forbidden {
+                turn: 3,
+                step: 2,
+                kind: GrantKind::Command,
+                target: "curl".into(),
+            },
+        );
         view.apply_protocol(
             0,
             &ServerMessage::Revoked {
@@ -2078,12 +2154,37 @@ mod tests {
                 target: "git".into(),
             },
         );
+        // Given again after it was taken back: a second entry.
+        view.apply_protocol(0, &granted(4, "git"));
+        let listed: Vec<_> = view
+            .grants
+            .iter()
+            .map(|answer| {
+                (
+                    answer.target.as_str(),
+                    answer.allow,
+                    answer.turn,
+                    answer.revoked,
+                )
+            })
+            .collect();
         assert_eq!(
-            view.grants,
-            [Grant {
-                kind: GrantKind::Command,
-                target: "npm".into()
-            }]
+            listed,
+            [
+                ("git", true, 1, true),
+                ("npm", true, 2, false),
+                ("curl", false, 3, false),
+                ("git", true, 4, false),
+            ]
         );
+    }
+
+    /// A view stored under protocol 10 had only yeses, and no call.
+    #[test]
+    fn a_stored_grant_from_before_the_no_reads_as_a_yes() {
+        let answer: SessionAnswer =
+            serde_json::from_str(r#"{"kind":"command","target":"git"}"#).expect("reads");
+        assert!(answer.allow && answer.holds());
+        assert_eq!((answer.turn, answer.step), (0, 0));
     }
 }

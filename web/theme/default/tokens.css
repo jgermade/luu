@@ -134,7 +134,7 @@
 :root[data-theme="dark"], [data-tone="dark"] {
   --luu-bg: #111111;
   --luu-sunken: #0a0a0a;
-  --luu-surface: #191919;
+  --luu-surface: #232323;
   --luu-hover: #222222;
   --luu-active: #2e2e2e;
   --luu-selected: #2a3241;

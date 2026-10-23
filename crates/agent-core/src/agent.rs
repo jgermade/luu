@@ -53,6 +53,10 @@ pub enum Answer {
     /// This call, and every one like it in the session's drafts until it is
     /// taken back. Remembering it is the asker's: the loop runs the call.
     Session,
+    /// No to this call, and to every one like it in the session's drafts until
+    /// it is taken back: they are refused without asking. Remembering it is the
+    /// asker's, as with [`Self::Session`].
+    Forbid,
 }
 
 /// Somebody who can answer for one call the floor refused.
@@ -78,6 +82,9 @@ pub enum Escalation {
     Granted(Sandbox),
     /// A person may allow it: a yes runs it under this.
     Ask(Sandbox),
+    /// A person already refused it for the session: refused with
+    /// [`PERSON_FORBADE`], and nobody is asked again.
+    Forbidden,
 }
 
 /// How far a refused call may go, decided before anyone is asked — so a click
@@ -116,6 +123,12 @@ pub struct Ask<'a> {
 /// line. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`, *the run,
 /// and the no that was not heard*.
 pub const PERSON_REFUSED: &str = "a person was asked and refused this call. Do not retry it or call another tool about it: answer them in plain text.";
+
+/// What the model is told when a person refused calls like this one for the
+/// session — now, or earlier. The same instruction as [`PERSON_REFUSED`], for
+/// the same reason, and *for this session* so that it does not try again a
+/// turn later.
+pub const PERSON_FORBADE: &str = "a person refused calls like this one for the rest of this session. Do not retry it or call another tool about it: answer them in plain text.";
 
 /// How many tool calls one turn may make before it has to answer.
 ///
@@ -419,6 +432,10 @@ pub async fn run_agent_turn(
             result = run_call(tools, &call, wider, &limits).await;
             grant = Some(crate::protocol::GrantScope::Session);
         }
+        if let Escalation::Forbidden = &escalation {
+            result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
+            grant = Some(crate::protocol::GrantScope::Session);
+        }
         if let (Some(ask), Escalation::Ask(wider)) = (ask, &escalation) {
             let mut cancelled = cancel.clone();
             let answer = tokio::select! {
@@ -440,6 +457,11 @@ pub async fn run_agent_turn(
                 Some(Answer::Deny) => {
                     result = ToolOutcome::denied(Verdict::deny(PERSON_REFUSED));
                     asked = Some(false);
+                }
+                Some(Answer::Forbid) => {
+                    result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
+                    asked = Some(false);
+                    grant = Some(crate::protocol::GrantScope::Session);
                 }
                 // Cancelled while it waited: the refusal stands as the floor
                 // gave it, and the turn ends where a cancel ends any turn.
@@ -1367,6 +1389,60 @@ mod tests {
         assert_eq!(step.asked, None);
         assert_eq!(step.grant, Some(crate::protocol::GrantScope::Session));
         assert!(fixture.root.join("example.html").exists());
+    }
+
+    #[tokio::test]
+    async fn a_no_for_the_session_refuses_the_call_and_says_so() {
+        let fixture = Fixture::new("ask-forbid");
+        let person = Says::answering(Answer::Forbid);
+        let (_stop, cancel) = watch::channel(false);
+        let (_, outcome) = draft(&fixture, &[WRITES_EXAMPLE, "done"], &person, cancel).await;
+
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, Some(false));
+        assert_eq!(step.grant, Some(crate::protocol::GrantScope::Session));
+        assert!(!step.outcome.verdict.allowed);
+        assert_eq!(step.outcome.verdict.rule, PERSON_FORBADE);
+        assert!(!fixture.root.join("example.html").exists());
+    }
+
+    /// A ceiling that says the call was already refused for the session.
+    struct AlreadyForbidden;
+
+    impl Ceiling for AlreadyForbidden {
+        fn escalate(&self, _call: &ToolCall, _refused_under: &Sandbox) -> Escalation {
+            Escalation::Forbidden
+        }
+    }
+
+    #[tokio::test]
+    async fn what_was_forbidden_for_the_session_is_refused_without_asking() {
+        let fixture = Fixture::new("ask-forbidden");
+        let person = Says::new(true);
+        let (_stop, cancel) = watch::channel(false);
+        let (events, outcome) = draft_under(
+            &fixture,
+            &[WRITES_EXAMPLE, "done"],
+            &AlreadyForbidden,
+            &person,
+            cancel,
+        )
+        .await;
+
+        assert!(
+            person.asked.lock().unwrap().is_empty(),
+            "nobody is asked, even somebody who would say yes"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TurnEvent::CallHeld { .. }))
+        );
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, None);
+        assert_eq!(step.grant, Some(crate::protocol::GrantScope::Session));
+        assert_eq!(step.outcome.verdict.rule, PERSON_FORBADE);
+        assert!(!fixture.root.join("example.html").exists());
     }
 
     #[tokio::test]

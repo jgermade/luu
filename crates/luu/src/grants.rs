@@ -15,6 +15,10 @@
 //!
 //! What `deny` names, and what no list names, is never asked. A posture has no
 //! `ask`, so under one only the write is.
+//!
+//! A person answers once, or for the session; for the session a yes runs what
+//! it covers without asking again, and — since protocol 11 — a no refuses it
+//! without asking again, until either is taken back.
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -27,9 +31,50 @@ use agent_core::tools::{ToolCall, writes_one_path};
 
 use crate::policies::{Resolved, Zones};
 
-/// What a person allowed for the session, shared between the turn that asks
-/// and the socket that takes a grant back.
-pub type Granted = Arc<Mutex<BTreeSet<Grant>>>;
+/// What a person answered for the session and is still in force: what runs
+/// without asking, and what is refused without asking. Never both for one
+/// thing: an answer in force means nobody is asked about it again.
+#[derive(Debug, Default)]
+pub struct Answers {
+    pub allowed: BTreeSet<Grant>,
+    pub forbidden: BTreeSet<Grant>,
+}
+
+impl Answers {
+    /// What a session's list leaves in force: every answer not taken back.
+    pub fn in_force(list: &[agent_core::api::SessionAnswer]) -> Self {
+        let mut answers = Self::default();
+        for answer in list.iter().filter(|answer| answer.holds()) {
+            answers.give(answer.grant(), answer.allow);
+        }
+        answers
+    }
+
+    /// A yes or a no for the session. Whether it is news.
+    pub fn give(&mut self, grant: Grant, allow: bool) -> bool {
+        let (to, from) = match allow {
+            true => (&mut self.allowed, &mut self.forbidden),
+            false => (&mut self.forbidden, &mut self.allowed),
+        };
+        from.remove(&grant);
+        to.insert(grant)
+    }
+
+    /// Takes back whatever is in force for `grant`. Whether there was one.
+    pub fn take_back(&mut self, grant: &Grant) -> bool {
+        // Both, not either: `|` rather than `||`.
+        self.allowed.remove(grant) | self.forbidden.remove(grant)
+    }
+
+    pub fn clear(&mut self) {
+        self.allowed.clear();
+        self.forbidden.clear();
+    }
+}
+
+/// [`Answers`], shared between the turn that asks and the socket that takes
+/// one back.
+pub type Answered = Arc<Mutex<Answers>>;
 
 /// How far a refused call in a draft may go.
 pub struct DraftCeiling {
@@ -38,14 +83,14 @@ pub struct DraftCeiling {
     wider: Sandbox,
     /// The environment's shell list, where there is one.
     shell: Option<Zones>,
-    granted: Granted,
+    answers: Answered,
 }
 
 impl DraftCeiling {
     pub fn new(
         session: &Sandbox,
         environment: Option<&Resolved>,
-        granted: Granted,
+        answers: Answered,
         authority: Authority,
     ) -> Self {
         let mut policy = session.to_policy();
@@ -70,15 +115,8 @@ impl DraftCeiling {
         Self {
             wider,
             shell: environment.map(|environment| environment.shell().clone()),
-            granted,
+            answers,
         }
-    }
-
-    fn already(&self, grant: &Grant) -> bool {
-        self.granted
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains(grant)
     }
 }
 
@@ -120,9 +158,18 @@ impl Ceiling for DraftCeiling {
                 }
             }
         };
-        match self.already(&grant) {
-            true => Escalation::Granted(wider),
-            false => Escalation::Ask(wider),
+        // Only what could be asked about can have been answered, so a no for
+        // the session is looked for here rather than before the lists.
+        let answers = self
+            .answers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if answers.forbidden.contains(&grant) {
+            Escalation::Forbidden
+        } else if answers.allowed.contains(&grant) {
+            Escalation::Granted(wider)
+        } else {
+            Escalation::Ask(wider)
         }
     }
 }
@@ -256,11 +303,11 @@ mod tests {
         let environment =
             environment("[shell.s]\nallow = [\"ls\"]\nask = [\"git\"]\ndeny = [\"curl\"]\n");
         let (session, floor) = sandboxes(&root, &environment);
-        let granted = Granted::default();
+        let answers = Answered::default();
         let ceiling = DraftCeiling::new(
             &session,
             Some(&environment),
-            granted.clone(),
+            answers.clone(),
             Authority::Person(None),
         );
         let run = |program: &str| call("run_command", serde_json::json!({ "argv": [program] }));
@@ -290,14 +337,69 @@ mod tests {
             "ls was not refused for its name, so a yes would change nothing"
         );
 
-        granted.lock().unwrap().insert(Grant {
+        let git = Grant {
             kind: GrantKind::Command,
             target: "git".into(),
-        });
+        };
+        answers.lock().unwrap().give(git.clone(), true);
         assert!(matches!(
             ceiling.escalate(&run("git"), &floor),
             Escalation::Granted(_)
         ));
+
+        // A no for the session replaces the yes, and is refused unasked.
+        answers.lock().unwrap().give(git.clone(), false);
+        assert!(matches!(
+            ceiling.escalate(&run("git"), &floor),
+            Escalation::Forbidden
+        ));
+        // Taken back: asked again.
+        assert!(answers.lock().unwrap().take_back(&git));
+        assert!(
+            !answers.lock().unwrap().take_back(&git),
+            "nothing left to take"
+        );
+        assert!(matches!(
+            ceiling.escalate(&run("git"), &floor),
+            Escalation::Ask(_)
+        ));
+        // And a no never reaches past the lists: curl is denied, not forbidden.
+        answers.lock().unwrap().give(
+            Grant {
+                kind: GrantKind::Command,
+                target: "curl".into(),
+            },
+            false,
+        );
+        assert!(matches!(
+            ceiling.escalate(&run("curl"), &floor),
+            Escalation::Refused
+        ));
+    }
+
+    /// A resume puts back what the list leaves in force, yes and no.
+    #[test]
+    fn what_is_in_force_is_what_was_not_taken_back() {
+        use agent_core::api::SessionAnswer;
+        let answer = |target: &str, allow: bool, revoked: bool| SessionAnswer {
+            kind: GrantKind::Command,
+            target: target.into(),
+            allow,
+            turn: 1,
+            step: 1,
+            revoked,
+        };
+        let answers = Answers::in_force(&[
+            answer("git", true, true),
+            answer("npm", true, false),
+            answer("curl", false, false),
+            answer("make", false, true),
+        ]);
+        let names = |set: &BTreeSet<Grant>| -> Vec<String> {
+            set.iter().map(|grant| grant.target.clone()).collect()
+        };
+        assert_eq!(names(&answers.allowed), ["npm"]);
+        assert_eq!(names(&answers.forbidden), ["curl"]);
     }
 
     #[test]
@@ -308,7 +410,7 @@ mod tests {
         let ceiling = DraftCeiling::new(
             &session,
             Some(&environment),
-            Granted::default(),
+            Answered::default(),
             Authority::Person(None),
         );
         let run = |program: &str| call("run_command", serde_json::json!({ "argv": [program] }));
@@ -381,7 +483,7 @@ mod tests {
         let session = Sandbox::new(&policy, &root).unwrap();
         let floor = session.read_only();
         let ceiling =
-            DraftCeiling::new(&session, None, Granted::default(), Authority::Person(None));
+            DraftCeiling::new(&session, None, Answered::default(), Authority::Person(None));
         let write = call(
             "write_file",
             serde_json::json!({ "path": "a.txt", "content": "x" }),

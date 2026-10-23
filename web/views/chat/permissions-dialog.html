@@ -1,17 +1,18 @@
 <script :setup>
-  // Permissions: what the session may do and what it did, side by side — so
-  // a person can start lax and narrow the lists from what was actually used.
-  // Asked for in so many words: *visualizar los permisos concedidos y la
+  // Permissions: what the session did and who decided it, beside what decided
+  // it — so a person can start lax and narrow the lists from what was actually
+  // used. Asked for in so many words: *visualizar los permisos concedidos y la
   // actividad autorizada y rechazada, con la idea de ser muy laxo al
   // principio, y revisando esta información, poder ir afinándolo*. See
   // `RECORD/2026-10-22.policies-not-postures.WIP.md`.
   //
-  // Three tabs over what the page already has: **Activity**, every tool call
-  // of the session and who let it through or stopped it; **Used**, the same
-  // by program and by file, beside the zone each is in now, and as lists to
-  // start from; **Granted**, the session's grants with their ×, the lists as
-  // written, and what a draft may do without asking. Nothing here changes a
-  // list: that is Settings' (row 51 of the roadmap).
+  // Four tabs over what the page already has: **Activity**, every tool call of
+  // the session in one of four words — *granted*, *granted once*, *denied*,
+  // *forbidden* — each a link to what decided it; **Granted** and
+  // **Forbidden**, what a person answered for the session, yes and no, taken
+  // back marked rather than dropped; **Policies**, the lists and what a draft
+  // does without asking. Nothing here changes a list: that is Settings' (row
+  // 51 of the roadmap).
   const { state, revokeGrant } = await import("@web/lib/store.js")
   const { ui, closePermissions, showPermissionsTab } = await import("@web/lib/ui.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
@@ -35,98 +36,156 @@
   const subjectOf = call => Array.isArray(call.arguments?.argv)
     ? call.arguments.argv.join(" ")
     : typeof call.arguments?.path === "string" ? call.arguments.path : ""
-  const writes = name => name === "write_file" || name === "edit_file"
+  const kindOf = call => call.name === "run_command" ? "command"
+    : call.name === "write_file" || call.name === "edit_file" ? "write"
+    : null
+  // A path as the server names a grant: without `.` and `..`, and relative to
+  // the working directory where it is inside it.
+  const relativeOf = path => {
+    const base = state.settings?.base || ""
+    const parts = []
+    for (const part of (path.startsWith("/") || !base ? path : `${base}/${path}`).split("/")) {
+      if (!part || part === ".") continue
+      if (part === "..") parts.pop()
+      else parts.push(part)
+    }
+    const full = (path.startsWith("/") || base ? "/" : "") + parts.join("/")
+    if (base && full === base) return ""
+    return base && full.startsWith(base + "/") ? full.slice(base.length + 1) : full
+  }
+  const targetOf = call => kindOf(call) === "command" ? programOf(call)
+    : typeof call.arguments?.path === "string" ? relativeOf(call.arguments.path)
+    : ""
 
-  // Who let it through or stopped it, in one word, and the rule in full.
+  // Who decided, in one of four words. *Granted*: a list, the floor or a yes
+  // for the session; *granted once*: a yes for this call; *denied*: a no for
+  // this call; *forbidden*: a list, the floor or a no for the session.
   const outcomeOf = call =>
     call.held ? { kind: "ask", word: "waiting for you" }
-    : !call.verdict.allowed
-      ? call.asked === false
-        ? { kind: "bad", word: "you refused" }
-        : { kind: "bad", word: "refused" }
-    : call.grant === "session"
-      ? { kind: "ok", word: call.asked ? "you, for the session" : "your grant" }
-    : call.grant === "once" || call.asked
-      ? { kind: "ok", word: "you, this time" }
-      : { kind: "ok", word: "allowed" }
+    : call.verdict.allowed
+      ? call.asked === true && call.grant !== "session"
+        ? { kind: "ok", word: "granted once" }
+        : { kind: "ok", word: "granted" }
+      : call.asked === false && call.grant !== "session"
+        ? { kind: "bad", word: "denied" }
+        : { kind: "bad", word: "forbidden" }
 
   const FILTERS = [
     { value: "all", label: "All" },
-    { value: "allowed", label: "Allowed" },
+    { value: "granted", label: "Granted" },
     { value: "refused", label: "Refused" },
-    { value: "asked", label: "Asked you" },
   ]
   let filter = "all"
   $: rows = calls
-    .map(call => ({ call, outcome: outcomeOf(call), subject: subjectOf(call) }))
-    .filter(({ call, outcome }) =>
+    .map(call => ({ call, key: `${call.turn}:${call.step}`, outcome: outcomeOf(call), subject: subjectOf(call) }))
+    .filter(({ outcome }) =>
       filter === "all" ? true
-      : filter === "allowed" ? outcome.kind === "ok"
-      : filter === "refused" ? outcome.kind === "bad"
-      : call.asked != null || !!call.held)
+      : filter === "granted" ? outcome.kind === "ok"
+      : outcome.kind === "bad")
     .reverse()
   $: refusedCount = calls.filter(call => call.verdict && !call.verdict.allowed).length
 
-  // ---- what was used ---------------------------------------------------------
-  const lists = () => state.settings?.lists || null
-  // Where a program stands in the shell list now.
-  const zoneOf = program => {
-    const shell = lists()?.shell
-    if (!shell) return ""
-    if ((shell.deny || []).includes(program)) return "deny"
-    if ((shell.allow || []).includes(program)) return "allow"
-    if ((shell.ask || []).includes(program)) return "ask"
-    if ((shell.ask || []).includes("*")) return "ask (*)"
-    return "no list"
+  // ---- what decided it -------------------------------------------------------
+  //
+  // A person's answer for the session, when it was one: the entry for the same
+  // thing, the same way, given at or before the call — a yes taken back and
+  // given again is two entries, and each call points at its own.
+  const answerFor = call => {
+    const allow = call.verdict.allowed
+    const kind = kindOf(call)
+    const target = targetOf(call)
+    const same = state.grants
+      .map((answer, index) => ({ answer, index }))
+      .filter(({ answer }) => (answer.allow !== false) === allow && answer.kind === kind && answer.target === target)
+    const before = ({ answer }) => !answer.turn
+      || answer.turn < call.turn
+      || (answer.turn === call.turn && answer.step <= call.step)
+    const found = [...same].reverse().find(before) || same[same.length - 1]
+    return found ? found.index : null
   }
-  const tally = (keyOf, wanted) => {
-    const by = new Map()
-    for (const call of calls) {
-      if (!wanted(call) || !call.verdict) continue
-      const key = keyOf(call)
-      if (!key) continue
-      const seen = by.get(key) || { key, ran: 0, refused: 0, asked: 0 }
-      if (call.verdict.allowed) seen.ran += 1
-      else seen.refused += 1
-      if (call.asked != null) seen.asked += 1
-      by.set(key, seen)
+  // A list's rule, otherwise: the program's entry in the shell list, or `*`;
+  // the files rule with the longest path that covers it.
+  const ruleOf = call => {
+    const lists = state.settings?.lists
+    if (!lists) return { key: null, note: "" }
+    if (call.name === "run_command") {
+      const program = programOf(call)
+      for (const zone of ["deny", "allow", "ask"]) {
+        const at = (lists.shell[zone] || []).indexOf(program)
+        if (at >= 0) return { key: `shell:${zone}:${at}`, note: "" }
+      }
+      const star = (lists.shell.ask || []).indexOf("*")
+      if (star >= 0) return { key: `shell:ask:${star}`, note: "" }
+      return { key: null, note: `${program} is in no list.` }
     }
-    return [...by.values()].sort((a, b) => (b.ran + b.refused) - (a.ran + a.refused) || a.key.localeCompare(b.key))
+    if (typeof call.arguments?.path !== "string") return { key: null, note: "" }
+    const target = relativeOf(call.arguments.path)
+    let best = null
+    for (const zone of ["deny", "allow", "ask"]) {
+      ;(lists.files[zone] || []).forEach((rule, index) => {
+        const written = typeof rule === "string" ? rule : rule.path
+        const path = written === "." ? "" : written.replace(/^\.\//, "").replace(/\/$/, "")
+        const covers = path === "" || target === path || target.startsWith(path + "/")
+        if (covers && (!best || path.length > best.length)) best = { length: path.length, key: `files:${zone}:${index}` }
+      })
+    }
+    return best ? { key: best.key, note: "" } : { key: null, note: `${target || "."} is in no files list.` }
   }
-  $: programs = (state.settings, tally(programOf, call => call.name === "run_command"))
-  $: written = tally(call => call.arguments?.path, call => writes(call.name))
-  // As lists to start from: what ran, allowed; what was refused and nobody
-  // allowed, left for a person to place. Lax first, then this.
-  $: suggestion = [
-    "# What this session ran, as a shell list to start from.",
-    "[shell.used]",
-    `allow = [${programs.filter(p => p.ran).map(p => JSON.stringify(p.key)).join(", ")}]`,
-    ...(programs.some(p => !p.ran)
-      ? [`# refused and never allowed: ${programs.filter(p => !p.ran).map(p => p.key).join(", ")}`]
-      : []),
-    ...(written.length
-      ? ["", `# written: ${written.map(w => w.key).join(", ")}`]
-      : []),
-  ].join("\n")
-  let copied = false
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(suggestion)
-      copied = true
-      setTimeout(() => { copied = false }, 1400)
-    } catch {}
+  const whereOf = call => {
+    if (call.grant === "session" && call.verdict) {
+      const at = answerFor(call)
+      return { tab: call.verdict.allowed ? "granted" : "forbidden", key: at == null ? null : `answer:${at}`, note: "" }
+    }
+    return { tab: "policies", ...ruleOf(call) }
   }
 
-  // ---- what is granted -------------------------------------------------------
+  // Followed from a row of Activity: the tab, the entry marked, and the call
+  // said above it. Kept until another is followed, so the row stays marked
+  // when the person comes back.
+  let focus = null
+  const follow = row => {
+    focus = { ...whereOf(row.call), row }
+    showPermissionsTab(focus.tab)
+    requestAnimationFrame(() =>
+      document.querySelector(".permissions .focused")?.scrollIntoView({ block: "nearest" }))
+  }
+  const back = () => {
+    showPermissionsTab("activity")
+    requestAnimationFrame(() =>
+      document.querySelector(".permissions .rows .focused")?.scrollIntoView({ block: "nearest" }))
+  }
+
+  // ---- what a person answered ------------------------------------------------
+  //
+  // Newest first, what was taken back still there. How many calls each one
+  // decided, by the same rule a row of Activity follows.
+  $: answers = state.grants
+    .map((answer, index) => ({
+      ...answer,
+      allow: answer.allow !== false,
+      index,
+      key: `answer:${index}`,
+      decided: calls.filter(call => call.grant === "session" && call.verdict && answerFor(call) === index).length,
+    }))
+    .reverse()
+  $: granted = answers.filter(answer => answer.allow)
+  $: forbidden = answers.filter(answer => !answer.allow)
+  const inForce = list => list.filter(answer => !answer.revoked).length
+  const doing = answer => answer.kind === "write" ? "write" : "run"
+
+  // ---- the lists -------------------------------------------------------------
   const ZONES = ["allow", "ask", "deny"]
-  const paths = rules => (rules || []).map(rule =>
+  const LISTS = ["shell", "network", "files"]
+  const lists = () => state.settings?.lists || null
+  const entriesOf = (list, zone) => (lists()?.[list]?.[zone] || []).map(rule =>
     typeof rule === "string" ? rule : `${rule.path} (${rule.access || "read"})`)
   $: floor = state.settings?.floor || null
 
   $: TABS = [
     { value: "activity", label: "Activity", count: calls.length },
-    { value: "used", label: "Used" },
-    { value: "granted", label: "Granted", count: state.grants.length },
+    { value: "granted", label: "Granted", count: inForce(granted) },
+    { value: "forbidden", label: "Forbidden", count: inForce(forbidden) },
+    { value: "policies", label: "Policies" },
   ]
 </script>
 
@@ -138,101 +197,101 @@
       <Segmented label="Show" size="sm" :model="filter" :options="FILTERS" @change="filter = $event.detail" />
       <span class="dim small">{{ calls.length }} {{ calls.length === 1 ? "call" : "calls" }} · {{ refusedCount }} refused</span>
     </div>
+    <!-- The call followed here, and the way back to it. -->
+    <div :if="tab !== 'activity' &amp;&amp; focus &amp;&amp; focus.tab === tab" class="bar followed">
+      <span class="what">
+        <span class="line"><b>{{ focus.row.call.name }}</b> <code>{{ focus.row.subject }}</code>
+          <span class="who" :class="focus.row.outcome.kind">{{ focus.row.outcome.word }}</span>
+          <span class="dim">turn {{ focus.row.call.turn }}</span></span>
+        <span class="why dim">{{ focus.row.call.verdict?.rule || "" }}<span :if="focus.note"> {{ focus.note }}</span></span>
+      </span>
+      <Button size="sm" variant="ghost" @click="back()">Back to activity</Button>
+    </div>
   </template>
 
-  <!-- ---- activity ---- -->
-  <div :if="tab === 'activity'" class="panel">
-    <p :if="!calls.length" class="dim">No tool has been called in this session yet.</p>
-    <ul :if="rows.length" class="rows">
-      <li :each="row in rows" :key="row.call.turn + ':' + row.call.step" :title="row.call.verdict?.rule || row.call.held?.refused || ''">
-        <span class="mark" :class="row.outcome.kind"></span>
-        <span class="what">
-          <span class="line"><b>{{ row.call.name }}</b> <code>{{ row.subject }}</code></span>
-          <span class="why dim">{{ row.call.verdict?.rule || row.call.held?.refused || "" }}</span>
-        </span>
-        <span class="who" :class="row.outcome.kind">{{ row.outcome.word }}</span>
-        <span class="turn dim">turn {{ row.call.turn }}</span>
-      </li>
-    </ul>
-    <p :if="calls.length &amp;&amp; !rows.length" class="dim">Nothing here under this filter.</p>
-  </div>
+  <div class="permissions">
 
-  <!-- ---- used ---- -->
-  <div :if="tab === 'used'" class="panel">
-    <h3>Programs</h3>
-    <p :if="!programs.length" class="dim small">No program has been run.</p>
-    <table :if="programs.length" class="tally">
-      <thead><tr><th>program</th><th>ran</th><th>refused</th><th>asked you</th><th>now in</th></tr></thead>
-      <tbody>
-        <tr :each="p in programs" :key="p.key">
-          <td><code>{{ p.key }}</code></td><td>{{ p.ran }}</td><td>{{ p.refused }}</td><td>{{ p.asked }}</td>
-          <td class="zone" :class="zoneOf(p.key).split(' ')[0].replace(' ', '-')">{{ zoneOf(p.key) }}</td>
-        </tr>
-      </tbody>
-    </table>
-    <h3>Files written</h3>
-    <p :if="!written.length" class="dim small">Nothing has been written.</p>
-    <table :if="written.length" class="tally">
-      <thead><tr><th>path</th><th>written</th><th>refused</th><th>asked you</th></tr></thead>
-      <tbody>
-        <tr :each="w in written" :key="w.key">
-          <td><code>{{ w.key }}</code></td><td>{{ w.ran }}</td><td>{{ w.refused }}</td><td>{{ w.asked }}</td>
-        </tr>
-      </tbody>
-    </table>
-    <h3>As lists to start from</h3>
-    <p class="dim small">Start lax — <code>ask = ["*"]</code> — and narrow to what was used:</p>
-    <pre class="suggestion">{{ suggestion }}</pre>
-  </div>
-
-  <!-- ---- granted ---- -->
-  <div :if="tab === 'granted'" class="panel">
-    <h3>Allowed for this session</h3>
-    <p :if="!state.grants.length" class="dim small">Nothing yet: a yes for the session shows here, with a way to take it back.</p>
-    <ul :if="state.grants.length" class="grants">
-      <li :each="grant in state.grants" :key="grant.kind + ':' + grant.target">
-        <span>{{ grant.kind === "write" ? "write" : "run" }} <code>{{ grant.target }}</code></span>
-        <Button size="sm" variant="ghost" @click="revokeGrant(grant.kind, grant.target)">Take back</Button>
-      </li>
-    </ul>
-
-    <h3>The lists
-      <span class="dim small">{{ lists()?.environment ? `[environment.${lists().environment}]` : `from ${lists()?.shell?.name || "the policy file"}` }}</span>
-    </h3>
-    <div :if="lists()" class="lists">
-      <div class="list">
-        <div class="list-head">shell <span class="dim">[shell.{{ lists().shell.name }}]</span></div>
-        <div :each="zone in ZONES" :key="'s' + zone" class="zone-row">
-          <span class="zone-name" :class="zone">{{ zone }}</span>
-          <span class="entries">{{ (lists().shell[zone] || []).join(" · ") || "—" }}</span>
-        </div>
-      </div>
-      <div class="list">
-        <div class="list-head">network <span class="dim">[network.{{ lists().network.name }}]</span></div>
-        <div :each="zone in ZONES" :key="'n' + zone" class="zone-row">
-          <span class="zone-name" :class="zone">{{ zone }}</span>
-          <span class="entries">{{ (lists().network[zone] || []).join(" · ") || "—" }}</span>
-        </div>
-      </div>
-      <div class="list">
-        <div class="list-head">files <span class="dim">[files.{{ lists().files.name }}]</span></div>
-        <div :each="zone in ZONES" :key="'f' + zone" class="zone-row">
-          <span class="zone-name" :class="zone">{{ zone }}</span>
-          <span class="entries">{{ paths(lists().files[zone]).join(" · ") || "—" }}</span>
-        </div>
-      </div>
+    <!-- ---- activity ---- -->
+    <div :if="tab === 'activity'" class="panel">
+      <p :if="!calls.length" class="dim">No tool has been called in this session yet.</p>
+      <ul :if="rows.length" class="rows">
+        <li :each="row in rows" :key="row.key" :class.focused="focus?.row?.key === row.key">
+          <span class="mark" :class="row.outcome.kind"></span>
+          <span class="what">
+            <span class="line"><b>{{ row.call.name }}</b> <code>{{ row.subject }}</code></span>
+            <span class="why dim">{{ row.call.verdict?.rule || row.call.held?.refused || "" }}</span>
+          </span>
+          <button :if="!row.call.held" type="button" class="who" :class="row.outcome.kind"
+                  title="Show what decided it" @click="follow(row)">{{ row.outcome.word }}</button>
+          <span :if="row.call.held" class="who ask">{{ row.outcome.word }}</span>
+          <span class="turn dim">turn {{ row.call.turn }}</span>
+        </li>
+      </ul>
+      <p :if="calls.length &amp;&amp; !rows.length" class="dim">Nothing here under this filter.</p>
     </div>
 
-    <h3>A draft, without asking</h3>
-    <p :if="floor" class="dim small">
-      reads {{ floor.reads.join(" · ") || "nothing" }} · runs {{ floor.commands.join(" · ") || "nothing" }}<span
-        :if="floor.network"> · reaches the network</span> · writes {{ (floor.writes || []).join(" · ") || "nothing" }}
-    </p>
+    <!-- ---- granted ---- -->
+    <div :if="tab === 'granted'" class="panel">
+      <p :if="!granted.length" class="dim small">Nothing yet: <em>Allow</em> with <em>Apply to session</em> on a question puts it here, with a way to revoke it.</p>
+      <ul :if="granted.length" class="answers">
+        <li :each="answer in granted" :key="answer.key" :class.focused="focus?.key === answer.key" :class.revoked="answer.revoked">
+          <span class="mark" :class="answer.revoked ? 'dim' : 'ok'"></span>
+          <span class="what">{{ doing(answer) }} <code>{{ answer.target }}</code></span>
+          <span class="dim small">{{ answer.decided }} {{ answer.decided === 1 ? "call" : "calls" }}</span>
+          <span class="dim small">turn {{ answer.turn || "?" }}</span>
+          <span :if="answer.revoked" class="state dim">revoked</span>
+          <Button :if="!answer.revoked" size="sm" variant="ghost"
+                  @click="revokeGrant(answer.kind, answer.target)">Revoke</Button>
+        </li>
+      </ul>
+    </div>
+
+    <!-- ---- forbidden ---- -->
+    <div :if="tab === 'forbidden'" class="panel">
+      <p :if="!forbidden.length" class="dim small">Nothing yet: <em>Deny</em> with <em>Apply to session</em> on a question puts it here, with a way to lift it.</p>
+      <ul :if="forbidden.length" class="answers">
+        <li :each="answer in forbidden" :key="answer.key" :class.focused="focus?.key === answer.key" :class.revoked="answer.revoked">
+          <span class="mark" :class="answer.revoked ? 'dim' : 'bad'"></span>
+          <span class="what">{{ doing(answer) }} <code>{{ answer.target }}</code></span>
+          <span class="dim small">{{ answer.decided }} {{ answer.decided === 1 ? "call" : "calls" }}</span>
+          <span class="dim small">turn {{ answer.turn || "?" }}</span>
+          <span :if="answer.revoked" class="state dim">lifted</span>
+          <Button :if="!answer.revoked" size="sm" variant="ghost"
+                  @click="revokeGrant(answer.kind, answer.target)">Lift</Button>
+        </li>
+      </ul>
+    </div>
+
+    <!-- ---- policies ---- -->
+    <div :if="tab === 'policies'" class="panel">
+      <h3>The lists
+        <span class="dim small">{{ lists()?.environment ? `[environment.${lists().environment}]` : `from ${lists()?.shell?.name || "the policy file"}` }}</span>
+      </h3>
+      <div :if="lists()" class="lists">
+        <div :each="list in LISTS" :key="list" class="list">
+          <div class="list-head">{{ list }} <span class="dim">[{{ list }}.{{ lists()[list].name }}]</span></div>
+          <div :each="zone in ZONES" :key="list + zone" class="zone-row">
+            <span class="zone-name" :class="zone">{{ zone }}</span>
+            <span class="entries">
+              <span :each="(entry, i) in entriesOf(list, zone)" :key="list + zone + i" class="entry"
+                    :class.focused="focus?.key === `${list}:${zone}:${i}`">{{ entry }}</span>
+              <span :if="!entriesOf(list, zone).length" class="dim">—</span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <h3>A draft, without asking</h3>
+      <p :if="floor" class="dim small">
+        reads {{ floor.reads.join(" · ") || "nothing" }} · runs {{ floor.commands.join(" · ") || "nothing" }}<span
+          :if="floor.network"> · reaches the network</span> · writes {{ (floor.writes || []).join(" · ") || "nothing" }}
+      </p>
+      <p class="dim small">Anything else a draft would do is asked of you where a list leaves it to you, and refused where none does.</p>
+    </div>
   </div>
 
   <template :slot.foot>
-    <span class="dim small foot-note">What happened in this session, and what it may do. The lists are edited in <code>config.toml</code>.</span>
-    <Button :if="tab === 'used'" @click="copy()">{{ copied ? "Copied" : "Copy the lists" }}</Button>
+    <span class="dim small foot-note">What happened in this session, and what decided it. The lists are edited in <code>config.toml</code>.</span>
     <Button variant="primary" @click="closePermissions()">Done</Button>
   </template>
 </TabModal>
@@ -248,50 +307,53 @@
     padding: var(--luu-space-3) var(--luu-space-5);
     border-bottom: 1px solid var(--luu-border);
     background: var(--luu-surface);
+    font-size: 12px;
   }
+  .followed .what { flex: 1; }
 
-  .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .rows, .answers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
   .rows li {
     display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: .6rem;
     padding: .4rem .6rem; border-radius: 6px; background: var(--luu-surface);
     font-size: 12px;
   }
+  .answers li {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: .6rem;
+    min-height: 2rem; padding: .15rem .25rem .15rem .6rem; border-radius: 6px; background: var(--luu-surface);
+    font-size: 12px;
+  }
+  .answers .what { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .answers li.revoked .what { color: var(--luu-fg-muted); text-decoration: line-through; }
+  .answers .state { padding: 0 .5rem; }
+  li.focused, .entry.focused { box-shadow: inset 0 0 0 1px var(--luu-accent); background: var(--luu-accent-soft); }
   .mark { width: 8px; height: 8px; border-radius: 999px; background: var(--luu-fg-muted); }
   .mark.ok { background: var(--luu-ok); }
   .mark.bad { background: var(--luu-bad); }
   .mark.ask { background: var(--luu-warn); }
+  .mark.dim { background: var(--luu-border-strong); }
   .what { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
   .line, .why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .why { font-size: 11px; }
-  .who { font-weight: 600; white-space: nowrap; }
+  .who {
+    padding: 0; border: 0; background: none; font: inherit;
+    font-weight: 600; white-space: nowrap;
+  }
+  button.who { cursor: pointer; }
+  button.who:hover { text-decoration: underline; }
   .who.ok { color: var(--luu-ok); }
   .who.bad { color: var(--luu-bad); }
   .who.ask { color: var(--luu-warn); }
   .turn { font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-  .tally { border-collapse: collapse; font-size: 12px; background: var(--luu-surface); border-radius: 6px; overflow: hidden; }
-  .tally th, .tally td { padding: .3rem .6rem; text-align: left; border-bottom: 1px solid var(--luu-border); }
-  .tally th { font-weight: 600; color: var(--luu-fg-muted); }
-  .tally td:not(:first-child), .tally th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
-  .zone.deny, .zone-name.deny { color: var(--luu-bad); }
-  .zone.allow, .zone-name.allow { color: var(--luu-ok); }
-  .zone.ask, .zone-name.ask { color: var(--luu-warn); }
-  .suggestion {
-    margin: 0; padding: .6rem .7rem; border-radius: 6px;
-    background: var(--luu-surface); border: 1px solid var(--luu-border);
-    font: 12px/1.5 var(--luu-font-mono); white-space: pre-wrap;
-  }
-
-  .grants { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-  .grants li {
-    display: flex; align-items: center; justify-content: space-between; gap: .6rem;
-    padding: .25rem .25rem .25rem .6rem; border-radius: 6px; background: var(--luu-surface); font-size: 12px;
-  }
+  .zone-name.deny { color: var(--luu-bad); }
+  .zone-name.allow { color: var(--luu-ok); }
+  .zone-name.ask { color: var(--luu-warn); }
   .lists { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--luu-space-2); }
   .list { padding: .5rem .6rem; border-radius: 6px; background: var(--luu-surface); font-size: 12px; min-width: 0; }
   .list-head { font-weight: 600; margin-bottom: .3rem; }
-  .zone-row { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: .4rem; }
+  .zone-row { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: .4rem; align-items: baseline; }
   .zone-name { font-weight: 600; }
-  .entries { overflow-wrap: anywhere; font-family: var(--luu-font-mono); font-size: 11px; }
+  .entries { display: flex; flex-wrap: wrap; gap: .1rem .3rem; min-width: 0; font-family: var(--luu-font-mono); font-size: 11px; }
+  .entry { padding: 0 .2rem; border-radius: 3px; overflow-wrap: anywhere; }
   .foot-note { margin-right: auto; }
 </style>

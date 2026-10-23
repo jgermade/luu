@@ -8,12 +8,14 @@ import { fileURLToPath } from "node:url"
 
 /**
  * A command the shell list leaves to a person: the draft's floor does not run
- * it, the card asks, *Allow for the session* runs it and lists it, the next
- * draft runs it without asking, and taking it back makes the one after ask
- * again. Under an environment out of `config.toml` whose shell list allows
- * `ls` and asks about `git`. The Permissions dialog reads the same session
- * back: who let each call through, what was used, and what is granted. See
- * `RECORD/2026-10-22.policies-not-postures.WIP.md`, step 2a.
+ * it, the card asks, *Allow* with *Apply to session* runs it and lists it, the
+ * next draft runs it without asking; taken back, *Deny* for the session refuses it
+ * and the next one without asking; lifted, it is asked again. Under an
+ * environment out of `config.toml` whose shell list allows `ls` and asks about
+ * `git`. The Permissions dialog reads the same session back: each call in one
+ * of four words, each a link to what decided it, and the answers for the
+ * session with what was taken back still listed. See
+ * `RECORD/2026-10-22.policies-not-postures.WIP.md`.
  */
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
@@ -23,6 +25,11 @@ const BASE = `http://127.0.0.1:${PORT}`
 const RUN = `Checking.
 \`\`\`tool
 {"name":"run_command","arguments":{"argv":["git","--version"]}}
+\`\`\``
+
+const LS = `Looking.
+\`\`\`tool
+{"name":"run_command","arguments":{"argv":["ls"]}}
 \`\`\``
 
 const CONFIG = `[provider.here]
@@ -71,9 +78,12 @@ test.beforeAll(async () => {
       "--provider", "here",
       "--no-store",
       "--mock-delay-ms", "0",
-      // A call and its answer per turn, three turns.
+      // A call and its answer per turn, six turns: git four times, ls, git.
       "--mock-reply", RUN, "--mock-reply", "Done.",
       "--mock-reply", RUN, "--mock-reply", "Done.",
+      "--mock-reply", RUN, "--mock-reply", "Done.",
+      "--mock-reply", RUN, "--mock-reply", "Done.",
+      "--mock-reply", LS, "--mock-reply", "Done.",
       "--mock-reply", RUN, "--mock-reply", "Done.",
     ],
     { cwd: root, env: { ...process.env, LUU_HOME: home }, stdio: "pipe" },
@@ -116,7 +126,7 @@ async function chooseFolder(page) {
   }
 }
 
-test("a command left to a person is asked, allowed for the session, and taken back", async ({ page }) => {
+test("a command left to a person is asked, allowed or denied for the session, and taken back", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
   page.on("console", message => {
@@ -133,59 +143,99 @@ test("a command left to a person is asked, allowed for the session, and taken ba
   }
   // The chat's cards: the inspector lists the same calls under the same class.
   const calls = page.locator(".transcript .call", { hasText: "run_command" })
+  const card = page.locator(".transcript .call", { has: page.locator(".question") })
+  const chips = page.locator(".grants .grant")
 
   // Asked: the floor does not run git, and the shell list leaves it to you.
   await say("which git?")
-  const card = page.locator(".transcript .call", { has: page.locator(".question") })
   await expect(card).toBeVisible({ timeout: 30_000 })
   await expect(card.locator(".why")).toContainText("may not run git")
   await expect(card.locator(".question pre")).toHaveText("git --version")
-  await expect(card.locator(".answers button")).toHaveText(["Allow this time", "Allow for the session", "Deny"])
-  await card.locator('.answers button:has-text("Allow for the session")').click()
+  await expect(card.locator(".answers button")).toHaveText(["Allow", "Deny"])
+  const forTheSession = card.getByRole("checkbox", { name: "Apply to session" })
+  await expect(forTheSession).not.toBeChecked()
+  await card.getByText("Apply to session").click()
+  await expect(forTheSession).toBeChecked()
+  await card.locator('.answers button:text-is("Allow")').click()
   await expect(calls.nth(0).locator(".status")).toHaveText("allowed for the session", { timeout: 15_000 })
-  const grant = page.locator(".grants .grant")
-  await expect(grant).toHaveCount(1)
-  await expect(grant).toContainText("run git")
+  await expect(chips).toHaveCount(1)
+  await expect(chips).toContainText("run git")
 
   // The next draft's call runs without a question.
   await say("again")
   await expect(calls.nth(1).locator(".status")).toHaveText("allowed earlier", { timeout: 30_000 })
   await expect(page.locator(".transcript .call .question")).toHaveCount(0)
 
-  // The Permissions dialog: each call and who let it through, newest first;
-  // what was used, beside where the lists put it; what is granted.
+  // Taken back, and denied for the session: refused now and next time, unasked.
+  await chips.getByRole("button", { name: "Take back running git" }).click()
+  await expect(chips).toHaveCount(0)
+  await say("once more")
+  await expect(card).toBeVisible({ timeout: 30_000 })
+  await card.getByText("Apply to session").click()
+  await card.locator('.answers button:text-is("Deny")').click()
+  await expect(calls.nth(2).locator(".status")).toHaveText("denied for the session", { timeout: 15_000 })
+  await expect(chips).toHaveCount(1)
+  await expect(chips).toHaveClass(/forbidden/)
+  await say("and again")
+  await expect(calls.nth(3).locator(".status")).toHaveText("denied earlier", { timeout: 30_000 })
+  await expect(page.locator(".transcript .call .question")).toHaveCount(0)
+  // And a program the list allows, which the floor runs.
+  await say("what is here?")
+  await expect(calls.nth(4).locator(".status")).toHaveText("done", { timeout: 30_000 })
+
+  // The dialog: each call in one of four words, newest first.
   await page.locator(".chat .col-head").getByRole("button", { name: "Permissions" }).click()
   const dialog = page.locator("dialog", { hasText: "Permissions" })
   await expect(dialog).toBeVisible()
   const rows = dialog.locator(".rows li")
+  await expect(rows.locator(".who")).toHaveText(["granted", "forbidden", "forbidden", "granted", "granted"])
+  await dialog.getByRole("radio", { name: "Refused" }).click()
   await expect(rows).toHaveCount(2)
-  await expect(rows.locator(".who")).toHaveText(["your grant", "you, for the session"])
-  await expect(rows.nth(0)).toContainText("git --version")
-  await dialog.getByRole("tab", { name: /Used/ }).click()
-  const git = dialog.locator(".tally tr", { hasText: "git" })
-  await expect(git.locator("td")).toHaveText(["git", "2", "0", "1", "ask"])
-  await expect(dialog.locator(".suggestion")).toContainText('allow = ["git"]')
-  await dialog.getByRole("tab", { name: /Granted/ }).click()
-  await expect(dialog.locator(".grants li")).toContainText("run git")
-  await expect(dialog.locator(".list", { hasText: "shell" })).toContainText("[shell.tools]")
-  await expect(dialog.locator(".list", { hasText: "shell" }).locator(".zone-row", { hasText: "ask" })).toContainText("git")
+  await dialog.getByRole("radio", { name: "All", exact: true }).click()
+
+  // Each word leads to what decided it. ls: the shell list's entry.
+  await rows.nth(0).getByRole("button", { name: "granted", exact: true }).click()
+  await expect(dialog.getByRole("tab", { selected: true })).toContainText("Policies")
+  await expect(dialog.locator(".entry.focused")).toHaveText("ls")
+  await expect(dialog.locator(".followed")).toContainText("ls")
+  await dialog.getByRole("button", { name: "Back to activity" }).click()
+  await expect(rows.nth(0)).toHaveClass(/focused/)
+
+  // The second git: the yes for the session, now revoked and still listed.
+  await rows.nth(3).getByRole("button", { name: "granted", exact: true }).click()
+  await expect(dialog.getByRole("tab", { selected: true })).toContainText("Granted")
+  const yes = dialog.locator(".answers li")
+  await expect(yes).toHaveCount(1)
+  await expect(yes).toHaveClass(/focused/)
+  await expect(yes).toHaveClass(/revoked/)
+  await expect(yes).toContainText("run git")
+  await expect(yes).toContainText("2 calls")
+  await expect(yes).toContainText("revoked")
+
+  // The last git: the no for the session, in force, lifted from here.
+  await dialog.getByRole("button", { name: "Back to activity" }).click()
+  await rows.nth(1).getByRole("button", { name: "forbidden" }).click()
+  await expect(dialog.getByRole("tab", { selected: true })).toContainText("Forbidden")
+  const no = dialog.locator(".answers li")
+  await expect(no).toHaveCount(1)
+  await expect(no).toHaveClass(/focused/)
+  await expect(no).toContainText("2 calls")
+  await no.getByRole("button", { name: "Lift" }).click()
+  await expect(no).toContainText("lifted")
+  await expect(no).toHaveClass(/revoked/)
   await dialog.getByRole("button", { name: "Done" }).click()
   await expect(dialog).toBeHidden()
+  await expect(chips).toHaveCount(0)
 
-  // Taken back: the one after is asked again, and a no is a no.
-  await grant.getByRole("button", { name: "Take back running git" }).click()
-  await expect(grant).toHaveCount(0)
-  await say("once more")
+  // Lifted: asked again, and a no this time is the fourth word.
+  await say("one last time")
   await expect(card).toBeVisible({ timeout: 30_000 })
-  await card.locator('.answers button:has-text("Deny")').click()
-  await expect(calls.nth(2).locator(".status")).toHaveText("you denied it", { timeout: 15_000 })
-
-  // And the no is in the activity, under Refused.
+  // A new question starts with the box clear: once, unless said otherwise.
+  await expect(card.getByRole("checkbox", { name: "Apply to session" })).not.toBeChecked()
+  await card.locator('.answers button:text-is("Deny")').click()
+  await expect(calls.nth(5).locator(".status")).toHaveText("you denied it", { timeout: 15_000 })
   await page.locator(".chat .col-head").getByRole("button", { name: "Permissions" }).click()
-  await expect(dialog).toBeVisible()
-  await dialog.getByRole("radio", { name: "Refused" }).click()
-  await expect(rows).toHaveCount(1)
-  await expect(rows.locator(".who")).toHaveText("you refused")
+  await expect(rows.nth(0).locator(".who")).toHaveText("denied")
 
   expect(errors).toEqual([])
 })

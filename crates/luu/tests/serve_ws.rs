@@ -1931,6 +1931,104 @@ async fn a_write_the_floor_refuses_is_put_to_a_person_and_runs_once_on_a_yes() {
     let _ = std::fs::remove_file(&scratch);
 }
 
+/// **Deny, applied to the session**: a no that lasts. The same write, a step later, is
+/// refused without anyone being asked; taken back, it is asked again — and the
+/// session's list keeps the no, marked as taken back. Protocol 11. See
+/// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+#[tokio::test]
+async fn a_no_for_the_session_is_refused_unasked_until_it_is_taken_back() {
+    let scratch = outside_the_floor().join(format!("luu-forbid-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&scratch);
+    let call = format!(
+        "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":{{\"path\":{},\"content\":\"no\"}}}}\n```",
+        serde_json::to_string(&scratch.display().to_string()).expect("a path"),
+    );
+    let address = server_writable(
+        vec![
+            call.clone(),
+            call.clone(),
+            "Done.".into(),
+            call,
+            "Done.".into(),
+        ],
+        &scratch,
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
+    )
+    .await;
+    let (held, _) = until(&mut socket, "call_held").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": held["turn"], "step": held["step"],
+                           "allow": false, "session": true}),
+    )
+    .await;
+    // Said before the refusal it causes, so the page lists it first.
+    let (forbidden, _) = until(&mut socket, "forbidden").await;
+    assert_eq!(forbidden["kind"], "write");
+    assert_eq!(forbidden["target"], scratch.display().to_string());
+    assert_eq!(forbidden["step"], held["step"]);
+    let (first, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(first["asked"], false);
+    assert_eq!(first["grant"], "session");
+    assert_eq!(first["verdict"]["allowed"], false);
+
+    // The next one is refused, and nobody is asked.
+    let (second, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(second["step"], held["step"].as_u64().unwrap() + 1);
+    assert_eq!(second["verdict"]["allowed"], false);
+    assert_eq!(second["grant"], "session", "{second}");
+    assert!(second.get("asked").is_none(), "{second}");
+    assert!(
+        second["verdict"]["rule"]
+            .as_str()
+            .is_some_and(|rule| rule.contains("rest of this session")),
+        "{}",
+        second["verdict"]["rule"],
+    );
+    until(&mut socket, "ended").await;
+    assert!(!scratch.exists());
+
+    // Taken back: said, and kept on the list, marked.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "revoke_grant", "kind": "write",
+                           "target": scratch.display().to_string()}),
+    )
+    .await;
+    let (revoked, _) = until(&mut socket, "revoked").await;
+    assert_eq!(revoked["target"], scratch.display().to_string());
+    let view = get(&address, "/api/sessions/live").await;
+    let listed = view["grants"].as_array().expect("the session's answers");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["allow"], false);
+    assert_eq!(listed[0]["revoked"], true);
+
+    // And asked again.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "once more"}),
+    )
+    .await;
+    let (again, _) = until(&mut socket, "call_held").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": again["turn"], "step": again["step"],
+                           "allow": false}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+    let _ = std::fs::remove_file(&scratch);
+}
+
 /// The other half of the floor, and the half that says it is a floor rather
 /// than a wall: **a draft still reads.** Exploration is what it is for.
 #[tokio::test]

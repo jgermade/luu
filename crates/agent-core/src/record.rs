@@ -207,7 +207,11 @@ use crate::trace::TraceMessage;
 /// a person's yes for the session, and one taken back — which a resume folds
 /// into what the session may do without asking; and `tool_result.grant`,
 /// additive. Protocol 10. See the same record, step 2a.
-pub const FORMAT: u32 = 22;
+///
+/// **23 carries `forbidden`**, a person's no for the session, folded as
+/// `granted` is; `revoked` takes back either, and the fold marks what it took
+/// back rather than dropping it. Protocol 11.
+pub const FORMAT: u32 = 23;
 
 /// The posture a session ran under, as a recording names it.
 ///

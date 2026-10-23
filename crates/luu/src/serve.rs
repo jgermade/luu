@@ -152,9 +152,15 @@ impl agent_core::agent::Asker for Watching {
                     session.held = None;
                 }
             }
-            // A yes for the session is remembered before the call runs, and
-            // said on the stream, so a resume has it and the page can list it.
-            if answer == agent_core::agent::Answer::Session
+            // A yes or a no for the session is remembered before the call
+            // runs or is refused, and said on the stream, so a resume has it
+            // and the page can list it.
+            let lasting = match answer {
+                agent_core::agent::Answer::Session => Some(true),
+                agent_core::agent::Answer::Forbid => Some(false),
+                _ => None,
+            };
+            if let Some(allow) = lasting
                 && let Some(grant) = crate::grants::grant_for(call, &self.base)
             {
                 let added = self
@@ -162,16 +168,24 @@ impl agent_core::agent::Asker for Watching {
                     .grants
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(grant.clone());
+                    .give(grant.clone(), allow);
                 if added {
-                    self.app
-                        .publish(Event::Protocol(ServerMessage::Granted {
-                            turn: self.turn,
+                    let (turn, kind, target) = (self.turn, grant.kind, grant.target);
+                    let said = match allow {
+                        true => ServerMessage::Granted {
+                            turn,
                             step,
-                            kind: grant.kind,
-                            target: grant.target,
-                        }))
-                        .await;
+                            kind,
+                            target,
+                        },
+                        false => ServerMessage::Forbidden {
+                            turn,
+                            step,
+                            kind,
+                            target,
+                        },
+                    };
+                    self.app.publish(Event::Protocol(said)).await;
                 }
             }
             answer
@@ -347,7 +361,7 @@ struct App {
     environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
     /// What a person allowed for the live session's drafts, until taken back.
     /// Emptied by a new session, refilled from the stream by a resume.
-    grants: crate::grants::Granted,
+    grants: crate::grants::Answered,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
@@ -2261,7 +2275,8 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             session,
         } => {
             let answer = match (allow, session) {
-                (false, _) => agent_core::agent::Answer::Deny,
+                (false, false) => agent_core::agent::Answer::Deny,
+                (false, true) => agent_core::agent::Answer::Forbid,
                 (true, false) => agent_core::agent::Answer::Once,
                 (true, true) => agent_core::agent::Answer::Session,
             };
@@ -2287,15 +2302,15 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 }
             }
         }
-        // A session grant taken back: the next call that needs it is asked
-        // again. Taking back what was never given changes nothing and says
-        // nothing.
+        // A yes or a no for the session taken back: the next call it covered
+        // is asked again. Taking back what is not in force changes nothing
+        // and says nothing.
         ClientMessage::RevokeGrant { kind, target } => {
             let removed = app
                 .grants
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(&agent_core::protocol::Grant {
+                .take_back(&agent_core::protocol::Grant {
                     kind,
                     target: target.clone(),
                 });
@@ -7656,11 +7671,12 @@ async fn resume_session(
         previous.shutdown().await;
     }
     *app.posture.lock().await = posture_name;
-    // What a person allowed it, as its stream last left it.
+    // What a person answered for it and did not take back, as its stream
+    // last left it.
     *app.grants
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-        loaded_view.grants.iter().cloned().collect();
+        crate::grants::Answers::in_force(&loaded_view.grants);
 
     *app.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store

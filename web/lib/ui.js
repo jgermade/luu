@@ -39,10 +39,10 @@ export const ui = $reactive({
   /// exit, and `sessions` goes `null` — unmounting it — once that is over. A
   /// dialog unmounted at once has no exit to play.
   sessionsLeaving: false,
-  /// The permissions dialog's tab — `activity`, `used` or `granted` — or
-  /// `null` while it is closed, and the same way out as the sessions dialog.
-  /// What the session may do and what it did, so the lists can start lax and
-  /// be narrowed from it. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+  /// The permissions dialog's tab — `activity`, `granted`, `forbidden` or
+  /// `policies` — or `null` while it is closed, and the same way out as the
+  /// sessions dialog. What the session did and what decided it, so the lists
+  /// can start lax and be narrowed from it. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
   permissions: null,
   permissionsLeaving: false,
   /// Two columns at a width that has room for three, chosen from the chat's
@@ -126,7 +126,7 @@ export function closeSessions() {
 
 // ---- permissions -----------------------------------------------------------
 
-const PERMISSION_TABS = ["activity", "used", "granted"]
+const PERMISSION_TABS = ["activity", "granted", "forbidden", "policies"]
 let permissionsLeaving = null
 
 /// Opens on the tab asked for, and asks for the lists again: Settings may

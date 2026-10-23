@@ -18,8 +18,8 @@ import { $reactive } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 10
-const FORMAT = 22
+const PROTOCOL = 11
+const FORMAT = 23
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -46,7 +46,9 @@ export const state = $reactive({
   // stderr, duration_ms }. Null everywhere else, because an in-process tool has
   // no exit code and a zero would be a lie about a fact that does not exist.
   tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms, command }]
-  grants: [],             // [{ kind: "command" | "write", target }] — a person's yes for the session
+  // What a person answered for the session, in order: a yes (`allow`) or a
+  // no, and whether it was taken back since — marked, never dropped.
+  grants: [],             // [{ kind: "command" | "write", target, allow, turn, step, revoked }]
   // The model calls after the first one of this turn — the tool round trips.
   // The budget describes the first call only, while the backend's usage is
   // summed over all of them, so the two are comparable only with these added in.
@@ -517,16 +519,26 @@ function onProtocol(message) {
         : call)
       break
 
-    // A yes for the session, and one taken back: what the session's drafts
-    // may do without asking. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+    // A yes or a no for the session, and one taken back: what the session's
+    // drafts may do, or are refused, without asking. Taken back is a mark on
+    // the list, not a removal. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
     case "granted":
-      if (!state.grants.some(g => g.kind === message.kind && g.target === message.target)) {
-        state.grants = [...state.grants, { kind: message.kind, target: message.target }]
+    case "forbidden": {
+      const allow = message.type === "granted"
+      const same = g => !g.revoked && g.allow === allow && g.kind === message.kind && g.target === message.target
+      if (!state.grants.some(same)) {
+        state.grants = [...state.grants, {
+          kind: message.kind, target: message.target, allow,
+          turn: message.turn, step: message.step, revoked: false,
+        }]
       }
       break
-    case "revoked":
-      state.grants = state.grants.filter(g => !(g.kind === message.kind && g.target === message.target))
+    }
+    case "revoked": {
+      const at = state.grants.findLastIndex(g => !g.revoked && g.kind === message.kind && g.target === message.target)
+      if (at >= 0) state.grants = state.grants.map((g, i) => i === at ? { ...g, revoked: true } : g)
       break
+    }
 
     case "tool_result":
       state.tools = state.tools.map(call => call.step === message.step
@@ -979,7 +991,9 @@ export function approvePlan(amendment = {}) {
 export const approveJob = (_job, amendment) => approvePlan(amendment)
 export const approveTask = approveJob
 /// The answer to a held call: `allow` runs that one call once under the policy
-/// file; otherwise the model is told a person refused it. `turn` and `step`
+/// file; otherwise the model is told a person refused it. `session` makes
+/// either last: a yes runs every call like it without asking, a no refuses
+/// them without asking, until it is taken back. `turn` and `step`
 /// name the call, so an answer that raced the end of its turn is refused rather
 /// than applied to whatever is held next.
 export function answerCall(turn, step, allow, session = false) {
@@ -987,8 +1001,8 @@ export function answerCall(turn, step, allow, session = false) {
   socket.send(JSON.stringify({ type: "answer_call", turn, step, allow, session }))
 }
 
-/// Takes back a yes given for the session: the next call that needs it is
-/// asked again.
+/// Takes back a yes or a no given for the session: the next call it covered is
+/// asked again. The answer stays on the session's list, marked.
 export function revokeGrant(kind, target) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify({ type: "revoke_grant", kind, target }))

@@ -59,6 +59,11 @@
   const TurnInspect = await import("@web/views/chat/turn-inspect.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
   const PermissionsDialog = await import("@web/views/chat/permissions-dialog.html")
+  // What a person answered for the session and has not taken back: under the
+  // draft line, a yes and a no each with its ×. The whole list, taken back
+  // included, is the Permissions dialog's.
+  $: allowedNow = state.grants.filter(grant => grant.allow !== false && !grant.revoked)
+  $: forbiddenNow = state.grants.filter(grant => grant.allow === false && !grant.revoked)
   const DiffModal = await import("@web/views/editor/diff-modal.html")
   const DiffStrip = await import("@web/views/editor/diff-strip.html")
   const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
@@ -1151,16 +1156,28 @@
             close &amp; fold
           </button>
         </div>
-        <!-- What a person allowed for the session: its drafts do these without
-             asking until one is taken back. See `crate::grants`. -->
-        <div :if="state.grants.length" class="grants">
+        <!-- What a person answered for the session: its drafts do these, or
+             are refused them, without asking until one is taken back. See
+             `crate::grants`. -->
+        <div :if="allowedNow.length" class="grants">
           <button type="button" class="dim grants-open" title="What this session may do, and what it did"
                   @click="openPermissions('granted')">allowed for the session:</button>
-          <span :each="grant in state.grants" :key="grant.kind + ':' + grant.target" class="grant">
+          <span :each="grant in allowedNow" :key="grant.kind + ':' + grant.target" class="grant">
             {{ grant.kind === "write" ? "write" : "run" }} <code>{{ grant.target }}</code><button
               type="button" class="revoke" :disabled="replaying"
               :title="`Take back: ask again before the next one`"
               :aria-label="`Take back ${grant.kind === 'write' ? 'writing' : 'running'} ${grant.target}`"
+              @click="revokeGrant(grant.kind, grant.target)">×</button>
+          </span>
+        </div>
+        <div :if="forbiddenNow.length" class="grants">
+          <button type="button" class="dim grants-open" title="What this session may do, and what it did"
+                  @click="openPermissions('forbidden')">denied for the session:</button>
+          <span :each="grant in forbiddenNow" :key="grant.kind + ':' + grant.target" class="grant forbidden">
+            {{ grant.kind === "write" ? "write" : "run" }} <code>{{ grant.target }}</code><button
+              type="button" class="revoke" :disabled="replaying"
+              :title="`Lift: ask again before the next one`"
+              :aria-label="`Lift the no to ${grant.kind === 'write' ? 'writing' : 'running'} ${grant.target}`"
               @click="revokeGrant(grant.kind, grant.target)">×</button>
           </span>
         </div>
@@ -1871,6 +1888,7 @@
     background: var(--luu-bg);
   }
   .grant code { font-size: 11px; }
+  .grant.forbidden code { color: var(--luu-bad); text-decoration: line-through; }
   .grants-open {
     padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer;
   }

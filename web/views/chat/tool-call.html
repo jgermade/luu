@@ -10,6 +10,7 @@
   // `RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`.
 
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
+  const Checkbox = await import("@web/theme/default/components/checkbox.html")
   const { answerCall } = await import("@web/lib/store.js")
 
   let open = false
@@ -39,8 +40,12 @@
   let sent = ""
   $: key = held ? `${held.turn}:${call?.step}` : ""
   $: answered = !!key && sent === key
-  // `session`: the yes lasts the session's drafts, until it is taken back.
-  const answer = (allow, session = false) => {
+  // *Apply to session*: the answer lasts the session's drafts, until it is
+  // taken back — a yes runs every call like it without asking, a no refuses
+  // them. One box under both buttons rather than four buttons: the question
+  // is yes or no, and how long is the second thing.
+  let session = false
+  const answer = allow => {
     if (!held || answered) return
     sent = key
     answerCall(held.turn, call.step, allow, session)
@@ -57,7 +62,9 @@
       : !call.verdict
         ? { word: "running…", kind: "busy" }
         : !call.verdict.allowed
-          ? { word: call.asked === false ? "you denied it" : "denied", kind: "bad" }
+          ? call.grant === "session"
+            ? { word: call.asked === false ? "denied for the session" : "denied earlier", kind: "bad" }
+            : { word: call.asked === false ? "you denied it" : "denied", kind: "bad" }
           : call.error
             ? { word: "failed", kind: "bad" }
             : call.command && call.command.exit_code !== 0
@@ -94,9 +101,9 @@
     <div :if="replaces" class="label">with</div>
     <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="10rem"><pre class="ok">{{ replaces.new }}</pre></Scrollable></div>
     <div class="answers">
-      <button type="button" class="primary" :disabled="answered" @click="answer(true)">Allow this time</button>
-      <button type="button" :disabled="answered" @click="answer(true, true)">Allow for the session</button>
+      <button type="button" class="primary" :disabled="answered" @click="answer(true)">Allow</button>
       <button type="button" :disabled="answered" @click="answer(false)">Deny</button>
+      <span class="session"><Checkbox :model="session" label="Apply to session" :disabled="answered" /></span>
     </div>
   </div>
 
@@ -168,7 +175,8 @@
   .status.ask { color: var(--luu-warn, #b7791f); font-weight: 600; }
   .question { padding: .1rem .6rem .55rem; border-top: 1px solid var(--luu-border, #c8c8c8); }
   .why { margin: .4rem 0 .2rem; overflow-wrap: anywhere; }
-  .answers { display: flex; gap: .4rem; margin-top: .5rem; }
+  .answers { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .5rem; }
+  .answers .session { margin-left: .4rem; }
   .answers button {
     padding: .25rem .7rem;
     border: 1px solid var(--luu-border, #c8c8c8);
