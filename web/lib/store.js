@@ -18,8 +18,8 @@ import { $reactive } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 9
-const FORMAT = 21
+const PROTOCOL = 10
+const FORMAT = 22
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -46,6 +46,7 @@ export const state = $reactive({
   // stderr, duration_ms }. Null everywhere else, because an in-process tool has
   // no exit code and a zero would be a lie about a fact that does not exist.
   tools: [],              // [{ step, name, arguments, verdict, error, output, truncated, duration_ms, command }]
+  grants: [],             // [{ kind: "command" | "write", target }] — a person's yes for the session
   // The model calls after the first one of this turn — the tool round trips.
   // The budget describes the first call only, while the backend's usage is
   // summed over all of them, so the two are comparable only with these added in.
@@ -516,6 +517,17 @@ function onProtocol(message) {
         : call)
       break
 
+    // A yes for the session, and one taken back: what the session's drafts
+    // may do without asking. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+    case "granted":
+      if (!state.grants.some(g => g.kind === message.kind && g.target === message.target)) {
+        state.grants = [...state.grants, { kind: message.kind, target: message.target }]
+      }
+      break
+    case "revoked":
+      state.grants = state.grants.filter(g => !(g.kind === message.kind && g.target === message.target))
+      break
+
     case "tool_result":
       state.tools = state.tools.map(call => call.step === message.step
         ? {
@@ -531,6 +543,9 @@ function onProtocol(message) {
             // recording made before asking existed, and on every call nobody
             // was asked about.
             asked: message.asked ?? null,
+            // What let it through when a person's yes did: `once`, or
+            // `session` — given now, or earlier and nobody was asked.
+            grant: message.grant ?? null,
           }
         : call)
       break
@@ -820,6 +835,7 @@ function reset() {
   state.history = []
   state.selectedTurn = null
   state.jobs = []
+  state.grants = []
   state.tasks = []
   state.budget = null
   state.tools = []
@@ -966,9 +982,16 @@ export const approveTask = approveJob
 /// file; otherwise the model is told a person refused it. `turn` and `step`
 /// name the call, so an answer that raced the end of its turn is refused rather
 /// than applied to whatever is held next.
-export function answerCall(turn, step, allow) {
+export function answerCall(turn, step, allow, session = false) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
-  socket.send(JSON.stringify({ type: "answer_call", turn, step, allow }))
+  socket.send(JSON.stringify({ type: "answer_call", turn, step, allow, session }))
+}
+
+/// Takes back a yes given for the session: the next call that needs it is
+/// asked again.
+export function revokeGrant(kind, target) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type: "revoke_grant", kind, target }))
 }
 
 export function declinePlan() {
@@ -1244,6 +1267,7 @@ export async function refreshLiveSession() {
       replaced: j.replaced || null,
     }))
     state.tasks = state.jobs
+    state.grants = view.grants || []
 
     const msgs = []
     let id = 1

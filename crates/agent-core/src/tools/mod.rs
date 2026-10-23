@@ -219,6 +219,9 @@ pub struct ToolStep {
     /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked: Option<bool>,
+    /// What let it through when a person's yes did: this call, or the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<crate::protocol::GrantScope>,
 }
 
 impl ToolStep {

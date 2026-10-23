@@ -36,6 +36,7 @@ pub mod auth;
 pub mod config;
 pub mod engines;
 pub mod export;
+pub mod grants;
 pub mod highlight;
 pub mod hosts;
 pub mod icons;
@@ -1378,14 +1379,17 @@ impl SandboxArgs {
     /// of a policy file, and every flag over them as it is over a file.
     pub(crate) async fn resolve_environment(
         &self,
-        environment: &policies::Resolved,
+        environment: std::sync::Arc<policies::Resolved>,
         runtime: Option<agent_core::worker::Runtime>,
     ) -> Result<Agency> {
         let mut args = self.clone();
         if runtime.is_some() {
             args.worker = runtime;
         }
-        args.resolve_from(Some(environment)).await
+        Ok(args
+            .resolve_from(Some(&environment))
+            .await?
+            .with_environment(environment))
     }
 
     async fn resolve(&self) -> Result<Agency> {
@@ -2709,7 +2713,7 @@ pub async fn run() -> Result<()> {
                                     args.resolve_posture(Some(&policy), runtime).await
                                 }
                                 Some(serve::Chosen::Environment(environment)) => {
-                                    args.resolve_environment(&environment, runtime).await
+                                    args.resolve_environment(environment, runtime).await
                                 }
                             }
                         })
@@ -3078,7 +3082,7 @@ pub async fn run() -> Result<()> {
                 // The confirmation, as a check rather than a question. A plan
                 // that asks for what the sandbox does not grant does not run —
                 // the alternative is discovering it as a denial four turns in.
-                let unmet = plan.unmet(agency.sandbox.as_ref());
+                let unmet = plan.unmet(agency.gate_sandbox(&plan.commands).as_ref());
                 if !unmet.is_empty() {
                     anyhow::bail!(
                         "job `{objective}` asks for what the sandbox does not grant:\n  {}",
@@ -3104,7 +3108,7 @@ pub async fn run() -> Result<()> {
                 );
                 let id = approved.job;
                 narrowed = Some(std::sync::Arc::new(
-                    plan.narrow(agency.sandbox.as_ref(), id)
+                    plan.narrow(agency.gate_sandbox(&plan.commands).as_ref(), id)
                         .with_context(|| format!("resolving the plan of job `{objective}`"))?,
                 ));
                 if let Some(recorder) = &recorder {

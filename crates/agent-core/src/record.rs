@@ -202,7 +202,12 @@ use crate::trace::TraceMessage;
 /// stream before it, which a resume reads as *unknown* and lets through, as it
 /// does a posture of `None`. See
 /// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
-pub const FORMAT: u32 = 21;
+///
+/// **22 carries `granted` and `revoked`**, new lines on the protocol channel —
+/// a person's yes for the session, and one taken back — which a resume folds
+/// into what the session may do without asking; and `tool_result.grant`,
+/// additive. Protocol 10. See the same record, step 2a.
+pub const FORMAT: u32 = 22;
 
 /// The posture a session ran under, as a recording names it.
 ///

@@ -86,11 +86,11 @@ struct Session {
     held: Option<Held>,
 }
 
-/// One call waiting on *allow once* or *deny*.
+/// One call waiting on a person's answer.
 struct Held {
     turn: TurnId,
     step: u32,
-    answer: tokio::sync::oneshot::Sender<bool>,
+    answer: tokio::sync::oneshot::Sender<agent_core::agent::Answer>,
 }
 
 /// The person a drafting turn asks, by way of whoever is watching the session.
@@ -107,6 +107,8 @@ struct Watching {
     /// it too, and a page that heard the question first had no call to hang it
     /// on.
     events: mpsc::Sender<TurnEvent>,
+    /// What a session grant is resolved against.
+    base: PathBuf,
 }
 
 impl agent_core::agent::Asker for Watching {
@@ -115,7 +117,8 @@ impl agent_core::agent::Asker for Watching {
         step: u32,
         call: &'a agent_core::tools::ToolCall,
         refused: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = agent_core::agent::Answer> + Send + 'a>>
+    {
         Box::pin(async move {
             let (answer, answered) = tokio::sync::oneshot::channel();
             // Held before it is announced, so an answer can never arrive
@@ -136,18 +139,42 @@ impl agent_core::agent::Asker for Watching {
                     refused: refused.to_string(),
                 })
                 .await;
-            let allow = answered.await.unwrap_or(false);
+            let answer = answered.await.unwrap_or(agent_core::agent::Answer::Deny);
             // Cleared here as well as by the answer, so a cancel that won the
             // race leaves nothing for a late answer to land on.
-            let mut session = self.app.session.lock().await;
-            if session
-                .held
-                .as_ref()
-                .is_some_and(|held| held.turn == self.turn && held.step == step)
             {
-                session.held = None;
+                let mut session = self.app.session.lock().await;
+                if session
+                    .held
+                    .as_ref()
+                    .is_some_and(|held| held.turn == self.turn && held.step == step)
+                {
+                    session.held = None;
+                }
             }
-            allow
+            // A yes for the session is remembered before the call runs, and
+            // said on the stream, so a resume has it and the page can list it.
+            if answer == agent_core::agent::Answer::Session
+                && let Some(grant) = crate::grants::grant_for(call, &self.base)
+            {
+                let added = self
+                    .app
+                    .grants
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(grant.clone());
+                if added {
+                    self.app
+                        .publish(Event::Protocol(ServerMessage::Granted {
+                            turn: self.turn,
+                            step,
+                            kind: grant.kind,
+                            target: grant.target,
+                        }))
+                        .await;
+                }
+            }
+            answer
         })
     }
 }
@@ -318,6 +345,9 @@ struct App {
     /// `[environment.<name>]`, resolved when this run started. Settings does
     /// not write them yet, so they do not move under it.
     environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
+    /// What a person allowed for the live session's drafts, until taken back.
+    /// Emptied by a new session, refilled from the stream by a resume.
+    grants: crate::grants::Granted,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
@@ -955,6 +985,7 @@ impl App {
             describe_for,
             postures: std::sync::RwLock::new(postures),
             environments,
+            grants: Default::default(),
             postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
@@ -2205,7 +2236,17 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
         ClientMessage::DeclinePlan => {
             decline_plan(app.clone()).await;
         }
-        ClientMessage::AnswerCall { turn, step, allow } => {
+        ClientMessage::AnswerCall {
+            turn,
+            step,
+            allow,
+            session,
+        } => {
+            let answer = match (allow, session) {
+                (false, _) => agent_core::agent::Answer::Deny,
+                (true, false) => agent_core::agent::Answer::Once,
+                (true, true) => agent_core::agent::Answer::Session,
+            };
             let held = {
                 let mut session = app.session.lock().await;
                 match &session.held {
@@ -2215,7 +2256,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             };
             match held {
                 Some(held) => {
-                    let _ = held.answer.send(allow);
+                    let _ = held.answer.send(answer);
                 }
                 None => {
                     refuse(
@@ -2226,6 +2267,23 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                     )
                     .await;
                 }
+            }
+        }
+        // A session grant taken back: the next call that needs it is asked
+        // again. Taking back what was never given changes nothing and says
+        // nothing.
+        ClientMessage::RevokeGrant { kind, target } => {
+            let removed = app
+                .grants
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&agent_core::protocol::Grant {
+                    kind,
+                    target: target.clone(),
+                });
+            if removed {
+                app.publish(Event::Protocol(ServerMessage::Revoked { kind, target }))
+                    .await;
             }
         }
         ClientMessage::RequestPlan => {
@@ -2715,25 +2773,26 @@ async fn approve_plan(
         match session.current.is_none() && session.pending.is_some() {
             true => {
                 let pending = session.pending.take().expect("checked just above");
-                let (granted, mut dropped) = permitted(
-                    &app.agency().await.sandbox,
-                    files,
-                    writes,
-                    commands,
-                    network,
-                    egress,
-                    enforcement,
-                );
+                // What the gate may grant: the session's, and what the lists
+                // leave to a person — whose approval this is.
+                let gate = {
+                    let asked: Vec<String> = pending
+                        .plan
+                        .commands
+                        .iter()
+                        .chain(&commands)
+                        .cloned()
+                        .collect();
+                    app.agency().await.gate_sandbox(&asked)
+                };
+                let (granted, mut dropped) =
+                    permitted(&gate, files, writes, commands, network, egress, enforcement);
                 // Checked against the plan as it will *be* rather than against
                 // the amendment alone: the person types `closes_on` for a
                 // command the model already declared more often than for one
                 // they are adding in the same breath.
-                let (closes_on, refused) = closing_condition(
-                    &app.agency().await.sandbox,
-                    Some(&pending.plan),
-                    &granted,
-                    closes_on,
-                );
+                let (closes_on, refused) =
+                    closing_condition(&gate, Some(&pending.plan), &granted, closes_on);
                 dropped.extend(refused);
                 // Amended on the proposal itself rather than through the
                 // context: the plan is not stored anywhere until the approval
@@ -2823,7 +2882,10 @@ async fn approve_plan(
     // The job's own sandbox, from here until it closes. A plan that names
     // nothing narrows to nothing, which is the point: a turn inside a job may
     // touch what the job was approved for.
-    let narrowed = match plan.narrow(app.agency().await.sandbox.as_ref(), job) {
+    let narrowed = match plan.narrow(
+        app.agency().await.gate_sandbox(&plan.commands).as_ref(),
+        job,
+    ) {
         Ok(sandbox) => Some(Arc::new(sandbox)),
         // Only a path that stopped existing between the check and here can do
         // this. Falling back to the session's sandbox would silently un-narrow
@@ -3140,7 +3202,10 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
         // `RECORD/2026-09-21.the-drafts-floor.completed.md`.
         let plan = session.context.job(job).and_then(|job| job.plan.clone());
         session.narrowed = plan
-            .and_then(|plan| plan.narrow(agency.sandbox.as_ref(), job).ok())
+            .and_then(|plan| {
+                plan.narrow(agency.gate_sandbox(&plan.commands).as_ref(), job)
+                    .ok()
+            })
             .map(|sandbox| (job, Arc::new(sandbox)));
     }
     app.publish(Event::Protocol(ServerMessage::JobReopened { job }))
@@ -3522,14 +3587,17 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     // accepts. Inside a job a refusal means the plan did not grant it, and the
     // plan stays what was approved. See
     // `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    // And since 2026-10-23, a command the shell list leaves to a person, and
+    // whatever a person already allowed for the session. See `crate::grants`.
     let wider = match sandbox.authority() {
-        Authority::Draft(draft) if !app.approvers.required => Some(
-            agency
-                .sandbox
-                .as_ref()
-                .clone()
-                .under(Authority::Person(*draft)),
-        ),
+        Authority::Draft(draft) if !app.approvers.required => {
+            Some(crate::grants::DraftCeiling::new(
+                &agency.sandbox,
+                agency.environment(),
+                app.grants.clone(),
+                Authority::Person(*draft),
+            ))
+        }
         _ => None,
     };
 
@@ -3605,6 +3673,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             app: app.clone(),
             turn,
             events: tx.clone(),
+            base: agency.sandbox.base().to_path_buf(),
         };
         let outcome = run_agent_turn(
             sending.backend.as_ref(),
@@ -3613,8 +3682,8 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             sandbox.as_ref(),
             agency.limits,
             app.schema_retry.as_ref(),
-            wider.as_ref().map(|wider| agent_core::agent::Ask {
-                wider,
+            wider.as_ref().map(|ceiling| agent_core::agent::Ask {
+                ceiling,
                 person: &watching,
             }),
             tx,
@@ -7152,6 +7221,11 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         previous.shutdown().await;
     }
     *app.posture.lock().await = posture_name.clone();
+    // A new session starts with nothing allowed by anybody.
+    app.grants
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
 
     let started_at = now_ms();
     let new_id = session_id(started_at);
@@ -7563,6 +7637,11 @@ async fn resume_session(
         previous.shutdown().await;
     }
     *app.posture.lock().await = posture_name;
+    // What a person allowed it, as its stream last left it.
+    *app.grants
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+        loaded_view.grants.iter().cloned().collect();
 
     *app.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store
@@ -7642,7 +7721,9 @@ async fn resume_session(
             Some((job, plan))
         });
         session.narrowed = live.and_then(|(job, plan)| {
-            let sandbox = plan.narrow(agency.sandbox.as_ref(), job).ok()?;
+            let sandbox = plan
+                .narrow(agency.gate_sandbox(&plan.commands).as_ref(), job)
+                .ok()?;
             Some((job, Arc::new(sandbox)))
         });
     }
@@ -8034,6 +8115,7 @@ mod tests {
             describe_for: None,
             postures: Default::default(),
             environments: Default::default(),
+            grants: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),

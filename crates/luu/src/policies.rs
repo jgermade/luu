@@ -187,10 +187,11 @@ impl Policies {
         let network = self.network.get(&environment.network)?.clone();
         let files = self.files.get(&environment.files)?.clone();
         let mut policy = SandboxPolicy {
-            paths: files.allow.clone(),
+            paths: Vec::new(),
             commands: shell.allow.clone(),
             ..SandboxPolicy::default()
         };
+        widen(&mut policy, None, files.allow.iter().cloned());
         (policy.network, policy.egress) = network_of(&network.allow);
         if let Some(enforcement) = environment.enforcement {
             policy.enforcement = enforcement;
@@ -219,6 +220,21 @@ impl Policies {
 }
 
 impl Resolved {
+    /// Its shell list, as written.
+    pub fn shell(&self) -> &Zones {
+        &self.shell.1
+    }
+
+    /// Its files list, as written.
+    pub fn files(&self) -> &FilesList {
+        &self.files.1
+    }
+
+    /// Its network list, as written.
+    pub fn network(&self) -> &Zones {
+        &self.network.1
+    }
+
     /// The lists as recorded, with `allow` read back off the sandbox the
     /// session actually got — the command line's `--allow-*` included — and
     /// `ask` and `deny` as written.
@@ -275,6 +291,33 @@ pub fn lists_of_file(label: &str, granted: &SandboxPolicy) -> Lists {
                 ..FilesList::default()
             },
         ),
+    }
+}
+
+/// Adds `rules` to `policy`'s paths, a path already there taking the greater
+/// of the two accesses. Two rules for one path would otherwise both stand, and
+/// the sandbox answers with the first — so a list's `ask` for writing `.` under
+/// an `allow` for reading it would read as read-only. `base` is what relative
+/// paths are read against, so `.` and the working directory written out are
+/// one path; without it, paths are compared as written.
+pub fn widen(
+    policy: &mut SandboxPolicy,
+    base: Option<&std::path::Path>,
+    rules: impl IntoIterator<Item = PathRule>,
+) {
+    let place = |path: &std::path::Path| match base {
+        None => path.to_path_buf(),
+        Some(base) => {
+            let joined = base.join(path);
+            joined.canonicalize().unwrap_or(joined)
+        }
+    };
+    for rule in rules {
+        let at = place(&rule.path);
+        match policy.paths.iter_mut().find(|held| place(&held.path) == at) {
+            Some(held) => held.access = held.access.max(rule.access),
+            None => policy.paths.push(rule),
+        }
     }
 }
 

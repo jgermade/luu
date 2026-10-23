@@ -163,6 +163,21 @@ carry it, and the gate's floor sentence says *writes nothing without asking you,
 one call at a time* where `floor.asks` is true. See
 [`RECORD/2026-10-02.a-refused-write-asks.completed.md`](RECORD/2026-10-02.a-refused-write-asks.completed.md).
 
+**Since 2026-10-23 a yes may last the session, and a command may be asked about.** The
+`Ask` carries a `Ceiling` rather than a sandbox: it decides per refused call whether nobody is
+asked, a person is, or a person already allowed it for the session (`crate::grants`). Under an
+environment, a `run_command` whose program the floor does not run is asked when the shell list
+puts it in `ask` (by name or by `*`) and not in `deny` — the allowlist refuses before the
+program starts, so it can be paused as a write can — and a yes runs it **with everything it
+implies**, the session's writes and network (to be looked at again). A write is asked as before,
+and also under the files list's `ask`. The answers are *Allow this time*, *Allow for the
+session* and *Deny*; a session grant is a `granted` line on the stream, listed under the draft
+with a × that sends `revoke_grant`, folded back in by a resume, and emptied by a new session.
+Still only in a draft, never for what `deny` or no list names, and not where approvals must be
+signed. At the gate, a plan may get what the lists leave to a person (`Agency::gate_sandbox`):
+approving it is that person's yes, for the job. `protocol::VERSION` 10, `record::FORMAT` 22. See
+[`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+
 It is only as strong as `enforcement`: under `best-effort` there is no Landlock,
 so a subprocess started by a draft turn can write anyway — true of every path
 grant here, and worth saying because the floor is the first one whose entire
@@ -223,8 +238,9 @@ One boundary does three jobs, which is the argument for it:
   it *is* the `SandboxPolicy` for that task. One informed approval beats a prompt
   per tool call, which is what trains people to click yes without reading. The
   one exception is a draft's dead end — a write the floor refuses and the policy
-  file allows — which is asked about once rather than refused; see the floor
-  above.
+  file allows, or since 2026-10-23 a command the shell list leaves to a person —
+  which is asked about rather than refused, once or for the session; see the
+  floor above.
 - **The transcript gets its grouping**: a closed task collapses to its summary in the
   UI — the view collapses exactly what the context collapses.
 

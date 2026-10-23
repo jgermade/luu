@@ -82,6 +82,10 @@ pub struct ToolCallView {
     /// asked. See [`crate::tools::ToolStep::asked`].
     #[serde(default)]
     pub asked: Option<bool>,
+    /// What let it through when a person's yes did. See
+    /// [`crate::tools::ToolStep::grant`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<crate::protocol::GrantScope>,
     /// While a person is being asked about this call: the floor's rule. Set by
     /// `call_held`, cleared by the `tool_result` that answers it — so a page
     /// that reloads in between gets the question back rather than a turn
@@ -630,6 +634,10 @@ pub struct SessionView {
     /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
     #[serde(default)]
     pub posture: Option<record::Posture>,
+    /// What a person allowed for the session, in the order they allowed it,
+    /// less what was taken back. Empty in a stream before protocol 10.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<crate::protocol::Grant>,
     /// The three resend rules the stream's **last** header names — what this
     /// session's turns were rendered under.
     ///
@@ -693,6 +701,7 @@ impl SessionView {
             // with the stream's own number the moment a header arrives.
             format: Some(record::FORMAT),
             posture: None,
+            grants: Vec::new(),
             repeat: None,
             prune: None,
             results: None,
@@ -1190,6 +1199,7 @@ impl SessionView {
                         duration_ms: None,
                         command: None,
                         asked: None,
+                        grant: None,
                         held: None,
                     });
                 }
@@ -1219,6 +1229,7 @@ impl SessionView {
                 duration_ms,
                 command,
                 asked,
+                grant,
                 ..
             } => {
                 if let Some(view) = self.turn_mut(*turn)
@@ -1231,8 +1242,24 @@ impl SessionView {
                     call.duration_ms = Some(*duration_ms);
                     call.command = command.clone();
                     call.asked = *asked;
+                    call.grant = *grant;
                     call.held = None;
                 }
+            }
+            // What the session may do without asking, as the stream last left
+            // it: a resume picks up the grants a person gave.
+            ServerMessage::Granted { kind, target, .. } => {
+                let grant = crate::protocol::Grant {
+                    kind: *kind,
+                    target: target.clone(),
+                };
+                if !self.grants.contains(&grant) {
+                    self.grants.push(grant);
+                }
+            }
+            ServerMessage::Revoked { kind, target } => {
+                self.grants
+                    .retain(|grant| !(grant.kind == *kind && grant.target == *target));
             }
         }
     }
@@ -2028,5 +2055,35 @@ mod tests {
                 detail: detail.into(),
             },
         }
+    }
+    /// What a person allowed for the session is folded from the stream, so a
+    /// resume has it; what was taken back is not.
+    #[test]
+    fn grants_are_folded_and_taken_back() {
+        use crate::protocol::{Grant, GrantKind};
+        let mut view = SessionView::new("s", "mock", "mock");
+        let granted = |target: &str| ServerMessage::Granted {
+            turn: 1,
+            step: 1,
+            kind: GrantKind::Command,
+            target: target.into(),
+        };
+        view.apply_protocol(0, &granted("git"));
+        view.apply_protocol(0, &granted("git"));
+        view.apply_protocol(0, &granted("npm"));
+        view.apply_protocol(
+            0,
+            &ServerMessage::Revoked {
+                kind: GrantKind::Command,
+                target: "git".into(),
+            },
+        );
+        assert_eq!(
+            view.grants,
+            [Grant {
+                kind: GrantKind::Command,
+                target: "npm".into()
+            }]
+        );
     }
 }

@@ -114,6 +114,9 @@ pub struct Agency {
     /// recording names them. `None` only where nothing resolved one — a test's
     /// hand-built agency. See [`crate::policies`].
     lists: Option<record::Lists>,
+    /// The environment it was built from, when it was one: its lists' `ask`
+    /// and `deny`, which the sandbox does not carry. See [`crate::grants`].
+    environment: Option<Arc<crate::policies::Resolved>>,
 }
 
 impl Agency {
@@ -133,6 +136,70 @@ impl Agency {
             limits,
             worker,
             lists: None,
+            environment: None,
+        }
+    }
+
+    /// The environment it was built from.
+    pub fn with_environment(mut self, environment: Arc<crate::policies::Resolved>) -> Self {
+        self.environment = Some(environment);
+        self
+    }
+
+    /// The environment it was built from, when it was one.
+    pub fn environment(&self) -> Option<&crate::policies::Resolved> {
+        self.environment.as_deref()
+    }
+
+    /// What the gate may grant a plan: the session's sandbox, and — where it
+    /// was built from an environment — what its lists leave to a person,
+    /// since approving the plan is that person's yes, for its job. `commands`
+    /// are the plan's: under `ask = ["*"]` they are what is being asked for.
+    /// What `deny` names, or no list names, is not here, and a plan asking for
+    /// it is told so at the gate as before. See
+    /// `RECORD/2026-10-22.policies-not-postures.WIP.md`, step 2a.
+    pub fn gate_sandbox(&self, commands: &[String]) -> Arc<Sandbox> {
+        let Some(environment) = &self.environment else {
+            return self.sandbox.clone();
+        };
+        let mut policy = self.sandbox.to_policy();
+        let shell = environment.shell();
+        let any = shell.ask.iter().any(|asked| asked == "*");
+        let asked = shell.ask.iter().filter(|asked| *asked != "*").chain(
+            commands
+                .iter()
+                .filter(|command| any && !command.contains('/') && !shell.deny.contains(command)),
+        );
+        for command in asked {
+            if !policy.commands.contains(command) {
+                policy.allow_command(command);
+            }
+        }
+        let network = environment.network();
+        if !network.ask.is_empty() {
+            let any_host = network.ask.iter().any(|host| host == "*");
+            match (policy.network, any_host) {
+                // Any host already, or any host may be asked for.
+                (true, _) if policy.egress.is_empty() => {}
+                (_, true) => policy.egress.clear(),
+                _ => policy.egress.extend(network.ask.iter().cloned()),
+            }
+            policy.network = true;
+        }
+        let base = self.sandbox.base();
+        crate::policies::widen(
+            &mut policy,
+            Some(base),
+            environment
+                .files()
+                .ask
+                .iter()
+                .filter(|rule| base.join(&rule.path).exists())
+                .cloned(),
+        );
+        match Sandbox::new(&policy, base) {
+            Ok(sandbox) => Arc::new(sandbox.under(self.sandbox.authority().clone())),
+            Err(_) => self.sandbox.clone(),
         }
     }
 

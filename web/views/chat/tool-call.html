@@ -39,11 +39,15 @@
   let sent = ""
   $: key = held ? `${held.turn}:${call?.step}` : ""
   $: answered = !!key && sent === key
-  const answer = allow => {
+  // `session`: the yes lasts the session's drafts, until it is taken back.
+  const answer = (allow, session = false) => {
     if (!held || answered) return
     sent = key
-    answerCall(held.turn, call.step, allow)
+    answerCall(held.turn, call.step, allow, session)
   }
+  // A command asked about is a program the shell list leaves to a person; a
+  // yes runs it with what the session may write and reach.
+  $: asksCommand = part?.name === "run_command"
   $: status = part?.pending
     ? { word: "writing the call…", kind: "busy" }
     : held
@@ -58,7 +62,9 @@
             ? { word: "failed", kind: "bad" }
             : call.command && call.command.exit_code !== 0
               ? { word: call.command.exit_code === null ? "killed" : `exit ${call.command.exit_code}`, kind: "bad" }
-              : { word: call.asked ? "allowed once" : "done", kind: "ok" }
+              : call.grant === "session"
+                ? { word: call.asked ? "allowed for the session" : "allowed earlier", kind: "ok" }
+                : { word: call.asked ? "allowed once" : "done", kind: "ok" }
   $: took = call?.duration_ms != null ? `${call.duration_ms} ms` : ""
   $: detailed = !part?.pending && (call || part?.raw)
   $: pretty = JSON.stringify(args, null, 2)
@@ -76,15 +82,20 @@
   </button>
 
   <div :if="held" class="question">
-    <p class="why">The draft may not write this. Allow it once?
+    <p :if="!asksCommand" class="why">The draft may not write this. Allow it?
       <span class="dim">— {{ held.refused }}</span></p>
+    <p :if="asksCommand" class="why">The draft may not run <code>{{ args.argv?.[0] }}</code>
+      — the shell list leaves it to you. Allow it?
+      <span class="dim">It runs with what the session may write and reach.</span></p>
+    <div :if="asksCommand" class="out"><Scrollable :x="true" frame="well" background="var(--luu-bg, #f4f5f8)"><pre>{{ subject }}</pre></Scrollable></div>
     <div :if="writes !== null" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre>{{ writes }}</pre></Scrollable></div>
     <div :if="replaces" class="label">replaces</div>
     <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="10rem"><pre class="bad">{{ replaces.old }}</pre></Scrollable></div>
     <div :if="replaces" class="label">with</div>
     <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="10rem"><pre class="ok">{{ replaces.new }}</pre></Scrollable></div>
     <div class="answers">
-      <button type="button" class="primary" :disabled="answered" @click="answer(true)">Allow once</button>
+      <button type="button" class="primary" :disabled="answered" @click="answer(true)">Allow this time</button>
+      <button type="button" :disabled="answered" @click="answer(true, true)">Allow for the session</button>
       <button type="button" :disabled="answered" @click="answer(false)">Deny</button>
     </div>
   </div>
@@ -92,7 +103,8 @@
   <div :if="open" class="body">
     <div :if="call?.verdict" class="line">
       <span :class="call.verdict.allowed ? 'ok' : 'bad'">{{ call.verdict.allowed ? "allowed" : "denied" }}</span>
-      <span :if="call.asked != null" class="dim">by you, for this call</span>
+      <span :if="call.asked != null &amp;&amp; call.grant !== 'session'" class="dim">by you, for this call</span>
+      <span :if="call.grant === 'session'" class="dim">by you, for the session</span>
       <span class="dim">— {{ call.verdict.rule }}</span>
     </div>
     <div :if="call?.error" class="line bad">{{ call.error }}</div>

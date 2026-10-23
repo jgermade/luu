@@ -2,7 +2,7 @@
   // A setup script takes `await import(...)`; a static `import` statement is
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
-          approvePlan, declinePlan, requestPlan, closeJob, reopenJob,
+          approvePlan, declinePlan, requestPlan, closeJob, reopenJob, revokeGrant,
           renameSession,
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
@@ -1143,6 +1143,18 @@
             close &amp; fold
           </button>
         </div>
+        <!-- What a person allowed for the session: its drafts do these without
+             asking until one is taken back. See `crate::grants`. -->
+        <div :if="state.grants.length" class="grants">
+          <span class="dim">allowed for the session:</span>
+          <span :each="grant in state.grants" :key="grant.kind + ':' + grant.target" class="grant">
+            {{ grant.kind === "write" ? "write" : "run" }} <code>{{ grant.target }}</code><button
+              type="button" class="revoke" :disabled="replaying"
+              :title="`Take back: ask again before the next one`"
+              :aria-label="`Take back ${grant.kind === 'write' ? 'writing' : 'running'} ${grant.target}`"
+              @click="revokeGrant(grant.kind, grant.target)">×</button>
+          </span>
+        </div>
       </div>
     </div>
 
@@ -1837,6 +1849,25 @@
   }
   .live-job span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .live-job button { margin-left: auto; }
+  /* What a person allowed for the session, each one a chip with its ×. */
+  .grants {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem;
+    margin: 0 1rem .4rem; font-size: 12px;
+  }
+  .grant {
+    display: inline-flex; align-items: center; gap: .25rem;
+    padding: .05rem .1rem .05rem .45rem;
+    border: 1px solid var(--luu-border); border-radius: 999px;
+    background: var(--luu-bg);
+  }
+  .grant code { font-size: 11px; }
+  .grant .revoke {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.1rem; height: 1.1rem; padding: 0;
+    border: 0; border-radius: 999px; background: none;
+    color: var(--luu-fg-muted); cursor: pointer; line-height: 1;
+  }
+  .grant .revoke:hover:not(:disabled) { background: var(--luu-hover); color: var(--luu-fg); }
 
   /* A closed task: one entry, where its turns were. */
   .fold {
