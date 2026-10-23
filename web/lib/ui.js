@@ -14,6 +14,7 @@
 import { $reactive } from "@web/vendor/jq79.js"
 import { prefs, setPlace } from "./prefs.js"
 import { stillThere } from "./places.js"
+import { loadPolicies } from "./policies.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
   newSession, resumeSession, apiHeaders, refreshSettings,
@@ -204,6 +205,9 @@ export async function openStarter(provider) {
   // and chosen at the same moment, because it is the only one there is: a
   // posture is what a session's jobs are approved against, so it never moves.
   if (!state.postures) await loadPostures()
+  // The lists, asked again on every opening: Settings → Policies may have
+  // changed them since, and an environment is a preset made of them.
+  const policies = await loadPolicies()
   ui.continuing = false
   const names = Object.keys(state.providers?.providers || {})
   const chosen = provider
@@ -222,8 +226,36 @@ export async function openStarter(provider) {
     // policy file on its own runtime, where it cannot. That is what every
     // session got before a session could choose.
     place: stillThere(state.postures, prefs.place),
+    // The tables of `config.toml`, and which list of each the session starts
+    // with: the preset's own until one is changed. `null` for a policy file,
+    // whose lists are the file's.
+    policies: policies.ok ? policies.view : null,
+    lists: null,
   }
+  ui.starter = { ...ui.starter, lists: presetLists(ui.starter.place) }
   if (chosen) await loadModels(chosen)
+}
+
+/// The lists an environment names, for the place it is the preset of; `null`
+/// for a posture or the server's own file.
+function presetLists(place) {
+  const [preset] = (place || "|").split("|")
+  const environment = ui.starter?.policies?.environment?.[preset]
+  return environment
+    ? { shell: environment.shell, network: environment.network, files: environment.files }
+    : null
+}
+
+/// Where the session starts from and on which runtime: the lists go back to
+/// the preset's own.
+export function choosePlace(place) {
+  ui.starter = { ...ui.starter, place, lists: presetLists(place) }
+}
+
+/// One of the three lists in place of the preset's.
+export function chooseList(kind, name) {
+  if (!ui.starter?.lists) return
+  ui.starter = { ...ui.starter, lists: { ...ui.starter.lists, [kind]: name } }
 }
 
 /// The list is fetched from the provider itself, so it is what is *pulled*
@@ -254,11 +286,17 @@ export function closeStarter() {
 export async function startSession() {
   ui.starting = true
   const [posture, runtime] = (ui.starter.place || "|").split("|")
+  // Sent only where they are not the preset's own: a session on a preset as
+  // it is records just its name.
+  const own = presetLists(ui.starter.place)
+  const changed = own && ui.starter.lists
+    && ["shell", "network", "files"].some(kind => ui.starter.lists[kind] !== own[kind])
   const ok = await newSession({
     provider: ui.starter.provider,
     model: ui.starter.model,
     posture: posture || undefined,
     runtime: runtime || undefined,
+    lists: changed ? ui.starter.lists : undefined,
   })
   ui.starting = false
   if (ok) {

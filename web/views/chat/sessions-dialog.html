@@ -8,13 +8,15 @@
   // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
   const { state, resumeSession, deleteSession, refreshSessionsList } = await import("@web/lib/store.js")
   const {
-    ui, loadModels, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
+    ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
+    choosePlace, chooseList,
   } = await import("@web/lib/ui.js")
   const { placeOptions } = await import("@web/lib/places.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Button = await import("@web/theme/default/components/button.html")
+  const ProviderModels = await import("./provider-models.html")
 
   const TABS = [
     { value: "new", label: "New session" },
@@ -38,27 +40,65 @@
   // choose one at all — over stdio the process is the session.
   $: places = state.postures?.choosable ? placeOptions(state.postures) : []
   $: chosenPosture = (ui.starter?.place || "|").split("|")[0]
-  // Each field's line under its box: what it is, where its value came from,
-  // or what will not work about it.
-  $: providerSaid = ui.starter?.provider === state.providers?.default
-    ? "the file's default"
-    : "where the session sends"
-  $: modelWarning = ui.starter?.reason
-    ? `Could not list this provider's models: ${ui.starter.reason}. Type one — a model that is not pulled yet is still a name worth writing down.`
-    : ""
-  $: modelSaid = ui.starter?.loading
-    ? "asking the provider…"
-    : ui.starter?.from
-      ? `from ${ui.starter.from}`
-      : !ui.starter?.models?.length
-        ? "This provider offers no list, so the model is whatever you type."
-        : `${ui.starter.models.length} on offer`
-  $: placeChoices = places.map(p => ({
-    value: p.value, label: `${p.name} — ${p.label}`, disabled: p.disabled, title: p.title,
-  }))
-  $: placeSaid = chosenPosture
-    ? `${state.postures?.postures[chosenPosture]?.policy} — chosen now: a session's jobs are approved against what it may do.`
-    : "what its commands may do"
+  // The choice of where it sends, said once beside the two columns' label:
+  // the provider, the model, and where that model came from.
+  $: sendsSaid = !ui.starter?.provider
+    ? "where the session sends"
+    : `${ui.starter.provider} · ${ui.starter.model || "its own model"}${ui.starter.provider === state.providers?.default ? " · the file's default" : ""}${ui.starter.from && ui.starter.model ? ` · from ${ui.starter.from}` : ""}`
+  // **Three rows, as asked**: where it starts from and where its commands
+  // run; which list of each axis it may use; where it sends. An environment
+  // is a preset: choosing one fills the runtime and the three lists, which
+  // can then be changed — the session records the lists it got, by name and
+  // hash. A posture, or the server's own policy file, has no lists to choose:
+  // its lists are the file's. See
+  // `RECORD/2026-10-22.policies-not-postures.WIP.md`, *the new session*.
+  $: presets = places.reduce((out, p) => out.some(q => q.value === p.posture)
+    ? out
+    : [...out, { value: p.posture, label: p.name }], [])
+  $: runtimes = places.filter(p => p.posture === chosenPosture)
+    .map(p => ({ value: p.value, label: p.label, disabled: p.disabled, title: p.title }))
+  $: environment = ui.starter?.policies?.environment?.[chosenPosture] || null
+  $: presetSaid = environment
+    ? "an environment: the lists start as its own"
+    : chosenPosture
+      ? `${state.postures?.postures[chosenPosture]?.policy} — a policy file, whose lists are its own`
+      : "the policy file serve was started with"
+  $: runtimeSaid = runtimes.find(r => r.value === ui.starter?.place)?.title?.includes("keeps its network")
+    ? "where its commands run · this runtime keeps its network"
+    : "where its commands run"
+  // The first place of a preset is its own runtime.
+  const choosePreset = preset => choosePlace(places.find(p => p.posture === preset && !p.disabled)?.value
+    || places.find(p => p.posture === preset)?.value || "|")
+
+  const KINDS = [
+    { key: "shell", label: "Shell" },
+    { key: "network", label: "Network" },
+    { key: "files", label: "Files" },
+  ]
+  const listNames = kind => Object.keys(ui.starter?.policies?.[kind] || {}).sort()
+  // A list at a glance: how much is in each zone, `*` where a zone takes any.
+  const zonesOf = (kind, name) => {
+    const list = ui.starter?.policies?.[kind]?.[name]
+    if (!list) return ""
+    return ["allow", "ask", "deny"]
+      .map(zone => {
+        const entries = list[zone] || []
+        return entries.length ? `${zone} ${entries.includes("*") ? "*" : entries.length}` : ""
+      })
+      .filter(Boolean).join(" · ") || "empty: nothing"
+  }
+  // What each select shows: the session's list, or — on a policy file — the
+  // file, which is all there is to show.
+  $: fileName = chosenPosture ? state.postures?.postures[chosenPosture]?.policy || chosenPosture : "the policy file"
+  const listOptions = kind => ui.starter?.lists
+    ? listNames(kind).map(name => ({ value: name, label: name }))
+    : [{ value: "", label: fileName }]
+  const listSaid = kind => {
+    const name = ui.starter?.lists?.[kind]
+    if (!name) return "the file's own"
+    const changed = environment && environment[kind] !== name
+    return `${zonesOf(kind, name)}${changed ? ` · instead of ${environment[kind]}` : ""}`
+  }
   $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
   // What stands in the way of *either* action: the server refuses both while a
   // turn is in flight or a proposal is unanswered, and a button that fails when
@@ -161,7 +201,7 @@
      begins something rather than settles it. A bar whatever its size. -->
 <!-- Open until `closeSessions` says it is leaving, so it plays its exit
      before it is unmounted. -->
-<TabModal :open="!ui.sessionsLeaving" title="Sessions" head="accent" tinted :tabs="TABS" :model="tab" width="38rem" height="26rem"
+<TabModal :open="!ui.sessionsLeaving" title="Sessions" head="accent" tinted :tabs="TABS" :model="tab" width="46rem" height="38rem"
           @change="choose($event.detail)" @close="closeSessions()">
 
   <!-- ---- new session ---- -->
@@ -173,26 +213,40 @@
     </p>
 
     <!-- One box per thing chosen: its name in the border, what it is or
-         where its value came from under it. -->
+         where its value came from under it. Three rows: where it starts from
+         and runs, what it may use, where it sends. -->
     <div class="fields" :if="profileNames.length">
-      <InputContainer label="Provider" type="select" :options="profileNames"
-                      :model="ui.starter?.provider" :description="providerSaid"
-                      @change="loadModels($event.detail)" />
+      <div :if="places.length" class="row two" data-row="where">
+        <InputContainer label="Start from" type="select" select-class="preset"
+                        :options="presets" :model="chosenPosture" :description="presetSaid"
+                        :disabled="presets.length < 2"
+                        @change="choosePreset($event.detail)" />
+        <InputContainer label="Runtime" type="select" select-class="place"
+                        :options="runtimes" :model="ui.starter?.place" :description="runtimeSaid"
+                        :disabled="runtimes.length < 2"
+                        @change="choosePlace($event.detail)" />
+      </div>
 
-      <InputContainer label="Model" list="starter-models" :model="ui.starter?.model"
-                      :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
-                      :warning="modelWarning" :description="modelSaid"
-                      @input="editStarter({ model: $event.detail })" />
-      <datalist id="starter-models">
-        <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
-      </datalist>
+      <div :if="places.length" class="row three" data-row="lists">
+        <InputContainer :each="kind in KINDS" :key="kind.key" :label="kind.label" type="select"
+                        :select-class="'list-' + kind.key"
+                        :options="listOptions(kind.key)" :model="ui.starter?.lists?.[kind.key] || ''"
+                        :description="listSaid(kind.key)" :disabled="!ui.starter?.lists"
+                        @change="chooseList(kind.key, $event.detail)" />
+      </div>
 
-      <!-- What the session may do, which is not where it sends. Offered only
-           where somebody has written one down: the names come from
-           `config.toml`, and a page cannot add to them. -->
-      <InputContainer :if="places.length > 1" label="Runs" type="select" select-class="place"
-                      :options="placeChoices" :model="ui.starter?.place" :description="placeSaid"
-                      @change="editStarter({ place: $event.detail })" />
+      <!-- Where it sends: the chat's dropup, laid in the dialog — the
+           providers, and the models of the one in focus. -->
+      <div class="sends" data-row="sends">
+        <div class="sends-head">
+          <span class="sends-label">Provider and model</span>
+          <span class="dim small">{{ sendsSaid }}</span>
+        </div>
+        <div class="sends-box">
+          <ProviderModels :provider="ui.starter?.provider || ''" :model="ui.starter?.model || ''" typable
+                          @choose="editStarter({ provider: $event.detail.provider, model: $event.detail.model })" />
+        </div>
+      </div>
     </div>
 
     <p class="dim small" :if="profileNames.length">
@@ -262,6 +316,25 @@
   .panel { display: flex; flex-direction: column; gap: var(--luu-space-3); }
   .panel > p { margin: 0; }
   .fields { display: flex; flex-direction: column; gap: var(--luu-space-4); }
+  .row { display: grid; gap: var(--luu-space-3); align-items: start; }
+  .row.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sends { display: flex; flex-direction: column; gap: .35rem; }
+  .sends-head { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
+  .sends-head .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sends-label { font-size: 12px; font-weight: 600; color: var(--luu-accent); }
+  /* One height, as the dropup's body: lists arriving do not move the rows. */
+  .sends-box {
+    height: 13rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 8px;
+    background: var(--luu-surface);
+    overflow: hidden;
+  }
+  /* A phone's width: one under the other. */
+  @media (max-width: 36rem) {
+    .row.two, .row.three { grid-template-columns: minmax(0, 1fr); }
+  }
   .count { margin-right: auto; }
   /* White over the body's grey: the search is part of the head's side of the
      dialog, the list part of the body's. */

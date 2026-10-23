@@ -987,6 +987,13 @@ access = "execute"
   environment names it), sent whole to `PUT /api/policies` and checked by the loader that reads
   the file back; the environments are shown, and resolved again on every save, so the next
   session on one runs under the lists as written. The live session keeps what it was built with.
+  **The new session's dialog** has three rows: where it starts from (an environment, a posture
+  or the server's own file) and its runtime; the shell, network and files lists, which an
+  environment fills as a preset and any of which can be swapped for another of the file
+  (`NewSession.lists`, resolved by `Policies::resolve_with` and recorded by name and hash like
+  any list); and where it sends, in the chat dropup's two columns (`provider-models.html`, one
+  component for both). A posture's lists are its policy file, and the server refuses a swap on
+  one.
   **Settings → Runtimes writes the postures table**, naming a policy file out of the
   ones at the top of the checkout and never one the page types, and the server
   replaces the postures it offers at once. Postures are no longer read only at

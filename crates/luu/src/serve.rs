@@ -6903,6 +6903,27 @@ struct NewSession {
     /// `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
     #[serde(default)]
     authority: Option<crate::provider::AuthorityNotes>,
+    /// Other lists of the same file in place of some of the environment's:
+    /// the new session's dialog starting from a preset and changing a list.
+    /// Names out of `config.toml`, as `posture` is, and only on top of an
+    /// environment — a posture's lists are its policy file. See
+    /// [`crate::policies::Policies::resolve_with`].
+    #[serde(default)]
+    lists: Option<ListsChoice>,
+}
+
+/// Which list of each axis, by name; an absent one is the environment's.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct ListsChoice {
+    shell: Option<String>,
+    network: Option<String>,
+    files: Option<String>,
+}
+
+impl ListsChoice {
+    fn is_empty(&self) -> bool {
+        self.shell.is_none() && self.network.is_none() && self.files.is_none()
+    }
 }
 
 impl NewSession {
@@ -7026,7 +7047,9 @@ async fn posture_for(
     app: &App,
     asked: Option<&str>,
     runtime: Option<&str>,
+    lists: Option<&ListsChoice>,
 ) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
+    let lists = lists.filter(|lists| !lists.is_empty());
     let Some(build) = &app.agency_for else {
         if let Some(runtime) = runtime {
             return Err((
@@ -7044,6 +7067,44 @@ async fn posture_for(
             )),
         };
     };
+    // Other lists than the environment's: resolved from the file as it is
+    // now, with the swap. Never on a posture or the server's own file, whose
+    // lists are the file's.
+    if let Some(lists) = lists {
+        let Some(name) = asked.filter(|name| app.environments().contains_key(*name)) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "lists are chosen on top of an environment, and {} is not one: \
+                     a posture's lists are its policy file",
+                    asked
+                        .map(|name| format!("`{name}`"))
+                        .unwrap_or("the server's own".into()),
+                ),
+            ));
+        };
+        let config = load_config()
+            .await
+            .map(|(config, _)| config)
+            .unwrap_or_default();
+        let resolved = config
+            .policies()
+            .resolve_with(
+                name,
+                lists.shell.as_deref(),
+                lists.network.as_deref(),
+                lists.files.as_deref(),
+            )
+            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+        return finish(
+            app,
+            build,
+            asked,
+            Some(Chosen::Environment(Arc::new(resolved))),
+            runtime,
+        )
+        .await;
+    }
     // A name is a posture's or an environment's — never both, which loading
     // the file refuses — so the order they are looked in decides nothing.
     let policy = match asked {
@@ -7065,6 +7126,18 @@ async fn posture_for(
             }
         },
     };
+    finish(app, build, asked, policy, runtime).await
+}
+
+/// The rest of [`posture_for`], once what the session is built from is known:
+/// the runtime variant checked against it, and the agency built.
+async fn finish(
+    app: &App,
+    build: &AgencyFactory,
+    asked: Option<&str>,
+    policy: Option<Chosen>,
+    runtime: Option<&str>,
+) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
     let runtime = match runtime {
         None => None,
         Some(text) => {
@@ -7347,11 +7420,17 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // And the same rule for what it may do: built before anything is reset, so
     // a runtime that is not installed or an image that is not built refuses the
     // *new* session rather than ending the one that is running.
-    let (posture_name, agency) =
-        match posture_for(app, asked.posture.as_deref(), asked.runtime.as_deref()).await {
-            Ok(resolved) => resolved,
-            Err((status, message)) => return (status, message).into_response(),
-        };
+    let (posture_name, agency) = match posture_for(
+        app,
+        asked.posture.as_deref(),
+        asked.runtime.as_deref(),
+        asked.lists.as_ref(),
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err((status, message)) => return (status, message).into_response(),
+    };
     *app.destination.write().await = sending.clone();
     tracing::info!(
         target: "luu::session",
@@ -7534,11 +7613,18 @@ async fn put_session_posture(
     // Built before anything is swapped, `create_session`'s discipline: a
     // runtime that is not installed refuses the move and leaves the session
     // where it was.
-    let (name, agency) =
-        match posture_for(app, asked.posture.as_deref(), asked.runtime.as_deref()).await {
-            Ok(resolved) => resolved,
-            Err((status, message)) => return (status, message).into_response(),
-        };
+    let (name, agency) = match posture_for(
+        app,
+        asked.posture.as_deref(),
+        asked.runtime.as_deref(),
+        // Moved from the terminal: a preset as it is.
+        None,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err((status, message)) => return (status, message).into_response(),
+    };
     let posture = agency.posture(name.clone());
     if current.same_place(&posture) && current.name == posture.name {
         if !Arc::ptr_eq(&agency, &app.agency().await) {
@@ -7682,11 +7768,17 @@ async fn resume_session(
     // is swapped, so a runtime that is not installed refuses the resume rather
     // than ending the session that is running — the discipline
     // `create_session` keeps for the same reason.
-    let (posture_name, agency) =
-        match posture_for(app, asked.posture.as_deref(), asked.runtime.as_deref()).await {
-            Ok(resolved) => resolved,
-            Err((status, message)) => return (status, message).into_response(),
-        };
+    let (posture_name, agency) = match posture_for(
+        app,
+        asked.posture.as_deref(),
+        asked.runtime.as_deref(),
+        asked.lists.as_ref(),
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err((status, message)) => return (status, message).into_response(),
+    };
     let posture = agency.posture(posture_name.clone());
 
     // A destination may move under a history; a posture may not. What a session

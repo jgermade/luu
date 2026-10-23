@@ -179,6 +179,46 @@ impl Policies {
             .collect()
     }
 
+    /// An environment with some of its lists swapped for others in the same
+    /// file: what a new session's dialog makes when it starts from a preset
+    /// and changes a list. Everything else — the runtime, the image, the
+    /// limits — is the environment's. The lists that are not there are named,
+    /// in the order they were asked for.
+    pub fn resolve_with(
+        &self,
+        name: &str,
+        shell: Option<&str>,
+        network: Option<&str>,
+        files: Option<&str>,
+    ) -> Result<Resolved, String> {
+        let Some(mut environment) = self.environments.get(name).cloned() else {
+            return Err(format!("there is no [environment.{name}]"));
+        };
+        if let Some(shell) = shell {
+            if !self.shell.contains_key(shell) {
+                return Err(format!("there is no [shell.{shell}]"));
+            }
+            environment.shell = shell.to_string();
+        }
+        if let Some(network) = network {
+            if !self.network.contains_key(network) {
+                return Err(format!("there is no [network.{network}]"));
+            }
+            environment.network = network.to_string();
+        }
+        if let Some(files) = files {
+            if !self.files.contains_key(files) {
+                return Err(format!("there is no [files.{files}]"));
+            }
+            environment.files = files.to_string();
+        }
+        let mut swapped = self.clone();
+        swapped.environments.insert(name.to_string(), environment);
+        swapped
+            .resolve(name)
+            .ok_or_else(|| format!("[environment.{name}] does not resolve"))
+    }
+
     /// One environment, resolved: `None` when there is no such name, or one
     /// of its lists is missing — which [`Policies::check`] refuses first.
     pub fn resolve(&self, name: &str) -> Option<Resolved> {
@@ -661,6 +701,29 @@ mod tests {
         assert_eq!(from_environment.shell.name, "s");
         assert_eq!(from_file.shell.name, "luu.toml");
         assert_eq!(from_file.shell.sha256.len(), 64);
+    }
+
+    /// A preset with a list swapped: the environment's runtime and image, the
+    /// other list's grants, and the swap in the record's names.
+    #[test]
+    fn an_environment_takes_another_list_of_the_same_file() {
+        let policies = policies(CONTAINER);
+        let resolved = policies
+            .resolve_with("container", None, Some("off"), None)
+            .expect("both are there");
+        assert_eq!(resolved.network(), &Zones::default());
+        assert!(!resolved.policy.network, "off reaches nothing");
+        assert_eq!(resolved.worker.image.as_deref(), Some("luu-worker:dev"));
+        assert_eq!(resolved.lists(&resolved.policy).network.name, "off");
+        assert_eq!(resolved.lists(&resolved.policy).shell.name, "rust");
+        assert_eq!(
+            policies
+                .resolve_with("container", Some("nope"), None, None)
+                .err()
+                .as_deref(),
+            Some("there is no [shell.nope]")
+        );
+        assert!(policies.resolve_with("nowhere", None, None, None).is_err());
     }
 
     /// The page's view: an environment's zones as written; a policy file's

@@ -405,11 +405,13 @@ test("the inspector can be pointed at a turn that has ended", async ({ page }) =
 })
 
 /**
- * Choosing another provider in the dialog asks that provider for its models. A
- * component's event is a CustomEvent carrying the value in `detail`; handing
- * the event itself on asked for `[provider.[object CustomEvent]]`, and the
- * dialog could neither list models nor go back. Nothing is started, so the
- * session the tests above read is left alone.
+ * Choosing another provider in the dialog asks that provider for its models,
+ * in the two columns the chat's dropup has: a provider in focus lists its
+ * own, and a model chosen is the choice. A component's event is a
+ * CustomEvent carrying the value in `detail`; handing the event itself on
+ * asked for `[provider.[object CustomEvent]]`, and the dialog could neither
+ * list models nor go back. Nothing is started, so the session the tests above
+ * read is left alone.
  */
 test("choosing another provider in the dialog lists that provider's models", async ({ page }) => {
   const errors = []
@@ -435,19 +437,28 @@ test("choosing another provider in the dialog lists that provider's models", asy
   await expect(starter).toHaveCount(0)
   await page.click('.chat .acts button[title*="New session"]')
   await expect(starter).toBeVisible()
-  const provider = starter.locator("select").first()
-  const model = starter.locator('input[list="starter-models"]')
+  const sends = starter.locator(".sends")
+  const chosen = sends.locator(".sends-head")
+  await expect(chosen).toContainText("here · mock")
+  await expect(sends.locator(".prov.current")).toContainText("here")
 
-  await provider.selectOption("there")
-  await expect(model).toHaveValue("mock-there")
-  await expect(starter.locator(".said.warning")).toHaveCount(0)
-  await provider.selectOption("here")
-  await expect(model).toHaveValue("mock")
+  // Another provider in focus lists its own models; choosing one is the choice.
+  await sends.locator(".prov strong", { hasText: /^there$/ }).click()
+  // The profile's own model first, whether or not the provider lists it.
+  await expect(sends.locator(".models button.model").first()).toContainText("mock-there")
+  await sends.locator(".models button.model", { hasText: "mock-there" }).click()
+  await expect(chosen).toContainText("there · mock-there")
+  await expect(sends.locator(".prov.current")).toContainText("there")
+  // By its name exactly: `there` has `here` in it.
+  await sends.locator(".prov strong", { hasText: /^here$/ }).click()
+  await sends.locator(".models button.model .name", { hasText: /^mock$/ }).click()
+  await expect(chosen).toContainText("here · mock")
 
   // And what is typed is a name, not an event.
-  await model.fill("typed-by-hand")
-  await model.blur()
-  await expect(model).toHaveValue("typed-by-hand")
+  const typed = sends.locator(".typed input")
+  await typed.fill("typed-by-hand")
+  await typed.press("Enter")
+  await expect(chosen).toContainText("here · typed-by-hand")
 
   await starter.getByRole("button", { name: "Close" }).click()
   await expect(starter).toBeHidden()
@@ -467,12 +478,13 @@ test("a session is started on a posture, and the page says which", async ({ page
   await chooseFolder(page)
 
   // The server's own policy file, before anything is chosen. In Settings →
-  // Models, which is where what this server resolved now lives.
+  // Models, which is where what this server resolved lives: its card says
+  // the session names no posture. (It was a *Posture* row until `190d5be`;
+  // this test looked for that row until 2026-10-23.)
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
-  await expect(page.locator("dt", { hasText: "Posture" }).first()).toBeVisible()
-  await expect(page.locator(".settings dd").filter({ hasText: "this server's own" }))
-    .toBeVisible()
+  const posture = page.locator(".stat-pill", { hasText: "Sandbox / Postura" })
+  await expect(posture.locator(".stat-value")).toHaveText("Servidor host")
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
@@ -484,21 +496,21 @@ test("a session is started on a posture, and the page says which", async ({ page
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
 
-  // Offered by name, out of config.toml. The page cannot add to the list: a
-  // posture is a policy file, and one the browser could write is a sandbox the
-  // browser could widen.
-  // Named by posture and by where it runs, as the terminal's foot names them.
-  const picker = starter.locator("select.place")
-  await expect(picker.locator("option")).toHaveText([
-    "server default — host",
-    "wide — host",
-  ])
-  await picker.selectOption("wide|")
+  // Offered by name, out of config.toml: where it starts from, and on which
+  // runtime. The page cannot add to the list: a posture is a policy file, and
+  // one the browser could write is a sandbox the browser could widen. A
+  // policy file has no lists to choose — they are the file's.
+  const preset = starter.locator("select.preset")
+  await expect(preset.locator("option")).toHaveText(["server default", "wide"])
+  await preset.selectOption("wide")
+  await expect(starter.locator("select.place")).toHaveValue("wide|")
+  await expect(starter.locator("select.list-shell")).toBeDisabled()
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
 
   // The next session is offered where this one runs.
   await page.click('.chat .acts button[title*="New session"]')
+  await expect(starter.locator("select.preset")).toHaveValue("wide")
   await expect(starter.locator("select.place")).toHaveValue("wide|")
   await starter.getByRole("button", { name: "Close" }).click()
   await expect(starter).toBeHidden()
@@ -511,9 +523,9 @@ test("a session is started on a posture, and the page says which", async ({ page
   await page.locator('.options .menu button:has-text("providers…")').click()
   await expect(page.locator("dialog.modal").first()).toBeVisible()
   await expect(page.locator(".modal .rail button.on")).toHaveText("Models")
-  const said = page.locator(".settings")
-  await expect(said).toContainText("wide")
-  await expect(said).toContainText("network allowed")
+  await expect(posture.locator(".stat-value")).toHaveText("wide")
+  await page.locator(".sandbox-toggle summary").click()
+  await expect(page.locator("pre.sandbox")).toContainText("network allowed")
   await expect(page.locator("pre.sandbox")).toContainText("ls")
 })
 
@@ -603,7 +615,7 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // session, and either tab is a click away from the other.
   await expect(sessions.getByRole("tab", { selected: true })).toHaveText("History")
   await sessions.getByRole("tab", { name: "New session" }).click()
-  await expect(sessions.getByRole("combobox", { name: "Provider" })).toBeVisible()
+  await expect(sessions.getByRole("listbox", { name: "Providers" })).toBeVisible()
   await expect(sessions.getByRole("button", { name: "Start session" })).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(sessions).toHaveCount(0)
@@ -1187,7 +1199,8 @@ async function gateOnWidePosture(page) {
   await page.click('.chat .acts button[title*="New session"]')
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
-  await starter.locator("select.place").selectOption("wide|")
+  await starter.locator("select.preset").selectOption("wide")
+  await expect(starter.locator("select.place")).toHaveValue("wide|")
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
 

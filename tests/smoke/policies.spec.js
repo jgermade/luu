@@ -96,6 +96,60 @@ async function chooseFolder(page) {
 
 const file = () => readFileSync(join(home, "config.toml"), "utf8")
 
+/**
+ * The new session's dialog: where it starts from and runs, which list of each
+ * axis, where it sends. An environment is a preset: it fills the three lists,
+ * one can be swapped for another of the file, and the session runs under the
+ * swap — named in what the page reads back. A policy file has no lists to
+ * choose. Before the test below, which renames and deletes lists.
+ */
+test("a session starts from an environment with another list in place of one of its own", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.chat .acts button[title^="New session"]')
+  const dialog = page.getByRole("dialog", { name: "Sessions" })
+  const select = name => dialog.locator(`select.${name}`)
+
+  // The server's own policy file: nothing to choose among its lists.
+  await expect(select("preset")).toHaveValue("")
+  for (const kind of ["shell", "network", "files"]) await expect(select(`list-${kind}`)).toBeDisabled()
+
+  // An environment fills them, and each can be changed.
+  await select("preset").selectOption("asking")
+  await expect(select("list-shell")).toHaveValue("tools")
+  await expect(select("list-network")).toHaveValue("off")
+  await expect(select("list-files")).toHaveValue("tree")
+  await expect(select("list-network")).toBeEnabled()
+  await select("list-network").selectOption("registries")
+  await expect(dialog.locator(".row[data-row='lists']")).toContainText("instead of off")
+  await dialog.getByRole("button", { name: "Start session" }).click()
+  await expect(dialog).toBeHidden()
+
+  // The session runs under the swap: the environment's other lists, and this one.
+  const settings = await (await fetch(`${BASE}/api/settings`)).json()
+  expect(settings.lists.environment).toBe("asking")
+  expect(settings.lists.shell.name).toBe("tools")
+  expect(settings.lists.network.name).toBe("registries")
+  expect(settings.lists.network.allow).toEqual(["crates.io"])
+
+  // Lists are chosen on top of an environment, never a policy file's.
+  const refused = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ lists: { network: "off" } }),
+  })
+  expect(refused.status).toBe(400)
+  expect(await refused.text()).toContain("a posture's lists are its policy file")
+
+  expect(errors).toEqual([])
+})
+
 test("the lists are edited in Settings and written to config.toml whole", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
