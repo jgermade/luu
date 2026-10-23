@@ -73,15 +73,14 @@ function keep(key, value) {
 const DEBUG_CARDS = ["turn", "context", "prefix", "tools", "compaction", "prompt"]
 
 export const prefs = $reactive({
-  /// `auto` | `light` | `dark`. **`dark` is what a browser with nothing
-  /// remembered gets**, and deliberately: every screenshot and every record in
-  /// this repo was taken against it, and a default that followed the OS would
-  /// quietly reinterpret all of them. `auto` is a choice, not the absence of
-  /// one.
-  // Light only, for now: the dark theme is off while the page's palette is
-  // reworked. Its tokens stay in the theme, because the columns' heads and
-  // feet are drawn with them (`data-tone="dark"`).
-  theme: "light",
+  /// `auto` | `light` | `dark`, chosen in Settings → Appearance. **`light` is
+  /// what a browser with nothing remembered gets**: the page has been light
+  /// since 2026-10-02, and every screenshot and record since was taken against
+  /// it, so a default that followed the OS would quietly reinterpret them.
+  /// `auto` is a choice, not the absence of one — the system's, followed as it
+  /// changes. The columns' heads and feet are dark islands whatever this says
+  /// (`data-tone="dark"`).
+  theme: kept("luu.theme", ["auto", "light", "dark"], "light"),
   /// `own` | `monaco`. What draws a file in the content column. `monaco` is an
   /// npm dependency of this directory rather than a payload in the tree, so it
   /// is only offered where somebody installed it — see `monacoAvailable`.
@@ -144,10 +143,23 @@ export const SIZES = {
   editorPx: { s: 11, m: 12, l: 14 },
 }
 
-/// Light is the theme's `:root` and dark is `data-theme="dark"` on it. Set
-/// unconditionally while the dark theme is off — see `prefs.theme`.
+/// Light is the theme's `:root` and dark is `data-theme="dark"` on it; `auto`
+/// is whichever the system prefers, repainted when that changes.
+const system = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null
 function paint() {
-  document.documentElement.setAttribute("data-theme", "light")
+  const dark = prefs.theme === "dark" || (prefs.theme === "auto" && !!system?.matches)
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light")
+}
+system?.addEventListener?.("change", () => {
+  if (prefs.theme === "auto") paint()
+})
+
+/// `auto` | `light` | `dark`.
+export function setTheme(which) {
+  if (!["auto", "light", "dark"].includes(which)) return
+  prefs.theme = which
+  keep("luu.theme", which)
+  paint()
 }
 
 function paintTones() {

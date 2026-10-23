@@ -191,6 +191,46 @@ test("General names the working dir and the config dir, and only the second is :
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
 })
 
+/**
+ * Settings → Appearance → Interface: the page's own light or dark, or the
+ * system's. Remembered by this browser, and `auto` follows the system as it
+ * changes. Light when nothing was chosen, as the page has been since
+ * 2026-10-02.
+ */
+test("the interface theme is light, dark, or the system's, and is remembered", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.emulateMedia({ colorScheme: "light" })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const root = page.locator("html")
+  await expect(root).toHaveAttribute("data-theme", "light")
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  const theme = page.getByRole("radiogroup", { name: "Interface theme" })
+  await expect(theme.getByRole("radio", { checked: true })).toHaveText("Light")
+
+  await theme.getByRole("radio", { name: "Dark" }).click()
+  await expect(root).toHaveAttribute("data-theme", "dark")
+  // The page's grounds follow it, not only the components'.
+  await expect(page.locator(".col.inspector")).not.toHaveCSS("background-color", "rgb(237, 237, 237)")
+  await page.reload()
+  await expect(root).toHaveAttribute("data-theme", "dark")
+
+  // Auto: the system's, as it changes.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Appearance")')
+  await theme.getByRole("radio", { name: "Auto" }).click()
+  await expect(root).toHaveAttribute("data-theme", "light")
+  await page.emulateMedia({ colorScheme: "dark" })
+  await expect(root).toHaveAttribute("data-theme", "dark")
+  await page.emulateMedia({ colorScheme: "light" })
+  await expect(root).toHaveAttribute("data-theme", "light")
+
+  await theme.getByRole("radio", { name: "Light" }).click()
+  await expect(root).toHaveAttribute("data-theme", "light")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
+})
+
 test("the resend rules are chosen from the page, and a save says what it did not do", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))

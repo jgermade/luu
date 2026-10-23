@@ -1133,11 +1133,14 @@ whole page could reach for it, because it can. See
 [`RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md`](RECORD/2026-09-16.styles-that-stay-in-their-component.completed.md).
 
 Preferences live in `prefs.js` and in `localStorage`: theme
-(auto/light/dark, where auto is `prefers-color-scheme` resolved live in JS rather than a second
-copy of the light palette), which editor draws a file, the layout, and who answers the gate.
-None of it is in `config.toml`, which says where a run *sends* — a fact about the run, not about
-the screen somebody reads from. Dark stays the default for a browser with nothing remembered,
-because every screenshot and every record here was taken against it.
+(auto/light/dark, chosen in Settings → Appearance → Interface, where auto is
+`prefers-color-scheme` resolved live in JS rather than a second copy of the light palette), which
+editor draws a file, the layout, and who answers the gate. None of it is in `config.toml`, which
+says where a run *sends* — a fact about the run, not about the screen somebody reads from.
+**Light is the default** for a browser with nothing remembered: the page went light on
+2026-10-02 and was light only until 2026-10-23, so every screenshot and record since was taken
+against it. Dark re-points the page's own grounds and the chat's inks too (`luu.css`, on the
+root only, so a dark island on a light page keeps the light page around it).
 
 **The chat has a name, not a tab strip.** One session is on screen, so a strip was spending a row
 to answer a question the head answers in words; the strip lives on as the **History** tab of

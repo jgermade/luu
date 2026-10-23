@@ -6,7 +6,7 @@
   // from, and one server answers two people on two machines. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
-  const { prefs, setEditor, setEditorTone, setSnippetTone, setLayout, setSize, monacoAvailable } =
+  const { prefs, setTheme, setEditor, setEditorTone, setSnippetTone, setLayout, setSize, monacoAvailable } =
     await import("@web/lib/prefs.js")
   const { loadIconTheme, saveIconTheme, importThemeFiles, themeFromFiles, themeFromDrop, loadIconPreviews, glyphFor } =
     await import("@web/lib/workspace.js")
@@ -206,6 +206,13 @@
   // the page is open.
   let monacoHere = null
   monacoAvailable().then(found => { monacoHere = found })
+  // The page's own light or dark — not the editor's, nor the snippets', which
+  // are chosen apart below — or the system's, followed as it changes.
+  const THEMES = [
+    { value: "auto", label: "Auto" },
+    { value: "light", label: "Light" },
+    { value: "dark", label: "Dark" },
+  ]
   $: editors = [
     { value: "own", label: "This page" },
     { value: "monaco", label: "Monaco", disabled: monacoHere === false },
@@ -225,6 +232,20 @@
     <p class="ds-hero-desc">Personaliza la visualización de código, paleta de colores y el comportamiento de las columnas.</p>
   </div>
 </div>
+
+<!-- The page as a whole: light, dark, or the system's. -->
+<section class="pane-group ui-group">
+  <h3>Interface</h3>
+  <div class="choice">
+    <span class="choice-name">Theme</span>
+    <Segmented label="Interface theme" size="sm" :options="THEMES" :model="prefs.theme"
+               @change="setTheme($event.detail)" />
+  </div>
+  <p class="note small">
+    <b>Auto</b> follows the system's light or dark, and changes with it. The editor and the
+    chat's code keep their own themes, below.
+  </p>
+</section>
 
 <!-- Two columns of one width, each a thing that draws code and its choices
      over what they change: the editor — what draws a file, and in which tone —
@@ -496,6 +517,11 @@
   }
   .pick:hover { border-color: var(--luu-accent); }
   .pick.off { opacity: .5; cursor: default; pointer-events: none; }
+  /* ---- the interface ---- */
+  .ui-group { display: flex; flex-direction: column; gap: var(--luu-space-2); }
+  .ui-group h3 { margin: 0 0 var(--luu-space-1); }
+  .ui-group .choice { justify-content: flex-start; }
+  .ui-group .note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--luu-fg-muted); }
   /* ---- the editor and the snippets ----
      Half and half: the editor and the snippets, each its choices over its
      preview. One under the other when the pane is too narrow for both — the
