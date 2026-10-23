@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>luu — a local-first AI agent</title>
+<meta name="description" content="luu is a local-first AI agent in Rust, built for 7B–32B models with 8K–32K of context. It decides what earns its place in the prompt, runs only what you approved, and installs with one line on Linux and macOS.">
+<meta property="og:title" content="luu — a local-first AI agent">
+<meta property="og:description" content="Built for the context window you actually have. One line to install on Linux and macOS.">
+<meta property="og:url" content="https://jgermade.github.io/luu/">
+<meta property="og:type" content="website">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%2312161c' rx='112'/%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round' stroke-width='40'%3E%3Cpath stroke='%23f5a524' d='M116 150v210'/%3E%3Cpath stroke='%23f2f4f7' d='M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215'/%3E%3C/g%3E%3Ccircle cx='356' cy='296' r='13' fill='%23f5a524'/%3E%3C/svg%3E">
+<!-- Everything inline and nothing fetched from another host: the page is
+     served from GitHub Pages beside the demo, and CI fails a site that
+     references a CDN or a font host. Mobile first — the base rules are the
+     phone, and each `min-width` query adds to them. -->
+<style>
+:root {
+  --bg: #f4f5f8;
+  --surface: #ffffff;
+  --sunken: #eaedf2;
+  --border: #d5d9e0;
+  --fg: #1a1d23;
+  --muted: #5b6472;
+  --accent: #2f5bbd;
+  --accent-soft: #e6ebf7;
+  --amber: #b9770e;
+  /* The install card is a dark island on either page, like luu's own heads. */
+  --term-bg: #12161c;
+  --term-surface: #1b2129;
+  --term-border: #2a313b;
+  --term-fg: #f2f4f7;
+  --term-muted: #9aa4b2;
+  --term-amber: #f5a524;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 12px;
+  --gutter: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --surface: #161b22;
+    --sunken: #0a0d11;
+    --border: #2a313b;
+    --fg: #e6e9ee;
+    --muted: #9aa4b2;
+    --accent: #7aa2f7;
+    --accent-soft: #1d2433;
+    --amber: #f5a524;
+    --term-bg: #0a0d11;
+    --term-surface: #131820;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.55 var(--sans);
+  overflow-wrap: break-word;
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, pre { font-family: var(--mono); font-size: 0.875em; }
+:not(pre) > code {
+  background: var(--sunken);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+h1, h2, h3 { line-height: 1.2; margin: 0; }
+p { margin: 0; }
+
+.wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 var(--gutter); }
+section { padding: 40px 0; }
+section + section { border-top: 1px solid var(--border); }
+.eyebrow {
+  color: var(--amber);
+  font: 600 0.75rem/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+h2 { font-size: 1.5rem; margin-bottom: 12px; }
+.lead { color: var(--muted); max-width: 62ch; }
+
+/* ---- head ---------------------------------------------------------------- */
+header { padding: 16px 0; }
+header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--fg); text-decoration: none; font-weight: 700; font-size: 1.125rem; }
+.brand svg { width: 32px; height: 32px; flex: none; }
+nav { display: flex; gap: 4px; }
+nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9375rem;
+  padding: 8px 10px;
+  border-radius: 8px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+}
+nav a:hover { color: var(--fg); background: var(--sunken); }
+nav .wide { display: none; }
+
+/* ---- hero ---------------------------------------------------------------- */
+.hero { padding: 24px 0 40px; }
+.hero h1 { font-size: 2rem; letter-spacing: -0.02em; margin-bottom: 16px; }
+.hero h1 em { font-style: normal; color: var(--amber); }
+.hero .lead { font-size: 1.0625rem; margin-bottom: 28px; }
+
+/* ---- the install card ---------------------------------------------------- */
+.install {
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border: 1px solid var(--term-border);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-width: 0;
+}
+.install h2 { font-size: 1rem; margin-bottom: 4px; }
+.install :not(pre) > code { background: var(--term-surface); color: var(--term-fg); }
+.install .note { color: var(--term-muted); font-size: 0.875rem; margin-bottom: 14px; }
+.cmds { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.cmd { min-width: 0; }
+.cmd .label { display: block; color: var(--term-muted); font-size: 0.8125rem; margin-bottom: 6px; }
+.cmd .row {
+  display: flex;
+  align-items: stretch;
+  background: var(--term-surface);
+  border: 1px solid var(--term-border);
+  border-radius: 8px;
+  min-width: 0;
+}
+/* Wrapped, not scrolled: the end of the line — `| sh`, `reinstall` — is the
+   part that tells the four apart, and a phone would hide it. */
+.cmd pre {
+  margin: 0;
+  padding: 12px;
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--term-fg);
+}
+.cmd pre::before { content: "$ "; color: var(--term-amber); }
+.cmd.primary .row { border-color: var(--term-amber); }
+.copy {
+  flex: none;
+  min-width: 64px;
+  border: 0;
+  border-left: 1px solid var(--term-border);
+  border-radius: 0 8px 8px 0;
+  background: transparent;
+  color: var(--term-muted);
+  font: 600 0.8125rem var(--sans);
+  cursor: pointer;
+  padding: 0 12px;
+}
+.copy:hover { color: var(--term-fg); background: var(--term-border); }
+.copy.done { color: var(--term-amber); }
+.platforms { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; padding: 0; list-style: none; }
+.platforms li {
+  font-size: 0.75rem;
+  color: var(--term-muted);
+  border: 1px solid var(--term-border);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.install .foot { color: var(--term-muted); font-size: 0.8125rem; margin-top: 14px; }
+.install .foot a { color: var(--term-fg); }
+
+/* ---- features ------------------------------------------------------------ */
+.grid { display: grid; gap: 12px; margin-top: 24px; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  min-width: 0;
+}
+.card h3 { font-size: 1rem; margin-bottom: 8px; }
+.card p { color: var(--muted); font-size: 0.9375rem; }
+
+/* ---- quick start and options --------------------------------------------- */
+/* Edge to edge on a phone, so the longest line fits without a scroll; a
+   card from 640px up. */
+.block {
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border-radius: 0;
+  padding: 14px var(--gutter);
+  margin: 20px calc(-1 * var(--gutter)) 0;
+  overflow-x: auto;
+  line-height: 1.7;
+  font-size: 0.8125rem;
+}
+.block .c { color: var(--term-muted); }
+.block .p { color: var(--term-amber); user-select: none; }
+dl.opts { margin: 20px 0 0; display: grid; gap: 14px; }
+dl.opts div { min-width: 0; }
+dl.opts dt code { font-weight: 600; }
+dl.opts dd { margin: 4px 0 0; color: var(--muted); font-size: 0.9375rem; }
+
+/* ---- demo and foot ------------------------------------------------------- */
+.demo {
+  display: block;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  color: var(--fg);
+  text-decoration: none;
+  margin-top: 20px;
+}
+.demo strong { color: var(--accent); display: block; font-size: 1.0625rem; margin-bottom: 4px; }
+.demo span { color: var(--muted); font-size: 0.9375rem; }
+.demo:hover strong { text-decoration: underline; }
+footer { border-top: 1px solid var(--border); padding: 24px 0 40px; color: var(--muted); font-size: 0.875rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+footer a { color: var(--muted); }
+
+/* ---- larger screens: each query only adds -------------------------------- */
+@media (min-width: 560px) {
+  nav .wide { display: inline-flex; }
+}
+@media (min-width: 640px) {
+  :root { --gutter: 24px; }
+  section { padding: 56px 0; }
+  .hero { padding: 40px 0 56px; }
+  .hero h1 { font-size: 2.75rem; }
+  .install { padding: 24px; }
+  .block { font-size: 0.875rem; padding: 18px 20px; margin: 20px 0 0; border-radius: var(--radius); }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  dl.opts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 32px; }
+  h2 { font-size: 1.75rem; }
+}
+@media (min-width: 960px) {
+  .hero .wrap { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 48px; align-items: center; }
+  .hero h1 { font-size: 3.25rem; }
+  .hero .lead { margin-bottom: 0; }
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="luu, home">
+      <svg viewBox="0 0 512 512" aria-hidden="true">
+        <rect width="512" height="512" fill="#12161c" rx="112"/>
+        <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="40">
+          <path stroke="#f5a524" d="M116 150v210"/>
+          <path stroke="#f2f4f7" d="M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215"/>
+        </g>
+        <circle cx="356" cy="296" r="13" fill="#f5a524"/>
+      </svg>
+      luu
+    </a>
+    <nav aria-label="Main">
+      <a class="wide" href="#start">Quick start</a>
+      <a href="./demo/">Demo</a>
+      <a href="https://github.com/jgermade/luu">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <p class="eyebrow">Local-first AI agent · Rust</p>
+        <h1>Built for the context window you <em>actually have</em>.</h1>
+        <p class="lead">luu orchestrates calls to models made for local inference — 7B–32B, with
+          8K–32K of context — and its whole job is deciding what earns a place in the prompt.
+          It reaches a remote model when you name one, never as a fallback.</p>
+      </div>
+
+      <div class="install" id="install">
+        <h2>Install with one line</h2>
+        <p class="note">Linux and macOS. No root: one binary in <code>~/.local/bin</code>.</p>
+        <ul class="cmds">
+          <li class="cmd primary">
+            <span class="label">Install, or update to the latest release</span>
+            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh</pre><button class="copy" type="button">Copy</button></div>
+          </li>
+          <li class="cmd">
+            <span class="label">Reinstall, even the same version</span>
+            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall</pre><button class="copy" type="button">Copy</button></div>
+          </li>
+          <li class="cmd">
+            <span class="label">Uninstall — keeps your sessions and config</span>
+            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall</pre><button class="copy" type="button">Copy</button></div>
+          </li>
+          <li class="cmd">
+            <span class="label">Uninstall and delete luu's state directory too</span>
+            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall --purge</pre><button class="copy" type="button">Copy</button></div>
+          </li>
+        </ul>
+        <ul class="platforms" aria-label="Prebuilt for">
+          <li>Linux x86_64</li>
+          <li>Linux arm64</li>
+          <li>macOS Apple Silicon</li>
+          <li>macOS Intel</li>
+        </ul>
+        <p class="foot">Read it before you pipe it: <a href="./setup.sh">setup.sh</a>.
+          Downloads are checked against the release's sha256.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <p class="eyebrow">What it does</p>
+      <h2>Context is the product</h2>
+      <p class="lead">A small model with a small window does well when what reaches it is chosen,
+        not accumulated. Everything else in luu exists to make that choice visible and safe.</p>
+      <div class="grid">
+        <article class="card">
+          <h3>Decide, then render</h3>
+          <p>The prompt is chosen against a token budget, bucket by bucket, and rendered from that
+            choice — so every token sent is attributable. History gives way in whole turns, and a
+            finished task folds into a summary.</p>
+        </article>
+        <article class="card">
+          <h3>A prefix the cache can keep</h3>
+          <p>System text and tool definitions stay byte-identical across calls, which is what a
+            local server's prompt cache reuses. How much of it survived is reported every turn.</p>
+        </article>
+        <article class="card">
+          <h3>Plans you approve</h3>
+          <p>A prompt becomes a plan that says what it will read, write and run — and is held until
+            you approve it. The approved plan is the sandbox for its task, not a comment.</p>
+        </article>
+        <article class="card">
+          <h3>The kernel holds the child</h3>
+          <p>The model never executes anything. Commands run under Landlock and seccomp on Linux,
+            rlimits everywhere, or inside a container — and every verdict says what enforced it.</p>
+        </article>
+        <article class="card">
+          <h3>Any model you can reach</h3>
+          <p>Ollama, anything OpenAI-compatible (llama-server, vLLM, LM Studio) and anything
+            Anthropic-compatible. luu can also start llama-server, mlx-serve or Ollama for you.</p>
+        </article>
+        <article class="card">
+          <h3>Sessions you can replay</h3>
+          <p>Sessions live in SQLite and survive a restart. Every run can be recorded and replayed in
+            the web UI, which is how two context strategies get compared rather than recalled.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="start">
+    <div class="wrap">
+      <p class="eyebrow">Quick start</p>
+      <h2>First run</h2>
+      <p class="lead">The first run asks where to keep its state — <code>~/.luu</code> or
+        <code>~/.config/luu</code> — and <code>LUU_HOME</code> answers it without asking.</p>
+<!-- Broken by hand to fit a phone: one flag a line reads the same at any width. -->
+<pre class="block"><span class="c"># one turn on the mock backend,</span>
+<span class="c"># no model needed</span>
+<span class="p">$ </span>luu chat "hola"
+
+<span class="c"># against a local Ollama</span>
+<span class="p">$ </span>luu chat "hola" --backend ollama \
+  --model qwen2.5-coder:7b \
+  --context-limit 8192
+
+<span class="c"># llama-server, vLLM or LM Studio</span>
+<span class="p">$ </span>luu chat "hola" --backend openai \
+  --openai-url http://localhost:8080/v1 \
+  --model qwen2.5-coder-7b
+
+<span class="c"># the web UI, on 127.0.0.1:7878</span>
+<span class="p">$ </span>luu serve</pre>
+      <a class="demo" href="./demo/">
+        <strong>See it without installing anything →</strong>
+        <span>The web UI replaying recorded sessions: the gate, the budget panel, and eviction under two policies.</span>
+      </a>
+    </div>
+  </section>
+
+  <section id="setup">
+    <div class="wrap">
+      <p class="eyebrow">setup.sh</p>
+      <h2>Installer options</h2>
+      <p class="lead">Pass them after <code>sh -s --</code>, for example
+        <code>sh -s -- install --dir ~/bin</code>. The script never edits a shell profile: when the
+        directory is not on your <code>PATH</code>, it prints the line to add.</p>
+      <dl class="opts">
+        <div><dt><code>install</code> · <code>reinstall</code> · <code>uninstall</code></dt>
+          <dd><code>install</code> is the default and does nothing when that version is already
+            there. <code>reinstall</code> always downloads again.</dd></div>
+        <div><dt><code>--dir DIR</code></dt>
+          <dd>Where the binary goes. Default <code>~/.local/bin</code>, or
+            <code>LUU_INSTALL_DIR</code>.</dd></div>
+        <div><dt><code>--version TAG</code></dt>
+          <dd>A release such as <code>v0.1.1</code>. Default the latest, or
+            <code>LUU_VERSION</code>.</dd></div>
+        <div><dt><code>--purge</code></dt>
+          <dd>With <code>uninstall</code>: also delete sessions, keys, <code>config.toml</code>,
+            engines and models. Asks first.</dd></div>
+        <div><dt><code>-y</code>, <code>--yes</code></dt>
+          <dd>Do not ask before deleting — needed for <code>--purge</code> when there is no
+            terminal.</dd></div>
+        <div><dt><code>LUU_DOWNLOAD_URL</code></dt>
+          <dd>A directory with <code>luu-&lt;target&gt;.tar.gz</code> and <code>SHA256SUMS</code>,
+            used instead of GitHub: a mirror, or <code>file://</code> for your own build.</dd></div>
+      </dl>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>luu</span>
+    <a href="https://github.com/jgermade/luu">Source</a>
+    <a href="https://github.com/jgermade/luu/releases">Releases</a>
+    <a href="https://github.com/jgermade/luu/blob/main/luu-design.md">Design</a>
+    <a href="./demo/">Demo</a>
+  </div>
+</footer>
+
+<script>
+  // Copy a command. The clipboard API needs a secure context, which Pages is;
+  // the selection fallback covers a page opened from disk.
+  for (const button of document.querySelectorAll(".copy")) {
+    button.setAttribute("aria-label", "Copy command")
+    button.addEventListener("click", async () => {
+      const text = button.parentElement.querySelector("pre").textContent
+      try {
+        await navigator.clipboard.writeText(text)
+      } catch {
+        const range = document.createRange()
+        range.selectNodeContents(button.parentElement.querySelector("pre"))
+        const selection = getSelection()
+        selection.removeAllRanges()
+        selection.addRange(range)
+        document.execCommand("copy")
+      }
+      button.textContent = "Copied"
+      button.classList.add("done")
+      setTimeout(() => { button.textContent = "Copy"; button.classList.remove("done") }, 1600)
+    })
+  }
+</script>
+</body>
+</html>

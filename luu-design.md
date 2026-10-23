@@ -2532,6 +2532,24 @@ see the section above and
 the argument they were measured against is
 [`RECORD/2026-08-31.the-portal-and-the-gate.completed.md`](RECORD/2026-08-31.the-portal-and-the-gate.completed.md).
 
+## Getting it onto a machine
+
+```sh
+curl -fsSL https://jgermade.github.io/luu/setup.sh | sh                        # install, or update
+curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall
+curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall [--purge]
+```
+
+One binary from a GitHub release — Linux x86_64 and arm64 (glibc ≥ 2.34), macOS
+Apple Silicon and Intel — into `~/.local/bin`, with no root and no shell profile
+edited. The download is checked against the release's `SHA256SUMS` (or GitHub's
+asset digest, for a release older than that file), run once from a temporary
+directory, and only then renamed over the old one. `uninstall` keeps the state
+directory; `--purge` deletes it after asking, and without a terminal the answer is
+no. The script and the landing that shows it are `pages/`, the root of GitHub
+Pages; the replay of recorded sessions is under `demo/`. See
+[`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md).
+
 ## Naming
 
 - Project name: **luu**. One name — the crate, the binary, the policy files

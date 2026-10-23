@@ -8,3 +8,4 @@ records/
 *.jsonl
 .DS_Store
 .env
+_site/

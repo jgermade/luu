@@ -101,12 +101,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # What `pages/setup.sh` checks a download against before it
+          # installs it.
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
           gh release create "${{ needs.version.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "${{ needs.version.outputs.sha }}" \
             --title "${{ needs.version.outputs.tag }}" \
             --generate-notes \
-            dist/*.tar.gz
+            dist/*.tar.gz dist/SHA256SUMS
 
   pages:
     needs: [version, build]
