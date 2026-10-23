@@ -276,7 +276,7 @@
     position: fixed;
     z-index: 15;
     display: none;
-    background: var(--luu-overlay);
+    background: var(--luu-overlay-sheet, var(--luu-overlay));
     backdrop-filter: blur(2px);
   }
   .veil.shown { display: block; animation: fade var(--luu-duration) ease; }

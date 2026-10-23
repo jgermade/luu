@@ -66,8 +66,11 @@
   --luu-outline-width: 1px;
   --luu-outline-color: #999;
   /* What a modal lays over the page behind it: a mid grey, the same for
-     every dialog — the page's `Modal`, `TabModal`, a `SubModal`'s sheet. */
+     every dialog — the page's `Modal`, `TabModal`. A sheet over its parent
+     (`SubModal`) lays a darker one over the parent's body, so the sheet
+     reads as above a dialog and not above the page. */
   --luu-overlay: rgba(128, 128, 128, .55);
+  --luu-overlay-sheet: rgba(50, 50, 50, .55);
 
   /* ---- type --------------------------------------------------------------- */
 
@@ -166,6 +169,7 @@
 
   --luu-focus: #7aa2f7;
   --luu-overlay: rgba(128, 128, 128, .55);
+  --luu-overlay-sheet: rgba(50, 50, 50, .55);
 
   --luu-shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
   --luu-shadow-md: 0 4px 12px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
