@@ -127,6 +127,11 @@ export const prefs = $reactive({
   /// offered, because a posture can leave `config.toml` and a runtime this
   /// machine.
   place: keptText("luu.place", "|"),
+  /// What the last session was started with, as JSON `{ runtime, lists }`:
+  /// the new session's runtime (`runtime|image`) and its three lists by name,
+  /// `""` for the empty one. Checked against `/api/postures` and the lists
+  /// before it is offered, since either can leave `config.toml`.
+  start: keptText("luu.start", ""),
   /// `s` | `m` | `l`: how big the tree, the editor and the chat are drawn,
   /// each on its own. `m` is the size each was before it could be chosen.
   treeSize: kept("luu.size.tree", ["s", "m", "l"], "m"),
@@ -213,6 +218,11 @@ export function setLayout(which) {
 export function setPlace(value) {
   prefs.place = value
   keep("luu.place", value)
+}
+
+export function setStart(value) {
+  prefs.start = value
+  keep("luu.start", value)
 }
 
 export function setPane(which) {

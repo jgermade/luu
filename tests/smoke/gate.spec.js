@@ -84,9 +84,10 @@ test.beforeAll(async () => {
   // Its own state directory, so the run reads no `config.toml` of the person
   // running it and writes nothing into theirs.
   home = mkdtempSync(join(tmpdir(), "luu-gate-"))
-  // And one posture in it, so the starter dialog has something to offer. The
-  // policy file is wider than the server's own in the one way the page shows —
-  // `network` — so "which one is in force" is answerable from the browser.
+  // And one posture in it, for the gate's tests to start their sessions on
+  // through the API. The policy file is wider than the server's own in the one
+  // way the page shows — `network` — so "which one is in force" is answerable
+  // from the browser.
   writeFileSync(
     join(home, "wide.toml"),
     '[sandbox]\nnetwork = true\ncommands = ["ls"]\n\n' +
@@ -469,12 +470,14 @@ test("choosing another provider in the dialog lists that provider's models", asy
 
 /**
  * A session picks what it may do, at the one moment it can — the same dialog
- * that asks where it sends. **Last in the file on purpose**: these tests share
- * one server, and starting a session ends the one the tests above are reading.
- * See
- * `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+ * that asks where it sends: where it runs, and one list of each axis. This
+ * server's `config.toml` has no lists, so each is the empty one. **Last in the
+ * file on purpose**: these tests share one server, and starting a session ends
+ * the one the tests above are reading. See
+ * `RECORD/2026-09-08.a-session-picks-its-executor.completed.md` and
+ * `RECORD/2026-10-22.policies-not-postures.WIP.md`, *every session from lists*.
  */
-test("a session is started on a posture, and the page says which", async ({ page }) => {
+test("a session is made from where it runs and its lists, and the page says which", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
@@ -498,37 +501,34 @@ test("a session is started on a posture, and the page says which", async ({ page
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
 
-  // Offered by name, out of config.toml: where it starts from, and on which
-  // runtime. The page cannot add to the list: a posture is a policy file, and
-  // one the browser could write is a sandbox the browser could widen. A
-  // policy file has no lists to choose — they are the file's.
-  const preset = starter.locator("select.preset")
-  await expect(preset.locator("option")).toHaveText(["server default", "wide"])
-  await preset.selectOption("wide")
-  await expect(starter.locator("select.place")).toHaveValue("wide|")
-  await expect(starter.locator("select.list-shell")).toBeDisabled()
+  // Nothing to start from — a posture is a name a session gives through the
+  // API, as the gate's tests below do. Where it runs, out of what this
+  // machine has, and the lists: none in the file, so the empty one each.
+  await expect(starter.locator("select.preset")).toHaveCount(0)
+  await expect(starter.locator("select.runtime")).toHaveValue("host|")
+  for (const kind of ["shell", "network", "files"]) {
+    await expect(starter.locator(`select.list-${kind} option`)).toHaveText(["empty"])
+  }
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
 
   // The next session is offered where this one runs.
   await page.click('.chat .acts button[title*="New session"]')
-  await expect(starter.locator("select.preset")).toHaveValue("wide")
-  await expect(starter.locator("select.place")).toHaveValue("wide|")
+  await expect(starter.locator("select.runtime")).toHaveValue("host|")
   await starter.getByRole("button", { name: "Close" }).click()
   await expect(starter).toBeHidden()
 
-  // And it is in force: Models opens on what this server resolved, and it
-  // resolved the file the posture named. Reached from the composer's second
-  // row, which is where the destination is reported now — the two tags that
-  // used to be in the page header.
+  // And it is in force: Models opens on what this server resolved, named by
+  // its lists, and with nothing in them it reaches no network. Reached from
+  // the composer's second row, which is where the destination is reported now
+  // — the two tags that used to be in the page header.
   await page.click(".options .dest")
   await page.locator('.options .menu button:has-text("providers…")').click()
   await expect(page.locator("dialog.modal").first()).toBeVisible()
   await expect(page.locator(".modal .rail button.on")).toHaveText("Models")
-  await expect(posture.locator(".stat-value")).toHaveText("wide")
+  await expect(posture.locator(".stat-value")).toHaveText("empty")
   await page.locator(".sandbox-toggle summary").click()
-  await expect(page.locator("pre.sandbox")).toContainText("network allowed")
-  await expect(page.locator("pre.sandbox")).toContainText("ls")
+  await expect(page.locator("pre.sandbox")).not.toContainText("network allowed")
 })
 
 /**
@@ -1182,8 +1182,8 @@ test("the editor setting offers Monaco where it is installed and says so where i
  * Starts a session on the wide posture and leaves a gate open on it. The two
  * tests below each want their own, because approving one consumes it.
  *
- * **Its plan is empty, and that is not a shortcut.** A session started from the
- * page builds its own backend out of `config.toml` (`crate::backend_for`), so
+ * **Its plan is empty, and that is not a shortcut.** A session started on a
+ * provider builds its own backend out of `config.toml` (`crate::backend_for`), so
  * it never sees the queue `--mock-reply` filled: the call gets the default
  * mock's paragraph, no `plan` block parses, and the proposal falls back to the
  * draft's own objective declaring nothing — which is the ordinary case for a
@@ -1195,17 +1195,18 @@ test("the editor setting offers Monaco where it is installed and says so where i
  * a person asks for one over the draft.
  */
 async function gateOnWidePosture(page) {
+  // Named through the API: the dialog makes a session from lists, and a
+  // posture is a name a session gives. The provider is named too, so the
+  // session builds its backend out of `config.toml`, as one from the dialog.
+  const started = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ posture: "wide", provider: "here" }),
+  })
+  expect(started.ok, await started.clone().text()).toBe(true)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
-
-  await page.click('.chat .acts button[title*="New session"]')
-  const starter = page.getByRole("dialog", { name: "Sessions" })
-  await expect(starter).toBeVisible()
-  await starter.locator("select.preset").selectOption("wide")
-  await expect(starter.locator("select.place")).toHaveValue("wide|")
-  await starter.locator('button:has-text("Start session")').click()
-  await expect(starter).toBeHidden({ timeout: 30_000 })
 
   const composer = page.locator(".composer input")
   await expect(composer).toBeEnabled()

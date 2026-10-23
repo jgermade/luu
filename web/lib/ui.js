@@ -12,8 +12,8 @@
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
 import { $reactive } from "@web/vendor/jq79.js"
-import { prefs, setPlace } from "./prefs.js"
-import { stillThere } from "./places.js"
+import { prefs, setStart } from "./prefs.js"
+import { runtimeOptions } from "./places.js"
 import { loadPolicies } from "./policies.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
@@ -25,7 +25,7 @@ export const ui = $reactive({
   /// Sections rather than a scroll, because they are not steps.
   section: "general",
   /// The session starter, or `null` when it is closed. `{ provider, model,
-  /// models, reason, from, loading, posture }`.
+  /// models, reason, from, loading, runtime, lists, policies }`.
   starter: null,
   starting: false,
   /// Which of the starter's two things is running, so the one that is says so
@@ -220,12 +220,11 @@ export async function openStarter(provider) {
   ui.sessions = "new"
   if (!state.providers) await loadProviders()
   // What this session may be allowed to do, offered beside where it sends —
-  // and chosen at the same moment, because it is the only one there is: a
-  // posture is what a session's jobs are approved against, so it never moves.
-  if (!state.postures) await loadPostures()
-  // The lists, asked again on every opening: Settings → Policies may have
-  // changed them since, and an environment is a preset made of them.
-  const policies = await loadPolicies()
+  // and chosen at the same moment, because it is the only one there is: what
+  // a session may do is what its jobs are approved against, so it never moves.
+  // Asked again on every opening, with the lists: Settings → Policies may
+  // have changed them since, and the images the runtimes offer with them.
+  const [policies] = await Promise.all([loadPolicies(), loadPostures()])
   ui.continuing = false
   const names = Object.keys(state.providers?.providers || {})
   const chosen = provider
@@ -240,39 +239,43 @@ export async function openStarter(provider) {
     reason: null,
     from: null,
     loading: false,
-    // Where the last session ran, if it still can — `"|"`, the server's own
-    // policy file on its own runtime, where it cannot. That is what every
-    // session got before a session could choose.
-    place: stillThere(state.postures, prefs.place),
-    // The tables of `config.toml`, and which list of each the session starts
-    // with: the preset's own until one is changed. `null` for a policy file,
-    // whose lists are the file's.
+    // The tables of `config.toml`, and what the session is made from: where
+    // it runs and one list of each axis by name, `""` for the empty one.
+    // What the last session started with, where it still can; else this
+    // machine and the empty lists — read the folder, ask the rest.
     policies: policies.ok ? policies.view : null,
-    lists: null,
+    ...rememberedStart(policies.ok ? policies.view : null),
   }
-  ui.starter = { ...ui.starter, lists: presetLists(ui.starter.place) }
   if (chosen) await loadModels(chosen)
 }
 
-/// The lists an environment names, for the place it is the preset of; `null`
-/// for a posture or the server's own file.
-function presetLists(place) {
-  const [preset] = (place || "|").split("|")
-  const environment = ui.starter?.policies?.environment?.[preset]
-  return environment
-    ? { shell: environment.shell, network: environment.network, files: environment.files }
-    : null
+const KINDS = ["shell", "network", "files"]
+
+/// The runtime and lists the last session started with, each where it still
+/// is: a runtime this machine still offers, a list `config.toml` still has.
+function rememberedStart(policies) {
+  let kept = {}
+  try {
+    kept = JSON.parse(prefs.start || "{}") || {}
+  } catch {}
+  const options = runtimeOptions(state.postures)
+  const runtime = options.find(option => option.value === kept.runtime && !option.disabled)?.value
+    || options.find(option => !option.disabled)?.value
+    || "host|"
+  const lists = Object.fromEntries(KINDS.map(kind => {
+    const name = kept.lists?.[kind]
+    return [kind, name && policies?.[kind]?.[name] ? name : ""]
+  }))
+  return { runtime, lists }
 }
 
-/// Where the session starts from and on which runtime: the lists go back to
-/// the preset's own.
-export function choosePlace(place) {
-  ui.starter = { ...ui.starter, place, lists: presetLists(place) }
+/// Where the session's commands run: `runtime|image`.
+export function chooseRuntime(value) {
+  ui.starter = { ...ui.starter, runtime: value }
 }
 
-/// One of the three lists in place of the preset's.
+/// One of the three lists, by name; `""` is the empty one.
 export function chooseList(kind, name) {
-  if (!ui.starter?.lists) return
   ui.starter = { ...ui.starter, lists: { ...ui.starter.lists, [kind]: name } }
 }
 
@@ -303,22 +306,20 @@ export function closeStarter() {
 
 export async function startSession() {
   ui.starting = true
-  const [posture, runtime] = (ui.starter.place || "|").split("|")
-  // Sent only where they are not the preset's own: a session on a preset as
-  // it is records just its name.
-  const own = presetLists(ui.starter.place)
-  const changed = own && ui.starter.lists
-    && ["shell", "network", "files"].some(kind => ui.starter.lists[kind] !== own[kind])
+  // Every session is made from a runtime and three lists, the empty ones
+  // left out — which the server reads as empty. Over stdio the process is
+  // the session, and there is nothing to choose.
+  const choosable = !!state.postures?.choosable
+  const [runtime, image] = (ui.starter.runtime || "host|").split("|")
+  const lists = Object.fromEntries(KINDS.map(kind => [kind, ui.starter.lists?.[kind]]).filter(([, name]) => name))
   const ok = await newSession({
     provider: ui.starter.provider,
     model: ui.starter.model,
-    posture: posture || undefined,
-    runtime: runtime || undefined,
-    lists: changed ? ui.starter.lists : undefined,
+    ...(choosable ? { runtime, ...(image ? { image } : {}), lists } : {}),
   })
   ui.starting = false
   if (ok) {
-    setPlace(ui.starter.place || "|")
+    setStart(JSON.stringify({ runtime: ui.starter.runtime, lists: ui.starter.lists }))
     closeSessions()
     await checkModel()
   }

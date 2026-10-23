@@ -506,8 +506,7 @@ mod tests {
         );
         let denying = policies
             .compose(
-                agent_core::worker::Runtime::Host,
-                None,
+                &crate::policies::Place::host(),
                 Some("s"),
                 Some("n"),
                 Some("f"),

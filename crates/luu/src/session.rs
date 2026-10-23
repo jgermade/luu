@@ -287,6 +287,18 @@ impl Agency {
             enforcement: self.sandbox.enforcement().as_str().to_string(),
             network: self.sandbox.network(),
             lists: self.lists.clone(),
+            // As asked, before the flags: a resume asks the same, and the
+            // same flags are over it.
+            composed: self
+                .environment
+                .as_ref()
+                .filter(|environment| environment.composed)
+                .map(|environment| {
+                    Box::new(record::Composed {
+                        runtime: environment.worker.runtime.as_str().to_string(),
+                        image: environment.worker.image.clone(),
+                    })
+                }),
         }
     }
 

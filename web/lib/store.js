@@ -19,7 +19,7 @@ import { $reactive } from "@web/vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 11
-const FORMAT = 23
+const FORMAT = 24
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -1456,6 +1456,11 @@ export async function providerModels(name, { facts = false } = {}) {
 /// the server still checks that the name resolves to the same three facts. See
 /// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
 ///
+/// A session made from lists — every one the new session's dialog starts
+/// since 2026-10-23 — has no name to say: it is said back as what made it,
+/// its runtime and image and its lists by name, the empty ones left out as
+/// they were when it started (`record::Composed`).
+///
 /// `null` for a session recorded before the posture was in the header, for one
 /// that ran on the server's own policy file, and whenever the view cannot be
 /// read — all three mean *say nothing*, which is what every resume did before.
@@ -1463,12 +1468,22 @@ async function storedPosture(id) {
   try {
     const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, { headers: apiHeaders() })
     if (!res.ok) return null
-    const view = await res.json()
-    return view?.posture?.name ?? null
+    const posture = (await res.json())?.posture
+    if (posture?.composed) {
+      const lists = Object.fromEntries(["shell", "network", "files"]
+        .map(kind => [kind, posture.lists?.[kind]?.name])
+        .filter(([, name]) => name && name !== EMPTY))
+      const { runtime, image } = posture.composed
+      return { runtime, ...(image ? { image } : {}), lists }
+    }
+    return posture?.name ? { posture: posture.name } : null
   } catch {
     return null
   }
 }
+
+/// The name the record gives a list that was not chosen — `policies::EMPTY`.
+const EMPTY = "(empty)"
 
 /// Picks a stored session back up, optionally somewhere else.
 ///
@@ -1483,7 +1498,7 @@ export async function resumeSession(id, choice) {
   const posture = await storedPosture(id)
   const wanted = {
     ...(choice && (choice.provider || choice.model) ? choice : {}),
-    ...(posture ? { posture } : {}),
+    ...(posture || {}),
   }
   const asked = Object.keys(wanted).length ? wanted : null
   try {

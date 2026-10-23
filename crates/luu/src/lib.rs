@@ -1344,7 +1344,12 @@ impl SandboxArgs {
         if let Some(runtime) = runtime {
             config.runtime = runtime;
         }
-        where_of(format!("[environment.{}]", environment.name), config)
+        let named = match environment.composed {
+            // Made from lists by name: there is no table to point at.
+            true => format!("lists {}", environment.name),
+            false => format!("[environment.{}]", environment.name),
+        };
+        where_of(named, config)
     }
 
     /// The same resolution, against a policy file a *session* named rather than

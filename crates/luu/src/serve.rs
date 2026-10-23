@@ -4087,6 +4087,10 @@ struct PosturesView {
     /// The environments a session may name, beside the postures: each is in
     /// `places` too. See [`crate::policies`].
     environments: Vec<String>,
+    /// Where a session made from lists may run — this machine, and every
+    /// image a posture or an environment names on every container runtime:
+    /// the new session's *Runtime*. See [`places_for_lists`].
+    runtimes: Vec<Where>,
 }
 
 /// What a session may be allowed to do, by name.
@@ -4702,6 +4706,10 @@ fn variants(describe: &DescribeFactory, policy: Option<Chosen>) -> Vec<Where> {
 async fn get_postures(State(state): State<AppRouterState>) -> Response {
     let app = &state.app;
     // Files, read on the blocking pool for `blocking`'s reason.
+    let runtimes = match &app.describe_for {
+        None => Vec::new(),
+        Some(describe) => places_for_lists(app, describe).await,
+    };
     let (own, places) = match app.describe_for.clone() {
         None => (Vec::new(), Default::default()),
         Some(describe) => {
@@ -4733,6 +4741,7 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         running: app.posture.lock().await.clone(),
         postures: app.postures(),
         environments: app.environments().keys().cloned().collect(),
+        runtimes,
     })
     .into_response()
 }
@@ -6870,9 +6879,15 @@ struct NewSession {
     /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
     posture: Option<String>,
     /// The posture on another container runtime — a word out of five, never
-    /// an image. See [`posture_for`].
+    /// an image. See [`posture_for`]. With `lists` and no posture, where the
+    /// session made from them runs: `host`, or a container runtime.
     #[serde(default)]
     runtime: Option<String>,
+    /// With `lists` and no posture, the image a container runtime runs: one
+    /// a posture or an environment of this machine names, never one the page
+    /// makes up. The first such where it is absent. See [`place_for`].
+    #[serde(default)]
+    image: Option<String>,
     /// The three resend rules, each absent meaning *whatever this server is
     /// already under* — its flags, or the rules the session before it chose.
     ///
@@ -6903,16 +6918,20 @@ struct NewSession {
     /// `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
     #[serde(default)]
     authority: Option<crate::provider::AuthorityNotes>,
-    /// Other lists of the same file in place of some of the environment's:
-    /// the new session's dialog starting from a preset and changing a list.
-    /// Names out of `config.toml`, as `posture` is, and only on top of an
-    /// environment — a posture's lists are its policy file. See
-    /// [`crate::policies::Policies::resolve_with`].
+    /// One list of each axis, by name out of `config.toml` as `posture` is.
+    /// **With no posture**, what the session is made from, on `runtime` and
+    /// `image` — an absent list is the empty one, which allows nothing and so
+    /// asks about everything: what the new session's dialog sends since
+    /// 2026-10-23 ([`crate::policies::Policies::compose`]). On top of an
+    /// environment, lists in place of some of its own
+    /// ([`crate::policies::Policies::resolve_with`]); on a posture, refused —
+    /// its lists are its policy file.
     #[serde(default)]
     lists: Option<ListsChoice>,
 }
 
-/// Which list of each axis, by name; an absent one is the environment's.
+/// Which list of each axis, by name; an absent one is the environment's, or
+/// the empty one where there is no environment.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 struct ListsChoice {
     shell: Option<String>,
@@ -7047,10 +7066,19 @@ async fn posture_for(
     app: &App,
     asked: Option<&str>,
     runtime: Option<&str>,
+    image: Option<&str>,
     lists: Option<&ListsChoice>,
 ) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
+    let made = asked.is_none().then_some(lists).flatten();
     let lists = lists.filter(|lists| !lists.is_empty());
     let Some(build) = &app.agency_for else {
+        if made.is_some() || lists.is_some() || image.is_some() {
+            return Err((
+                StatusCode::CONFLICT,
+                "this surface cannot choose a posture, so not its lists or its image either"
+                    .to_string(),
+            ));
+        }
         if let Some(runtime) = runtime {
             return Err((
                 StatusCode::CONFLICT,
@@ -7067,9 +7095,45 @@ async fn posture_for(
             )),
         };
     };
+    // No posture and no environment: a session made from where it runs and
+    // one list of each axis, from the file as it is now. Named by its lists,
+    // which is what the record and the page call it.
+    if let Some(lists) = made {
+        let place = place_for(app, runtime, image).await?;
+        let config = load_config()
+            .await
+            .map(|(config, _)| config)
+            .unwrap_or_default();
+        let resolved = config
+            .policies()
+            .compose(
+                &place,
+                lists.shell.as_deref(),
+                lists.network.as_deref(),
+                lists.files.as_deref(),
+            )
+            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+        let name = resolved.name.clone();
+        return finish(
+            app,
+            build,
+            Some(&name),
+            Some(Chosen::Environment(Arc::new(resolved))),
+            None,
+        )
+        .await;
+    }
+    if let Some(image) = image {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "an image is chosen with lists and no posture, and `{image}` came with a \
+                 posture: a posture's image is its file's"
+            ),
+        ));
+    }
     // Other lists than the environment's: resolved from the file as it is
-    // now, with the swap. Never on a posture or the server's own file, whose
-    // lists are the file's.
+    // now, with the swap. Never on a posture, whose lists are its file's.
     if let Some(lists) = lists {
         let Some(name) = asked.filter(|name| app.environments().contains_key(*name)) else {
             return Err((
@@ -7077,9 +7141,7 @@ async fn posture_for(
                 format!(
                     "lists are chosen on top of an environment, and {} is not one: \
                      a posture's lists are its policy file",
-                    asked
-                        .map(|name| format!("`{name}`"))
-                        .unwrap_or("the server's own".into()),
+                    asked.map(|name| format!("`{name}`")).unwrap_or_default(),
                 ),
             ));
         };
@@ -7127,6 +7189,127 @@ async fn posture_for(
         },
     };
     finish(app, build, asked, policy, runtime).await
+}
+
+/// Where a session made from lists runs: `host` where nothing is said, a
+/// runtime with no container as it is, and a container runtime on an image a
+/// posture or an environment of this machine names — with that file's
+/// in-image paths, since a toolchain the image keeps is the file's to say.
+/// The page picks out of [`places_for_lists`]; it never names an image of its
+/// own, for the reason [`NewSession::posture`] gives.
+async fn place_for(
+    app: &App,
+    runtime: Option<&str>,
+    image: Option<&str>,
+) -> Result<crate::policies::Place, (StatusCode, String)> {
+    let runtime = runtime
+        .unwrap_or("host")
+        .parse::<agent_core::worker::Runtime>()
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+    if !runtime.is_contained() {
+        if let Some(image) = image {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("`{runtime}` runs no container, so no image either, and not `{image}`"),
+            ));
+        }
+        return Ok(crate::policies::Place {
+            runtime,
+            image: None,
+            image_paths: Vec::new(),
+        });
+    }
+    let named = images_named(app).await;
+    let found = match image {
+        Some(image) => named.into_iter().find(|(named, _)| named == image),
+        None => named.into_iter().next(),
+    };
+    match found {
+        Some((image, image_paths)) => Ok(crate::policies::Place {
+            runtime,
+            image: Some(image),
+            image_paths,
+        }),
+        None => Err((
+            StatusCode::BAD_REQUEST,
+            match image {
+                Some(image) => format!(
+                    "no posture or environment in config.toml names the image `{image}`, \
+                     and a session runs only on an image this machine names"
+                ),
+                None => format!(
+                    "`{runtime}` runs an image, and no posture or environment in config.toml \
+                     names one"
+                ),
+            },
+        )),
+    }
+}
+
+/// The images this machine's postures and environments run in a container,
+/// each once, with the in-image paths of the first that names it. A posture's
+/// file that does not load names nothing here; choosing it says why.
+async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRule>)> {
+    let postures = app.postures();
+    let environments = app.environments();
+    blocking(move || {
+        let from_files = postures.values().filter_map(|posture| {
+            agent_core::worker::WorkerConfig::from_file(&posture.policy).ok()
+        });
+        let from_environments = environments
+            .values()
+            .map(|environment| environment.worker.clone());
+        let mut named: Vec<(String, Vec<agent_core::sandbox::PathRule>)> = Vec::new();
+        for worker in from_files.chain(from_environments) {
+            let Some(image) = worker.image.filter(|_| worker.runtime.is_contained()) else {
+                continue;
+            };
+            if !named.iter().any(|(there, _)| *there == image) {
+                named.push((image, worker.paths));
+            }
+        }
+        named
+    })
+    .await
+}
+
+/// Every place a session made from lists may run, as [`Where`]s: this
+/// machine, and each image [`images_named`] finds on every container runtime.
+/// What the new session's dialog offers as *Runtime*.
+async fn places_for_lists(app: &App, describe: &DescribeFactory) -> Vec<Where> {
+    let places = std::iter::once(crate::policies::Place::host()).chain(
+        images_named(app)
+            .await
+            .into_iter()
+            .map(|(image, image_paths)| crate::policies::Place {
+                runtime: agent_core::worker::Runtime::CONTAINED[0],
+                image: Some(image),
+                image_paths,
+            }),
+    );
+    let empty = crate::policies::Policies::default();
+    let describe = describe.clone();
+    let places: Vec<_> = places
+        .filter_map(|place| empty.compose(&place, None, None, None).ok())
+        .map(|resolved| Chosen::Environment(Arc::new(resolved)))
+        .collect();
+    blocking(move || {
+        places
+            .into_iter()
+            .flat_map(|chosen| {
+                let declared = describe(Some(chosen.clone()), None);
+                let contained = declared
+                    .runtime
+                    .parse::<agent_core::worker::Runtime>()
+                    .is_ok_and(|runtime| runtime.is_contained());
+                match contained {
+                    true => variants(&describe, Some(chosen)),
+                    false => vec![declared],
+                }
+            })
+            .collect()
+    })
+    .await
 }
 
 /// The rest of [`posture_for`], once what the session is built from is known:
@@ -7424,6 +7607,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         app,
         asked.posture.as_deref(),
         asked.runtime.as_deref(),
+        asked.image.as_deref(),
         asked.lists.as_ref(),
     )
     .await
@@ -7619,6 +7803,7 @@ async fn put_session_posture(
         asked.runtime.as_deref(),
         // Moved from the terminal: a preset as it is.
         None,
+        None,
     )
     .await
     {
@@ -7772,6 +7957,7 @@ async fn resume_session(
         app,
         asked.posture.as_deref(),
         asked.runtime.as_deref(),
+        asked.image.as_deref(),
         asked.lists.as_ref(),
     )
     .await
@@ -8540,6 +8726,7 @@ mod tests {
             enforcement: "kernel".into(),
             network: false,
             lists: None,
+            composed: None,
         };
         let mut view = SessionView::new("s", "mock", "mock");
         view.started_at = 1_700_000_000_000;
@@ -8606,6 +8793,7 @@ mod tests {
             enforcement: "kernel".into(),
             network: false,
             lists: None,
+            composed: None,
         };
         let host = record::Posture {
             name: None,
@@ -8613,6 +8801,7 @@ mod tests {
             enforcement: "kernel".into(),
             network: false,
             lists: None,
+            composed: None,
         };
 
         let mut view = SessionView::new("s", "mock", "mock");
@@ -8681,6 +8870,7 @@ mod tests {
                     enforcement: "kernel".into(),
                     network: false,
                     lists: None,
+                    composed: None,
                 },
             )
             .is_some(),
@@ -8707,6 +8897,7 @@ mod tests {
             enforcement: "kernel".into(),
             network: false,
             lists: None,
+            composed: None,
         };
         let sending = mock_destination("mock", "mock");
         let mut view = SessionView::new("s", "mock", "mock");
@@ -8797,6 +8988,7 @@ mod tests {
             enforcement: "kernel".into(),
             network: false,
             lists: None,
+            composed: None,
         };
         let sending = mock_destination("mock", "mock");
         let mut view = SessionView::new("s", "mock", "mock");

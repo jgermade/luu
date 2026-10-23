@@ -211,7 +211,13 @@ use crate::trace::TraceMessage;
 /// **23 carries `forbidden`**, a person's no for the session, folded as
 /// `granted` is; `revoked` takes back either, and the fold marks what it took
 /// back rather than dropping it. Protocol 11.
-pub const FORMAT: u32 = 23;
+///
+/// **24: a posture may be `composed`** — made from a runtime and three lists
+/// by name, as the new session's dialog makes every session, rather than from
+/// a posture or an environment of the file — with the runtime and image a
+/// resume makes it again on. Absent for every other posture, and in every
+/// stream before it.
+pub const FORMAT: u32 = 24;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -242,6 +248,22 @@ pub struct Posture {
     /// can be edited tomorrow. `None` in a stream written before format 21.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lists: Option<Lists>,
+    /// Where it was made from a runtime and the three lists by name rather
+    /// than taken from a file: what a resume makes it again from, with the
+    /// lists' names. `None` for a posture, an environment or the server's own
+    /// policy file. Boxed: a header is the largest line by far, and this is
+    /// what tipped it over clippy's `large_enum_variant`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed: Option<Box<Composed>>,
+}
+
+/// What a composed posture ran on, by the words a new session asks with: the
+/// runtime's name, never the worker's label, and the image a container ran.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Composed {
+    pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 /// The three lists a posture resolved to.
@@ -461,6 +483,43 @@ mod tests {
         assert!(matches!(parsed[1], RecordLine::Protocol { at_ms: 12, .. }));
     }
 
+    /// A composed posture says what made it, in the words a session asks
+    /// with; any other says nothing, so a stream from before 24 reads the same.
+    #[test]
+    fn a_composed_posture_says_its_runtime_and_image_and_another_says_nothing() {
+        let plain = Posture {
+            name: None,
+            runtime: "host".into(),
+            enforcement: "kernel".into(),
+            network: false,
+            lists: None,
+            composed: None,
+        };
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("composed").is_none());
+        let composed = Posture {
+            name: Some("rust · empty · project".into()),
+            runtime: "docker (luu-worker:dev)".into(),
+            composed: Some(Box::new(Composed {
+                runtime: "docker".into(),
+                image: Some("luu-worker:dev".into()),
+            })),
+            ..plain.clone()
+        };
+        let json = serde_json::to_value(&composed).unwrap();
+        assert_eq!(json["composed"]["runtime"], "docker");
+        assert_eq!(json["composed"]["image"], "luu-worker:dev");
+        let back: Posture = serde_json::from_value(json).unwrap();
+        assert_eq!(back, composed);
+        assert!(
+            composed.same_place(&Posture {
+                composed: None,
+                ..composed.clone()
+            }),
+            "how it was made is not where it ran"
+        );
+    }
+
     /// The comparison a resume makes before it hands a person a gate.
     #[test]
     fn two_postures_are_the_same_place_by_their_facts_and_never_by_their_name() {
@@ -470,6 +529,7 @@ mod tests {
             enforcement: "kernel".into(),
             network: false,
             lists: None,
+            composed: None,
         };
 
         assert!(
@@ -522,6 +582,7 @@ mod tests {
             enforcement: "kernel".into(),
             network: false,
             lists: Some(lists.clone()),
+            composed: None,
         };
 
         let renamed = Lists {

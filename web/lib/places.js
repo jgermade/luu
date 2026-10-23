@@ -50,3 +50,19 @@ export function stillThere(postures, value) {
   const found = placeOptions(postures).find(option => option.value === value && !option.disabled)
   return found ? found.value : "|"
 }
+
+/// Where a session made from lists may run, out of `/api/postures`'
+/// `runtimes`: this machine, and every image a posture or an environment
+/// names on every container runtime — `[{ value, runtime, image, label, title,
+/// disabled }]`, the value `runtime|image`. The new session's *Runtime*; see
+/// `RECORD/2026-10-22.policies-not-postures.WIP.md`, *every session from lists*.
+export function runtimeOptions(postures) {
+  return (postures?.runtimes || []).map(place => ({
+    value: `${place.runtime}|${place.image || ""}`,
+    runtime: place.runtime,
+    image: place.image || null,
+    label: runs(place),
+    title: place.missing || (place.gap ? "the container keeps its network" : ""),
+    disabled: !!place.missing,
+  }))
+}

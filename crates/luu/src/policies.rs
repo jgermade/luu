@@ -111,6 +111,28 @@ pub struct Policies {
     pub environments: BTreeMap<String, Environment>,
 }
 
+/// Where a composed session runs: a runtime and, in a container, the image
+/// and the trees that exist only inside it — taken from a posture or an
+/// environment that names the image, never typed by a page. See
+/// [`Policies::compose`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    pub runtime: Runtime,
+    pub image: Option<String>,
+    pub image_paths: Vec<PathRule>,
+}
+
+impl Place {
+    /// This machine, with no container.
+    pub fn host() -> Self {
+        Self {
+            runtime: Runtime::Host,
+            image: None,
+            image_paths: Vec::new(),
+        }
+    }
+}
+
 /// An environment, resolved into what luu builds a session from.
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -274,15 +296,14 @@ impl Policies {
         })
     }
 
-    /// A session's policy made from a runtime and one list of each axis by
-    /// name — `None` for the empty one, [`EMPTY`] in the record — rather than
-    /// from an environment: what the new session's dialog asks for. Named by
-    /// its lists, and marked [`Resolved::composed`] so a resume makes it
-    /// again from the same names.
+    /// A session's policy made from where it runs and one list of each axis
+    /// by name — `None` for the empty one, [`EMPTY`] in the record — rather
+    /// than from an environment: what the new session's dialog asks for.
+    /// Named by its lists, and marked [`Resolved::composed`] so a resume
+    /// makes it again from the same names.
     pub fn compose(
         &self,
-        runtime: Runtime,
-        image: Option<String>,
+        place: &Place,
         shell: Option<&str>,
         network: Option<&str>,
         files: Option<&str>,
@@ -327,9 +348,9 @@ impl Policies {
         composed.environments.insert(
             name.clone(),
             Environment {
-                runtime,
-                image,
-                image_paths: Vec::new(),
+                runtime: place.runtime,
+                image: place.image.clone(),
+                image_paths: place.image_paths.clone(),
                 timeout_ms: None,
                 shell,
                 network,
@@ -396,8 +417,14 @@ impl Resolved {
 /// zone as written. A policy file's are all `allow`, named after the file.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ListsView {
-    /// The environment's name, or `None` for a policy file.
+    /// The environment's name, or `None` for a policy file. A session made
+    /// from lists has its lists' names here.
     pub environment: Option<String>,
+    /// Made from lists by name rather than an environment of the file — so
+    /// there is no `[environment.<name>]` to point at, and a list named
+    /// [`EMPTY`] is the empty one rather than a table.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub composed: bool,
     pub shell: Named<Zones>,
     pub network: Named<Zones>,
     pub files: Named<FilesList>,
@@ -420,6 +447,7 @@ impl ListsView {
     pub fn of_environment(resolved: &Resolved) -> Self {
         Self {
             environment: Some(resolved.name.clone()),
+            composed: resolved.composed,
             shell: Named {
                 name: resolved.shell.0.clone(),
                 list: resolved.shell.1.clone(),
@@ -445,6 +473,7 @@ impl ListsView {
         };
         Self {
             environment: None,
+            composed: false,
             shell: named(Zones {
                 allow: granted.commands.clone(),
                 ..Zones::default()
@@ -864,6 +893,59 @@ mod tests {
         assert!(
             !resolved.lists(&widened).same(&plain),
             "an --allow-command is recorded"
+        );
+    }
+
+    /// A session made from lists by name: no environment, the empty list
+    /// where none is chosen, the folder read whatever the lists say, and the
+    /// names in the record — the empty one under a name no list can have.
+    #[test]
+    fn lists_by_name_compose_into_a_session_and_an_absent_one_is_empty() {
+        let policies = policies(CONTAINER);
+        let resolved = policies
+            .compose(&Place::host(), Some("rust"), None, Some("project"))
+            .expect("both are there");
+        assert!(resolved.composed);
+        assert_eq!(resolved.name, "rust · empty · project");
+        assert_eq!(resolved.policy.commands, ["cargo", "rustc", "git"]);
+        assert!(
+            !resolved.policy.network,
+            "the empty network list reaches nothing"
+        );
+        assert_eq!(resolved.worker.runtime, Runtime::Host);
+        let lists = resolved.lists(&resolved.policy);
+        assert_eq!(lists.network.name, EMPTY);
+        assert_eq!(lists.shell.name, "rust");
+
+        let empty = policies
+            .compose(&Place::host(), None, None, None)
+            .expect("nothing to be missing");
+        assert_eq!(empty.name, "empty");
+        assert!(empty.policy.commands.is_empty());
+        assert_eq!(empty.policy.paths, [PathRule::new(".", Access::Read)]);
+
+        let contained = Place {
+            runtime: Runtime::Docker,
+            image: Some("luu-worker:dev".into()),
+            image_paths: vec![PathRule::new("/usr/local/cargo", Access::Execute)],
+        };
+        let there = policies
+            .compose(
+                &contained,
+                Some("rust"),
+                Some("registries"),
+                Some("project"),
+            )
+            .expect("composes");
+        assert_eq!(there.worker.image.as_deref(), Some("luu-worker:dev"));
+        assert_eq!(there.worker.paths, contained.image_paths);
+
+        assert_eq!(
+            policies
+                .compose(&Place::host(), Some("nope"), None, None)
+                .err()
+                .as_deref(),
+            Some("there is no [shell.nope]")
         );
     }
 

@@ -60,7 +60,9 @@ test.beforeAll(async () => {
   writeFileSync(join(home, "config.toml"), CONFIG)
   server = spawn(
     binary(),
-    ["serve", "--bind", `127.0.0.1:${PORT}`, "--provider", "here", "--no-store", "--mock-delay-ms", "0"],
+    // A store, in the home above: a session made from lists comes back made
+    // from them.
+    ["serve", "--bind", `127.0.0.1:${PORT}`, "--provider", "here", "--mock-delay-ms", "0"],
     { cwd: root, env: { ...process.env, LUU_HOME: home }, stdio: "pipe" },
   )
   let output = ""
@@ -96,13 +98,15 @@ async function chooseFolder(page) {
 const file = () => readFileSync(join(home, "config.toml"), "utf8")
 
 /**
- * The new session's dialog: where it starts from and runs, which list of each
- * axis, where it sends. An environment is a preset: it fills the three lists,
- * one can be swapped for another of the file, and the session runs under the
- * swap — named in what the page reads back. A policy file has no lists to
- * choose. Before the test below, which renames and deletes lists.
+ * The new session's dialog: where it runs and which list of each axis, always
+ * — no preset to start from, and a list not chosen is the empty one, which
+ * reads the folder and asks the rest. The session runs under what was chosen
+ * and is resumed made from it again; the next one is offered the same. An
+ * environment still takes another list of the file in place of one of its
+ * own, through the API. Before the test below, which renames and deletes
+ * lists.
  */
-test("a session starts from an environment with another list in place of one of its own", async ({ page }) => {
+test("a session is made from a runtime and three lists, and comes back made from them", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
   page.on("console", message => {
@@ -111,40 +115,87 @@ test("a session starts from an environment with another list in place of one of 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
-  await page.click('.chat .acts button[title^="New session"]')
   const dialog = page.getByRole("dialog", { name: "Sessions" })
   const select = name => dialog.locator(`select.${name}`)
+  const lists = dialog.locator(".row[data-row='lists']")
+  const settings = async () => (await fetch(`${BASE}/api/settings`)).json()
+  const say = async text => {
+    const done = page.locator(".transcript article.assistant button.meta")
+    const before = await done.count()
+    await page.locator(".composer input").fill(text)
+    await page.click('.composer button[type="submit"]')
+    await expect(done).toHaveCount(before + 1)
+  }
 
-  // The server's own policy file: nothing to choose among its lists.
-  await expect(select("preset")).toHaveValue("")
-  for (const kind of ["shell", "network", "files"]) await expect(select(`list-${kind}`)).toBeDisabled()
+  // Nothing to start from: where it runs, and one list of each axis, none
+  // chosen yet — the empty one.
+  await page.click('.chat .acts button[title^="New session"]')
+  await expect(dialog.locator("select.preset")).toHaveCount(0)
+  await expect(select("runtime")).toHaveValue("host|")
+  await expect(select("list-shell").locator("option")).toHaveText(["empty", "tools"])
+  await expect(select("list-network").locator("option")).toHaveText(["empty", "off", "registries"])
+  for (const kind of ["shell", "network", "files"]) await expect(select(`list-${kind}`)).toHaveValue("")
+  await expect(lists).toContainText("runs nothing without asking")
+  await expect(lists).toContainText("reads the folder, asks to write")
 
-  // An environment fills them, and each can be changed.
-  await select("preset").selectOption("asking")
-  await expect(select("list-shell")).toHaveValue("tools")
-  await expect(select("list-network")).toHaveValue("off")
-  await expect(select("list-files")).toHaveValue("tree")
-  await expect(select("list-network")).toBeEnabled()
+  await select("list-shell").selectOption("tools")
+  await expect(lists).toContainText("allow 2 · deny 1")
   await select("list-network").selectOption("registries")
-  await expect(dialog.locator(".row[data-row='lists']")).toContainText("instead of off")
   await dialog.getByRole("button", { name: "Start session" }).click()
-  await expect(dialog).toBeHidden()
+  await expect(dialog).toHaveCount(0)
 
-  // The session runs under the swap: the environment's other lists, and this one.
-  const settings = await (await fetch(`${BASE}/api/settings`)).json()
-  expect(settings.lists.environment).toBe("asking")
-  expect(settings.lists.shell.name).toBe("tools")
-  expect(settings.lists.network.name).toBe("registries")
-  expect(settings.lists.network.allow).toEqual(["crates.io"])
+  // It runs under them, the empty one where none was chosen.
+  const made = await settings()
+  expect(made.lists.composed).toBe(true)
+  expect(made.lists.shell.name).toBe("tools")
+  expect(made.lists.network.name).toBe("registries")
+  expect(made.lists.network.allow).toEqual(["crates.io"])
+  expect(made.lists.files.name).toBe("(empty)")
+  await say("hola")
 
-  // Lists are chosen on top of an environment, never a policy file's.
-  const refused = await fetch(`${BASE}/api/sessions`, {
+  // The next one is offered what this one was made from; started empty.
+  await page.click('.chat .acts button[title^="New session"]')
+  await expect(select("list-shell")).toHaveValue("tools")
+  await expect(select("list-network")).toHaveValue("registries")
+  await expect(select("list-files")).toHaveValue("")
+  await select("list-shell").selectOption("")
+  await select("list-network").selectOption("")
+  await dialog.getByRole("button", { name: "Start session" }).click()
+  await expect(dialog).toHaveCount(0)
+  expect((await settings()).lists.environment).toBe("empty")
+
+  // Picked from the history, the first is resumed made from its lists again.
+  await page.click('button[title="Earlier sessions"]')
+  await dialog.locator("ul.sessions li:not(.on) .pick").first().click()
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(async () => (await settings()).lists.shell.name).toBe("tools")
+  expect((await settings()).lists.network.name).toBe("registries")
+
+  // What the server refuses, and says why.
+  const refused = async (body, text) => {
+    const answer = await fetch(`${BASE}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    expect(answer.status).toBe(400)
+    expect(await answer.text()).toContain(text)
+  }
+  await refused({ lists: { network: "nope" } }, "there is no [network.nope]")
+  await refused({ runtime: "docker", lists: {} }, "no posture or environment in config.toml names one")
+  await refused({ runtime: "host", image: "luu-worker:dev", lists: {} }, "runs no container")
+
+  // An environment takes another list of the file in place of its own.
+  const swapped = await fetch(`${BASE}/api/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ lists: { network: "off" } }),
+    body: JSON.stringify({ posture: "asking", lists: { network: "registries" } }),
   })
-  expect(refused.status).toBe(400)
-  expect(await refused.text()).toContain("a posture's lists are its policy file")
+  expect(swapped.ok).toBe(true)
+  const there = await settings()
+  expect(there.lists.environment).toBe("asking")
+  expect(there.lists.composed ?? false).toBe(false)
+  expect(there.lists.network.name).toBe("registries")
 
   expect(errors).toEqual([])
 })

@@ -9,9 +9,9 @@
   const { state, resumeSession, deleteSession, archiveSession, refreshSessionsList } = await import("@web/lib/store.js")
   const {
     ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
-    choosePlace, chooseList,
+    chooseRuntime, chooseList,
   } = await import("@web/lib/ui.js")
-  const { placeOptions } = await import("@web/lib/places.js")
+  const { runtimeOptions } = await import("@web/lib/places.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
@@ -39,41 +39,24 @@
   // one label over two backends is a comparison nobody can make.
 
   $: profileNames = Object.keys(state.providers?.providers || {})
-  // Every posture on every runtime it can run on, as the terminal's foot
-  // offers them; the last one used is chosen to begin with (`openStarter`).
-  // Empty where nobody has written a posture down, and where a surface cannot
-  // choose one at all — over stdio the process is the session.
-  $: places = state.postures?.choosable ? placeOptions(state.postures) : []
-  $: chosenPosture = (ui.starter?.place || "|").split("|")[0]
   // The choice of where it sends, said once beside the two columns' label:
   // the provider, the model, and where that model came from.
   $: sendsSaid = !ui.starter?.provider
     ? "where the session sends"
     : `${ui.starter.provider} · ${ui.starter.model || "its own model"}${ui.starter.provider === state.providers?.default ? " · the file's default" : ""}${ui.starter.from && ui.starter.model ? ` · from ${ui.starter.from}` : ""}`
-  // **Three rows, as asked**: where it starts from and where its commands
-  // run; which list of each axis it may use; where it sends. An environment
-  // is a preset: choosing one fills the runtime and the three lists, which
-  // can then be changed — the session records the lists it got, by name and
-  // hash. A posture, or the server's own policy file, has no lists to choose:
-  // its lists are the file's. See
-  // `RECORD/2026-10-22.policies-not-postures.WIP.md`, *the new session*.
-  $: presets = places.reduce((out, p) => out.some(q => q.value === p.posture)
-    ? out
-    : [...out, { value: p.posture, label: p.name }], [])
-  $: runtimes = places.filter(p => p.posture === chosenPosture)
-    .map(p => ({ value: p.value, label: p.label, disabled: p.disabled, title: p.title }))
-  $: environment = ui.starter?.policies?.environment?.[chosenPosture] || null
-  $: presetSaid = environment
-    ? "an environment: the lists start as its own"
-    : chosenPosture
-      ? `${state.postures?.postures[chosenPosture]?.policy} — a policy file, whose lists are its own`
-      : "the policy file serve was started with"
-  $: runtimeSaid = runtimes.find(r => r.value === ui.starter?.place)?.title?.includes("keeps its network")
-    ? "where its commands run · this runtime keeps its network"
+  // **Every session is made from where it runs and one list of each axis**,
+  // as asked: *siempre se podrá elegir el runtime y las políticas*. No
+  // preset: a list not chosen is the empty one, which allows nothing — the
+  // session reads its folder, writes to scratch, and asks the rest. The
+  // session records each list by name and hash. Over stdio the process is
+  // the session, and there is nothing to choose. See
+  // `RECORD/2026-10-22.policies-not-postures.WIP.md`, *every session from
+  // lists*.
+  $: choosable = !!state.postures?.choosable
+  $: runtimes = runtimeOptions(state.postures)
+  $: runtimeSaid = runtimes.find(r => r.value === ui.starter?.runtime)?.title
+    ? `where its commands run · ${runtimes.find(r => r.value === ui.starter?.runtime).title}`
     : "where its commands run"
-  // The first place of a preset is its own runtime.
-  const choosePreset = preset => choosePlace(places.find(p => p.posture === preset && !p.disabled)?.value
-    || places.find(p => p.posture === preset)?.value || "|")
 
   const KINDS = [
     { key: "shell", label: "Shell" },
@@ -90,19 +73,20 @@
         const entries = list[zone] || []
         return entries.length ? `${zone} ${entries.includes("*") ? "*" : entries.length}` : ""
       })
-      .filter(Boolean).join(" · ") || "empty: nothing"
+      .filter(Boolean).join(" · ") || "names nothing: asks"
   }
-  // What each select shows: the session's list, or — on a policy file — the
-  // file, which is all there is to show.
-  $: fileName = chosenPosture ? state.postures?.postures[chosenPosture]?.policy || chosenPosture : "the policy file"
-  const listOptions = kind => ui.starter?.lists
-    ? listNames(kind).map(name => ({ value: name, label: name }))
-    : [{ value: "", label: fileName }]
+  const EMPTY_SAID = {
+    shell: "runs nothing without asking",
+    network: "reaches nothing without asking",
+    files: "reads the folder, asks to write",
+  }
+  const listOptions = kind => [
+    { value: "", label: "empty" },
+    ...listNames(kind).map(name => ({ value: name, label: name })),
+  ]
   const listSaid = kind => {
     const name = ui.starter?.lists?.[kind]
-    if (!name) return "the file's own"
-    const changed = environment && environment[kind] !== name
-    return `${zonesOf(kind, name)}${changed ? ` · instead of ${environment[kind]}` : ""}`
+    return name ? zonesOf(kind, name) : EMPTY_SAID[kind]
   }
   $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
   // What stands in the way of *either* action: the server refuses both while a
@@ -225,26 +209,21 @@
       machine has already named.
     </p>
 
-    <!-- One box per thing chosen: its name in the border, what it is or
-         where its value came from under it. Three rows: where it starts from
-         and runs, what it may use, where it sends. -->
+    <!-- One box per thing chosen: its name in the border, what it is under
+         it. Three rows: where it runs, what it may use, where it sends. -->
     <div class="fields" :if="profileNames.length">
-      <div :if="places.length" class="row two" data-row="where">
-        <InputContainer label="Start from" type="select" select-class="preset"
-                        :options="presets" :model="chosenPosture" :description="presetSaid"
-                        :disabled="presets.length < 2"
-                        @change="choosePreset($event.detail)" />
-        <InputContainer label="Runtime" type="select" select-class="place"
-                        :options="runtimes" :model="ui.starter?.place" :description="runtimeSaid"
+      <div :if="choosable" class="row two" data-row="where">
+        <InputContainer label="Runtime" type="select" select-class="runtime"
+                        :options="runtimes" :model="ui.starter?.runtime" :description="runtimeSaid"
                         :disabled="runtimes.length < 2"
-                        @change="choosePlace($event.detail)" />
+                        @change="chooseRuntime($event.detail)" />
       </div>
 
-      <div :if="places.length" class="row three" data-row="lists">
+      <div :if="choosable" class="row three" data-row="lists">
         <InputContainer :each="kind in KINDS" :key="kind.key" :label="kind.label" type="select"
                         :select-class="'list-' + kind.key"
                         :options="listOptions(kind.key)" :model="ui.starter?.lists?.[kind.key] || ''"
-                        :description="listSaid(kind.key)" :disabled="!ui.starter?.lists"
+                        :description="listSaid(kind.key)"
                         @change="chooseList(kind.key, $event.detail)" />
       </div>
 

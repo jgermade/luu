@@ -206,7 +206,13 @@
   // Where a list is written: its own table under an environment, and the
   // policy file's `[sandbox]` otherwise, which has no lists by name.
   const SANDBOX = { shell: "[sandbox] commands", network: "[sandbox] network", files: "[[sandbox.paths]]" }
-  const sourceOf = list => lists()?.environment ? `[${list}.${lists()[list].name}]` : SANDBOX[list]
+  // Made from lists, one not chosen is the empty one, which has no table.
+  const sourceOf = list => !lists()?.environment ? SANDBOX[list]
+    : lists().composed && lists()[list].name === "(empty)" ? "empty: names nothing"
+    : `[${list}.${lists()[list].name}]`
+  $: listsSaid = lists()?.composed ? "made from the lists chosen when it started"
+    : lists()?.environment ? `[environment.${lists().environment}]`
+    : `from ${lists()?.shell?.name || "the policy file"}`
   const ENFORCEMENT = {
     "kernel": "a command runs only where the kernel holds it — Landlock and seccomp, which are Linux's. Where they are missing, every command is refused; enforcement = \"best-effort\" runs it and says what was missing.",
     "best-effort": "a command runs even where the kernel cannot hold it, and its verdict says what was missing.",
@@ -300,7 +306,7 @@
     <!-- ---- policies ---- -->
     <div :if="tab === 'policies'" class="panel">
       <h3>The lists
-        <span class="dim small">{{ lists()?.environment ? `[environment.${lists().environment}]` : `from ${lists()?.shell?.name || "the policy file"}` }}</span>
+        <span class="dim small">{{ listsSaid }}</span>
       </h3>
       <div :if="lists()" class="lists">
         <div :each="list in LISTS" :key="list" class="list">
