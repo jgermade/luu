@@ -229,9 +229,9 @@ impl std::fmt::Display for Authority {
             Self::Policy => write!(f, "the sandbox policy"),
             Self::Plan(job) => write!(f, "the approved plan for job {job}"),
             Self::Draft(Some(job)) => {
-                write!(f, "the floor for draft {job}, which grants no writes")
+                write!(f, "the floor for draft {job}, which writes only to scratch")
             }
-            Self::Draft(None) => write!(f, "the draft's floor, which grants no writes"),
+            Self::Draft(None) => write!(f, "the draft's floor, which writes only to scratch"),
             Self::Person(Some(job)) => write!(f, "a person, for this call only, in draft {job}"),
             Self::Person(None) => write!(f, "a person, for this call only"),
         }
@@ -732,7 +732,7 @@ impl Sandbox {
                 // the loosening becomes somebody's decision.
                 Authority::Draft(_) => format!(
                     "the kernel cannot hold this child ({missing}); \
-                     a draft runs on the floor, which grants no writes — \
+                     a draft runs on the floor, which writes only to scratch — \
                      approve a plan to run this"
                 ),
             }));

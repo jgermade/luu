@@ -118,12 +118,20 @@ and have no write bit to take — and stamps `Authority::Draft`, so a refusal sa
 the floor refused rather than sending someone to edit `luu.toml`. `chat` keeps
 the policy file: a floor is the gate's shadow, and `chat` has no gate.
 
+**Since 2026-10-23 the floor writes to its scratch** and nowhere else: `.tmp` at
+the top of the working directory — made when it is missing, with a `.gitignore`
+that ignores it whole — and the system's temporary folder, or in a container the
+container's own `/tmp` (an in-image path beside the image's toolchain, since the
+host's is not inside it). *El modo draft solo debe poder leer, y escribir en
+carpetas temporales.* The floor is `session::draft_floor`: `read_only`, then the
+scratch at read-write, the narrower rule winning under the read-only tree.
+
 **The refusal names the draft, one turn in.** `Authority::Draft` carries an
 `Option<JobId>`: `None` on the first prompt of a session, where the sandbox is
 chosen before `open_draft` runs and there is genuinely nothing to name, and the
 draft's id on every prompt after it — stamped by `serve` from the context it is
 already reading, and only where the live job really is a draft. So a denial
-reads *the floor for draft 3, which grants no writes*, the way one inside an
+reads *the floor for draft 3, which writes only to scratch*, the way one inside an
 approved job has always read *the approved plan for job 7*, and a reader stops
 having to join the refusal's turn to the line that opened its job.
 
@@ -134,9 +142,9 @@ rather than a decision about what to **add**. `/api/settings` carries the
 session's floor beside its posture (`reads`, `commands`, `network`, resolved in
 Rust and never re-derived in the page, because a second resolution of a policy
 is a second sandbox), and the gate prints it under the asks: *unapproved, a turn
-reads `.` · runs `rg`, `ls` — and writes nothing*. There is no `writes` field on
-the wire: the floor grants none by construction, so it is a sentence rather than
-an always-empty list. See
+reads `.` · runs `rg`, `ls` — and writes only to .tmp · /tmp; anything else is
+asked of you first*. `writes` is on the wire since the floor has some, and it is
+the scratch and nothing more. See
 [`RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`](RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md).
 
 **A write the floor refuses is asked about, once, where the policy file would
@@ -159,7 +167,7 @@ not where `[approvals] required` — an unsigned click would be the one widening
 that skips the signature. The question travels on the turn's own event channel,
 behind the `tool_call` it is about: published directly, it overtook it and the
 page had no call to hang it on. `protocol::VERSION` 9 and `record::FORMAT` 20
-carry it, and the gate's floor sentence says *writes nothing without asking you,
+carry it, and the gate's floor sentence said *writes nothing without asking you,
 one call at a time* where `floor.asks` is true. See
 [`RECORD/2026-10-02.a-refused-write-asks.completed.md`](RECORD/2026-10-02.a-refused-write-asks.completed.md).
 

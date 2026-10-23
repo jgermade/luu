@@ -1295,7 +1295,7 @@ mod tests {
         assert_eq!(asked[0].0, 1);
         assert_eq!(asked[0].1, "write_file");
         assert!(
-            asked[0].2.contains("grants no writes"),
+            asked[0].2.contains("writes only to scratch"),
             "the question carries the floor's own rule: {}",
             asked[0].2
         );

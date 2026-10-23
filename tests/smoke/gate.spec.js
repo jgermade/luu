@@ -211,10 +211,10 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`: what the
   // turn in front of the gate already has. Approving is a decision about what to
   // *add*, and a panel that states one term is a panel that reads as a yes to a
-  // list. The floor grants no writes by construction, so that is a sentence.
+  // list. Since 2026-10-23 it writes only to its scratch, and says where.
   const floor = gate.locator("p.floor")
   await expect(floor).toContainText("unapproved, a turn reads")
-  await expect(floor).toContainText("writes nothing")
+  await expect(floor).toContainText("writes only to .tmp")
   // The draft is open behind it, holding the turn that opened it.
   await expect(page.locator("article.assistant")).not.toHaveCount(0)
 

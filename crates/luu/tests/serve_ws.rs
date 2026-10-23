@@ -500,6 +500,17 @@ async fn server_with_postures(
     address.to_string()
 }
 
+/// A folder outside the checkout's tracked files and outside the draft's
+/// floor, for the tests whose failure is a write that should not have
+/// happened. Not the system's temporary folder: since 2026-10-23 a draft may
+/// write there (`session::draft_floor`). Cargo's own scratch for integration
+/// tests, under `target/`, which nothing tracks.
+fn outside_the_floor() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).expect("cargo's scratch for tests");
+    dir.canonicalize().expect("cargo's scratch for tests")
+}
+
 async fn next_message(socket: &mut Socket) -> Value {
     let frame = tokio::time::timeout(PATIENCE, socket.next())
         .await
@@ -1708,7 +1719,7 @@ async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
     // it at the checkout means a red run that also edits the repository. That
     // is how this test was first written and the first failing run replaced
     // `crates/luu/Cargo.toml` with the word `broken`.
-    let scratch = std::env::temp_dir().join(format!("luu-draft-floor-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-draft-floor-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by a draft\"}}}}\n```",
@@ -1784,7 +1795,7 @@ async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
 /// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
 #[tokio::test]
 async fn a_refusal_in_a_draft_names_the_draft_it_was_refused_in() {
-    let scratch = std::env::temp_dir().join(format!("luu-draft-named-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-draft-named-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by a draft\"}}}}\n```",
@@ -1854,7 +1865,7 @@ async fn a_refusal_in_a_draft_names_the_draft_it_was_refused_in() {
 /// floor, and nobody asked. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
 #[tokio::test]
 async fn a_write_the_floor_refuses_is_put_to_a_person_and_runs_once_on_a_yes() {
-    let scratch = std::env::temp_dir().join(format!("luu-allow-once-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-allow-once-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"allowed once\"}}}}\n```",
@@ -1949,7 +1960,7 @@ async fn a_draft_turn_still_reads_what_the_policy_file_grants() {
 /// goes through. The path is one nothing else reads, so the test can write it.
 #[tokio::test]
 async fn a_write_added_at_the_gate_goes_through() {
-    let scratch = std::env::temp_dir().join(format!("luu-write-{}.txt", std::process::id()));
+    let scratch = outside_the_floor().join(format!("luu-write-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&scratch);
     let call = format!(
         "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"written by the task\"}}}}\n```",
@@ -3042,12 +3053,23 @@ async fn the_settings_route_carries_the_floor_a_draft_runs_on() {
             .is_some_and(|text| text.contains("read-write")),
         "the session grants writes; the floor is what takes them away",
     );
-    // No `writes` key at all, deliberately: an always-empty list is a question
-    // mark where the panel says a sentence.
+    // It writes to its scratch and nowhere else: `.tmp` at the top of the
+    // tree, and the system's temporary folder. See `session::draft_floor`.
+    let writes: Vec<&str> = floor["writes"]
+        .as_array()
+        .expect("where it may write")
+        .iter()
+        .map(|path| path.as_str().expect("a path"))
+        .collect();
+    assert!(writes.contains(&".tmp"), "{writes:?}");
+    let temp = std::env::temp_dir().canonicalize().expect("the temporary folder");
     assert!(
-        floor.get("writes").is_none(),
-        "the floor grants no writes by construction and says so in words",
+        writes
+            .iter()
+            .all(|path| *path == ".tmp" || std::path::Path::new(path) == temp),
+        "nothing but the scratch: {writes:?}",
     );
+    assert!(!reads.contains(&".tmp"), "a folder it writes is listed once, as written");
     assert_eq!(floor["network"], false, "the mock server reaches nothing");
     assert_eq!(
         floor["asks"], true,

@@ -119,6 +119,51 @@ pub struct Agency {
     environment: Option<Arc<crate::policies::Resolved>>,
 }
 
+/// The folder of scratch a draft may write in, at the top of the working
+/// directory.
+pub const SCRATCH: &str = ".tmp";
+
+/// What a turn nobody approved may do: read what the session reads, and write
+/// only to scratch — `.tmp` at the top of the working directory, and the
+/// system's temporary folder. Everything else it would write is put to a
+/// person, or waits for a plan.
+///
+/// Until 2026-10-23 the floor wrote nothing at all, by construction
+/// (`RECORD/2026-09-21.the-drafts-floor.completed.md`); a draft that could not
+/// even leave a scratch file had a tool run fail on its own temporary output.
+/// Asked for in so many words: *el modo draft solo debe poder leer, y escribir
+/// en carpetas temporales (incluyendo .tmp en la raíz de la carpeta del
+/// proyecto)*. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+///
+/// `.tmp` is made when it is missing, with a `.gitignore` that ignores it
+/// whole, so it never shows as a change in the project. In a container the
+/// host's temporary folder is not there: the container's own `/tmp` is the
+/// worker's, added beside the image's paths where the worker is started.
+fn draft_floor(sandbox: &Sandbox, contained: bool) -> Sandbox {
+    let floor = sandbox.read_only();
+    let base = sandbox.base();
+    let scratch = base.join(SCRATCH);
+    if !scratch.exists() && std::fs::create_dir_all(&scratch).is_ok() {
+        let _ = std::fs::write(scratch.join(".gitignore"), "*\n");
+    }
+    let mut writable = vec![scratch];
+    if !contained {
+        writable.push(std::env::temp_dir());
+    }
+    let mut policy = floor.to_policy();
+    crate::policies::widen(
+        &mut policy,
+        Some(base),
+        writable.into_iter().filter(|path| path.exists()).map(|path| {
+            agent_core::sandbox::PathRule::new(path, agent_core::sandbox::Access::ReadWrite)
+        }),
+    );
+    match Sandbox::new(&policy, base) {
+        Ok(widened) => widened.under(floor.authority().clone()),
+        Err(_) => floor,
+    }
+}
+
 impl Agency {
     /// The only way to build one, so the floor is derived exactly once.
     ///
@@ -129,9 +174,10 @@ impl Agency {
         limits: agent_core::agent::Limits,
         worker: Option<Arc<Worker>>,
     ) -> Self {
+        let contained = worker.as_ref().is_some_and(|worker| worker.is_contained());
         Self {
             tools,
-            floor: Arc::new(sandbox.read_only()),
+            floor: Arc::new(draft_floor(&sandbox, contained)),
             sandbox,
             limits,
             worker,

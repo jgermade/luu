@@ -124,6 +124,25 @@ is why it leads.
 | 14 | **Concurrency** — `serve` runs one live session at a time | needs a design argument | [`state-of-play`](../../RECORD/2026-09-09.state-of-play.completed.md) §Still open |
 | 16 | **Rotating and revoking an approval key**, and nothing signs a *recording* | waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 
+**Section E — what a session may do: policies and grants.** Added
+2026-10-23, inside this revision, from
+[`policies-not-postures`](../../RECORD/2026-10-22.policies-not-postures.WIP.md):
+steps 1 and 2a of that record landed (lists and environments, asked in a draft,
+grants once and for the session), and these rows are what it leaves. New rows
+continue from 46.
+
+| # | Item | Blocked on | Argued in |
+| --- | --- | --- | --- |
+| 46 | **What a yes to a command reaches.** Kept as decided: a command a person allows runs with everything it implies — the session's writes and its network — and the question says so in one line. **To review**: whether the question should offer the program without the writes, so an `npm install` does not also let every `postinstall` write anywhere in the project | a look at how often it is asked | *the proxy waits, and a command is granted whole* |
+| 47 | **The egress proxy, connected** (step 2b). `EgressProxy` is built and never started: a session's network is all or nothing while a command runs, and a host list only bounds what a plan may declare. Forced through it — proxy variables and a kernel rule that lets only its port out on the host, an internal network whose one way out is the proxy in a container | nothing; postponed | *step 2's decisions*, 2 |
+| 48 | **A grant per host, once or for the session** (step 2c) — the proxy holds the connection and asks, the command's clock stopped while it waits | row 47 | *step 2's decisions*, 2 |
+| 49 | **The seam carries the outcome, not the policy** (step 3): the worker gets `{ cmd, paths, network, limits }` and no allowlist or authority; the files list becomes the mounts — read-only over `.git/hooks`, `/dev/null` over what may not be read, named volumes for `caches` — so a files `deny`, refused today, is accepted once it is held; and the folder chosen becomes the session's base rather than a filter on what is listed | nothing | *decided, and where every file lives* §2, §4 |
+| 50 | **The working directory stops deciding** (step 4): its `luu.toml` is the policy only when named with `--sandbox`; `.luu/policy.toml` is offered as a suggestion and adopted with its hash; `[approvals]` moves to luu's config, required by the exposure | nothing | *decided, and where every file lives* §3, §6 |
+| 51 | **Settings edits the lists and the environments** (step 5), the environment picker where the posture picker is, and a refusal's *Add to the policy*. `gate.spec`'s *a session is started on a posture* is rewritten with it — it looks for a *Posture* row Settings → Models has not had since `190d5be` | rows 49–50, not strictly | *decided* §1 |
+| 52 | **Always: a grant for the project**, kept in luu's config by working directory. Put off by decision | a decision | *always is for later* |
+| 53 | **A yes that needs a signature** — where `[approvals] required = true` nothing is asked, since an unsigned click would skip the signature | row 16 | [`a-refused-write-asks`](../../RECORD/2026-10-02.a-refused-write-asks.completed.md) §Still open |
+| 54 | **The `--allow-*` flags add a second rule for a path**, and the first answers: a policy reading `.` with `--allow-write .` still refuses the write. The lists merge by path (`policies::widen`); the flags do not | nothing | *step 2a, built* |
+
 ```mermaid
 gantt
     title The order as of 2026-09-23

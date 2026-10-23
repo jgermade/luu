@@ -493,15 +493,17 @@ pub type AgencyFactory = Arc<
 /// language, is a second sandbox, and the one on the page would be the one
 /// somebody reads while deciding.
 ///
-/// **There is no `writes` field.** The floor grants none by construction, so an
-/// always-empty list would invite a reader to wonder when it is not; the panel
-/// says so as a sentence instead. See
-/// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+/// **`writes` is the scratch, and only the scratch**: until 2026-10-23 the floor
+/// granted no writes by construction and the field did not exist; now it
+/// writes to `.tmp` and the system's temporary folder and nowhere else. See
+/// `session::draft_floor`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Floor {
     /// What it may read, relative to the base where they are under it and `.`
     /// for the base itself — the spelling a policy file uses.
     reads: Vec<String>,
+    /// Where it may write: its scratch folders, spelt as `reads` is.
+    writes: Vec<String>,
     /// What it may run. The session's allowlist, unchanged: subtracting it
     /// would take `rg` and `ls`, which is what exploration is for.
     commands: Vec<String>,
@@ -518,17 +520,23 @@ impl Floor {
     /// From the floor a session derived once, as the page should print it.
     fn of(floor: &Sandbox, asks: bool) -> Self {
         let policy = floor.to_policy();
+        let spelt = |rule: &agent_core::sandbox::PathRule| {
+            match workspace::relative_of(floor.base(), &rule.path) {
+                here if here.is_empty() => ".".to_string(),
+                under => under,
+            }
+        };
+        let writable = |rule: &&agent_core::sandbox::PathRule| {
+            rule.access == agent_core::sandbox::Access::ReadWrite
+        };
         Self {
             reads: policy
                 .paths
                 .iter()
-                .map(
-                    |rule| match workspace::relative_of(floor.base(), &rule.path) {
-                        here if here.is_empty() => ".".to_string(),
-                        under => under,
-                    },
-                )
+                .filter(|rule| !writable(rule))
+                .map(spelt)
                 .collect(),
+            writes: policy.paths.iter().filter(writable).map(spelt).collect(),
             commands: policy.commands.clone(),
             network: policy.network,
             asks,

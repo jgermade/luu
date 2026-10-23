@@ -1473,8 +1473,10 @@ impl SandboxArgs {
                     .with_binary(self.worker_binary.clone())
                     // The image's own trees, which the host must not try to
                     // resolve: `/usr/local/cargo` is the image's toolchain and
-                    // is not a directory here.
-                    .with_paths(worker_config.paths.clone())
+                    // is not a directory here. And, in a container, its own
+                    // `/tmp`: the scratch a draft may write to there, since the
+                    // host's temporary folder is not inside it.
+                    .with_paths(scratch_in_image(&worker_config))
                     // The seam's clock: how long a call with no clock of its
                     // own may take before the worker is treated as stuck. See
                     // `RECORD/2026-09-05.a-clock-at-the-seam.completed.md`.
@@ -1506,6 +1508,20 @@ impl SandboxArgs {
         )
         .with_lists(lists))
     }
+}
+
+/// A worker's in-image paths, with the container's `/tmp` writable where it
+/// runs in one. See `session::draft_floor`.
+fn scratch_in_image(config: &WorkerConfig) -> Vec<agent_core::sandbox::PathRule> {
+    let mut paths = config.paths.clone();
+    let tmp = std::path::Path::new("/tmp");
+    if config.runtime.is_contained() && !paths.iter().any(|rule| rule.path == tmp) {
+        paths.push(agent_core::sandbox::PathRule::new(
+            tmp,
+            agent_core::sandbox::Access::ReadWrite,
+        ));
+    }
+    paths
 }
 
 /// Where a `[worker]` would run, said without starting it: its runtime, its
