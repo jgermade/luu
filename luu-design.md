@@ -2540,7 +2540,7 @@ curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall
 curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall [--purge]
 ```
 
-One binary from a GitHub release — Linux x86_64 and arm64 (glibc ≥ 2.35), macOS
+One binary from a GitHub release — Linux x86_64 and arm64 (glibc ≥ 2.34), macOS
 Apple Silicon and Intel — into `~/.local/bin`, with no root and no shell profile
 edited. The download is checked against the release's `SHA256SUMS` (or GitHub's
 asset digest, for a release older than that file), run once from a temporary
