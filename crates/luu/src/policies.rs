@@ -1,18 +1,17 @@
 //! What a session may do, as lists by axis — shell, network, files — and the
 //! environments that combine them, in `config.toml` beside the providers.
 //!
-//! Step 1 of `RECORD/2026-10-22.policies-not-postures.WIP.md`: the model, read
-//! and resolved into the sandbox and the worker luu already has, and recorded.
-//! **Nothing asks yet.** A list's `allow` is what the session's sandbox
-//! grants, exactly as a policy file's `[sandbox]` does — the gate still asks
-//! for whatever a plan wants beyond the draft's floor. `ask` and `deny` are
-//! read, checked and recorded, and grant nothing: an entry in `ask` is closed
-//! until step 2 lets a person open it.
+//! See `RECORD/2026-10-22.policies-not-postures.WIP.md`. **Two zones.** A
+//! list's `allow` is what the session's sandbox grants, exactly as a policy
+//! file's `[sandbox]` does; its `deny` is never granted, by the gate or by a
+//! person. What a list names in neither is asked: of the person in a draft
+//! ([`crate::grants::DraftCeiling`]), and given to a plan at the gate when the
+//! plan names it. Every session reads its working directory, whatever its
+//! files list says.
 //!
 //! ```toml
 //! [shell.rust]
 //! allow = ["cargo", "rustc", "git", "rg", "ls"]
-//! ask   = ["*"]
 //! deny  = ["curl"]
 //!
 //! [network.registries]
@@ -45,18 +44,18 @@ use sha2::{Digest, Sha256};
 
 /// A shell or a network list: program names, or host patterns.
 ///
-/// `*` is any program or any host. It may be asked for, and on a network list
-/// allowed — *any host*, which is what a policy file's `network = true` with no
-/// `egress` has always meant. A shell list may not allow it: an allowlist that
-/// lets every program through is the failure a sandbox exists to avoid, and
-/// the way to say it is to write the programs.
+/// `*` is any program or any host. A network list may allow it — *any host*,
+/// which is what a policy file's `network = true` with no `egress` has always
+/// meant. A shell list may not: an allowlist that lets every program through is
+/// the failure a sandbox exists to avoid, and the way to say it is to write the
+/// programs. Neither may deny it: what a list does not name is asked, and a
+/// list that refused everything it does not name would be an allowlist with
+/// no one to ask.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Zones {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ask: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<String>,
 }
@@ -74,8 +73,6 @@ pub struct Zones {
 pub struct FilesList {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<PathRule>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ask: Vec<PathRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<String>,
 }
@@ -118,13 +115,23 @@ pub struct Policies {
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub name: String,
-    /// What the sandbox grants: every list's `allow`, and nothing else.
+    /// What the sandbox grants: the working directory to read, and every
+    /// list's `allow`.
     pub policy: SandboxPolicy,
     pub worker: WorkerConfig,
     shell: (String, Zones),
     network: (String, Zones),
     files: (String, FilesList),
+    /// Made from a runtime and three lists by name, rather than from an
+    /// environment of the file: a resume makes it again from those names.
+    /// See [`Policies::compose`].
+    pub composed: bool,
 }
+
+/// The name an absent list has in the record: the empty list, which allows
+/// nothing and so asks about everything. Not a bare TOML key, so no list of
+/// the file can be called it.
+pub const EMPTY: &str = "(empty)";
 
 impl Policies {
     /// Whether the lists and environments hold together. `postures` are the
@@ -231,7 +238,15 @@ impl Policies {
             commands: shell.allow.clone(),
             ..SandboxPolicy::default()
         };
-        widen(&mut policy, None, files.allow.iter().cloned());
+        // Every session reads the folder it works in: what a draft is for,
+        // whatever the files list says beyond it. Since 2026-10-23 — before,
+        // a list with no `.` read nothing.
+        widen(
+            &mut policy,
+            None,
+            std::iter::once(PathRule::new(".", agent_core::sandbox::Access::Read))
+                .chain(files.allow.iter().cloned()),
+        );
         (policy.network, policy.egress) = network_of(&network.allow);
         if let Some(enforcement) = environment.enforcement {
             policy.enforcement = enforcement;
@@ -255,7 +270,79 @@ impl Policies {
             shell: (environment.shell.clone(), shell),
             network: (environment.network.clone(), network),
             files: (environment.files.clone(), files),
+            composed: false,
         })
+    }
+
+    /// A session's policy made from a runtime and one list of each axis by
+    /// name — `None` for the empty one, [`EMPTY`] in the record — rather than
+    /// from an environment: what the new session's dialog asks for. Named by
+    /// its lists, and marked [`Resolved::composed`] so a resume makes it
+    /// again from the same names.
+    pub fn compose(
+        &self,
+        runtime: Runtime,
+        image: Option<String>,
+        shell: Option<&str>,
+        network: Option<&str>,
+        files: Option<&str>,
+    ) -> Result<Resolved, String> {
+        let mut composed = self.clone();
+        let pick = |kind: &str, name: Option<&str>| -> Result<String, String> {
+            match name {
+                None | Some(EMPTY) => Ok(EMPTY.to_string()),
+                Some(name) => {
+                    let there = match kind {
+                        "shell" => self.shell.contains_key(name),
+                        "network" => self.network.contains_key(name),
+                        _ => self.files.contains_key(name),
+                    };
+                    there
+                        .then(|| name.to_string())
+                        .ok_or_else(|| format!("there is no [{kind}.{name}]"))
+                }
+            }
+        };
+        let shell = pick("shell", shell)?;
+        let network = pick("network", network)?;
+        let files = pick("files", files)?;
+        composed.shell.insert(EMPTY.to_string(), Zones::default());
+        composed.network.insert(EMPTY.to_string(), Zones::default());
+        composed
+            .files
+            .insert(EMPTY.to_string(), FilesList::default());
+        let shown = |name: &String| match name.as_str() {
+            EMPTY => "empty".to_string(),
+            name => name.to_string(),
+        };
+        let name = match (shell.as_str(), network.as_str(), files.as_str()) {
+            (EMPTY, EMPTY, EMPTY) => "empty".to_string(),
+            _ => format!(
+                "{} · {} · {}",
+                shown(&shell),
+                shown(&network),
+                shown(&files)
+            ),
+        };
+        composed.environments.insert(
+            name.clone(),
+            Environment {
+                runtime,
+                image,
+                image_paths: Vec::new(),
+                timeout_ms: None,
+                shell,
+                network,
+                files,
+                enforcement: None,
+                limits: None,
+            },
+        );
+        let mut resolved = composed
+            .resolve(&name)
+            .ok_or_else(|| "the lists do not resolve".to_string())?;
+        resolved.composed = true;
+        Ok(resolved)
     }
 }
 
@@ -277,7 +364,7 @@ impl Resolved {
 
     /// The lists as recorded, with `allow` read back off the sandbox the
     /// session actually got — the command line's `--allow-*` included — and
-    /// `ask` and `deny` as written.
+    /// `deny` as written.
     pub fn lists(&self, granted: &SandboxPolicy) -> Lists {
         Lists {
             shell: hashed(
@@ -420,8 +507,8 @@ pub fn lists_of_file(label: &str, granted: &SandboxPolicy) -> Lists {
 
 /// Adds `rules` to `policy`'s paths, a path already there taking the greater
 /// of the two accesses. Two rules for one path would otherwise both stand, and
-/// the sandbox answers with the first — so a list's `ask` for writing `.` under
-/// an `allow` for reading it would read as read-only. `base` is what relative
+/// the sandbox answers with the first — so a list's `allow` for writing `.`
+/// beside the read every session has of it would read as read-only. `base` is what relative
 /// paths are read against, so `.` and the working directory written out are
 /// one path; without it, paths are compared as written.
 pub fn widen(
@@ -465,11 +552,7 @@ fn network_allow(granted: &SandboxPolicy) -> Vec<String> {
 }
 
 fn check_zones(at: &str, list: &Zones, hosts: bool) -> Result<(), String> {
-    let zones = [
-        ("allow", &list.allow),
-        ("ask", &list.ask),
-        ("deny", &list.deny),
-    ];
+    let zones = [("allow", &list.allow), ("deny", &list.deny)];
     for (zone, entries) in zones {
         for entry in entries {
             if entry.is_empty() || entry.chars().any(char::is_whitespace) {
@@ -484,8 +567,10 @@ fn check_zones(at: &str, list: &Zones, hosts: bool) -> Result<(), String> {
             }
             if entry == "*" && (zone == "deny" || (zone == "allow" && !hosts)) {
                 let why = match zone {
-                    "deny" => "what no list names is denied already",
-                    _ => "write the programs, or ask = [\"*\"]",
+                    "deny" => {
+                        "what a list does not name is asked, so deny names what is never given"
+                    }
+                    _ => "write the programs: what a list does not name is asked",
                 };
                 return Err(format!("{at} {zone} has \"*\": {why}"));
             }
@@ -508,21 +593,12 @@ fn check_files(at: &str, list: &FilesList) -> Result<(), String> {
              for a command yet, so it is not accepted until it can — leave it out of allow instead"
         ));
     }
-    for (zone, entries) in [("allow", &list.allow), ("ask", &list.ask)] {
-        if let Some(rule) = entries.iter().find(|rule| rule.path.as_os_str().is_empty()) {
-            return Err(format!("{at} {zone} has a path that is empty ({rule:?})"));
-        }
-    }
     if let Some(rule) = list
-        .ask
+        .allow
         .iter()
-        .find(|rule| list.allow.iter().any(|allowed| allowed == *rule))
+        .find(|rule| rule.path.as_os_str().is_empty())
     {
-        return Err(format!(
-            "{at} has {} ({}) in both allow and ask",
-            rule.path.display(),
-            rule.access.as_str()
-        ));
+        return Err(format!("{at} allow has a path that is empty ({rule:?})"));
     }
     Ok(())
 }
@@ -540,7 +616,6 @@ fn hashed(name: &str, list: &Zones) -> Hashed {
         name,
         &Zones {
             allow: canonical(&list.allow),
-            ask: canonical(&list.ask),
             deny: canonical(&list.deny),
         },
     )
@@ -560,7 +635,6 @@ fn hashed_files(name: &str, list: &FilesList) -> Hashed {
         name,
         &FilesList {
             allow: canonical(&list.allow),
-            ask: canonical(&list.ask),
             deny,
         },
     )
@@ -604,7 +678,6 @@ mod tests {
     const CONTAINER: &str = r#"
         [shell.rust]
         allow = ["cargo", "rustc", "git"]
-        ask   = ["*"]
         deny  = ["curl"]
 
         [network.registries]
@@ -655,14 +728,8 @@ mod tests {
             [PathRule::new("/usr/local/cargo", Access::Execute)]
         );
 
-        // Nothing asks yet: `*` in ask and `curl` in deny grant nothing.
-        assert!(
-            !resolved
-                .policy
-                .commands
-                .iter()
-                .any(|c| c == "*" || c == "curl")
-        );
+        // `curl` in deny grants nothing.
+        assert!(!resolved.policy.commands.iter().any(|c| c == "curl"));
 
         let local = policies.resolve("local").expect("named");
         assert!(!local.policy.network, "an empty allow is no network");
@@ -734,7 +801,7 @@ mod tests {
         let view = ListsView::of_environment(&policies.resolve("local").expect("named"));
         assert_eq!(view.environment.as_deref(), Some("local"));
         assert_eq!(view.shell.name, "rust");
-        assert_eq!(view.shell.list.ask, ["*"]);
+        assert_eq!(view.shell.list.allow, ["cargo", "rustc", "git"]);
         assert_eq!(view.shell.list.deny, ["curl"]);
         let json = serde_json::to_value(&view).expect("serialises");
         assert_eq!(
@@ -763,7 +830,7 @@ mod tests {
         );
         assert_eq!(view.environment, None);
         assert_eq!(view.shell.list.allow, ["git"]);
-        assert!(view.shell.list.ask.is_empty() && view.shell.list.deny.is_empty());
+        assert!(view.shell.list.deny.is_empty());
         assert_eq!(
             view.network.list.allow,
             ["*"],
@@ -779,17 +846,18 @@ mod tests {
         assert_eq!(paths, [".", "docs", "/opt/tools"]);
     }
 
-    /// What is asked for is part of what a session could do, so it is in the hash.
+    /// What is denied is part of what a session could do — without it, a
+    /// person could be asked for it — so it is in the hash.
     #[test]
-    fn ask_and_deny_are_in_the_hash_and_a_flag_that_widens_is_too() {
+    fn deny_is_in_the_hash_and_a_flag_that_widens_is_too() {
         let policies = policies(CONTAINER);
         let resolved = policies.resolve("container").expect("named");
         let plain = resolved.lists(&resolved.policy);
 
-        let mut narrower = policies.clone();
-        narrower.shell.get_mut("rust").unwrap().ask.clear();
-        let asked_less = narrower.resolve("container").unwrap();
-        assert!(!asked_less.lists(&asked_less.policy).same(&plain));
+        let mut wider = policies.clone();
+        wider.shell.get_mut("rust").unwrap().deny.clear();
+        let denied_less = wider.resolve("container").unwrap();
+        assert!(!denied_less.lists(&denied_less.policy).same(&plain));
 
         let mut widened = resolved.policy.clone();
         widened.commands.push("make".into());
@@ -816,7 +884,7 @@ mod tests {
             refused("[shell.s]\nallow = [\"git\"]\ndeny = [\"git\"]\n", &[])
                 .contains("in both allow and deny")
         );
-        assert!(refused("[network.n]\ndeny = [\"*\"]\n", &[]).contains("denied already"));
+        assert!(refused("[network.n]\ndeny = [\"*\"]\n", &[]).contains("never given"));
         assert!(
             refused(
                 "[files.f]\nallow = [{ path = \".\" }]\ndeny = [\".env\"]\n",
@@ -825,6 +893,10 @@ mod tests {
             .contains("not accepted until it can")
         );
         assert!(refused(&format!("[shell.s]\n{env}"), &["e".to_string()]).contains("share a name"));
+
+        // Two zones: what neither names is asked, so there is no third.
+        let asking = toml::from_str::<Zones>("ask = [\"*\"]").expect_err("no ask zone");
+        assert!(asking.to_string().contains("unknown field `ask`"));
 
         // `*` on a network list is any host, as `network = true` with no egress.
         let any = policies("[network.n]\nallow = [\"*\"]\n");

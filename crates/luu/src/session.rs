@@ -220,50 +220,42 @@ impl Agency {
     }
 
     /// What the gate may grant a plan: the session's sandbox, and — where it
-    /// was built from an environment — what its lists leave to a person,
-    /// since approving the plan is that person's yes, for its job. `commands`
-    /// are the plan's: under `ask = ["*"]` they are what is being asked for.
-    /// What `deny` names, or no list names, is not here, and a plan asking for
-    /// it is told so at the gate as before. See
-    /// `RECORD/2026-10-22.policies-not-postures.WIP.md`, step 2a.
+    /// was built from lists — whatever they do not deny, since approving the
+    /// plan is a person's yes, for its job: the plan's `commands` but those
+    /// the shell list denies, the working directory to write, and any host
+    /// where the network list denies none. A posture's or the server's own
+    /// policy file is still the outer bound: nothing past it. See
+    /// `RECORD/2026-10-22.policies-not-postures.WIP.md`, *two zones*.
     pub fn gate_sandbox(&self, commands: &[String]) -> Arc<Sandbox> {
         let Some(environment) = &self.environment else {
             return self.sandbox.clone();
         };
         let mut policy = self.sandbox.to_policy();
         let shell = environment.shell();
-        let any = shell.ask.iter().any(|asked| asked == "*");
-        let asked = shell.ask.iter().filter(|asked| *asked != "*").chain(
-            commands
-                .iter()
-                .filter(|command| any && !command.contains('/') && !shell.deny.contains(command)),
-        );
-        for command in asked {
+        for command in commands
+            .iter()
+            .filter(|command| !command.contains('/') && !shell.deny.contains(command))
+        {
             if !policy.commands.contains(command) {
                 policy.allow_command(command);
             }
         }
         let network = environment.network();
-        if !network.ask.is_empty() {
-            let any_host = network.ask.iter().any(|host| host == "*");
-            match (policy.network, any_host) {
-                // Any host already, or any host may be asked for.
-                (true, _) if policy.egress.is_empty() => {}
-                (_, true) => policy.egress.clear(),
-                _ => policy.egress.extend(network.ask.iter().cloned()),
-            }
+        if network.deny.is_empty() {
+            // Any host: there is nothing to keep it from, and the egress list
+            // cannot say *all but these* — a deny keeps the plan to what is
+            // allowed, until the proxy can (row 47).
             policy.network = true;
+            policy.egress.clear();
         }
         let base = self.sandbox.base();
         crate::policies::widen(
             &mut policy,
             Some(base),
-            environment
-                .files()
-                .ask
-                .iter()
-                .filter(|rule| base.join(&rule.path).exists())
-                .cloned(),
+            std::iter::once(agent_core::sandbox::PathRule::new(
+                ".",
+                agent_core::sandbox::Access::ReadWrite,
+            )),
         );
         match Sandbox::new(&policy, base) {
             Ok(sandbox) => Arc::new(sandbox.under(self.sandbox.authority().clone())),

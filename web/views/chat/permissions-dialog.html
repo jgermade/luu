@@ -127,20 +127,19 @@
     const refused = call.verdict && !call.verdict.allowed
     if (call.name === "run_command") {
       const program = programOf(call)
-      for (const zone of ["deny", "allow", "ask"]) {
+      for (const zone of ["deny", "allow"]) {
         const at = (lists.shell[zone] || []).indexOf(program)
         if (at < 0) continue
         if (refused && zone === "allow") return beyond(call, program)
         return { key: `shell:${zone}:${at}`, note: "" }
       }
-      const star = (lists.shell.ask || []).indexOf("*")
-      if (star >= 0) return { key: `shell:ask:${star}`, note: "" }
-      return { key: null, note: `${program} is in no list.` }
+      // Two zones: in neither is what is asked of you.
+      return { key: null, note: `${program} is in neither zone, so it is asked of you.` }
     }
     if (typeof call.arguments?.path !== "string") return { key: null, note: "" }
     const target = relativeOf(call.arguments.path)
     let best = null
-    for (const zone of ["deny", "allow", "ask"]) {
+    for (const zone of ["allow"]) {
       ;(lists.files[zone] || []).forEach((rule, index) => {
         const written = typeof rule === "string" ? rule : rule.path
         const path = written === "." ? "" : written.replace(/^\.\//, "").replace(/\/$/, "")
@@ -150,7 +149,7 @@
         }
       })
     }
-    if (!best) return { key: null, note: `${target || "."} is in no files list.` }
+    if (!best) return { key: null, note: `${target || "."} is in no files list: the folder is read, and a write in it is asked of you.` }
     if (refused && kindOf(call) === "write" && best.zone === "allow" && best.access === "read-write") {
       return beyond(call, target)
     }
@@ -199,7 +198,9 @@
   const doing = answer => answer.kind === "write" ? "write" : "run"
 
   // ---- the lists -------------------------------------------------------------
-  const ZONES = ["allow", "ask", "deny"]
+  // Two zones; a files list has `allow` alone until a path can be denied.
+  const ZONES = ["allow", "deny"]
+  const zonesOf = list => list === "files" ? ["allow"] : ZONES
   const LISTS = ["shell", "network", "files"]
   const lists = () => state.settings?.lists || null
   // Where a list is written: its own table under an environment, and the
@@ -304,7 +305,7 @@
       <div :if="lists()" class="lists">
         <div :each="list in LISTS" :key="list" class="list">
           <div class="list-head">{{ list }} <span class="dim">{{ sourceOf(list) }}</span></div>
-          <div :each="zone in ZONES" :key="list + zone" class="zone-row">
+          <div :each="zone in zonesOf(list)" :key="list + zone" class="zone-row">
             <span class="zone-name" :class="zone">{{ zone }}</span>
             <span class="entries">
               <span :each="(entry, i) in entriesOf(list, zone)" :key="list + zone + i" class="entry"
@@ -324,7 +325,7 @@
       <p :if="floor" class="dim small marked" :class.focused="focus?.key === 'floor'">reads {{ floor.reads.join(" · ") || "nothing" }} · runs {{ floor.commands.join(" · ") || "nothing" }}<span
           :if="floor.network"> · reaches the network</span> · writes {{ (floor.writes || []).join(" · ") || "nothing" }}
       </p>
-      <p class="dim small">Anything else a draft would do is asked of you where a list leaves it to you, and refused where none does.</p>
+      <p class="dim small">Anything else a draft would do in the folder is asked of you, unless a list denies it.</p>
     </div>
   </div>
 
@@ -388,7 +389,6 @@
 
   .zone-name.deny { color: var(--luu-bad); }
   .zone-name.allow { color: var(--luu-ok); }
-  .zone-name.ask { color: var(--luu-warn); }
   .lists { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--luu-space-2); }
   .list { padding: .5rem .6rem; border-radius: 6px; background: var(--luu-surface); font-size: 12px; min-width: 0; }
   .list-head { font-weight: 600; margin-bottom: .3rem; }

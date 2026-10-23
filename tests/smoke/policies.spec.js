@@ -25,7 +25,6 @@ model = "mock"
 
 [shell.tools]
 allow = ["ls", "git"]
-ask = ["*"]
 deny = ["curl"]
 
 [network.off]
@@ -166,7 +165,6 @@ test("the lists are edited in Settings and written to config.toml whole", async 
   const zone = (list, name) => list.locator(`.zone[data-zone='${name}']`)
   await expect(zone(tools, "allow").locator(".entry")).toHaveText(["ls×", "git×"])
   await expect(zone(tools, "deny").locator(".entry")).toHaveText(["curl×"])
-  await expect(pane.locator(".preset-list li")).toContainText("[environment.asking]")
   const save = pane.locator(".section-actions button.save")
   await expect(save).toBeDisabled()
 
@@ -189,7 +187,6 @@ test("the lists are edited in Settings and written to config.toml whole", async 
   await name.press("Enter")
   const rust = pane.locator(".kind[data-kind='shell'] .list[data-list='rust']")
   await expect(rust).toBeVisible()
-  await expect(pane.locator(".preset-list li")).toContainText("rust")
   // One that nothing names goes.
   const registries = pane.locator(".kind[data-kind='network'] .list[data-list='registries']")
   await registries.getByRole("button", { name: "Delete" }).click()
@@ -204,17 +201,22 @@ test("the lists are edited in Settings and written to config.toml whole", async 
   const postures = await (await fetch(`${BASE}/api/postures`)).json()
   expect(postures.environments).toContain("asking")
 
-  // A write the loader refuses — a path denied inside one that is allowed,
-  // which a command cannot be held to yet — is not written, and says why.
+  // Two zones: a path is only ever allowed — one denied inside the folder a
+  // session reads could not be held for a command yet.
   const tree = pane.locator(".kind[data-kind='files'] .list[data-list='tree']")
-  await zone(tree, "deny").locator("input").fill("secrets")
-  await zone(tree, "deny").locator("input").press("Enter")
+  await expect(tree.locator(".zone")).toHaveCount(1)
+  await expect(zone(tree, "allow")).toBeVisible()
+
+  // A write the loader refuses — every program allowed, which a sandbox
+  // exists to stop — is not written, and says why.
+  await zone(rust, "allow").locator("input").fill("*")
+  await zone(rust, "allow").locator("input").press("Enter")
   const before = file()
   await save.click()
-  await expect(pane.locator(".section-actions .error")).toContainText("cannot be held")
+  await expect(pane.locator(".section-actions .error")).toContainText("write the programs")
   expect(file()).toBe(before)
   await pane.getByRole("button", { name: "Discard" }).click()
-  await expect(zone(tree, "deny").locator(".entry")).toHaveCount(0)
+  await expect(zone(rust, "allow").locator(".entry")).toHaveText(["ls×", "git×", "rg×"])
   await expect(pane.locator(".section-actions .error")).toHaveCount(0)
 
   // The refusal asked for above, and nothing else: a browser logs every

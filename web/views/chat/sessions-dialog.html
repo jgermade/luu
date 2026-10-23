@@ -85,7 +85,7 @@
   const zonesOf = (kind, name) => {
     const list = ui.starter?.policies?.[kind]?.[name]
     if (!list) return ""
-    return ["allow", "ask", "deny"]
+    return ["allow", "deny"]
       .map(zone => {
         const entries = list[zone] || []
         return entries.length ? `${zone} ${entries.includes("*") ? "*" : entries.length}` : ""

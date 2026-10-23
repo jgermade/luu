@@ -9,12 +9,12 @@ import { fileURLToPath } from "node:url"
 /**
  * A command the shell list leaves to a person: the draft's floor does not run
  * it, the card asks, *Allow* with *Apply to session* runs it and lists it, the
- * next draft runs it without asking; taken back, *Deny* for the session refuses it
- * and the next one without asking; lifted, it is asked again. Under an
- * environment out of `config.toml` whose shell list allows `ls` and asks about
- * `git`. The Permissions dialog reads the same session back: each call in one
- * of four words, each a link to what decided it, and the answers for the
- * session with what was taken back still listed. See
+ * next draft runs it without asking; taken back, *Deny* for the session
+ * refuses it and the next one without asking; lifted, it is asked again.
+ * Under an environment out of `config.toml` whose shell list allows `ls` and
+ * names `git` in neither zone. The Permissions dialog reads the same session
+ * back: each call in one of four words, each a link to what decided it, and
+ * the answers for the session with what was taken back still listed. See
  * `RECORD/2026-10-22.policies-not-postures.WIP.md`.
  */
 
@@ -38,7 +38,6 @@ model = "mock"
 
 [shell.tools]
 allow = ["ls"]
-ask = ["git"]
 
 [network.off]
 

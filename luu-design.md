@@ -174,18 +174,19 @@ one call at a time* where `floor.asks` is true. See
 **Since 2026-10-23 an answer may last the session, and a command may be asked about.** The
 `Ask` carries a `Ceiling` rather than a sandbox: it decides per refused call whether nobody is
 asked, a person is, or a person already answered for the session — a yes runs it, a no refuses
-it (`crate::grants`). Under an environment, a `run_command` whose program the floor does not
-run is asked when the shell list puts it in `ask` (by name or by `*`) and not in `deny` — the
-allowlist refuses before the program starts, so it can be paused as a write can — and a yes
-runs it **with everything it implies**, the session's writes and network (to be looked at
-again). A write is asked as before, and also under the files list's `ask`. The question is
+it (`crate::grants`). **Two zones**: a `run_command` whose program the floor does not run is
+asked unless the shell list denies it — the allowlist refuses before the program starts, so it
+can be paused as a write can — and a yes runs it **with everything it implies**, the folder
+writable and the session's network (to be looked at again). A write is asked inside the working
+directory and under no files `deny`; outside the folder nothing is asked. The question is
 *Allow* or *Deny*, with an *Apply to session* box: ticked, a yes is a `granted` line on the
 stream and a no a `forbidden` one, each listed under the draft with a × that sends
 `revoke_grant`. Taken back is a `revoked` line, and the session's list keeps the answer, marked
 (`api::SessionAnswer`); a resume puts back what was not taken back, and a new session starts
-with nothing. Still only in a draft, never for what `deny` or no list names, and not where
-approvals must be signed. At the gate, a plan may get what the lists leave to a person
-(`Agency::gate_sandbox`): approving it is that person's yes, for the job. `protocol::VERSION`
+with nothing. Still only in a draft, never for what `deny` names, and not where approvals must
+be signed. At the gate, a plan on a session built from lists may get whatever they do not deny
+(`Agency::gate_sandbox`) — its commands, the folder to write, any host where none is denied —
+since approving it is that person's yes, for the job; a policy file stays the outer bound. `protocol::VERSION`
 11, `record::FORMAT` 23. See
 [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
 
@@ -196,8 +197,8 @@ session), *granted once*, *denied* (a no for this call), *forbidden* (a list, th
 for the session) — and each word leads to what decided it: the answer on **Granted** or
 **Forbidden**, which list every answer for the session, taken back included, with *Revoke* or
 *Lift*; or the rule on **Policies** — the program's entry in the shell list, or the files rule
-with the longest path that covers it — which shows the three lists zone by zone and what a
-draft does without asking. It reads `/api/settings`' `lists` (`policies::ListsView`: the
+with the longest path that covers it, or a note that a program in neither zone is asked — which
+shows the three lists zone by zone and what a draft does without asking. It reads `/api/settings`' `lists` (`policies::ListsView`: the
 environment's lists as written, or a policy file's grants as `allow`) and the calls and answers
 the page already holds; it edits nothing — that is Settings'.
 
@@ -977,16 +978,19 @@ access = "execute"
   otherwise swaps the agency, ends the old worker and writes a header line, so the
   fold's *last header wins* says from where on the session ran somewhere else.
   **Since 2026-10-22 a session may name an environment instead**: `[shell.<name>]`,
-  `[network.<name>]` and `[files.<name>]` lists in `allow`/`ask`/`deny` zones, and
+  `[network.<name>]` and `[files.<name>]` lists in two zones, `allow` and `deny` — what
+  neither names is asked (**since 2026-10-23**; the loader refuses an `ask` zone) — and
   `[environment.<name>]` naming one of each with its runtime — resolved into the same sandbox
-  and worker, `allow` only for now, and recorded by each list's name and SHA-256 in the
-  header's posture (`record::FORMAT` 21), which a resume compares. See
+  and worker, with the working directory read whatever the files list says, and recorded by
+  each list's name and SHA-256 in the header's posture (`record::FORMAT` 21), which a resume
+  compares. See
   [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
-  **Settings → Policies edits the lists**: each by name, its entries by zone, new, renamed
-  (the environments that name it follow in the same write) and deleted (not while an
-  environment names it), sent whole to `PUT /api/policies` and checked by the loader that reads
-  the file back; the environments are shown, and resolved again on every save, so the next
-  session on one runs under the lists as written. The live session keeps what it was built with.
+  **Settings → Policies edits the lists**: each by name, its entries by zone (a files list in
+  `allow` only, since a files `deny` is refused until it can be held), new, renamed (the
+  environments that name it follow in the same write) and deleted (not while an environment
+  names it), sent whole to `PUT /api/policies` and checked by the loader that reads the file
+  back; the environments are resolved again on every save, so the next session on one runs
+  under the lists as written. The live session keeps what it was built with.
   **The new session's dialog** has three rows: where it starts from (an environment, a posture
   or the server's own file) and its runtime; the shell, network and files lists, which an
   environment fills as a preset and any of which can be swapped for another of the file

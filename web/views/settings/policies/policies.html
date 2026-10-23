@@ -1,10 +1,12 @@
 <script :setup>
   // What a session may do, as lists by axis — shell, network, files — each in
-  // three zones: `allow` (without asking), `ask` (put to a person in a draft)
-  // and `deny` (never). Seen and edited here, written to `config.toml` whole,
-  // and checked there by the loader that reads it. The environments that
-  // combine them are below, as the presets a new session starts from. See
-  // `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+  // **two zones**: `allow` (without asking) and `deny` (never). Everything in
+  // neither is asked of you in a draft, which is why there is no `ask` zone
+  // since 2026-10-23 — the loader refuses one, so the file says what this
+  // section shows. Seen and edited here,
+  // written to `config.toml` whole, and checked there by the loader that reads
+  // it. A new session picks one of each, or none. See
+  // `RECORD/2026-10-22.policies-not-postures.WIP.md`, *two zones*.
   //
   // **A copy, saved at once or not at all.** The section edits a draft of the
   // four tables and *Save* sends it whole: a rename reaches the environments
@@ -19,15 +21,17 @@
   const SaveButton = await import("@web/components/save-button.html")
 
   const KINDS = [
-    { key: "shell", label: "Shell", what: "Programs run_command may run, by name — * in ask asks about any other.", placeholder: "a program, or *" },
-    { key: "network", label: "Network", what: "Hosts a command may reach — *.a.host for its subdomains, * for any.", placeholder: "a host, or *" },
-    { key: "files", label: "Files", what: "Paths, relative to the working directory, and how far each may be used.", placeholder: "a path" },
+    { key: "shell", label: "Shell", what: "Programs run_command may run, by name. One in neither zone is asked of you.", placeholder: "a program" },
+    { key: "network", label: "Network", what: "Hosts a command may reach — *.a.host for its subdomains, * for any. A plan may be given others at the gate.", placeholder: "a host, or *" },
+    { key: "files", label: "Files", what: "Paths beyond the working directory's own read, relative to it, and how far each may be used. A write anywhere else in it is asked of you.", placeholder: "a path" },
   ]
   const ZONES = [
     { key: "allow", label: "allow", what: "without asking" },
-    { key: "ask", label: "ask", what: "asked of you in a draft" },
-    { key: "deny", label: "deny", what: "never" },
+    { key: "deny", label: "deny", what: "never, and nobody is asked" },
   ]
+  // A path cannot be denied yet: inside the folder a session reads, a command
+  // could not be held to it (row 49 of the roadmap), and the loader says so.
+  const zonesOf = kind => kind === "files" ? ZONES.filter(zone => zone.key === "allow") : ZONES
   const ACCESS = [
     { value: "read", label: "read" },
     { value: "execute", label: "execute" },
@@ -51,11 +55,14 @@
 
   $: editable = !!view?.editable
   // How many lists and environments the draft moves away from the file.
-  $: changes = !draft || !view ? 0 : ["shell", "network", "files", "environment"].reduce((sum, kind) => {
-    const names = new Set([...Object.keys(draft[kind]), ...Object.keys(view[kind] || {})])
-    return sum + [...names].filter(name =>
-      JSON.stringify(draft[kind][name]) !== JSON.stringify((view[kind] || {})[name])).length
-  }, 0)
+  $: changes = !draft || !view ? 0 : (() => {
+    const file = copy(view)
+    return ["shell", "network", "files", "environment"].reduce((sum, kind) => {
+      const names = new Set([...Object.keys(draft[kind]), ...Object.keys(file[kind])])
+      return sum + [...names].filter(name =>
+        JSON.stringify(draft[kind][name]) !== JSON.stringify(file[kind][name])).length
+    }, 0)
+  })()
 
   // ---- the lists -------------------------------------------------------------
 
@@ -142,9 +149,6 @@
     renaming = null
   }
 
-  $: presets = Object.entries(draft?.environment || {})
-    .map(([name, environment]) => ({ name, ...environment }))
-    .sort((a, b) => a.name.localeCompare(b.name))
 </script>
 
 <div class="policies-pane pane-main">
@@ -156,7 +160,7 @@
     </div>
     <div class="ds-hero-body">
       <h4 class="ds-hero-title">Policies</h4>
-      <p class="ds-hero-desc">What a session may do: what it runs, what it reaches, what it reads and writes — each in allow, ask and deny. A new session starts from an environment that combines one of each.</p>
+      <p class="ds-hero-desc">What a session may do: what it runs, what it reaches, what it writes — each in allow and deny. Anything in neither is asked of you, and every session reads its working directory. A new session picks one list of each, or none.</p>
     </div>
   </div>
 
@@ -183,13 +187,12 @@
             <span :if="renaming.error" class="error small">{{ renaming.error }}</span>
           </span>
           <span class="grow"></span>
-          <span :if="usedBy(kind.key, name).length" class="dim small used">in {{ usedBy(kind.key, name).join(", ") }}</span>
           <Button :if="editable" size="sm" variant="ghost" @click="startRename(kind.key, name)">Rename</Button>
           <Button :if="editable" size="sm" variant="ghost" :disabled="usedBy(kind.key, name).length > 0"
-                  :title="usedBy(kind.key, name).length ? `Named by ${usedBy(kind.key, name).map(e => `[environment.${e}]`).join(', ')}` : 'Delete this list'"
+                  :title="usedBy(kind.key, name).length ? `Named by ${usedBy(kind.key, name).map(e => `[environment.${e}]`).join(', ')} in config.toml` : 'Delete this list'"
                   @click="remove(kind.key, name)">Delete</Button>
         </header>
-        <div :each="zone in ZONES" :key="zone.key" class="zone" :data-zone="zone.key">
+        <div :each="zone in zonesOf(kind.key)" :key="zone.key" class="zone" :data-zone="zone.key">
           <span class="zone-name" :class="zone.key" :title="zone.what">{{ zone.label }}</span>
           <span class="entries">
             <span :each="(entry, i) in entriesOf(kind.key, name, zone.key)" :key="zone.key + i" class="entry">
@@ -212,24 +215,6 @@
         </div>
       </article>
     </div>
-  </section>
-
-  <section :if="draft" class="pane-group presets">
-    <div class="kind-head">
-      <h3>Environments</h3>
-      <span class="dim small">One list of each, and where commands run: what a new session is offered to start from.</span>
-    </div>
-    <p :if="!presets.length" class="dim small">No [environment.*] yet: a session runs under the policy file (luu.toml) or a posture.</p>
-    <ul :if="presets.length" class="preset-list">
-      <li :each="preset in presets" :key="preset.name">
-        <code class="name">[environment.{{ preset.name }}]</code>
-        <span class="dim small">{{ preset.runtime || "direct" }}{{ preset.image ? ` · ${preset.image}` : "" }}</span>
-        <span class="grow"></span>
-        <span class="uses"><span class="dim">shell</span> <code>{{ preset.shell }}</code></span>
-        <span class="uses"><span class="dim">network</span> <code>{{ preset.network }}</code></span>
-        <span class="uses"><span class="dim">files</span> <code>{{ preset.files }}</code></span>
-      </li>
-    </ul>
   </section>
 
   <div :if="draft &amp;&amp; editable" class="section-actions">
@@ -260,11 +245,9 @@
   .list header { display: flex; align-items: center; gap: .3rem; min-height: 1.9rem; }
   .name { font-size: 12px; font-weight: 600; }
   .rename { display: flex; flex-direction: column; gap: .15rem; }
-  .used { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 9rem; }
   .zone { display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: .5rem; align-items: start; }
   .zone-name { font-size: 12px; font-weight: 600; padding-top: .25rem; cursor: help; }
   .zone-name.allow { color: var(--luu-ok); }
-  .zone-name.ask { color: var(--luu-warn); }
   .zone-name.deny { color: var(--luu-bad); }
   .entries { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .3rem; min-width: 0; }
   .entry {
@@ -283,12 +266,6 @@
   .drop:hover { background: var(--luu-hover); color: var(--luu-bad); }
   .add { display: inline-flex; gap: .25rem; flex: 1 1 9rem; min-width: 9rem; }
   .add > :first-child { flex: 1; min-width: 0; }
-  .preset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-  .preset-list li {
-    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
-    padding: .45rem .7rem; border-radius: 6px; background: var(--luu-surface); font-size: 12px;
-  }
-  .uses code { font-size: 11px; }
   .section-actions { display: flex; align-items: center; gap: .6rem; }
   .refused { overflow-wrap: anywhere; }
 </style>

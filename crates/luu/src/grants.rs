@@ -2,19 +2,22 @@
 //! run what a person already allowed for the session.
 //!
 //! Step 2a of `RECORD/2026-10-22.policies-not-postures.WIP.md`. Asked in a
-//! draft only — inside an approved job the plan is what was approved — and
-//! only for what the lists leave to a person:
+//! draft only — inside an approved job the plan is what was approved.
 //!
-//! - **a write** the floor refused and the session's files would allow — its
-//!   `allow`, or its `ask` — which is what *allow once* always asked
-//!   (`RECORD/2026-10-02.a-refused-write-asks.completed.md`);
+//! **Two zones since 2026-10-23**: what a list allows runs, what it denies is
+//! never asked, and *everything else is asked* — the `ask` zone went, since
+//! it said what no list now says anyway, and the loader refuses one. So:
+//!
+//! - **a write** the floor refused, inside the working directory and under no
+//!   files `deny`: the write tools check their path before they touch it, so
+//!   a yes runs the same call with the folder writable;
 //! - **a command** the floor does not run because the shell list does not
-//!   allow it, where that list puts it in `ask` (by name, or by `*`) and not in
-//!   `deny`. A yes runs it **with everything it implies**: the session's writes
-//!   and its network, as decided on 2026-10-23 and to be looked at again.
+//!   allow it, and does not deny it. A yes runs it **with everything it
+//!   implies**: the folder writable and the session's network, as decided on
+//!   2026-10-23 and to be looked at again.
 //!
-//! What `deny` names, and what no list names, is never asked. A posture has no
-//! `ask`, so under one only the write is.
+//! Outside the working directory nothing is asked: the folder is the
+//! boundary.
 //!
 //! A person answers once, or for the session; for the session a yes runs what
 //! it covers without asking again, and — since protocol 11 — a no refuses it
@@ -29,7 +32,7 @@ use agent_core::protocol::{Grant, GrantKind};
 use agent_core::sandbox::{Authority, Sandbox};
 use agent_core::tools::{ToolCall, writes_one_path};
 
-use crate::policies::{Resolved, Zones};
+use crate::policies::Resolved;
 
 /// What a person answered for the session and is still in force: what runs
 /// without asking, and what is refused without asking. Never both for one
@@ -78,11 +81,15 @@ pub type Answered = Arc<Mutex<Answers>>;
 
 /// How far a refused call in a draft may go.
 pub struct DraftCeiling {
-    /// The session's sandbox and its files' `ask`, stamped as a person's: what
-    /// a yes to a write runs under, and what a yes to a command starts from.
+    /// The session's sandbox with its working directory writable, stamped as
+    /// a person's: what a yes to a write runs under, and what a yes to a
+    /// command starts from.
     wider: Sandbox,
-    /// The environment's shell list, where there is one.
-    shell: Option<Zones>,
+    /// Programs the shell list denies: never asked.
+    denied_commands: Vec<String>,
+    /// Paths the files list denies, relative to the working directory: never
+    /// asked to be written.
+    denied_paths: Vec<String>,
     answers: Answered,
 }
 
@@ -94,27 +101,25 @@ impl DraftCeiling {
         authority: Authority,
     ) -> Self {
         let mut policy = session.to_policy();
-        if let Some(environment) = environment {
-            // A path a list asks about and that is not there yet is left out:
-            // a grant on a missing path is a load error, and a write that would
-            // create it is a write to its directory, which `allow` answers.
-            crate::policies::widen(
-                &mut policy,
-                Some(session.base()),
-                environment
-                    .files()
-                    .ask
-                    .iter()
-                    .filter(|rule| session.base().join(&rule.path).exists())
-                    .cloned(),
-            );
-        }
+        crate::policies::widen(
+            &mut policy,
+            Some(session.base()),
+            std::iter::once(agent_core::sandbox::PathRule::new(
+                ".",
+                agent_core::sandbox::Access::ReadWrite,
+            )),
+        );
         let wider = Sandbox::new(&policy, session.base())
             .unwrap_or_else(|_| session.clone())
             .under(authority);
         Self {
             wider,
-            shell: environment.map(|environment| environment.shell().clone()),
+            denied_commands: environment
+                .map(|environment| environment.shell().deny.clone())
+                .unwrap_or_default(),
+            denied_paths: environment
+                .map(|environment| environment.files().deny.clone())
+                .unwrap_or_default(),
             answers,
         }
     }
@@ -128,25 +133,25 @@ impl Ceiling for DraftCeiling {
         let wider = match grant.kind {
             GrantKind::Write => {
                 // Refused for something other than where it writes: the same
-                // refusal under any sandbox, so nobody is asked.
-                if writes_one_path(call, refused_under) || !writes_one_path(call, &self.wider) {
+                // refusal under any sandbox, so nobody is asked. Nor is a write
+                // outside the folder, or one a files `deny` covers.
+                if writes_one_path(call, refused_under)
+                    || !writes_one_path(call, &self.wider)
+                    || denied(&self.denied_paths, &grant.target)
+                {
                     return Escalation::Refused;
                 }
                 self.wider.clone()
             }
             GrantKind::Command => {
-                let Some(shell) = &self.shell else {
-                    return Escalation::Refused;
-                };
                 let program = grant.target.as_str();
-                let askable = shell.ask.iter().any(|asked| asked == program)
-                    || shell.ask.iter().any(|asked| asked == "*");
+                // Already allowed, so refused for something other than its
+                // name — a yes would change nothing; or denied.
                 if refused_under
                     .commands()
                     .iter()
                     .any(|allowed| allowed == program)
-                    || shell.deny.iter().any(|denied| denied == program)
-                    || !askable
+                    || self.denied_commands.iter().any(|denied| denied == program)
                 {
                     return Escalation::Refused;
                 }
@@ -172,6 +177,16 @@ impl Ceiling for DraftCeiling {
             Escalation::Ask(wider)
         }
     }
+}
+
+/// Whether `target` — relative to the working directory — is under a denied
+/// path: the path itself or anything inside it.
+fn denied(paths: &[String], target: &str) -> bool {
+    let target = Path::new(target);
+    paths.iter().any(|path| {
+        let path = Path::new(path.trim_start_matches("./"));
+        path.as_os_str() == "." || target.starts_with(path)
+    })
 }
 
 /// What a session grant for `call` would be: the program `run_command` runs,
@@ -224,6 +239,7 @@ fn relative(base: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policies::Zones;
     use agent_core::sandbox::{Access, PathRule, SandboxPolicy};
 
     fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
@@ -297,11 +313,12 @@ mod tests {
         );
     }
 
+    /// Two zones: what the list allows runs, what it denies is never asked,
+    /// and everything else — what it names in neither — is.
     #[test]
-    fn a_command_in_ask_is_asked_and_one_in_deny_or_in_no_list_is_not() {
+    fn a_command_not_denied_is_asked_and_one_denied_is_not() {
         let root = scratch("commands");
-        let environment =
-            environment("[shell.s]\nallow = [\"ls\"]\nask = [\"git\"]\ndeny = [\"curl\"]\n");
+        let environment = environment("[shell.s]\nallow = [\"ls\"]\ndeny = [\"curl\"]\n");
         let (session, floor) = sandboxes(&root, &environment);
         let answers = Answered::default();
         let ceiling = DraftCeiling::new(
@@ -328,10 +345,10 @@ mod tests {
             ceiling.escalate(&run("curl"), &floor),
             Escalation::Refused
         ));
-        assert!(matches!(
-            ceiling.escalate(&run("make"), &floor),
-            Escalation::Refused
-        ));
+        assert!(
+            matches!(ceiling.escalate(&run("make"), &floor), Escalation::Ask(_)),
+            "in no list: asked, since 2026-10-23"
+        );
         assert!(
             matches!(ceiling.escalate(&run("ls"), &floor), Escalation::Refused),
             "ls was not refused for its name, so a yes would change nothing"
@@ -402,37 +419,14 @@ mod tests {
         assert_eq!(names(&answers.forbidden), ["curl"]);
     }
 
-    #[test]
-    fn a_star_in_ask_asks_for_any_program_but_what_is_denied() {
-        let root = scratch("star");
-        let environment = environment("[shell.s]\nask = [\"*\"]\ndeny = [\"curl\"]\n");
-        let (session, floor) = sandboxes(&root, &environment);
-        let ceiling = DraftCeiling::new(
-            &session,
-            Some(&environment),
-            Answered::default(),
-            Authority::Person(None),
-        );
-        let run = |program: &str| call("run_command", serde_json::json!({ "argv": [program] }));
-        assert!(matches!(
-            ceiling.escalate(&run("git"), &floor),
-            Escalation::Ask(_)
-        ));
-        assert!(matches!(
-            ceiling.escalate(&run("curl"), &floor),
-            Escalation::Refused
-        ));
-    }
-
     /// At the gate the approval is the person's yes, for the job: a plan may
-    /// get what the lists leave to a person, and never what they deny.
+    /// get whatever the lists do not deny, and never what they deny.
     #[test]
-    fn the_gate_may_grant_what_the_lists_ask_about() {
+    fn the_gate_may_grant_what_the_lists_do_not_deny() {
         let root = scratch("gate");
-        let text = "[shell.s]\nallow = [\"ls\"]\nask = [\"*\"]\ndeny = [\"curl\"]\n\
-                    [network.n]\nask = [\"crates.io\"]\n\
-                    [files.f]\nallow = [{ path = \".\", access = \"read\" }]\n\
-                    ask = [{ path = \".\", access = \"read-write\" }]\n\
+        let text = "[shell.s]\nallow = [\"ls\"]\ndeny = [\"curl\"]\n\
+                    [network.n]\n\
+                    [files.f]\n\
                     [environment.e]\nshell = \"s\"\nnetwork = \"n\"\nfiles = \"f\"\n";
         let environment = std::sync::Arc::new(
             crate::provider::Config::from_toml(text, "config.toml")
@@ -453,27 +447,103 @@ mod tests {
             !agency.sandbox.network(),
             "the session itself reaches nothing"
         );
+        assert_eq!(
+            agency.sandbox.access_for(&root),
+            Some(Access::Read),
+            "an empty files list still reads the folder"
+        );
 
         let gate = agency.gate_sandbox(&["git".into(), "curl".into()]);
         assert!(
             gate.commands().iter().any(|c| c == "git"),
-            "asked for by the plan, under *"
+            "asked for by the plan, and in no list"
         );
         assert!(
             !gate.commands().iter().any(|c| c == "curl"),
             "denied stays denied"
         );
-        assert!(gate.network());
-        assert_eq!(gate.egress(), ["crates.io"]);
-        assert_eq!(
-            gate.access_for(&root),
-            Some(Access::ReadWrite),
-            "the files' ask"
+        assert!(gate.network(), "no host is denied");
+        assert!(gate.egress().is_empty(), "so any");
+        assert_eq!(gate.access_for(&root), Some(Access::ReadWrite));
+
+        // A host denied keeps a plan to what is allowed: the egress list
+        // cannot say *all but these*.
+        let text = text.replace("[network.n]\n", "[network.n]\ndeny = [\"evil.example\"]\n");
+        let denying = std::sync::Arc::new(
+            crate::provider::Config::from_toml(&text, "config.toml")
+                .unwrap()
+                .policies()
+                .resolve("e")
+                .unwrap(),
         );
+        let session = Sandbox::new(&denying.policy, &root).unwrap();
+        let agency = crate::session::Agency::new(
+            std::sync::Arc::new(agent_core::tools::Tools::standard()),
+            std::sync::Arc::new(session),
+            agent_core::agent::Limits::default(),
+            None,
+        )
+        .with_environment(denying);
+        assert!(!agency.gate_sandbox(&[]).network());
     }
 
+    /// A write inside the folder is asked, one a files `deny` covers is not,
+    /// and one outside the folder is not: the folder is the boundary. The
+    /// loader refuses a files `deny` until a command can be held to it (row
+    /// 49), so the lists are built here without it.
     #[test]
-    fn under_a_posture_only_the_write_is_asked() {
+    fn a_write_is_asked_inside_the_folder_and_not_where_it_is_denied() {
+        let root = scratch("writes");
+        let mut policies = crate::policies::Policies::default();
+        policies.shell.insert("s".into(), Zones::default());
+        policies.network.insert("n".into(), Zones::default());
+        policies.files.insert(
+            "f".into(),
+            crate::policies::FilesList {
+                deny: vec![".git".into()],
+                ..Default::default()
+            },
+        );
+        let denying = policies
+            .compose(
+                agent_core::worker::Runtime::Host,
+                None,
+                Some("s"),
+                Some("n"),
+                Some("f"),
+            )
+            .expect("composes");
+        let (session, floor) = sandboxes(&root, &denying);
+        let ceiling = DraftCeiling::new(
+            &session,
+            Some(&denying),
+            Answered::default(),
+            Authority::Person(None),
+        );
+        let write = |path: &str| {
+            call(
+                "write_file",
+                serde_json::json!({ "path": path, "content": "x" }),
+            )
+        };
+        assert!(matches!(
+            ceiling.escalate(&write("notes.md"), &floor),
+            Escalation::Ask(_)
+        ));
+        assert!(matches!(
+            ceiling.escalate(&write(".git/config"), &floor),
+            Escalation::Refused
+        ));
+        assert!(matches!(
+            ceiling.escalate(&write("/etc/elsewhere"), &floor),
+            Escalation::Refused
+        ));
+    }
+
+    /// A posture — a policy file — has no lists, so nothing is denied: a
+    /// command it does not allow is asked, as a write is.
+    #[test]
+    fn under_a_posture_what_it_does_not_allow_is_asked() {
         let root = scratch("posture");
         let policy = SandboxPolicy {
             paths: vec![PathRule::new(".", Access::ReadWrite)],
@@ -493,9 +563,6 @@ mod tests {
             Escalation::Ask(_)
         ));
         let run = call("run_command", serde_json::json!({ "argv": ["git"] }));
-        assert!(matches!(
-            ceiling.escalate(&run, &floor),
-            Escalation::Refused
-        ));
+        assert!(matches!(ceiling.escalate(&run, &floor), Escalation::Ask(_)));
     }
 }

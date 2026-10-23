@@ -2325,7 +2325,7 @@ mod tests {
         )
         .expect("loads");
         let lists = Config::from_toml(
-            "[shell.tools]\nallow = [\"git\"]\nask = [\"*\"]\n[network.off]\n\
+            "[shell.tools]\nallow = [\"git\"]\ndeny = [\"curl\"]\n[network.off]\n\
              [files.tree]\nallow = [{ path = \".\", access = \"read-write\" }]\n\
              [environment.e]\nshell = \"tools\"\nnetwork = \"off\"\nfiles = \"tree\"\n",
             "lists.toml",
