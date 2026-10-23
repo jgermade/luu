@@ -154,9 +154,12 @@ fn draft_floor(sandbox: &Sandbox, contained: bool) -> Sandbox {
     crate::policies::widen(
         &mut policy,
         Some(base),
-        writable.into_iter().filter(|path| path.exists()).map(|path| {
-            agent_core::sandbox::PathRule::new(path, agent_core::sandbox::Access::ReadWrite)
-        }),
+        writable
+            .into_iter()
+            .filter(|path| path.exists())
+            .map(|path| {
+                agent_core::sandbox::PathRule::new(path, agent_core::sandbox::Access::ReadWrite)
+            }),
     );
     match Sandbox::new(&policy, base) {
         Ok(widened) => widened.under(floor.authority().clone()),

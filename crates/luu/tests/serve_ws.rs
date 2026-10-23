@@ -3062,14 +3062,19 @@ async fn the_settings_route_carries_the_floor_a_draft_runs_on() {
         .map(|path| path.as_str().expect("a path"))
         .collect();
     assert!(writes.contains(&".tmp"), "{writes:?}");
-    let temp = std::env::temp_dir().canonicalize().expect("the temporary folder");
+    let temp = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temporary folder");
     assert!(
         writes
             .iter()
             .all(|path| *path == ".tmp" || std::path::Path::new(path) == temp),
         "nothing but the scratch: {writes:?}",
     );
-    assert!(!reads.contains(&".tmp"), "a folder it writes is listed once, as written");
+    assert!(
+        !reads.contains(&".tmp"),
+        "a folder it writes is listed once, as written"
+    );
     assert_eq!(floor["network"], false, "the mock server reaches nothing");
     assert_eq!(
         floor["asks"], true,

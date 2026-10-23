@@ -520,11 +520,12 @@ impl Floor {
     /// From the floor a session derived once, as the page should print it.
     fn of(floor: &Sandbox, asks: bool) -> Self {
         let policy = floor.to_policy();
-        let spelt = |rule: &agent_core::sandbox::PathRule| {
-            match workspace::relative_of(floor.base(), &rule.path) {
-                here if here.is_empty() => ".".to_string(),
-                under => under,
-            }
+        let spelt = |rule: &agent_core::sandbox::PathRule| match workspace::relative_of(
+            floor.base(),
+            &rule.path,
+        ) {
+            here if here.is_empty() => ".".to_string(),
+            under => under,
         };
         let writable = |rule: &&agent_core::sandbox::PathRule| {
             rule.access == agent_core::sandbox::Access::ReadWrite
