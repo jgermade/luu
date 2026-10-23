@@ -10,7 +10,8 @@
   const { workspace, loadRoot, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor } =
     await import("@web/lib/workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, checkModel,
-          watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal } = await import("@web/lib/ui.js")
+          watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal,
+          openPermissions } = await import("@web/lib/ui.js")
   const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const { modelLabel } = await import("@web/lib/engines.js")
@@ -57,6 +58,7 @@
   const ToolCall = await import("@web/views/chat/tool-call.html")
   const TurnInspect = await import("@web/views/chat/turn-inspect.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
+  const PermissionsDialog = await import("@web/views/chat/permissions-dialog.html")
   const DiffModal = await import("@web/views/editor/diff-modal.html")
   const DiffStrip = await import("@web/views/editor/diff-strip.html")
   const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
@@ -602,6 +604,7 @@
   <!-- The chat head's column switch: Chrome's devtools "dock to right", a
        window with a panel down its right side. -->
   <symbol id="i-dock" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/><path d="M14.5 4.5H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-4.5z" style="fill: currentColor; stroke: none"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 19 6v5.5c0 4.3-2.9 7.8-7 9-4.1-1.2-7-4.7-7-9V6z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
 </svg>
 
@@ -795,6 +798,10 @@
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
         <button type="button" title="Earlier sessions"
                 @click="openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+        <button type="button" class="permissions" :disabled="!state.session"
+                title="Permissions — what this session may do, and what it did"
+                aria-label="Permissions"
+                @click="openPermissions()"><svg class="ic"><use href="#i-shield"/></svg></button>
         <button type="button" class="copy-chat" :disabled="!state.messages.length"
                 :title="copiedChat ? 'Copied' : 'Copy the conversation'"
                 :aria-label="copiedChat ? 'Copied' : 'Copy the conversation'"
@@ -1147,7 +1154,8 @@
         <!-- What a person allowed for the session: its drafts do these without
              asking until one is taken back. See `crate::grants`. -->
         <div :if="state.grants.length" class="grants">
-          <span class="dim">allowed for the session:</span>
+          <button type="button" class="dim grants-open" title="What this session may do, and what it did"
+                  @click="openPermissions('granted')">allowed for the session:</button>
           <span :each="grant in state.grants" :key="grant.kind + ':' + grant.target" class="grant">
             {{ grant.kind === "write" ? "write" : "run" }} <code>{{ grant.target }}</code><button
               type="button" class="revoke" :disabled="replaying"
@@ -1257,6 +1265,7 @@
 <SessionsDialog :if="ui.sessions && !state.settingsOpen" />
 <TurnInspect :if="ui.inspecting != null" />
 <ContextModal :if="ui.contextOpen" />
+<PermissionsDialog :if="ui.permissions && !state.settingsOpen" />
 <DiffModal :if="ui.diff" />
 <SnippetPreview :if="snippet.preview !== null" />
 
@@ -1862,6 +1871,10 @@
     background: var(--luu-bg);
   }
   .grant code { font-size: 11px; }
+  .grants-open {
+    padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer;
+  }
+  .grants-open:hover { text-decoration: underline; }
   .grant .revoke {
     display: inline-flex; align-items: center; justify-content: center;
     width: 1.1rem; height: 1.1rem; padding: 0;

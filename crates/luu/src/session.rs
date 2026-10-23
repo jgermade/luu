@@ -200,6 +200,22 @@ impl Agency {
         self.environment.as_deref()
     }
 
+    /// The lists it was built from, for the page: the environment's as
+    /// written, or the policy file's, all in `allow`.
+    pub fn lists_view(&self) -> crate::policies::ListsView {
+        match &self.environment {
+            Some(environment) => crate::policies::ListsView::of_environment(environment),
+            None => crate::policies::ListsView::of_policy(
+                self.lists
+                    .as_ref()
+                    .map(|lists| lists.shell.name.as_str())
+                    .unwrap_or("the policy file"),
+                &self.sandbox.to_policy(),
+                self.sandbox.base(),
+            ),
+        }
+    }
+
     /// What the gate may grant a plan: the session's sandbox, and — where it
     /// was built from an environment — what its lists leave to a person,
     /// since approving the plan is that person's yes, for its job. `commands`

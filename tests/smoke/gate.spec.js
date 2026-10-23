@@ -573,18 +573,20 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // No cog: it moved to the inspector's foot, which is the column that is
   // always on screen. See
   // `RECORD/2026-09-16.the-modals-are-dialogs.completed.md`. What is here: a
-  // new session, the history, copying the conversation, and — at this width,
-  // where three columns fit — the switch to two.
-  await expect(page.locator(".chat .acts button")).toHaveCount(4)
+  // new session, the history, the session's permissions, copying the
+  // conversation, and — at this width, where three columns fit — the switch
+  // to two.
+  await expect(page.locator(".chat .acts button")).toHaveCount(5)
   await expect(page.locator(".chat .acts button").last()).toHaveClass(/columns/)
   await expect(page.locator('.inspector .col-foot button[title="Settings"]')).toHaveCount(1)
   // Drawn rather than typed since phase 7 of the three-pane record — this used
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  // 23, and Appearance's palette since 2026-10-21. The tree's own shapes are
-  // the theme's, in `theme/default/files.svg`, not the page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(24)
+  // 23, Appearance's palette since 2026-10-21 and the permissions' shield
+  // since 2026-10-23. The tree's own shapes are the theme's, in
+  // `theme/default/files.svg`, not the page's.
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(25)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be

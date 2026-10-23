@@ -16,7 +16,7 @@ import { prefs, setPlace } from "./prefs.js"
 import { stillThere } from "./places.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
-  newSession, resumeSession, apiHeaders,
+  newSession, resumeSession, apiHeaders, refreshSettings,
 } from "./store.js"
 
 export const ui = $reactive({
@@ -39,6 +39,12 @@ export const ui = $reactive({
   /// exit, and `sessions` goes `null` — unmounting it — once that is over. A
   /// dialog unmounted at once has no exit to play.
   sessionsLeaving: false,
+  /// The permissions dialog's tab — `activity`, `used` or `granted` — or
+  /// `null` while it is closed, and the same way out as the sessions dialog.
+  /// What the session may do and what it did, so the lists can start lax and
+  /// be narrowed from it. See `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+  permissions: null,
+  permissionsLeaving: false,
   /// Two columns at a width that has room for three, chosen from the chat's
   /// head for as long as the page is open. Not a preference: `General →
   /// Columns` is the setting, and this is the button beside the work.
@@ -115,6 +121,34 @@ export function closeSessions() {
     ui.starter = null
     ui.continuing = false
     ui.sessionsLeaving = false
+  }, exitMs())
+}
+
+// ---- permissions -----------------------------------------------------------
+
+const PERMISSION_TABS = ["activity", "used", "granted"]
+let permissionsLeaving = null
+
+/// Opens on the tab asked for, and asks for the lists again: Settings may
+/// have been read before this session's environment was.
+export function openPermissions(tab = "activity") {
+  clearTimeout(permissionsLeaving)
+  ui.permissionsLeaving = false
+  ui.permissions = PERMISSION_TABS.includes(tab) ? tab : "activity"
+  return refreshSettings()
+}
+
+export function showPermissionsTab(tab) {
+  if (PERMISSION_TABS.includes(tab)) ui.permissions = tab
+}
+
+export function closePermissions() {
+  if (!ui.permissions || ui.permissionsLeaving) return
+  ui.permissionsLeaving = true
+  clearTimeout(permissionsLeaving)
+  permissionsLeaving = setTimeout(() => {
+    ui.permissions = null
+    ui.permissionsLeaving = false
   }, exitMs())
 }
 

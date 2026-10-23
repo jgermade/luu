@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url"
  * it, the card asks, *Allow for the session* runs it and lists it, the next
  * draft runs it without asking, and taking it back makes the one after ask
  * again. Under an environment out of `config.toml` whose shell list allows
- * `ls` and asks about `git`. See
+ * `ls` and asks about `git`. The Permissions dialog reads the same session
+ * back: who let each call through, what was used, and what is granted. See
  * `RECORD/2026-10-22.policies-not-postures.WIP.md`, step 2a.
  */
 
@@ -151,6 +152,26 @@ test("a command left to a person is asked, allowed for the session, and taken ba
   await expect(calls.nth(1).locator(".status")).toHaveText("allowed earlier", { timeout: 30_000 })
   await expect(page.locator(".transcript .call .question")).toHaveCount(0)
 
+  // The Permissions dialog: each call and who let it through, newest first;
+  // what was used, beside where the lists put it; what is granted.
+  await page.locator(".chat .col-head").getByRole("button", { name: "Permissions" }).click()
+  const dialog = page.locator("dialog", { hasText: "Permissions" })
+  await expect(dialog).toBeVisible()
+  const rows = dialog.locator(".rows li")
+  await expect(rows).toHaveCount(2)
+  await expect(rows.locator(".who")).toHaveText(["your grant", "you, for the session"])
+  await expect(rows.nth(0)).toContainText("git --version")
+  await dialog.getByRole("tab", { name: /Used/ }).click()
+  const git = dialog.locator(".tally tr", { hasText: "git" })
+  await expect(git.locator("td")).toHaveText(["git", "2", "0", "1", "ask"])
+  await expect(dialog.locator(".suggestion")).toContainText('allow = ["git"]')
+  await dialog.getByRole("tab", { name: /Granted/ }).click()
+  await expect(dialog.locator(".grants li")).toContainText("run git")
+  await expect(dialog.locator(".list", { hasText: "shell" })).toContainText("[shell.tools]")
+  await expect(dialog.locator(".list", { hasText: "shell" }).locator(".zone-row", { hasText: "ask" })).toContainText("git")
+  await dialog.getByRole("button", { name: "Done" }).click()
+  await expect(dialog).toBeHidden()
+
   // Taken back: the one after is asked again, and a no is a no.
   await grant.getByRole("button", { name: "Take back running git" }).click()
   await expect(grant).toHaveCount(0)
@@ -158,6 +179,13 @@ test("a command left to a person is asked, allowed for the session, and taken ba
   await expect(card).toBeVisible({ timeout: 30_000 })
   await card.locator('.answers button:has-text("Deny")').click()
   await expect(calls.nth(2).locator(".status")).toHaveText("you denied it", { timeout: 15_000 })
+
+  // And the no is in the activity, under Refused.
+  await page.locator(".chat .col-head").getByRole("button", { name: "Permissions" }).click()
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole("radio", { name: "Refused" }).click()
+  await expect(rows).toHaveCount(1)
+  await expect(rows.locator(".who")).toHaveText("you refused")
 
   expect(errors).toEqual([])
 })

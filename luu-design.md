@@ -186,6 +186,16 @@ signed. At the gate, a plan may get what the lists leave to a person (`Agency::g
 approving it is that person's yes, for the job. `protocol::VERSION` 10, `record::FORMAT` 22. See
 [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
 
+**What was allowed and refused is read in one place, so the lists can start lax and be
+narrowed.** *Permissions*, a dialog from the shield in the chat's head: **Activity** is every
+call of the session with who let it through or stopped it (a list, the floor, *you, this time*,
+*you, for the session*, *your grant*, *you refused*); **Used** tallies it by program and by
+file written, beside the zone each program is in now, and offers what ran as a `[shell.used]`
+list to copy; **Granted** is the session's grants with *Take back*, the three lists zone by
+zone, and what a draft does without asking. It reads `/api/settings`' `lists`
+(`policies::ListsView`: the environment's lists as written, or a policy file's grants as
+`allow`) and the calls the page already holds; it edits nothing — that is Settings'.
+
 It is only as strong as `enforcement`: under `best-effort` there is no Landlock,
 so a subprocess started by a draft turn can write anyway — true of every path
 grant here, and worth saying because the floor is the first one whose entire

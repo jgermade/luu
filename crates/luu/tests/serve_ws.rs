@@ -3068,8 +3068,8 @@ async fn the_settings_route_carries_the_floor_a_draft_runs_on() {
     assert!(
         writes
             .iter()
-            .all(|path| *path == ".tmp" || std::path::Path::new(path) == temp),
-        "nothing but the scratch: {writes:?}",
+            .all(|path| *path == ".tmp" || *path == temp.display().to_string()),
+        "nothing but the scratch, and the temporary folder in full: {writes:?}",
     );
     assert!(
         !reads.contains(&".tmp"),

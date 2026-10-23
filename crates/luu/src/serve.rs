@@ -520,12 +520,16 @@ impl Floor {
     /// From the floor a session derived once, as the page should print it.
     fn of(floor: &Sandbox, asks: bool) -> Self {
         let policy = floor.to_policy();
-        let spelt = |rule: &agent_core::sandbox::PathRule| match workspace::relative_of(
-            floor.base(),
-            &rule.path,
-        ) {
-            here if here.is_empty() => ".".to_string(),
-            under => under,
+        // Under the base, relative to it; elsewhere — the system's temporary
+        // folder — in full, since a relative spelling of `/tmp` is `//tmp`.
+        let spelt = |rule: &agent_core::sandbox::PathRule| {
+            if !rule.path.starts_with(floor.base()) {
+                return rule.path.display().to_string();
+            }
+            match workspace::relative_of(floor.base(), &rule.path) {
+                here if here.is_empty() => ".".to_string(),
+                under => under,
+            }
         };
         let writable = |rule: &&agent_core::sandbox::PathRule| {
             rule.access == agent_core::sandbox::Access::ReadWrite
@@ -607,6 +611,10 @@ pub struct Settings {
     /// session's and not the destination's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     floor: Option<Floor>,
+    /// The lists the session was built from, each zone as written — what the
+    /// permissions panel sets what was done against. Filled at the route.
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
+    lists: Option<crate::policies::ListsView>,
     store: Option<String>,
     /// The machine's state directory — where `config.toml`, `sessions.db` and
     /// the logs live — or empty where none has been chosen. The page writes
@@ -917,6 +925,7 @@ impl App {
             base: String::new(),
             posture: None,
             floor: None,
+            lists: None,
             home: String::new(),
             store: store.as_ref().map(|path| path.display().to_string()),
             unconfigured: provider.unconfigured(),
@@ -4010,6 +4019,7 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     settings.base = agency.sandbox.base().display().to_string();
     settings.posture = Some(agency.posture(name));
     settings.floor = Some(Floor::of(agency.floor(), !app.approvers.required));
+    settings.lists = Some(agency.lists_view());
     settings.home = state_home().await.unwrap_or_default();
     Json(settings).into_response()
 }
@@ -8091,6 +8101,7 @@ mod tests {
                     base: String::new(),
                     posture: None,
                     floor: None,
+                    lists: None,
                     home: String::new(),
                     store: None,
                     unconfigured: true,
@@ -8244,6 +8255,7 @@ mod tests {
                 base: String::new(),
                 posture: None,
                 floor: None,
+                lists: None,
                 home: String::new(),
                 store: None,
                 unconfigured: false,

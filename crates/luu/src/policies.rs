@@ -265,6 +265,84 @@ impl Resolved {
     }
 }
 
+/// The lists a session was built from, as the page shows them: by name, each
+/// zone as written. A policy file's are all `allow`, named after the file.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ListsView {
+    /// The environment's name, or `None` for a policy file.
+    pub environment: Option<String>,
+    pub shell: Named<Zones>,
+    pub network: Named<Zones>,
+    pub files: Named<FilesList>,
+}
+
+/// A list and its name.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Named<T> {
+    pub name: String,
+    #[serde(flatten)]
+    pub list: T,
+}
+
+impl ListsView {
+    /// An environment's lists, as written.
+    pub fn of_environment(resolved: &Resolved) -> Self {
+        Self {
+            environment: Some(resolved.name.clone()),
+            shell: Named {
+                name: resolved.shell.0.clone(),
+                list: resolved.shell.1.clone(),
+            },
+            network: Named {
+                name: resolved.network.0.clone(),
+                list: resolved.network.1.clone(),
+            },
+            files: Named {
+                name: resolved.files.0.clone(),
+                list: resolved.files.1.clone(),
+            },
+        }
+    }
+
+    /// A policy file's, read back off the sandbox it gave: everything in
+    /// `allow`, paths relative to `base` where they are under it.
+    pub fn of_policy(label: &str, granted: &SandboxPolicy, base: &std::path::Path) -> Self {
+        let named = |list| Named {
+            name: label.to_string(),
+            list,
+        };
+        Self {
+            environment: None,
+            shell: named(Zones {
+                allow: granted.commands.clone(),
+                ..Zones::default()
+            }),
+            network: named(Zones {
+                allow: network_allow(granted),
+                ..Zones::default()
+            }),
+            files: Named {
+                name: label.to_string(),
+                list: FilesList {
+                    allow: granted
+                        .paths
+                        .iter()
+                        .map(|rule| {
+                            let path = match rule.path.strip_prefix(base) {
+                                Ok(under) if under.as_os_str().is_empty() => ".".into(),
+                                Ok(under) => under.to_path_buf(),
+                                Err(_) => rule.path.clone(),
+                            };
+                            PathRule::new(path, rule.access)
+                        })
+                        .collect(),
+                    ..FilesList::default()
+                },
+            },
+        }
+    }
+}
+
 /// The lists of a session built from a policy file — a posture, or the
 /// server's own — which has everything in `allow`. `label` names all three:
 /// the file is the only name they have.
@@ -577,6 +655,55 @@ mod tests {
         assert_eq!(from_environment.shell.name, "s");
         assert_eq!(from_file.shell.name, "luu.toml");
         assert_eq!(from_file.shell.sha256.len(), 64);
+    }
+
+    /// The page's view: an environment's zones as written; a policy file's
+    /// grants in `allow`, with paths under the base spelt from it.
+    #[test]
+    fn the_lists_are_shown_as_written_and_a_policy_file_as_allow() {
+        let policies = policies(CONTAINER);
+        let view = ListsView::of_environment(&policies.resolve("local").expect("named"));
+        assert_eq!(view.environment.as_deref(), Some("local"));
+        assert_eq!(view.shell.name, "rust");
+        assert_eq!(view.shell.list.ask, ["*"]);
+        assert_eq!(view.shell.list.deny, ["curl"]);
+        let json = serde_json::to_value(&view).expect("serialises");
+        assert_eq!(
+            json["shell"]["deny"][0], "curl",
+            "the zones sit beside the name"
+        );
+
+        let base = std::path::Path::new("/work/repo");
+        let view = ListsView::of_policy(
+            "luu.toml",
+            &SandboxPolicy {
+                commands: vec!["git".into()],
+                paths: vec![
+                    PathRule::new(base, Access::ReadWrite),
+                    PathRule::new(base.join("docs"), Access::Read),
+                    PathRule::new("/opt/tools", Access::Read),
+                ],
+                network: true,
+                ..SandboxPolicy::default()
+            },
+            base,
+        );
+        assert_eq!(view.environment, None);
+        assert_eq!(view.shell.list.allow, ["git"]);
+        assert!(view.shell.list.ask.is_empty() && view.shell.list.deny.is_empty());
+        assert_eq!(
+            view.network.list.allow,
+            ["*"],
+            "the network, with no egress list"
+        );
+        let paths: Vec<_> = view
+            .files
+            .list
+            .allow
+            .iter()
+            .map(|rule| rule.path.display().to_string())
+            .collect();
+        assert_eq!(paths, [".", "docs", "/opt/tools"]);
     }
 
     /// What is asked for is part of what a session could do, so it is in the hash.
