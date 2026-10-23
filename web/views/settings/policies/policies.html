@@ -1,0 +1,294 @@
+<script :setup>
+  // What a session may do, as lists by axis — shell, network, files — each in
+  // three zones: `allow` (without asking), `ask` (put to a person in a draft)
+  // and `deny` (never). Seen and edited here, written to `config.toml` whole,
+  // and checked there by the loader that reads it. The environments that
+  // combine them are below, as the presets a new session starts from. See
+  // `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+  //
+  // **A copy, saved at once or not at all.** The section edits a draft of the
+  // four tables and *Save* sends it whole: a rename reaches the environments
+  // that name the list in the same write, so the file never names a list that
+  // is not there. A list an environment names cannot be deleted — the button
+  // says which. What was saved is what the next session runs under; the live
+  // one keeps what it was built with.
+  const { loadPolicies, savePolicies } = await import("@web/lib/policies.js")
+  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const Select = await import("@web/theme/default/components/select.html")
+  const Button = await import("@web/theme/default/components/button.html")
+  const SaveButton = await import("@web/components/save-button.html")
+
+  const KINDS = [
+    { key: "shell", label: "Shell", what: "Programs run_command may run, by name — * in ask asks about any other.", placeholder: "a program, or *" },
+    { key: "network", label: "Network", what: "Hosts a command may reach — *.a.host for its subdomains, * for any.", placeholder: "a host, or *" },
+    { key: "files", label: "Files", what: "Paths, relative to the working directory, and how far each may be used.", placeholder: "a path" },
+  ]
+  const ZONES = [
+    { key: "allow", label: "allow", what: "without asking" },
+    { key: "ask", label: "ask", what: "asked of you in a draft" },
+    { key: "deny", label: "deny", what: "never" },
+  ]
+  const ACCESS = [
+    { value: "read", label: "read" },
+    { value: "execute", label: "execute" },
+    { value: "read-write", label: "read-write" },
+  ]
+
+  let view = null
+  let draft = null
+  let error = ""
+  let loading = true
+  const copy = tables => JSON.parse(JSON.stringify({
+    shell: tables?.shell || {}, network: tables?.network || {},
+    files: tables?.files || {}, environment: tables?.environment || {},
+  }))
+  loadPolicies().then(result => {
+    loading = false
+    if (!result.ok) return (error = result.error)
+    view = result.view
+    draft = copy(view)
+  })
+
+  $: editable = !!view?.editable
+  // How many lists and environments the draft moves away from the file.
+  $: changes = !draft || !view ? 0 : ["shell", "network", "files", "environment"].reduce((sum, kind) => {
+    const names = new Set([...Object.keys(draft[kind]), ...Object.keys(view[kind] || {})])
+    return sum + [...names].filter(name =>
+      JSON.stringify(draft[kind][name]) !== JSON.stringify((view[kind] || {})[name])).length
+  }, 0)
+
+  // ---- the lists -------------------------------------------------------------
+
+  const namesOf = kind => Object.keys(draft?.[kind] || {}).sort()
+  const entriesOf = (kind, name, zone) => draft?.[kind]?.[name]?.[zone] || []
+  const labelOf = entry => typeof entry === "string" ? entry : `${entry.path} · ${entry.access || "read"}`
+  // A table with nothing in a zone writes no key for it, as the file would.
+  const setZone = (kind, name, zone, entries) => {
+    const list = { ...draft[kind][name] }
+    if (entries.length) list[zone] = entries
+    else delete list[zone]
+    draft = { ...draft, [kind]: { ...draft[kind], [name]: list } }
+  }
+  const usedBy = (kind, name) => Object.entries(draft?.environment || {})
+    .filter(([, environment]) => environment[kind] === name).map(([env]) => env)
+
+  // What is being typed into each zone's field, and the access a path is
+  // added with: `kind:name:zone` → value.
+  let typing = {}
+  let access = {}
+  const keyOf = (kind, name, zone) => `${kind}:${name}:${zone}`
+  const add = (kind, name, zone) => {
+    const key = keyOf(kind, name, zone)
+    const text = (typing[key] || "").trim()
+    if (!text) return
+    const paths = kind === "files" && zone !== "deny"
+    const entry = paths ? { path: text, access: access[key] || "read" } : text
+    const same = e => (typeof e === "string" ? e : e.path) === text
+    if (!entriesOf(kind, name, zone).some(same)) setZone(kind, name, zone, [...entriesOf(kind, name, zone), entry])
+    typing = { ...typing, [key]: "" }
+  }
+  const drop = (kind, name, zone, index) =>
+    setZone(kind, name, zone, entriesOf(kind, name, zone).filter((_, i) => i !== index))
+
+  // ---- naming ----------------------------------------------------------------
+  //
+  // A name is a TOML bare key — what `[shell.<name>]` can say without quotes.
+  const NAME = /^[A-Za-z0-9_-]+$/
+  let renaming = null
+  const startRename = (kind, name) => { renaming = { kind, from: name, value: name, error: "" } }
+  const commitRename = () => {
+    if (!renaming) return
+    const { kind, from, value } = renaming
+    const to = value.trim()
+    if (to === from) return (renaming = null)
+    if (!NAME.test(to)) return (renaming = { ...renaming, error: "letters, digits, - and _ only" })
+    if (draft[kind][to]) return (renaming = { ...renaming, error: `there is a [${kind}.${to}] already` })
+    const lists = {}
+    for (const name of Object.keys(draft[kind])) lists[name === from ? to : name] = draft[kind][name]
+    // The environments that name it follow, in the same write.
+    const environment = Object.fromEntries(Object.entries(draft.environment).map(([env, e]) =>
+      [env, e[kind] === from ? { ...e, [kind]: to } : e]))
+    draft = { ...draft, [kind]: lists, environment }
+    renaming = null
+  }
+  const newList = kind => {
+    let name = "new"
+    for (let n = 2; draft[kind][name]; n++) name = `new-${n}`
+    draft = { ...draft, [kind]: { ...draft[kind], [name]: {} } }
+    startRename(kind, name)
+  }
+  const remove = (kind, name) => {
+    if (usedBy(kind, name).length) return
+    const lists = { ...draft[kind] }
+    delete lists[name]
+    draft = { ...draft, [kind]: lists }
+  }
+
+  // ---- saving ----------------------------------------------------------------
+  const save = async () => {
+    const result = await savePolicies(draft)
+    if (!result.ok) {
+      error = result.error
+      return false
+    }
+    error = ""
+    view = result.view
+    draft = copy(view)
+    return true
+  }
+  const discard = () => {
+    draft = copy(view)
+    error = ""
+    renaming = null
+  }
+
+  $: presets = Object.entries(draft?.environment || {})
+    .map(([name, environment]) => ({ name, ...environment }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+</script>
+
+<div class="policies-pane pane-main">
+  <div class="ds-hero">
+    <div class="ds-hero-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3.5 19 6v5.5c0 4.3-2.9 7.8-7 9-4.1-1.2-7-4.7-7-9V6z"/><path d="m9 12 2.2 2.2L15.5 10"/>
+      </svg>
+    </div>
+    <div class="ds-hero-body">
+      <h4 class="ds-hero-title">Policies</h4>
+      <p class="ds-hero-desc">What a session may do: what it runs, what it reaches, what it reads and writes — each in allow, ask and deny. A new session starts from an environment that combines one of each.</p>
+    </div>
+  </div>
+
+  <p :if="loading" class="dim">Reading config.toml…</p>
+  <p :if="!loading &amp;&amp; !draft" class="error">{{ error || "The policies could not be read." }}</p>
+  <p :if="draft &amp;&amp; !editable" class="caveat small">Read-only: this server is bound off loopback, and only a person at this machine edits its config.toml.</p>
+
+  <section :if="draft" :each="kind in KINDS" :key="kind.key" class="pane-group kind" :data-kind="kind.key">
+    <div class="kind-head">
+      <h3>{{ kind.label }}</h3>
+      <span class="dim small">{{ kind.what }}</span>
+      <span class="grow"></span>
+      <Button :if="editable" size="sm" variant="ghost" @click="newList(kind.key)">+ {{ kind.key }} list</Button>
+    </div>
+    <p :if="!namesOf(kind.key).length" class="dim small">No [{{ kind.key }}.*] list yet.</p>
+    <div class="lists">
+      <article :each="name in namesOf(kind.key)" :key="kind.key + ':' + name" class="list" :data-list="name">
+        <header>
+          <code :if="!(renaming &amp;&amp; renaming.kind === kind.key &amp;&amp; renaming.from === name)" class="name">[{{ kind.key }}.{{ name }}]</code>
+          <span :if="renaming &amp;&amp; renaming.kind === kind.key &amp;&amp; renaming.from === name" class="rename">
+            <TextInput size="sm" :model="renaming.value" label="List name" autofocus :invalid="!!renaming.error"
+                       @input="renaming = { ...renaming, value: $event.detail, error: '' }"
+                       @enter="commitRename()" @blur="commitRename()" />
+            <span :if="renaming.error" class="error small">{{ renaming.error }}</span>
+          </span>
+          <span class="grow"></span>
+          <span :if="usedBy(kind.key, name).length" class="dim small used">in {{ usedBy(kind.key, name).join(", ") }}</span>
+          <Button :if="editable" size="sm" variant="ghost" @click="startRename(kind.key, name)">Rename</Button>
+          <Button :if="editable" size="sm" variant="ghost" :disabled="usedBy(kind.key, name).length > 0"
+                  :title="usedBy(kind.key, name).length ? `Named by ${usedBy(kind.key, name).map(e => `[environment.${e}]`).join(', ')}` : 'Delete this list'"
+                  @click="remove(kind.key, name)">Delete</Button>
+        </header>
+        <div :each="zone in ZONES" :key="zone.key" class="zone" :data-zone="zone.key">
+          <span class="zone-name" :class="zone.key" :title="zone.what">{{ zone.label }}</span>
+          <span class="entries">
+            <span :each="(entry, i) in entriesOf(kind.key, name, zone.key)" :key="zone.key + i" class="entry">
+              <code>{{ labelOf(entry) }}</code><button :if="editable" type="button" class="drop"
+                :aria-label="`Remove ${labelOf(entry)} from ${zone.key}`"
+                @click="drop(kind.key, name, zone.key, i)">×</button>
+            </span>
+            <span :if="editable" class="add">
+              <TextInput size="sm" :model="typing[keyOf(kind.key, name, zone.key)] || ''" :placeholder="kind.placeholder"
+                         :label="`Add to ${kind.key}.${name} ${zone.key}`"
+                         @input="typing = { ...typing, [keyOf(kind.key, name, zone.key)]: $event.detail }"
+                         @enter="add(kind.key, name, zone.key)" />
+              <Select :if="kind.key === 'files' &amp;&amp; zone.key !== 'deny'" size="sm" :options="ACCESS"
+                      :label="`Access for ${kind.key}.${name} ${zone.key}`"
+                      :model="access[keyOf(kind.key, name, zone.key)] || 'read'"
+                      @change="access = { ...access, [keyOf(kind.key, name, zone.key)]: $event.detail }" />
+            </span>
+            <span :if="!editable &amp;&amp; !entriesOf(kind.key, name, zone.key).length" class="dim">—</span>
+          </span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section :if="draft" class="pane-group presets">
+    <div class="kind-head">
+      <h3>Environments</h3>
+      <span class="dim small">One list of each, and where commands run: what a new session is offered to start from.</span>
+    </div>
+    <p :if="!presets.length" class="dim small">No [environment.*] yet: a session runs under the policy file (luu.toml) or a posture.</p>
+    <ul :if="presets.length" class="preset-list">
+      <li :each="preset in presets" :key="preset.name">
+        <code class="name">[environment.{{ preset.name }}]</code>
+        <span class="dim small">{{ preset.runtime || "direct" }}{{ preset.image ? ` · ${preset.image}` : "" }}</span>
+        <span class="grow"></span>
+        <span class="uses"><span class="dim">shell</span> <code>{{ preset.shell }}</code></span>
+        <span class="uses"><span class="dim">network</span> <code>{{ preset.network }}</code></span>
+        <span class="uses"><span class="dim">files</span> <code>{{ preset.files }}</code></span>
+      </li>
+    </ul>
+  </section>
+
+  <div :if="draft &amp;&amp; editable" class="section-actions">
+    <span :if="error" class="error small refused">{{ error }}</span>
+    <span class="grow"></span>
+    <Button :if="changes" variant="ghost" @click="discard()">Discard</Button>
+    <SaveButton :action="save" :changes="changes" />
+  </div>
+</div>
+
+<style scoped>
+  .policies-pane { flex: 1 0 auto; }
+  .small { font-size: 12px; }
+  .dim { color: var(--luu-fg-muted); }
+  .grow { flex: 1; }
+  .error { color: var(--luu-bad); }
+  .caveat { color: var(--luu-warn); margin: 0; }
+  .kind-head { display: flex; align-items: baseline; gap: .6rem; }
+  .kind-head h3 { margin: 0; }
+  .lists { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: var(--luu-space-3); }
+  .list {
+    display: flex; flex-direction: column; gap: .35rem;
+    padding: .55rem .7rem .65rem;
+    border: 1px solid var(--luu-border); border-radius: 8px;
+    background: var(--luu-surface);
+    min-width: 0;
+  }
+  .list header { display: flex; align-items: center; gap: .3rem; min-height: 1.9rem; }
+  .name { font-size: 12px; font-weight: 600; }
+  .rename { display: flex; flex-direction: column; gap: .15rem; }
+  .used { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 9rem; }
+  .zone { display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: .5rem; align-items: start; }
+  .zone-name { font-size: 12px; font-weight: 600; padding-top: .25rem; cursor: help; }
+  .zone-name.allow { color: var(--luu-ok); }
+  .zone-name.ask { color: var(--luu-warn); }
+  .zone-name.deny { color: var(--luu-bad); }
+  .entries { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .3rem; min-width: 0; }
+  .entry {
+    display: inline-flex; align-items: center; gap: .15rem;
+    padding: .05rem .15rem .05rem .45rem;
+    border: 1px solid var(--luu-border); border-radius: 999px;
+    background: var(--luu-bg);
+    font-size: 11px;
+  }
+  .entry code { font-size: 11px; overflow-wrap: anywhere; }
+  .drop {
+    width: 1.1rem; height: 1.1rem; padding: 0;
+    border: 0; border-radius: 999px; background: none;
+    color: var(--luu-fg-muted); font: inherit; line-height: 1; cursor: pointer;
+  }
+  .drop:hover { background: var(--luu-hover); color: var(--luu-bad); }
+  .add { display: inline-flex; gap: .25rem; flex: 1 1 9rem; min-width: 9rem; }
+  .add > :first-child { flex: 1; min-width: 0; }
+  .preset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .preset-list li {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    padding: .45rem .7rem; border-radius: 6px; background: var(--luu-surface); font-size: 12px;
+  }
+  .uses code { font-size: 11px; }
+  .section-actions { display: flex; align-items: center; gap: .6rem; }
+  .refused { overflow-wrap: anywhere; }
+</style>

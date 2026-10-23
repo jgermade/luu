@@ -24,6 +24,7 @@
   const SettingsEngines = await import("./engines/engines.html")
   const SettingsRuntimes = await import("./runtimes/runtimes.html")
   const SettingsSessions = await import("./sessions/sessions.html")
+  const SettingsPolicies = await import("./policies/policies.html")
   const Rail = await import("@web/components/rail.html")
 
   const SECTIONS = [
@@ -40,6 +41,9 @@
     // the postures and the host shell. Beside Sessions, because a posture is
     // chosen per session. See `runtimes/runtimes.html`.
     { value: "runtimes", label: "Runtimes", icon: "i-box" },
+    // What a session may do: the shell, network and files lists, and the
+    // environments that combine them. See `policies/policies.html`.
+    { value: "policies", label: "Policies", icon: "i-shield" },
     { value: "sessions", label: "Sessions", icon: "i-repeat" },
   ]
 
@@ -122,6 +126,8 @@
              :aria-hidden="String(shown !== 'models')"><SettingsModels /></div>
         <div :if="mounted('sessions')" class="section" data-section="sessions" :class="phase('sessions')"
              :aria-hidden="String(shown !== 'sessions')"><SettingsSessions /></div>
+        <div :if="mounted('policies')" class="section" data-section="policies" :class="phase('policies')"
+             :aria-hidden="String(shown !== 'policies')"><SettingsPolicies /></div>
       </div>
     </section>
   </div>

@@ -356,9 +356,12 @@ struct App {
     /// session already on a posture keeps the agency it was built with. See
     /// `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
     postures: std::sync::RwLock<std::collections::BTreeMap<String, crate::provider::Posture>>,
-    /// `[environment.<name>]`, resolved when this run started. Settings does
-    /// not write them yet, so they do not move under it.
-    environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
+    /// `[environment.<name>]`, resolved when this run started and again each
+    /// time Settings → Policies writes the lists they name — so a list edited
+    /// there is what the next session on it runs under. A session already on
+    /// one keeps the agency it was built with, as with a posture.
+    environments:
+        std::sync::RwLock<std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>>,
     /// What a person allowed for the live session's drafts, until taken back.
     /// Emptied by a new session, refilled from the stream by a resume.
     grants: crate::grants::Answered,
@@ -1016,7 +1019,7 @@ impl App {
             agency_for,
             describe_for,
             postures: std::sync::RwLock::new(postures),
-            environments,
+            environments: std::sync::RwLock::new(environments),
             grants: Default::default(),
             postures_path,
             icons: std::sync::RwLock::new(icons),
@@ -1079,6 +1082,15 @@ impl App {
     /// whatever the caller does with them.
     fn postures(&self) -> std::collections::BTreeMap<String, crate::provider::Posture> {
         self.postures
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// The environments as they are now, for the reason [`App::postures`]
+    /// clones: the resolved lists are behind `Arc`s, so this is cheap.
+    fn environments(&self) -> std::collections::BTreeMap<String, Arc<crate::policies::Resolved>> {
+        self.environments
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -1467,6 +1479,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/settings", get(get_settings))
         .route("/api/settings.json", get(get_settings))
         .route("/api/providers", get(get_providers).put(put_providers))
+        .route("/api/policies", get(get_policies).put(put_policies))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/probe", post(probe_provider))
         .route("/api/providers/{name}/models", get(get_provider_models))
@@ -4693,7 +4706,7 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         None => (Vec::new(), Default::default()),
         Some(describe) => {
             let postures = app.postures();
-            let environments = app.environments.clone();
+            let environments = app.environments();
             blocking(move || {
                 let variants = |chosen: Option<Chosen>| variants(&describe, chosen);
                 let places = postures
@@ -4719,7 +4732,7 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         choosable: app.agency_for.is_some(),
         running: app.posture.lock().await.clone(),
         postures: app.postures(),
-        environments: app.environments.keys().cloned().collect(),
+        environments: app.environments().keys().cloned().collect(),
     })
     .into_response()
 }
@@ -4938,7 +4951,7 @@ async fn build_image(
     let named = {
         let base = base.clone();
         let postures = app.postures();
-        let environments = app.environments.clone();
+        let environments = app.environments();
         let describe = app.describe_for.clone();
         blocking(move || {
             let place = |chosen: Chosen| describe.as_ref().map(|d| d(Some(chosen), None));
@@ -6122,6 +6135,114 @@ async fn probe_provider(
     .into_response()
 }
 
+/// The lists and the environments that combine them, as `config.toml` has
+/// them: what Settings → Policies shows and edits. See
+/// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct PoliciesTables {
+    #[serde(default)]
+    shell: std::collections::BTreeMap<String, crate::policies::Zones>,
+    #[serde(default)]
+    network: std::collections::BTreeMap<String, crate::policies::Zones>,
+    #[serde(default)]
+    files: std::collections::BTreeMap<String, crate::policies::FilesList>,
+    #[serde(default)]
+    environment: std::collections::BTreeMap<String, crate::policies::Environment>,
+}
+
+#[derive(serde::Serialize)]
+struct PoliciesView {
+    #[serde(flatten)]
+    tables: PoliciesTables,
+    /// The postures' names, which an environment may not take.
+    postures: Vec<String>,
+    /// Whether the page may write them: not on a server bound off loopback,
+    /// for the reason the providers may not be.
+    editable: bool,
+}
+
+fn policies_view(config: &crate::provider::Config, editable: bool) -> PoliciesView {
+    let policies = config.policies();
+    PoliciesView {
+        tables: PoliciesTables {
+            shell: policies.shell.clone(),
+            network: policies.network.clone(),
+            files: policies.files.clone(),
+            environment: policies.environments.clone(),
+        },
+        postures: config.postures().keys().cloned().collect(),
+        editable,
+    }
+}
+
+async fn get_policies(State(state): State<AppRouterState>) -> Response {
+    let config = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    Json(policies_view(&config, state.providers_editable)).into_response()
+}
+
+/// Writes the lists and the environments, whole: the page edits a copy and
+/// sends it back. Checked by the loader that reads it, as the providers are —
+/// an environment naming a list that is gone, an entry in two zones, a host
+/// that is not one — and the refusal is the loader's own sentence.
+///
+/// The environments are resolved again from what was written, so the next
+/// session on one runs under the lists as they are now; the live session
+/// keeps the agency it was built with.
+async fn put_policies(
+    State(state): State<AppRouterState>,
+    Json(edit): Json<PoliciesTables>,
+) -> Response {
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "the policies are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml. \
+             Run luu once on a terminal, or set LUU_HOME.",
+        )
+            .into_response();
+    };
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let config = current.with_policies(crate::policies::Policies {
+        shell: edit.shell,
+        network: edit.network,
+        files: edit.files,
+        environments: edit.environment,
+    });
+    if let Err(error) = write_config(config.clone(), path).await {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(WriteRefused {
+                message: error.to_string(),
+                declaration: None,
+            }),
+        )
+            .into_response();
+    }
+    *state
+        .app
+        .environments
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = config
+        .policies()
+        .resolve_all()
+        .into_iter()
+        .map(|(name, resolved)| (name, Arc::new(resolved)))
+        .collect();
+    Json(policies_view(&config, state.providers_editable)).into_response()
+}
+
 #[derive(serde::Deserialize)]
 struct ProvidersEdit {
     default: Option<String>,
@@ -6927,7 +7048,7 @@ async fn posture_for(
     // the file refuses — so the order they are looked in decides nothing.
     let policy = match asked {
         None => None,
-        Some(name) => match (app.postures().get(name), app.environments.get(name)) {
+        Some(name) => match (app.postures().get(name), app.environments().get(name)) {
             (Some(posture), _) => Some(Chosen::File(posture.policy.clone())),
             (None, Some(environment)) => Some(Chosen::Environment(environment.clone())),
             (None, None) => {

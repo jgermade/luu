@@ -249,7 +249,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // Resend and Authority are one section now, in this order, and the rail
   // puts Engines before Models; Appearance is General's other half since
   // 2026-10-21.
-  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Appearance", "Engines", "Models", "Runtimes", "Sessions"])
+  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Appearance", "Engines", "Models", "Runtimes", "Policies", "Sessions"])
   await expect(page.locator("#sessions-resend h2")).toHaveText("Resend")
   await expect(page.locator("#sessions-authority h2")).toHaveText("Authority")
 

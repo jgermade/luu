@@ -1122,6 +1122,17 @@ impl Config {
         })
     }
 
+    /// The same file with other lists and environments: what Settings →
+    /// Policies writes. Everything else — the providers, the postures, the
+    /// engines — is this config's, carried through as [`Config::from_parts`]
+    /// carries the lists.
+    pub fn with_policies(&self, policies: crate::policies::Policies) -> Self {
+        Self {
+            policies,
+            ..self.clone()
+        }
+    }
+
     /// The file as an editor hands it back: a default and a set of profiles.
     ///
     /// The postures are *this* config's, not the editor's: the page does not
@@ -2301,5 +2312,41 @@ mod tests {
         // as the defaults, which would turn *this machine says nothing* into
         // *this machine chose off*.
         assert!(!rendered.contains("prune"), "{rendered}");
+    }
+
+    /// Settings → Policies writes the lists and the environments, and only
+    /// those: the providers beside them survive, and what was written loads.
+    #[test]
+    fn the_policies_are_written_whole_and_the_rest_is_kept() {
+        let config = Config::from_toml(
+            "default = \"here\"\n[provider.here]\nbackend = \"mock\"\nmodel = \"mock\"\n\
+             [shell.old]\nallow = [\"ls\"]\n",
+            "config.toml",
+        )
+        .expect("loads");
+        let lists = Config::from_toml(
+            "[shell.tools]\nallow = [\"git\"]\nask = [\"*\"]\n[network.off]\n\
+             [files.tree]\nallow = [{ path = \".\", access = \"read-write\" }]\n\
+             [environment.e]\nshell = \"tools\"\nnetwork = \"off\"\nfiles = \"tree\"\n",
+            "lists.toml",
+        )
+        .expect("loads")
+        .policies()
+        .clone();
+        let written = config
+            .with_policies(lists.clone())
+            .render()
+            .expect("renders");
+        let again = Config::from_toml(&written, "config.toml").expect("what was written loads");
+        assert_eq!(
+            again.policies(),
+            &lists,
+            "the lists, whole: [shell.old] is gone"
+        );
+        assert_eq!(again.default_name(), Some("here"));
+        assert!(
+            again.profiles().contains_key("here"),
+            "the providers are kept"
+        );
     }
 }

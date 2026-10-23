@@ -14,7 +14,7 @@
   // does without asking. Nothing here changes a list: that is Settings' (row
   // 51 of the roadmap).
   const { state, revokeGrant } = await import("@web/lib/store.js")
-  const { ui, closePermissions, showPermissionsTab } = await import("@web/lib/ui.js")
+  const { ui, closePermissions, showPermissionsTab, openSettingsAt } = await import("@web/lib/ui.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
   const Segmented = await import("@web/theme/default/components/segmented.html")
   const Button = await import("@web/theme/default/components/button.html")
@@ -329,7 +329,8 @@
   </div>
 
   <template :slot.foot>
-    <span class="dim small foot-note">What happened in this session, and what decided it. The lists are edited in <code>config.toml</code>.</span>
+    <span class="dim small foot-note">What happened in this session, and what decided it. The lists are edited in
+      <button type="button" class="link" @click="closePermissions(), openSettingsAt('policies')">Settings → Policies</button>.</span>
     <Button variant="primary" @click="closePermissions()">Done</Button>
   </template>
 </TabModal>
@@ -396,4 +397,8 @@
   .entries { display: flex; flex-wrap: wrap; gap: .1rem .3rem; min-width: 0; font-family: var(--luu-font-mono); font-size: 11px; }
   .entry { padding: 0 .2rem; border-radius: 3px; overflow-wrap: anywhere; }
   .foot-note { margin-right: auto; }
+  .foot-note .link {
+    padding: 0; border: 0; background: none; font: inherit; color: var(--luu-accent);
+    cursor: pointer; text-decoration: underline;
+  }
 </style>

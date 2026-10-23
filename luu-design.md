@@ -982,6 +982,11 @@ access = "execute"
   and worker, `allow` only for now, and recorded by each list's name and SHA-256 in the
   header's posture (`record::FORMAT` 21), which a resume compares. See
   [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+  **Settings → Policies edits the lists**: each by name, its entries by zone, new, renamed
+  (the environments that name it follow in the same write) and deleted (not while an
+  environment names it), sent whole to `PUT /api/policies` and checked by the loader that reads
+  the file back; the environments are shown, and resolved again on every save, so the next
+  session on one runs under the lists as written. The live session keeps what it was built with.
   **Settings → Runtimes writes the postures table**, naming a policy file out of the
   ones at the top of the checkout and never one the page types, and the server
   replaces the postures it offers at once. Postures are no longer read only at

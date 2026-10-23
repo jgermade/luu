@@ -77,7 +77,7 @@ export const ui = $reactive({
 })
 
 export function openSettingsAt(section) {
-  ui.section = ["models", "appearance"].includes(section) ? section : "general"
+  ui.section = ["models", "appearance", "policies"].includes(section) ? section : "general"
   return openSettings()
 }
 
