@@ -633,11 +633,28 @@ It has already earned itself: it found a double replay that had been showing a
 ghost turn to every visitor of the deployed page. See
 [`RECORD/2026-08-30.tests-that-run-it.completed.md`](RECORD/2026-08-30.tests-that-run-it.completed.md).
 
-CI is `.github/workflows/build.yml` (fmt, clippy, tests, both binaries, the site) on
+CI is `.github/workflows/build.yml` (fmt, clippy, tests, four binaries, the site) on
 every push and pull request. `release.yml` is manual: it takes `patch`/`minor`/`major`,
 raises the workspace version, tags it, calls `build.yml` at the new commit, publishes
-the release and deploys Pages. It has a `dry-run` input — use it before the first
-real release.
+the release with a `SHA256SUMS` beside the archives and deploys Pages. It has a
+`dry-run` input — use it before the first real release.
+
+**Pages is the landing, and the replay is under `demo/`.** `pages/` is served as it
+is at the root — `index.html` and `setup.sh`, the one-line installer
+(`curl -fsSL https://jgermade.github.io/luu/setup.sh | sh`, with `reinstall` and
+`uninstall [--purge]`) — and the assembled `site/` goes beside it as `demo/`.
+The binaries are the four targets `setup.sh` installs, Linux built on the oldest
+Ubuntu runner for the glibc it links against, and every one a runner can execute
+is installed, reinstalled and uninstalled by `scripts/setup-check.sh` before it is
+uploaded:
+
+```sh
+scripts/setup-check.sh dist/luu-x86_64-unknown-linux-gnu.tar.gz
+shellcheck -s sh pages/setup.sh
+```
+
+See
+[`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md).
 
 **Do not edit the UI's `dist`-like output, because there isn't one.** `web/`
 is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into

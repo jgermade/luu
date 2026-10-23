@@ -37,16 +37,26 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
 
+  # The four targets `pages/setup.sh` installs. Linux is built on the oldest
+  # Ubuntu runner rather than the newest, because a binary needs the glibc it
+  # was linked against or newer: built on 24.04 it wants 2.39 and will not start
+  # on Debian 12 or Ubuntu 22.04. Intel macOS is cross-built on Apple Silicon,
+  # so its runner cannot execute it and the installer check skips it.
   binary:
     needs: test
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            cross: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -55,9 +65,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # The runner is in the key because the cache does not tell Ubuntu
+      # releases apart: objects built on 24.04 restored onto 22.04 would put
+      # 24.04's glibc back into the binary.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.os }}-${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
@@ -69,6 +82,12 @@ jobs:
           cp "target/${{ matrix.target }}/release/luu" "$out/"
           cp README.md "$out/" 2>/dev/null || true
           tar -czf "dist/luu-${{ matrix.target }}.tar.gz" -C dist "luu-${{ matrix.target }}"
+
+      # The one-line installer, against the archive a release would publish:
+      # install, reinstall, a bad checksum, uninstall and purge, in `sh`.
+      - name: The installer, against this build
+        if: ${{ !matrix.cross }}
+        run: scripts/setup-check.sh "dist/luu-${{ matrix.target }}.tar.gz"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -133,7 +152,8 @@ jobs:
           set -euo pipefail
           # A CDN reference here would work locally and break the moment the
           # binary is offline — which is the case the embedded UI exists for.
-          if grep -rInE 'https?://(cdn|unpkg|esm|fonts)\.' site/ ; then
+          # The landing in `pages/` is held to the same rule.
+          if grep -rInE 'https?://(cdn|unpkg|esm|fonts)\.' site/ pages/ ; then
             echo "::error::the site must not reference external hosts"
             exit 1
           fi
@@ -206,10 +226,27 @@ jobs:
             tests/smoke/playwright-report
           if-no-files-found: ignore
 
+      # What Pages serves: the landing and the installer at the root, from
+      # `pages/` as it is, and the site assembled above under `demo/`. The
+      # suites above keep serving `site/` at its own root, so neither knows the
+      # other moved. Every push assembles it; only a release deploys it.
+      - name: Assemble the Pages tree
+        run: |
+          set -euo pipefail
+          shellcheck -s sh pages/setup.sh
+          shellcheck scripts/setup-check.sh
+          rm -rf _site && mkdir -p _site
+          cp -R pages/. _site/
+          cp -R site _site/demo
+          test -s _site/index.html
+          test -s _site/setup.sh
+          test -s _site/demo/index.html
+          test -s _site/demo/api/sessions.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: site
-          path: site
+          path: _site
           if-no-files-found: error
 
       - uses: actions/configure-pages@v5
@@ -217,4 +254,4 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         if: ${{ inputs.pages }}
         with:
-          path: site
+          path: _site
