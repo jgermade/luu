@@ -290,7 +290,10 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // And the answer to it, which the prompt it was measured from cannot hold:
   // it was written after. Marked as not sent, because the next turn sends it.
   const answered = context.locator('.group[data-bucket="answer"]')
-  await expect(answered.locator("pre")).toContainText(ANSWER)
+  // The turn as it went: what the model said up to its call, what the call
+  // gave back, and the reply after it — the answer last.
+  await expect(answered.locator(".entry.result")).toHaveCount(1)
+  await expect(answered.locator(".entry.reply pre").last()).toContainText(ANSWER)
   await expect(answered.locator("header")).toContainText("not sent yet")
   await context.locator(".modal-head button", { hasText: "close" }).click()
   await expect(context).toBeHidden()

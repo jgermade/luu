@@ -92,6 +92,12 @@ pub struct ToolCallView {
     /// waiting on nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// Where in the turn's reply this call's step ended: the length of the
+    /// text streamed before the call, in UTF-16 units — what a page indexes a
+    /// string by — so the reply can be cut into what each round trip said.
+    /// `None` in a view folded before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<usize>,
 }
 
 /// One job as a client browses it. The transcript groups by this, which is
@@ -1243,6 +1249,7 @@ impl SessionView {
                         asked: None,
                         grant: None,
                         held: None,
+                        at: Some(view.text.encode_utf16().count()),
                     });
                 }
             }
@@ -2177,6 +2184,37 @@ mod tests {
                 ("git", true, 4, false),
             ]
         );
+    }
+
+    /// Each call says where in the turn's reply its step ended, counted as a
+    /// page counts a string: `✓` is one unit, `🦀` two.
+    #[test]
+    fn a_call_says_where_its_step_ended_in_the_reply() {
+        let mut view = SessionView::new("s", "mock", "mock");
+        view.apply_protocol(
+            0,
+            &ServerMessage::TurnStarted {
+                turn: 1,
+                prompt: "hi".into(),
+                job: None,
+            },
+        );
+        let token = |text: &str| ServerMessage::Token {
+            turn: 1,
+            text: text.into(),
+        };
+        let call = |step: u32| ServerMessage::ToolCall {
+            turn: 1,
+            step,
+            name: "list_dir".into(),
+            arguments: serde_json::json!({ "path": "." }),
+        };
+        view.apply_protocol(0, &token("Looking ✓"));
+        view.apply_protocol(0, &call(1));
+        view.apply_protocol(0, &token(" 🦀 again"));
+        view.apply_protocol(0, &call(2));
+        let at: Vec<_> = view.turns[0].tools.iter().map(|call| call.at).collect();
+        assert_eq!(at, [Some(9), Some(18)]);
     }
 
     /// A view stored under protocol 10 had only yeses, and no call.

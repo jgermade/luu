@@ -493,7 +493,12 @@ function onProtocol(message) {
 
     // Pushed and then replaced rather than mutated: jq79 does not wake an
     // `:each` binding on a property assigned inside an array element.
-    case "tool_call":
+    case "tool_call": {
+      // Where in the reply this step ended — what has streamed so far,
+      // flushed or not — so the reply can be cut into what each round trip
+      // said. The server's fold says the same of a stored turn.
+      const last = state.messages[state.messages.length - 1]
+      const at = (last?.role === "assistant" ? last.text.length : 0) + pending.length
       state.tools = [...state.tools, {
         step: message.step,
         name: message.name,
@@ -506,8 +511,10 @@ function onProtocol(message) {
         command: null,
         held: null,
         asked: null,
+        at,
       }]
       break
+    }
 
     // The floor refused a write the policy file allows, and the turn is
     // waiting on a person: *allow once* or *deny*. It stays on the call it is

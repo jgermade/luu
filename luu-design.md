@@ -1566,7 +1566,11 @@ The rest follows from that:
   same partial over total. The indicator reads the newest turn whether it happened live or came
   back from the server, so a reload does not leave it empty. A click opens `context-modal.html`, the same grouped view
   about that turn, with the window's use, the answer's reserve and what the server counted, and
-  the answer to it last, marked as not sent yet. See
+  the answer to it last, marked as not sent yet — **as the turn went**, where it used tools:
+  each reply up to its call, what that call gave back as the model got it, and what the next call
+  sent, cut where each call's step ended (`ToolCallView.at`, kept by the page and the server's
+  fold alike). A card in the chat shows the first lines of its result under it without being
+  opened. See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
 - **The transcript follows its end while it is at its end** (`Scrollable`'s `autoscroll`): any
   scroll up leaves it at once, and only scrolling back to the end picks it up again. The chat's
