@@ -275,12 +275,10 @@ async fn a_plans_network_narrowing_crosses_the_seam() {
 /// `luu` on the far side.
 #[cfg(unix)]
 fn stuck_once(root: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let script = root.join("stuck-worker.sh");
-    std::fs::write(
+    write_script(
         &script,
-        format!(
+        &format!(
             r#"#!/bin/sh
 printf '%s\n' '{{"kind":"hello","protocol":{PROTOCOL},"version":"stuck","commands":[]}}'
 while IFS= read -r line; do
@@ -293,10 +291,42 @@ done
 "#,
             root = root.display(),
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     script
+}
+
+/// Writes an executable script without this process ever holding it open for
+/// writing.
+///
+/// `std::fs::write` followed by an exec of the same file races every other test
+/// in this binary that spawns a child: a fork taken while the write is open
+/// carries the descriptor until that child's own exec, and the kernel refuses to
+/// exec a file somebody holds for writing — `ETXTBSY`, "Text file busy"
+/// (rust-lang/rust#114554). The release run of v0.1.2 lost that race, and so did
+/// one run in three hundred here. A `sh` that writes the file and exits is the
+/// only writer there ever is, and it is gone before anyone runs what it wrote.
+#[cfg(unix)]
+fn write_script(path: &Path, body: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut writer = Command::new("sh")
+        .args(["-c", r#"cat > "$0" && chmod 755 "$0""#])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("sh to write the script");
+    writer
+        .stdin
+        .take()
+        .expect("its stdin")
+        .write_all(body.as_bytes())
+        .unwrap();
+    assert!(
+        writer.wait().unwrap().success(),
+        "sh wrote {}",
+        path.display()
+    );
 }
 
 #[cfg(unix)]
@@ -363,15 +393,12 @@ async fn a_worker_that_is_alive_and_stuck_is_abandoned_and_replaced() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_worker_that_will_not_start_says_why_in_its_own_words() {
-    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new("refuses");
     let runtime = fixture.root.join("runtime.sh");
-    std::fs::write(
+    write_script(
         &runtime,
         "#!/bin/sh\necho 'level=fatal msg=\"colima is not running\"' >&2\nexit 1\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
 
     let spec = WorkerSpec::new(Runtime::Direct, &fixture.root).with_binary(Some(runtime));
     let Err(error) = Worker::start(&spec, &[]).await else {
