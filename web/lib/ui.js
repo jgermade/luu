@@ -143,14 +143,32 @@ export function showPermissionsTab(tab) {
   if (PERMISSION_TABS.includes(tab)) ui.permissions = tab
 }
 
+/// Plays the dialog's way out, and resolves once it has gone — so whatever
+/// opens next waits for it. A dialog opened again meanwhile stays, and the
+/// promise never resolves: nothing should open over it.
+let permissionsClosed = Promise.resolve()
 export function closePermissions() {
-  if (!ui.permissions || ui.permissionsLeaving) return
+  if (!ui.permissions) return Promise.resolve()
+  if (ui.permissionsLeaving) return permissionsClosed
   ui.permissionsLeaving = true
   clearTimeout(permissionsLeaving)
-  permissionsLeaving = setTimeout(() => {
-    ui.permissions = null
-    ui.permissionsLeaving = false
-  }, exitMs())
+  permissionsClosed = new Promise(gone => {
+    permissionsLeaving = setTimeout(() => {
+      ui.permissions = null
+      ui.permissionsLeaving = false
+      gone()
+    }, exitMs())
+  })
+  return permissionsClosed
+}
+
+/// From the permissions dialog to a section of Settings: the dialog leaves
+/// first, with its exit, and Settings opens after. Opened at once, Settings
+/// unmounted the dialog mid-exit — the page mounts it only while Settings is
+/// closed — and it vanished.
+export async function permissionsToSettings(section) {
+  await closePermissions()
+  return openSettingsAt(section)
 }
 
 // ---- is the model actually there ------------------------------------------

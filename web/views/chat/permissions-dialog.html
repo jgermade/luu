@@ -14,7 +14,7 @@
   // does without asking. Nothing here changes a list: that is Settings' (row
   // 51 of the roadmap).
   const { state, revokeGrant } = await import("@web/lib/store.js")
-  const { ui, closePermissions, showPermissionsTab, openSettingsAt } = await import("@web/lib/ui.js")
+  const { ui, closePermissions, showPermissionsTab, permissionsToSettings } = await import("@web/lib/ui.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
   const Segmented = await import("@web/theme/default/components/segmented.html")
   const Button = await import("@web/theme/default/components/button.html")
@@ -330,7 +330,7 @@
 
   <template :slot.foot>
     <span class="dim small foot-note">What happened in this session, and what decided it. The lists are edited in
-      <button type="button" class="link" @click="closePermissions(), openSettingsAt('policies')">Settings → Policies</button>.</span>
+      <button type="button" class="link" @click="permissionsToSettings('policies')">Settings → Policies</button>.</span>
     <Button variant="primary" @click="closePermissions()">Done</Button>
   </template>
 </TabModal>

@@ -261,5 +261,15 @@ test("a command left to a person is asked, allowed or denied for the session, an
   await expect(dialog.locator(".entry.focused")).toHaveCount(0)
   await expect(dialog.locator(".followed .note")).toContainText("ls is in allow")
 
+  // Where the lists are edited: the dialog plays its way out, and only then
+  // does Settings open, on Policies. Opened at once, Settings unmounted the
+  // dialog in the middle of its exit.
+  await dialog.getByRole("button", { name: "Settings → Policies" }).click()
+  await expect(dialog).toHaveClass(/\bleaving\b/)
+  expect(await page.locator(".policies-pane").count(), "Settings waits for the exit").toBe(0)
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator(".modal .rail button.on")).toHaveText("Policies")
+  await expect(page.locator(".policies-pane")).toBeVisible()
+
   expect(errors).toEqual([])
 })
