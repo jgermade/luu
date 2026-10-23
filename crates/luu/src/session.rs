@@ -201,9 +201,10 @@ impl Agency {
     }
 
     /// The lists it was built from, for the page: the environment's as
-    /// written, or the policy file's, all in `allow`.
+    /// written, or the policy file's, all in `allow` — and the enforcement the
+    /// session runs under, flags included.
     pub fn lists_view(&self) -> crate::policies::ListsView {
-        match &self.environment {
+        let mut view = match &self.environment {
             Some(environment) => crate::policies::ListsView::of_environment(environment),
             None => crate::policies::ListsView::of_policy(
                 self.lists
@@ -213,7 +214,9 @@ impl Agency {
                 &self.sandbox.to_policy(),
                 self.sandbox.base(),
             ),
-        }
+        };
+        view.enforcement = self.sandbox.enforcement();
+        view
     }
 
     /// What the gate may grant a plan: the session's sandbox, and — where it

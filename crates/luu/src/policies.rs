@@ -274,6 +274,10 @@ pub struct ListsView {
     pub shell: Named<Zones>,
     pub network: Named<Zones>,
     pub files: Named<FilesList>,
+    /// What happens to a command the kernel cannot hold — refused under
+    /// `kernel`, run and reported under `best-effort`. Not a list's, but it
+    /// refuses what the lists allow, so a refusal can be traced to it.
+    pub enforcement: agent_core::sandbox::Enforcement,
 }
 
 /// A list and its name.
@@ -301,6 +305,7 @@ impl ListsView {
                 name: resolved.files.0.clone(),
                 list: resolved.files.1.clone(),
             },
+            enforcement: resolved.policy.enforcement,
         }
     }
 
@@ -339,6 +344,7 @@ impl ListsView {
                     ..FilesList::default()
                 },
             },
+            enforcement: granted.enforcement,
         }
     }
 }
@@ -671,6 +677,10 @@ mod tests {
         assert_eq!(
             json["shell"]["deny"][0], "curl",
             "the zones sit beside the name"
+        );
+        assert_eq!(
+            json["enforcement"], "kernel",
+            "the default, and the strict one"
         );
 
         let base = std::path::Path::new("/work/repo");

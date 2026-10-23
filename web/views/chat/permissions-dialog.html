@@ -26,7 +26,7 @@
   // The kept turns, and the one running: its calls are not in the history
   // until it ends.
   $: calls = [
-    ...state.history.flatMap(turn => (turn.tools || []).map(call => ({ ...call, turn: turn.turn }))),
+    ...state.history.flatMap(turn => (turn.tools || []).map(call => ({ ...call, turn: turn.turn, job: turn.job ?? null }))),
     ...(state.turn != null && !state.history.some(kept => kept.turn === state.turn)
       ? state.tools.map(call => ({ ...call, turn: state.turn }))
       : []),
@@ -105,14 +105,33 @@
   }
   // A list's rule, otherwise: the program's entry in the shell list, or `*`;
   // the files rule with the longest path that covers it.
+  //
+  // **Unless the list allows it and it was refused anyway**: then the list is
+  // not what refused it, and marking its `allow` entry says the opposite of
+  // what happened. A command the kernel cannot hold is refused by the
+  // enforcement — the server's own words, in `sandbox/mod.rs`, are how it is
+  // told apart; a write the list allows, in a draft, by the floor; either,
+  // inside a job, by its plan.
+  const KERNEL = "the kernel cannot hold"
+  const beyond = (call, what) =>
+    call.name === "run_command" && call.verdict.rule.startsWith(KERNEL)
+      ? { key: "enforcement", note: `${what} is in allow: the kernel cannot hold a command here, and the enforcement refuses what it cannot hold.` }
+      : call.job != null
+        ? { key: null, note: `${what} is in allow: the plan of job ${call.job} is what refused it.` }
+        : call.name === "run_command"
+          ? { key: null, note: `${what} is in allow: the rule above is what refused it.` }
+          : { key: "floor", note: `${what || "."} is in allow: a draft writes only to its scratch.` }
   const ruleOf = call => {
     const lists = state.settings?.lists
     if (!lists) return { key: null, note: "" }
+    const refused = call.verdict && !call.verdict.allowed
     if (call.name === "run_command") {
       const program = programOf(call)
       for (const zone of ["deny", "allow", "ask"]) {
         const at = (lists.shell[zone] || []).indexOf(program)
-        if (at >= 0) return { key: `shell:${zone}:${at}`, note: "" }
+        if (at < 0) continue
+        if (refused && zone === "allow") return beyond(call, program)
+        return { key: `shell:${zone}:${at}`, note: "" }
       }
       const star = (lists.shell.ask || []).indexOf("*")
       if (star >= 0) return { key: `shell:ask:${star}`, note: "" }
@@ -126,10 +145,16 @@
         const written = typeof rule === "string" ? rule : rule.path
         const path = written === "." ? "" : written.replace(/^\.\//, "").replace(/\/$/, "")
         const covers = path === "" || target === path || target.startsWith(path + "/")
-        if (covers && (!best || path.length > best.length)) best = { length: path.length, key: `files:${zone}:${index}` }
+        if (covers && (!best || path.length > best.length)) {
+          best = { length: path.length, key: `files:${zone}:${index}`, zone, access: rule.access }
+        }
       })
     }
-    return best ? { key: best.key, note: "" } : { key: null, note: `${target || "."} is in no files list.` }
+    if (!best) return { key: null, note: `${target || "."} is in no files list.` }
+    if (refused && kindOf(call) === "write" && best.zone === "allow" && best.access === "read-write") {
+      return beyond(call, target)
+    }
+    return { key: best.key, note: "" }
   }
   const whereOf = call => {
     if (call.grant === "session" && call.verdict) {
@@ -177,6 +202,14 @@
   const ZONES = ["allow", "ask", "deny"]
   const LISTS = ["shell", "network", "files"]
   const lists = () => state.settings?.lists || null
+  // Where a list is written: its own table under an environment, and the
+  // policy file's `[sandbox]` otherwise, which has no lists by name.
+  const SANDBOX = { shell: "[sandbox] commands", network: "[sandbox] network", files: "[[sandbox.paths]]" }
+  const sourceOf = list => lists()?.environment ? `[${list}.${lists()[list].name}]` : SANDBOX[list]
+  const ENFORCEMENT = {
+    "kernel": "a command runs only where the kernel holds it — Landlock and seccomp, which are Linux's. Where they are missing, every command is refused; enforcement = \"best-effort\" runs it and says what was missing.",
+    "best-effort": "a command runs even where the kernel cannot hold it, and its verdict says what was missing.",
+  }
   const entriesOf = (list, zone) => (lists()?.[list]?.[zone] || []).map(rule =>
     typeof rule === "string" ? rule : `${rule.path} (${rule.access || "read"})`)
   $: floor = state.settings?.floor || null
@@ -203,7 +236,8 @@
         <span class="line"><b>{{ focus.row.call.name }}</b> <code>{{ focus.row.subject }}</code>
           <span class="who" :class="focus.row.outcome.kind">{{ focus.row.outcome.word }}</span>
           <span class="dim">turn {{ focus.row.call.turn }}</span></span>
-        <span class="why dim">{{ focus.row.call.verdict?.rule || "" }}<span :if="focus.note"> {{ focus.note }}</span></span>
+        <span class="why dim" :title="focus.row.call.verdict?.rule || ''">{{ focus.row.call.verdict?.rule || "" }}</span>
+        <span :if="focus.note" class="note">{{ focus.note }}</span>
       </span>
       <Button size="sm" variant="ghost" @click="back()">Back to activity</Button>
     </div>
@@ -269,7 +303,7 @@
       </h3>
       <div :if="lists()" class="lists">
         <div :each="list in LISTS" :key="list" class="list">
-          <div class="list-head">{{ list }} <span class="dim">[{{ list }}.{{ lists()[list].name }}]</span></div>
+          <div class="list-head">{{ list }} <span class="dim">{{ sourceOf(list) }}</span></div>
           <div :each="zone in ZONES" :key="list + zone" class="zone-row">
             <span class="zone-name" :class="zone">{{ zone }}</span>
             <span class="entries">
@@ -281,9 +315,13 @@
         </div>
       </div>
 
+      <h3>Enforcement</h3>
+      <p :if="lists()" class="small marked" :class.focused="focus?.key === 'enforcement'">
+        <code>{{ lists().enforcement }}</code> <span class="dim">— {{ ENFORCEMENT[lists().enforcement] || "" }}</span>
+      </p>
+
       <h3>A draft, without asking</h3>
-      <p :if="floor" class="dim small">
-        reads {{ floor.reads.join(" · ") || "nothing" }} · runs {{ floor.commands.join(" · ") || "nothing" }}<span
+      <p :if="floor" class="dim small marked" :class.focused="focus?.key === 'floor'">reads {{ floor.reads.join(" · ") || "nothing" }} · runs {{ floor.commands.join(" · ") || "nothing" }}<span
           :if="floor.network"> · reaches the network</span> · writes {{ (floor.writes || []).join(" · ") || "nothing" }}
       </p>
       <p class="dim small">Anything else a draft would do is asked of you where a list leaves it to you, and refused where none does.</p>
@@ -325,7 +363,9 @@
   .answers .what { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .answers li.revoked .what { color: var(--luu-fg-muted); text-decoration: line-through; }
   .answers .state { padding: 0 .5rem; }
-  li.focused, .entry.focused { box-shadow: inset 0 0 0 1px var(--luu-accent); background: var(--luu-accent-soft); }
+  li.focused, .entry.focused, .marked.focused { box-shadow: inset 0 0 0 1px var(--luu-accent); background: var(--luu-accent-soft); }
+  .marked { margin: 0 -.5rem; padding: .3rem .5rem; border-radius: 6px; }
+  .followed .note { font-size: 11px; color: var(--luu-fg); }
   .mark { width: 8px; height: 8px; border-radius: 999px; background: var(--luu-fg-muted); }
   .mark.ok { background: var(--luu-ok); }
   .mark.bad { background: var(--luu-bad); }

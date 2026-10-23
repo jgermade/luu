@@ -996,11 +996,29 @@ test("a new default and the chat's picker both move the session without a restar
   await page.click(".options .dest")
   const menu = page.locator(".options .menu")
   const models = menu.locator(".models")
+  await expect(menu).toBeVisible()
+  // One height from the moment it opens: it opens upward, and a list that
+  // arrived and grew it moved its top edge while the person read it.
+  const top = (await menu.boundingBox()).y
   await expect(menu.locator(".prov.on")).toContainText("here")
   await expect(models.locator("button.model.on")).toHaveText(/mock/)
   await menu.locator(".prov", { hasText: "local" }).hover()
   await expect(menu.locator(".prov.on")).toContainText("local")
   await expect(models.locator("button.model")).toHaveText(/tiny/)
+  expect((await menu.boundingBox()).y).toBe(top)
+  // The row under the pointer changes its ink as well as its ground.
+  // The accent as the menu draws it: the chat's foot is a dark island.
+  const accent = await menu.evaluate(element => {
+    const probe = document.createElement("span")
+    probe.style.color = "var(--luu-accent)"
+    element.append(probe)
+    const color = getComputedStyle(probe).color
+    probe.remove()
+    return color
+  })
+  await expect(menu.locator(".prov", { hasText: "local" })).toHaveCSS("color", accent)
+  await models.locator("button.model", { hasText: "tiny" }).hover()
+  await expect(models.locator("button.model", { hasText: "tiny" })).toHaveCSS("color", accent)
   await models.locator("button.model", { hasText: "tiny" }).click()
   await expect(menu).toHaveCount(0)
   await expect(page.locator(".options .dest")).toContainText("local")

@@ -237,5 +237,29 @@ test("a command left to a person is asked, allowed or denied for the session, an
   await page.locator(".chat .col-head").getByRole("button", { name: "Permissions" }).click()
   await expect(rows.nth(0).locator(".who")).toHaveText("denied")
 
+  // A command the list allows and the kernel cannot hold — macOS under
+  // `enforcement = "kernel"` — is traced past the list, to the enforcement,
+  // rather than to its own `allow` entry. Linux holds it here, so the call is
+  // put in the page's history as the server words it there.
+  await page.evaluate(async () => {
+    const { state } = await import("./lib/store.js")
+    const kept = state.history[state.history.length - 1]
+    state.history = [...state.history, { ...kept, turn: 99, job: null, tools: [{
+      step: 1, name: "run_command", arguments: { argv: ["ls", "-la"] },
+      verdict: {
+        allowed: false,
+        rule: "the kernel cannot hold this child (landlock and seccomp are Linux-only, and this is macos); a draft runs on the floor, which writes only to scratch — approve a plan to run this",
+        enforced_by: "process",
+      },
+      asked: null, grant: null, held: null,
+    }] }]
+  })
+  await expect(rows.nth(0).locator(".who")).toHaveText("forbidden")
+  await rows.nth(0).getByRole("button", { name: "forbidden", exact: true }).click()
+  await expect(dialog.getByRole("tab", { selected: true })).toContainText("Policies")
+  await expect(dialog.locator(".marked.focused")).toContainText("kernel")
+  await expect(dialog.locator(".entry.focused")).toHaveCount(0)
+  await expect(dialog.locator(".followed .note")).toContainText("ls is in allow")
+
   expect(errors).toEqual([])
 })

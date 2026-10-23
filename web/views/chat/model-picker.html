@@ -79,9 +79,7 @@
 
   const focusOn = async name => {
     focus = name
-    grow(name)
     await load(name)
-    grow(name)
   }
 
   const toggle = async event => {
@@ -95,36 +93,22 @@
     const left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8))
     place = `left:${left}px;bottom:${window.innerHeight - box.top + 6}px`
     lists = {}
+    loaded = false
     await loadProviders()
+    loaded = true
     // Opens on where the session is, so the second column starts on the
     // models it is choosing among.
     const first = names.includes(current) ? current : names[0] || ""
-    height = fit(first)
     await focusOn(first)
   }
 
-  // The columns' height, in rem: enough for the providers and for the lists
-  // focused since the menu opened, and it **never shrinks** while it is open —
-  // a height that followed the focused provider moved the menu's top edge each
-  // time the pointer crossed another, because it opens upward. Growing moves
-  // it once, for a list that would not have fitted. A longer list than the
-  // ceiling scrolls in its column; the ceiling is the CSS's.
-  let height = 0
-  const grow = name => { height = Math.max(height, fit(name)) }
-  const fit = name => {
-    const providers = names.length * 2.5 + .6
-    const listed = lists[name]
-    if (!listed) return Math.max(8, providers)
-    // The reason is the one thing in this column whose height is its text's
-    // length rather than a row count: ~58 characters fit the width at this
-    // size. A provider that answers nothing — 401, nothing listening — says so
-    // here, and left uncounted it was a three-line message in 3.65rem.
-    const reason = listed.reason && !listed.models.length
-      ? Math.ceil(listed.reason.length / 58) * 1.4 + .4
-      : 0
-    const rows = Math.max(1, listed.models.length + listed.unavailable.length)
-    return Math.max(8, providers, 2 + reason + rows * 1.65)
-  }
+  // **One height, from the moment it opens.** The menu opens upward, so any
+  // change of height moves its top edge: it grew to fit each list as it
+  // loaded, and the content jumped while the models arrived. Now the body is
+  // a fixed box — the CSS's — whatever is loading in it, and a list longer
+  // than it scrolls in its column. Whether the providers have been asked yet,
+  // so *No providers yet* is not said while they are on their way.
+  let loaded = false
 
   const choose = async (provider, model) => {
     if (busy || switching) return
@@ -189,12 +173,14 @@
   <div :if="open" class="backdrop" @click="open = false"></div>
   <div :if="open" class="menu" role="dialog" aria-label="Provider and model"
        :style="place">
-    <p :if="!names.length" class="dim small pad">
-      No providers yet.
-      <button type="button" class="link" @click="open = false, openSettingsAt('models')">add one →</button>
-    </p>
+    <div :if="!names.length" class="body">
+      <p :if="loaded" class="dim small pad">
+        No providers yet.
+        <button type="button" class="link" @click="open = false, openSettingsAt('models')">add one →</button>
+      </p>
+    </div>
 
-    <div :if="names.length" class="cols" :style="height ? `--rows:${height}rem` : ''">
+    <div :if="names.length" class="body cols">
       <!-- Providers. Hover or click puts one in focus; nothing is chosen until
            a model is. -->
       <ul class="providers" role="listbox" aria-label="Providers">
@@ -261,7 +247,7 @@
         This server keeps no sessions, so switching starts an empty one.
       </span>
       <span :if="switching" class="dim small">Switching…</span>
-      <span :if="error" class="error small">{{ error }}</span>
+      <span :if="error" class="error small" :title="error">{{ error }}</span>
       <span class="grow"></span>
       <button type="button" class="link" @click="open = false, openSettingsAt('models')">providers…</button>
     </footer>
@@ -363,13 +349,12 @@
     display: flex;
     flex-direction: column;
   }
+  /* One height whatever it holds — loading, a list, a reason, nothing —
+     because a menu that opens upward moves its top edge with any change. */
+  .body { height: min(22rem, 60vh); }
   .cols {
     display: grid;
     grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
-    /* A floor of its own, then `fit`'s measurement, then the viewport: the
-       old `min()` had only a ceiling, so a measured height could lower the
-       menu and never raise it. */
-    height: min(max(16rem, var(--rows, 18rem)), 60vh, 30rem);
   }
   .providers {
     list-style: none;
@@ -397,6 +382,11 @@
   .prov .text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .prov.on { background: var(--luu-sunken); }
   .prov.current strong { color: var(--luu-accent); }
+  /* Under the pointer: the menu's hover, and the ink changes with it, so the
+     row being pointed at reads before its background does. */
+  .prov:hover, .prov:focus-visible { background: var(--luu-selected); color: var(--luu-accent); outline: none; }
+  .prov:hover .dim, .prov:focus-visible .dim { color: var(--luu-fg); }
+  .prov:hover .go { opacity: .8; }
   .prov .go { width: 10px; height: 10px; opacity: .4; flex: none; }
   .models { overflow-y: auto; padding: .3rem 0; }
   .models header { padding: .2rem .8rem .3rem; }
@@ -414,7 +404,12 @@
     color: var(--luu-fg);
     cursor: pointer;
   }
-  .model:hover:not(:disabled):not(.off) { background: var(--luu-sunken); }
+  .model:hover:not(:disabled):not(.off), .model:focus-visible {
+    background: var(--luu-selected);
+    color: var(--luu-accent);
+    outline: none;
+  }
+  .model.off:hover { background: var(--luu-hover); color: var(--luu-fg); }
   .model.on { color: var(--luu-accent); }
   .model.off { color: var(--luu-fg-muted); cursor: help; }
   .model.off .name { font-style: italic; }
@@ -422,13 +417,19 @@
   .check { width: 1em; flex: none; color: var(--luu-accent); }
   .model .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pad { margin: 0; padding: .2rem .8rem; }
+  /* One line, for the reason the body is one height: a message that wrapped
+     here moved the top edge too. What does not fit is cut, and the error
+     keeps the whole of itself in its tooltip. */
   .menu footer {
     display: flex;
     gap: .5rem;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-height: 2.1rem;
     border-top: 1px solid var(--luu-border);
     padding: .4rem .8rem;
   }
+  .menu footer > span:not(.grow) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu footer .link { flex: none; }
   .menu footer .grow { flex: 1; }
 </style>
