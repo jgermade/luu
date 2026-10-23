@@ -2,7 +2,7 @@
 import { expect, test } from "@playwright/test"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -90,11 +90,23 @@ test.beforeAll(async () => {
   chmodSync(join(brewBin, "brew"), 0o755)
   // And no podman but the one it installs. The Runtimes test needs a machine
   // without one, and luu finds runtimes on PATH alone, so every directory
-  // holding a real one is left out rather than the machine assumed bare — it
-  // stopped being bare the evening somebody installed podman on it.
+  // holding a real one is replaced, in its place, by a folder of links to
+  // everything in it but podman — it stopped being bare the evening somebody
+  // installed podman on it. Not left out whole: on the CI runner podman is in
+  // /usr/bin, and leaving that out took git and python3 with it, and every
+  // GET /api/workspace/git-status answered 500.
   const path = (process.env.PATH || "")
     .split(":")
-    .filter(dir => dir && !existsSync(join(dir, "podman")))
+    .filter(Boolean)
+    .map((dir, at) => {
+      if (!existsSync(join(dir, "podman"))) return dir
+      const shadow = join(home, "path", String(at))
+      mkdirSync(shadow, { recursive: true })
+      for (const name of readdirSync(dir)) {
+        if (name !== "podman") symlinkSync(join(dir, name), join(shadow, name))
+      }
+      return shadow
+    })
     .join(":")
 
   server = spawn(
