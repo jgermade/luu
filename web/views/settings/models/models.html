@@ -194,11 +194,12 @@
            switched off in Engines is not one — and the models of the one in
            focus; ✓ is the default, and its own model. A click on a model
            makes it the default: the provider has no *make default* of its
-           own, since a default is always some model. -->
+           own, since a default is always some model. A model typed under
+           the list is one too, for a server that lists none. -->
       <div class="browse" :if="state.providers">
         <ProviderModels :provider="state.providers.default || ''"
                         :model="state.providers.providers?.[state.providers.default]?.model || ''"
-                        :disabled="!editable"
+                        :disabled="!editable" typable
                         @focus="focused = $event.detail" @choose="chooseDefault($event.detail)">
           <template :slot.head>
             <span :if="said" class="said">{{ said }}</span>

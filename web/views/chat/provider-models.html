@@ -43,22 +43,26 @@
   let lists = {}
   $: shown = lists[focus] || null
   $: profile = state.providers?.providers?.[focus] || {}
+  // What the server listed, and first the model the profile names when the
+  // list leaves it out: it is a choice whether or not the provider lists it —
+  // what a session there starts on. Worked out as it is drawn rather than
+  // when the list arrived, so a model chosen since — typed for a server that
+  // lists none — is there at once.
+  $: models = (() => {
+    const listed = shown?.models || []
+    const own = profile.model
+    return own && shown && !shown.loading && !listed.includes(own) ? [own, ...listed] : listed
+  })()
 
   const load = async name => {
     if (!name || lists[name]) return
     lists = { ...lists, [name]: { loading: true, models: [], labels: {}, unavailable: [] } }
     const answer = await providerModels(name)
-    // The model the profile names is a choice whether or not the provider
-    // lists it — it is what a session there starts on — so it is first when
-    // the list leaves it out.
-    const own = state.providers?.providers?.[name]?.model
-    const listed = answer.models || []
-    const models = own && !listed.includes(own) ? [own, ...listed] : listed
     lists = {
       ...lists,
       [name]: {
         loading: false,
-        models,
+        models: answer.models || [],
         reason: answer.reason || null,
         labels: answer.labels || {},
         unavailable: answer.unavailable || [],
@@ -142,7 +146,7 @@
     </div>
     <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
     <p :if="shown?.reason &amp;&amp; !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
-    <button :each="name in shown?.models || []" :key="name" type="button"
+    <button :each="name in models" :key="name" type="button"
             class="model" role="option"
             :class.on="focus === provider &amp;&amp; name === model"
             :disabled="isDisabled"
@@ -170,8 +174,13 @@
       <span class="name">{{ u.label }}</span>
     </div>
     <!-- A provider whose list is empty is still a destination: its own
-         model, or the one the server picks. -->
-    <button :if="shown &amp;&amp; !shown.loading &amp;&amp; !shown.models.length" type="button"
+         model, or the one the server picks. Said, when the server gave no
+         reason: an empty answer, or a 404 from a server that does not list
+         its models at all, which the backend reads as none. -->
+    <p :if="shown &amp;&amp; !shown.loading &amp;&amp; !shown.models.length &amp;&amp; !shown.reason" class="dim small pad">
+      {{ focus }} lists no models{{ canType ? ": type one below" : "" }}.
+    </p>
+    <button :if="shown &amp;&amp; !shown.loading &amp;&amp; !models.length" type="button"
             class="model" :disabled="isDisabled" @click="choose(focus, '')">
       <span class="check"></span>
       <span class="name dim">use it with its own model</span>

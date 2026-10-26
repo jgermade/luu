@@ -582,8 +582,10 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   const pane = page.locator(".modal .models-pane")
   const names = pane.locator(".prov strong")
   await expect(names).toHaveText(["here", "local"])
-  // The list is read-only: no inputs in it, and nothing to save under it.
-  await expect(pane.locator(".browse input")).toHaveCount(0)
+  // The list is read-only: no input in it but the one a model is typed
+  // into, and nothing to save under it.
+  await expect(pane.locator(".browse input")).toHaveCount(1)
+  await expect(pane.locator(".browse .typed input")).toHaveCount(1)
   await expect(page.locator(".modal .section.on button.save")).toHaveCount(0)
   // Not asked to be the default, so the mock still is.
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
@@ -1129,6 +1131,53 @@ test("a remote default is chosen with a click and held until its host is typed",
   await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
+  expect(errors).toEqual([])
+})
+
+/**
+ * A server that does not list its models — a 404 on `/v1/models`, which the
+ * anthropic backend reads as none — says so in the columns, and a model
+ * typed under them is the default, as a click on a listed one is.
+ */
+test("a provider that lists no models says so, and a typed model is the default", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const silent = createServer((req, res) => res.writeHead(404).end())
+  await new Promise(done => silent.listen(0, "127.0.0.1", done))
+  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (silent.address()).port}/apps/anthropic`
+  const file = join(home, "config.toml")
+  const before = readFileSync(file, "utf8")
+  writeFileSync(file, `${before.trimEnd()}\n\n[provider.unlisted]\nbackend = "anthropic"\nurl = "${at}"\n`)
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const pane = page.locator(".modal .models-pane")
+    await pane.locator(".prov", { has: page.locator('strong:text-is("unlisted")') }).click()
+    await expect(pane.locator(".models")).toContainText("unlisted lists no models: type one below")
+    await pane.locator('.typed input').fill("typed-1")
+    await pane.locator('.typed input').press("Enter")
+    await expect.poll(() => readFileSync(file, "utf8")).toContain('default = "unlisted"')
+    expect(readFileSync(file, "utf8")).toContain('model = "typed-1"')
+    await expect(pane.locator("button.model.on")).toContainText("typed-1")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    // Back as it was, the live session included, whatever happened above.
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    delete now.providers.unlisted
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: now.providers }),
+    })
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+    silent.close()
+  }
   expect(errors).toEqual([])
 })
 

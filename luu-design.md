@@ -1262,7 +1262,8 @@ and laid out with the Design System's visual heroes, preview cards, workflow dia
 pickers offer — none whose engine is switched off in *Engines* — in one column and the models of
 the one in focus in the other, under a head with that provider's edit; a click on a model makes
 it and its provider the default — a provider has no *make default* of its own, since a default is
-always some model. *+ provider* is in the pane's pinned foot, as
+always some model — and so does one typed under them, for a server that lists none (a 404 on its
+`/v1/models` is read as none, and the column says so). *+ provider* is in the pane's pinned foot, as
 *+ engine* is in Engines', and the built-in mock is a row of its own under the columns, chosen
 when the file names no default, because a server that fell back to it used to show a table with
 nothing chosen; the providers are **read-only**, and each is added, edited, renamed or — in its
