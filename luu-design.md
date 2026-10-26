@@ -1258,12 +1258,15 @@ via `<PathText>` with the full host directory in hover title, and settings forms
 **Settings is sections down the side**, not one scroll, because the sections are not steps.
 Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport height (`calc(100dvh - 4.5rem)`),
 and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (the folder `serve` was started in, and luu's own — the folder chosen under the first is the inspector foot's, which names it and changes it), *Models*
-(what this server resolved, then the providers file the next run reads — with the built-in mock
-as a row of its own, chosen when the file names no default, because a server that fell back to
-it used to show a table with nothing chosen; the providers are a **read-only list**, and each is
-added, edited, renamed or removed in its own form in a modal, which writes that one profile and
-nothing else, at once — the default alone is set from the list; see
-[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
+(the providers file the next run reads, laid out as the new session's dialog: the providers in
+one column and the models of the one in focus in the other, that provider's default, *use →* and
+edit over its models, and *+ provider* under the list — with the built-in mock as a row of its
+own above them, chosen when the file names no default, because a server that fell back to it
+used to show a table with nothing chosen; the providers are **read-only**, and each is added,
+edited, renamed or — in its form's *Danger zone* — removed in its own form in a modal, which
+writes that one profile and nothing else, at once; the default alone is set from the list; see
+[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md)
+and [`RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`](RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
 starts](#a-model-server-luu-starts)) and *Resend* (the three
 rules that decide how much of the history a turn pays for again). *Resend* is beside *Models* and
 not inside *General* on the same rule that keeps `config.toml` and `localStorage` apart: General

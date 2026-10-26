@@ -511,17 +511,9 @@ test("a session is made from where it runs and its lists, and the page says whic
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
 
-  // The server's own policy file, before anything is chosen. In Settings →
-  // Models, which is where what this server resolved lives: its card says
-  // the session names no posture. (It was a *Posture* row until `190d5be`;
-  // this test looked for that row until 2026-10-23.)
-  await page.click('.inspector .col-foot button[title="Settings"]')
-  await page.click('.modal .rail button:has-text("Models")')
-  const posture = page.locator(".stat-pill", { hasText: "Sandbox / Postura" })
-  await expect(posture.locator(".stat-value")).toHaveText("Servidor host")
-  await page.locator(".modal-head button.close", { hasText: "close" }).click()
-  await expect(page.locator("dialog.modal")).toHaveCount(0)
-
+  // The server's own policy file was read here from Settings → Models' card
+  // of what this server resolved until 2026-10-26, when the card went; the
+  // dialog below says the same of the session it makes.
   // The "+" in the chat's head. Sessions were a tab strip over the chat
   // column (`RECORD/2026-09-15.a-three-pane-inspector.completed.md`) and before that
   // a `+ New` button beside a dropdown in the page header; one session is on
@@ -547,17 +539,19 @@ test("a session is made from where it runs and its lists, and the page says whic
   await starter.getByRole("button", { name: "Close" }).click()
   await expect(starter).toBeHidden()
 
-  // And it is in force: Models opens on what this server resolved, named by
-  // its lists, and with nothing in them it reaches no network. Reached from
-  // the composer's second row, which is where the destination is reported now
-  // — the two tags that used to be in the page header.
+  // And it is in force: the server resolved it under its lists' name, and
+  // with nothing in them it reaches no network. Read from the settings the
+  // page is served, since Settings → Models no longer draws them.
+  const resolved = await (await fetch(`${BASE}/api/settings`)).json()
+  expect(resolved.posture?.name).toBe("empty")
+  expect(resolved.sandbox).not.toContain("network allowed")
+  // Models is still reached from the composer's second row, which is where
+  // the destination is reported — the two tags that used to be in the page
+  // header.
   await page.click(".options .dest")
   await page.locator('.options .menu button:has-text("providers…")').click()
   await expect(page.locator("dialog.modal").first()).toBeVisible()
   await expect(page.locator(".modal .rail button.on")).toHaveText("Models")
-  await expect(posture.locator(".stat-value")).toHaveText("empty")
-  await page.locator(".sandbox-toggle summary").click()
-  await expect(page.locator("pre.sandbox")).not.toContainText("network allowed")
 })
 
 /**

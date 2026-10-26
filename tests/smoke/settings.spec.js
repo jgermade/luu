@@ -518,7 +518,7 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
 
   // No default in the file: the mock is what this server runs, and the table
   // says so instead of showing nothing chosen.
-  const builtin = page.locator(".modal ul.providers li.builtin")
+  const builtin = page.locator(".modal .models-pane .builtin")
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
   await expect(builtin.locator(".tag:not(.default)")).toHaveText("running")
 
@@ -575,18 +575,29 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   expect(onDisk).toContain(`url = "${server.at}"`)
   expect(onDisk).toContain('model = "tiny"')
   expect(onDisk).toContain("[provider.here]")
-  const names = page.locator(".modal ul.providers li.profile .name")
+  // Laid out as the new session's dialog: the providers in one column, the
+  // models of the one in focus in the other.
+  const pane = page.locator(".modal .models-pane")
+  const names = pane.locator(".prov strong")
   await expect(names).toHaveText(["here", "local"])
   // The list is read-only: no inputs in it, and nothing to save under it.
-  await expect(page.locator(".modal ul.providers input")).toHaveCount(0)
+  await expect(pane.locator(".browse input")).toHaveCount(0)
   await expect(page.locator(".modal .section.on button.save")).toHaveCount(0)
   // Not asked to be the default, so the mock still is.
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
 
-  // Edited in its own form, which opens on what the file has and asks the
-  // provider what it serves: its Models tab is open on the answer.
-  const row = name => page.locator(".modal ul.providers li.profile", { has: page.locator(`.name:text-is("${name}")`) })
-  await row("local").locator("button.edit").click()
+  // Edited in its own form, opened from beside the provider's name over its
+  // models, which asks the provider what it serves: its Models tab is open on
+  // the answer.
+  const focus = async name => {
+    await pane.locator(".prov", { has: page.locator(`strong:text-is("${name}")`) }).click()
+    await expect(pane.locator(".models-head strong")).toHaveText(name)
+  }
+  const openEdit = async name => {
+    await focus(name)
+    await pane.getByRole("button", { name: `Edit ${name}` }).click()
+  }
+  await openEdit("local")
   const edit = page.getByRole("dialog", { name: "Provider local" })
   await edit.getByRole("tab", { name: /Models/ }).click()
   const pick = name => edit.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) }).locator('input[type="radio"]')
@@ -596,7 +607,8 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(edit).toHaveCount(0)
   server.close()
   expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
-  await expect(row("local")).toContainText("tiny-q4")
+  await focus("local")
+  await expect(pane.locator(".models-head")).toContainText("tiny-q4")
 
   // Renamed, and the old name is gone rather than left beside it; then
   // removed, asked twice.
@@ -606,13 +618,16 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await scratch.locator("select.backend").selectOption("mock")
   await scratch.getByRole("button", { name: "Add provider" }).click()
   await expect(scratch).toHaveCount(0)
-  await row("scratch").locator("button.edit").click()
+  await openEdit("scratch")
   const renaming = page.getByRole("dialog", { name: "Provider scratch" })
   await renaming.locator("dd input").first().fill("scratch2")
   await renaming.getByRole("button", { name: "Save" }).click()
   await expect(names).toHaveText(["here", "local", "scratch2"])
-  await row("scratch2").locator("button.edit").click()
+  await openEdit("scratch2")
   const removing = page.getByRole("dialog", { name: "Provider scratch2" })
+  // In its danger zone, apart from everything that is saved.
+  await expect(removing.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0)
+  await removing.getByRole("tab", { name: "Danger zone" }).click()
   await removing.getByRole("button", { name: "Remove", exact: true }).click()
   await removing.getByRole("button", { name: "Remove scratch2?" }).click()
   await expect(removing).toHaveCount(0)
@@ -1024,7 +1039,7 @@ test("an engine is added with its provider, started, and stopped from Settings",
 
   // And Models shows the provider as one that starts an engine.
   await page.click('.modal .rail button:has-text("Models")')
-  await expect(page.locator(".modal ul.providers .tag", { hasText: "engine" })).toHaveCount(1)
+  await expect(page.locator(".modal .models-pane .prov", { hasText: "luu starts it" })).toHaveCount(1)
 
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
@@ -1056,9 +1071,10 @@ test("a new default and the chat's picker both move the session without a restar
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
   // The default is the one thing changed from the list, and written at once.
-  const here = page.locator(".modal ul.providers li.profile", { has: page.locator('.name:text-is("here")') })
-  await here.locator('button:has-text("make default")').click()
-  await expect(here.locator(".tag.default")).toHaveCount(1)
+  const pane = page.locator(".modal .models-pane")
+  await pane.locator(".prov", { has: page.locator('strong:text-is("here")') }).click()
+  await pane.locator('.models-head button:has-text("make default")').click()
+  await expect(pane.locator(".models-head .tag.default")).toHaveCount(1)
   await expect(page.locator(".modal")).toContainText("the live session is on here")
   const after = await (await fetch(`${BASE}/api/settings`)).json()
   expect(after.profile).toBe("here")

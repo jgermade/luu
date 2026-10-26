@@ -1,4 +1,4 @@
-<script :setup="{ provider = '', model = '', disabled = false, typable = false }">
+<script :setup="{ provider = '', model = '', disabled = false, typable = false, every = false }">
   // Where a session sends, chosen in two columns: the providers in
   // `config.toml`, and the models of the one in focus — what *it* can serve,
   // asked of it when it is focused (`/models`). For a provider whose engine
@@ -16,6 +16,11 @@
   // scrolls in its column — so the box does not move while lists arrive.
   // `typable` adds a field under the models for one the provider does not
   // list: a model not pulled yet is still a name worth writing down.
+  //
+  // **And a third, Settings → Models**, where providers are kept rather than
+  // chosen: `every` lists the ones whose engine is switched off too, it emits
+  // `focus` with the provider in focus, and the `head` slot sits right of that
+  // provider's name over its models — where its own actions go.
   const { state, providerModels, offeredProviders } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
 
@@ -23,7 +28,7 @@
   $: isDisabled = flag(disabled)
   $: canType = flag(typable)
 
-  $: names = offeredProviders()
+  $: names = flag(every) ? Object.keys(state.providers?.providers || {}) : offeredProviders()
   // The provider whose models the second column shows.
   let focus = ""
   // name → { loading, models, reason, labels, unavailable }. Kept while this
@@ -54,6 +59,7 @@
     }
   }
   const focusOn = async name => {
+    if (focus !== name) $emit("focus", name)
     focus = name
     await load(name)
   }
@@ -96,7 +102,7 @@
     const p = state.providers?.providers?.[name] || {}
     return [
       p.backend || "ollama",
-      p.engine ? "luu starts it" : "",
+      p.engine ? ((state.providers?.idle || []).includes(name) ? "engine off" : "luu starts it") : "",
       transportOf(p, p.model) === "native" ? "native tools" : "",
     ].filter(Boolean).join(" · ")
   }
@@ -123,6 +129,7 @@
     <div class="models-head dim small">
       <strong>{{ focus }}</strong>
       <span :if="profile.engine">· engine {{ profile.engine }}</span>
+      <span :if="$slots.head" class="head-acts"><slot.head /></span>
     </div>
     <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
     <p :if="shown?.reason &amp;&amp; !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
@@ -206,7 +213,8 @@
   .prov:hover .go { opacity: .8; }
   .prov .go { width: 10px; height: 10px; opacity: .4; flex: none; }
   .models { overflow-y: auto; padding: .3rem 0; min-height: 0; }
-  .models-head { padding: .2rem .8rem .3rem; }
+  .models-head { display: flex; align-items: center; gap: .35rem; padding: .2rem .8rem .3rem; min-height: 1.9rem; }
+  .head-acts { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; }
   .model {
     display: flex;
     gap: .4rem;
