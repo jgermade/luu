@@ -14,7 +14,9 @@ this way).
 
 Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`.
 
-Two are the projects' own rather than Simple Icons', for the engines luu
+Three are the projects' own rather than Simple Icons', for the engines luu
 starts: `ollama.svg` is `docs/ollama-logo.svg` from
-[ollama/ollama](https://github.com/ollama/ollama), and `llamacpp.svg` is
-llama.cpp's mark as its project draws it. `mlx` has none yet.
+[ollama/ollama](https://github.com/ollama/ollama), `llamacpp.svg` is
+llama.cpp's mark as its project draws it, and `mlx.svg` is the X of
+[mlx-serve](https://github.com/ddalcu/mlx-serve)'s app icon, traced flat
+without its tile and its bevel.

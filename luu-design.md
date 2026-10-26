@@ -1366,9 +1366,9 @@ URL, keeps the browser's cache honest. A versioned extension path that an update
 to the newest version beside it. See
 [`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md).
 **Brand marks are the one exception to *nothing is vendored***: a mark is its owner's and there is
-one per brand, so there is no taste to tie the page to. Fourteen come with the page
-(`web/brands/`: Simple Icons' under CC0, named by lobehub's slugs, and llama.cpp's and Ollama's
-own, which an engine's card and the installer's kinds wear too), drawn as a mask over
+one per brand, so there is no taste to tie the page to. Fifteen come with the page
+(`web/brands/`: Simple Icons' under CC0, named by lobehub's slugs, and llama.cpp's, mlx-serve's
+and Ollama's own, which an engine's card and the installer's kinds wear too), drawn as a mask over
 `currentColor` beside each provider (by backend and URL host) and model (by family, after the
 catalog's prefix) in the two columns the pickers share; nothing known is no mark. `[ui]
 brand-icons` names a pack instead — a folder of `<slug>.svg`, or one with `icons/` in it — offered

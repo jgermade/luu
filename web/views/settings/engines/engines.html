@@ -233,9 +233,10 @@
       <section :each="card in cards" :key="card.key" class="engine" :class.found="!!card.found"
                :class.off="!used(card)">
         <header>
-          <BrandIcon :src="brandSrc(engineBrand((card.engine || card.found).kind))" size="16px" />
+          <!-- The kind is its mark; named for whoever cannot see it. -->
+          <BrandIcon :src="brandSrc(engineBrand((card.engine || card.found).kind))" size="16px"
+                     :label="(card.engine || card.found).kind" />
           <strong>{{ card.name }}</strong>
-          <span class="tag">{{ (card.engine || card.found).kind }}</span>
           <span class="origin" :class="card.found ? 'system' : card.engine.origin"
                 :title="originTitle(card)">{{ ORIGIN[card.found ? "system" : card.engine.origin].word }}</span>
           <span :if="used(card)" class="state" :class="card.engine.status.state"
@@ -301,7 +302,7 @@
           <dd :if="card.engine">
             <code>{{ card.engine.url }}</code>
             <span :if="!card.engine.providers.length" class="dim">· no provider names it</span>
-            <span :each="p in card.engine.providers" :key="p">· <span class="tag">{{ p }}</span></span>
+            <span :each="p in card.engine.providers" :key="p">· {{ p }}</span>
           </dd>
 
           <dt :if="card.engine">Arguments</dt>
