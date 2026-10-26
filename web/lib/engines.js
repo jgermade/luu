@@ -3,7 +3,7 @@
 /// downloads of luu's own copies. Every answer is the whole view again, so the
 /// page never works out a server's state for itself. See `crate::engines` and
 /// `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
-import { apiHeaders } from "./store.js"
+import { apiHeaders, state, loadProviders, saveProviders } from "./store.js"
 
 async function call(method, path, body) {
   const res = await fetch(path, {
@@ -19,14 +19,52 @@ export const loadEngines = () => call("GET", "./api/engines")
 /// The whole `[engine.*]` table: the page writes one table at a time, the
 /// way it writes the providers.
 export const saveEngines = engines => call("PUT", "./api/engines", { engines })
-// An empty JSON body, and it is load-bearing: see `start_engine`.
-export const startEngine = name => call("POST", `./api/engines/${encodeURIComponent(name)}/start`, {})
+// A JSON body, and it is load-bearing: see `start_engine`. `model`, a catalog
+// reference, starts it on that model rather than its table's.
+export const startEngine = (name, model = "") =>
+  call("POST", `./api/engines/${encodeURIComponent(name)}/start`, model ? { model } : {})
 export const stopEngine = name => call("POST", `./api/engines/${encodeURIComponent(name)}/stop`, {})
 export const installEngine = (kind, version, variant) =>
   call("POST", "./api/engines/install", { kind, version: version || null, variant: variant || null })
-/// Removes luu's own copy of that release; the tables that name it stay.
-export const uninstallEngine = (kind, version, variant) =>
-  call("POST", "./api/engines/uninstall", { kind, version: version || null, variant: variant || null })
+/// Uninstalls an engine on luu's own copy: the copy, its table and the
+/// providers that start it. See `uninstall_engine`.
+export const uninstallEngine = name =>
+  call("POST", `./api/engines/${encodeURIComponent(name)}/uninstall`, {})
+
+/// The first port from the kind's own upward that nothing has: `{ ok, port }`
+/// or `{ ok: false, error }`. See `engines::free_port`.
+export async function freePort(kind) {
+  const res = await fetch(`./api/engines/port?kind=${encodeURIComponent(kind)}`, { headers: apiHeaders() })
+  if (!res.ok) return { ok: false, error: (await res.text()) || `${res.status}` }
+  return { ok: true, port: (await res.json()).port }
+}
+
+/// Puts an engine on another port, and the providers that send to it with it
+/// — each only where its URL still says the old one, so a URL somebody
+/// changed by hand is left alone. `view` is the engines view as the page has
+/// it; answers `{ ok, view }` or `{ ok: false, error }`.
+export async function moveEngine(view, name, port) {
+  const engines = Object.fromEntries(Object.entries(view.engines).map(([n, e]) => [n, tableOf(e)]))
+  const before = view.engines[name]?.url
+  engines[name] = { ...engines[name], port }
+  const written = await saveEngines(engines)
+  if (!written.ok) return written
+  const after = written.view.engines[name]?.url
+  await loadProviders()
+  const providers = { ...(state.providers?.providers || {}) }
+  let changed = false
+  for (const linked of view.engines[name]?.providers || []) {
+    if (before !== after && providers[linked]?.url === before) {
+      providers[linked] = { ...providers[linked], url: after }
+      changed = true
+    }
+  }
+  if (changed) {
+    const result = await saveProviders({ default: state.providers?.default ?? null, providers })
+    if (!result?.ok) return { ok: false, error: `The engine moved, and its provider did not: ${state.providersError}` }
+  }
+  return written
+}
 
 /// What the file says of one engine, out of the view — which also carries its
 /// status, the resolved binary and the linked providers. `enabled` is among

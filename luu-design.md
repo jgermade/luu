@@ -2252,9 +2252,9 @@ is sent to it.
 kind = "llama"          # llama | mlx | ollama
 binary = "managed"      # luu's own copy; a path; or absent: found on PATH
 # enabled = false       # kept, and not used: luu does not start it
-port = 8080
-model = "ollama:qwen2.5-coder:7b"   # -m, out of what this machine already has
+port = 8080             # the first free one from the kind's own, when luu writes it
 args = ["-c", "8192"]
+# model = "ollama:qwen2.5-coder:7b" # read, never asked: the session's model is the one loaded
 
 [provider.gemma]
 backend = "openai"
@@ -2327,12 +2327,29 @@ neither (`origin`, the server's answer) — and nothing is removed from the page
 provider that starts it; not used, a table keeps everything and gains `enabled = false`, which
 luu **does not start** (`ensure` and the start route refuse, naming the switch) and whose
 providers **leave the pickers** (`idle` on `GET /api/providers`), while staying in Settings →
-Models. **luu's own copy installs and uninstalls** from its card (`POST /api/engines/uninstall`,
-refused while an engine runs from it), and the table that names it stays. A version or variant
-the page sends is a name or it is refused — it is joined into a path under the state directory.
-The actions are icons (start, stop, output, install, uninstall, edit), and the output is a
-`SubModal` with each line coloured by what it says. See
+Models. A version or variant the page sends is a name or it is refused — it is joined into a
+path under the state directory. The actions are icons (start, stop, output, install, uninstall,
+edit), and the output is a `SubModal` with each line coloured by what it says. See
 [`RECORD/2026-10-26.engines-found-used-and-owned.completed.md`](RECORD/2026-10-26.engines-found-used-and-owned.completed.md).
+
+**The engine's model is the session's.** Nothing in the pane or the form asks for one: a session
+chooses its model and `for_run` starts the engine on it; an old table's `model` still loads and
+an edit keeps it. **Play opens a sheet** of the models the engine can load (the catalog; ollama's
+store for ollama) with *Start a chat* — a session on the engine's provider and that model, which
+closes Settings — and *Start engine*, which `POST /api/engines/{name}/start` with `{ model }`, a
+catalog reference, restarting an engine luu runs on another. **luu picks the port**: `GET
+/api/engines/port` is the first from the kind's own upward that no table names and a bind on
+`127.0.0.1` finds free, within a hundred and under the ephemeral range, and the form and *use*
+write it; when something else answers on an engine's port anyway, the sheet offers *move to port
+N*, which rewrites the table and every provider whose URL still says the old one. **Uninstall
+asks, then removes the engine** (`POST /api/engines/{name}/uninstall`, luu's own copy only):
+stopped, its copy deleted unless another table runs it, and `[engine.<name>]` taken out of the
+file with the providers that start it. **The form is an installer** in a wide `SubModal` of
+`InputContainer`s: the kind as cards (with whether this machine has a release of it,
+`cannot_install`), where the binary comes from, the name and port filled in, *Advanced* for the
+arguments; *Install* downloads luu's copy there and closes when it is on disk — unpacked without
+an archive's single top folder, so `luu:/engines/llama/b11236/llama-server`. See
+[`RECORD/2026-10-26.engines-installed-and-started.completed.md`](RECORD/2026-10-26.engines-installed-and-started.completed.md).
 
 ### Settings
 

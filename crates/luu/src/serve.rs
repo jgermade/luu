@@ -1650,7 +1650,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines", get(get_engines).put(put_engines))
         .route("/api/engine", get(live_engine))
         .route("/api/engines/install", post(install_engine))
-        .route("/api/engines/uninstall", post(uninstall_engine))
+        .route("/api/engines/port", get(free_engine_port))
+        .route("/api/engines/{name}/uninstall", post(uninstall_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
         // Other machines' `luu serve`, reached through this one: the list, and
@@ -5729,6 +5730,9 @@ struct EnginesView {
     discovered: Vec<Discovered>,
     /// The version luu downloads when a table names none.
     pinned: std::collections::BTreeMap<&'static str, &'static str>,
+    /// Why this machine has no release of a kind to download, for each kind
+    /// that has none — MLX off Apple Silicon. Absent is installable.
+    cannot_install: std::collections::BTreeMap<&'static str, String>,
     /// luu's own copies already downloaded, per kind, by directory name.
     managed: std::collections::BTreeMap<&'static str, Vec<String>>,
     /// Where they go.
@@ -5872,6 +5876,10 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
         found,
         discovered,
         pinned: KINDS.iter().map(|k| (k.as_str(), k.pinned())).collect(),
+        cannot_install: KINDS
+            .iter()
+            .filter_map(|k| Some((k.as_str(), k.asset(k.pinned(), None).err()?)))
+            .collect(),
         managed,
         root: root.map(|root| root.display().to_string()),
         installs: supervisor.installs(),
@@ -6033,28 +6041,62 @@ async fn put_engines(
 /// Starts one without waiting for it: the page polls, and shows its output
 /// while it loads. A port something else already answers on is refused,
 /// because a second server there would fail to bind and say so less clearly.
+///
+/// `{ model }` starts a llama.cpp or mlx engine on that model instead of its
+/// table's — a catalog reference, nothing else from the page, which is what
+/// the start sheet offers — and restarts one luu runs on another.
 async fn start_engine(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
     Path(name): Path<String>,
-    // Required, and empty: a JSON body is what a cross-site form cannot send
-    // without a preflight this server never answers.
-    Json(_): Json<serde_json::Value>,
+    // Required: a JSON body is what a cross-site form cannot send without a
+    // preflight this server never answers.
+    Json(asked): Json<serde_json::Value>,
 ) -> Response {
     if let Err(refused) = engines_allowed(&state, &headers) {
         return *refused;
+    }
+    let model = asked
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string);
+    if let Some(model) = &model
+        && !crate::models::is_reference(model)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{model} is not a model on this machine: from this page an engine starts on one out of the catalog"),
+        )
+            .into_response();
     }
     let engine = match load_config().await {
         Ok((config, _)) => config.engines().get(&name).cloned(),
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     };
-    let Some(engine) = engine else {
+    let Some(mut engine) = engine else {
         return (
             StatusCode::NOT_FOUND,
             format!("there is no [engine.{name}]"),
         )
             .into_response();
     };
+    if let Some(model) = model
+        && engine.kind != crate::provider::EngineKind::Ollama
+    {
+        // Running on another one: stopped, so it starts again on this.
+        if state
+            .app
+            .engines
+            .model_of(&name)
+            .await
+            .is_some_and(|running| running.as_ref() != Some(&model))
+        {
+            state.app.engines.stop(&name).await;
+        }
+        engine.model = Some(model);
+    }
     let status = state.app.engines.status(&name, &engine).await;
     if status.answering && status.state != "running" {
         let port = engine.port.unwrap_or(engine.kind.default_port());
@@ -6090,23 +6132,138 @@ struct InstallAsk {
     variant: Option<String>,
 }
 
-/// Removes luu's own copy of one release. See [`crate::engines::Supervisor::uninstall`].
+/// The first free port for a kind, from its own upward: what the form and
+/// *use* write, and what the start sheet offers to move a busy engine to. See
+/// [`crate::engines::free_port`].
+async fn free_engine_port(
+    Query(asked): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let kind = match asked.get("kind").map(String::as_str) {
+        Some("llama") | None => crate::provider::EngineKind::Llama,
+        Some("mlx") => crate::provider::EngineKind::Mlx,
+        Some("ollama") => crate::provider::EngineKind::Ollama,
+        Some(other) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("`{other}` is not an engine kind"),
+            )
+                .into_response();
+        }
+    };
+    let named: Vec<u16> = match load_config().await {
+        Ok((config, _)) => config
+            .engines()
+            .values()
+            .map(|e| e.port.unwrap_or(e.kind.default_port()))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    match blocking(move || crate::engines::free_port(kind, &named)).await {
+        Some(port) => Json(serde_json::json!({ "port": port })).into_response(),
+        None => (
+            StatusCode::CONFLICT,
+            format!(
+                "every port from {} to {} is taken",
+                kind.default_port(),
+                kind.default_port() + 99
+            ),
+        )
+            .into_response(),
+    }
+}
+
+/// Uninstalls an engine that runs luu's own copy: stops it, deletes the copy
+/// unless another table runs it, and takes `[engine.<name>]` out of the file
+/// with the providers that start it. A binary luu did not put on the machine
+/// is never deleted, so an engine on one is refused here — it is used or not.
 async fn uninstall_engine(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
-    Json(asked): Json<InstallAsk>,
+    Path(name): Path<String>,
+    Json(_): Json<serde_json::Value>,
 ) -> Response {
     if let Err(refused) = engines_allowed(&state, &headers) {
         return *refused;
     }
-    let blank = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    if let Err(error) = state
-        .app
-        .engines
-        .uninstall(asked.kind, blank(asked.version), blank(asked.variant))
-        .await
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Some(engine) = current.engines().get(&name).cloned() else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    if engine.binary.as_deref() != Some("managed") {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "`{name}` runs a binary luu did not install: it is used or not, and never deleted"
+            ),
+        )
+            .into_response();
+    }
+    state.app.engines.stop(&name).await;
+    let release = |e: &crate::provider::Engine| {
+        (
+            e.kind,
+            e.version
+                .clone()
+                .unwrap_or_else(|| e.kind.pinned().to_string()),
+            e.variant.clone(),
+        )
+    };
+    let shared = current.engines().iter().any(|(other, e)| {
+        *other != name && e.binary.as_deref() == Some("managed") && release(e) == release(&engine)
+    });
+    let (kind, version, variant) = release(&engine);
+    let on_disk = crate::engines::root()
+        .map(|root| crate::engines::managed_dir(&root, kind, &version, variant.as_deref()))
+        .is_some_and(|dir| dir.is_dir());
+    if !shared
+        && on_disk
+        && let Err(error) = state
+            .app
+            .engines
+            .uninstall(kind, Some(version), variant)
+            .await
     {
         return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    let gone: Vec<String> = current
+        .profiles()
+        .iter()
+        .filter(|(_, profile)| profile.engine.as_deref() == Some(name.as_str()))
+        .map(|(provider, _)| provider.clone())
+        .collect();
+    let providers = current
+        .profiles()
+        .iter()
+        .filter(|(provider, _)| !gone.contains(provider))
+        .map(|(provider, profile)| (provider.clone(), profile.clone()))
+        .collect();
+    let default = current
+        .default_name()
+        .filter(|default| !gone.iter().any(|g| g == default))
+        .map(str::to_string);
+    let mut engines = current.engines().clone();
+    engines.remove(&name);
+    if let Err(error) = write_config(
+        current.from_parts(default, providers).with_engines(engines),
+        path,
+    )
+    .await
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     engines_answer(&state).await
 }

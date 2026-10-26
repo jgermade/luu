@@ -10,15 +10,15 @@
   // where its binary comes from — `luu:` for luu's own copy, which it can
   // install and uninstall, `system` for one it found. See
   // `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
-  const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, uninstallEngine,
-          modelLabel, tableOf, profileFor, defaultPort } = await import("@web/lib/engines.js")
+  const { loadEngines, saveEngines, stopEngine, installEngine, uninstallEngine,
+          tableOf, profileFor, freePort } = await import("@web/lib/engines.js")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const Switch = await import("@web/theme/default/components/switch.html")
   const Button = await import("@web/theme/default/components/button.html")
   const PathText = await import("@web/components/path-text.html")
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
-  const { openStarter } = await import("@web/lib/ui.js")
   const EngineForm = await import("./engine-form.html")
+  const EngineStart = await import("./engine-start.html")
 
   let view = null
   let error = ""
@@ -26,8 +26,11 @@
   // a new one, `null` when the form is shut.
   let editing = null
   let busy = ""
-  // Whose output is open in the sheet, or `null`.
+  // Whose output is open in the sheet, or `null`; whose start sheet; and
+  // whose uninstall is being asked about.
   let output = null
+  let starting = null
+  let uninstalling = null
 
   const took = result => {
     if (result.ok) {
@@ -80,11 +83,12 @@
   // writes with its box ticked.
   const useFound = async card => {
     const { kind, path } = card.found
-    const taken = Object.values(view.engines).map(e => e.port || defaultPort(e.kind))
-    let port = defaultPort(kind)
-    while (taken.includes(port)) port++
+    // A port nothing has: the kind's own, or the first free one above it.
+    const free = await freePort(kind)
+    if (!free.ok) return void (error = free.error)
+    const port = free.port
     const engines = tables()
-    engines[card.name] = { kind, binary: path, ...(port !== defaultPort(kind) ? { port } : {}) }
+    engines[card.name] = { kind, binary: path, port }
     if (!(await act(`use:${card.key}`, () => saveEngines(engines)))) return
     await loadProviders()
     const providers = { ...(state.providers?.providers || {}) }
@@ -134,6 +138,22 @@
   // luu's own copy, which this card can put on the machine or take off it.
   const managed = card => card.engine?.binary === "managed"
   const release = card => card.engine.version || view.pinned[card.engine.kind]
+
+  // What an uninstall takes with it, said before it does: luu's copy unless
+  // another table runs the same one, the table, and the providers that start
+  // it. See `uninstall_engine`.
+  const sharesCopy = name => {
+    const e = view.engines[name]
+    const same = o => o.binary === "managed" && o.kind === e.kind &&
+      (o.version || view.pinned[o.kind]) === (e.version || view.pinned[e.kind]) && (o.variant || "") === (e.variant || "")
+    return Object.entries(view.engines).filter(([n, o]) => n !== name && same(o)).map(([n]) => n)
+  }
+  const uninstall = async () => {
+    if (await act(`uninstall:${uninstalling}`, () => uninstallEngine(uninstalling))) {
+      uninstalling = null
+      await loadProviders()
+    }
+  }
 
   // The output's lines, each coloured by what it says.
   $: lines = output ? (view?.engines?.[output]?.status.log || []) : []
@@ -240,7 +260,7 @@
             <Button :if="!running(card)" square variant="ghost" size="sm"
                     :title="used(card) ? 'Start' : 'Switch it on to start it'" label="Start"
                     :disabled="!view.editable || !!busy || !used(card)"
-                    @click="act(`start:${card.name}`, () => startEngine(card.name))">
+                    @click="starting = card.name">
               <svg class="ic"><use href="#i-play"/></svg>
             </Button>
             <Button :if="running(card)" square variant="ghost" size="sm" title="Stop" label="Stop"
@@ -260,10 +280,10 @@
                     @click="act('install', () => installEngine(card.engine.kind, card.engine.version, card.engine.variant))">
               <svg class="ic"><use href="#i-download"/></svg>
             </Button>
-            <Button :if="managed(card) && card.engine.resolved" square variant="ghost" size="sm"
-                    :title="running(card) ? 'Stop it to uninstall luu\'s copy' : `Uninstall luu's own copy · ${release(card)}`"
-                    label="Uninstall" :disabled="!view.editable || !!busy || running(card)"
-                    @click="act(`uninstall:${card.name}`, () => uninstallEngine(card.engine.kind, card.engine.version, card.engine.variant))">
+            <Button :if="managed(card)" square variant="ghost" size="sm"
+                    :title="`Uninstall ${card.name} and luu's own copy · ${release(card)}`"
+                    label="Uninstall" :disabled="!view.editable || !!busy"
+                    @click="uninstalling = card.name">
               <svg class="ic"><use href="#i-trash"/></svg>
             </Button>
             <Button square variant="ghost" size="sm" title="Edit" label="Edit" :disabled="!view.editable"
@@ -284,21 +304,11 @@
             <span :if="card.engine?.problem" class="warn">{{ card.engine.problem }}</span>
           </dd>
 
-          <dt :if="card.engine && card.engine.kind !== 'ollama'">Model</dt>
-          <dd :if="card.engine && card.engine.kind !== 'ollama'">
-            <span :if="card.engine.model">{{ modelLabel(card.engine.model) }}</span>
-            <span :if="!card.engine.model" class="dim">named in the arguments</span>
-          </dd>
-
           <dt :if="card.engine">Sends</dt>
           <dd :if="card.engine">
             <code>{{ card.engine.url }}</code>
             <span :if="!card.engine.providers.length" class="dim">· no provider names it</span>
-            <span :each="p in card.engine.providers" :key="p">
-              · <span class="tag">{{ p }}</span>
-              <button :if="used(card)" type="button" class="link" title="Start a session on this provider"
-                      @click="openStarter(p)">use →</button>
-            </span>
+            <span :each="p in card.engine.providers" :key="p">· <span class="tag">{{ p }}</span></span>
           </dd>
 
           <dt :if="card.engine">Arguments</dt>
@@ -347,6 +357,41 @@
   <pre class="log"><span :each="line, i in lines" :key="i" class="line" :class="tone(line)">{{ line }}</span></pre>
 </SubModal>
 
+<!-- Play: a model, and an engine or a chat on it. -->
+<EngineStart :if="starting" :view="view" :name="starting"
+             :saved="next => { view = next }" :close="() => { starting = null }" />
+
+<!-- Uninstalling asks first, and says everything that goes with it. -->
+<SubModal :open="!!uninstalling" :title="uninstalling ? `Uninstall ${uninstalling}` : ''" width="34rem"
+          @close="uninstalling = null">
+  <div :if="uninstalling && view?.engines?.[uninstalling]" class="goes">
+    <p>This removes, at once:</p>
+    <ul>
+      <li :if="!sharesCopy(uninstalling).length">
+        luu's own copy of {{ view.engines[uninstalling].kind }} {{ release({ engine: view.engines[uninstalling] }) }}<span
+          :if="view.engines[uninstalling].resolved">, <code><PathText :path="view.engines[uninstalling].resolved" :home="state.settings?.home" /></code> and the folder it is in</span>
+      </li>
+      <li :if="sharesCopy(uninstalling).length">
+        nothing on disk: {{ sharesCopy(uninstalling).join(", ") }} runs the same copy
+      </li>
+      <li>
+        <code>[engine.{{ uninstalling }}]</code> from <code>config.toml</code><span
+          :if="running({ engine: view.engines[uninstalling] })">, stopped first</span>
+      </li>
+      <li :if="view.engines[uninstalling].providers.length">
+        the providers that start it: {{ view.engines[uninstalling].providers.join(", ") }}<span
+          :if="view.engines[uninstalling].providers.includes(state.providers?.default)">, and the
+          default with them, which goes back to the mock</span>
+      </li>
+    </ul>
+  </div>
+  <p :if="error" class="error">{{ error }}</p>
+  <template :slot.foot>
+    <span class="left"><Button variant="ghost" @click="uninstalling = null">Cancel</Button></span>
+    <Button variant="danger" :loading="busy === `uninstall:${uninstalling}`" @click="uninstall()">Uninstall</Button>
+  </template>
+</SubModal>
+
 <style scoped>
   .engines-pane {
     display: flex;
@@ -391,6 +436,9 @@
     color: var(--luu-fg-muted);
   }
   .engine.off { background: var(--luu-sunken, rgba(0, 0, 0, .03)); }
+  .goes p { margin: 0 0 .4rem; font-size: 12.5px; }
+  .goes ul { margin: 0; padding-left: 1.2rem; font-size: 12.5px; line-height: 1.6; }
+  .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
   .engine.off header strong { color: var(--luu-fg-muted); }
   .actions { display: inline-flex; align-items: center; gap: .15rem; }
   .actions .ic { width: 15px; height: 15px; }

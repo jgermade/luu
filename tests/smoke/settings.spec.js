@@ -990,17 +990,26 @@ test("an engine is added with its provider, started, and stopped from Settings",
   await page.locator('.engines-pane button.add:has-text("+ engine")').click()
   const form = page.getByRole("dialog", { name: "Add an engine" })
   await expect(form).toBeVisible()
-  await form.locator("dd input").first().fill("fake")
-  await form.locator("select").nth(1).selectOption("custom")
+  // An installer: the kind, where its binary comes from, and where it
+  // listens, with a name and a free port already in. No model: a session
+  // chooses the one its engine loads.
+  await expect(form.getByRole("radio", { name: /llama\.cpp/ })).toHaveAttribute("aria-checked", "true")
+  await expect(form.getByLabel("Name", { exact: true })).toHaveValue(/^llama(-\d+)?$/)
+  await expect(form.getByLabel("Port", { exact: true })).toHaveValue(/^\d+$/)
+  await expect(form.getByText("Model", { exact: true })).toHaveCount(0)
+  await expect(form.getByRole("button", { name: "Install" })).toBeVisible()
+  await form.getByLabel("Name", { exact: true }).fill("fake")
+  await form.getByRole("radio", { name: /A path/ }).check()
 
   // Only the kind's own binary, from here.
-  const path = form.locator('input[placeholder$="/llama-server"]')
+  const path = form.getByLabel("Path", { exact: true })
   await path.fill("/bin/sh")
-  await expect(form.locator(".warn", { hasText: "must be a file named" })).toBeVisible()
-  await expect(form.locator("button.save")).toBeDisabled()
+  await expect(form.getByText("must be a file named llama-server")).toBeVisible()
+  const add = form.getByRole("button", { name: "Add engine" })
+  await expect(add).toBeDisabled()
   await path.fill(fake)
-  await form.locator('input[placeholder="8080"]').fill("8097")
-  await form.locator("button.save").click()
+  await form.getByLabel("Port", { exact: true }).fill("8097")
+  await add.click()
   await expect(form).toHaveCount(0)
 
   const onDisk = readFileSync(join(home, "config.toml"), "utf8")
@@ -1020,8 +1029,13 @@ test("an engine is added with its provider, started, and stopped from Settings",
   // A path the file names, neither luu's own copy nor one the machine had.
   await expect(card.locator(".origin")).toHaveText("path")
 
-  // Its actions are icons, named for a screen reader and a tooltip.
+  // Its actions are icons, named for a screen reader and a tooltip. Play
+  // asks which model, out of what the machine has, and starts it on that.
   await card.getByRole("button", { name: "Start" }).click()
+  const start = page.getByRole("dialog", { name: "Start fake" })
+  await expect(start.locator(".model .label").first()).toBeVisible()
+  await start.getByRole("button", { name: "Start engine" }).click()
+  await expect(start).toHaveCount(0)
   await expect(card.locator(".state")).toHaveText(/starting|running/)
   // The output is a sheet over the pane, each line coloured by what it says:
   // the command luu ran first.
@@ -1150,26 +1164,14 @@ test("the models on this machine are listed by where they came from", async ({ p
   await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
-  // The engine form offers the two llama.cpp can load, and says why not the third.
+  // Play offers the two llama.cpp can load, and not the third.
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Engines")')
-  await page.locator(".engines-pane section.engine", { hasText: "fake" }).getByRole("button", { name: "Edit" }).click()
-  const form = page.getByRole("dialog", { name: "Engine fake" })
-  const models = form.locator("select").nth(2)
-  await expect(models.locator("option")).toHaveText([
-    "none — named in the arguments below",
-    /tiny:1b \(ollama\)/,
-    /small-Q4_K_M \(huggingface\)/,
-    /⚠ big:27b-mlx \(ollama, mlx\)/,
-  ])
-  await expect(models.locator("option").last()).toBeDisabled()
-  await expect(models.locator("option").last()).toHaveAttribute("title", /only ollama/)
-  await expect(form).toContainText("1 on this machine this engine cannot load")
-  await models.selectOption("ollama:tiny:1b")
-  await form.locator("button.save").click()
-  await expect(form).toHaveCount(0)
-  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "ollama:tiny:1b"')
-  await expect(page.locator(".engines-pane section.engine", { hasText: "fake" })).toContainText("tiny:1b (ollama)")
+  await page.locator(".engines-pane section.engine", { hasText: "fake" }).getByRole("button", { name: "Start" }).click()
+  const start = page.getByRole("dialog", { name: "Start fake" })
+  await expect(start.locator(".model .label")).toHaveText(["tiny:1b (ollama)", "small-Q4_K_M (huggingface)"])
+  await start.getByRole("button", { name: "Cancel" }).click()
+  await expect(start).toHaveCount(0)
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
   // And the chat's picker lists them under the provider that starts it.
@@ -1512,7 +1514,8 @@ test("a theme is added as a zip, dropped on the frame, and a bare JSON is refuse
  * *system*, not used, and used with one switch — its engine and the provider
  * that starts it. Switched off, the table stays with `enabled = false` and its
  * provider leaves the pickers. And luu's own copy, once it is on disk, is
- * uninstalled from its card and leaves the table in place. Last in the file:
+ * uninstalled from its card, asked first: the copy, the table and the card
+ * go together. Last in the file:
  * the provider it writes would otherwise be in every picker after it. See
  * `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
  */
@@ -1568,10 +1571,15 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
     `${readFileSync(join(home, "config.toml"), "utf8").trimEnd()}\n\n[engine.own]\nkind = "llama"\nbinary = "managed"\nport = 8099\n`)
   const own = page.locator(".engines-pane section.engine", { has: page.locator("header strong", { hasText: /^own$/ }) })
   await expect(own.locator(".origin")).toHaveText("luu:", { timeout: 10_000 })
+  // Asked first, with what goes; then the copy, the table and the card.
   await own.getByRole("button", { name: "Uninstall" }).click()
-  await expect(own.getByRole("button", { name: "Install" })).toBeVisible()
+  const asking = page.getByRole("dialog", { name: "Uninstall own" })
+  await expect(asking).toContainText("[engine.own]")
+  await expect(asking).toContainText("luu's own copy of llama b11236")
+  await asking.getByRole("button", { name: "Uninstall" }).click()
+  await expect(own).toHaveCount(0)
   expect(existsSync(copy)).toBe(false)
-  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain("[engine.own]")
+  expect(readFileSync(join(home, "config.toml"), "utf8")).not.toContain("[engine.own]")
 
   expect(errors).toEqual([])
 })
@@ -1636,5 +1644,56 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   await expect(marks.getByRole("radio", { name: /The page's own/ })).toHaveAttribute("aria-checked", "true")
   expect(readFileSync(file, "utf8")).not.toContain("brand-icons")
 
+  expect(errors).toEqual([])
+})
+
+/**
+ * Play on an engine whose port something else answers on says so and moves
+ * it — the table and the provider that sends there — to the first free port;
+ * then starts a chat on the engine's provider and the model chosen in the
+ * sheet. Last in the file: the live session is on that provider after it. See
+ * `RECORD/2026-10-26.engines-installed-and-started.completed.md`.
+ */
+test("play moves a busy engine to a free port and starts a chat on the chosen model", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  // Not luu's, on `fake`'s port.
+  const squatter = createServer((req, res) => res.end("not luu's"))
+  await new Promise(done => squatter.listen(8097, "127.0.0.1", done))
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Engines")')
+    const card = page.locator(".engines-pane section.engine", { hasText: "fake" })
+    await expect(card.locator(".state")).toHaveText("answering, not luu's", { timeout: 10_000 })
+    await card.getByRole("button", { name: "Start" }).click()
+    const start = page.getByRole("dialog", { name: "Start fake" })
+    await expect(start).toContainText("not luu's answers on port 8097")
+    await expect(start.getByRole("button", { name: "Start a chat" })).toBeDisabled()
+    const move = start.getByRole("button", { name: /Move to port \d+/ })
+    await expect(move).toBeEnabled()
+    const to = Number((await move.textContent()).match(/\d+/)[0])
+    expect(to).not.toBe(8097)
+    await move.click()
+    await expect(start.locator(".taken")).toHaveCount(0)
+    const onDisk = readFileSync(join(home, "config.toml"), "utf8")
+    expect(onDisk).toContain(`port = ${to}`)
+    expect(onDisk).toContain(`url = "http://127.0.0.1:${to}/v1"`)
+
+    // The model chosen here is the session's, on the engine's provider.
+    await start.locator(".model", { hasText: "small-Q4_K_M" }).click()
+    await start.getByRole("button", { name: "Start a chat" }).click()
+    await expect(page.locator("dialog.modal")).toHaveCount(0)
+    const settings = await (await fetch(`${BASE}/api/settings`)).json()
+    expect(settings.profile).toBe("fake")
+    expect(settings.model).toContain("small-Q4_K_M")
+  } finally {
+    squatter.close()
+  }
   expect(errors).toEqual([])
 })

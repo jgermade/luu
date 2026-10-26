@@ -292,6 +292,31 @@ pub fn resolve_binary(engine: &Engine) -> Result<PathBuf, String> {
     }
 }
 
+/// The one directory `dir` holds, when it holds that and nothing else.
+fn sole_dir(dir: &Path) -> Option<PathBuf> {
+    let mut entries = std::fs::read_dir(dir).ok()?.flatten();
+    let only = entries.next()?;
+    match entries.next().is_none() && only.file_type().ok()?.is_dir() {
+        true => Some(only.path()),
+        false => None,
+    }
+}
+
+/// How far up from a kind's own port luu looks for a free one.
+const PORTS_TRIED: u16 = 100;
+
+/// The first port from the kind's own upward that no table names and nothing
+/// on this machine listens on — a bind on `127.0.0.1` is the test — within
+/// [`PORTS_TRIED`] of it, and under the range the OS hands outgoing
+/// connections (32768 and up on Linux, 49152 on macOS), where a port free now
+/// is a taken one a minute later. `None` when every one of them is taken.
+pub fn free_port(kind: EngineKind, named: &[u16]) -> Option<u16> {
+    let from = kind.default_port();
+    (from..from.saturating_add(PORTS_TRIED).min(32768))
+        .filter(|port| !named.contains(port))
+        .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
+}
+
 /// Whether a version and a variant the page sent may be joined into a path
 /// under the state directory: a release tag's characters, and not led by a
 /// `.`, so neither `..` nor a hidden directory is a name. Install had taken
@@ -1044,6 +1069,15 @@ impl Supervisor {
         Ok(())
     }
 
+    /// The model an engine this server runs was started on: `None` when it
+    /// is not running, `Some(None)` when it was started on none.
+    pub async fn model_of(&self, name: &str) -> Option<Option<String>> {
+        let mut slots = self.slots.lock().await;
+        let slot = slots.get_mut(name)?;
+        slot.reap();
+        slot.running.as_ref().map(|running| running.model.clone())
+    }
+
     pub fn installs(&self) -> Vec<Install> {
         self.installs
             .lock()
@@ -1247,9 +1281,16 @@ impl Supervisor {
             ));
         }
         let _ = tokio::fs::remove_dir_all(dir).await;
-        tokio::fs::rename(&staging, dir)
+        // An archive with one folder at its top — llama.cpp's `llama-b11236/`
+        // — is moved in without it: the version is already the directory's
+        // name, and a second one under it was only the archive's.
+        let top = sole_dir(&staging);
+        tokio::fs::rename(top.as_deref().unwrap_or(&staging), dir)
             .await
             .map_err(|e| format!("moving the copy into {}: {e}", dir.display()))?;
+        if top.is_some() {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+        }
         Ok(())
     }
 }
@@ -1257,6 +1298,33 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A port is free when no table names it and nothing listens on it, and
+    /// the search goes up from the kind's own.
+    #[test]
+    fn a_free_port_is_one_nobody_has() {
+        let kind = EngineKind::Llama;
+        let first = free_port(kind, &[]).expect("a free port near 8080");
+        assert!(first >= kind.default_port() && first < 32768);
+        let held = std::net::TcpListener::bind(("127.0.0.1", first)).unwrap();
+        let next = free_port(kind, &[]).expect("another");
+        assert!(next > first, "{next} after {first}, which is listened on");
+        assert_ne!(free_port(kind, &[next]), Some(next), "a table names it");
+        drop(held);
+    }
+
+    /// An archive with one folder at its top is that folder; one with more
+    /// than that, or a file beside it, is itself.
+    #[test]
+    fn an_archive_s_one_folder_is_not_kept() {
+        let dir = std::env::temp_dir().join(format!("luu-sole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("llama-b1")).unwrap();
+        assert_eq!(sole_dir(&dir), Some(dir.join("llama-b1")));
+        std::fs::write(dir.join("LICENSE"), "").unwrap();
+        assert_eq!(sole_dir(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A tag the page sends is joined into a path under the state directory,
     /// so it is a name or it is refused — for install and uninstall alike.
