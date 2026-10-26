@@ -31,6 +31,39 @@ export const installEngine = (kind, version, variant) =>
 export const uninstallEngine = name =>
   call("POST", `./api/engines/${encodeURIComponent(name)}/uninstall`, {})
 
+/// Talks to an engine on a model, outside any session: `messages` is the
+/// conversation so far, `onText` is handed each piece of the reply as it
+/// streams. Resolves to `{ ok, usage }` or `{ ok: false, error }`. See
+/// `chat_engine`.
+export async function chatEngine(name, model, messages, onText) {
+  const res = await fetch(`./api/engines/${encodeURIComponent(name)}/chat`, {
+    method: "POST",
+    headers: { ...apiHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ model: model || null, messages }),
+  })
+  if (!res.ok || !res.body) return { ok: false, error: (await res.text()) || `${res.status}` }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let usage = null
+  let error = ""
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    for (let at = buffer.indexOf("\n"); at >= 0; at = buffer.indexOf("\n")) {
+      const line = buffer.slice(0, at).trim()
+      buffer = buffer.slice(at + 1)
+      if (!line) continue
+      const event = JSON.parse(line)
+      if (typeof event.text === "string") onText(event.text)
+      if (event.error) error = event.error
+      if (event.done) usage = event.done.usage || null
+    }
+  }
+  return error ? { ok: false, error } : { ok: true, usage }
+}
+
 /// The first port from the kind's own upward that nothing has: `{ ok, port }`
 /// or `{ ok: false, error }`. See `engines::free_port`.
 export async function freePort(kind) {

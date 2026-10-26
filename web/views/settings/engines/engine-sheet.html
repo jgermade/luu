@@ -1,0 +1,290 @@
+<script :setup="{ view = null, name = '', tab = 'start', saved = null, close = null }">
+  // An engine's own sheet, over its card: three tabs. **Start** — the models
+  // it can load, out of what the machine has (for ollama, ollama's own store),
+  // *Start engine* on one, and *New session* on its provider with it. **Chat**
+  // — a conversation with the engine on that model, here, outside any session
+  // (`chat_engine`). **Output** — what the engine printed, each line coloured
+  // by what it says. Play opens it on Start, the output icon on Output. See
+  // `RECORD/2026-10-26.an-engine-s-own-sheet.completed.md`.
+  //
+  // Nothing starts while something that is not luu's answers on its port: a
+  // chat there would talk to that server, whatever it holds. Start offers the
+  // first free port instead, which moves the engine and its providers.
+  const { startEngine, loadCatalog, freePort, moveEngine, defaultPort, chatEngine } =
+    await import("@web/lib/engines.js")
+  const { state, newSession, closeSettings } = await import("@web/lib/store.js")
+  const { checkModel } = await import("@web/lib/ui.js")
+  const { brandSrc, modelBrand } = await import("@web/lib/brands.js")
+  const { markdown } = await import("@web/helpers/markdown.js")
+  const SubModal = await import("@web/theme/default/components/sub-modal.html")
+  const Button = await import("@web/theme/default/components/button.html")
+  const InputContainer = await import("@web/theme/default/components/input-container.html")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+
+  // False once it should leave: `SubModal` plays the exit, then `close`
+  // unmounts it.
+  let open = true
+  const leave = () => {
+    open = false
+    const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
+    setTimeout(() => close?.(), Number.isFinite(ms) ? ms : 0)
+  }
+  let shown = tab
+
+  // Fixed while the sheet is up: what kind it is and who sends to it.
+  const kind = view?.engines?.[name]?.kind || "llama"
+  const providers = view?.engines?.[name]?.providers || []
+  let provider = providers[0] || ""
+  let chosen = view?.engines?.[name]?.model || ""
+  let catalog = []
+  let loading = true
+  let busy = false
+  let error = ""
+  loadCatalog().then(listed => {
+    catalog = listed.ok ? listed.view.models : []
+    loading = false
+    const loads = catalog.filter(m => !m.cannot?.[kind])
+    if (!loads.some(m => m.reference === chosen)) chosen = loads[0]?.reference || ""
+  })
+  $: loadable = catalog.filter(m => !m.cannot?.[kind])
+  $: chosenLabel = catalog.find(m => m.reference === chosen)?.label || chosen
+  const gb = n => `${(n / 1e9).toFixed(1)} GB`
+  // A llama.cpp or mlx session names the catalog's reference; an ollama one,
+  // ollama's own name for it.
+  const asChat = reference => (kind === "ollama" ? reference.replace(/^ollama:/, "") : reference)
+
+  // Read where they are used: the parent's view moves under the sheet.
+  const status = () => view?.engines?.[name]?.status || null
+  const taken = () => !!status()?.answering && status()?.state !== "running"
+  const port = () => view?.engines?.[name]?.port || defaultPort(kind)
+  $: lines = view?.engines?.[name]?.status?.log || []
+  $: TABS = [
+    { value: "start", label: "Start" },
+    { value: "chat", label: "Chat" },
+    { value: "output", label: "Output", count: lines.length || null },
+  ]
+
+  let freeAt = null
+  if (taken()) freePort(kind).then(answer => { freeAt = answer.ok ? answer.port : null; error = answer.ok ? "" : answer.error })
+  const move = async () => {
+    busy = true
+    const result = await moveEngine(view, name, freeAt)
+    busy = false
+    if (!result.ok) return void (error = result.error)
+    saved?.(result.view)
+    error = ""
+  }
+
+  // ---- start ---------------------------------------------------------------
+
+  const startOnly = async () => {
+    busy = true
+    const result = await startEngine(name, kind === "ollama" ? "" : chosen)
+    busy = false
+    if (!result.ok) return void (error = result.error)
+    saved?.(result.view)
+    error = ""
+    shown = "output"
+  }
+  const startSession = async () => {
+    busy = true
+    const ok = await newSession({ provider, model: asChat(chosen) })
+    busy = false
+    if (!ok) return void (error = state.error || "the session was not made")
+    leave()
+    await closeSettings()
+    await checkModel()
+  }
+
+  // ---- chat ----------------------------------------------------------------
+
+  // `{ role, content }`, as the route takes them; the last one grows while a
+  // reply streams in. Kept as long as the sheet is open, and no longer.
+  let said = []
+  let draft = ""
+  let chatting = false
+  let chatError = ""
+  let usage = null
+  const send = async () => {
+    const text = draft.trim()
+    if (!text || chatting || !chosen || taken()) return
+    const asked = [...said, { role: "user", content: text }]
+    said = [...asked, { role: "assistant", content: "" }]
+    draft = ""
+    chatting = true
+    chatError = ""
+    const answer = await chatEngine(name, chosen, asked, piece => {
+      const last = said[said.length - 1]
+      said = [...said.slice(0, -1), { ...last, content: last.content + piece }]
+    })
+    chatting = false
+    usage = answer.ok ? answer.usage : null
+    if (answer.ok) return
+    chatError = answer.error
+    // A reply that never came is not part of the conversation.
+    if (!said[said.length - 1]?.content) said = said.slice(0, -1)
+  }
+  const keyed = event => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault()
+      send()
+    }
+  }
+
+  // ---- output --------------------------------------------------------------
+
+  const tone = line => /^\$ /.test(line)
+    ? "cmd"
+    : /\b(error|fatal|failed|failure|panic|abort(ed)?|cannot|unable|refused|denied)\b|^E[\s:]/i.test(line)
+      ? "err"
+      : /\b(warn(ing)?|deprecated)\b|^W[\s:]/i.test(line)
+        ? "warn"
+        : /\b(listening|ready|loaded|started|server is listening)\b/i.test(line)
+          ? "ok"
+          : ""
+</script>
+
+<SubModal :open="open" :title="name" width="46rem" height="min(30rem, calc(100dvh - 15rem))"
+          :tabs="TABS" :model="shown" @change="shown = $event.detail" @close="leave()">
+  <div :if="taken() && shown !== 'output'" class="taken">
+    <p>
+      Something that is not luu's answers on port <strong>{{ port() }}</strong>: a
+      chat there would talk to it, whatever it holds.
+    </p>
+    <Button size="sm" :disabled="!freeAt || busy" @click="move()">
+      {{ freeAt ? `Move to port ${freeAt}` : "Looking for a free port…" }}
+    </Button>
+    <span class="dim small">the engine, and the providers that send to it</span>
+  </div>
+
+  <!-- Start: which model, and what to start on it. -->
+  <div :if="shown === 'start'" class="pane">
+    <div class="models" role="radiogroup" aria-label="Model">
+      <p :if="loading" class="dim small">Looking at what this machine has…</p>
+      <p :if="!loading && !loadable.length" class="dim small">
+        No model this engine can load is on this machine.
+        <span :if="kind === 'ollama'"><code>ollama pull</code> one first.</span>
+        <span :if="kind !== 'ollama'">A GGUF in ollama's store, llama.cpp's cache, Hugging Face's or
+          <code>luu:/models</code> is listed here.</span>
+      </p>
+      <label :each="m in loadable" :key="m.reference" class="model" :class.on="chosen === m.reference">
+        <input type="radio" name="engine-model" :checked="chosen === m.reference" @change="chosen = m.reference">
+        <BrandIcon :src="brandSrc(modelBrand(m.reference))" />
+        <span class="label">{{ m.label }}</span>
+        <span class="dim small">{{ gb(m.size) }}</span>
+      </label>
+    </div>
+    <div :if="providers.length > 1" class="provider">
+      <InputContainer label="Provider" type="select" :options="providers" :model="provider"
+                      description="the one a new session sends through" @change="provider = $event.detail" />
+    </div>
+    <p :if="!providers.length" class="dim small">
+      No provider names this engine, so a session cannot be made on it: it can
+      be started, and talked to under Chat.
+    </p>
+  </div>
+
+  <!-- Chat: the engine and the model, nothing of luu's between them. -->
+  <div :if="shown === 'chat'" class="pane chat">
+    <p class="dim small">
+      Straight to the engine on <strong>{{ chosenLabel || "no model" }}</strong> — chosen under
+      Start — with no system prompt, no tools and nothing recorded. Started on it first if it is not.
+    </p>
+    <div :each="m, i in said" :key="i" class="said" :class="m.role">
+      <div class="who">{{ m.role === "user" ? "you" : chosenLabel }}</div>
+      <div :if="m.role === 'user'" class="text">{{ m.content }}</div>
+      <div :if="m.role === 'assistant' && m.content" class="text reply-md" :html="markdown(m.content)"></div>
+      <div :if="m.role === 'assistant' && !m.content && chatting" class="dim small">loading the model and waiting for it…</div>
+    </div>
+    <p :if="usage" class="dim small">→ {{ usage.prompt_tokens }} ← {{ usage.completion_tokens }} tokens</p>
+    <p :if="chatError" class="error">{{ chatError }}</p>
+  </div>
+
+  <!-- Output: what it printed, each line in the colour of what it says. -->
+  <div :if="shown === 'output'" class="pane">
+    <p :if="!lines.length" class="dim small">Nothing yet: it prints once it is started.</p>
+    <pre :if="lines.length" class="log"><span :each="line, i in lines" :key="i" class="line" :class="tone(line)">{{ line }}</span></pre>
+  </div>
+
+  <p :if="error && shown !== 'chat'" class="error">{{ error }}</p>
+
+  <template :slot.foot>
+    <Button :if="shown === 'start'" :disabled="busy || taken() || !providers.length || !chosen || !provider"
+            :title="provider ? '' : 'No provider names this engine'" @click="startSession()">New session</Button>
+    <Button :if="shown === 'start'" variant="primary" :disabled="busy || taken() || (kind !== 'ollama' && !chosen)"
+            @click="startOnly()">Start engine</Button>
+    <div :if="shown === 'chat'" class="composer">
+      <textarea rows="2" :value="draft" :disabled="chatting || taken() || !chosen"
+                placeholder="Say something to it — Enter sends, Shift+Enter is a new line"
+                aria-label="Message" @input="draft = $event.target.value" @keydown="keyed($event)"></textarea>
+      <Button variant="primary" :loading="chatting" :disabled="!draft.trim() || chatting || taken() || !chosen"
+              @click="send()">Send</Button>
+    </div>
+  </template>
+</SubModal>
+
+<style scoped>
+  .taken {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem .7rem;
+    margin-bottom: .8rem;
+    padding: .65rem .85rem;
+    border: 1px solid var(--luu-warn);
+    border-radius: 8px;
+    background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
+  }
+  .taken p { margin: 0; flex-basis: 100%; font-size: 12px; }
+  .models { display: flex; flex-direction: column; gap: 2px; }
+  .model {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    padding: .4rem .6rem;
+    border-radius: 6px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .model:hover { background: var(--luu-sunken); }
+  .model.on { background: var(--luu-selected); color: var(--luu-accent); }
+  .model input { margin: 0; }
+  .model .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .provider { margin-top: .8rem; }
+  .chat { display: flex; flex-direction: column; gap: .7rem; }
+  .chat > p { margin: 0; }
+  .said .who { font-size: 11px; color: var(--luu-fg-muted); margin-bottom: .15rem; }
+  .said.user .text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+  .said.assistant .text { font-size: 13px; overflow-wrap: anywhere; }
+  .composer { display: flex; align-items: flex-end; gap: .5rem; flex: 1; min-width: 0; }
+  .composer textarea {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+    padding: .45rem .6rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 6px;
+    background: var(--luu-bg);
+    color: var(--luu-fg);
+    font: inherit;
+    font-size: 13px;
+  }
+  .composer textarea:focus { border-color: var(--luu-accent); outline: none; }
+  .log {
+    margin: 0;
+    padding: .6rem .9rem;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--luu-fg);
+  }
+  .log .line { display: block; min-height: 1.5em; }
+  .log .cmd { color: var(--luu-accent); font-weight: 600; }
+  .log .err { color: var(--luu-bad); }
+  .log .warn { color: var(--luu-warn); }
+  .log .ok { color: var(--luu-ok); }
+  .small { font-size: 11px; }
+  .dim { color: var(--luu-fg-muted); }
+  .error { color: var(--luu-bad); margin: 0; }
+</style>

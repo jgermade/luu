@@ -1030,23 +1030,25 @@ test("an engine is added with its provider, started, and stopped from Settings",
   await expect(card.locator(".origin")).toHaveText("path")
 
   // Its actions are icons, named for a screen reader and a tooltip. Play
-  // asks which model, out of what the machine has, and starts it on that.
+  // opens the engine's own sheet on Start: which model, out of what the
+  // machine has, and starts it on that — then shows what it printed, each
+  // line coloured by what it says, the command luu ran first.
   await card.getByRole("button", { name: "Start" }).click()
-  const start = page.getByRole("dialog", { name: "Start fake" })
-  await expect(start.locator(".model .label").first()).toBeVisible()
-  await start.getByRole("button", { name: "Start engine" }).click()
-  await expect(start).toHaveCount(0)
+  const sheet = page.getByRole("dialog", { name: "fake", exact: true })
+  await expect(sheet.getByRole("tab", { name: "Start" })).toHaveAttribute("aria-selected", "true")
+  await expect(sheet.locator(".model .label").first()).toBeVisible()
+  await sheet.getByRole("button", { name: "Start engine" }).click()
   await expect(card.locator(".state")).toHaveText(/starting|running/)
-  // The output is a sheet over the pane, each line coloured by what it says:
-  // the command luu ran first.
-  await expect(card.getByRole("button", { name: "Output" })).toBeEnabled({ timeout: 10_000 })
-  await card.getByRole("button", { name: "Output" }).click()
-  // The innermost dialog holding it: Settings' own holds it too.
-  const sheet = page.locator("dialog", { has: page.locator("pre.log") }).last()
+  await expect(sheet.getByRole("tab", { name: /Output/ })).toHaveAttribute("aria-selected", "true")
   await expect(sheet.locator("pre.log")).toContainText("stand-in on 8097", { timeout: 10_000 })
   await expect(sheet.locator(".line.cmd").first()).toContainText("llama-server")
-  await sheet.locator("button.close").click()
-  await expect(sheet).toBeHidden()
+  await sheet.getByRole("button", { name: "Close" }).click()
+  await expect(sheet).toHaveCount(0)
+  // The output icon opens the same sheet, on Output.
+  await card.getByRole("button", { name: "Output" }).click()
+  await expect(sheet.getByRole("tab", { name: /Output/ })).toHaveAttribute("aria-selected", "true")
+  await sheet.getByRole("button", { name: "Close" }).click()
+  await expect(sheet).toHaveCount(0)
   await card.getByRole("button", { name: "Stop" }).click()
   await expect(card.locator(".state")).toHaveText("exited")
   await expect(card).toContainText("stopped from luu")
@@ -1168,9 +1170,9 @@ test("the models on this machine are listed by where they came from", async ({ p
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Engines")')
   await page.locator(".engines-pane section.engine", { hasText: "fake" }).getByRole("button", { name: "Start" }).click()
-  const start = page.getByRole("dialog", { name: "Start fake" })
+  const start = page.getByRole("dialog", { name: "fake", exact: true })
   await expect(start.locator(".model .label")).toHaveText(["tiny:1b (ollama)", "small-Q4_K_M (huggingface)"])
-  await start.getByRole("button", { name: "Cancel" }).click()
+  await start.getByRole("button", { name: "Close" }).click()
   await expect(start).toHaveCount(0)
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
@@ -1537,7 +1539,7 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
 
   const card = page.locator(".engines-pane section.engine.found", { hasText: system })
   await expect(card.locator(".origin")).toHaveText("system")
-  await expect(card.locator(".state")).toHaveText("not used")
+  await expect(card.locator(".state")).toHaveText("disabled")
   // Nothing removes it: it is used or it is not, and it cannot start until it is.
   await expect(card.getByRole("button", { name: "Remove" })).toHaveCount(0)
   await expect(card.getByRole("button", { name: "Start" })).toBeDisabled()
@@ -1555,7 +1557,7 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
 
   // Off: the table stays, one key says so, and the provider is idle.
   await used.getByRole("switch").click()
-  await expect(used.locator(".state")).toHaveText("not used")
+  await expect(used.locator(".state")).toHaveText("disabled")
   onDisk = readFileSync(join(home, "config.toml"), "utf8")
   expect(onDisk).toContain(`[engine.${name}]`)
   expect(onDisk.match(/enabled = false/g)).toHaveLength(1)
@@ -1649,17 +1651,41 @@ test("providers and models wear their brand's mark, from the page's own or a pac
 
 /**
  * Play on an engine whose port something else answers on says so and moves
- * it — the table and the provider that sends there — to the first free port;
- * then starts a chat on the engine's provider and the model chosen in the
- * sheet. Last in the file: the live session is on that provider after it. See
- * `RECORD/2026-10-26.engines-installed-and-started.completed.md`.
+ * it — the table and the provider that sends there — to the first free port.
+ * Then the sheet talks to the engine on the model chosen under Start, outside
+ * any session; and *New session* makes one on its provider with that model.
+ * Last in the file: the live session is on that provider after it. See
+ * `RECORD/2026-10-26.an-engine-s-own-sheet.completed.md`.
  */
-test("play moves a busy engine to a free port and starts a chat on the chosen model", async ({ page }) => {
+test("an engine's sheet moves it off a busy port, talks to it, and makes a session on it", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
   page.on("console", message => {
     if (message.type() === "error") errors.push(`console: ${message.text()}`)
   })
+  // `fake` becomes a stand-in that answers as llama-server does: `/health`,
+  // and a chat streamed back as server-sent events.
+  const bin = join(home, "bin")
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, "engine.py"), [
+    "import json, sys",
+    "from http.server import BaseHTTPRequestHandler, HTTPServer",
+    "class H(BaseHTTPRequestHandler):",
+    "    def log_message(self, *a): pass",
+    "    def do_GET(self):",
+    "        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')",
+    "    def do_POST(self):",
+    "        body = json.loads(self.rfile.read(int(self.headers.get('content-length', 0))))",
+    "        said = body['messages'][-1]['content']",
+    "        self.send_response(200); self.send_header('content-type', 'text/event-stream'); self.end_headers()",
+    "        for piece in ['echo: ', said]:",
+    "            self.wfile.write(('data: ' + json.dumps({'choices': [{'index': 0, 'delta': {'content': piece}}]}) + '\\n\\n').encode())",
+    "        self.wfile.write(('data: ' + json.dumps({'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}) + '\\n\\n').encode())",
+    "        self.wfile.write(b'data: [DONE]\\n\\n')",
+    "print('stand-in listening on', sys.argv[1], flush=True)",
+    "HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()",
+  ].join("\n"))
+  writeFileSync(join(bin, "llama-server"), `#!/bin/sh\nexec python3 ${join(bin, "engine.py")} "$4"\n`)
   // Not luu's, on `fake`'s port.
   const squatter = createServer((req, res) => res.end("not luu's"))
   await new Promise(done => squatter.listen(8097, "127.0.0.1", done))
@@ -1672,22 +1698,35 @@ test("play moves a busy engine to a free port and starts a chat on the chosen mo
     const card = page.locator(".engines-pane section.engine", { hasText: "fake" })
     await expect(card.locator(".state")).toHaveText("answering, not luu's", { timeout: 10_000 })
     await card.getByRole("button", { name: "Start" }).click()
-    const start = page.getByRole("dialog", { name: "Start fake" })
-    await expect(start).toContainText("not luu's answers on port 8097")
-    await expect(start.getByRole("button", { name: "Start a chat" })).toBeDisabled()
-    const move = start.getByRole("button", { name: /Move to port \d+/ })
+    const sheet = page.getByRole("dialog", { name: "fake", exact: true })
+    await expect(sheet).toContainText("not luu's answers on port 8097")
+    await expect(sheet.getByRole("button", { name: "Start engine" })).toBeDisabled()
+    await expect(sheet.getByRole("button", { name: "New session" })).toBeDisabled()
+    const move = sheet.getByRole("button", { name: /Move to port \d+/ })
     await expect(move).toBeEnabled()
     const to = Number((await move.textContent()).match(/\d+/)[0])
     expect(to).not.toBe(8097)
     await move.click()
-    await expect(start.locator(".taken")).toHaveCount(0)
+    await expect(sheet.locator(".taken")).toHaveCount(0)
     const onDisk = readFileSync(join(home, "config.toml"), "utf8")
     expect(onDisk).toContain(`port = ${to}`)
     expect(onDisk).toContain(`url = "http://127.0.0.1:${to}/v1"`)
 
-    // The model chosen here is the session's, on the engine's provider.
-    await start.locator(".model", { hasText: "small-Q4_K_M" }).click()
-    await start.getByRole("button", { name: "Start a chat" }).click()
+    // The model chosen under Start, talked to under Chat: started on it, and
+    // its reply streamed into the sheet.
+    await sheet.locator(".model", { hasText: "small-Q4_K_M" }).click()
+    await sheet.getByRole("tab", { name: "Chat" }).click()
+    await expect(sheet).toContainText("small-Q4_K_M")
+    await sheet.getByRole("textbox", { name: "Message" }).fill("hola")
+    await sheet.getByRole("textbox", { name: "Message" }).press("Enter")
+    await expect(sheet.locator(".said.user .text")).toHaveText("hola")
+    await expect(sheet.locator(".said.assistant .text")).toContainText("echo: hola", { timeout: 20_000 })
+    await sheet.getByRole("tab", { name: /Output/ }).click()
+    await expect(sheet.locator("pre.log")).toContainText(`stand-in listening on ${to}`)
+
+    // And a session on its provider with that model.
+    await sheet.getByRole("tab", { name: "Start" }).click()
+    await sheet.getByRole("button", { name: "New session" }).click()
     await expect(page.locator("dialog.modal")).toHaveCount(0)
     const settings = await (await fetch(`${BASE}/api/settings`)).json()
     expect(settings.profile).toBe("fake")

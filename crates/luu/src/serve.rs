@@ -1652,6 +1652,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines/install", post(install_engine))
         .route("/api/engines/port", get(free_engine_port))
         .route("/api/engines/{name}/uninstall", post(uninstall_engine))
+        .route("/api/engines/{name}/chat", post(chat_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
         // Other machines' `luu serve`, reached through this one: the list, and
@@ -6170,6 +6171,130 @@ async fn free_engine_port(
         )
             .into_response(),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct EngineChat {
+    /// A catalog reference for llama.cpp and mlx; for ollama, its own name or
+    /// the catalog's `ollama:` one.
+    model: Option<String>,
+    messages: Vec<agent_core::backend::Message>,
+}
+
+/// A conversation with an engine, from its sheet in Settings: `ensure` on the
+/// model — downloaded, started or moved onto it as a session's first turn
+/// would be — then the reply streamed back as NDJSON, `{"text"}` lines and a
+/// last `{"done"}` or `{"error"}`.
+///
+/// **Not a session**: no system prompt, no tools, no budget, no recording,
+/// nothing kept. It answers *does this engine answer, on this model*, and it
+/// sends to the engine's own `127.0.0.1` URL — never a provider's — so it
+/// cannot be pointed anywhere with a key in it. See
+/// `RECORD/2026-10-26.an-engine-s-own-sheet.completed.md`.
+async fn chat_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Json(asked): Json<EngineChat>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let engine = match load_config().await {
+        Ok((config, _)) => config.engines().get(&name).cloned(),
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Some(mut engine) = engine else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    let model = asked
+        .model
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty());
+    let ollama = engine.kind == crate::provider::EngineKind::Ollama;
+    // What the request names: ollama wants its own name for a model; the
+    // others load one model and answer for it whatever it is called.
+    let named = match (&model, ollama) {
+        (Some(model), true) => model.strip_prefix("ollama:").unwrap_or(model).to_string(),
+        (Some(model), false) => {
+            if !crate::models::is_reference(model) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("{model} is not a model on this machine"),
+                )
+                    .into_response();
+            }
+            engine.model = Some(model.clone());
+            model.clone()
+        }
+        (None, true) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "ollama serves many models: name one",
+            )
+                .into_response();
+        }
+        (None, false) => engine.model.clone().unwrap_or_default(),
+    };
+    if asked.messages.is_empty() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "nothing was said").into_response();
+    }
+    if let Err(error) = state.app.engines.ensure(&name, &engine).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    let port = engine.port.unwrap_or(engine.kind.default_port());
+    let backend = crate::probe_backend(
+        match ollama {
+            true => crate::provider::BackendKind::Ollama,
+            false => crate::provider::BackendKind::Openai,
+        },
+        &engine.kind.url(port),
+        None,
+    );
+    let request = CompletionRequest {
+        model: named,
+        messages: asked.messages,
+        context_limit: None,
+        temperature: None,
+        seed: None,
+        constraint: None,
+        tools: Vec::new(),
+    };
+    let (send, lines) = tokio::sync::mpsc::channel::<String>(64);
+    tokio::spawn(async move {
+        use futures_util::StreamExt;
+        let line = |value: serde_json::Value| format!("{value}\n");
+        let mut stream = backend.stream(request);
+        while let Some(chunk) = stream.next().await {
+            let out = match chunk {
+                Ok(agent_core::backend::Chunk::Text(text)) => {
+                    line(serde_json::json!({ "text": text }))
+                }
+                Ok(agent_core::backend::Chunk::Done { stop, usage }) => {
+                    line(serde_json::json!({ "done": { "stop": stop, "usage": usage } }))
+                }
+                Err(error) => line(serde_json::json!({ "error": error.to_string() })),
+            };
+            if send.send(out).await.is_err() {
+                return;
+            }
+        }
+    });
+    let body = futures_util::stream::unfold(lines, |mut lines| async move {
+        lines
+            .recv()
+            .await
+            .map(|line| (Ok::<_, std::convert::Infallible>(line), lines))
+    });
+    (
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        axum::body::Body::from_stream(body),
+    )
+        .into_response()
 }
 
 /// Uninstalls an engine that runs luu's own copy: stops it, deletes the copy

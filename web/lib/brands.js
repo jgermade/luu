@@ -9,7 +9,7 @@ import { apiHeaders } from "./store.js"
 /// The page's own, by slug: the files in `web/brands/`.
 const BUILTIN = new Set([
   "anthropic", "claude", "deepseek", "gemini", "google", "huggingface", "kimi",
-  "lmstudio", "meta", "mistral", "ollama", "qwen", "vllm",
+  "llamacpp", "lmstudio", "meta", "mistral", "ollama", "qwen", "vllm",
 ])
 export const builtinCount = BUILTIN.size
 
@@ -62,6 +62,11 @@ export function brandSrc(slugs, view = brands.view) {
   }
   return null
 }
+
+/// An engine's marks, by its kind: llama.cpp's and Ollama's own, and MLX's
+/// once there is one.
+const ENGINES = { llama: ["llamacpp", "ggml"], mlx: ["mlx"], ollama: ["ollama"] }
+export const engineBrand = kind => ENGINES[kind] || []
 
 /// Hosts that say whose API a URL is. A local server says nothing: an
 /// OpenAI-compatible `127.0.0.1` is a `llama-server` far more often than it

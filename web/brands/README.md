@@ -13,3 +13,8 @@ licence of its own for a mark, or the owner forbids this use, it is not here
 this way).
 
 Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`.
+
+Two are the projects' own rather than Simple Icons', for the engines luu
+starts: `ollama.svg` is `docs/ollama-logo.svg` from
+[ollama/ollama](https://github.com/ollama/ollama), and `llamacpp.svg` is
+llama.cpp's mark as its project draws it. `mlx` has none yet.

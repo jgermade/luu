@@ -21,6 +21,9 @@
   const Button = await import("@web/theme/default/components/button.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const Checkbox = await import("@web/theme/default/components/checkbox.html")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  const { brandSrc, engineBrand, loadBrands } = await import("@web/lib/brands.js")
+  loadBrands()
 
   // False once it should leave: `SubModal` plays the exit, then `close`
   // unmounts it.
@@ -233,7 +236,7 @@
                 :disabled="(!!editing && kind !== k.value) || !offered(k.value)"
                 :title="cannot(k.value) && !foundOf(k.value).length ? cannot(k.value) : ''"
                 @click="chooseKind(k.value)">
-          <span class="kind-head"><strong>{{ k.name }}</strong>
+          <span class="kind-head"><BrandIcon :src="brandSrc(engineBrand(k.value))" size="16px" /><strong>{{ k.name }}</strong>
             <span :if="k.note && !editing" class="tag">{{ k.note }}</span></span>
           <span class="dim small">{{ k.says }}</span>
           <span :if="cannot(k.value)" class="warn small">{{ foundOf(k.value).length ? "no release for this machine — one is installed" : cannot(k.value) }}</span>

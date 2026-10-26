@@ -5,8 +5,8 @@
   // See `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
   //
   // **And what the machine already has**, each binary no table runs drawn as a
-  // card of its own, *not used*. Nothing is removed from here: a card is used
-  // or not, and *not used* keeps its table with `enabled = false`. Each says
+  // card of its own, *disabled*. Nothing is removed from here: a card is
+  // enabled or not, and *disabled* keeps its table with `enabled = false`. Each says
   // where its binary comes from — `luu:` for luu's own copy, which it can
   // install and uninstall, `system` for one it found. See
   // `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
@@ -16,9 +16,12 @@
   const Switch = await import("@web/theme/default/components/switch.html")
   const Button = await import("@web/theme/default/components/button.html")
   const PathText = await import("@web/components/path-text.html")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  const { brandSrc, engineBrand, loadBrands } = await import("@web/lib/brands.js")
+  loadBrands()
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
   const EngineForm = await import("./engine-form.html")
-  const EngineStart = await import("./engine-start.html")
+  const EngineSheet = await import("./engine-sheet.html")
 
   let view = null
   let error = ""
@@ -26,10 +29,10 @@
   // a new one, `null` when the form is shut.
   let editing = null
   let busy = ""
-  // Whose output is open in the sheet, or `null`; whose start sheet; and
-  // whose uninstall is being asked about.
-  let output = null
-  let starting = null
+  // Whose sheet is open and on which tab — `{ name, tab }`, play opening it
+  // on Start and the output icon on Output — and whose uninstall is being
+  // asked about.
+  let sheet = null
   let uninstalling = null
 
   const took = result => {
@@ -155,17 +158,6 @@
     }
   }
 
-  // The output's lines, each coloured by what it says.
-  $: lines = output ? (view?.engines?.[output]?.status.log || []) : []
-  const tone = line => /^\$ /.test(line)
-    ? "cmd"
-    : /\b(error|fatal|failed|failure|panic|abort(ed)?|cannot|unable|refused|denied)\b|^E[\s:]/i.test(line)
-      ? "err"
-      : /\b(warn(ing)?|deprecated)\b|^W[\s:]/i.test(line)
-        ? "warn"
-        : /\b(listening|ready|loaded|started|server is listening)\b/i.test(line)
-          ? "ok"
-          : ""
 </script>
 
 <div class="engines-pane">
@@ -217,7 +209,7 @@
 
     <section class="pane-group">
       <p class="dim small" :if="view?.path">
-        Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />. Cada motor se arranca y se para a mano desde su tarjeta, y se usa o no con su interruptor.
+        Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />. Cada motor se arranca y se para a mano desde su tarjeta, y se habilita o no con su interruptor.
       </p>
       <p :if="!view && !error" class="dim small skeleton-pulse">
         Cargando engines configurados…
@@ -241,6 +233,7 @@
       <section :each="card in cards" :key="card.key" class="engine" :class.found="!!card.found"
                :class.off="!used(card)">
         <header>
+          <BrandIcon :src="brandSrc(engineBrand((card.engine || card.found).kind))" size="16px" />
           <strong>{{ card.name }}</strong>
           <span class="tag">{{ (card.engine || card.found).kind }}</span>
           <span class="origin" :class="card.found ? 'system' : card.engine.origin"
@@ -249,7 +242,7 @@
                 :class.up="card.engine.status.answering">
             {{ stateWord(card.engine.status) }}
           </span>
-          <span :if="!used(card)" class="state">not used</span>
+          <span :if="!used(card)" class="state">disabled</span>
           <span :if="used(card) && card.engine.status.pid" class="dim small">
             pid {{ card.engine.status.pid }}
           </span>
@@ -258,9 +251,9 @@
           <span class="grow"></span>
           <span class="actions">
             <Button :if="!running(card)" square variant="ghost" size="sm"
-                    :title="used(card) ? 'Start' : 'Switch it on to start it'" label="Start"
+                    :title="used(card) ? 'Start' : 'Enable it to start it'" label="Start"
                     :disabled="!view.editable || !!busy || !used(card)"
-                    @click="starting = card.name">
+                    @click="sheet = { name: card.name, tab: 'start' }">
               <svg class="ic"><use href="#i-play"/></svg>
             </Button>
             <Button :if="running(card)" square variant="ghost" size="sm" title="Stop" label="Stop"
@@ -271,7 +264,7 @@
             <Button :if="card.engine" square variant="ghost" size="sm" label="Output"
                     :title="card.engine.status.log.length ? `Output · ${card.engine.status.log.length} lines` : 'No output yet'"
                     :disabled="!card.engine.status.log.length"
-                    @click="output = card.name">
+                    @click="sheet = { name: card.name, tab: 'output' }">
               <svg class="ic"><use href="#i-terminal"/></svg>
             </Button>
             <Button :if="managed(card) && !card.engine.resolved" square variant="ghost" size="sm"
@@ -290,7 +283,7 @@
                     @click="editing = card.found ? { found: { ...card.found, name: card.name } } : { name: card.name }">
               <svg class="ic"><use href="#i-edit"/></svg>
             </Button>
-            <Switch :model="used(card)" :label="used(card) ? 'Used' : 'Not used'" size="sm"
+            <Switch :model="used(card)" label="Enabled" size="sm"
                     :disabled="!view.editable || !!busy"
                     @change="card.found ? useFound(card) : setUse(card.name, $event.detail)" />
           </span>
@@ -350,16 +343,9 @@
 <EngineForm :if="editing" :view="view" :editing="editing?.name || ''" :found="editing?.found || null"
             :saved="next => { view = next }" :close="() => { editing = null }" />
 
-<!-- What the engine printed, over the pane, each line in the colour of what
-     it says. The sheet's body is what scrolls. -->
-<SubModal :open="!!output" :title="output ? `${output} · output` : ''" width="52rem"
-          height="min(32rem, calc(100dvh - 14rem))" @close="output = null">
-  <pre class="log"><span :each="line, i in lines" :key="i" class="line" :class="tone(line)">{{ line }}</span></pre>
-</SubModal>
-
-<!-- Play: a model, and an engine or a chat on it. -->
-<EngineStart :if="starting" :view="view" :name="starting"
-             :saved="next => { view = next }" :close="() => { starting = null }" />
+<!-- An engine's own sheet: start it on a model, talk to it, read it. -->
+<EngineSheet :if="sheet" :view="view" :name="sheet?.name || ''" :tab="sheet?.tab || 'start'"
+             :saved="next => { view = next }" :close="() => { sheet = null }" />
 
 <!-- Uninstalling asks first, and says everything that goes with it. -->
 <SubModal :open="!!uninstalling" :title="uninstalling ? `Uninstall ${uninstalling}` : ''" width="34rem"
@@ -453,20 +439,6 @@
     cursor: help;
   }
   .origin.luu { color: var(--luu-accent); border-color: var(--luu-accent); }
-  .log {
-    margin: 0;
-    padding: .6rem .9rem;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    color: var(--luu-fg);
-  }
-  .log .line { display: block; min-height: 1.5em; }
-  .log .cmd { color: var(--luu-accent); font-weight: 600; }
-  .log .err { color: var(--luu-bad); }
-  .log .warn { color: var(--luu-warn); }
-  .log .ok { color: var(--luu-ok); }
   .download { display: flex; align-items: center; gap: .6rem; font-size: 12px; margin: .3rem 0; }
   .download progress { flex: 1; }
   .engine-skeleton {

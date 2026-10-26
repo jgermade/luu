@@ -1366,8 +1366,9 @@ URL, keeps the browser's cache honest. A versioned extension path that an update
 to the newest version beside it. See
 [`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md).
 **Brand marks are the one exception to *nothing is vendored***: a mark is its owner's and there is
-one per brand, so there is no taste to tie the page to. Thirteen come with the page
-(`web/brands/`, from Simple Icons, CC0, named by lobehub's slugs), drawn as a mask over
+one per brand, so there is no taste to tie the page to. Fourteen come with the page
+(`web/brands/`: Simple Icons' under CC0, named by lobehub's slugs, and llama.cpp's and Ollama's
+own, which an engine's card and the installer's kinds wear too), drawn as a mask over
 `currentColor` beside each provider (by backend and URL host) and model (by family, after the
 catalog's prefix) in the two columns the pickers share; nothing known is no mark. `[ui]
 brand-icons` names a pack instead — a folder of `<slug>.svg`, or one with `icons/` in it — offered
@@ -2251,7 +2252,7 @@ is sent to it.
 [engine.gemma]
 kind = "llama"          # llama | mlx | ollama
 binary = "managed"      # luu's own copy; a path; or absent: found on PATH
-# enabled = false       # kept, and not used: luu does not start it
+# enabled = false       # kept, and disabled: luu does not start it
 port = 8080             # the first free one from the kind's own, when luu writes it
 args = ["-c", "8192"]
 # model = "ollama:qwen2.5-coder:7b" # read, never asked: the session's model is the one loaded
@@ -2319,7 +2320,7 @@ model on the disk never looks missing.
 See [`RECORD/2026-09-28.a-model-server-luu-starts.completed.md`](RECORD/2026-09-28.a-model-server-luu-starts.completed.md).
 
 **Settings → Engines lists what the machine has, not only what the file says.** Every binary
-`engines::discover` finds that no table runs is a card of its own, *not used* (`discovered` on
+`engines::discover` finds that no table runs is a card of its own, *disabled* (`discovered` on
 `GET /api/engines`, compared after `canonicalize`). Each card says where its binary comes from —
 `luu:` for luu's own copy, `system` for one the machine had, `path` for one the file names that is
 neither (`origin`, the server's answer) — and nothing is removed from the page: a card is
@@ -2334,10 +2335,15 @@ edit), and the output is a `SubModal` with each line coloured by what it says. S
 
 **The engine's model is the session's.** Nothing in the pane or the form asks for one: a session
 chooses its model and `for_run` starts the engine on it; an old table's `model` still loads and
-an edit keeps it. **Play opens a sheet** of the models the engine can load (the catalog; ollama's
-store for ollama) with *Start a chat* — a session on the engine's provider and that model, which
-closes Settings — and *Start engine*, which `POST /api/engines/{name}/start` with `{ model }`, a
-catalog reference, restarting an engine luu runs on another. **luu picks the port**: `GET
+an edit keeps it. **An engine has a sheet of its own**, opened by play on *Start* and by the
+output icon on *Output*. *Start* lists the models it can load (the catalog; ollama's store for
+ollama), with *Start engine* — `POST /api/engines/{name}/start` with `{ model }`, a catalog
+reference, restarting an engine luu runs on another — and *New session*, on the engine's
+provider and that model. *Chat* talks to the engine on that model in the sheet, **outside any
+session**: `POST /api/engines/{name}/chat` runs `ensure` and streams the reply as NDJSON, with no
+system prompt, no tools, no budget and nothing recorded, to the engine's own `127.0.0.1` URL and
+never a provider's. *Output* is what it printed, a line's colour saying what it is. The switch on
+a card reads *Enabled*. **luu picks the port**: `GET
 /api/engines/port` is the first from the kind's own upward that no table names and a bind on
 `127.0.0.1` finds free, within a hundred and under the ephemeral range, and the form and *use*
 write it; when something else answers on an engine's port anyway, the sheet offers *move to port
