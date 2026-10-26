@@ -1,0 +1,29 @@
+<script :setup="{ src = '', size = '13px', label = '' }">
+  // A brand's mark, in the ink of whatever it sits in: drawn as a mask over
+  // `currentColor`, so it is muted in a muted row, the accent under the
+  // pointer, and right in both themes — like every other icon on the page.
+  //
+  //   <BrandIcon :src="brandSrc(modelBrand(name))" />
+  //
+  // **Self-contained**, like everything in `components/`: which file is the
+  // caller's to say (`lib/brands.js`), and with no `src` it draws nothing.
+  // `label` names it for a screen reader where the row's text does not.
+</script>
+
+<span :if="src" class="brand" :role="label ? 'img' : null" :aria-label="label || null"
+      :aria-hidden="label ? null : 'true'"
+      :style="`width:${size};height:${size};-webkit-mask-image:url('${src}');mask-image:url('${src}')`"></span>
+
+<style scoped>
+  .brand {
+    display: inline-block;
+    flex: none;
+    background: currentColor;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+  }
+</style>

@@ -1,20 +1,39 @@
-<script :setup="{ view = null, editing = '', saved = null, close = null }">
-  // One `[engine.<name>]`, added or edited, over Settings → Engines. Adding one
-  // also writes the provider that starts it, because an engine nothing names
-  // is a server no session will ever ask for.
+<script :setup="{ view = null, editing = '', found = null, saved = null, close = null }">
+  // An engine, installed or edited, as a sheet over Settings → Engines — laid
+  // out as an installer: **which kind**, **where its binary comes from** (luu's
+  // own copy, one this machine has, or a path), and **where it listens**. The
+  // model is not asked: a session chooses it, and the engine loads what the
+  // session chose. See
+  // `RECORD/2026-10-26.engines-installed-and-started.completed.md`.
   //
-  // The binary is a choice among what the server found, luu's own copy, or a
-  // path — and the path must end in the kind's own binary name, which the
-  // server checks again: see `accepts_from_page` in `crate::engines`.
-  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("@web/lib/engines.js")
+  // Adding one also writes the provider that starts it, because an engine
+  // nothing names is a server no session will ever ask for; and *Install*, on
+  // luu's own copy, downloads it here and closes when it is on disk.
+  //
+  // A path must end in the kind's own binary name, which the server checks
+  // again: see `accepts_from_page` in `crate::engines`. `found` — `{ kind,
+  // path, name }`, a binary the machine has that no table runs yet: the form
+  // opens on it, under the name its card showed.
+  const { saveEngines, installEngine, loadEngines, profileFor, defaultPort, freePort, tableOf } =
+    await import("@web/lib/engines.js")
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
-  const Modal = await import("@web/components/modal.html")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
-  const Select = await import("@web/theme/default/components/select.html")
+  const SubModal = await import("@web/theme/default/components/sub-modal.html")
+  const Button = await import("@web/theme/default/components/button.html")
+  const InputContainer = await import("@web/theme/default/components/input-container.html")
   const Checkbox = await import("@web/theme/default/components/checkbox.html")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  const { brandSrc, engineBrand, loadBrands } = await import("@web/lib/brands.js")
+  loadBrands()
 
-  // False once it should leave: `Modal` plays the exit, then `close` unmounts.
+  // False once it should leave: `SubModal` plays the exit, then `close`
+  // unmounts it.
   let open = true
+  const leave = () => {
+    open = false
+    clearTimeout(polling)
+    const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
+    setTimeout(() => close?.(), Number.isFinite(ms) ? ms : 0)
+  }
 
   const current = editing ? view?.engines?.[editing] : null
   const quote = arg => (/\s/.test(arg) ? `"${arg}"` : arg)
@@ -23,77 +42,136 @@
   const split = line =>
     [...line.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(m => m[1] ?? m[2] ?? m[3])
 
-  let name = editing || ""
-  let kind = current?.kind || "llama"
-  // "" found automatically, "managed", a found path, or "custom".
-  let binary = !current
-    ? "managed"
-    : !current.binary
-      ? ""
-      : current.binary === "managed" || (view?.found?.[current.kind] || []).includes(current.binary)
-        ? current.binary
-        : "custom"
-  let path = binary === "custom" ? current.binary : ""
+  const KINDS = [
+    { value: "llama", name: "llama.cpp", says: "llama-server · 12 MB · GGUF, one model per server", note: "recommended" },
+    { value: "mlx", name: "MLX", says: "mlx-serve · Apple Silicon · MLX and GGUF" },
+    { value: "ollama", name: "Ollama", says: "its own model store and its own MLX · 160 MB" },
+  ]
+  const BINS = { llama: "llama-server", mlx: "mlx-serve", ollama: "ollama" }
+  // Why a kind has no release here, where it has none (`cannot_install`).
+  const cannot = k => view?.cannot_install?.[k] || ""
+  const foundOf = k => view?.found?.[k] || []
+  // A kind is offered when there is something to run: a release to download
+  // or a binary already here.
+  const offered = k => !cannot(k) || foundOf(k).length > 0
+
+  let kind = current?.kind || found?.kind || KINDS.find(k => offered(k.value))?.value || "llama"
+  // "managed", "found" (one of `foundOf(kind)`), "path", or "auto" — an
+  // edited table with no `binary`, which runs whichever this machine has.
+  let source = found
+    ? "found"
+    : !current
+      ? (cannot(kind) && foundOf(kind).length ? "found" : "managed")
+      : !current.binary
+        ? "auto"
+        : current.binary === "managed"
+          ? "managed"
+          : foundOf(current.kind).includes(current.binary) ? "found" : "path"
+  let foundPath = found?.path || (source === "found" ? current.binary : foundOf(kind)[0] || "")
+  let path = source === "path" ? current.binary : ""
   let version = current?.version || ""
   let variant = current?.variant || ""
+  let name = editing || found?.name || ""
   let port = current?.port ? String(current.port) : ""
   let args = (current?.args || []).map(quote).join(" ")
   let readyTimeout = current?.["ready-timeout"] ? String(current["ready-timeout"]) : ""
-  let model = current?.model || ""
-  // What this machine already has, for a llama.cpp engine to load. Asked
-  // once, when the form opens: the catalog is a walk of four directories.
-  let catalog = []
-  let roots = {}
-  const listed = await loadCatalog()
-  if (listed.ok) {
-    catalog = listed.view.models
-    roots = listed.view.roots
-  }
   let withProvider = !editing
   let saving = false
   let error = ""
+  // The download *Install* started, as the server reports it.
+  let download = null
+  let polling = null
 
-  $: bin = kind === "ollama" ? "ollama" : "llama-server"
-  // Which ones this kind of engine loads is the server's answer (`cannot`),
-  // not a rule restated here.
-  $: loadable = catalog.filter(m => !m.cannot?.[kind])
-  $: unloadable = catalog.filter(m => m.cannot?.[kind])
-  const gb = n => `${(n / 1e9).toFixed(1)} GB`
-  $: found = view?.found?.[kind] || []
+  // A name and a port to start from, for a new one: the kind's own name,
+  // numbered past one that is taken, and the first port nothing has.
+  const freeName = k => {
+    let candidate = k
+    for (let n = 2; view?.engines?.[candidate]; n++) candidate = `${k}-${n}`
+    return candidate
+  }
+  let suggested = ""
+  const suggest = async k => {
+    if (editing) return
+    if (!name.trim() || name === suggested) name = suggested = freeName(k)
+    const free = await freePort(k)
+    if (free.ok && !port.trim()) port = String(free.port)
+  }
+  suggest(kind)
+  const chooseKind = k => {
+    if (editing || !offered(k) || k === kind) return
+    kind = k
+    port = ""
+    source = cannot(k) && foundOf(k).length ? "found" : "managed"
+    foundPath = foundOf(k)[0] || ""
+    path = ""
+    variant = ""
+    suggest(k)
+  }
+  const useFoundBinary = () => {
+    source = "found"
+    foundPath = foundPath || foundOf(kind)[0] || ""
+  }
+
+  $: bin = BINS[kind]
   $: pinned = view?.pinned?.[kind] || ""
   $: copies = view?.managed?.[kind] || []
-  $: haveCopy = copies.includes(variant ? `${version || pinned}-${variant}` : (version || pinned))
+  $: haveCopy = copies.includes(variant.trim() ? `${version.trim() || pinned}-${variant.trim()}` : (version.trim() || pinned))
   $: trimmed = name.trim()
   $: badName = !!trimmed && !/^[A-Za-z0-9_-]+$/.test(trimmed)
   $: clash = !editing && !!trimmed && !!view?.engines?.[trimmed]
-  $: badPath = binary === "custom" && !!path.trim() && path.trim().split("/").pop() !== bin
+  $: badPath = source === "path" && !!path.trim() && path.trim().split("/").pop() !== bin
   $: portNumber = Number(port.trim() || defaultPort(kind))
   $: badPort = !Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535
-  $: canSave = !!trimmed && !badName && !clash && !badPath && !badPort && !saving
-    && !(binary === "custom" && !path.trim())
-
-  const configOf = e => Object.fromEntries(
-    ["kind", "binary", "version", "variant", "port", "model", "args", "ready-timeout"]
-      .filter(key => e[key] !== undefined && e[key] !== null)
-      .map(key => [key, e[key]]))
+  $: portTaken = !!port.trim() && Object.entries(view?.engines || {})
+    .some(([n, e]) => n !== editing && (e.port || defaultPort(e.kind)) === portNumber)
+  $: installs = source === "managed" && !haveCopy
+  $: canSave = !!trimmed && !badName && !clash && !badPath && !badPort && !portTaken && !saving && !download
+    && !(source === "path" && !path.trim()) && !(source === "found" && !foundPath)
+    && !(source === "managed" && cannot(kind))
 
   const table = () => ({
     kind,
-    ...(binary === "custom" ? { binary: path.trim() } : binary ? { binary } : {}),
-    ...(binary === "managed" && version.trim() ? { version: version.trim() } : {}),
-    ...(binary === "managed" && variant.trim() ? { variant: variant.trim() } : {}),
-    ...(port.trim() ? { port: portNumber } : {}),
-    ...(kind !== "ollama" && model ? { model } : {}),
+    ...(source === "managed" ? { binary: "managed" } : {}),
+    ...(source === "found" ? { binary: foundPath } : {}),
+    ...(source === "path" ? { binary: path.trim() } : {}),
+    ...(source === "managed" && version.trim() ? { version: version.trim() } : {}),
+    ...(source === "managed" && variant.trim() ? { variant: variant.trim() } : {}),
+    port: portNumber,
+    // An old table's own model, kept as it was: nothing here asks for one.
+    ...(current?.model ? { model: current.model } : {}),
     ...(args.trim() ? { args: split(args) } : {}),
     ...(readyTimeout.trim() ? { "ready-timeout": Number(readyTimeout) } : {}),
+    // Edited, not switched: an engine that was off stays off.
+    ...(current?.enabled === false ? { enabled: false } : {}),
   })
+
+  // Until the copy is on disk: the download as the server reports it, then
+  // the sheet closes.
+  const follow = async () => {
+    const answer = await loadEngines()
+    if (answer.ok) {
+      saved?.(answer.view)
+      const wanted = version.trim() || pinned
+      const now = (answer.view.installs || []).find(i => i.kind === kind && i.version === wanted &&
+        (i.variant || "") === variant.trim())
+      download = now || download
+      if (now?.state === "done" || (!now && (answer.view.managed?.[kind] || []).length > copies.length)) return leave()
+      if (now?.state === "failed") {
+        error = now.error || "the download failed"
+        download = null
+        saving = false
+        return
+      }
+    }
+    polling = setTimeout(follow, 800)
+  }
 
   const save = async () => {
     if (!canSave) return
     saving = true
     error = ""
     const engines = Object.fromEntries(
-      Object.entries(view?.engines || {}).map(([n, e]) => [n, configOf(e)]))
+      Object.entries(view?.engines || {}).map(([n, e]) => [n, tableOf(e)]))
     engines[trimmed] = table()
     const written = await saveEngines(engines)
     if (!written.ok) {
@@ -129,160 +207,201 @@
         return
       }
     }
-    saving = false
-    open = false
+    if (!installs) {
+      saving = false
+      return leave()
+    }
+    const started = await installEngine(kind, version.trim(), variant.trim())
+    if (!started.ok) {
+      saving = false
+      error = `The engine was written, and its download did not start: ${started.error}`
+      return
+    }
+    download = { state: "downloading", done: 0, total: 0 }
+    follow()
   }
+  const mb = n => `${(n / 1e6).toFixed(1)} MB`
+  const pct = d => (d?.total ? Math.floor((100 * d.done) / d.total) : 0)
 </script>
 
-<Modal :title="editing ? 'Engine ' + editing : 'Add an engine'" width="34rem" :open="open" @close="close?.()">
-  <section class="modal-body">
-    <!-- The content pads itself, and so does the foot beside it: the body
-         holds both and pads neither. -->
-    <div class="modal-main">
-      <dl class="settings form">
-        <dt>Name</dt>
-        <dd>
-          <TextInput :model="name" placeholder="gemma" :disabled="!!editing" :warn="badName || clash" />
-          <span :if="badName" class="warn">letters, digits, <code>-</code> and <code>_</code></span>
-          <span :if="clash" class="warn">already an engine of that name</span>
-        </dd>
-
-        <dt>Kind</dt>
-        <dd>
-          <Select :model="kind" :disabled="!!editing"
-                       @change="binary = 'managed', path = '', variant = ''">
-            <option value="llama">llama.cpp — llama-server, 12 MB, GGUF, one model per server</option>
-            <option value="mlx">mlx — mlx-serve, Apple Silicon, MLX and GGUF</option>
-            <option value="ollama">ollama — its own model store and its own MLX, 160 MB</option>
-          </Select>
-        </dd>
-
-        <dt>Binary</dt>
-        <dd>
-          <Select :model="binary">
-            <option value="managed">luu's own copy{{ haveCopy ? " — downloaded" : " — downloaded when you press download" }}</option>
-            <option :each="p in found" :key="p" :value="p">{{ p }}</option>
-            <option value="">whichever is found first on this machine</option>
-            <option value="custom">a path…</option>
-          </Select>
-        </dd>
-        <dd :if="binary === 'custom'">
-          <TextInput :model="path" :placeholder="`/opt/homebrew/bin/${bin}`" :warn="badPath" />
-          <span :if="badPath" class="warn">must be a file named <code>{{ bin }}</code></span>
-        </dd>
-        <dd :if="binary === 'custom'" class="note">
-          From here, only a file named <code>{{ bin }}</code>. Anything else is
-          written in <code>config.toml</code> by hand.
-        </dd>
-        <dd :if="!found.length && binary !== 'managed'" class="note">
-          No <code>{{ bin }}</code> was found on this machine.
-        </dd>
-
-        <dt :if="binary === 'managed'">Version</dt>
-        <dd :if="binary === 'managed'">
-          <TextInput size="num" :model="version" :placeholder="pinned" />
-          <span class="dim">a release tag; empty is the one luu pins</span>
-        </dd>
-        <dt :if="binary === 'managed' && kind === 'llama'">Variant</dt>
-        <dd :if="binary === 'managed' && kind === 'llama'">
-          <TextInput size="num" :model="variant" placeholder="—" />
-          <span class="dim"><code>vulkan</code>, <code>cuda-12.8</code>, <code>rocm-10.0</code> on Linux; empty is CPU/Metal</span>
-        </dd>
-
-        <dt>Port</dt>
-        <dd>
-          <TextInput size="num" :model="port" :placeholder="String(defaultPort(kind))" :warn="badPort" />
-          <span :if="badPort" class="warn">a port is 1–65535</span>
-        </dd>
-
-        <dt :if="kind !== 'ollama'">Model</dt>
-        <dd :if="kind !== 'ollama'">
-          <Select :model="model">
-            <option value="">none — named in the arguments below</option>
-            <option :if="model && !loadable.some(m => m.reference === model)" :value="model">
-              {{ modelLabel(model) }} — not found on this machine
-            </option>
-            <option :each="m in loadable" :key="m.reference" :value="m.reference">
-              {{ m.label }} · {{ gb(m.size) }}
-            </option>
-            <option :each="m in unloadable" :key="m.reference" disabled
-                    :title="m.cannot[kind]">
-              ⚠ {{ m.label }}
-            </option>
-          </Select>
-        </dd>
-        <dd :if="kind !== 'ollama'" class="note">
-          What this machine already has, where each tool keeps it — nothing is
-          copied. A session that picks another from the chat restarts the engine
-          on it.
-        </dd>
-        <!-- The greyed ones, with why: a native select shows no tooltip on a
-             disabled option everywhere, so the reasons are also written out. -->
-        <dd :if="kind !== 'ollama' && unloadable.length" class="caveat">
-          <span class="warn">⚠</span> {{ unloadable.length }} on this machine this engine cannot load:
-          <span :each="m in unloadable" :key="m.reference" class="blocked"
-                :title="m.cannot[kind]">{{ m.label }}</span>
-          <span class="dim">— {{ unloadable[0].cannot[kind] }}{{ unloadable.length > 1 ? " (hover each for its own reason)" : "" }}</span>
-          <span :if="!catalog.length">None found in {{ Object.values(roots).filter(Boolean).join(", ") }}.</span>
-        </dd>
-
-        <dt>Arguments</dt>
-        <dd>
-          <TextInput :model="args"
-                     :placeholder="kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : ''" />
-        </dd>
-        <dd :if="kind === 'llama'" class="note">
-          After <code>--host 127.0.0.1 --port</code> and the model's
-          <code>-m</code>, which luu adds. Without a model above, name one here:
-          <code>-hf &lt;repo&gt;</code> (downloaded on first start, so the first
-          wait is long) or <code>-m &lt;file.gguf&gt;</code>. Then the tuning:
-          <code>-c</code>, <code>-ngl</code>, <code>-fa</code>. There is no
-          shell, so write paths whole: <code>~</code> is not expanded.
-        </dd>
-        <dd :if="kind === 'mlx'" class="note">
-          After <code>--serve --host 127.0.0.1 --port</code> and the model's
-          <code>--model</code>, which luu adds. <code>mlx-serve --help</code> has
-          the rest: KV-cache quantization, speculative decoding, the context.
-          Needs macOS 26.2 or later.
-        </dd>
-        <dd :if="kind === 'ollama'" class="note">
-          After <code>serve</code>. The models are ollama's own —
-          <code>ollama pull</code> them, and the provider's model names one.
-        </dd>
-
-        <dt>Ready within</dt>
-        <dd>
-          <TextInput size="num" :model="readyTimeout" placeholder="120"
-                     @input="readyTimeout = $event.detail" />
-          <span class="dim">seconds a session waits for it to answer</span>
-        </dd>
-
-        <dt :if="!editing">Provider</dt>
-        <dd :if="!editing">
-          <Checkbox :model="withProvider" @change="withProvider = $event.detail">
-            also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
-          </Checkbox>
-        </dd>
-      </dl>
-
-      <p :if="error" class="error">{{ error }}</p>
-    </div>
-
-    <div class="modal-foot">
-      <div class="modal-actions">
-        <button type="button" @click="open = false">Cancel</button>
-        <button type="button" class="save" :disabled="!canSave" @click="save()">
-          {{ saving ? "Saving…" : (editing ? "Save" : "Add engine") }}
+<SubModal :open="open" :title="editing ? `Engine ${editing}` : 'Add an engine'" width="46rem"
+          height="min(36rem, calc(100dvh - 14rem))" @close="leave()">
+  <div class="installer">
+    <!-- 1. Which kind: fixed once written, so only offered when adding. -->
+    <section class="step">
+      <h4><span class="n">1</span> Engine</h4>
+      <div class="kinds" role="radiogroup" aria-label="Engine">
+        <button :each="k in KINDS" :key="k.value" type="button" role="radio" class="kind"
+                :aria-checked="kind === k.value ? 'true' : 'false'"
+                :disabled="(!!editing && kind !== k.value) || !offered(k.value)"
+                :title="cannot(k.value) && !foundOf(k.value).length ? cannot(k.value) : ''"
+                @click="chooseKind(k.value)">
+          <span class="kind-head"><BrandIcon :src="brandSrc(engineBrand(k.value))" size="16px" /><strong>{{ k.name }}</strong>
+            <span :if="k.note && !editing" class="tag">{{ k.note }}</span></span>
+          <span class="dim small">{{ k.says }}</span>
+          <span :if="cannot(k.value)" class="warn small">{{ foundOf(k.value).length ? "no release for this machine — one is installed" : cannot(k.value) }}</span>
         </button>
       </div>
+    </section>
+
+    <!-- 2. Where its binary comes from. -->
+    <section class="step">
+      <h4><span class="n">2</span> Binary</h4>
+      <div class="sources" role="radiogroup" aria-label="Binary">
+        <label class="source" :class.on="source === 'managed'" :class.off="!!cannot(kind)">
+          <input type="radio" name="engine-source" :checked="source === 'managed'" :disabled="!!cannot(kind)"
+                 @change="source = 'managed'">
+          <span class="source-text">
+            <strong>Install luu's own copy</strong>
+            <span class="dim small">{{ cannot(kind) || `the official release, checked against the sha256 GitHub publishes${haveCopy ? " — already downloaded" : ""}` }}</span>
+          </span>
+        </label>
+        <div :if="source === 'managed'" class="row">
+          <InputContainer label="Version" :model="version" :placeholder="pinned"
+                          description="a release tag; empty is the one luu pins" />
+          <InputContainer :if="kind === 'llama'" label="Variant" :model="variant" placeholder="—"
+                          description="vulkan, cuda-12.8, rocm-10.0 on Linux; empty is CPU/Metal" />
+        </div>
+
+        <label class="source" :class.on="source === 'found'" :class.off="!foundOf(kind).length">
+          <input type="radio" name="engine-source" :checked="source === 'found'" :disabled="!foundOf(kind).length"
+                 @change="useFoundBinary()">
+          <span class="source-text">
+            <strong>One this machine has</strong>
+            <span class="dim small">{{ foundOf(kind).length ? `${foundOf(kind).length} found — luu runs it and never removes it` : `no ${bin} was found on this machine` }}</span>
+          </span>
+        </label>
+        <div :if="source === 'found'" class="row">
+          <InputContainer label="Binary" type="select" :options="foundOf(kind)" :model="foundPath"
+                          @change="foundPath = $event.detail" />
+        </div>
+
+        <label :if="source === 'auto'" class="source on">
+          <input type="radio" name="engine-source" checked @change="source = 'auto'">
+          <span class="source-text">
+            <strong>Whichever this machine has first</strong>
+            <span class="dim small">the table names none, so <code>PATH</code> decides</span>
+          </span>
+        </label>
+
+        <label class="source" :class.on="source === 'path'">
+          <input type="radio" name="engine-source" :checked="source === 'path'" @change="source = 'path'">
+          <span class="source-text">
+            <strong>A path</strong>
+            <span class="dim small">a file named <code>{{ bin }}</code>; anything else is written in <code>config.toml</code> by hand</span>
+          </span>
+        </label>
+        <div :if="source === 'path'" class="row">
+          <InputContainer label="Path" :model="path" :placeholder="`/opt/homebrew/bin/${bin}`"
+                          :error="badPath ? `must be a file named ${bin}` : ''" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. What it is called, and where it listens. -->
+    <section class="step">
+      <h4><span class="n">3</span> Where it listens</h4>
+      <div class="row">
+        <InputContainer label="Name" :model="name" :disabled="!!editing" placeholder="llama"
+                        :error="badName ? 'letters, digits, - and _' : clash ? 'already an engine of that name' : ''" />
+        <InputContainer label="Port" :model="port" :placeholder="String(defaultPort(kind))"
+                        :error="badPort ? 'a port is 1–65535' : portTaken ? 'another engine listens there' : ''"
+                        :description="editing ? '' : 'the first free one from the kind\'s own'" />
+      </div>
+      <Checkbox :if="!editing" :model="withProvider" @change="withProvider = $event.detail">
+        also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
+      </Checkbox>
+    </section>
+
+    <details class="step advanced" :open="!!(args || readyTimeout)">
+      <summary>Advanced</summary>
+      <div class="row">
+        <InputContainer label="Arguments" :model="args"
+                        :placeholder="kind === 'llama' ? '-c 8192 -ngl 99' : ''"
+                        :description="kind === 'ollama' ? 'after serve' : 'after --host, --port and the model, which luu adds; there is no shell, so ~ is not expanded'" />
+        <InputContainer label="Ready within" :model="readyTimeout" placeholder="120"
+                        description="seconds a session waits for it" />
+      </div>
+    </details>
+
+    <div :if="download" class="downloading">
+      <span>{{ download.asset || `${kind} ${version.trim() || pinned}` }}</span>
+      <progress :value="download.done || 0" :max="download.total || 1"></progress>
+      <span class="dim small">{{ download.state }}<span :if="download.total"> · {{ mb(download.done) }} of {{ mb(download.total) }} · {{ pct(download) }}%</span></span>
     </div>
-  </section>
-</Modal>
+    <p :if="error" class="error">{{ error }}</p>
+  </div>
+
+  <template :slot.foot>
+    <span class="left"><Button variant="ghost" @click="leave()">Cancel</Button></span>
+    <Button variant="primary" :disabled="!canSave" :loading="saving" @click="save()">
+      {{ download ? "Installing…" : editing ? "Save" : installs ? "Install" : "Add engine" }}
+    </Button>
+  </template>
+</SubModal>
 
 <style scoped>
-  .form input:not([type]), .form select { width: 100%; }
-  .form input.w-num { width: 8rem; margin-right: .4rem; }
-  .form label { display: flex; gap: .4rem; align-items: center; }
-  .blocked { font-style: italic; margin-right: .4rem; cursor: help; text-decoration: underline dotted; }
+  .installer { display: flex; flex-direction: column; gap: 1.1rem; }
+  .step h4 {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0 0 .55rem;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--luu-fg);
+  }
+  .n {
+    display: inline-grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 50%;
+    background: var(--luu-selected);
+    color: var(--luu-accent);
+    font-size: 11px;
+  }
+  .kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+  .kind {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: .25rem;
+    padding: .65rem .75rem;
+    text-align: left;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--luu-fg);
+    background: var(--luu-surface);
+    border: 1px solid var(--luu-border);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .kind:hover:not(:disabled) { border-color: var(--luu-accent); }
+  .kind[aria-checked="true"] { border-color: var(--luu-accent); box-shadow: inset 0 0 0 1px var(--luu-accent); background: var(--luu-selected); }
+  .kind:disabled { cursor: default; opacity: .55; }
+  .kind-head { display: flex; align-items: center; gap: .4rem; }
+  .sources { display: flex; flex-direction: column; gap: .4rem; }
+  .source {
+    display: flex;
+    align-items: flex-start;
+    gap: .55rem;
+    padding: .5rem .65rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .source.on { border-color: var(--luu-accent); background: var(--luu-selected); }
+  .source.off { opacity: .55; cursor: default; }
+  .source input { margin: .15rem 0 0; }
+  .source-text { display: flex; flex-direction: column; gap: .1rem; font-size: 12.5px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .6rem; margin: .1rem 0 .3rem; }
+  .advanced summary { cursor: pointer; font-size: 12px; font-weight: 600; margin-bottom: .5rem; }
+  .downloading { display: flex; align-items: center; gap: .6rem; font-size: 12px; }
+  .downloading progress { flex: 1; }
+  .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
+  .small { font-size: 11px; }
+  .dim { color: var(--luu-fg-muted); }
   .warn { color: var(--luu-warn); }
+  .error { color: var(--luu-bad); margin: 0; }
 </style>

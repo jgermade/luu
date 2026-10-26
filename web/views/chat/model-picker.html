@@ -18,7 +18,7 @@
   // answers as soon as the session points there, the menu closes, and the
   // button says `loading 12s` until the engine answers — see `watchEngine`.
   // A turn sent before then waits for it on the server.
-  const { state, loadProviders, providerModels, newSession, resumeSession } =
+  const { state, loadProviders, providerModels, newSession, resumeSession, offeredProviders } =
     await import("@web/lib/store.js")
   const { ui, checkModel, openSettingsAt, switching: leavingFrom } = await import("@web/lib/ui.js")
   const { modelLabel } = await import("@web/lib/engines.js")
@@ -32,7 +32,7 @@
   let switching = false
   let error = ""
 
-  $: names = Object.keys(state.providers?.providers || {})
+  $: names = offeredProviders()
   $: hasTurns = state.messages.length > 0
   $: proposed = (state.jobs || []).some(j => j.state === "proposed")
   $: busy = state.status === "running"

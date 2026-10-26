@@ -21,11 +21,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const PORT = 7902
 const BASE = `http://127.0.0.1:${PORT}`
 
-const READ = '```tool\n{"name":"read_file","arguments":{"path":"AGENTS.md"}}\n```'
+const READ = '```tool\n{"name":"read_file","arguments":{"path":"AGENTS.md","start_line":3,"max_lines":4}}\n```'
 // A call tried out while thinking and dropped, then the one made. Three words,
 // so six seconds, the first four of them with the thinking still open.
 const DRAFT = '```tool\n{"name":"read_file","arguments":{"path":"NOT-THIS.md"}}\n```'
 const THINKING = `<think>Maybe ${DRAFT} no.</think>\n${READ}`
+// Two calls in one reply, with nothing said between them: one word, so the
+// pair arrives at once and runs as one step.
+const RUN = '```tool\n{"name":"read_file","arguments":{"path":"README.md"}}\n```\n' +
+  '```tool\n{"name":"list_dir","arguments":{"path":"."}}\n```'
 
 function binary() {
   const named = process.env.LUU_BIN
@@ -61,6 +65,8 @@ test.beforeAll(async () => {
       "--mock-reply", READ,
       "--mock-reply", "Done.",
       "--mock-reply", THINKING,
+      "--mock-reply", "Done.",
+      "--mock-reply", RUN,
       "--mock-reply", "Done.",
     ],
     { cwd: root, env: { ...process.env, LUU_HOME: home }, stdio: "pipe" },
@@ -126,15 +132,14 @@ test("the chat says the model is reading what a call returned", async ({ page })
   await expect(answer.locator(".parts .text").last()).toHaveText("Done.", { timeout: 10_000 })
   await expect(answer.locator(".waiting")).toHaveCount(0)
 
-  // What came back, under the card without opening it: the first lines of
-  // what the model got, and how many more. Opened, the preview gives way to
-  // the body.
+  // What a read came back with is the file, so the card is only its head:
+  // which file, and — where it was not the whole of it — which lines. Opened,
+  // the body has the bytes.
   const call = answer.locator(".call").first()
-  await expect(call.locator(".preview pre")).toContainText("# luu")
-  await expect(call.locator(".preview .more")).toContainText(/\+\d+ lines/)
-  await call.locator(".preview").click()
+  await expect(call.locator(".lines")).toHaveText("lines 3–6")
   await expect(call.locator(".preview")).toHaveCount(0)
-  await expect(call.locator(".body")).toBeVisible()
+  await call.locator(".head").click()
+  await expect(call.locator(".body")).toContainText("A local-first AI agent")
 
   // The Context modal shows the turn as it went: the reply up to the call,
   // what the call gave back, the call after it, and the last reply.
@@ -215,4 +220,35 @@ test("the earlier sessions open from the clock, and are on screen", async ({ pag
   })
   expect(seen.height).toBeGreaterThan(20)
   expect(seen.inside).toBe(true)
+})
+
+/**
+ * Calls the model made one after another, with nothing said between them,
+ * are one box in the chat, every card in it on show.
+ */
+test("calls in a row are one box of their cards", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+
+  const composer = page.locator(".composer input")
+  await expect(composer).toBeEnabled()
+  await composer.fill("lee y lista")
+  await page.click('.composer button[type="submit"]')
+
+  const answer = page.locator(".transcript article.assistant").last()
+  const run = answer.locator(".calls")
+  await expect(run.locator(".call .status")).toHaveText(["done", "done"], { timeout: 15_000 })
+  await expect(run.locator(".call .name")).toHaveText(["read_file", "list_dir"])
+  await expect(answer.locator(".calls")).toHaveCount(1)
+  await expect(answer.locator(".call")).toHaveCount(2)
+  await expect(answer.locator(".parts .text").last()).toHaveText("Done.", { timeout: 10_000 })
+
+  expect(errors).toEqual([])
 })

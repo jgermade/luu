@@ -15,7 +15,7 @@
   const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const { modelLabel } = await import("@web/lib/engines.js")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
   const Dropup = await import("@web/components/dropup.html")
 
   // The gate's two narrowings. `null` is *leave*, which is what almost every
@@ -56,7 +56,7 @@
   const ModelPicker = await import("@web/views/chat/model-picker.html")
   const SessionsDialog = await import("@web/views/chat/sessions-dialog.html")
   const ToolCall = await import("@web/views/chat/tool-call.html")
-  const TurnInspect = await import("@web/views/chat/turn-inspect.html")
+  const ToolGroup = await import("@web/views/chat/tool-group.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
   const PermissionsDialog = await import("@web/views/chat/permissions-dialog.html")
   // What a person answered for the session and has not taken back: under the
@@ -69,7 +69,7 @@
   const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
   const TerminalPanel = await import("@web/views/editor/terminal.html")
   const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
-  const { segments } = await import("@web/helpers/segments.js")
+  const { segments, runs } = await import("@web/helpers/segments.js")
   const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
   const { markdown } = await import("@web/helpers/markdown.js")
@@ -420,7 +420,10 @@
     const rows = list.map(entry => {
       if (entry.kind !== "message" || entry.message.role !== "assistant") return transcriptRows.keep(entry.id, entry)
       const { parts, live, reading, timing } = partsOf(entry.message)
-      const kept = parts.map(part => transcriptRows.keep(`${entry.id}:${part.i}`, part))
+      // And calls in a row as one part, kept under a key of its own: the run
+      // shares its first call's `i`, and that key is the call's.
+      const kept = runs(parts.map(part => transcriptRows.keep(`${entry.id}:${part.i}`, part)))
+        .map(part => part.kind === "tools" ? transcriptRows.keep(`${entry.id}:run${part.i}`, part) : part)
       return transcriptRows.keep(entry.id, { ...entry, parts: kept, live, reading, timing })
     })
     transcriptRows.sweep()
@@ -602,6 +605,11 @@
        a prompt in a window for the terminal. -->
   <symbol id="i-diff" viewBox="0 0 24 24"><path d="M12 4.5v7M8.5 8h7M8.5 17.5h7"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7 9.5 3 2.5-3 2.5M12.5 15H17"/></symbol>
+  <!-- Settings → Engines: what an engine's card does — start it, stop it,
+       and download luu's own copy. -->
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/></symbol>
   <!-- Settings → Runtimes: a box, for what a container is. -->
   <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3.5 19.5 7.5v9L12 20.5 4.5 16.5v-9z"/><path d="M4.5 7.5 12 11.5l7.5-4M12 11.5v9"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.5 12a7.5 7.5 0 0 1-7.5 7.5H4.5l2.1-2.8A7.5 7.5 0 1 1 20.5 12Z"/></symbol>
@@ -916,6 +924,7 @@
                   <Scrollable :x="true" background="var(--luu-code-ground)"><pre><code :html="snippetHtml(`${entry.id}:${part.i}`, part, snippet.lit)"></code></pre></Scrollable>
                 </figure>
                 <ToolCall :if="part.kind === 'tool'" :part="part" :live="part.live" />
+                <ToolGroup :if="part.kind === 'tools'" :calls="part.calls" />
                 <!-- What the model wrote while reasoning: folded, because it is
                      not the answer, and behind a click, because it is often
                      the reason for one. -->
@@ -1115,11 +1124,11 @@
                job is not the session. -->
           <div class="narrow" :if="!replaying">
             <span class="dim">network</span>
-            <Segmented size="sm" label="network" :options="NETWORK" :model="network" />
+            <ChoiceSegmented size="sm" label="network" :options="NETWORK" :model="network" />
           </div>
           <div class="narrow" :if="!replaying">
             <span class="dim">enforcement</span>
-            <Segmented size="sm" label="enforcement" :options="ENFORCEMENT" :model="enforcement" />
+            <ChoiceSegmented size="sm" label="enforcement" :options="ENFORCEMENT" :model="enforcement" />
           </div>
           <!-- The one field here that narrows backwards: `kernel` is a
                tightening and needs no permission, `best-effort` asks the policy
@@ -1297,7 +1306,7 @@
 <Project :if="workspace.picker.open && !state.settingsOpen" />
 <SettingsModal :if="state.settingsOpen" />
 <SessionsDialog :if="ui.sessions && !state.settingsOpen" />
-<TurnInspect :if="ui.inspecting != null" />
+<ContextModal :if="ui.inspecting != null" :turn="ui.inspecting" />
 <ContextModal :if="ui.contextOpen" />
 <PermissionsDialog :if="ui.permissions && !state.settingsOpen" />
 <DiffModal :if="ui.diff" />

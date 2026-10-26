@@ -292,6 +292,64 @@ pub fn resolve_binary(engine: &Engine) -> Result<PathBuf, String> {
     }
 }
 
+/// The one directory `dir` holds, when it holds that and nothing else.
+fn sole_dir(dir: &Path) -> Option<PathBuf> {
+    let mut entries = std::fs::read_dir(dir).ok()?.flatten();
+    let only = entries.next()?;
+    match entries.next().is_none() && only.file_type().ok()?.is_dir() {
+        true => Some(only.path()),
+        false => None,
+    }
+}
+
+/// How far up from a kind's own port luu looks for a free one.
+const PORTS_TRIED: u16 = 100;
+
+/// The first port from the kind's own upward that no table names and nothing
+/// on this machine listens on — a bind on `127.0.0.1` is the test — within
+/// [`PORTS_TRIED`] of it, and under the range the OS hands outgoing
+/// connections (32768 and up on Linux, 49152 on macOS), where a port free now
+/// is a taken one a minute later. `None` when every one of them is taken.
+pub fn free_port(kind: EngineKind, named: &[u16]) -> Option<u16> {
+    let from = kind.default_port();
+    (from..from.saturating_add(PORTS_TRIED).min(32768))
+        .filter(|port| !named.contains(port))
+        .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
+}
+
+/// Whether a version and a variant the page sent may be joined into a path
+/// under the state directory: a release tag's characters, and not led by a
+/// `.`, so neither `..` nor a hidden directory is a name. Install had taken
+/// them as they came.
+fn tags(version: &str, variant: Option<&str>) -> Result<(), String> {
+    let tag = |text: &str| {
+        !text.is_empty()
+            && !text.starts_with('.')
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+    };
+    match (tag(version), variant.is_none_or(tag)) {
+        (true, true) => Ok(()),
+        (false, _) => Err(format!("`{version}` is not a release tag")),
+        (_, false) => Err(format!(
+            "`{}` is not a build variant",
+            variant.unwrap_or("")
+        )),
+    }
+}
+
+/// An engine somebody switched off is not started, by a session or by a click:
+/// it says so, where a session sent to it would otherwise fail to connect.
+fn in_use(name: &str, engine: &Engine) -> Result<(), String> {
+    match engine.enabled {
+        true => Ok(()),
+        false => Err(format!(
+            "engine `{name}` is not in use: switch it on in Settings → Engines"
+        )),
+    }
+}
+
 /// The file `-m` is given: a reference out of [`crate::models`], or a path.
 fn model_path(reference: &str, kind: EngineKind) -> Result<PathBuf, String> {
     if !crate::models::is_reference(reference) {
@@ -632,6 +690,7 @@ impl Supervisor {
 
     /// Starts it unless this server already has it running.
     pub async fn start(&self, name: &str, engine: &Engine) -> Result<(), String> {
+        in_use(name, engine)?;
         let binary = resolve_binary(engine)?;
         let port = engine.port.unwrap_or(engine.kind.default_port());
         let mut slots = self.slots.lock().await;
@@ -824,6 +883,8 @@ impl Supervisor {
     }
 
     async fn ensure_now(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<(), String> {
+        // Before anything is downloaded for it, as well as before it runs.
+        in_use(name, engine)?;
         let port = engine.port.unwrap_or(engine.kind.default_port());
         let ours = {
             let mut slots = self.slots.lock().await;
@@ -948,6 +1009,75 @@ impl Supervisor {
         }
     }
 
+    /// Removes luu's own copy of one release: the directory [`managed_dir`]
+    /// names, and the download it came from. Refused while it is downloading,
+    /// and while an engine this server started runs from inside it — the
+    /// slots stay locked until it is gone, so none starts from it meanwhile.
+    pub async fn uninstall(
+        &self,
+        kind: EngineKind,
+        version: Option<String>,
+        variant: Option<String>,
+    ) -> Result<(), String> {
+        let root = root().ok_or("this machine has no state directory yet")?;
+        let version = version.unwrap_or_else(|| kind.pinned().to_string());
+        tags(&version, variant.as_deref())?;
+        let dir = managed_dir(&root, kind, &version, variant.as_deref());
+        let key = format!(
+            "{}/{}",
+            kind.as_str(),
+            kind.asset(&version, variant.as_deref())?
+        );
+        if self
+            .installs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .is_some_and(|i| !matches!(i.state, "done" | "failed"))
+        {
+            return Err(format!(
+                "luu's own {} {version} is still downloading",
+                kind.as_str()
+            ));
+        }
+        let mut slots = self.slots.lock().await;
+        for (name, slot) in slots.iter_mut() {
+            slot.reap();
+            if slot
+                .running
+                .as_ref()
+                .is_some_and(|r| r.binary.starts_with(&dir))
+            {
+                return Err(format!("engine `{name}` is running from it: stop it first"));
+            }
+        }
+        if !dir.is_dir() {
+            return Err(format!(
+                "luu's own {} {version} is not downloaded",
+                kind.as_str()
+            ));
+        }
+        tokio::fs::remove_dir_all(&dir)
+            .await
+            .map_err(|error| format!("removing {}: {error}", dir.display()))?;
+        drop(slots);
+        tracing::info!(target: "luu::engines", kind = kind.as_str(), version, dir = %dir.display(), "managed copy removed");
+        self.installs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&key);
+        Ok(())
+    }
+
+    /// The model an engine this server runs was started on: `None` when it
+    /// is not running, `Some(None)` when it was started on none.
+    pub async fn model_of(&self, name: &str) -> Option<Option<String>> {
+        let mut slots = self.slots.lock().await;
+        let slot = slots.get_mut(name)?;
+        slot.reap();
+        slot.running.as_ref().map(|running| running.model.clone())
+    }
+
     pub fn installs(&self) -> Vec<Install> {
         self.installs
             .lock()
@@ -978,6 +1108,7 @@ impl Supervisor {
     ) -> Result<(), String> {
         let root = root().ok_or("this machine has no state directory yet")?;
         let version = version.unwrap_or_else(|| kind.pinned().to_string());
+        tags(&version, variant.as_deref())?;
         let asset = kind.asset(&version, variant.as_deref())?;
         let key = format!("{}/{}", kind.as_str(), asset);
         {
@@ -1150,9 +1281,16 @@ impl Supervisor {
             ));
         }
         let _ = tokio::fs::remove_dir_all(dir).await;
-        tokio::fs::rename(&staging, dir)
+        // An archive with one folder at its top — llama.cpp's `llama-b11236/`
+        // — is moved in without it: the version is already the directory's
+        // name, and a second one under it was only the archive's.
+        let top = sole_dir(&staging);
+        tokio::fs::rename(top.as_deref().unwrap_or(&staging), dir)
             .await
             .map_err(|e| format!("moving the copy into {}: {e}", dir.display()))?;
+        if top.is_some() {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+        }
         Ok(())
     }
 }
@@ -1160,6 +1298,73 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A port is free when no table names it and nothing listens on it, and
+    /// the search goes up from the kind's own.
+    #[test]
+    fn a_free_port_is_one_nobody_has() {
+        let kind = EngineKind::Llama;
+        let first = free_port(kind, &[]).expect("a free port near 8080");
+        assert!(first >= kind.default_port() && first < 32768);
+        let held = std::net::TcpListener::bind(("127.0.0.1", first)).unwrap();
+        let next = free_port(kind, &[]).expect("another");
+        assert!(next > first, "{next} after {first}, which is listened on");
+        assert_ne!(free_port(kind, &[next]), Some(next), "a table names it");
+        drop(held);
+    }
+
+    /// An archive with one folder at its top is that folder; one with more
+    /// than that, or a file beside it, is itself.
+    #[test]
+    fn an_archive_s_one_folder_is_not_kept() {
+        let dir = std::env::temp_dir().join(format!("luu-sole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("llama-b1")).unwrap();
+        assert_eq!(sole_dir(&dir), Some(dir.join("llama-b1")));
+        std::fs::write(dir.join("LICENSE"), "").unwrap();
+        assert_eq!(sole_dir(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tag the page sends is joined into a path under the state directory,
+    /// so it is a name or it is refused — for install and uninstall alike.
+    #[test]
+    fn a_tag_from_the_page_is_a_name_and_not_a_path() {
+        assert!(tags("b11236", None).is_ok());
+        assert!(tags("v0.34.4", Some("cuda-12.8")).is_ok());
+        for (version, variant) in [
+            ("../../etc", None),
+            ("b1", Some("..")),
+            ("", None),
+            ("b1/../x", None),
+            (".hidden", None),
+        ] {
+            assert!(tags(version, variant).is_err(), "{version} {variant:?}");
+        }
+    }
+
+    /// Switched off is not started, by a click or by a session, and says why
+    /// before anything is resolved or downloaded for it.
+    #[tokio::test]
+    async fn an_engine_switched_off_is_not_started() {
+        let supervisor = Arc::new(Supervisor::default());
+        let engine = Engine {
+            kind: EngineKind::Llama,
+            binary: Some("managed".into()),
+            enabled: false,
+            ..Default::default()
+        };
+        for error in [
+            supervisor.start("off", &engine).await.unwrap_err(),
+            supervisor.ensure("off", &engine).await.unwrap_err(),
+        ] {
+            assert!(error.contains("`off` is not in use"), "{error}");
+        }
+        assert!(
+            supervisor.installs().is_empty(),
+            "nothing was downloaded for it"
+        );
+    }
 
     /// The names the two projects publish, checked against the release pages
     /// on 2026-09-28 — not derived from anything, so this is the test that says

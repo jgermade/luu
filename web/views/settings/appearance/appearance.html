@@ -11,7 +11,60 @@
   const { loadIconTheme, saveIconTheme, importThemeFiles, themeFromFiles, themeFromDrop, loadIconPreviews, glyphFor } =
     await import("@web/lib/workspace.js")
   const Menu = await import("@web/theme/default/components/menu.html")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
+  const { brands, loadBrands, saveBrands, importBrandFiles, brandSrc, builtinCount } =
+    await import("@web/lib/brands.js")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+
+  // The brand marks the pickers draw: the page's own few, or a pack named as
+  // `[ui] brand-icons` — imported into luu's folder, or installed with npm
+  // beside Monaco. `brands.view` is read where it is used and copied nowhere.
+  // See `RECORD/2026-10-26.brand-icons.completed.md`.
+  let brandBusy = false
+  let brandError = ""
+  loadBrands()
+  const BRAND_SAMPLES = [
+    { name: "Anthropic", slugs: ["anthropic"] }, { name: "Claude", slugs: ["claude", "anthropic"] },
+    { name: "OpenAI", slugs: ["openai"] }, { name: "Ollama", slugs: ["ollama"] },
+    { name: "Qwen", slugs: ["qwen"] }, { name: "Llama", slugs: ["meta"] },
+    { name: "Gemma", slugs: ["gemma", "google"] }, { name: "Mistral", slugs: ["mistral"] },
+    { name: "DeepSeek", slugs: ["deepseek"] }, { name: "Hugging Face", slugs: ["huggingface"] },
+  ]
+  // The ones found, and the one the file names where it was not among them —
+  // copied, so nothing of `brands` is put in this component's store.
+  $: packs = [
+    ...(brands.view?.found || []).map(pack => ({ ...pack })),
+    ...(brands.view?.named && !(brands.view.found || []).some(p => p.path === brands.view.chosen)
+      ? [{ path: brands.view.chosen, name: brands.view.loaded || brands.view.named, count: (brands.view.slugs || []).length, source: "config.toml" }]
+      : []),
+  ]
+  const chooseBrands = async path => {
+    if (!brands.view?.editable || brandBusy) return
+    if ((path || "") === (brands.view?.chosen || "")) return
+    brandBusy = true
+    const result = await saveBrands(path || null)
+    brandBusy = false
+    brandError = result.ok ? "" : result.error
+  }
+  const BRAND_ADD = [
+    { value: "folder", label: "A folder…" },
+    { value: "file", label: "A zip…" },
+  ]
+  const pickBrands = which => $self(which === "folder" ? "input.pick-brands-folder" : "input.pick-brands-file")?.click()
+  const importBrands = async event => {
+    const files = event.target.files
+    if (!files?.length) return
+    brandBusy = true
+    try {
+      const result = await importBrandFiles(await themeFromFiles(files))
+      brandError = result.ok ? "" : result.error
+    } catch (error) {
+      brandError = `It could not be read: ${error.message || error}`
+    } finally {
+      brandBusy = false
+      event.target.value = ""
+    }
+  }
 
   // The icon theme: the server's view of it, what is typed into the path, and
   // the last refusal, in the loader's own words.
@@ -238,8 +291,8 @@
   <h3>Interface</h3>
   <div class="choice">
     <span class="choice-name">Theme</span>
-    <Segmented label="Interface theme" size="sm" :options="THEMES" :model="prefs.theme"
-               @change="setTheme($event.detail)" />
+    <ChoiceSegmented label="Interface theme" size="sm" :options="THEMES" :model="prefs.theme"
+                     @change="setTheme($event.detail)" />
   </div>
   <p class="note small">
     <b>Auto</b> follows the system's light or dark, and changes with it. The editor and the
@@ -259,13 +312,13 @@
       <div class="choices">
         <div class="choice">
           <span class="choice-name">Engine</span>
-          <Segmented label="Editor engine" size="sm" :options="editors" :model="prefs.editor"
-                     @change="setEditor($event.detail)" />
+          <ChoiceSegmented label="Editor engine" size="sm" :options="editors" :model="prefs.editor"
+                           @change="setEditor($event.detail)" />
         </div>
         <div class="choice">
           <span class="choice-name">Theme</span>
-          <Segmented label="Editor theme" size="sm" :options="TONES" :model="prefs.editorTone"
-                     @change="setEditorTone($event.detail)" />
+          <ChoiceSegmented label="Editor theme" size="sm" :options="TONES" :model="prefs.editorTone"
+                           @change="setEditorTone($event.detail)" />
         </div>
       </div>
       <div class="mini-editor" :data-tone="prefs.editorTone === 'dark' ? 'dark' : 'light'"
@@ -293,8 +346,8 @@
       </p>
       <div class="choice size-choice">
         <span class="choice-name">Text size</span>
-        <Segmented label="Editor text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.editorSize"
-                   @change="setSize('editor', $event.detail)" />
+        <ChoiceSegmented label="Editor text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.editorSize"
+                         @change="setSize('editor', $event.detail)" />
       </div>
     </div>
 
@@ -302,8 +355,8 @@
       <h3>Chat</h3>
       <div class="choice">
         <span class="choice-name">Snippet theme</span>
-        <Segmented label="Snippet colours" size="sm" :options="TONES" :model="prefs.snippetTone"
-                   @change="setSnippetTone($event.detail)" />
+        <ChoiceSegmented label="Snippet colours" size="sm" :options="TONES" :model="prefs.snippetTone"
+                         @change="setSnippetTone($event.detail)" />
       </div>
       <div class="mini-chat">
        <div class="mini-chat-scaled">
@@ -320,8 +373,8 @@
       </p>
       <div class="choice size-choice">
         <span class="choice-name">Text size</span>
-        <Segmented label="Chat text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.chatSize"
-                   @change="setSize('chat', $event.detail)" />
+        <ChoiceSegmented label="Chat text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.chatSize"
+                         @change="setSize('chat', $event.detail)" />
       </div>
     </div>
   </div>
@@ -483,9 +536,64 @@
   </div>
   <div class="choice size-choice tree-size">
     <span class="choice-name">Size</span>
-    <Segmented label="Files size" size="sm" :options="SIZE_OPTIONS" :model="prefs.treeSize"
-               @change="setSize('tree', $event.detail)" />
+    <ChoiceSegmented label="Files size" size="sm" :options="SIZE_OPTIONS" :model="prefs.treeSize"
+                     @change="setSize('tree', $event.detail)" />
     <span class="dim small">the tree's text and icons</span>
+  </div>
+</section>
+
+<section class="pane-group brands-group">
+  <h3>Brand marks</h3>
+  <!-- Which marks the pickers draw beside a provider and a model. Served, so
+       it is `config.toml`'s and not this screen's, like the icons pack. -->
+  <p class="note small">
+    The marks beside each provider and model in the pickers: the page's own
+    few, or a pack, as <code>[ui] brand-icons</code> in <code>config.toml</code>
+    — a folder of SVGs named by brand. <code>npm install @lobehub/icons-static-svg</code>
+    in <code>web/</code> is found by itself.
+  </p>
+  <p :if="brands.view?.error" class="caveat">It did not load: {{ brands.view.error }}</p>
+  <p :if="brands.view?.refused" class="refused">{{ brands.view.refused }}</p>
+  <p :if="brandError" class="error">{{ brandError }}</p>
+
+  <div class="duo brands-duo">
+    <div class="theme-list" role="radiogroup" aria-label="Brand marks">
+      <span class="group-name">Default</span>
+      <button type="button" role="radio" class="theme-option"
+              :aria-checked="!brands.view?.named ? 'true' : 'false'"
+              :disabled="!brands.view?.editable || brandBusy" @click="chooseBrands('')">
+        <span class="option-name">The page's own</span>
+        <span class="tag">{{ builtinCount }} marks</span>
+      </button>
+
+      <span class="group-name">Packs</span>
+      <span :if="!packs.length" class="dim small empty-group">None yet.</span>
+      <button :each="pack in packs" :key="pack.path" type="button" role="radio" class="theme-option"
+              :aria-checked="pack.path === brands.view?.chosen ? 'true' : 'false'"
+              :disabled="!brands.view?.editable || brandBusy" :title="pack.path"
+              @click="chooseBrands(pack.path)">
+        <span class="option-name">{{ pack.name }}</span>
+        <span class="tag">{{ pack.count }} · {{ pack.source === "luu" ? ":luu" : pack.source }}</span>
+      </button>
+
+      <div class="add">
+        <Menu size="sm" :label="brandBusy ? 'Importing…' : '+ Add a pack'" :items="BRAND_ADD"
+              :disabled="!brands.view?.editable || brandBusy" @select="pickBrands($event.detail)" />
+        <input class="pick-brands-folder" type="file" webkitdirectory hidden @change="importBrands($event)">
+        <input class="pick-brands-file" type="file" hidden accept=".zip,application/zip"
+               @change="importBrands($event)">
+      </div>
+    </div>
+
+    <!-- What the chosen marks draw, for a few brands a person meets: a slug
+         the pack lacks is the page's own, and neither is a dash. -->
+    <ul class="brand-preview" aria-label="Preview">
+      <li :each="sample in BRAND_SAMPLES" :key="sample.name">
+        <BrandIcon :src="brandSrc(sample.slugs, brands.view)" size="16px" />
+        <span :if="!brandSrc(sample.slugs, brands.view)" class="dim">—</span>
+        <span>{{ sample.name }}</span>
+      </li>
+    </ul>
   </div>
 </section>
 
@@ -657,6 +765,21 @@
   .files-group { container-type: inline-size; }
   .lead-note { margin: 0; font-size: 12px; color: var(--luu-fg-muted); }
   .theme-list { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .brand-preview {
+    list-style: none;
+    margin: 0;
+    padding: .6rem .8rem;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .45rem .8rem;
+    align-content: start;
+    font-size: 12px;
+    border: 1px solid var(--luu-border);
+    border-radius: 8px;
+    background: var(--luu-surface);
+  }
+  .brand-preview li { display: flex; align-items: center; gap: .45rem; min-width: 0; }
+  .brand-preview .dim { width: 16px; text-align: center; }
   .group-name {
     margin: var(--luu-space-3) 0 2px;
     color: var(--luu-fg-muted);

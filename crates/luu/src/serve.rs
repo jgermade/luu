@@ -382,6 +382,10 @@ struct App {
     /// The editors' icon themes as last found, looked for again behind
     /// whoever asks — see [`crate::icons::Detected`].
     detected: Arc<crate::icons::Detected>,
+    /// The pack of brand marks `[ui] brand-icons` names, read the first time
+    /// the page asks and swapped whole when Settings writes another — see
+    /// [`put_brands`]. `None` until then.
+    brands: std::sync::RwLock<Option<Arc<Brands>>>,
     /// The model servers this server started, and the downloads of luu's own
     /// copies. Children of this process — see [`Serving::run`] for how they
     /// stop with it, and `crate::engines` for the rest.
@@ -779,7 +783,65 @@ pub struct StdioOptions {
     pub store: Option<PathBuf>,
 }
 
+/// The brand marks as this server draws them: what `[ui] brand-icons` says,
+/// the pack it loaded, and why it did not where it did not.
+#[derive(Default)]
+struct Brands {
+    named: Option<std::path::PathBuf>,
+    pack: crate::brands::Pack,
+    error: Option<String>,
+}
+
+impl Brands {
+    fn from_file() -> Self {
+        let named = crate::provider::Config::load()
+            .ok()
+            .and_then(|(config, _)| config.ui().and_then(|ui| ui.brand_icons.clone()));
+        let (pack, error) = match &named {
+            None => (crate::brands::Pack::default(), None),
+            Some(named) => match crate::brands::load(&crate::provider::expand_home(named)) {
+                Ok(pack) => (pack, None),
+                Err(error) => (crate::brands::Pack::default(), Some(error)),
+            },
+        };
+        Self { named, pack, error }
+    }
+}
+
 impl App {
+    /// The brand marks as they stand, read from the file the first time.
+    /// Blocking: it may read `config.toml` and a folder.
+    fn brands(&self) -> Arc<Brands> {
+        if let Some(brands) = self
+            .brands
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
+            return brands;
+        }
+        let mut slot = self
+            .brands
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.get_or_insert_with(|| Arc::new(Brands::from_file()))
+            .clone()
+    }
+
+    /// Puts a new pack in place, one revision on from the one it replaces.
+    fn swap_brands(&self, named: Option<std::path::PathBuf>, mut pack: crate::brands::Pack) {
+        let mut slot = self
+            .brands
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pack.revision = slot.as_ref().map_or(0, |b| b.pack.revision) + 1;
+        *slot = Some(Arc::new(Brands {
+            named,
+            pack,
+            error: None,
+        }));
+    }
+
     /// The icon theme as it stands. A clone of the `Arc`, so no lock is held
     /// past this line.
     fn icons(&self) -> Arc<crate::icons::Theme> {
@@ -1031,6 +1093,7 @@ impl App {
             postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
+            brands: std::sync::RwLock::new(None),
             engines: Arc::default(),
             tasks: Arc::default(),
             inflight: Arc::default(),
@@ -1504,6 +1567,17 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
                 crate::icons::IMPORT_MAX_BYTES + 1024 * 1024,
             )),
         )
+        // The brand marks the pickers draw: the pack this machine names, the
+        // ones it has, and one mark by its slug — never a path. See
+        // `crate::brands`.
+        .route("/api/brands", get(get_brands).put(put_brands))
+        .route(
+            "/api/brands/import",
+            post(import_brands).layer(axum::extract::DefaultBodyLimit::max(
+                crate::icons::IMPORT_MAX_BYTES + 1024 * 1024,
+            )),
+        )
+        .route("/api/brands/icon/{slug}", get(get_brand_icon))
         .route("/api/postures", get(get_postures).put(put_postures))
         .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
@@ -1576,6 +1650,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines", get(get_engines).put(put_engines))
         .route("/api/engine", get(live_engine))
         .route("/api/engines/install", post(install_engine))
+        .route("/api/engines/port", get(free_engine_port))
+        .route("/api/engines/{name}/uninstall", post(uninstall_engine))
+        .route("/api/engines/{name}/chat", post(chat_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
         // Other machines' `luu serve`, reached through this one: the list, and
@@ -4614,31 +4691,10 @@ async fn import_icon_theme(
         )
             .into_response();
     };
-    let mut files = Vec::new();
-    let mut total = 0usize;
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(field)) => field,
-            Ok(None) => break,
-            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        };
-        let Some(name) = field.file_name().map(str::to_string) else {
-            continue;
-        };
-        let bytes = match field.bytes().await {
-            Ok(bytes) => bytes,
-            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        };
-        total += bytes.len();
-        if total > crate::icons::IMPORT_MAX_BYTES || files.len() >= crate::icons::IMPORT_MAX_FILES {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "the folder is too big to be an icon theme",
-            )
-                .into_response();
-        }
-        files.push((name, bytes.to_vec()));
-    }
+    let files = match picked_files(&mut multipart, "an icon theme").await {
+        Ok(files) => files,
+        Err(response) => return *response,
+    };
     let imported =
         match tokio::task::spawn_blocking(move || crate::icons::import(&folder, files)).await {
             Ok(Ok(imported)) => imported,
@@ -4647,22 +4703,268 @@ async fn import_icon_theme(
                 return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
             }
         };
-    // Written as `~/…` when it can be, so the file reads the same on another
-    // machine with the same layout.
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let named = match home
-        .as_deref()
-        .and_then(|home| imported.strip_prefix(home).ok())
-    {
-        Some(rest) => std::path::Path::new("~").join(rest),
-        None => imported,
-    };
+    let named = tilde(imported);
     let applied =
         blocking(move || apply_icon_theme(&state, Some(named)).map(|()| icon_theme_view(&state)))
             .await;
     match applied {
         Ok(view) => Json(view).into_response(),
         Err(response) => *response,
+    }
+}
+
+/// A picked folder, as the page sends it: every file part, by its relative
+/// path, within the importer's limits. `what` names it in the refusal.
+async fn picked_files(
+    multipart: &mut axum::extract::Multipart,
+    what: &str,
+) -> Result<Vec<(String, Vec<u8>)>, Box<Response>> {
+    let mut files = Vec::new();
+    let mut total = 0usize;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                return Err(Box::new(
+                    (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+                ));
+            }
+        };
+        let Some(name) = field.file_name().map(str::to_string) else {
+            continue;
+        };
+        let bytes = match field.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(Box::new(
+                    (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+                ));
+            }
+        };
+        total += bytes.len();
+        if total > crate::icons::IMPORT_MAX_BYTES || files.len() >= crate::icons::IMPORT_MAX_FILES {
+            return Err(Box::new(
+                (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!("the folder is too big to be {what}"),
+                )
+                    .into_response(),
+            ));
+        }
+        files.push((name, bytes.to_vec()));
+    }
+    Ok(files)
+}
+
+/// Written as `~/…` when it can be, so the file reads the same on another
+/// machine with the same layout.
+fn tilde(path: std::path::PathBuf) -> std::path::PathBuf {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(rest) => std::path::Path::new("~").join(rest),
+        None => path,
+    }
+}
+
+// ---- brand marks ----------------------------------------------------------
+
+/// `<state dir>/brand-icons`, beside `config.toml`: where a pack is imported.
+fn brands_folder() -> Option<std::path::PathBuf> {
+    Some(
+        crate::provider::Config::path_for_writing()?
+            .parent()?
+            .join("brand-icons"),
+    )
+}
+
+/// `[ui] brand-icons` as Settings shows it, and what the pickers need to
+/// draw a mark: which slugs the pack has, under which revision.
+#[derive(serde::Serialize)]
+struct BrandsView {
+    /// What the file says, as written.
+    named: Option<String>,
+    /// The same, as the canonical path a found pack's `path` is, so the page
+    /// can tell which one is chosen.
+    chosen: Option<String>,
+    /// The pack's name, when it loaded.
+    loaded: Option<String>,
+    /// Why it did not.
+    error: Option<String>,
+    revision: u64,
+    slugs: Vec<String>,
+    /// Every pack on this machine: imported into luu's folder, or installed
+    /// with npm beside the page's other optional packages.
+    found: Vec<crate::brands::Found>,
+    folder: Option<String>,
+    editable: bool,
+    refused: Option<String>,
+}
+
+fn brands_view(state: &AppRouterState) -> BrandsView {
+    let brands = state.app.brands();
+    let folder = brands_folder();
+    BrandsView {
+        named: brands.named.as_ref().map(|p| p.display().to_string()),
+        chosen: brands.named.as_ref().map(|p| {
+            let p = crate::provider::expand_home(p);
+            std::fs::canonicalize(&p).unwrap_or(p).display().to_string()
+        }),
+        loaded: (!brands.pack.slugs().is_empty()).then(|| brands.pack.name.clone()),
+        error: brands.error.clone(),
+        revision: brands.pack.revision,
+        slugs: brands.pack.slugs(),
+        found: crate::brands::discover(folder.as_deref(), &node_modules()),
+        folder: folder.map(|f| f.display().to_string()),
+        editable: state.providers_editable,
+        refused: (!state.providers_editable).then(|| {
+            "this server is bound off loopback, and a pack of marks is a path on this machine. \
+             Edit config.toml on the machine itself."
+                .to_string()
+        }),
+    }
+}
+
+async fn get_brands(State(state): State<AppRouterState>) -> Response {
+    Json(blocking(move || brands_view(&state)).await).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct BrandsAsk {
+    #[serde(rename = "brand-icons")]
+    brand_icons: Option<String>,
+}
+
+async fn put_brands(State(state): State<AppRouterState>, Json(asked): Json<BrandsAsk>) -> Response {
+    let named = asked
+        .brand_icons
+        .map(|named| named.trim().to_string())
+        .filter(|named| !named.is_empty())
+        .map(std::path::PathBuf::from);
+    let applied = blocking(move || apply_brands(&state, named).map(|()| brands_view(&state))).await;
+    match applied {
+        Ok(view) => Json(view).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// The write both routes end in: load, write `[ui]`, swap.
+fn apply_brands(
+    state: &AppRouterState,
+    named: Option<std::path::PathBuf>,
+) -> Result<(), Box<Response>> {
+    let refuse = |status: StatusCode, text: String| Box::new((status, text).into_response());
+    if !state.providers_editable {
+        return Err(refuse(
+            StatusCode::FORBIDDEN,
+            "the brand marks are read-only on a server bound off loopback".into(),
+        ));
+    }
+    let Some(path) = crate::provider::Config::path_for_writing() else {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml"
+                .into(),
+        ));
+    };
+    let pack = match &named {
+        None => crate::brands::Pack::default(),
+        Some(named) => crate::brands::load(&crate::provider::expand_home(named))
+            .map_err(|error| refuse(StatusCode::UNPROCESSABLE_ENTITY, error))?,
+    };
+    // Built from the file on disk, and the rest of `[ui]` as it was: this
+    // route owns one key of it.
+    let current = crate::provider::Config::load()
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let mut ui = current.ui().cloned().unwrap_or_default();
+    ui.brand_icons = named.clone();
+    current
+        .with_ui(ui)
+        .write(&path)
+        .map_err(|error| refuse(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    state.app.swap_brands(named, pack);
+    Ok(())
+}
+
+/// A picked folder or zip of marks, written under `<state dir>/brand-icons`
+/// if it loads as a pack, and chosen.
+async fn import_brands(
+    State(state): State<AppRouterState>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "the brand marks are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(folder) = blocking(brands_folder).await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to import into",
+        )
+            .into_response();
+    };
+    let files = match picked_files(&mut multipart, "a pack of marks").await {
+        Ok(files) => files,
+        Err(response) => return *response,
+    };
+    let imported =
+        match tokio::task::spawn_blocking(move || crate::brands::import(&folder, files)).await {
+            Ok(Ok(imported)) => imported,
+            Ok(Err(error)) => return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response(),
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        };
+    let named = tilde(imported);
+    let applied =
+        blocking(move || apply_brands(&state, Some(named)).map(|()| brands_view(&state))).await;
+    match applied {
+        Ok(view) => Json(view).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// One mark, by its slug in the pack's table, as SVG and nothing else.
+async fn get_brand_icon(State(state): State<AppRouterState>, Path(slug): Path<String>) -> Response {
+    let slug = slug.strip_suffix(".svg").unwrap_or(&slug).to_string();
+    let brands = blocking({
+        let state = state.clone();
+        move || state.app.brands()
+    })
+    .await;
+    let Some(path) = crate::brands::is_slug(&slug)
+        .then(|| brands.pack.path(&slug))
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, "no such mark").into_response();
+    };
+    match tokio::fs::read(path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "image/svg+xml"),
+                // The page asks with the pack's `revision` in the URL.
+                (header::CACHE_CONTROL, "public, max-age=3600"),
+                // Drawn as a mask or an image, never as a document.
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; style-src 'unsafe-inline'",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not read the mark: {error}"),
+        )
+            .into_response(),
     }
 }
 
@@ -5408,6 +5710,9 @@ struct EngineView {
     /// The binary it would run, or why there is none.
     resolved: Option<String>,
     problem: Option<String>,
+    /// Where that binary comes from: `luu` for luu's own copy, `system` for
+    /// one this machine had, `path` for one the file names that is neither.
+    origin: &'static str,
     /// Where a profile for it sends.
     url: String,
     /// The profiles that name it.
@@ -5422,13 +5727,24 @@ struct EnginesView {
     engines: std::collections::BTreeMap<String, EngineView>,
     /// Every copy of each kind's binary on this machine.
     found: std::collections::BTreeMap<&'static str, Vec<String>>,
+    /// The ones of those no engine runs: what the pane offers to use.
+    discovered: Vec<Discovered>,
     /// The version luu downloads when a table names none.
     pinned: std::collections::BTreeMap<&'static str, &'static str>,
+    /// Why this machine has no release of a kind to download, for each kind
+    /// that has none — MLX off Apple Silicon. Absent is installable.
+    cannot_install: std::collections::BTreeMap<&'static str, String>,
     /// luu's own copies already downloaded, per kind, by directory name.
     managed: std::collections::BTreeMap<&'static str, Vec<String>>,
     /// Where they go.
     root: Option<String>,
     installs: Vec<crate::engines::Install>,
+}
+
+#[derive(serde::Serialize)]
+struct Discovered {
+    kind: crate::provider::EngineKind,
+    path: String,
 }
 
 const KINDS: [crate::provider::EngineKind; 3] = [
@@ -5444,22 +5760,64 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
     // binary each engine resolves to, what this machine has installed, and
     // luu's own copies.
     let listed = config.engines().clone();
-    let (mut resolved, found, root, managed) = blocking(move || {
+    let (mut resolved, mut origins, found, discovered, root, managed) = blocking(move || {
         let resolved: std::collections::BTreeMap<String, Result<PathBuf, String>> = listed
             .iter()
             .map(|(name, engine)| (name.clone(), crate::engines::resolve_binary(engine)))
             .collect();
+        let real = |path: &PathBuf| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let on_machine: Vec<(crate::provider::EngineKind, PathBuf)> = KINDS
+            .iter()
+            .flat_map(|kind| {
+                crate::engines::discover(*kind)
+                    .into_iter()
+                    .map(|p| (*kind, p))
+            })
+            .collect();
         let found: std::collections::BTreeMap<&'static str, Vec<String>> = KINDS
             .iter()
             .map(|kind| {
-                let found = crate::engines::discover(*kind)
-                    .into_iter()
-                    .map(|p| p.display().to_string())
+                let found = on_machine
+                    .iter()
+                    .filter(|(k, _)| k == kind)
+                    .map(|(_, p)| p.display().to_string())
                     .collect();
                 (kind.as_str(), found)
             })
             .collect();
         let root = crate::engines::root();
+        // A binary under luu's own directory is luu's, whatever the table
+        // calls it; one the machine has is the system's.
+        let origins: std::collections::BTreeMap<String, &'static str> = listed
+            .iter()
+            .map(|(name, engine)| {
+                let at = resolved.get(name).and_then(|r| r.as_ref().ok()).map(real);
+                let origin = match (engine.binary.as_deref(), &at) {
+                    (Some("managed"), _) => "luu",
+                    (_, Some(at)) if root.as_ref().is_some_and(|r| at.starts_with(real(r))) => {
+                        "luu"
+                    }
+                    (None, _) => "system",
+                    (_, Some(at)) if on_machine.iter().any(|(_, p)| real(p) == *at) => "system",
+                    _ => "path",
+                };
+                (name.clone(), origin)
+            })
+            .collect();
+        // What a table already runs, switched off or not, is not offered again.
+        let named: Vec<PathBuf> = resolved
+            .values()
+            .filter_map(|r| r.as_ref().ok())
+            .map(real)
+            .collect();
+        let discovered: Vec<Discovered> = on_machine
+            .iter()
+            .filter(|(_, path)| !named.contains(&real(path)))
+            .map(|(kind, path)| Discovered {
+                kind: *kind,
+                path: path.display().to_string(),
+            })
+            .collect();
         let managed: std::collections::BTreeMap<&'static str, Vec<String>> = KINDS
             .iter()
             .map(|kind| {
@@ -5477,7 +5835,7 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
                 (kind.as_str(), copies)
             })
             .collect();
-        (resolved, found, root, managed)
+        (resolved, origins, found, discovered, root, managed)
     })
     .await;
     let mut engines = std::collections::BTreeMap::new();
@@ -5503,6 +5861,7 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
                 config: engine.clone(),
                 resolved,
                 problem,
+                origin: origins.remove(name).unwrap_or("path"),
             },
         );
     }
@@ -5516,7 +5875,12 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
         }),
         engines,
         found,
+        discovered,
         pinned: KINDS.iter().map(|k| (k.as_str(), k.pinned())).collect(),
+        cannot_install: KINDS
+            .iter()
+            .filter_map(|k| Some((k.as_str(), k.asset(k.pinned(), None).err()?)))
+            .collect(),
         managed,
         root: root.map(|root| root.display().to_string()),
         installs: supervisor.installs(),
@@ -5653,10 +6017,17 @@ async fn put_engines(
             }
         }
     }
+    // Stopped once written: the ones the write takes away, and the ones it
+    // switches off, which luu no longer runs.
     let removed: Vec<String> = current
         .engines()
         .keys()
-        .filter(|name| !asked.engines.contains_key(*name))
+        .filter(|name| {
+            asked
+                .engines
+                .get(*name)
+                .is_none_or(|engine| !engine.enabled)
+        })
         .cloned()
         .collect();
     if let Err(error) = write_config(current.with_engines(asked.engines), path).await {
@@ -5671,28 +6042,62 @@ async fn put_engines(
 /// Starts one without waiting for it: the page polls, and shows its output
 /// while it loads. A port something else already answers on is refused,
 /// because a second server there would fail to bind and say so less clearly.
+///
+/// `{ model }` starts a llama.cpp or mlx engine on that model instead of its
+/// table's — a catalog reference, nothing else from the page, which is what
+/// the start sheet offers — and restarts one luu runs on another.
 async fn start_engine(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
     Path(name): Path<String>,
-    // Required, and empty: a JSON body is what a cross-site form cannot send
-    // without a preflight this server never answers.
-    Json(_): Json<serde_json::Value>,
+    // Required: a JSON body is what a cross-site form cannot send without a
+    // preflight this server never answers.
+    Json(asked): Json<serde_json::Value>,
 ) -> Response {
     if let Err(refused) = engines_allowed(&state, &headers) {
         return *refused;
+    }
+    let model = asked
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string);
+    if let Some(model) = &model
+        && !crate::models::is_reference(model)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{model} is not a model on this machine: from this page an engine starts on one out of the catalog"),
+        )
+            .into_response();
     }
     let engine = match load_config().await {
         Ok((config, _)) => config.engines().get(&name).cloned(),
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     };
-    let Some(engine) = engine else {
+    let Some(mut engine) = engine else {
         return (
             StatusCode::NOT_FOUND,
             format!("there is no [engine.{name}]"),
         )
             .into_response();
     };
+    if let Some(model) = model
+        && engine.kind != crate::provider::EngineKind::Ollama
+    {
+        // Running on another one: stopped, so it starts again on this.
+        if state
+            .app
+            .engines
+            .model_of(&name)
+            .await
+            .is_some_and(|running| running.as_ref() != Some(&model))
+        {
+            state.app.engines.stop(&name).await;
+        }
+        engine.model = Some(model);
+    }
     let status = state.app.engines.status(&name, &engine).await;
     if status.answering && status.state != "running" {
         let port = engine.port.unwrap_or(engine.kind.default_port());
@@ -5726,6 +6131,266 @@ struct InstallAsk {
     kind: crate::provider::EngineKind,
     version: Option<String>,
     variant: Option<String>,
+}
+
+/// The first free port for a kind, from its own upward: what the form and
+/// *use* write, and what the start sheet offers to move a busy engine to. See
+/// [`crate::engines::free_port`].
+async fn free_engine_port(
+    Query(asked): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let kind = match asked.get("kind").map(String::as_str) {
+        Some("llama") | None => crate::provider::EngineKind::Llama,
+        Some("mlx") => crate::provider::EngineKind::Mlx,
+        Some("ollama") => crate::provider::EngineKind::Ollama,
+        Some(other) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("`{other}` is not an engine kind"),
+            )
+                .into_response();
+        }
+    };
+    let named: Vec<u16> = match load_config().await {
+        Ok((config, _)) => config
+            .engines()
+            .values()
+            .map(|e| e.port.unwrap_or(e.kind.default_port()))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    match blocking(move || crate::engines::free_port(kind, &named)).await {
+        Some(port) => Json(serde_json::json!({ "port": port })).into_response(),
+        None => (
+            StatusCode::CONFLICT,
+            format!(
+                "every port from {} to {} is taken",
+                kind.default_port(),
+                kind.default_port() + 99
+            ),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct EngineChat {
+    /// A catalog reference for llama.cpp and mlx; for ollama, its own name or
+    /// the catalog's `ollama:` one.
+    model: Option<String>,
+    messages: Vec<agent_core::backend::Message>,
+}
+
+/// A conversation with an engine, from its sheet in Settings: `ensure` on the
+/// model — downloaded, started or moved onto it as a session's first turn
+/// would be — then the reply streamed back as NDJSON, `{"text"}` lines and a
+/// last `{"done"}` or `{"error"}`.
+///
+/// **Not a session**: no system prompt, no tools, no budget, no recording,
+/// nothing kept. It answers *does this engine answer, on this model*, and it
+/// sends to the engine's own `127.0.0.1` URL — never a provider's — so it
+/// cannot be pointed anywhere with a key in it. See
+/// `RECORD/2026-10-26.an-engine-s-own-sheet.completed.md`.
+async fn chat_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Json(asked): Json<EngineChat>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let engine = match load_config().await {
+        Ok((config, _)) => config.engines().get(&name).cloned(),
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Some(mut engine) = engine else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    let model = asked
+        .model
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty());
+    let ollama = engine.kind == crate::provider::EngineKind::Ollama;
+    // What the request names: ollama wants its own name for a model; the
+    // others load one model and answer for it whatever it is called.
+    let named = match (&model, ollama) {
+        (Some(model), true) => model.strip_prefix("ollama:").unwrap_or(model).to_string(),
+        (Some(model), false) => {
+            if !crate::models::is_reference(model) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("{model} is not a model on this machine"),
+                )
+                    .into_response();
+            }
+            engine.model = Some(model.clone());
+            model.clone()
+        }
+        (None, true) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "ollama serves many models: name one",
+            )
+                .into_response();
+        }
+        (None, false) => engine.model.clone().unwrap_or_default(),
+    };
+    if asked.messages.is_empty() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "nothing was said").into_response();
+    }
+    if let Err(error) = state.app.engines.ensure(&name, &engine).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    let port = engine.port.unwrap_or(engine.kind.default_port());
+    let backend = crate::probe_backend(
+        match ollama {
+            true => crate::provider::BackendKind::Ollama,
+            false => crate::provider::BackendKind::Openai,
+        },
+        &engine.kind.url(port),
+        None,
+    );
+    let request = CompletionRequest {
+        model: named,
+        messages: asked.messages,
+        context_limit: None,
+        temperature: None,
+        seed: None,
+        constraint: None,
+        tools: Vec::new(),
+    };
+    let (send, lines) = tokio::sync::mpsc::channel::<String>(64);
+    tokio::spawn(async move {
+        use futures_util::StreamExt;
+        let line = |value: serde_json::Value| format!("{value}\n");
+        let mut stream = backend.stream(request);
+        while let Some(chunk) = stream.next().await {
+            let out = match chunk {
+                Ok(agent_core::backend::Chunk::Text(text)) => {
+                    line(serde_json::json!({ "text": text }))
+                }
+                Ok(agent_core::backend::Chunk::Done { stop, usage }) => {
+                    line(serde_json::json!({ "done": { "stop": stop, "usage": usage } }))
+                }
+                Err(error) => line(serde_json::json!({ "error": error.to_string() })),
+            };
+            if send.send(out).await.is_err() {
+                return;
+            }
+        }
+    });
+    let body = futures_util::stream::unfold(lines, |mut lines| async move {
+        lines
+            .recv()
+            .await
+            .map(|line| (Ok::<_, std::convert::Infallible>(line), lines))
+    });
+    (
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        axum::body::Body::from_stream(body),
+    )
+        .into_response()
+}
+
+/// Uninstalls an engine that runs luu's own copy: stops it, deletes the copy
+/// unless another table runs it, and takes `[engine.<name>]` out of the file
+/// with the providers that start it. A binary luu did not put on the machine
+/// is never deleted, so an engine on one is refused here — it is used or not.
+async fn uninstall_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Json(_): Json<serde_json::Value>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Some(engine) = current.engines().get(&name).cloned() else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    if engine.binary.as_deref() != Some("managed") {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "`{name}` runs a binary luu did not install: it is used or not, and never deleted"
+            ),
+        )
+            .into_response();
+    }
+    state.app.engines.stop(&name).await;
+    let release = |e: &crate::provider::Engine| {
+        (
+            e.kind,
+            e.version
+                .clone()
+                .unwrap_or_else(|| e.kind.pinned().to_string()),
+            e.variant.clone(),
+        )
+    };
+    let shared = current.engines().iter().any(|(other, e)| {
+        *other != name && e.binary.as_deref() == Some("managed") && release(e) == release(&engine)
+    });
+    let (kind, version, variant) = release(&engine);
+    let on_disk = crate::engines::root()
+        .map(|root| crate::engines::managed_dir(&root, kind, &version, variant.as_deref()))
+        .is_some_and(|dir| dir.is_dir());
+    if !shared
+        && on_disk
+        && let Err(error) = state
+            .app
+            .engines
+            .uninstall(kind, Some(version), variant)
+            .await
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    let gone: Vec<String> = current
+        .profiles()
+        .iter()
+        .filter(|(_, profile)| profile.engine.as_deref() == Some(name.as_str()))
+        .map(|(provider, _)| provider.clone())
+        .collect();
+    let providers = current
+        .profiles()
+        .iter()
+        .filter(|(provider, _)| !gone.contains(provider))
+        .map(|(provider, profile)| (provider.clone(), profile.clone()))
+        .collect();
+    let default = current
+        .default_name()
+        .filter(|default| !gone.iter().any(|g| g == default))
+        .map(str::to_string);
+    let mut engines = current.engines().clone();
+    engines.remove(&name);
+    if let Err(error) = write_config(
+        current.from_parts(default, providers).with_engines(engines),
+        path,
+    )
+    .await
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    engines_answer(&state).await
 }
 
 async fn install_engine(
@@ -5762,6 +6427,9 @@ struct ProvidersView {
     refused: Option<String>,
     default: Option<String>,
     providers: std::collections::BTreeMap<String, crate::provider::Profile>,
+    /// The profiles whose engine is switched off, which the pickers leave
+    /// out. See `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
+    idle: Vec<String>,
     /// The profile *this* server is running, which the file's default may no
     /// longer be: the file can be edited while a server that resolved hours ago
     /// keeps sending where it was pointed.
@@ -5823,6 +6491,18 @@ async fn providers_view(
         },
         default: config.default_name().map(str::to_string),
         providers: config.profiles().clone(),
+        idle: config
+            .profiles()
+            .iter()
+            .filter(|(_, profile)| {
+                profile
+                    .engine
+                    .as_ref()
+                    .and_then(|engine| config.engines().get(engine))
+                    .is_some_and(|engine| !engine.enabled)
+            })
+            .map(|(name, _)| name.clone())
+            .collect(),
         running: running.clone(),
         follows,
         waiting: match follows && running.as_deref() != config.default_name() {
@@ -8606,6 +9286,7 @@ mod tests {
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),
+            brands: std::sync::RwLock::new(None),
             engines: Arc::default(),
             tasks: Arc::default(),
             inflight: Arc::default(),

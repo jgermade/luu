@@ -85,14 +85,6 @@
   $: reply = answer ? { big: replyText.split("\n").length > BIG_LINES || replyText.length > BIG_CHARS } : null
   $: buckets = (budget?.buckets || []).filter(b => b.tokens > 0)
   $: sent = buckets.filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
-  // The tools bucket under the native transport: sent beside the prompt, and
-  // rendered by the server's template where this page cannot see. A turn
-  // recorded before the specs were traced has the count and nothing else.
-  $: nativeTools = (() => {
-    const tools = buckets.find(b => b.name === "tools")?.tokens || 0
-    const shown = groups.find(g => g.bucket === "tools")
-    return tools && (!shown || shown.native) ? tools : 0
-  })()
 </script>
 
 <div class="context">
@@ -135,6 +127,12 @@
         <pre :class="'b-' + g.bucket">{{ e.text }}</pre>
       </div>
     </div>
+    <!-- The same ways in, where a reader who got to the fade is looking. -->
+    <footer :if="g.big">
+      <button :if="!modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'all')">show all</button>
+      <button :if="!modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'scroll')">scroll</button>
+      <button :if="modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, null)">collapse</button>
+    </footer>
   </section>
 
   <section :if="reply" class="group answer" data-bucket="answer">
@@ -163,15 +161,13 @@
         </div>
       </div>
     </div>
+    <footer :if="reply.big">
+      <button :if="!modes.answer" type="button" class="link" @click="mode('answer', 'all')">show all</button>
+      <button :if="!modes.answer" type="button" class="link" @click="mode('answer', 'scroll')">scroll</button>
+      <button :if="modes.answer" type="button" class="link" @click="mode('answer', null)">collapse</button>
+    </footer>
   </section>
 
-  <p :if="nativeTools" class="note">
-    <span class="swatch" style="background:var(--luu-bucket-tools)"></span>
-    <b>tools {{ nativeTools }}</b> — sent in the request's own <code>tools</code>
-    field, not in the prompt's text. The server's chat template renders them into the
-    prompt with the tool prompt the model was trained on, which is why the
-    server's prompt count is higher than the sum of the text above.
-  </p>
   <p :if="extraCalls?.length" class="dim small">
     This is the first call of the turn. The tool round trips after it sent
     {{ extraCalls.reduce((sum, c) => sum + c.prompt_tokens, 0) }} tokens more,
@@ -206,15 +202,20 @@
     font-size: 12px;
   }
   .group header .link { font-size: 11px; }
+  .group footer { display: flex; justify-content: flex-end; gap: .45rem; padding: 0 .65rem .35rem; }
+  .group footer .link { font-size: 11px; }
   .body { padding: .45rem .65rem; }
-  /* Clipped: the first lines, fading out — no scroll bar until asked for. */
+  /* Clipped: the first lines, fading out — no scroll bar until asked for.
+     *Scroll* keeps the same box, so the lines being read stay where they
+     were and only become scrollable; under BIG_LINES' 24, so a block that
+     is clipped is one that does not fit. */
+  .body.clip, .body.scroll { max-height: 24rem; }
   .body.clip {
-    max-height: 17rem;
     overflow: hidden;
     -webkit-mask-image: linear-gradient(to bottom, #000 75%, transparent);
     mask-image: linear-gradient(to bottom, #000 75%, transparent);
   }
-  .body.scroll { max-height: 30rem; overflow: auto; }
+  .body.scroll { overflow: auto; }
   .entry + .entry { margin-top: .5rem; padding-top: .5rem; border-top: 1px dashed var(--luu-border); }
   .role { font-size: 11px; color: var(--luu-fg-muted); margin-bottom: .15rem; }
   .role.refused { color: var(--luu-bad); }
@@ -235,8 +236,6 @@
     overflow-wrap: anywhere;
     font-size: 12px;
   }
-  .note { font-size: 12px; color: var(--luu-fg-muted); display: flex; gap: .45rem; align-items: baseline; margin: 0 0 .9rem; }
-  .note b { color: var(--luu-bucket-tools); white-space: nowrap; }
   /* The legend's colours, on the text they count. */
   .b-system { color: var(--luu-bucket-system); }
   .b-tools { color: var(--luu-bucket-tools); }

@@ -3,7 +3,8 @@
   // **Connection** — name, backend, URL, key, and the Messages API's own
   // keys — and **Models**, what it serves: every model it lists, grouped by
   // what the server says of its tools, with a window each and the default
-  // among them. *Models* opens once Connect has spoken to the server, or, on
+  // among them. An edit has a third, **Danger zone**, which is where it is
+  // removed: the one thing the form does that cannot be saved back. *Models* opens once Connect has spoken to the server, or, on
   // an edit, once the saved provider has answered. See
   // `RECORD/2026-10-21.connecting-a-provider.completed.md` and its section of
   // 2026-10-22.
@@ -20,7 +21,7 @@
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Select = await import("@web/theme/default/components/select.html")
   const Checkbox = await import("@web/theme/default/components/checkbox.html")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
 
   // False once it should leave: `SubModal` plays the exit, then `close`
   // unmounts it — after the exit, which the sheet does not announce.
@@ -309,6 +310,7 @@
       count: list && !list.loading && !list.error ? listed.length : null,
       disabled: !list || engineOwned,
     },
+    ...(editing ? [{ value: "danger", label: "Danger zone" }] : []),
   ]
 
   // ---- writing it ------------------------------------------------------
@@ -526,9 +528,9 @@
           <span :if="!sameWindow && row.hint" class="dim hint">{{ row.hint }}</span>
         </span>
         <span :if="row.kind === 'model'" class="tcell">
-          <Segmented :if="row.group !== 'tools'" size="sm" :label="'Tool calls of ' + row.name"
-                     :options="['fenced', 'native']" :model="row.transport"
-                     @change="setTransport(row.name, $event.detail)" />
+          <ChoiceSegmented :if="row.group !== 'tools'" size="sm" :label="'Tool calls of ' + row.name"
+                           :options="['fenced', 'native']" :model="row.transport"
+                           @change="setTransport(row.name, $event.detail)" />
         </span>
         <span :if="row.kind === 'model' && row.note" class="rnote" :class.warn="row.transport === 'native'">{{ row.note }}</span>
       </li>
@@ -546,6 +548,20 @@
     </p>
   </div>
 
+  <!-- Removing it, apart from everything that is saved: asked twice, and
+       said what goes with it. -->
+  <div :if="tab === 'danger'" class="danger">
+    <strong>Remove {{ editing }}</strong>
+    <p>
+      Takes <code>[provider.{{ editing }}]</code> out of <code>config.toml</code>,
+      and the entries of its models with it.
+      <span :if="state.providers?.default === editing">It is the default, so the
+        default goes back to the mock.</span>
+    </p>
+    <Button :variant="armed ? 'danger' : 'secondary'" :disabled="saving"
+            @click="armed ? remove() : (armed = true)">{{ armed ? `Remove ${editing}?` : "Remove" }}</Button>
+  </div>
+
   <p :if="error" class="error">{{ error }}</p>
 
   <div :if="declaration" class="declare">
@@ -558,12 +574,10 @@
   </div>
 
   <template :slot.foot>
-    <!-- Leaving, and for an edit removing, on the left; what keeps the form
-         on the right. -->
+    <!-- Leaving on the left; what keeps the form on the right. Removing is
+         the danger zone's, not the foot's. -->
     <span class="left">
       <Button variant="ghost" @click="leave()">Cancel</Button>
-      <Button :if="editing" :variant="armed ? 'danger' : 'ghost'" :disabled="saving"
-              @click="armed ? remove() : (armed = true)">{{ armed ? `Remove ${editing}?` : "Remove" }}</Button>
     </span>
     <Button :if="!engineOwned" :loading="connecting" @click="connect()">{{ connecting ? "Connecting…" : "Connect" }}</Button>
     <Button variant="primary" :disabled="!canSave" :loading="saving" @click="save()">
@@ -603,6 +617,18 @@
   .rnote.warn { color: var(--luu-warn, #b26a00); }
   .leave { margin-top: .7rem; }
   .declare { margin-top: 1rem; }
+  .danger {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: .5rem;
+    padding: .8rem 1rem;
+    border: 1px solid var(--luu-bad);
+    border-radius: 8px;
+    background: var(--luu-bad-soft);
+  }
+  .danger strong { color: var(--luu-bad); }
+  .danger p { margin: 0; font-size: 12px; line-height: 1.5; }
   .declare p { margin: 0 0 .5rem; }
   /* On the left of the foot, away from the buttons that keep the form. */
   .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }

@@ -219,6 +219,37 @@ function bareStart(text, from) {
   return match ? match.index + match[1].length + match[0].slice(match[1].length).indexOf("{") : -1
 }
 
+/// Calls in a row as one part: two or more `tool` parts with nothing between
+/// them but whitespace become `{ kind: "tools", i, live, calls }`, which the
+/// chat draws as one box; a lone call stays a `tool`. The whitespace between
+/// them goes, since it was only ever the line break between two fences; what
+/// follows the last call stays.
+export function runs(parts) {
+  const out = []
+  let run = []
+  let gap = []
+  const flush = () => {
+    if (run.length > 1) out.push({ kind: "tools", i: run[0].i, live: run[0].live, calls: run })
+    else out.push(...run)
+    out.push(...gap)
+    run = []
+    gap = []
+  }
+  for (const part of parts) {
+    if (part.kind === "tool") {
+      gap = []
+      run.push(part)
+    } else if (run.length && part.kind === "text" && !part.text.trim()) {
+      gap.push(part)
+    } else {
+      flush()
+      out.push(part)
+    }
+  }
+  flush()
+  return out
+}
+
 /// One past the `}` that closes the object opened at `start`, or -1 while it
 /// is still open. Strings are skipped, escapes included, so a brace inside an
 /// argument does not close the call early.

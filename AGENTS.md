@@ -177,11 +177,18 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [engine.gemma]
 #   kind = "llama"
 #   binary = "managed"
-#   model = "ollama:qwen2.5-coder:7b"   # any GGUF from ollama, llama.cpp,
-#                                       # Hugging Face or <state dir>/models
+#   port = 8080
+#
+# It loads the session's model — any GGUF from ollama, llama.cpp, Hugging Face
+# or <state dir>/models, chosen in the chat or the new session's dialog.
 #
 # Downloading luu's copy, starting it, switching its model when the chat picks
-# another, and stopping it when no session uses it are all automatic.
+# another, and stopping it when no session uses it are all automatic. The pane
+# also lists the binaries this machine already has, as cards nobody wrote yet:
+# a switch uses one (its table and a provider) or stops using one — the table
+# stays, with `enabled = false` — and uninstalling luu's own copy, asked first,
+# removes it with its table and providers. Play picks the model and starts a
+# chat on it; the engine's port is the first free one from the kind's own.
 #
 # Settings → Runtimes is where a session's commands may run: each container
 # runtime (docker, podman, nerdctl, colima, container) probed for whether it is
@@ -199,6 +206,11 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
+#
+# Providers and models wear their brand's mark in the pickers: thirteen in
+# `web/brands/` (Simple Icons, CC0), or a pack — `[ui] brand-icons`, a folder of
+# `<slug>.svg`, chosen in Appearance → Brand marks, where `npm install
+# @lobehub/icons-static-svg` in `web/` is found by itself.
 #
 # Monaco and xterm.js are the optional dependencies and they are *node* ones,
 # in `web/package.json` rather than vendored into the tree: `make install`

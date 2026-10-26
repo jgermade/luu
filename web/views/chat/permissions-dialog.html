@@ -16,7 +16,7 @@
   const { state, revokeGrant } = await import("@web/lib/store.js")
   const { ui, closePermissions, showPermissionsTab, permissionsToSettings } = await import("@web/lib/ui.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
   const Button = await import("@web/theme/default/components/button.html")
 
   $: tab = ui.permissions || "activity"
@@ -234,7 +234,7 @@
 
   <template :slot.bar>
     <div :if="tab === 'activity'" class="bar">
-      <Segmented label="Show" size="sm" :model="filter" :options="FILTERS" @change="filter = $event.detail" />
+      <ChoiceSegmented label="Show" size="sm" :model="filter" :options="FILTERS" @change="filter = $event.detail" />
       <span class="dim small">{{ calls.length }} {{ calls.length === 1 ? "call" : "calls" }} · {{ refusedCount }} refused</span>
     </div>
     <!-- The call followed here, and the way back to it. -->

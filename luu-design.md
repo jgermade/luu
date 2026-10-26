@@ -1257,13 +1257,16 @@ via `<PathText>` with the full host directory in hover title, and settings forms
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps.
 Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport height (`calc(100dvh - 4.5rem)`),
-and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
-(what this server resolved, then the providers file the next run reads — with the built-in mock
-as a row of its own, chosen when the file names no default, because a server that fell back to
-it used to show a table with nothing chosen; the providers are a **read-only list**, and each is
-added, edited, renamed or removed in its own form in a modal, which writes that one profile and
-nothing else, at once — the default alone is set from the list; see
-[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
+and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (the folder `serve` was started in, and luu's own — the folder chosen under the first is the inspector foot's, which names it and changes it), *Models*
+(the providers file the next run reads, laid out as the new session's dialog: the providers in
+one column and the models of the one in focus in the other, that provider's default, *use →* and
+edit over its models, and *+ provider* under the list — with the built-in mock as a row of its
+own above them, chosen when the file names no default, because a server that fell back to it
+used to show a table with nothing chosen; the providers are **read-only**, and each is added,
+edited, renamed or — in its form's *Danger zone* — removed in its own form in a modal, which
+writes that one profile and nothing else, at once; the default alone is set from the list; see
+[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md)
+and [`RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`](RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
 starts](#a-model-server-luu-starts)) and *Resend* (the three
 rules that decide how much of the history a turn pays for again). *Resend* is beside *Models* and
 not inside *General* on the same rule that keeps `config.toml` and `localStorage` apart: General
@@ -1361,7 +1364,19 @@ shapes: a folder, open or shut, and a sheet per kind of file, coloured by token.
 `config.toml` only if it loads, and is swapped in live. The manifest's `revision`, in every icon
 URL, keeps the browser's cache honest. A versioned extension path that an update removed resolves
 to the newest version beside it. See
-[`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
+[`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md).
+**Brand marks are the one exception to *nothing is vendored***: a mark is its owner's and there is
+one per brand, so there is no taste to tie the page to. Fifteen come with the page
+(`web/brands/`: Simple Icons' under CC0, named by lobehub's slugs, and llama.cpp's, mlx-serve's
+and Ollama's own, which an engine's card and the installer's kinds wear too), drawn as a mask over
+`currentColor` beside each provider (by backend and URL host) and model (by family, after the
+catalog's prefix) in the two columns the pickers share; nothing known is no mark. `[ui]
+brand-icons` names a pack instead — a folder of `<slug>.svg`, or one with `icons/` in it — offered
+by Settings → Appearance → Brand marks from `<state dir>/brand-icons/` (imported like a theme) and
+from `web/node_modules/@lobehub/icons-static-svg` (installed with npm, like Monaco), read into a
+slug → file table that `/api/brands/icon/{slug}` serves as SVG and nothing else; a slug the pack
+lacks is the page's own. See
+[`RECORD/2026-10-26.brand-icons.completed.md`](RECORD/2026-10-26.brand-icons.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
 grammar crates — `Makefile`, `Containerfile` and `Dockerfile` found by name, having no extension
 to be found by — sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does
@@ -1565,7 +1580,12 @@ The rest follows from that:
   time, using the same forms `parse_call` accepts (a fence, or a bare `{"name": …}` at the start of
   a line). It pairs each block, in order, with the turn's `tool_call`/`tool_result`, and
   `tool-call.html` draws each one as a card: the name, what the call is about, how it went, and
-  the arguments and output behind a click. A block still being written is a placeholder, and a
+  the arguments and output behind a click. A `read_file` that may not have read the whole file
+  names its lines beside the path (`lines 120–159`, from `start_line` and the lines that came
+  back), and shows nothing of the file under its head: what came back is what the model read,
+  not what the call did. Calls in a row with nothing said between them are one box
+  (`tool-group.html`, grouped by `segments.js`'s `runs`), every card in it on show and opened
+  by its own click. A block still being written is a placeholder, and a
   tail that could be the start of one is held back for the frame or two it takes to tell. While a
   live answer ends on a call that has run, a line under it says the model is reading what the
   call returned, until the next token. What the model wrote while reasoning — `<think>…</think>`,
@@ -1584,29 +1604,34 @@ The rest follows from that:
   reads `≥`. No count from the backend means no speed, never zero. The times are the page's clock
   live and `TurnView`'s `at_ms` after a reload. `first_token_at_ms` is folded from the `token`
   lines' own stamps, so every recording has it and no format moved. A click opens
-  `turn-inspect.html`, a `<dialog>` with three tabs: the context, the answer as the model wrote
-  it (fences included), and each tool call. **The context is grouped by what each piece is**
+  `context-modal.html` about that turn — **the modal the context indicator opens** about the
+  newest one, not a second one with fewer facts: the window's use, the answer's reserve, what the
+  server counted, how the tools travelled, and, once the turn has ended, how it ended, what it
+  wrote, its speed and its times; the copy; and the grouped context with the answer last, as
+  the turn went. **The context is grouped by what each piece is**
   (`context-view.html`): system, tools, map, summaries, history, code, prompt, in the legend's
   order and colours, each a card under its bucket's count, with an earlier exchange keeping
   who said it. The boundaries are read back from what the renderer always writes (`# Tools`,
   `# Repository map`, a fold's `[job closed]`, a `// path` fragment, the question at the end),
   in `prompt-parts.js`, because the wire carries counts and not spans. **No block scrolls unless
   asked to**: one too large to read at a glance is clipped with a fade and offers *show all*
-  (inline) or *scroll* (a box of its own). Nothing is fetched: it is the turn `state.history`
+  (inline) or *scroll* — the same box made scrollable, so the lines being read stay where they
+  were — in its head and again at the fade. Nothing is fetched: it is the turn `state.history`
   already holds.
 - **The composer: attach on the left, the context on the right.** The clip that names the open
   file in the prompt sits left of the input. The right end of the options row is the context
   indicator: the newest turn's buckets as a small bar in the legend's colours and the tokens sent
   over the window, `1.5k / 8k`, the count amber from 80% of it and red from 95%. Where the window
-  is unknown it reads `1.5k / —` and says why. The turn modal and the context modal carry the
-  same partial over total. The indicator reads the newest turn whether it happened live or came
-  back from the server, so a reload does not leave it empty. A click opens `context-modal.html`, the same grouped view
-  about that turn, with the window's use, the answer's reserve and what the server counted, and
-  the answer to it last, marked as not sent yet — **as the turn went**, where it used tools:
+  is unknown it reads `1.5k / —` and says why. The modal carries the same partial over total.
+  The indicator reads the newest turn whether it happened live or came back from the server, so
+  a reload does not leave it empty. A click opens `context-modal.html` with no turn: the same
+  modal as a meta line's, about the newest turn as it stands — which may still be running, so it
+  reads the live fields rather than `state.history` — and the answer to it last, marked as not
+  sent yet — **as the turn went**, where it used tools:
   each reply up to its call, what that call gave back as the model got it, and what the next call
   sent, cut where each call's step ended (`ToolCallView.at`, kept by the page and the server's
   fold alike). A card in the chat shows the first lines of its result under it without being
-  opened. See
+  opened, except a read's. See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
 - **The transcript follows its end while it is at its end** (`Scrollable`'s `autoscroll`): any
   scroll up leaves it at once, and only scrolling back to the end picks it up again. The chat's
@@ -1655,7 +1680,7 @@ The rest follows from that:
   feet, a modal's head, the terminal, and the editor and snippets by their tone preference — is
   said in the markup, and what dark *is* is the theme's. The chat column re-points the `--luu-*`
   inks for its grey. The page's form controls are the theme's: `TextInput`, `Select`,
-  `Textarea`, `Checkbox`, `Segmented`. `app.css`'s rules for bare `input`, `select`, `textarea`,
+  `Textarea`, `Checkbox`, `ChoiceSegmented`. `app.css`'s rules for bare `input`, `select`, `textarea`,
   `button` and `pre` are `:where()`, so they weigh nothing against a component's scoped style. A
   bare boolean attribute (`<Button disabled>`) is on; a large modal (40rem and up, as drawn) has a dark head — a `data-tone="dark"` island — and a small one a head that is part of its body, in the theme's `Modal` and `TabModal` and the page's own `Modal`, and the theme's two take a head in a tone as well — `head="accent"`, `ok`, `warn` or `bad`, the same bar in the tone's strong colour with a solid badge's ink, whatever the size;
   every pressable component has a pressed state
@@ -2227,9 +2252,10 @@ is sent to it.
 [engine.gemma]
 kind = "llama"          # llama | mlx | ollama
 binary = "managed"      # luu's own copy; a path; or absent: found on PATH
-port = 8080
-model = "ollama:qwen2.5-coder:7b"   # -m, out of what this machine already has
+# enabled = false       # kept, and disabled: luu does not start it
+port = 8080             # the first free one from the kind's own, when luu writes it
 args = ["-c", "8192"]
+# model = "ollama:qwen2.5-coder:7b" # read, never asked: the session's model is the one loaded
 
 [provider.gemma]
 backend = "openai"
@@ -2292,6 +2318,44 @@ matmul. A provider whose engine is llama.cpp or mlx lists every model it can loa
 picker, and the ones it cannot **greyed out, with a warning and the reason as a tooltip**, so a
 model on the disk never looks missing.
 See [`RECORD/2026-09-28.a-model-server-luu-starts.completed.md`](RECORD/2026-09-28.a-model-server-luu-starts.completed.md).
+
+**Settings → Engines lists what the machine has, not only what the file says.** Every binary
+`engines::discover` finds that no table runs is a card of its own, *disabled* (`discovered` on
+`GET /api/engines`, compared after `canonicalize`). Each card says where its binary comes from —
+`luu:` for luu's own copy, `system` for one the machine had, `path` for one the file names that is
+neither (`origin`, the server's answer) — and nothing is removed from the page: a card is
+**used or not**. Used, a found binary becomes `[engine.<kind>]` with that `binary` and the
+provider that starts it; not used, a table keeps everything and gains `enabled = false`, which
+luu **does not start** (`ensure` and the start route refuse, naming the switch) and whose
+providers **leave the pickers** (`idle` on `GET /api/providers`), while staying in Settings →
+Models. A version or variant the page sends is a name or it is refused — it is joined into a
+path under the state directory. The actions are icons (start, stop, output, install, uninstall,
+edit), and the output is a `SubModal` with each line coloured by what it says. See
+[`RECORD/2026-10-26.engines-found-used-and-owned.completed.md`](RECORD/2026-10-26.engines-found-used-and-owned.completed.md).
+
+**The engine's model is the session's.** Nothing in the pane or the form asks for one: a session
+chooses its model and `for_run` starts the engine on it; an old table's `model` still loads and
+an edit keeps it. **An engine has a sheet of its own**, opened by play on *Start* and by the
+output icon on *Output*. *Start* lists the models it can load (the catalog; ollama's store for
+ollama), with *Start engine* — `POST /api/engines/{name}/start` with `{ model }`, a catalog
+reference, restarting an engine luu runs on another — and *New session*, on the engine's
+provider and that model. *Chat* talks to the engine on that model in the sheet, **outside any
+session**: `POST /api/engines/{name}/chat` runs `ensure` and streams the reply as NDJSON, with no
+system prompt, no tools, no budget and nothing recorded, to the engine's own `127.0.0.1` URL and
+never a provider's. *Output* is what it printed, a line's colour saying what it is. The switch on
+a card reads *Enabled*. **luu picks the port**: `GET
+/api/engines/port` is the first from the kind's own upward that no table names and a bind on
+`127.0.0.1` finds free, within a hundred and under the ephemeral range, and the form and *use*
+write it; when something else answers on an engine's port anyway, the sheet offers *move to port
+N*, which rewrites the table and every provider whose URL still says the old one. **Uninstall
+asks, then removes the engine** (`POST /api/engines/{name}/uninstall`, luu's own copy only):
+stopped, its copy deleted unless another table runs it, and `[engine.<name>]` taken out of the
+file with the providers that start it. **The form is an installer** in a wide `SubModal` of
+`InputContainer`s: the kind as cards (with whether this machine has a release of it,
+`cannot_install`), where the binary comes from, the name and port filled in, *Advanced* for the
+arguments; *Install* downloads luu's copy there and closes when it is on disk — unpacked without
+an archive's single top folder, so `luu:/engines/llama/b11236/llama-server`. See
+[`RECORD/2026-10-26.engines-installed-and-started.completed.md`](RECORD/2026-10-26.engines-installed-and-started.completed.md).
 
 ### Settings
 

@@ -1063,6 +1063,15 @@ export async function loadPostures() {
   }
 }
 
+/// The profiles the pickers offer: every one but those whose engine is
+/// switched off (`idle`), which Settings → Models still lists, since that is
+/// where a provider is edited. See
+/// `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
+export function offeredProviders() {
+  const idle = state.providers?.idle || []
+  return Object.keys(state.providers?.providers || {}).filter(name => !idle.includes(name))
+}
+
 /// The providers file, without opening anything.
 ///
 /// The session starter needs the list of profiles and is not the modal, which
