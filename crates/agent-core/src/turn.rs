@@ -70,9 +70,13 @@ pub enum TurnEvent {
     },
     /// The model asked for a tool. Emitted before the sandbox is consulted, so
     /// a denial is visible as a call that was made and refused rather than as
-    /// nothing happening.
+    /// nothing happening. `index` is which call of that step's reply this is,
+    /// counting from 1: a native server streams a *list* of calls, and the
+    /// loop runs the whole list — see
+    /// `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
     ToolCall {
         step: u32,
+        index: u32,
         call: ToolCall,
     },
     /// The floor refused this call, the policy file would allow it, and a
@@ -82,10 +86,12 @@ pub enum TurnEvent {
     /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     CallHeld {
         step: u32,
+        index: u32,
         call: crate::tools::ToolCall,
         refused: String,
     },
-    /// What it did, including the verdict and who enforced it.
+    /// What it did, including the verdict and who enforced it. The call's
+    /// `index` rides on the [`ToolStep`].
     ToolResult {
         step: u32,
         outcome: Box<ToolStep>,

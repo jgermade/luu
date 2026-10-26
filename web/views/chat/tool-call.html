@@ -36,9 +36,10 @@
     : null
   // Which question this card already answered, so a second click cannot send
   // a second answer while the first is on its way. Keyed by the call rather
-  // than a flag, so a later question on the same card is not born answered.
+  // than a flag, so a later question on the same card is not born answered —
+  // and by the call's place in its step too, since one reply can carry two.
   let sent = ""
-  $: key = held ? `${held.turn}:${call?.step}` : ""
+  $: key = held ? `${held.turn}:${held.step}:${held.index ?? 1}` : ""
   $: answered = !!key && sent === key
   // *Apply to session*: the answer lasts the session's drafts, until it is
   // taken back — a yes runs every call like it without asking, a no refuses
@@ -48,7 +49,7 @@
   const answer = allow => {
     if (!held || answered) return
     sent = key
-    answerCall(held.turn, call.step, allow, session)
+    answerCall(held.turn, held.step, held.index ?? 1, allow, session)
   }
   // A command asked about is a program the shell list leaves to a person; a
   // yes runs it with what the session may write and reach.

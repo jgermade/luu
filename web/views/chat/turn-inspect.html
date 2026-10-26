@@ -91,9 +91,9 @@
       </div>
 
       <div :if="tab === 'tools'">
-        <div :each="call in tools" :key="call.step" class="block">
+        <div :each="call in tools" :key="`${call.step}.${call.index ?? 1}`" class="block">
           <div class="role">
-            step {{ call.step }} · <b>{{ call.name }}</b>
+            step {{ call.step }}<span :if="call.index > 1">.{{ call.index }}</span> · <b>{{ call.name }}</b>
             <span :if="call.verdict" :class="call.verdict.allowed ? 'ok' : 'bad'">
               · {{ call.verdict.allowed ? "allowed" : "denied" }} — {{ call.verdict.rule }}
             </span>

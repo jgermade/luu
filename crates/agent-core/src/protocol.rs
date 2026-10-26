@@ -275,6 +275,10 @@ pub enum ClientMessage {
     AnswerCall {
         turn: TurnId,
         step: u32,
+        /// Which call of that step is being answered. Absent is the first,
+        /// which is every call before a reply could carry more than one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
         allow: bool,
         /// For the rest of the session, not only this call: with `allow` a yes
         /// that lasts (protocol 10), without it a no that does (11). Absent is
@@ -543,10 +547,15 @@ pub enum ServerMessage {
         detail: String,
     },
     /// A tool the model asked for, before it was checked. `step` counts from 1
-    /// within the turn.
+    /// within the turn. `index` is which call of that step's reply this is,
+    /// counting from 1; absent is 1, which is every call made before a reply
+    /// could carry more than one — an optional field, so the protocol stays
+    /// where it is.
     ToolCall {
         turn: TurnId,
         step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
         name: String,
         arguments: serde_json::Value,
     },
@@ -559,6 +568,8 @@ pub enum ServerMessage {
     CallHeld {
         turn: TurnId,
         step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
         name: String,
         arguments: serde_json::Value,
         refused: String,
@@ -569,6 +580,8 @@ pub enum ServerMessage {
     ToolResult {
         turn: TurnId,
         step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
         name: String,
         verdict: Verdict,
         error: Option<String>,
@@ -602,6 +615,8 @@ pub enum ServerMessage {
     Granted {
         turn: TurnId,
         step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
         kind: GrantKind,
         target: String,
     },
@@ -611,6 +626,8 @@ pub enum ServerMessage {
     Forbidden {
         turn: TurnId,
         step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
         kind: GrantKind,
         target: String,
     },
@@ -621,6 +638,13 @@ pub enum ServerMessage {
         kind: GrantKind,
         target: String,
     },
+}
+
+/// The wire's `index`: absent for the first call of a step, so a single-call
+/// reply streams exactly the bytes it streamed before the field existed, and
+/// only a second or later call of one step says anything.
+fn above_one(index: u32) -> Option<u32> {
+    (index > 1).then_some(index)
 }
 
 impl ServerMessage {
@@ -642,19 +666,22 @@ impl ServerMessage {
                 usage,
             },
             TurnEvent::Failed(message) => Self::Failed { turn, message },
-            TurnEvent::ToolCall { step, call } => Self::ToolCall {
+            TurnEvent::ToolCall { step, index, call } => Self::ToolCall {
                 turn,
                 step,
+                index: above_one(index),
                 name: call.name,
                 arguments: call.arguments,
             },
             TurnEvent::CallHeld {
                 step,
+                index,
                 call,
                 refused,
             } => Self::CallHeld {
                 turn,
                 step,
+                index: above_one(index),
                 name: call.name,
                 arguments: call.arguments,
                 refused,
@@ -662,6 +689,7 @@ impl ServerMessage {
             TurnEvent::ToolResult { step, outcome } => {
                 let ToolStep {
                     call,
+                    index,
                     outcome,
                     duration_ms,
                     asked,
@@ -671,6 +699,7 @@ impl ServerMessage {
                 Self::ToolResult {
                     turn,
                     step,
+                    index: above_one(index),
                     name: call.name,
                     verdict: outcome.verdict,
                     error: outcome.error,

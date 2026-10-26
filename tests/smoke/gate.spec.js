@@ -287,6 +287,13 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await ctx.click()
   const context = page.getByRole("dialog", { name: "Context" })
   await expect(context).toBeVisible()
+  // The way to take the whole context out of here, beside the readouts.
+  await expect(context.locator(".facts .copy")).toBeVisible()
+  await expect(context.locator(".facts .copy")).toBeEnabled()
+  // How this turn's tools travelled, read from what it sent: the mock session
+  // never set `tool-calls`, so the definitions are in the prompt as text.
+  await expect(context.locator(".facts")).toContainText("tools")
+  await expect(context.locator(".facts")).toContainText("fenced")
   await expect(context.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
   // And the answer to it, which the prompt it was measured from cannot hold:
   // it was written after. Marked as not sent, because the next turn sends it.
@@ -449,6 +456,11 @@ test("choosing another provider in the dialog lists that provider's models", asy
   await sends.locator(".prov strong", { hasText: /^there$/ }).click()
   // The profile's own model first, whether or not the provider lists it.
   await expect(sends.locator(".models button.model").first()).toContainText("mock-there")
+  // Beside it, how this model's tools travel: these profiles never set
+  // `tool-calls`, so the fenced icon — braces, not the native plug.
+  await expect(sends.locator(".models button.model .tools").first()).toBeVisible()
+  await expect(sends.locator(".models button.model use").first())
+    .toHaveAttribute("href", "#i-tools-fenced")
   await sends.locator(".models button.model", { hasText: "mock-there" }).click()
   await expect(chosen).toContainText("there · mock-there")
   await expect(sends.locator(".prov.current")).toContainText("there")
@@ -601,10 +613,11 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
   // 23, Appearance's palette since 2026-10-21, and since 2026-10-23 the
-  // permissions' shield and a session's archive, restore and delete. The
-  // tree's own shapes are the theme's, in `theme/default/files.svg`, not the
-  // page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(28)
+  // permissions' shield and a session's archive, restore and delete; since
+  // 2026-10-25 the picker's two tool transports, a plug and braces.
+  // The tree's own shapes are the theme's, in `theme/default/files.svg`, not
+  // the page's.
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(30)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be

@@ -142,6 +142,7 @@ continue from 46.
 | 52 | **Always: a grant for the project**, kept in luu's config by working directory. Put off by decision | a decision | *always is for later* |
 | 53 | **A yes that needs a signature** — where `[approvals] required = true` nothing is asked, since an unsigned click would skip the signature | row 16 | [`a-refused-write-asks`](../../RECORD/2026-10-02.a-refused-write-asks.completed.md) §Still open |
 | 54 | **The `--allow-*` flags add a second rule for a path**, and the first answers: a policy reading `.` with `--allow-write .` still refuses the write. The lists merge by path (`policies::widen`); the flags do not | nothing | *step 2a, built* |
+| 55 | ~~**A step runs every call its reply carries** — the loop executes the whole list a native reply streams, keyed `(step, index)`; today only the first runs and the rest read *not run*~~. *Built 2026-10-25*: `parse_calls`, the loop runs the list, `index` is an optional field on four protocol messages and the format stayed where it was. What is left is the count — the grounded scripts under `--tool-calls native`, tool cards per step — which decides whether the planning prompt says anything about it | the count | [`more-than-one-call-in-a-reply`](../../RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md) |
 
 ```mermaid
 gantt

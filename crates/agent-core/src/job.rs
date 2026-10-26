@@ -889,6 +889,7 @@ mod tests {
                 name: name.into(),
                 arguments,
             },
+            index: 1,
             outcome: ToolOutcome {
                 verdict: Verdict::deny("test"),
                 output: String::new(),

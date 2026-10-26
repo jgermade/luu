@@ -932,6 +932,7 @@ impl Context {
                 steps.push(ToolStep {
                     text,
                     call,
+                    index: call_view.index.unwrap_or(1),
                     outcome,
                     duration_ms: call_view.duration_ms.unwrap_or(0),
                     asked: call_view.asked,
@@ -1828,9 +1829,13 @@ impl Context {
                     // what a pruned turn gives up is what came back. Under
                     // `Results::Kept` this is the same loop the turn above it
                     // runs, which is what keeps a run made before the rule
-                    // byte-identical under it.
+                    // byte-identical under it. A reply that carried more than
+                    // one call is one assistant message and one result per
+                    // call, so the text goes once — at its first call.
                     for step in &turn.steps {
-                        messages.push(Message::assistant(step.text.clone()));
+                        if step.index == 1 {
+                            messages.push(Message::assistant(step.text.clone()));
+                        }
                         messages.push(Message::user(result_under(step, budget.results, counter)));
                     }
                     messages.push(Message::assistant(turn.answer.clone()));
@@ -1869,11 +1874,17 @@ impl Context {
                         &current,
                         counter,
                     )));
-                    // Each step is a real exchange, so the alternation holds and
-                    // no chat template has to decide what two user messages in a
-                    // row mean.
+                    // Each step is a real exchange. A reply that carried more
+                    // than one call is one assistant message and its results,
+                    // so two user messages in a row do arrive here when a model
+                    // asked for two things at once — every chat template this
+                    // speaks takes that, and the native transports rebuild the
+                    // pair into `tool_calls` and tool messages before the wire.
+                    // The text goes once, at its first call.
                     for step in &turn.steps {
-                        messages.push(Message::assistant(step.text.clone()));
+                        if step.index == 1 {
+                            messages.push(Message::assistant(step.text.clone()));
+                        }
                         messages.push(Message::user(step.result_text()));
                     }
                     messages.push(Message::assistant(turn.answer.clone()));
@@ -2124,10 +2135,19 @@ impl Context {
 }
 
 /// The tool exchanges of a turn, counted as the messages they render as.
+/// A reply that carried more than one call renders its text once, at its
+/// first call, and the count follows the render — not the steps.
 fn steps_tokens(steps: &[ToolStep], counter: &dyn TokenCounter) -> u32 {
     steps
         .iter()
-        .map(|step| counter.count(&step.text) + counter.count(&step.result_text()))
+        .map(|step| {
+            let asked = if step.index == 1 {
+                counter.count(&step.text)
+            } else {
+                0
+            };
+            asked + counter.count(&step.result_text())
+        })
         .sum()
 }
 
@@ -2620,6 +2640,49 @@ mod tests {
         assert_eq!(selection.messages.len(), 5 * 2 + 2);
         // No window, no headroom to plot.
         assert!(!selection.buckets.iter().any(|b| b.name == "reserve"));
+    }
+
+    #[test]
+    fn a_reply_with_two_calls_renders_one_assistant_message_and_two_results() {
+        // The exchange the loop built — the model's own words once, and one
+        // result per call — is what the render owes back. A step whose index
+        // is not the first of its reply carries no assistant message.
+        let counter = WordCounter::default();
+        let first = ran("one");
+        let mut second = read("two");
+        second.text = first.text.clone();
+        second.index = 2;
+        let mut context = Context::new("system");
+        context.push_turn_with_steps(
+            1,
+            "look and read".to_string(),
+            "both came back".to_string(),
+            vec![],
+            vec![first, second],
+            &counter,
+        );
+
+        let selection = context.select("now", &[], Budget::new(1000, 4, Eviction::Turn), &counter);
+        let roles: Vec<Role> = selection.messages.iter().map(|m| m.role).collect();
+        // system, prompt, assistant once, two results, answer, current prompt.
+        assert_eq!(
+            roles,
+            [
+                Role::System,
+                Role::User,
+                Role::Assistant,
+                Role::User,
+                Role::User,
+                Role::Assistant,
+                Role::User,
+            ]
+        );
+        let assistants = selection
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .count();
+        assert_eq!(assistants, 2, "the reply and the answer, not one per call");
     }
 
     #[test]
@@ -4483,6 +4546,7 @@ mod tests {
                 name: "run_command".into(),
                 arguments: serde_json::json!({}),
             },
+            index: 1,
             outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
             duration_ms: 1,
             asked: None,
@@ -4515,6 +4579,7 @@ mod tests {
                 name: "read_file".into(),
                 arguments: serde_json::json!({}),
             },
+            index: 1,
             outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
             duration_ms: 1,
             asked: None,
@@ -4950,6 +5015,7 @@ mod tool_turn_tests {
                 name: name.into(),
                 arguments: serde_json::json!({}),
             },
+            index: 1,
             outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
             duration_ms: 1,
             asked: None,

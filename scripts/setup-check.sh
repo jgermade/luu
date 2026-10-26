@@ -37,7 +37,13 @@ fail() {
 }
 
 step "install"
-sh "$setup" | tee "$work/out"
+# No command typed: with nobody to ask the script installs, which is what CI
+# exercises; on a terminal it would show the menu, so ask it nothing here.
+if (: </dev/tty) 2>/dev/null; then
+  sh "$setup" install | tee "$work/out"
+else
+  sh "$setup" | tee "$work/out"
+fi
 grep -q '^Installed luu' "$work/out" || fail "install did not say it installed"
 "$bin" --version
 

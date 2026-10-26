@@ -80,8 +80,9 @@ struct Session {
     /// `None` outside a job, where the policy file is the whole answer.
     narrowed: Option<(JobId, Arc<Sandbox>)>,
     /// A call the floor refused and a person is being asked about — at most
-    /// one, since a turn makes one call at a time and one turn runs. The turn
-    /// is waiting on `answer`; nothing else is. See
+    /// one, since a turn asks about one call at a time even when its reply
+    /// carries several, and one turn runs. The turn is waiting on `answer`;
+    /// nothing else is. See
     /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     held: Option<Held>,
 }
@@ -90,6 +91,8 @@ struct Session {
 struct Held {
     turn: TurnId,
     step: u32,
+    /// Which call of that step's reply this is, counting from 1.
+    index: u32,
     answer: tokio::sync::oneshot::Sender<agent_core::agent::Answer>,
 }
 
@@ -115,6 +118,7 @@ impl agent_core::agent::Asker for Watching {
     fn ask<'a>(
         &'a self,
         step: u32,
+        index: u32,
         call: &'a agent_core::tools::ToolCall,
         refused: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = agent_core::agent::Answer> + Send + 'a>>
@@ -128,6 +132,7 @@ impl agent_core::agent::Asker for Watching {
                 session.held = Some(Held {
                     turn: self.turn,
                     step,
+                    index,
                     answer,
                 });
             }
@@ -135,6 +140,7 @@ impl agent_core::agent::Asker for Watching {
                 .events
                 .send(TurnEvent::CallHeld {
                     step,
+                    index,
                     call: call.clone(),
                     refused: refused.to_string(),
                 })
@@ -144,11 +150,9 @@ impl agent_core::agent::Asker for Watching {
             // race leaves nothing for a late answer to land on.
             {
                 let mut session = self.app.session.lock().await;
-                if session
-                    .held
-                    .as_ref()
-                    .is_some_and(|held| held.turn == self.turn && held.step == step)
-                {
+                if session.held.as_ref().is_some_and(|held| {
+                    held.turn == self.turn && held.step == step && held.index == index
+                }) {
                     session.held = None;
                 }
             }
@@ -171,16 +175,19 @@ impl agent_core::agent::Asker for Watching {
                     .give(grant.clone(), allow);
                 if added {
                     let (turn, kind, target) = (self.turn, grant.kind, grant.target);
+                    let index = (index > 1).then_some(index);
                     let said = match allow {
                         true => ServerMessage::Granted {
                             turn,
                             step,
+                            index,
                             kind,
                             target,
                         },
                         false => ServerMessage::Forbidden {
                             turn,
                             step,
+                            index,
                             kind,
                             target,
                         },
@@ -2284,6 +2291,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
         ClientMessage::AnswerCall {
             turn,
             step,
+            index,
             allow,
             session,
         } => {
@@ -2293,10 +2301,13 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 (true, false) => agent_core::agent::Answer::Once,
                 (true, true) => agent_core::agent::Answer::Session,
             };
+            let index = index.unwrap_or(1);
             let held = {
                 let mut session = app.session.lock().await;
                 match &session.held {
-                    Some(held) if held.turn == turn && held.step == step => session.held.take(),
+                    Some(held) if held.turn == turn && held.step == step && held.index == index => {
+                        session.held.take()
+                    }
                     _ => None,
                 }
             };
@@ -2309,7 +2320,14 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                         app,
                         "answer_call",
                         Refusal::Call,
-                        format!("no call is held at turn {turn}, step {step}"),
+                        format!(
+                            "no call is held at turn {turn}, step {step}{}",
+                            if index > 1 {
+                                format!(", call {index}")
+                            } else {
+                                String::new()
+                            }
+                        ),
                     )
                     .await;
                 }

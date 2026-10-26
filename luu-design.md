@@ -559,21 +559,33 @@ The model never executes anything directly — it only emits a structured reques
 
 - **Agent loop**, built:
   1. Prompt + history + tools → model
-  2. If a tool call: parse → validate against the `Sandbox` → execute (real Rust code) → append the call *and its result* to the turn → back to 1
+  2. If the reply carries a tool call: parse → validate against the `Sandbox` →
+     execute (real Rust code) → append the call *and its result* to the turn →
+     back to 1. A reply can carry more than one call — a native server streams a
+     *list*, and the loop runs the whole list, each keyed `(step, index)`; two
+     calls in one reply is one exchange, not two.
+     See `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
   3. If plain text: end of turn
 
-  Capped at `--max-tool-steps` (8), and exhausting it ends the turn with
+  Capped at `--max-tool-steps` (8), which counts **executed calls** — a reply
+  that carries three spends three of them — and exhausting it ends the turn with
   `EndReason::ToolLimit` rather than presenting an investigation cut short as a
   conclusion.
 - **The steps are messages, and they alternate**: a turn renders as `user(prompt)`,
-  then `assistant(call) · user(result)` per step, then `assistant(answer)`. The
-  fusion rule applied to a new kind of content — and it means a turn with tool
-  calls is still *one* turn, evicted whole, so the model never sees a result
-  whose call has gone.
+  then `assistant(call) · user(result)` per step, then `assistant(answer)` — where
+  a step that carried more than one call is its reply once and one result after
+  it, so the alternation is per reply and not per call. The fusion rule applied
+  to a new kind of content — and it means a turn with tool calls is still *one*
+  turn, evicted whole, so the model never sees a result whose call has gone.
 - **How the model expresses a call is a transport detail.** `ToolCall` is the type
   and the parser is one function. It reads a fenced ```` ```tool ```` block
   out of plain text, which works against any backend including a 7B that has
-  never seen a tool API. **A call written while thinking is not a call**: the
+  never seen a tool API — and two shapes a model reaches for without being
+  asked: a ```` ```json ```` block, and `<tool_call>…</tool_call>`, Qwen's own
+  template tag, which arrives as content when the server did not parse it. A
+  reply that mixes them is read in **text order**, earliest call first, so a
+  fence later in the reply cannot shadow the blocks before it; a block whose
+  body does not parse is text and is not a call. **A call written while thinking is not a call**: the
   reasoning is masked out before the reader looks (`tools::mask_thinking`),
   because that is where a model tries a call out and drops it, and the text
   itself — stored, resent, inspected — is left as the model wrote it. See
@@ -2191,7 +2203,14 @@ pickers — and a model with no table takes the profile's, so one pulled tomorro
 needs no edit. A run resolves a flag, then the model's entry, then the
 profile, with no request to anyone: the form asked the server, and the file
 remembers its answer. `-m` still reaches a model left out — naming one is
-choosing it.
+choosing it. **The Models row shows the effective one** — the default model's
+entry, else the profile, else the backend's default — and marks a provider
+whose entries disagree, because the row used to read the profile's key alone
+and could say `native` while the model a run used travelled `fenced`. The
+picker's model rows carry the same answer as an icon — a plug for `native`,
+braces for `fenced` — and the Context modal's `tools` row answers the other
+half: what that turn actually sent. See
+[`RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`](RECORD/2026-10-25.the-transport-a-run-resolves.completed.md).
 
 **A profile is written and chosen from the browser as well as by hand**: the
 configuration modal edits this file on loopback, and a new session names one of
@@ -2535,19 +2554,22 @@ the argument they were measured against is
 ## Getting it onto a machine
 
 ```sh
-curl -fsSL https://jgermade.github.io/luu/setup.sh | sh                        # install, or update
-curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall
-curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall [--purge]
+curl -fsSL https://jgermade.github.io/luu/setup.sh | sh   # asks: install, update, reinstall, uninstall
+curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- install | reinstall | uninstall [--purge]
 ```
 
 One binary from a GitHub release — Linux x86_64 and arm64 (glibc ≥ 2.34), macOS
 Apple Silicon and Intel — into `~/.local/bin`, with no root and no shell profile
-edited. The download is checked against the release's `SHA256SUMS` (or GitHub's
+edited. With no command on a terminal the script *asks* what to do, offering
+reinstall and uninstall only when it finds a binary in the install directory;
+with no terminal to ask on it installs, so the one line is still an install in a
+script. The download is checked against the release's `SHA256SUMS` (or GitHub's
 asset digest, for a release older than that file), run once from a temporary
 directory, and only then renamed over the old one. `uninstall` keeps the state
 directory; `--purge` deletes it after asking, and without a terminal the answer is
-no. The script and the landing that shows it are `pages/`, the root of GitHub
-Pages; the replay of recorded sessions is under `demo/`. See
+no. The landing page shows the one line and nothing else, because the script now
+says the rest. The script and the landing that shows it are `pages/`, the root of
+GitHub Pages; the replay of recorded sessions is under `demo/`. See
 [`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md).
 
 ## Naming

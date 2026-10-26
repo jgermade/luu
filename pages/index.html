@@ -135,8 +135,8 @@ nav .wide { display: none; }
   border-radius: 8px;
   min-width: 0;
 }
-/* Wrapped, not scrolled: the end of the line — `| sh`, `reinstall` — is the
-   part that tells the four apart, and a phone would hide it. */
+/* Wrapped, not scrolled: the end of the line — `| sh` — is the part that
+   makes it a command, and a phone would hide it. */
 .cmd pre {
   margin: 0;
   padding: 12px;
@@ -282,23 +282,13 @@ footer a { color: var(--muted); }
 
       <div class="install" id="install">
         <h2>Install with one line</h2>
-        <p class="note">Linux and macOS. No root: one binary in <code>~/.local/bin</code>.</p>
+        <p class="note">Linux and macOS. No root: one binary in <code>~/.local/bin</code>.
+          The script asks what to do — install, or update, reinstall and uninstall when it
+          finds luu already there.</p>
         <ul class="cmds">
           <li class="cmd primary">
-            <span class="label">Install, or update to the latest release</span>
+            <span class="label">Install, update, reinstall or uninstall</span>
             <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh</pre><button class="copy" type="button">Copy</button></div>
-          </li>
-          <li class="cmd">
-            <span class="label">Reinstall, even the same version</span>
-            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall</pre><button class="copy" type="button">Copy</button></div>
-          </li>
-          <li class="cmd">
-            <span class="label">Uninstall — keeps your sessions and config</span>
-            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall</pre><button class="copy" type="button">Copy</button></div>
-          </li>
-          <li class="cmd">
-            <span class="label">Uninstall and delete luu's state directory too</span>
-            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall --purge</pre><button class="copy" type="button">Copy</button></div>
           </li>
         </ul>
         <ul class="platforms" aria-label="Prebuilt for">
@@ -394,8 +384,9 @@ footer a { color: var(--muted); }
         directory is not on your <code>PATH</code>, it prints the line to add.</p>
       <dl class="opts">
         <div><dt><code>install</code> · <code>reinstall</code> · <code>uninstall</code></dt>
-          <dd><code>install</code> is the default and does nothing when that version is already
-            there. <code>reinstall</code> always downloads again.</dd></div>
+          <dd>With no command, the script asks which to do, offering <code>reinstall</code> and
+            <code>uninstall</code> only when luu is already there. <code>install</code> does nothing
+            when that version is already there. <code>reinstall</code> always downloads again.</dd></div>
         <div><dt><code>--dir DIR</code></dt>
           <dd>Where the binary goes. Default <code>~/.local/bin</code>, or
             <code>LUU_INSTALL_DIR</code>.</dd></div>

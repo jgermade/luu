@@ -80,13 +80,24 @@
     const name = typed.trim()
     if (name) choose(focus, name)
   }
+  // What a run resolves for a model, in `provider.rs`'s own order: its own
+  // entry, then the profile, then the backend's default. The picker used to
+  // read the profile alone, so a model entry saying `fenced` could send our
+  // fence format while the row said native. See
+  // `RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`.
+  const profileTransport = p => p?.["tool-calls"] || (p?.backend === "anthropic" ? "native" : "fenced")
+  const transportOf = (p, model) => p?.models?.[model]?.["tool-calls"] || profileTransport(p)
+  const transportTitle = transport =>
+    transport === "native"
+      ? "native tools — sent in the request's own `tools` field"
+      : "fenced — the tools are text in the prompt, and a call is a fenced block"
   // Under the field, what it would choose.
   const describe = name => {
     const p = state.providers?.providers?.[name] || {}
     return [
       p.backend || "ollama",
       p.engine ? "luu starts it" : "",
-      (p["tool-calls"] || (p.backend === "anthropic" ? "native" : "")) === "native" ? "native tools" : "",
+      transportOf(p, p.model) === "native" ? "native tools" : "",
     ].filter(Boolean).join(" · ")
   }
 </script>
@@ -122,6 +133,12 @@
             @click="choose(focus, name)">
       <span class="check">{{ focus === provider &amp;&amp; name === model ? "✓" : "" }}</span>
       <span class="name">{{ shown?.labels?.[name] || modelLabel(name) }}</span>
+      <span class="tools" :class.native="transportOf(profile, name) === 'native'"
+            :title="transportTitle(transportOf(profile, name))">
+        <svg class="ic" role="img" :aria-label="transportTitle(transportOf(profile, name))">
+          <use :href="transportOf(profile, name) === 'native' ? '#i-tools-native' : '#i-tools-fenced'"/>
+        </svg>
+      </span>
     </button>
     <!-- On this machine and not loadable by this provider's engine — an
          MLX model under llama.cpp, ollama's own MLX under anything but
@@ -215,7 +232,15 @@
   .model.off .name { font-style: italic; }
   .model .warn { color: var(--luu-warn); }
   .check { width: 1em; flex: none; color: var(--luu-accent); }
-  .model .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* How this model's tools travel, last in the row: a plug for the request's
+     own `tools` field, braces for text in the prompt. Muted until it is
+     native, because fenced is the default and the exception is the news. */
+  .model .tools { display: inline-flex; flex: none; color: var(--luu-fg-muted); }
+  .model .tools .ic { width: 13px; height: 13px; }
+  .model .tools.native { color: var(--luu-bucket-tools, var(--luu-accent)); }
+  .model:hover .tools { color: inherit; }
+  .model.on .tools.native { color: var(--luu-accent); }
   .pad { margin: 0; padding: .2rem .8rem; }
   .small { font-size: 11px; }
   .dim { color: var(--luu-fg-muted); }

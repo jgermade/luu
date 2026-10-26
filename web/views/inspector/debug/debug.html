@@ -366,7 +366,7 @@
 
 <Card name="tools" title="Tool calls" :summary="toolsSummary">
   <ol class="timeline" :if="calls.length">
-    <li :each="call in calls" :key="call.step">
+    <li :each="call in calls" :key="`${call.step}.${call.index ?? 1}`">
       <div class="call">
         <svg class="ic kind"><use :href="toolIcon(call.name)"/></svg>
         <b>{{ call.name }}</b>

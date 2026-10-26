@@ -77,7 +77,7 @@
   ]
   let filter = "all"
   $: rows = calls
-    .map(call => ({ call, key: `${call.turn}:${call.step}`, outcome: outcomeOf(call), subject: subjectOf(call) }))
+    .map(call => ({ call, key: `${call.turn}:${call.step}:${call.index ?? 1}`, outcome: outcomeOf(call), subject: subjectOf(call) }))
     .filter(({ outcome }) =>
       filter === "all" ? true
       : filter === "granted" ? outcome.kind === "ok"

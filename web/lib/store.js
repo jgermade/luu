@@ -496,11 +496,13 @@ function onProtocol(message) {
     case "tool_call": {
       // Where in the reply this step ended — what has streamed so far,
       // flushed or not — so the reply can be cut into what each round trip
-      // said. The server's fold says the same of a stored turn.
+      // said. The server's fold says the same of a stored turn. `index` is
+      // which call of the step's reply this is; absent is the first.
       const last = state.messages[state.messages.length - 1]
       const at = (last?.role === "assistant" ? last.text.length : 0) + pending.length
       state.tools = [...state.tools, {
         step: message.step,
+        index: message.index ?? 1,
         name: message.name,
         arguments: message.arguments,
         verdict: null,
@@ -521,8 +523,8 @@ function onProtocol(message) {
     // about, so the question is drawn where the model asked. See
     // `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     case "call_held":
-      state.tools = state.tools.map(call => call.step === message.step
-        ? { ...call, held: { turn: message.turn, refused: message.refused } }
+      state.tools = state.tools.map(call => call.step === message.step && (call.index ?? 1) === (message.index ?? 1)
+        ? { ...call, held: { turn: message.turn, step: message.step, index: message.index ?? 1, refused: message.refused } }
         : call)
       break
 
@@ -548,7 +550,7 @@ function onProtocol(message) {
     }
 
     case "tool_result":
-      state.tools = state.tools.map(call => call.step === message.step
+      state.tools = state.tools.map(call => call.step === message.step && (call.index ?? 1) === (message.index ?? 1)
         ? {
             ...call,
             verdict: message.verdict,
@@ -836,7 +838,7 @@ function fromStored(turn) {
     // A call a person is still being asked about carries the floor's rule as
     // `held`; the card wants the turn beside it to answer with.
     tools: (turn.tools || []).map(call => call.held
-      ? { ...call, held: { turn: turn.turn, refused: call.held } }
+      ? { ...call, held: { turn: turn.turn, step: call.step, index: call.index ?? 1, refused: call.held } }
       : call),
     extraCalls: turn.extra_calls || [],
     prompt: turn.prompt_sent || "",
@@ -1000,12 +1002,14 @@ export const approveTask = approveJob
 /// The answer to a held call: `allow` runs that one call once under the policy
 /// file; otherwise the model is told a person refused it. `session` makes
 /// either last: a yes runs every call like it without asking, a no refuses
-/// them without asking, until it is taken back. `turn` and `step`
+/// them without asking, until it is taken back. `turn`, `step` and `index`
 /// name the call, so an answer that raced the end of its turn is refused rather
 /// than applied to whatever is held next.
-export function answerCall(turn, step, allow, session = false) {
+export function answerCall(turn, step, index, allow, session = false) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
-  socket.send(JSON.stringify({ type: "answer_call", turn, step, allow, session }))
+  const answer = { type: "answer_call", turn, step, allow, session }
+  if (index > 1) answer.index = index
+  socket.send(JSON.stringify(answer))
 }
 
 /// Takes back a yes or a no given for the session: the next call it covered is

@@ -66,6 +66,12 @@ pub struct ExtraCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallView {
     pub step: u32,
+    /// Which call of its step this is, counting from 1. Absent is 1: every
+    /// view folded before a step could carry more than one call, and every
+    /// call of a single-call reply. See
+    /// `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
     pub name: String,
     pub arguments: serde_json::Value,
     /// Allowed or denied, and *which rule* matched — plus who enforced it.
@@ -1235,14 +1241,18 @@ impl SessionView {
             ServerMessage::ToolCall {
                 turn,
                 step,
+                index,
                 name,
                 arguments,
             } => {
                 if let Some(view) = self.turn_mut(*turn)
-                    && !view.tools.iter().any(|call| call.step == *step)
+                    && !view.tools.iter().any(|call| {
+                        call.step == *step && call.index.unwrap_or(1) == index.unwrap_or(1)
+                    })
                 {
                     view.tools.push(ToolCallView {
                         step: *step,
+                        index: *index,
                         name: name.clone(),
                         arguments: arguments.clone(),
                         verdict: None,
@@ -1264,11 +1274,14 @@ impl SessionView {
             ServerMessage::CallHeld {
                 turn,
                 step,
+                index,
                 refused,
                 ..
             } => {
                 if let Some(view) = self.turn_mut(*turn)
-                    && let Some(call) = view.tools.iter_mut().find(|call| call.step == *step)
+                    && let Some(call) = view.tools.iter_mut().find(|call| {
+                        call.step == *step && call.index.unwrap_or(1) == index.unwrap_or(1)
+                    })
                 {
                     call.held = Some(refused.clone());
                 }
@@ -1276,6 +1289,7 @@ impl SessionView {
             ServerMessage::ToolResult {
                 turn,
                 step,
+                index,
                 verdict,
                 error,
                 output,
@@ -1287,7 +1301,9 @@ impl SessionView {
                 ..
             } => {
                 if let Some(view) = self.turn_mut(*turn)
-                    && let Some(call) = view.tools.iter_mut().find(|call| call.step == *step)
+                    && let Some(call) = view.tools.iter_mut().find(|call| {
+                        call.step == *step && call.index.unwrap_or(1) == index.unwrap_or(1)
+                    })
                 {
                     call.verdict = Some(verdict.clone());
                     call.error = error.clone();
@@ -1307,12 +1323,14 @@ impl SessionView {
                 step,
                 kind,
                 target,
+                ..
             }
             | ServerMessage::Forbidden {
                 turn,
                 step,
                 kind,
                 target,
+                ..
             } => {
                 let allow = matches!(message, ServerMessage::Granted { .. });
                 let already = self.grants.iter().any(|answer| {
@@ -2145,6 +2163,7 @@ mod tests {
         let granted = |turn: TurnId, target: &str| ServerMessage::Granted {
             turn,
             step: 1,
+            index: None,
             kind: GrantKind::Command,
             target: target.into(),
         };
@@ -2156,6 +2175,7 @@ mod tests {
             &ServerMessage::Forbidden {
                 turn: 3,
                 step: 2,
+                index: None,
                 kind: GrantKind::Command,
                 target: "curl".into(),
             },
@@ -2212,6 +2232,7 @@ mod tests {
         let call = |step: u32| ServerMessage::ToolCall {
             turn: 1,
             step,
+            index: None,
             name: "list_dir".into(),
             arguments: serde_json::json!({ "path": "." }),
         };
@@ -2221,6 +2242,56 @@ mod tests {
         view.apply_protocol(0, &call(2));
         let at: Vec<_> = view.turns[0].tools.iter().map(|call| call.at).collect();
         assert_eq!(at, [Some(9), Some(18)]);
+    }
+
+    /// Two calls of one step are two views, and the `tool_result` answers its
+    /// own call — the pair is `(step, index)`, not `step` alone.
+    #[test]
+    fn two_calls_of_one_step_fold_into_two_views() {
+        let mut view = SessionView::new("s", "mock", "mock");
+        let started = ServerMessage::TurnStarted {
+            turn: 1,
+            prompt: "look and read".into(),
+            job: None,
+        };
+        view.apply_protocol(0, &started);
+        let call = |step: u32, index: Option<u32>, name: &str| ServerMessage::ToolCall {
+            turn: 1,
+            step,
+            index,
+            name: name.into(),
+            arguments: serde_json::json!({}),
+        };
+        let result = |step: u32, index: Option<u32>, name: &str| ServerMessage::ToolResult {
+            turn: 1,
+            step,
+            index,
+            name: name.into(),
+            verdict: crate::sandbox::Verdict::allow("test", crate::sandbox::Applied::Process),
+            error: None,
+            output: format!("[{name}] ok"),
+            truncated: false,
+            duration_ms: 1,
+            command: None,
+            asked: None,
+            grant: None,
+        };
+        view.apply_protocol(0, &call(1, None, "list_dir"));
+        view.apply_protocol(0, &call(1, Some(2), "read_file"));
+        view.apply_protocol(0, &result(1, Some(2), "read_file"));
+        view.apply_protocol(0, &result(1, None, "list_dir"));
+
+        let tools = &view.turns[0].tools;
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "list_dir");
+        assert_eq!(tools[0].index, None);
+        assert_eq!(
+            tools[0].output, "[list_dir] ok",
+            "the absent index is the first call"
+        );
+        assert_eq!(tools[1].name, "read_file");
+        assert_eq!(tools[1].index, Some(2));
+        assert!(tools.iter().all(|call| call.verdict.is_some()));
     }
 
     /// A view stored under protocol 10 had only yeses, and no call.

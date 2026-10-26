@@ -5,6 +5,10 @@
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall
 #
+# With no command and a terminal to ask on, the first line asks what to do:
+# install, and — when it finds a binary already there — reinstall or uninstall.
+# With nobody to ask it installs, the answer this line has always given.
+#
 # One binary, from a GitHub release, into ~/.local/bin (or --dir). No root, and
 # nothing outside that directory is written: no shell profile is edited, and
 # when the directory is not on PATH the line to add is printed instead.
@@ -31,11 +35,15 @@ Usage:
   sh setup.sh [command] [options]
 
 Commands:
-  install      Install the latest release (the default). Does nothing when
-               that version is already there; replaces an older one.
+  install      Install the latest release. Does nothing when that version is
+               already there; replaces an older one.
   reinstall    Download and replace the binary, even if it is the same version.
   uninstall    Remove the binary. The state directory is kept unless --purge.
   help         Show this text.
+
+With no command, the script asks which of these to do, offering reinstall and
+uninstall only when it finds a binary in the install directory. With no
+terminal to ask on it installs.
 
 Options:
   --dir DIR        Where the binary goes. Default: ~/.local/bin
@@ -288,6 +296,59 @@ confirm() {
 	esac
 }
 
+# No command was typed: ask what to do, offering the destructive options only
+# when there is something here to destroy. The answer becomes COMMAND.
+choose_command() {
+	if ! (: </dev/tty) 2>/dev/null; then
+		say "There is no terminal to ask on, so: install. (--help for the commands.)"
+		COMMAND=install
+		return
+	fi
+	current=""
+	if [ -x "$DIR/luu" ]; then current=$(version_of "$DIR/luu"); fi
+	if [ -n "$current" ]; then
+		say "luu $current is installed at $DIR/luu."
+		say ""
+		say "  1) Install the latest release (update if there is one)"
+		say "  2) Reinstall $current"
+		say "  3) Uninstall — keeps luu's state directory"
+		say "  4) Quit"
+	else
+		say "luu is not installed in $DIR."
+		say ""
+		say "  1) Install the latest release"
+		say "  2) Quit"
+	fi
+	while :; do
+		printf 'What should this do? [1] ' >/dev/tty
+		read -r answer </dev/tty || answer=1
+		[ -n "$answer" ] || answer=1
+		case "$answer" in
+		q | Q) answer=quit ;;
+		esac
+		if [ -n "$current" ]; then
+			case "$answer" in
+			1) COMMAND=install; return ;;
+			2) COMMAND=reinstall; return ;;
+			3) COMMAND=uninstall; return ;;
+			4 | quit)
+				say "Nothing to do."
+				exit 0
+				;;
+			esac
+		else
+			case "$answer" in
+			1) COMMAND=install; return ;;
+			2 | quit)
+				say "Nothing to do."
+				exit 0
+				;;
+			esac
+		fi
+		warn "not an option"
+	done
+}
+
 uninstall_luu() {
 	if [ -e "$DIR/luu" ] || [ -L "$DIR/luu" ]; then
 		rm -f "$DIR/luu" || die "could not remove $DIR/luu"
@@ -335,13 +396,17 @@ uninstall_luu() {
 
 main() {
 	COMMAND=install
+	EXPLICIT=0
 	DIR=${LUU_INSTALL_DIR:-}
 	VERSION=${LUU_VERSION:-}
 	PURGE=0
 	YES=0
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		install | reinstall | uninstall) COMMAND=$1 ;;
+		install | reinstall | uninstall)
+			COMMAND=$1
+			EXPLICIT=1
+			;;
 		help | -h | --help)
 			usage
 			return
@@ -380,6 +445,7 @@ main() {
 	*) DIR="$(pwd)/$DIR" ;;
 	esac
 	DIR=${DIR%/}
+	if [ "$EXPLICIT" = 0 ]; then choose_command; fi
 
 	trap '[ -z "$TMP" ] || rm -rf "$TMP"' EXIT
 	trap 'exit 130' INT

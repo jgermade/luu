@@ -210,6 +210,13 @@ pub(crate) fn clamp(mut text: String) -> (String, bool) {
 pub struct ToolStep {
     pub text: String,
     pub call: ToolCall,
+    /// Which call of its reply this is, counting from 1. A reply that carried
+    /// one call is index 1, which is every step recorded before a reply could
+    /// carry more than one — so the field is absent in the wire and in the
+    /// store for them, and a step read from either is the first call. See
+    /// `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub index: u32,
     pub outcome: ToolOutcome,
     pub duration_ms: u64,
     /// What a person answered when the floor refused this call and the policy
@@ -229,6 +236,14 @@ impl ToolStep {
     pub fn result_text(&self) -> String {
         self.outcome.render(&self.call.name)
     }
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(index: &u32) -> bool {
+    *index == 1
 }
 
 /// Whether `sandbox` would let `call` write the one path it names — the pure
@@ -434,6 +449,12 @@ needed, answer in plain text and do not emit a block.
 /// scan already found the object inside it; naming the fence is what lets the
 /// page and the native history treat the block as one unit. See
 /// `RECORD/2026-09-30.native-tool-calls.completed.md`.
+///
+/// **And `<tool_call>…</tool_call>`**, Qwen's own template tag, which a model
+/// whose training wins over our preamble writes *as content* when the server
+/// did not parse it — a fenced session's ordinary failure. The body is the
+/// same envelope, and a body that does not parse is text, not a call. See
+/// `RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`.
 pub fn parse_call(text: &str) -> Option<ToolCall> {
     split_call(text).map(|(_, call)| call)
 }
@@ -454,13 +475,105 @@ pub const CALL_FENCES: [&str; 2] = ["tool", "json"];
 /// what the history says the model wrote is not this function's to change.
 pub fn split_call(text: &str) -> Option<(String, ToolCall)> {
     let seen = mask_thinking(text);
-    let fenced = CALL_FENCES.iter().find_map(|tag| {
-        let (open, body, _) = fenced_bounds(&seen, tag)?;
-        let call = serde_json::from_str::<ToolCall>(body).ok()?;
-        Some((open, call))
-    });
-    let (start, call) = fenced.or_else(|| bare_object_at(&seen))?;
-    (!call.name.is_empty()).then(|| (text[..start].trim_end().to_string(), call))
+    first_call(&seen).map(|(start, _, call)| (text[..start].trim_end().to_string(), call))
+}
+
+/// Every call the reply carries, in the order the model wrote them. A reply
+/// with one call is the one case [`parse_call`] already knew; a reply with
+/// more is a model that asked for two things at once, which is what a native
+/// server streams when `tool_calls` is a list and a fenced model drifts into
+/// writing two fences. The loop runs the whole list — see
+/// `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
+///
+/// The scan is [`first_call`] repeated after each call's end, and it takes the
+/// **earliest** of the forms, so the list is the order the model wrote them in
+/// — a later fence no longer shadows the tags between it and the previous
+/// call. A reply with one call moves by nothing.
+pub fn parse_calls(text: &str) -> Vec<ToolCall> {
+    scan_calls(text)
+        .into_iter()
+        .map(|(_, _, call)| call)
+        .collect()
+}
+
+/// [`parse_calls`], plus what the reply said before the **first** call: the
+/// native transport's history rebuild turns one assistant message and its
+/// results into one `tool_calls` list, and needs the prose half of the whole
+/// reply, not of its first call.
+pub fn split_calls(text: &str) -> Option<(String, Vec<ToolCall>)> {
+    let found = scan_calls(text);
+    let (start, _, _) = *found.first()?;
+    Some((
+        text[..start].trim_end().to_string(),
+        found.into_iter().map(|(_, _, call)| call).collect(),
+    ))
+}
+
+fn scan_calls(text: &str) -> Vec<(usize, usize, ToolCall)> {
+    let seen = mask_thinking(text);
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some((start, end, call)) = first_call(&seen[at..]) {
+        out.push((at + start, at + end, call));
+        at += end;
+    }
+    out
+}
+
+/// The first call in masked text, and where it ends — the **earliest** of the
+/// three forms, so a reply that mixes them runs in the order the model wrote
+/// them. The old rule was the first fence anywhere, which silently skipped
+/// every call between it and the previous one: a reply with four
+/// `<tool_call>` blocks before a fenced `run_command` ran the fence and left
+/// the four in the prose
+/// (`RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`, *Same day —
+/// the mixed reply*). A bare object is still a call only when no fence or tag
+/// contains it — the span check below — because the scan finds objects inside
+/// both.
+fn first_call(text: &str) -> Option<(usize, usize, ToolCall)> {
+    let candidates = [
+        fenced_first(text),
+        tagged_span(text),
+        bare_object_span(text),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .filter(|(_, _, call)| !call.name.is_empty())
+        .min_by_key(|(start, _, _)| *start)
+}
+
+/// The earliest parseable ```` ```tool ```` or ```` ```json ```` block.
+fn fenced_first(text: &str) -> Option<(usize, usize, ToolCall)> {
+    CALL_FENCES
+        .iter()
+        .filter_map(|tag| {
+            let (open, body, close_end) = fenced_bounds(text, tag)?;
+            let call = serde_json::from_str::<ToolCall>(body).ok()?;
+            Some((open, close_end, call))
+        })
+        .min_by_key(|(open, _, _)| *open)
+}
+
+/// `<tool_call>…</tool_call>` — the tag Qwen's own template writes, which a
+/// model given our fenced preamble reaches for anyway when its training wins.
+/// The body is the same `{"name": …}` envelope. A block whose body does not
+/// parse is text, not a call, and the scan carries on after it.
+fn tagged_span(text: &str) -> Option<(usize, usize, ToolCall)> {
+    const OPEN: &str = "<tool_call>";
+    const CLOSE: &str = "</tool_call>";
+    let mut from = 0;
+    while let Some(found) = text[from..].find(OPEN) {
+        let start = from + found;
+        let body_at = start + OPEN.len();
+        let close = text[body_at..].find(CLOSE)?;
+        let end = body_at + close + CLOSE.len();
+        if let Ok(call) = serde_json::from_str::<ToolCall>(text[body_at..body_at + close].trim()) {
+            return Some((start, end, call));
+        }
+        from = end;
+    }
+    None
 }
 
 const THINK_OPEN: &str = "<think>";
@@ -608,11 +721,12 @@ fn fenced_bounds<'a>(text: &'a str, tag: &str) -> Option<(usize, &'a str, usize)
 /// The first `{…}` that parses as a call. Scanned from every `{` rather than
 /// from the first, because models like to open with prose containing braces.
 fn bare_object(text: &str) -> Option<ToolCall> {
-    bare_object_at(text).map(|(_, call)| call)
+    bare_object_span(text).map(|(_, _, call)| call)
 }
 
-/// [`bare_object`], and where the object starts.
-fn bare_object_at(text: &str) -> Option<(usize, ToolCall)> {
+/// The first `{…}` that parses as a call, and where in the text it starts and
+/// ends — the end is what lets [`scan_calls`] carry on after it.
+fn bare_object_span(text: &str) -> Option<(usize, usize, ToolCall)> {
     let bytes = text.as_bytes();
     for (start, _) in text
         .char_indices()
@@ -620,7 +734,7 @@ fn bare_object_at(text: &str) -> Option<(usize, ToolCall)> {
     {
         let mut stream = serde_json::Deserializer::from_str(&text[start..]).into_iter::<ToolCall>();
         if let Some(Ok(call)) = stream.next() {
-            return Some((start, call));
+            return Some((start, start + stream.byte_offset(), call));
         }
     }
     None
@@ -666,6 +780,82 @@ mod tests {
     #[test]
     fn plain_prose_is_an_answer_and_not_a_call() {
         assert!(parse_call("The file defines one function, `main`.").is_none());
+    }
+
+    #[test]
+    fn two_fences_in_one_reply_are_two_calls_in_order() {
+        let text = format!("{READ}\nand then\n{RUN}");
+        let calls = parse_calls(&text);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[1].name, "run_command");
+        assert_eq!(
+            parse_call(&text).unwrap().name,
+            calls[0].name,
+            "the first of the list is the one the single reader always found",
+        );
+    }
+
+    #[test]
+    fn a_bare_object_after_a_fence_is_the_second_call() {
+        let text = format!("{READ}\nand {{\"name\":\"list_dir\",\"arguments\":{{}}}}");
+        let calls = parse_calls(&text);
+        assert_eq!(
+            calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["read_file", "list_dir"]
+        );
+    }
+
+    #[test]
+    fn a_call_written_while_thinking_is_still_not_a_call_in_the_list() {
+        // The plural scan keeps the singular rule: reasoning is where a model
+        // tries a call out, and trying it out is not making it.
+        let text = format!("<thinkmaybe {RUN} — no, read first.</think>{READ}");
+        let calls = parse_calls(&text);
+        assert_eq!(calls.len(), 1, "the drafted call is not in the list");
+        assert_eq!(calls[0].name, "read_file");
+    }
+
+    #[test]
+    fn a_tagged_call_is_a_call() {
+        // Qwen's own template writes `<tool_call>`, and a model handed our
+        // preamble still reaches for it when its training wins. The server may
+        // not have parsed it, so it arrives as content — and it is a call.
+        let call = parse_call(
+            "<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \".\"}}\n</tool_call>",
+        )
+        .unwrap();
+        assert_eq!(call.name, "list_dir");
+    }
+
+    #[test]
+    fn a_reply_that_mixes_fences_and_tags_runs_in_text_order() {
+        // The bug the order fixes: a ```` ```tool ```` fence later in the reply
+        // used to win over the tags before it, so every one of them was
+        // skipped — executed nothing, shown as prose.
+        let text = format!(
+            "{READ}<tool_call>\n{{\"name\": \"list_dir\", \"arguments\": {{}}}}\n</tool_call>\n{RUN}"
+        );
+        let calls = parse_calls(&text);
+        assert_eq!(
+            calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["read_file", "list_dir", "run_command"],
+            "the fence is third, not first"
+        );
+    }
+
+    #[test]
+    fn a_malformed_tag_is_text_and_the_scan_carries_on() {
+        // A body that lost a quote is what the model wrote; it is not a call,
+        // and it must not swallow the call after it.
+        let text = format!(
+            "<tool_call>\n{{name\": \"read_file\", \"arguments\": {{}}}}\n</tool_call>\n{READ}"
+        );
+        let calls = parse_calls(&text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        // And the block stays where it was, as text: the model's own words.
+        assert!(split_call(&text).unwrap().0.contains("<tool_call>"));
     }
 
     const RUN: &str =

@@ -31,6 +31,34 @@
   }
   $: answer = replyTo(state.messages, turn)
   $: notes = [state.settings?.authority?.draft?.text, state.settings?.authority?.plan?.text].filter(Boolean)
+  // How this turn's tools travelled, read from what it actually sent rather
+  // than from what the profile says: `toolSpecs` is the request's own `tools`
+  // field (native only), and the fenced transport puts the definitions in the
+  // prompt's `# Tools` block. Neither is present when the session has no tools
+  // or the trace was off, and then there is nothing true to say.
+  $: transport = state.toolSpecs
+    ? "native"
+    : (state.prompt || "").includes("# Tools") ? "fenced" : null
+
+  // The whole context as it was sent, for pasting into a conversation: the
+  // prompt's exact bytes, and under the native transport the request's own
+  // `tools` field beside them — which is not in the text, and is part of what
+  // the model saw. The answer is not context: it was never sent.
+  let copied = false
+  const contextText = () => {
+    const prompt = state.prompt || ""
+    const specs = state.toolSpecs || ""
+    return specs ? `${prompt}\n\n# the request's tools field, sent beside this text\n${specs}` : prompt
+  }
+  const copyContext = async () => {
+    try {
+      await navigator.clipboard.writeText(contextText())
+    } catch {
+      return
+    }
+    copied = true
+    setTimeout(() => { copied = false }, 1500)
+  }
 </script>
 
 <Modal title="Context" width="64rem" @close="closeContext()">
@@ -49,6 +77,17 @@
          title="What the server counted. The difference from ours is the chat template, and under native tool calls the tools it rendered.">
       <span class="k">the server counted</span><b>{{ state.budget.backendPrompt }}</b>
     </div>
+    <div :if="transport"
+         title="Read from this turn, not from the profile: native sent the tools in the request's own field, fenced put them in the prompt as text.">
+      <span class="k">tools</span><b>{{ transport }}</b>
+    </div>
+    <button type="button" class="copy" :disabled="!state.prompt"
+            :title="copied ? 'Copied' : 'Copy the whole context, as it was sent'"
+            :aria-label="copied ? 'Copied' : 'Copy the whole context, as it was sent'"
+            @click="copyContext()">
+      <svg class="ic"><use :href="copied ? '#i-check' : '#i-copy'"/></svg>
+      <span>{{ copied ? "Copied" : "Copy context" }}</span>
+    </button>
   </div>
 
   <section class="modal-body">
@@ -81,4 +120,23 @@
   .facts b { font-weight: 600; font-variant-numeric: tabular-nums; }
   .warn { color: var(--luu-warn); }
   .dim { color: var(--luu-fg-muted); }
+  /* The one action in the facts row, so it sits apart from the readouts. */
+  .facts .copy {
+    margin-left: auto;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .3rem .6rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 5px;
+    background: var(--luu-bg, #fff);
+    color: var(--luu-fg-muted);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .facts .copy:hover:not(:disabled) { color: var(--luu-fg); background: var(--luu-sunken); }
+  .facts .copy:disabled { opacity: .45; cursor: default; }
+  .facts .copy .ic { width: 13px; height: 13px; }
 </style>

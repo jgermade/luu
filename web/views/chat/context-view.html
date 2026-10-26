@@ -51,19 +51,28 @@
     ? "running…"
     : [`[${call.name}] ${call.error || "ok"}`, call.output || "", call.truncated ? `[${call.name}] output cut` : ""]
         .filter(Boolean).join("\n")
+  // A call's place in its step, spelled for a key: `1` is the only call a
+  // step had before a reply could carry more than one, and it is not said.
+  const where = call => `${call.step}${call.index > 1 ? `.${call.index}` : ""}`
   $: trips = (() => {
-    const calls = [...(tools || [])].sort((a, b) => a.step - b.step)
+    const calls = [...(tools || [])].sort((a, b) => a.step - b.step || (a.index ?? 1) - (b.index ?? 1))
     if (!answer || !calls.length || calls.some(call => typeof call.at !== "number")) return []
     const out = []
     let from = 0
     calls.forEach(call => {
+      // The reply a call ends is the text before it that no earlier call of
+      // the same step already ended: one reply, then its calls' results in a
+      // row, each cut where the next begins.
       const said = answer.slice(from, call.at).trim()
-      if (said) out.push({ kind: "reply", key: `r${call.step}`, text: said })
+      if (said) out.push({ kind: "reply", key: `r${where(call)}`, text: said })
       out.push({
-        kind: "result", key: `t${call.step}`, name: call.name, text: resultOf(call),
+        kind: "result", key: `t${where(call)}`, name: call.name, text: resultOf(call),
         refused: !!call.verdict && !call.verdict.allowed,
       })
-      const next = (extraCalls || []).find(extra => extra.step === call.step + 1)
+      // The next model call is announced once the step's last call answered,
+      // not after every call of a step that carried more than one.
+      const isLastOfStep = call === calls.findLast(other => other.step === call.step)
+      const next = isLastOfStep && (extraCalls || []).find(extra => extra.step === call.step + 1)
       if (next) out.push({ kind: "call", key: `c${next.step}`, step: next.step, tokens: next.prompt_tokens, shared: next.shared_tokens })
       from = call.at
     })

@@ -43,6 +43,26 @@
   }
 
   $: profileNames = Object.keys(state.providers?.providers || {})
+  // What a run actually resolves, in `provider.rs`'s own order: the model's
+  // entry, then the profile, then the backend's default. The row used to read
+  // the profile's key alone, so a model entry saying `fenced` could send our
+  // fence format while this said *native* — the trap that made a session copy
+  // the preamble's JSON style. See
+  // `RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`.
+  const backendTransport = backend => backend === "anthropic" ? "native" : "fenced"
+  const profileTransport = p => p?.["tool-calls"] || backendTransport(p?.backend)
+  const modelTransport = (p, model) => p?.models?.[model]?.["tool-calls"] || profileTransport(p)
+  const transportOf = name => {
+    const p = state.providers?.providers?.[name]
+    return p?.model ? modelTransport(p, p.model) : profileTransport(p)
+  }
+  // A model whose own entry disagrees with the profile: a run with `-m` can
+  // travel differently from what the row says, and the row should not hide it.
+  const overridden = name => {
+    const p = state.providers?.providers?.[name]
+    const base = profileTransport(p)
+    return Object.values(p?.models || {}).some(entry => entry["tool-calls"] && entry["tool-calls"] !== base)
+  }
   // The built-in mock is not a profile and was never a row, so a server that
   // fell back to it showed a table with nothing chosen while the mock answered
   // every turn. It is a row now: "no default" in the file *is* the mock, and
@@ -215,7 +235,9 @@
               <span :if="state.providers.providers[name].url">· {{ state.providers.providers[name].url }}</span>
               <span :if="state.providers.providers[name].model">· {{ state.providers.providers[name].model }}</span>
               <span :if="state.providers.providers[name]['context-limit']">· {{ state.providers.providers[name]["context-limit"] }} tokens</span>
-              <span :if="state.providers.providers[name]['tool-calls'] === 'native'">· native tools</span>
+              <span :if="transportOf(name) === 'native'">· native tools</span>
+              <span :if="overridden(name)" class="warn"
+                    title="A model's own `tool-calls` differs from the profile's: a run with -m resolves that model's entry over this. Open the provider to see which.">· per-model tools</span>
             </span>
           </div>
           <div class="tags">
@@ -387,6 +409,7 @@
   .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
   .who strong.name { font-size: 13.5px; font-weight: 600; color: var(--luu-fg); }
   .who .dim { font-size: 12px; overflow-wrap: anywhere; }
+  .who .warn { color: var(--luu-warn); }
   .tags, .acts { display: flex; gap: .4rem; align-items: center; flex: none; }
   .acts button { scroll-margin-bottom: 5rem; }
   .tag.default {

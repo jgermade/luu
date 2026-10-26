@@ -3467,13 +3467,22 @@ pub async fn run() -> Result<()> {
                             let _ = out.write_all(text.as_bytes()).await;
                             let _ = out.flush().await;
                         }
-                        TurnEvent::ToolCall { step, call } => {
+                        TurnEvent::ToolCall { step, index, call } => {
                             let arguments = serde_json::to_string(&call.arguments)
                                 .unwrap_or_else(|_| "{}".into());
                             let _ = out
                                 .write_all(
-                                    format!("\n\n  [{step}] → {} {arguments}\n", call.name)
-                                        .as_bytes(),
+                                    format!(
+                                        "\n\n  [{}{}] → {} {arguments}\n",
+                                        step,
+                                        if index > 1 {
+                                            format!(".{index}")
+                                        } else {
+                                            String::new()
+                                        },
+                                        call.name
+                                    )
+                                    .as_bytes(),
                                 )
                                 .await;
                             let _ = out.flush().await;
@@ -3494,8 +3503,16 @@ pub async fn run() -> Result<()> {
                             let _ = out
                                 .write_all(
                                     format!(
-                                        "  [{step}] ← {status} · {} · held by {} · {} ms\n\n",
-                                        verdict.rule, verdict.enforced_by, outcome.duration_ms,
+                                        "  [{}{}] ← {status} · {} · held by {} · {} ms\n\n",
+                                        step,
+                                        if outcome.index > 1 {
+                                            format!(".{}", outcome.index)
+                                        } else {
+                                            String::new()
+                                        },
+                                        verdict.rule,
+                                        verdict.enforced_by,
+                                        outcome.duration_ms,
                                     )
                                     .as_bytes(),
                                 )

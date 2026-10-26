@@ -19,8 +19,16 @@
 // its template's tags — `qwen2.5-coder:7b` on every call it made under the
 // native transport. A ```json block is a call only when what is inside is one;
 // any other JSON stays the code block it is. See
-// `RECORD/2026-09-30.native-tool-calls.completed.md` and `agent_core::tools::CALL_FENCES`.
+// `RECORD/2026-09-30.native-tool-calls.completed.md` and
+// `agent_core::tools::CALL_FENCES`.
 const FENCES = ["```tool", "```json"]
+
+// The tag a model trained on Qwen's template writes when its training wins over
+// the preamble — it arrives as content when the server did not parse it, and it
+// is a call all the same. The body is the same `{"name": …}` envelope. See
+// `RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`.
+const TOOL_OPEN = "<tool_call>"
+const TOOL_CLOSE = "</tool_call>"
 
 /// `[{ kind: "text", text }` | `{ kind: "tool", call, name, arguments, pending, raw }`
 /// | `{ kind: "think", text, open, words }]`.
@@ -35,7 +43,10 @@ const FENCES = ["```tool", "```json"]
 /// `live` says the reply may still grow, which is when a tail that could be
 /// the start of a call is held back instead of flashed.
 export function segments(text, tools = [], live = false) {
-  const calls = [...(tools || [])].sort((a, b) => a.step - b.step)
+  // A reply can carry more than one call — a native server streams a list —
+  // and they share a step, so the pair is (step, index): the fences consume
+  // the executed calls in the order the model wrote them.
+  const calls = [...(tools || [])].sort((a, b) => a.step - b.step || (a.index ?? 1) - (b.index ?? 1))
   const out = []
   let used = 0
   const pushText = t => {
@@ -67,12 +78,36 @@ export function segments(text, tools = [], live = false) {
       .filter(([at]) => at >= 0)
       .sort((a, b) => a[0] - b[0])[0] || [-1, ""]
     const bare = bareStart(text, i)
-    const next = [fence, bare].filter(n => n >= 0).sort((a, b) => a - b)[0]
+    const tagged = text.indexOf(TOOL_OPEN, i)
+    // Earliest of the three, in the order the model wrote them — the loop's
+    // scanner reads the same way, so a block it ran is a block this draws.
+    const next = [fence, bare, tagged].filter(n => n >= 0).sort((a, b) => a - b)[0]
     if (next === undefined) {
       pushText(live ? holdBack(text.slice(i)) : text.slice(i))
       break
     }
     pushText(text.slice(i, next))
+
+    if (next === tagged) {
+      const body = next + TOOL_OPEN.length
+      const close = text.indexOf(TOOL_CLOSE, body)
+      if (close < 0) {
+        // The tag is still being written, or never closed. Live it is the
+        // placeholder; afterwards it is what the model left, as the block it
+        // is.
+        if (live) pushTool(null, text.slice(next), true)
+        else pushText(text.slice(next))
+        break
+      }
+      const end = close + TOOL_CLOSE.length
+      const parsed = parse(text.slice(body, close))
+      // A body that does not parse is what the model wrote, kept whole and
+      // visible: it is not a call, and it must not consume one that ran.
+      if (parsed?.name) pushTool(parsed, text.slice(next, end), false)
+      else pushText(text.slice(next, end))
+      i = end
+      continue
+    }
 
     if (next === fence) {
       let body = next + tag.length
@@ -209,6 +244,8 @@ function holdBack(tail) {
   return tail
     .replace(/(^|\n)[ \t]*`{1,3}(t(o(ol?)?)?|j(s(on?)?)?)?$/, "$1")
     .replace(/(^|\n)[ \t]*\{\s*("(n(a(me?)?)?)?"?)?$/, "$1")
-    // Or of a thinking block, which would otherwise flash as `<thi`.
+    // Or of a thinking block or a tool tag, which would otherwise flash as
+    // `<thi` and `<too`.
     .replace(/<(t(h(i(nk?)?)?)?)?$/, "")
+    .replace(/<t(o(o(l(_(c(a(l(l?)?)?)?)?)?)?)?)?$/, "")
 }

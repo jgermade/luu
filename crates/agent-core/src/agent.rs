@@ -24,7 +24,8 @@ use tokio::sync::{mpsc, watch};
 use crate::backend::{Backend, CompletionRequest, Constraint, Message, Usage};
 use crate::sandbox::{Sandbox, Verdict};
 use crate::tools::{
-    CallVerdict, ToolCall, ToolOutcome, ToolStep, parse_call, score_call, writes_one_path,
+    CallVerdict, ToolCall, ToolOutcome, ToolStep, parse_call, parse_calls, score_call,
+    writes_one_path,
 };
 use crate::turn::{EndReason, TurnEvent, TurnOutcome, run_turn};
 use crate::worker::Executor;
@@ -68,6 +69,7 @@ pub trait Asker: Send + Sync {
     fn ask<'a>(
         &'a self,
         step: u32,
+        index: u32,
         call: &'a ToolCall,
         refused: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>>;
@@ -393,7 +395,8 @@ pub async fn run_agent_turn(
             outcome
         };
 
-        let Some(call) = parse_call(&outcome.text) else {
+        let calls = parse_calls(&outcome.text);
+        if calls.is_empty() {
             let _ = events
                 .send(TurnEvent::Ended {
                     reason: outcome.reason,
@@ -403,120 +406,148 @@ pub async fn run_agent_turn(
             return AgentOutcome::from_final(outcome.text.clone(), steps, outcome, usage);
         };
 
-        // Emitted before the sandbox is consulted, so a denial reads as a call
-        // that was refused rather than as nothing having happened.
-        let _ = events
-            .send(TurnEvent::ToolCall {
-                step,
-                call: call.clone(),
-            })
-            .await;
+        // One reply can carry more than one call — a native server streams a
+        // *list* of them, and a fenced model that drifts into writing two
+        // fences meant both. The reply is the model's own words once, and each
+        // call gets its result after it: the exchange is one assistant message
+        // and N user messages, which is what `native::messages` rebuilds into
+        // one `tool_calls` list and N tool messages. See
+        // `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
+        messages.push(Message::assistant(outcome.text.clone()));
+        let budget = limits.max_steps.max(1);
+        for (n, call) in calls.into_iter().enumerate() {
+            let index = (n + 1) as u32;
+            // The cap counts executed calls, which is what `--max-tool-steps`
+            // always said it capped; a call past it is left in the reply
+            // unexecuted, and the turn ends on it as it ends on a cancelled
+            // one — the page says *not run* and the recording says `ToolLimit`.
+            if steps.len() as u32 >= budget {
+                break;
+            }
 
-        let mut started = std::time::Instant::now();
-        let mut result = run_call(tools, &call, sandbox, &limits).await;
+            // Emitted before the sandbox is consulted, so a denial reads as a
+            // call that was refused rather than as nothing having happened.
+            let _ = events
+                .send(TurnEvent::ToolCall {
+                    step,
+                    index,
+                    call: call.clone(),
+                })
+                .await;
 
-        // **What a draft may put to a person**: a call the turn's sandbox
-        // refused and the ceiling says a click may reach. Asked before the
-        // model sees the refusal, so a yes runs the same call — which did
-        // nothing the first time, because the file tools and the command's
-        // allowlist check before they touch — and a no is the model's answer.
-        // What a person already allowed for the session runs without asking.
-        let mut asked = None;
-        let mut grant = None;
-        let escalation = match ask {
-            Some(ask) if !result.verdict.allowed => ask.ceiling.escalate(&call, sandbox),
-            _ => Escalation::Refused,
-        };
-        if let Escalation::Granted(wider) = &escalation {
-            started = std::time::Instant::now();
-            result = run_call(tools, &call, wider, &limits).await;
-            grant = Some(crate::protocol::GrantScope::Session);
-        }
-        if let Escalation::Forbidden = &escalation {
-            result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
-            grant = Some(crate::protocol::GrantScope::Session);
-        }
-        if let (Some(ask), Escalation::Ask(wider)) = (ask, &escalation) {
-            let mut cancelled = cancel.clone();
-            let answer = tokio::select! {
-                answer = ask.person.ask(step, &call, &result.verdict.rule) => Some(answer),
-                _ = cancelled.wait_for(|cancelled| *cancelled) => None,
+            let mut started = std::time::Instant::now();
+            let mut result = run_call(tools, &call, sandbox, &limits).await;
+
+            // **What a draft may put to a person**: a call the turn's sandbox
+            // refused and the ceiling says a click may reach. Asked before the
+            // model sees the refusal, so a yes runs the same call — which did
+            // nothing the first time, because the file tools and the command's
+            // allowlist check before they touch — and a no is the model's answer.
+            // What a person already allowed for the session runs without asking.
+            let mut asked = None;
+            let mut grant = None;
+            let escalation = match ask {
+                Some(ask) if !result.verdict.allowed => ask.ceiling.escalate(&call, sandbox),
+                _ => Escalation::Refused,
             };
-            match answer {
-                Some(yes @ (Answer::Once | Answer::Session)) => {
-                    // The clock is the call's, not the wait's: a person who
-                    // took a minute to read it did not make the tool slow.
-                    started = std::time::Instant::now();
-                    result = run_call(tools, &call, wider, &limits).await;
-                    asked = Some(true);
-                    grant = Some(match yes {
-                        Answer::Session => crate::protocol::GrantScope::Session,
-                        _ => crate::protocol::GrantScope::Once,
-                    });
-                }
-                Some(Answer::Deny) => {
-                    result = ToolOutcome::denied(Verdict::deny(PERSON_REFUSED));
-                    asked = Some(false);
-                }
-                Some(Answer::Forbid) => {
-                    result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
-                    asked = Some(false);
-                    grant = Some(crate::protocol::GrantScope::Session);
-                }
-                // Cancelled while it waited: the refusal stands as the floor
-                // gave it, and the turn ends where a cancel ends any turn.
-                None => {
-                    let taken = ToolStep {
-                        text: outcome.text.clone(),
-                        call,
-                        outcome: result,
-                        duration_ms: started.elapsed().as_millis() as u64,
-                        asked: None,
-                        grant: None,
-                    };
-                    let _ = events
-                        .send(TurnEvent::ToolResult {
-                            step,
-                            outcome: Box::new(taken.clone()),
-                        })
-                        .await;
-                    steps.push(taken);
-                    let _ = events
-                        .send(TurnEvent::Ended {
+            if let Escalation::Granted(wider) = &escalation {
+                started = std::time::Instant::now();
+                result = run_call(tools, &call, wider, &limits).await;
+                grant = Some(crate::protocol::GrantScope::Session);
+            }
+            if let Escalation::Forbidden = &escalation {
+                result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
+                grant = Some(crate::protocol::GrantScope::Session);
+            }
+            if let (Some(ask), Escalation::Ask(wider)) = (ask, &escalation) {
+                let mut cancelled = cancel.clone();
+                let answer = tokio::select! {
+                    answer = ask.person.ask(step, index, &call, &result.verdict.rule) => Some(answer),
+                    _ = cancelled.wait_for(|cancelled| *cancelled) => None,
+                };
+                match answer {
+                    Some(yes @ (Answer::Once | Answer::Session)) => {
+                        // The clock is the call's, not the wait's: a person who
+                        // took a minute to read it did not make the tool slow.
+                        started = std::time::Instant::now();
+                        result = run_call(tools, &call, wider, &limits).await;
+                        asked = Some(true);
+                        grant = Some(match yes {
+                            Answer::Session => crate::protocol::GrantScope::Session,
+                            _ => crate::protocol::GrantScope::Once,
+                        });
+                    }
+                    Some(Answer::Deny) => {
+                        result = ToolOutcome::denied(Verdict::deny(PERSON_REFUSED));
+                        asked = Some(false);
+                    }
+                    Some(Answer::Forbid) => {
+                        result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
+                        asked = Some(false);
+                        grant = Some(crate::protocol::GrantScope::Session);
+                    }
+                    // Cancelled while it waited: the refusal stands as the floor
+                    // gave it, and the turn ends where a cancel ends any turn.
+                    None => {
+                        let taken = ToolStep {
+                            text: outcome.text.clone(),
+                            call,
+                            index,
+                            outcome: result,
+                            duration_ms: started.elapsed().as_millis() as u64,
+                            asked: None,
+                            grant: None,
+                        };
+                        let _ = events
+                            .send(TurnEvent::ToolResult {
+                                step,
+                                outcome: Box::new(taken.clone()),
+                            })
+                            .await;
+                        steps.push(taken);
+                        let _ = events
+                            .send(TurnEvent::Ended {
+                                reason: EndReason::Cancelled,
+                                usage: None,
+                            })
+                            .await;
+                        return AgentOutcome {
+                            text: outcome.text.clone(),
+                            steps,
                             reason: EndReason::Cancelled,
-                            usage: None,
-                        })
-                        .await;
-                    return AgentOutcome {
-                        text: outcome.text.clone(),
-                        steps,
-                        reason: EndReason::Cancelled,
-                        usage,
-                        error: None,
-                    };
+                            usage,
+                            error: None,
+                        };
+                    }
                 }
             }
+
+            let taken = ToolStep {
+                text: outcome.text.clone(),
+                call,
+                index,
+                outcome: result,
+                duration_ms: started.elapsed().as_millis() as u64,
+                asked,
+                grant,
+            };
+
+            let _ = events
+                .send(TurnEvent::ToolResult {
+                    step,
+                    outcome: Box::new(taken.clone()),
+                })
+                .await;
+
+            messages.push(Message::user(taken.result_text()));
+            steps.push(taken);
         }
-
-        let taken = ToolStep {
-            text: outcome.text.clone(),
-            call,
-            outcome: result,
-            duration_ms: started.elapsed().as_millis() as u64,
-            asked,
-            grant,
-        };
-
-        let _ = events
-            .send(TurnEvent::ToolResult {
-                step,
-                outcome: Box::new(taken.clone()),
-            })
-            .await;
-
-        messages.push(Message::assistant(taken.text.clone()));
-        messages.push(Message::user(taken.result_text()));
-        steps.push(taken);
+        // The budget is spent — mid-reply or at its end — and the model is
+        // still working. Asking it again would spend a call of the window on
+        // a turn that has none left to give.
+        if steps.len() as u32 >= budget {
+            break;
+        }
     }
 
     // The budget is spent and the model is still working. Saying `stop` here
@@ -939,6 +970,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reply_that_carries_two_calls_runs_both_in_order() {
+        // The native server streams a *list*; the loop runs the whole list.
+        // See `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
+        let fixture = Fixture::new("twocalls");
+        let (events, outcome) = drive(
+            &fixture,
+            &[
+                "```tool\n{\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}\n```\n```tool\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\"}}\n```",
+                "Both came back.",
+            ],
+            DEFAULT_MAX_STEPS,
+        )
+        .await;
+
+        assert_eq!(outcome.steps.len(), 2, "one step per call, not per reply");
+        assert_eq!(outcome.steps[0].call.name, "list_dir");
+        assert_eq!(outcome.steps[0].index, 1);
+        assert_eq!(outcome.steps[1].call.name, "read_file");
+        assert_eq!(outcome.steps[1].index, 2);
+        // The reply is the model's own words once, verbatim, beside both calls.
+        assert_eq!(outcome.steps[0].text, outcome.steps[1].text);
+        assert_eq!(outcome.reason, EndReason::Stop);
+
+        let calls: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                TurnEvent::ToolCall { step, index, .. } => Some((*step, *index)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, vec![(1, 1), (1, 2)], "both keyed by (step, index)");
+        let announced = events
+            .iter()
+            .filter(|event| matches!(event, TurnEvent::ModelCall { .. }))
+            .count();
+        assert_eq!(announced, 2, "two model calls: the reply, then the answer");
+    }
+
+    #[tokio::test]
+    async fn the_step_budget_counts_calls_and_not_replies() {
+        // `--max-tool-steps` caps the tool calls one turn may make. A reply
+        // carrying three of them under a budget of two spends two, ends the
+        // turn on the limit, and leaves the third fence where the page can
+        // say it was not run.
+        let fixture = Fixture::new("budget");
+        let one = |name: &str| {
+            format!("```tool\n{{\"name\":\"{name}\",\"arguments\":{{\"path\":\".\"}}}}\n```")
+        };
+        let reply = format!(
+            "{}\n{}\n{}",
+            one("list_dir"),
+            one("list_dir"),
+            one("list_dir")
+        );
+        let (events, outcome) = drive(&fixture, &[reply.as_str()], 2).await;
+
+        assert_eq!(outcome.steps.len(), 2);
+        assert_eq!(outcome.reason, EndReason::ToolLimit);
+        let ended = events
+            .iter()
+            .filter(|event| matches!(event, TurnEvent::Ended { .. }))
+            .count();
+        assert_eq!(ended, 1, "a turn ends once, however the budget ran out");
+    }
+
+    #[tokio::test]
     async fn a_denied_call_is_reported_to_the_model_rather_than_ending_the_turn() {
         let fixture = Fixture::new("denied");
         let (_, outcome) = drive(
@@ -1216,6 +1313,7 @@ mod tests {
         fn ask<'a>(
             &'a self,
             step: u32,
+            _index: u32,
             call: &'a ToolCall,
             refused: &'a str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {
@@ -1235,6 +1333,7 @@ mod tests {
         fn ask<'a>(
             &'a self,
             _step: u32,
+            _index: u32,
             _call: &'a ToolCall,
             _refused: &'a str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {

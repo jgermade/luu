@@ -23,7 +23,7 @@
 use serde::Serialize;
 
 use super::{Message, Role, ToolSpec};
-use crate::tools::{ToolCall, split_call};
+use crate::tools::{ToolCall, split_calls};
 
 /// How a server wants a call's arguments: the OpenAI API as a JSON-encoded
 /// *string*, Ollama's own API as the object itself.
@@ -33,7 +33,7 @@ pub enum Arguments {
     Object,
 }
 
-/// One message as a server with a `tools` field reads it.
+/// The history as a server with a `tools` field reads it. See [`messages`].
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WireMessage {
     pub role: &'static str,
@@ -77,22 +77,33 @@ pub fn messages(history: &[Message], arguments: Arguments) -> Vec<WireMessage> {
     while i < history.len() {
         let message = &history[i];
         let paired = (message.role == Role::Assistant)
-            .then(|| split_call(&message.content))
+            .then(|| split_calls(&message.content))
             .flatten()
-            .filter(|(_, call)| {
-                history.get(i + 1).is_some_and(|next| {
-                    next.role == Role::User && next.content.starts_with(&format!("[{}]", call.name))
-                })
+            .filter(|(_, found)| {
+                // Every call answered, in order, by the message after it: one
+                // unanswered call makes the whole exchange go up as text, the
+                // way a half-written step did before a reply could carry more
+                // than one call.
+                let rest = &history[i + 1..];
+                !found.is_empty()
+                    && found.iter().enumerate().all(|(n, call)| {
+                        rest.get(n).is_some_and(|next| {
+                            next.role == Role::User
+                                && next.content.starts_with(&format!("[{}]", call.name))
+                        })
+                    })
             });
         match paired {
-            Some((prose, call)) => {
-                calls += 1;
-                let id = format!("call_{calls}");
-                out.push(WireMessage {
-                    role: "assistant",
-                    content: prose,
-                    tool_calls: vec![WireCall {
-                        id: id.clone(),
+            Some((prose, found)) => {
+                let answered = found.len();
+                let mut ids = Vec::with_capacity(found.len());
+                let mut wire_calls = Vec::with_capacity(found.len());
+                for call in found {
+                    calls += 1;
+                    let id = format!("call_{calls}");
+                    ids.push(id.clone());
+                    wire_calls.push(WireCall {
+                        id,
                         kind: "function",
                         function: WireFunction {
                             name: call.name,
@@ -103,16 +114,23 @@ pub fn messages(history: &[Message], arguments: Arguments) -> Vec<WireMessage> {
                                 }
                             },
                         },
-                    }],
+                    });
+                }
+                out.push(WireMessage {
+                    role: "assistant",
+                    content: prose,
+                    tool_calls: wire_calls,
                     tool_call_id: None,
                 });
-                out.push(WireMessage {
-                    role: "tool",
-                    content: history[i + 1].content.clone(),
-                    tool_calls: Vec::new(),
-                    tool_call_id: Some(id),
-                });
-                i += 2;
+                for (n, id) in ids.into_iter().enumerate() {
+                    out.push(WireMessage {
+                        role: "tool",
+                        content: history[i + 1 + n].content.clone(),
+                        tool_calls: Vec::new(),
+                        tool_call_id: Some(id),
+                    });
+                }
+                i += 1 + answered;
             }
             None => {
                 out.push(WireMessage {
@@ -233,6 +251,36 @@ mod tests {
             object[2].tool_calls[0].function.arguments,
             serde_json::json!({"path": "README.md"})
         );
+    }
+
+    #[test]
+    fn two_calls_in_one_reply_become_two_tool_calls_and_two_tool_messages() {
+        // The reply the native transport streams as a list rebuilds as a list:
+        // one assistant message, `tool_calls` with both, and each result
+        // answering its own call by position. See
+        // `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
+        let history = vec![
+            Message::user("look and read"),
+            Message::assistant(
+                "```tool\n{\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}\n```\n```tool\n\
+                 {\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\"}}\n```",
+            ),
+            Message::user("[list_dir] ok\nnotes.txt"),
+            Message::user("[read_file] ok\n42"),
+            Message::assistant("Both came back."),
+        ];
+        let wire = messages(&history, Arguments::String);
+        let roles: Vec<&str> = wire.iter().map(|m| m.role).collect();
+        assert_eq!(roles, ["user", "assistant", "tool", "tool", "assistant"]);
+        assert_eq!(wire[1].tool_calls.len(), 2);
+        assert_eq!(wire[1].tool_calls[0].function.name, "list_dir");
+        assert_eq!(wire[1].tool_calls[1].function.name, "read_file");
+        assert_eq!(wire[1].tool_calls[0].id, "call_1");
+        assert_eq!(wire[1].tool_calls[1].id, "call_2");
+        assert_eq!(wire[2].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(wire[2].content, "[list_dir] ok\nnotes.txt");
+        assert_eq!(wire[3].tool_call_id.as_deref(), Some("call_2"));
+        assert_eq!(wire[3].content, "[read_file] ok\n42");
     }
 
     #[test]

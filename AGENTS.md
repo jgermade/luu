@@ -122,7 +122,9 @@ cargo run --bin luu -- chat "hola" -p workstation -m qwen2.5-coder:14b
 # and how its tool calls travel: `fenced` (the default — definitions as text
 # in our system prompt, a ```tool block back) or `native` (the server's own
 # `tools` field, rendered by its chat template with the tool prompt the model
-# was trained on). `tool-calls = "native"` on a profile says it once.
+# was trained on). `tool-calls = "native"` on a profile says it once; a model's
+# own entry overrides it (`[provider.X.models."<name>"] tool-calls`), and the
+# Models row shows the effective one for the default model, not the profile's.
 cargo run --bin luu -- chat "read AGENTS.md" -p workstation --tool-calls native
 # The profile `default` names must carry `remote = true` when its URL is not
 # this machine — a LAN box included — or the file does not load: with no `-p`,
@@ -641,8 +643,9 @@ the release with a `SHA256SUMS` beside the archives and deploys Pages. It has a
 
 **Pages is the landing, and the replay is under `demo/`.** `pages/` is served as it
 is at the root — `index.html` and `setup.sh`, the one-line installer
-(`curl -fsSL https://jgermade.github.io/luu/setup.sh | sh`, with `reinstall` and
-`uninstall [--purge]`) — and the assembled `site/` goes beside it as `demo/`.
+(`curl -fsSL https://jgermade.github.io/luu/setup.sh | sh`, which asks what to
+do — install, `reinstall`, `uninstall [--purge]` — when it has a terminal to ask
+on) — and the assembled `site/` goes beside it as `demo/`.
 The binaries are the four targets `setup.sh` installs, Linux built on the oldest
 Ubuntu runner for the glibc it links against, and every one a runner can execute
 is installed, reinstalled and uninstalled by `scripts/setup-check.sh` before it is
