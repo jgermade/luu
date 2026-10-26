@@ -15,7 +15,7 @@
   const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const { modelLabel } = await import("@web/lib/engines.js")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
   const Dropup = await import("@web/components/dropup.html")
 
   // The gate's two narrowings. `null` is *leave*, which is what almost every
@@ -1124,11 +1124,11 @@
                job is not the session. -->
           <div class="narrow" :if="!replaying">
             <span class="dim">network</span>
-            <Segmented size="sm" label="network" :options="NETWORK" :model="network" />
+            <ChoiceSegmented size="sm" label="network" :options="NETWORK" :model="network" />
           </div>
           <div class="narrow" :if="!replaying">
             <span class="dim">enforcement</span>
-            <Segmented size="sm" label="enforcement" :options="ENFORCEMENT" :model="enforcement" />
+            <ChoiceSegmented size="sm" label="enforcement" :options="ENFORCEMENT" :model="enforcement" />
           </div>
           <!-- The one field here that narrows backwards: `kernel` is a
                tightening and needs no permission, `best-effort` asks the policy

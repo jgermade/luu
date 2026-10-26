@@ -19,7 +19,7 @@
   const Checkbox = await import("@theme/components/checkbox.html")
   const RadioGroup = await import("@theme/components/radio-group.html")
   const Switch = await import("@theme/components/switch.html")
-  const Segmented = await import("@theme/components/segmented.html")
+  const ChoiceSegmented = await import("@theme/components/choice-segmented.html")
   const Field = await import("@theme/components/field.html")
   const Tabs = await import("@theme/components/tabs.html")
   const Menu = await import("@theme/components/menu.html")
@@ -483,7 +483,7 @@
         <svg class="btn-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>
         Integrate
       </Button>
-      <Segmented label="Theme" size="sm" icons-only :model="theme" :options="THEMES" />
+      <ChoiceSegmented label="Theme" size="sm" icons-only :model="theme" :options="THEMES" />
     </div>
   </header>
 
@@ -975,14 +975,14 @@
       <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('segmented')"><svg class="btn-ic"
         viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
       <template :slot.lead>Two to five short answers side by side. One radio group to the keyboard.
-        <code>&lt;Segmented&gt;</code>, sized as every other control is.</template>
+        <code>&lt;ChoiceSegmented&gt;</code>, sized as every other control is.</template>
       <div class="demo stack">
-        <Segmented label="Columns" :model="layout" :options="[{ value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }]" />
-        <Segmented label="Tone" size="sm" :model="tone" :options="['light', 'dark']" />
-        <Segmented label="Repeat" size="lg" :model="repeat"
-                   :options="['once', 'always', { value: 'never', label: 'never', disabled: true }]" />
-        <div class="narrow"><Segmented label="Block" block :model="layout" :options="['two', 'three']" /></div>
-        <Segmented label="Disabled" disabled model="a" :options="['a', 'b']" />
+        <ChoiceSegmented label="Columns" :model="layout" :options="[{ value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }]" />
+        <ChoiceSegmented label="Tone" size="sm" :model="tone" :options="['light', 'dark']" />
+        <ChoiceSegmented label="Repeat" size="lg" :model="repeat"
+                         :options="['once', 'always', { value: 'never', label: 'never', disabled: true }]" />
+        <div class="narrow"><ChoiceSegmented label="Block" block :model="layout" :options="['two', 'three']" /></div>
+        <ChoiceSegmented label="Disabled" disabled model="a" :options="['a', 'b']" />
         <p class="state">layout: <code>{{ layout }}</code> · tone: <code>{{ tone }}</code> ·
           repeat: <code>{{ repeat }}</code></p>
       </div>
@@ -1002,7 +1002,7 @@
           <span class="cell"><Button :size="z">Cancel</Button></span>
           <span class="cell wide"><TextInput :size="z" placeholder="a name" :label="`Name, ${z}`" /></span>
           <span class="cell wide"><Select :size="z" :model="backend" :options="BACKENDS" :label="`Backend, ${z}`" /></span>
-          <span class="cell"><Segmented :size="z" :label="`Columns, ${z}`" :model="layout" :options="['two', 'three']" /></span>
+          <span class="cell"><ChoiceSegmented :size="z" :label="`Columns, ${z}`" :model="layout" :options="['two', 'three']" /></span>
           <span class="cell wide"><Typeahead :size="z" :label="`Model, ${z}`" :options="TA_MODELS" placeholder="a model" /></span>
         </div>
       </div>
@@ -1032,7 +1032,7 @@
             <TextInput id="f-window" type="number" model="32768" suffix="tokens" />
           </Field>
           <Field layout="inline" label="Tool calls">
-            <Segmented label="Tool calls" :options="['fenced', 'native']" model="fenced" />
+            <ChoiceSegmented label="Tool calls" :options="['fenced', 'native']" model="fenced" />
           </Field>
           <Field layout="inline" label="Remote">
             <Switch :model="remote" description="the URL is not this machine" />
@@ -1195,7 +1195,7 @@
               <p class="state">deleted: <code>{{ deleted }}</code></p>
           </div>
           <div class="row heads">
-            <Segmented label="Modal head" size="sm" :model="modalHead" :options="HEADS" />
+            <ChoiceSegmented label="Modal head" size="sm" :model="modalHead" :options="HEADS" />
             <Button @click="headed = true">With this head…</Button>
           </div>
 
@@ -1260,7 +1260,7 @@
             keeps the dialog still as the tabs change. Its head takes the same values as a
             <code>Modal</code>'s, and on a tone the tabs and their line are drawn in its ink.</p>
             <div class="row heads">
-              <Segmented label="Tab modal head" size="sm" :model="tabHead" :options="HEADS" />
+              <ChoiceSegmented label="Tab modal head" size="sm" :model="tabHead" :options="HEADS" />
             </div>
             <div class="row">
               <Button @click="tabbing = true">workstation…</Button>

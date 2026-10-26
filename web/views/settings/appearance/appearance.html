@@ -11,7 +11,7 @@
   const { loadIconTheme, saveIconTheme, importThemeFiles, themeFromFiles, themeFromDrop, loadIconPreviews, glyphFor } =
     await import("@web/lib/workspace.js")
   const Menu = await import("@web/theme/default/components/menu.html")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
 
   // The icon theme: the server's view of it, what is typed into the path, and
   // the last refusal, in the loader's own words.
@@ -238,8 +238,8 @@
   <h3>Interface</h3>
   <div class="choice">
     <span class="choice-name">Theme</span>
-    <Segmented label="Interface theme" size="sm" :options="THEMES" :model="prefs.theme"
-               @change="setTheme($event.detail)" />
+    <ChoiceSegmented label="Interface theme" size="sm" :options="THEMES" :model="prefs.theme"
+                     @change="setTheme($event.detail)" />
   </div>
   <p class="note small">
     <b>Auto</b> follows the system's light or dark, and changes with it. The editor and the
@@ -259,13 +259,13 @@
       <div class="choices">
         <div class="choice">
           <span class="choice-name">Engine</span>
-          <Segmented label="Editor engine" size="sm" :options="editors" :model="prefs.editor"
-                     @change="setEditor($event.detail)" />
+          <ChoiceSegmented label="Editor engine" size="sm" :options="editors" :model="prefs.editor"
+                           @change="setEditor($event.detail)" />
         </div>
         <div class="choice">
           <span class="choice-name">Theme</span>
-          <Segmented label="Editor theme" size="sm" :options="TONES" :model="prefs.editorTone"
-                     @change="setEditorTone($event.detail)" />
+          <ChoiceSegmented label="Editor theme" size="sm" :options="TONES" :model="prefs.editorTone"
+                           @change="setEditorTone($event.detail)" />
         </div>
       </div>
       <div class="mini-editor" :data-tone="prefs.editorTone === 'dark' ? 'dark' : 'light'"
@@ -293,8 +293,8 @@
       </p>
       <div class="choice size-choice">
         <span class="choice-name">Text size</span>
-        <Segmented label="Editor text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.editorSize"
-                   @change="setSize('editor', $event.detail)" />
+        <ChoiceSegmented label="Editor text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.editorSize"
+                         @change="setSize('editor', $event.detail)" />
       </div>
     </div>
 
@@ -302,8 +302,8 @@
       <h3>Chat</h3>
       <div class="choice">
         <span class="choice-name">Snippet theme</span>
-        <Segmented label="Snippet colours" size="sm" :options="TONES" :model="prefs.snippetTone"
-                   @change="setSnippetTone($event.detail)" />
+        <ChoiceSegmented label="Snippet colours" size="sm" :options="TONES" :model="prefs.snippetTone"
+                         @change="setSnippetTone($event.detail)" />
       </div>
       <div class="mini-chat">
        <div class="mini-chat-scaled">
@@ -320,8 +320,8 @@
       </p>
       <div class="choice size-choice">
         <span class="choice-name">Text size</span>
-        <Segmented label="Chat text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.chatSize"
-                   @change="setSize('chat', $event.detail)" />
+        <ChoiceSegmented label="Chat text size" size="sm" :options="SIZE_OPTIONS" :model="prefs.chatSize"
+                         @change="setSize('chat', $event.detail)" />
       </div>
     </div>
   </div>
@@ -483,8 +483,8 @@
   </div>
   <div class="choice size-choice tree-size">
     <span class="choice-name">Size</span>
-    <Segmented label="Files size" size="sm" :options="SIZE_OPTIONS" :model="prefs.treeSize"
-               @change="setSize('tree', $event.detail)" />
+    <ChoiceSegmented label="Files size" size="sm" :options="SIZE_OPTIONS" :model="prefs.treeSize"
+                     @change="setSize('tree', $event.detail)" />
     <span class="dim small">the tree's text and icons</span>
   </div>
 </section>

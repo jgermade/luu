@@ -330,25 +330,25 @@ export const USAGE = {
 <Switch :model="autoName" label="Name sessions" description="from their first prompt"
         @change="saveSessions({ autoName: $event.detail })" />`)] },
 
-  segmented: { title: "Choice segmented", parts: [one("segmented", "Segmented",
+  segmented: { title: "Choice segmented", parts: [one("segmented", "ChoiceSegmented",
     "Two to five short answers side by side, one radio group to the keyboard. Sized as every other control; block stretches it across the row.",
     "editor-prefs.html", `<script :setup>
-  const Segmented = await import("@theme/components/segmented.html")
+  const ChoiceSegmented = await import("@theme/components/choice-segmented.html")
   const { prefs, setTone, setLayout } = await import("./prefs.js")
 </script>
 
-<Segmented label="Editor theme" size="sm" :model="prefs.tone" :options="['light', 'dark']"
-           @change="setTone($event.detail)" />
-<Segmented label="Columns" block :model="prefs.layout"
-           :options="[{ value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }]"
-           @change="setLayout($event.detail)" />`)] },
+<ChoiceSegmented label="Editor theme" size="sm" :model="prefs.tone" :options="['light', 'dark']"
+                 @change="setTone($event.detail)" />
+<ChoiceSegmented label="Columns" block :model="prefs.layout"
+                 :options="[{ value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }]"
+                 @change="setLayout($event.detail)" />`)] },
 
   sizes: { title: "Sizes", parts: [one("sizes", "Sizes",
     "One size for a row: every control takes sm, md or lg and is as tall as --luu-control-sm, md or lg, so a row of them lines up.",
     "filter-bar.html", `<script :setup="{ size = 'sm' }">
   const TextInput = await import("@theme/components/text-input.html")
   const Select = await import("@theme/components/select.html")
-  const Segmented = await import("@theme/components/segmented.html")
+  const ChoiceSegmented = await import("@theme/components/choice-segmented.html")
   const Button = await import("@theme/components/button.html")
 
   let query = ""
@@ -359,7 +359,7 @@ export const USAGE = {
 <div class="bar">
   <TextInput :size="size" label="Filter" :model="query" placeholder="filter" />
   <Select :size="size" label="Backend" :model="backend" :options="['ollama', 'openai', 'anthropic']" />
-  <Segmented :size="size" label="View" :model="view" :options="['list', 'grid']" />
+  <ChoiceSegmented :size="size" label="View" :model="view" :options="['list', 'grid']" />
   <Button :size="size" variant="primary" @click="$emit('apply', query)">Apply</Button>
 </div>
 

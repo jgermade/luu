@@ -1665,7 +1665,7 @@ The rest follows from that:
   feet, a modal's head, the terminal, and the editor and snippets by their tone preference — is
   said in the markup, and what dark *is* is the theme's. The chat column re-points the `--luu-*`
   inks for its grey. The page's form controls are the theme's: `TextInput`, `Select`,
-  `Textarea`, `Checkbox`, `Segmented`. `app.css`'s rules for bare `input`, `select`, `textarea`,
+  `Textarea`, `Checkbox`, `ChoiceSegmented`. `app.css`'s rules for bare `input`, `select`, `textarea`,
   `button` and `pre` are `:where()`, so they weigh nothing against a component's scoped style. A
   bare boolean attribute (`<Button disabled>`) is on; a large modal (40rem and up, as drawn) has a dark head — a `data-tone="dark"` island — and a small one a head that is part of its body, in the theme's `Modal` and `TabModal` and the page's own `Modal`, and the theme's two take a head in a tone as well — `head="accent"`, `ok`, `warn` or `bad`, the same bar in the tone's strong colour with a solid badge's ink, whatever the size;
   every pressable component has a pressed state

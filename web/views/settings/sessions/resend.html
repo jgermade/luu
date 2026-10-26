@@ -16,7 +16,7 @@
   // nobody can reach from the surface they actually use is a narrowing nobody
   // applies.
   const { state, loadResend, saveResend } = await import("@web/lib/store.js")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
   const SaveButton = await import("@web/components/save-button.html")
   const PathText = await import("@web/components/path-text.html")
 
@@ -136,7 +136,7 @@
 <dl class="settings" :if="state.resend">
   <dt>Repeat</dt>
   <dd>
-    <Segmented label="Repeat" :options="REPEAT" :model="draft.repeat" :disabled="!editable" />
+    <ChoiceSegmented label="Repeat" :options="REPEAT" :model="draft.repeat" :disabled="!editable" />
   </dd>
   <dd class="note">
     <div class="rule-visual-pills">
@@ -155,7 +155,7 @@
 
   <dt>Prune</dt>
   <dd>
-    <Segmented label="Prune" :options="PRUNE" :model="draft.prune" :disabled="!editable" />
+    <ChoiceSegmented label="Prune" :options="PRUNE" :model="draft.prune" :disabled="!editable" />
   </dd>
   <dd class="note">
     <div class="rule-visual-pills">
@@ -171,7 +171,7 @@
 
   <dt>Results</dt>
   <dd>
-    <Segmented label="Results" :options="RESULTS" :model="draft.results" :disabled="!editable" />
+    <ChoiceSegmented label="Results" :options="RESULTS" :model="draft.results" :disabled="!editable" />
   </dd>
   <dd class="note">
     <div class="rule-visual-pills">

@@ -9,7 +9,7 @@
   // refusal is a turn. See
   // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
   const { state, loadAuthority, saveAuthority } = await import("@web/lib/store.js")
-  const Segmented = await import("@web/theme/default/components/segmented.html")
+  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
   const SaveButton = await import("@web/components/save-button.html")
   const PathText = await import("@web/components/path-text.html")
   const Textarea = await import("@web/theme/default/components/textarea.html")
@@ -131,7 +131,7 @@
                    placeholder="Nothing — a draft that tries to write discovers the floor by being refused." />
   </dd>
   <dd>
-    <Segmented label="Draft position" :options="POSITIONS" :model="draft.draftPosition" :disabled="!editable" />
+    <ChoiceSegmented label="Draft position" :options="POSITIONS" :model="draft.draftPosition" :disabled="!editable" />
   </dd>
   <dd class="note">
     <div class="rule-visual-pills">
@@ -151,7 +151,7 @@
                    placeholder="Nothing — the ordinary case, since a plan already grants what it grants." />
   </dd>
   <dd>
-    <Segmented label="Plan position" :options="POSITIONS" :model="draft.planPosition" :disabled="!editable" />
+    <ChoiceSegmented label="Plan position" :options="POSITIONS" :model="draft.planPosition" :disabled="!editable" />
   </dd>
   <dd class="note">
     <div class="rule-visual-pills">
