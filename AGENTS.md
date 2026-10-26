@@ -127,9 +127,11 @@ cargo run --bin luu -- chat "hola" -p workstation -m qwen2.5-coder:14b
 # Models row shows the effective one for the default model, not the profile's.
 cargo run --bin luu -- chat "read AGENTS.md" -p workstation --tool-calls native
 # The profile `default` names must carry `remote = true` when its URL is not
-# this machine — a LAN box included — or the file does not load: with no `-p`,
-# nobody typed the destination. Naming it is typing it, so every other profile
-# is free of the word.
+# this machine — a LAN box included — or that default is *held*: the file loads,
+# nothing is sent there, a run with no `-p` refuses, `serve` stays on the mock,
+# and Settings → Models asks for the host to be typed back. With no `-p`, nobody
+# typed the destination. Naming it is typing it, so every other profile is free
+# of the word.
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 # sessions are cached in the state directory's sessions.db by default, so a
 # restart does not lose the conversation: `--store <path>` moves it,
@@ -207,7 +209,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
 #
-# Providers and models wear their brand's mark in the pickers: thirteen in
+# Providers and models wear their brand's mark in the pickers: seventeen in
 # `web/brands/` (Simple Icons, CC0), or a pack — `[ui] brand-icons`, a folder of
 # `<slug>.svg`, chosen in Appearance → Brand marks, where `npm install
 # @lobehub/icons-static-svg` in `web/` is found by itself.

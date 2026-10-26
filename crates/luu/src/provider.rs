@@ -28,11 +28,17 @@
 //! destination typed once, weeks ago — except that `-p workstation` **is**
 //! typing it, at the moment of use. The default is the only shape where nothing
 //! was typed, so it is the only one that has to have been written down. A
-//! `config.toml` that arrived from somewhere else fails to load if its default
-//! points off the machine.
+//! `config.toml` that arrived from somewhere else with its default pointing off
+//! the machine **loads, with that default held**: nothing is sent there until
+//! the host is typed back, a run with no `-p` says so, and `serve` waits on the
+//! mock. It used to fail to load, which took every other table in the file
+//! down with it — the editor that could have fixed it included. A `remote =
+//! true` on a default that is this machine is simply dropped: no consent is
+//! being given or taken away, so that one migrates by itself.
 //!
 //! See `RECORD/2026-09-07.naming-a-provider.completed.md`, and its later section for
-//! why the rule is not on every profile.
+//! why the rule is not on every profile, and
+//! `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md` for the hold.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -751,6 +757,10 @@ pub struct Posture {
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     default: Option<String>,
+    /// The default, when it points off this machine without `remote = true`:
+    /// kept in the file and **not used** until the host is typed back. See
+    /// [`Config::held`].
+    held: Option<Held>,
     providers: BTreeMap<String, Profile>,
     postures: BTreeMap<String, Posture>,
     policies: crate::policies::Policies,
@@ -762,6 +772,14 @@ pub struct Config {
     engines: BTreeMap<String, Engine>,
     hosts: BTreeMap<String, Host>,
     server: Option<Server>,
+}
+
+/// A default that points off this machine and has not said `remote = true`:
+/// which profile, and the URL it would send to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Held {
+    pub name: String,
+    pub url: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -786,15 +804,6 @@ pub enum ConfigError {
          the default."
     )]
     UndeclaredRemoteDefault {
-        path: String,
-        name: String,
-        url: String,
-    },
-    #[error(
-        "{path}: [provider.{name}] says `remote = true` and {url} is this machine. The word is \
-         there to be read, and one written where it is not true is one nobody reads."
-    )]
-    RemoteButLocal {
         path: String,
         name: String,
         url: String,
@@ -871,8 +880,9 @@ impl Config {
             path: path.to_string(),
             source,
         })?;
-        let config = Self {
+        let mut config = Self {
             default: file.default,
+            held: None,
             providers: file.provider,
             postures: file.posture,
             policies: crate::policies::Policies {
@@ -890,7 +900,7 @@ impl Config {
             hosts: file.host,
             server: file.server,
         };
-        config.check_default(path)?;
+        config.held = config.check_default(path)?;
         config.check_engines(path)?;
         config.check_messages(path)?;
         config.check_hosts(path)?;
@@ -1007,14 +1017,18 @@ impl Config {
         Ok(())
     }
 
-    /// The whole of the load-time rule, and it is about one profile.
-    fn check_default(&self, path: &str) -> Result<(), ConfigError> {
-        let Some(name) = &self.default else {
-            return Ok(());
+    /// The whole of the load-time rule, and it is about one profile: a default
+    /// off this machine that does not say so is **held**, and the answer is
+    /// which one. A `remote = true` on a default that is this machine is taken
+    /// off — the word is there to be read, and one written where it is not
+    /// true is one nobody reads — and the next write leaves it out.
+    fn check_default(&mut self, path: &str) -> Result<Option<Held>, ConfigError> {
+        let Some(name) = self.default.clone() else {
+            return Ok(None);
         };
         let profile = self
             .providers
-            .get(name)
+            .get_mut(&name)
             .ok_or_else(|| ConfigError::NoSuchDefault {
                 path: path.to_string(),
                 name: name.clone(),
@@ -1022,26 +1036,59 @@ impl Config {
         let kind = profile.backend.unwrap_or(BackendKind::Ollama);
         // The mock reaches nothing, so it has no destination to declare.
         if kind == BackendKind::Mock {
-            return Ok(());
+            return Ok(None);
         }
         let url = profile
             .url
             .clone()
             .or_else(|| kind.default_url().map(str::to_string))
             .unwrap_or_default();
-        match (is_this_machine(&url), profile.remote) {
-            (false, false) => Err(ConfigError::UndeclaredRemoteDefault {
-                path: path.to_string(),
-                name: name.clone(),
-                url,
-            }),
-            (true, true) => Err(ConfigError::RemoteButLocal {
-                path: path.to_string(),
-                name: name.clone(),
-                url,
-            }),
-            _ => Ok(()),
+        Ok(match (is_this_machine(&url), profile.remote) {
+            (false, false) => Some(Held { name, url }),
+            (true, true) => {
+                profile.remote = false;
+                None
+            }
+            _ => None,
+        })
+    }
+
+    /// The default this file names and no run uses: it points off this
+    /// machine and does not say `remote = true`. A run with no `-p` refuses
+    /// on it ([`resolve`]), `serve` waits on the mock ([`resolve_holding`]),
+    /// and the page asks for the host to be typed back.
+    pub fn held(&self) -> Option<&Held> {
+        self.held.as_ref()
+    }
+
+    /// The default a run with no `-p` resolves to: the file's, unless it is
+    /// held.
+    pub fn usable_default(&self) -> Option<&str> {
+        match self.held {
+            Some(_) => None,
+            None => self.default.as_deref(),
         }
+    }
+
+    /// This file as a run reads it while its default is held: as if it named
+    /// none. What `serve` resolves against, so it starts — on the mock —
+    /// rather than refusing to.
+    fn holding(&self) -> Self {
+        Self {
+            default: None,
+            held: None,
+            ..self.clone()
+        }
+    }
+
+    fn held_error(&self, path: &str) -> Option<ConfigError> {
+        self.held
+            .as_ref()
+            .map(|held| ConfigError::UndeclaredRemoteDefault {
+                path: path.to_string(),
+                name: held.name.clone(),
+                url: held.url.clone(),
+            })
     }
 
     /// The profile a run uses: the one `-p` named, or the file's default, or
@@ -1053,10 +1100,15 @@ impl Config {
     ) -> Result<Option<(&str, &Profile)>, ConfigError> {
         let name = match named {
             Some(name) => name,
-            None => match &self.default {
-                Some(name) => name.as_str(),
-                None => return Ok(None),
-            },
+            None => {
+                if let Some(error) = self.held_error(path) {
+                    return Err(error);
+                }
+                match &self.default {
+                    Some(name) => name.as_str(),
+                    None => return Ok(None),
+                }
+            }
         };
         match self.providers.get_key_value(name) {
             Some((name, profile)) => Ok(Some((name.as_str(), profile))),
@@ -1125,6 +1177,11 @@ impl Config {
     /// second copy of the rules: an editor that could write a file the loader
     /// refuses is an editor that bricks the next run, and the rule that a remote
     /// default must declare itself is the one it would brick it with.
+    ///
+    /// A remote default with no `remote = true` is not one of the things it
+    /// refuses: that file loads, with the default held, and the page asks for
+    /// the host where the default was chosen. The choice and the consent are
+    /// two facts, written by two gestures — a click and a typed host.
     pub fn write(&self, path: &Path) -> Result<(), ConfigError> {
         let text = self.render()?;
         Self::from_toml(&text, &path.display().to_string())?;
@@ -1171,6 +1228,9 @@ impl Config {
     ) -> Self {
         Self {
             default,
+            // Worked out again from what this becomes: [`Config::write`]
+            // parses its own text, and a reader loads the file.
+            held: None,
             providers,
             postures: self.postures.clone(),
             policies: self.policies.clone(),
@@ -1452,6 +1512,21 @@ impl Resolved {
             Some(name) => format!("provider: {name} → {destination}{remote}{tools}"),
             None => format!("provider: {destination}{remote}{tools}"),
         })
+    }
+}
+
+/// [`resolve`] for a server, which has to start whatever the file says: with
+/// nothing named and the default held, it resolves as a file with no default
+/// — the mock — instead of refusing, and the page asks for the host. Naming a
+/// profile is typing it, so a named one resolves exactly as [`resolve`] does.
+pub fn resolve_holding(
+    config: &Config,
+    path: Option<&Path>,
+    flags: Flags<'_>,
+) -> Result<Resolved, ConfigError> {
+    match (flags.provider, config.held()) {
+        (None, Some(_)) => resolve(&config.holding(), path, flags),
+        _ => resolve(config, path, flags),
     }
 }
 
@@ -1947,24 +2022,57 @@ mod tests {
         assert!(!from_file.unconfigured());
     }
 
+    /// A remote default that does not say so is held, not fatal: the file
+    /// loads, a run with no `-p` refuses at the moment it would have sent,
+    /// naming it is typing it, and a server starts on the mock.
     #[test]
     fn a_remote_default_must_say_so() {
-        let error = config(
-            r#"
+        let text = r#"
             default = "hosted"
             [provider.hosted]
             backend = "openai"
             url = "https://openrouter.ai/api/v1"
-            "#,
-        )
-        .expect_err("every run with no -p would send there");
+            [engine.kept]
+            kind = "llama"
+            "#;
+        let loaded = config(text).expect("the rest of the file still loads");
+        assert_eq!(loaded.default_name(), Some("hosted"));
+        assert_eq!(loaded.usable_default(), None);
+        assert_eq!(
+            loaded.held(),
+            Some(&Held {
+                name: "hosted".into(),
+                url: "https://openrouter.ai/api/v1".into()
+            })
+        );
+        assert!(loaded.engines().contains_key("kept"));
+
+        let error = resolve(&loaded, Some(Path::new(PATH)), Flags::default())
+            .expect_err("every run with no -p would send there");
         assert!(matches!(error, ConfigError::UndeclaredRemoteDefault { .. }));
         assert!(error.to_string().contains("remote = true"));
+
+        let named = Flags {
+            provider: Some("hosted"),
+            ..Flags::default()
+        };
+        assert_eq!(
+            resolve(&loaded, Some(Path::new(PATH)), named)
+                .expect("-p is typing it")
+                .kind,
+            BackendKind::Openai
+        );
+
+        let serving = resolve_holding(&loaded, Some(Path::new(PATH)), Flags::default())
+            .expect("a server starts");
+        assert_eq!(serving.kind, BackendKind::Mock);
+        assert!(serving.unconfigured());
     }
 
+    /// The one case that migrates by itself: no consent is given or taken.
     #[test]
-    fn a_local_default_must_not_claim_to_be_remote() {
-        let error = config(
+    fn a_local_default_that_claims_to_be_remote_drops_the_word() {
+        let loaded = config(
             r#"
             default = "local"
             [provider.local]
@@ -1973,8 +2081,10 @@ mod tests {
             remote = true
             "#,
         )
-        .expect_err("a word written where it is not true is one nobody reads");
-        assert!(matches!(error, ConfigError::RemoteButLocal { .. }));
+        .expect("it loads");
+        assert!(!loaded.profiles()["local"].remote);
+        assert_eq!(loaded.held(), None);
+        assert!(!loaded.render().expect("renders").contains("remote"));
     }
 
     /// The narrowing the record's later section argued for: `-p hosted` is the
@@ -2237,6 +2347,27 @@ mod tests {
         )
         .expect("the file that is already there");
 
+        let error = Config::default()
+            .from_parts(Some("gone".to_string()), BTreeMap::new())
+            .write(&path)
+            .expect_err("a default naming no profile is not a file this may write");
+        assert!(matches!(error, ConfigError::NoSuchDefault { .. }));
+
+        let after = std::fs::read_to_string(&path).expect("still there");
+        assert!(after.contains("[provider.local]"), "the old file survived");
+        assert!(
+            !path.with_extension("toml.new").exists(),
+            "nothing is left half-written beside it"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A default is a choice and `remote = true` is consent: the editor writes
+    /// the first without the second, and the file it writes loads with that
+    /// default held — and carries it through a write about something else.
+    #[test]
+    fn a_remote_default_is_written_held() {
+        let path = scratch("held");
         let mut providers = BTreeMap::new();
         providers.insert(
             "hosted".to_string(),
@@ -2246,18 +2377,22 @@ mod tests {
                 ..Profile::default()
             },
         );
-        let error = Config::default()
+        Config::default()
             .from_parts(Some("hosted".to_string()), providers)
             .write(&path)
-            .expect_err("an undeclared remote default is not a file this may write");
-        assert!(matches!(error, ConfigError::UndeclaredRemoteDefault { .. }));
+            .expect("a choice is written");
+        let read = Config::from_toml(&std::fs::read_to_string(&path).unwrap(), PATH).unwrap();
+        assert_eq!(read.held().map(|h| h.name.as_str()), Some("hosted"));
 
-        let after = std::fs::read_to_string(&path).expect("still there");
-        assert!(after.contains("[provider.local]"), "the old file survived");
-        assert!(
-            !path.with_extension("toml.new").exists(),
-            "nothing is left half-written beside it"
-        );
+        let mut engines = BTreeMap::new();
+        engines.insert("gemma".to_string(), Engine::default());
+        read.with_engines(engines)
+            .write(&path)
+            .expect("an engine is not the default's business");
+        let after = Config::from_toml(&std::fs::read_to_string(&path).unwrap(), PATH).unwrap();
+        assert!(after.engines().contains_key("gemma"));
+        assert_eq!(after.default_name(), Some("hosted"));
+        assert!(after.held().is_some(), "still held: nobody typed the host");
         std::fs::remove_file(&path).ok();
     }
 

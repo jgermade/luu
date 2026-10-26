@@ -1,4 +1,4 @@
-<script :setup="{ taken = [], editing = '', defaulting = false, saved = null, close = null }">
+<script :setup="{ taken = [], editing = '', saved = null, close = null }">
   // A provider, added or edited, as a sheet over Settings with two tabs:
   // **Connection** — name, backend, URL, key, and the Messages API's own
   // keys — and **Models**, what it serves: every model it lists, grouped by
@@ -14,9 +14,9 @@
   // **It writes one profile and nothing else.** The body is the file as the
   // server last answered it, with this profile put in (or, for an edit, put in
   // place of the one it was). `taken` is every name in the file, `editing` the
-  // one being edited (`""` to add), `defaulting` makes it the default — the
-  // list's *make default* opens it so for a remote host to be typed — and
-  // `saved(name)` is told what was written.
+  // one being edited (`""` to add), and `saved(name)` is told what was
+  // written. A default is never made here: a click on a model makes it, and
+  // the host of a remote one is typed over the list, where it is held.
   const { state, saveProviders, probeProvider, providerModels } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
@@ -92,8 +92,8 @@
   let effort = was.effort || ""
   let maxTokens = was["max-tokens"] != null ? String(was["max-tokens"]) : ""
   // No box for it: a provider is made the default from the list. It stays the
-  // default through an edit and a rename, and `defaulting` is the list asking.
-  const makeDefault = defaulting || (!!editing && state.providers?.default === editing)
+  // default through an edit and a rename.
+  const makeDefault = !!editing && state.providers?.default === editing
 
   // ---- models -----------------------------------------------------------
 
@@ -131,9 +131,6 @@
   let armed = false
   let saving = false
   let error = null
-  // The one refusal a person can answer: a remote default asks for its host.
-  let declaration = null
-  let typed = ""
 
   $: chosen = BACKENDS.find(b => b.value === backend) || BACKENDS[0]
   $: trimmed = name.trim()
@@ -147,7 +144,6 @@
   // shuts the Models tab with it.
   const forget = () => {
     if (list && !list.saved) { list = null; tab = "connection" }
-    declaration = null
   }
 
   const connect = async () => {
@@ -304,7 +300,6 @@
     && (!count(thinkingBudget) || count(thinkingBudget) < 1024 || count(thinkingBudget) >= lowestCap)
 
   $: canSave = !!trimmed && !clash && !saving && !invalid && !list?.loading && !maxBad && !budgetBad
-    && (!declaration || typed.trim() === declaration.host)
 
   // ---- the tabs ----------------------------------------------------------
 
@@ -391,7 +386,7 @@
     error = null
     const result = await saveProviders({
       default: defaultAfter(),
-      providers: { ...others(), [trimmed]: profile(!!declaration || !!was.remote) },
+      providers: { ...others(), [trimmed]: profile(!!was.remote) },
       ...(keyed && keyValue.trim() ? { keys: { [trimmed]: keyValue } } : {}),
     })
     saving = false
@@ -400,13 +395,7 @@
       leave()
       return
     }
-    // Asked for the host: keep the form, and show the question inside it.
-    if (result?.declaration && !declaration) {
-      declaration = result.declaration
-      typed = ""
-    } else {
-      error = state.providersError || "the write was refused"
-    }
+    error = state.providersError || "the write was refused"
   }
 
   // The file without this profile; the default goes back to the mock if it
@@ -434,7 +423,7 @@
   <dl :if="tab === 'connection'" class="settings form">
     <dt>Name</dt>
     <dd>
-      <TextInput :model="name" placeholder="local" autofocus :warn="clash" @input="declaration = null" />
+      <TextInput :model="name" placeholder="local" autofocus :warn="clash" />
       <span :if="clash" class="warn">already a provider of that name</span>
     </dd>
 
@@ -572,15 +561,6 @@
 
   <p :if="error" class="error">{{ error }}</p>
 
-  <div :if="declaration" class="declare">
-    <p>
-      <strong>{{ declaration.profile }}</strong> sends to
-      <strong>{{ declaration.host }}</strong>, which is not this machine, and
-      it would become the default. Type the host to confirm.
-    </p>
-    <TextInput :model="typed" :placeholder="declaration.host" />
-  </div>
-
   <template :slot.foot>
     <!-- Leaving on the left; what keeps the form on the right. Removing is
          the danger zone's, not the foot's. -->
@@ -589,7 +569,7 @@
     </span>
     <Button :if="!engineOwned" :loading="connecting" @click="connect()">{{ connecting ? "Connecting…" : "Connect" }}</Button>
     <Button variant="primary" :disabled="!canSave" :loading="saving" @click="save()">
-      {{ saving ? "Saving…" : declaration ? "Confirm and save" : editing ? "Save" : "Add provider" }}
+      {{ saving ? "Saving…" : editing ? "Save" : "Add provider" }}
     </Button>
   </template>
 </SubModal>
@@ -624,7 +604,6 @@
   .rnote { grid-column: 1 / -1; font-size: 11px; color: var(--luu-fg-muted); padding-left: 1.4rem; }
   .rnote.warn { color: var(--luu-warn, #b26a00); }
   .leave { margin-top: .7rem; }
-  .declare { margin-top: 1rem; }
   .danger {
     display: flex;
     flex-direction: column;
@@ -637,7 +616,6 @@
   }
   .danger strong { color: var(--luu-bad); }
   .danger p { margin: 0; font-size: 12px; line-height: 1.5; }
-  .declare p { margin: 0 0 .5rem; }
   /* On the left of the foot, away from the buttons that keep the form. */
   .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
 </style>

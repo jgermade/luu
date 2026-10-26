@@ -517,10 +517,12 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await page.click('.modal .rail button:has-text("Models")')
 
   // No default in the file: the mock is what this server runs, and the table
-  // says so instead of showing nothing chosen.
+  // says so instead of showing nothing chosen — and the banner says why: the
+  // file has a provider, and none is the default.
   const builtin = page.locator(".modal .models-pane .builtin")
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
   await expect(builtin.locator(".tag:not(.default)")).toHaveText("running")
+  await expect(page.locator(".modal .models-pane .first-run")).toContainText("No provider is the default")
 
   await page.locator('.modal button.add:has-text("+ provider")').click()
   const form = page.getByRole("dialog", { name: "Add a provider" })
@@ -1063,6 +1065,67 @@ test("an engine is added with its provider, started, and stopped from Settings",
 })
 
 /**
+ * A default and the consent to send there untyped are two facts. A click on a
+ * model of a provider off this machine makes it the default, with nothing
+ * opened, and the default is *held*: the live session stays on the mock until
+ * the host is typed back over the columns, which writes `remote = true`. See
+ * `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`.
+ */
+test("a remote default is chosen with a click and held until its host is typed", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const file = join(home, "config.toml")
+  const before = readFileSync(file, "utf8")
+  writeFileSync(file, `${before.trimEnd()}\n\n[provider.faraway]\nbackend = "openai"\n` +
+    `url = "https://models.example.invalid/v1"\nmodel = "far-1"\n`)
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
+  const pane = page.locator(".modal .models-pane")
+  await pane.locator(".prov", { has: page.locator('strong:text-is("faraway")') }).click()
+  await pane.locator("button.model", { hasText: "far-1" }).click()
+
+  // Written, and held: no form, the default chosen, the session on the mock.
+  await expect(page.getByRole("dialog", { name: "Provider faraway" })).toHaveCount(0)
+  const held = pane.locator(".first-run.held")
+  await expect(held).toContainText("faraway is the default")
+  await expect(held).toContainText("models.example.invalid")
+  expect(readFileSync(file, "utf8")).toContain('default = "faraway"')
+  expect(readFileSync(file, "utf8")).not.toContain("remote = true")
+  expect((await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  // The other banner is not shown as well: this one says why.
+  await expect(pane.locator(".first-run:not(.held)")).toHaveCount(0)
+
+  // Typed back: consent, in the file, and the hold is gone.
+  const confirm = held.getByRole("button", { name: "Confirm" })
+  await expect(confirm).toBeDisabled()
+  await held.locator("input").fill("models.example.invalid")
+  await confirm.click()
+  await expect(held).toHaveCount(0)
+  expect(readFileSync(file, "utf8")).toContain("remote = true")
+
+  // Back as it was for the tests after this one, the live session included.
+  const now = await (await fetch(`${BASE}/api/providers`)).json()
+  delete now.providers.faraway
+  const put = await fetch(`${BASE}/api/providers`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ default: null, providers: now.providers }),
+  })
+  expect(put.status).toBe(200)
+  await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
+
+  expect(errors).toEqual([])
+})
+
+/**
  * Changing where a session sends needs no restart: a new `default` is taken up
  * by an empty live session nobody pointed anywhere, and the chat's own picker
  * lists every provider with the models it serves and moves the session there.
@@ -1090,13 +1153,13 @@ test("a new default and the chat's picker both move the session without a restar
   // a click on a model makes it and its provider the default.
   const pane = page.locator(".modal .models-pane")
   await pane.locator(".prov", { has: page.locator('strong:text-is("here")') }).click()
-  await expect(pane.locator('.models-head button:has-text("make default")')).toHaveCount(1)
-  // Nothing in the head starts a session any more: that is the picker's.
+  // Nothing in the head makes a default or starts a session: a default is a
+  // model, and a session is the picker's.
+  await expect(pane.locator(".models-head button", { hasText: "make default" })).toHaveCount(0)
   await expect(pane.locator(".models-head button", { hasText: "use →" })).toHaveCount(0)
   await pane.locator("button.model", { hasText: "mock" }).click()
   await expect(pane.locator(".models-head .tag.default")).toHaveCount(1)
   await expect(pane.locator("button.model.on")).toHaveText(/mock/)
-  await expect(pane.locator('.models-head button:has-text("make default")')).toHaveCount(0)
   // And the mock's row, under the columns, is no longer the default.
   await expect(pane.locator(".builtin .tag.default")).toHaveCount(0)
   await expect(page.locator(".modal")).toContainText("the live session is on here")
@@ -1650,7 +1713,8 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   // On a port nothing answers, so the models are the profile's own.
   const file = join(home, "config.toml")
   writeFileSync(file, `${readFileSync(file, "utf8").trimEnd()}\n\n[provider.qwen-box]\nbackend = "ollama"\n` +
-    `url = "http://127.0.0.1:9"\nmodel = "qwen2.5-coder:7b"\n`)
+    `url = "http://127.0.0.1:9"\nmodel = "qwen2.5-coder:7b"\n\n[provider.ali]\nbackend = "openai"\n` +
+    `url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"\nmodel = "glm-5.2"\n`)
   const mine = join(home, "brand-icons", "mine")
   mkdirSync(mine, { recursive: true })
   writeFileSync(join(mine, "qwen.svg"), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>')
@@ -1667,6 +1731,16 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   await row.click()
   const model = pane.locator(".model", { hasText: "qwen2.5-coder:7b" })
   await expect(model.locator(".brand")).toHaveAttribute("style", /brands\/qwen\.svg/)
+  // An engine's provider wears its engine's mark: its URL is 127.0.0.1 and
+  // says nothing of whose server it is.
+  await expect(pane.locator(".prov", { has: page.locator('strong:text-is("fake")') }).locator(".brand"))
+    .toHaveAttribute("style", /brands\/llamacpp\.svg/)
+  // Alibaba Cloud's host is Alibaba Cloud's, and GLM is Z.ai's.
+  const ali = pane.locator(".prov", { has: page.locator('strong:text-is("ali")') })
+  await expect(ali.locator(".brand")).toHaveAttribute("style", /brands\/alibabacloud\.svg/)
+  await ali.click()
+  await expect(pane.locator(".model", { hasText: "glm-5.2" }).locator(".brand"))
+    .toHaveAttribute("style", /brands\/zai\.svg/)
 
   // A pack instead: found where luu imports them, chosen, and written.
   await page.click('.modal .rail button:has-text("Appearance")')

@@ -12,7 +12,9 @@ licence of its own for a mark, or the owner forbids this use, it is not here
 (MiniMax's carries a custom licence; Apple does not allow its logo to be used
 this way).
 
-Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`.
+Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`,
+`zdotai` → `zai` (Z.ai, which makes GLM). `alibabacloud` is Alibaba Cloud's,
+worn by its hosts and by Alibaba's Wan until a pack has a mark of Wan's own.
 
 Three are the projects' own rather than Simple Icons', for the engines luu
 starts: `ollama.svg` is `docs/ollama-logo.svg` from

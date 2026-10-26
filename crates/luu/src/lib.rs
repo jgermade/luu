@@ -1710,6 +1710,10 @@ struct ModelArgs<'a> {
     mock_delay_ms: u64,
     mock_replies: Vec<String>,
     mock_cycle: bool,
+    /// `serve`, which starts on the mock when the file's default is held
+    /// rather than refusing to start: the page is where the host is typed.
+    /// `chat` and `stdio` refuse, at the moment they would have sent.
+    holding: bool,
 }
 
 /// The destination, resolved, announced, and built.
@@ -1761,7 +1765,18 @@ async fn with_server_window(
 
 fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resolved)> {
     let (config, path) = provider::Config::load()?;
-    let resolved = provider::resolve(
+    if let (true, None, Some(held)) = (args.holding, args.provider, config.held()) {
+        eprintln!(
+            "warning: [provider.{}] is the default and {} is not this machine, and it does not \
+             say `remote = true` — so nothing is sent there, and this server starts on the \
+             mock. Type the host in Settings → Models to confirm it.",
+            held.name, held.url
+        );
+    }
+    let resolved = match args.holding {
+        true => provider::resolve_holding,
+        false => provider::resolve,
+    }(
         &config,
         path.as_deref(),
         provider::Flags {
@@ -2560,6 +2575,7 @@ pub async fn run() -> Result<()> {
             mock_delay_ms,
             mock_replies,
             mock_cycle,
+            holding: true,
         })?;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
@@ -2810,6 +2826,7 @@ pub async fn run() -> Result<()> {
             mock_delay_ms,
             mock_replies,
             mock_cycle,
+            holding: false,
         })?;
         // Held for as long as the protocol runs, and stopped with it.
         let _engine = engine_for(&resolved).await?;
@@ -2948,6 +2965,7 @@ pub async fn run() -> Result<()> {
         mock_delay_ms,
         mock_replies,
         mock_cycle,
+        holding: false,
     })?;
     // Held until the run ends: dropping it stops the server it started.
     let _engine = engine_for(&resolved).await?;

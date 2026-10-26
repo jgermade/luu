@@ -6430,6 +6430,16 @@ struct ProvidersView {
     /// The profiles whose engine is switched off, which the pickers leave
     /// out. See `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
     idle: Vec<String>,
+    /// The default, when it is held: it points off this machine and does not
+    /// say `remote = true`, so no run with nothing named sends there — this
+    /// server included — until the host is typed back. See
+    /// `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held: Option<Declaration>,
+    /// Each engine's kind, by its name: what a profile with `engine` wears as
+    /// its mark — its URL is `127.0.0.1` and says nothing of whose server it
+    /// is.
+    engines: std::collections::BTreeMap<String, crate::provider::EngineKind>,
     /// The profile *this* server is running, which the file's default may no
     /// longer be: the file can be edited while a server that resolved hours ago
     /// keeps sending where it was pointed.
@@ -6503,9 +6513,18 @@ async fn providers_view(
             })
             .map(|(name, _)| name.clone())
             .collect(),
+        engines: config
+            .engines()
+            .iter()
+            .map(|(name, engine)| (name.clone(), engine.kind))
+            .collect(),
+        held: config.held().map(|held| Declaration {
+            profile: held.name.clone(),
+            host: crate::provider::authority_of(&held.url).to_string(),
+        }),
         running: running.clone(),
         follows,
-        waiting: match follows && running.as_deref() != config.default_name() {
+        waiting: match follows && running.as_deref() != config.usable_default() {
             false => None,
             true => {
                 let session = state.app.session.lock().await;
@@ -6721,21 +6740,20 @@ async fn get_provider_models(
     .into_response()
 }
 
-/// Why a write was refused, in a shape an editor can act on.
-///
-/// **The rule lives in one place and it is not this one.** The browser never
-/// decides whether a URL is off the machine; it writes what it was given, is
-/// refused by the loader, and is told which host to have somebody type back.
-/// A second implementation of `is_this_machine` in JavaScript is how the two
-/// drift until the page cheerfully saves a file the next run cannot load.
+/// Why a write was refused, in the loader's own words.
 #[derive(serde::Serialize)]
 struct WriteRefused {
     message: String,
-    /// Set only for the one refusal a person can answer: a default that leaves
-    /// this machine and has not said so. The host is what they type.
-    declaration: Option<Declaration>,
 }
 
+/// A default the file holds: it points off this machine and does not say
+/// `remote = true`, so nothing is sent there until somebody types `host`.
+///
+/// **The rule lives in one place and it is not this one.** The browser never
+/// decides whether a URL is off the machine; the loader does, and the view
+/// says which profile is held and which host to have somebody type back. A
+/// second implementation of `is_this_machine` in JavaScript is how the two
+/// would drift.
 #[derive(serde::Serialize)]
 struct Declaration {
     profile: String,
@@ -6932,7 +6950,6 @@ async fn put_policies(
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(WriteRefused {
                 message: error.to_string(),
-                declaration: None,
             }),
         )
             .into_response();
@@ -7039,7 +7056,6 @@ async fn put_providers(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     Json(WriteRefused {
                         message: format!("{error:#}"),
-                        declaration: None,
                     }),
                 )
                     .into_response();
@@ -7047,28 +7063,24 @@ async fn put_providers(
         }
     }
     let config = current.from_parts(edit.default, edit.providers);
-    // Checked by the loader that will read it back, so the rule a remote
-    // default has to declare itself is enforced here by being the same rule.
+    // Checked by the loader that will read it back. A remote default that
+    // does not say so is written, and held — see `ProvidersView::held`.
     if let Err(error) = write_config(config.clone(), path).await {
-        let declaration = match &error {
-            crate::provider::ConfigError::UndeclaredRemoteDefault { name, url, .. } => {
-                Some(Declaration {
-                    profile: name.clone(),
-                    host: crate::provider::authority_of(url).to_string(),
-                })
-            }
-            _ => None,
-        };
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(WriteRefused {
                 message: error.to_string(),
-                declaration,
             }),
         )
             .into_response();
     }
-    follow_the_default(&state, config.default_name()).await;
+    // Followed only where it is usable: a held default is chosen and not yet
+    // a destination, and the file as written is what says which.
+    let usable = load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| config.usable_default().map(str::to_string));
+    follow_the_default(&state, usable.as_deref()).await;
     match providers_view(&state).await {
         Ok(view) => Json(view).into_response(),
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
@@ -8150,7 +8162,9 @@ async fn destination_for(
     let (config, path) = load_config()
         .await
         .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-    let resolved = crate::provider::resolve(
+    // With nothing named and the default held, the mock, as `serve` started:
+    // a new session is not the place the host gets typed.
+    let resolved = crate::provider::resolve_holding(
         &config,
         path.as_deref(),
         crate::provider::Flags {

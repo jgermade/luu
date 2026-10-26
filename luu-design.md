@@ -1260,8 +1260,9 @@ Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport heigh
 and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (the folder `serve` was started in, and luu's own — the folder chosen under the first is the inspector foot's, which names it and changes it), *Models*
 (the providers file the next run reads, laid out as the new session's dialog: the providers the
 pickers offer — none whose engine is switched off in *Engines* — in one column and the models of
-the one in focus in the other, under a head with that provider's *make default* and edit; a click
-on a model makes it and its provider the default. *+ provider* is in the pane's pinned foot, as
+the one in focus in the other, under a head with that provider's edit; a click on a model makes
+it and its provider the default — a provider has no *make default* of its own, since a default is
+always some model. *+ provider* is in the pane's pinned foot, as
 *+ engine* is in Engines', and the built-in mock is a row of its own under the columns, chosen
 when the file names no default, because a server that fell back to it used to show a table with
 nothing chosen; the providers are **read-only**, and each is added, edited, renamed or — in its
@@ -1849,12 +1850,16 @@ it a larger authority than approving one job. Off loopback the section renders
 disabled and says why.
 
 **The browser never decides whether a URL is off the machine.** It writes what it
-was given; the loader — the same one every run reads the file with — refuses a
-default that leaves the machine without `remote = true`, and the refusal names
-the profile and the host. The page then asks for that host to be *typed* and
-retries with the declaration in place. So the rule has one implementation, and
-the word is produced by a person answering the machine's objection rather than
-by a checkbox the program pre-ticked. A key typed into the form is written to a
+was given; the loader — the same one every run reads the file with — **holds** a
+default that leaves the machine without `remote = true`, and `GET /api/providers`
+names the profile and the host (`held`). The page then asks, over the columns,
+for that host to be *typed*, and writes the declaration. So the rule has one
+implementation, and the word is produced by a person answering the machine's
+objection rather than by a checkbox the program pre-ticked. **The default and
+the consent are two facts written by two gestures**: a click on a model chooses
+the default, at once and with nothing opened, and the typed host consents to
+sending there untyped. See
+[`RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`](RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md). A key typed into the form is written to a
 file before `config.toml` is, and the file holds a path, for the reason the
 provider section gives.
 
@@ -1881,9 +1886,8 @@ the cap a reply gets when nothing is typed, which a model that takes less than
 the profile's cap is written as an exception of its own. Models outside *tools*
 get a transport select, fenced or native, and the models without tools can be
 left out of the pickers. Saving without connecting stays, for a server that is
-off. **The form does not make a provider the default** — the list does, with
-*make default* or a click on one of its models, and opens the form only for a
-remote host to be typed. **A provider whose engine luu starts has no Connect**:
+off. **The form does not make a provider the default** — the list does, with a
+click on one of its models, and never opens the form for it. **A provider whose engine luu starts has no Connect**:
 its Models tab is what its pickers offer — for llama.cpp or mlx the models on
 this machine the engine loads, for ollama what that ollama lists — and a
 catalog says nothing of tools, so each of a llama.cpp or mlx engine's models
@@ -2205,8 +2209,14 @@ Local-first promises that nothing leaves the machine without the destination
 having been typed, and a profile is a destination typed once, weeks ago —
 except that `-p workstation` *is* typing it, at the moment of use. The default
 is the only shape where nothing was typed, so it is the only one that must have
-been written down; a `config.toml` that arrived from elsewhere fails to load if
-its default points off the machine. **A box on the LAN counts as off the
+been written down. A `config.toml` whose default points off the machine without
+saying so **loads with that default held**: nothing is sent there, a run with no
+`-p` refuses at the moment it would have sent, `serve` starts on the mock, and
+the page asks for the host. It used to fail to load, which took every other
+table down with it — the page that could have fixed it included. A `remote =
+true` on a default that is this machine is dropped by the loader and left out
+of the next write: no consent is given or taken by it, so that one migrates by
+itself. **A box on the LAN counts as off the
 machine** — the commitment says *the machine*, not *the building* — and a host
 that cannot be parsed counts as off it too. Every run that has somewhere to send
 prints where, before it sends: `provider: workstation → openai@192.168.1.40:8080
