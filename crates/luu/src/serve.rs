@@ -5713,8 +5713,10 @@ struct EngineView {
     /// Where that binary comes from: `luu` for luu's own copy, `system` for
     /// one this machine had, `path` for one the file names that is neither.
     origin: &'static str,
-    /// Where a profile for it sends.
-    url: String,
+    /// Where a profile for it sends: its table's port, or where this process
+    /// placed an automatic one. `None` for an automatic engine nothing has
+    /// needed yet — it has no port until something does.
+    url: Option<String>,
     /// The profiles that name it.
     providers: Vec<String>,
 }
@@ -5849,9 +5851,7 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
             name.clone(),
             EngineView {
                 status: supervisor.status(name, engine).await,
-                url: engine
-                    .kind
-                    .url(engine.port.unwrap_or(engine.kind.default_port())),
+                url: crate::engines::port_of(name, engine).map(|port| engine.kind.url(port)),
                 providers: config
                     .profiles()
                     .iter()
@@ -6098,9 +6098,20 @@ async fn start_engine(
         }
         engine.model = Some(model);
     }
+    // An automatic engine is placed now if nothing has placed it, and placed
+    // again if something that is not luu's has taken its port since; one
+    // whose table names a port is the sheet's to move.
+    let automatic = engine.port.is_none();
+    if automatic {
+        let status = state.app.engines.status(&name, &engine).await;
+        if status.answering && status.state != "running" {
+            crate::engines::unplace(&name);
+        }
+        engine.port = place_engine(&name, &engine).await;
+    }
     let status = state.app.engines.status(&name, &engine).await;
     if status.answering && status.state != "running" {
-        let port = engine.port.unwrap_or(engine.kind.default_port());
+        let port = crate::engines::port_of(&name, &engine).unwrap_or(engine.kind.default_port());
         return (
             StatusCode::CONFLICT,
             format!("something already answers on port {port}, and it is not one luu started"),
@@ -6133,6 +6144,17 @@ struct InstallAsk {
     variant: Option<String>,
 }
 
+/// Where an automatic engine listens for this process, placed now if nothing
+/// has: past every port a table names, as `provider::resolve` places it.
+async fn place_engine(name: &str, engine: &crate::provider::Engine) -> Option<u16> {
+    let fixed: Vec<u16> = match load_config().await {
+        Ok((config, _)) => config.engines().values().filter_map(|e| e.port).collect(),
+        Err(_) => Vec::new(),
+    };
+    let (name, kind) = (name.to_string(), engine.kind);
+    blocking(move || crate::engines::place(&name, kind, &fixed)).await
+}
+
 /// The first free port for a kind, from its own upward: what the form and
 /// *use* write, and what the start sheet offers to move a busy engine to. See
 /// [`crate::engines::free_port`].
@@ -6151,14 +6173,13 @@ async fn free_engine_port(
                 .into_response();
         }
     };
-    let named: Vec<u16> = match load_config().await {
-        Ok((config, _)) => config
-            .engines()
-            .values()
-            .map(|e| e.port.unwrap_or(e.kind.default_port()))
-            .collect(),
+    // Every port a table names, and every one this process placed an
+    // automatic engine on.
+    let mut named: Vec<u16> = match load_config().await {
+        Ok((config, _)) => config.engines().values().filter_map(|e| e.port).collect(),
         Err(_) => Vec::new(),
     };
+    named.extend(crate::engines::placed_ports());
     match blocking(move || crate::engines::free_port(kind, &named)).await {
         Some(port) => Json(serde_json::json!({ "port": port })).into_response(),
         None => (
@@ -6243,10 +6264,13 @@ async fn chat_engine(
     if asked.messages.is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "nothing was said").into_response();
     }
+    if engine.port.is_none() {
+        engine.port = place_engine(&name, &engine).await;
+    }
     if let Err(error) = state.app.engines.ensure(&name, &engine).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
     }
-    let port = engine.port.unwrap_or(engine.kind.default_port());
+    let port = crate::engines::port_of(&name, &engine).unwrap_or(engine.kind.default_port());
     let backend = crate::probe_backend(
         match ollama {
             true => crate::provider::BackendKind::Ollama,
@@ -6693,6 +6717,33 @@ async fn get_provider_models(
                     }
                 }
                 (models, None)
+            }
+            // An ollama engine luu starts and nothing has started yet answers
+            // on no port — an automatic one has none at all — and what it
+            // would serve is ollama's store on this disk, by ollama's own
+            // names. Asking the port was a `connection refused` on every
+            // picker that showed the provider before a session had used it.
+            Err(_)
+                if resolved
+                    .engine
+                    .as_ref()
+                    .is_some_and(|(_, e)| e.kind == crate::provider::EngineKind::Ollama) =>
+            {
+                let catalog = tokio::task::spawn_blocking(crate::models::catalog)
+                    .await
+                    .unwrap_or_default();
+                let models: Vec<String> = catalog
+                    .into_iter()
+                    .filter(|m| m.source == crate::models::Source::Ollama)
+                    .map(|m| {
+                        labels.insert(m.name.clone(), m.label.clone());
+                        m.name
+                    })
+                    .collect();
+                let reason = models
+                    .is_empty()
+                    .then(|| "no model in ollama's store on this machine".to_string());
+                (models, reason)
             }
             Err(error) => (Vec::new(), Some(error.to_string())),
         },

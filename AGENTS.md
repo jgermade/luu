@@ -179,7 +179,8 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [engine.gemma]
 #   kind = "llama"
 #   binary = "managed"
-#   port = 8080
+#   # port = 8080 — absent, luu places it on the first free port from the
+#   # kind's own each time it starts, and its providers send there
 #
 # It loads the session's model — any GGUF from ollama, llama.cpp, Hugging Face
 # or <state dir>/models, chosen in the chat or the new session's dialog.
@@ -190,7 +191,9 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # a switch uses one (its table and a provider) or stops using one — the table
 # stays, with `enabled = false` — and uninstalling luu's own copy, asked first,
 # removes it with its table and providers. Play picks the model and starts a
-# chat on it; the engine's port is the first free one from the kind's own.
+# chat on it. A provider that names an engine sends to that engine's port —
+# its table's, or where luu placed it — whatever its own URL says; the form's
+# *Auto*, on by default, is the port left out.
 #
 # Settings → Runtimes is where a session's commands may run: each container
 # runtime (docker, podman, nerdctl, colima, container) probed for whether it is

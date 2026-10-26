@@ -1610,6 +1610,39 @@ pub fn resolve(
         false => MessagesKeys::default(),
     };
 
+    // Only while the URL is still the profile's own: a flag that sent this
+    // run elsewhere is not a reason to start the profile's server.
+    let mut engine =
+        match flag_url.is_none() && flags.backend.is_none_or(|b| Some(b) == profile.backend) {
+            true => profile
+                .engine
+                .as_ref()
+                .and_then(|engine| Some((engine.clone(), config.engines.get(engine)?.clone()))),
+            false => None,
+        };
+    // **The port is the engine's.** A profile that names an engine sends to
+    // the port that engine listens on — its table's, or, with none, the one
+    // this process places it on — with the path its own URL had. The port
+    // used to be written into both, and the profile's copy went stale the
+    // first time the engine moved. See
+    // `RECORD/2026-10-26.ports-luu-places.completed.md`.
+    let mut url = url;
+    if let Some((engine_name, table)) = &mut engine {
+        let fixed: Vec<u16> = config.engines.values().filter_map(|e| e.port).collect();
+        let port = table
+            .port
+            .or_else(|| crate::engines::place(engine_name, table.kind, &fixed));
+        if let Some(port) = port {
+            table.port = Some(port);
+            url = match profile.url.as_deref() {
+                Some(own) => {
+                    crate::engines::at_port(own, port).unwrap_or_else(|| table.kind.url(port))
+                }
+                None => table.kind.url(port),
+            };
+        }
+    }
+
     Ok(Resolved {
         kind,
         url,
@@ -1627,16 +1660,7 @@ pub fn resolve(
             (0, Some(_)) => WindowFrom::Profile,
             _ => WindowFrom::Flag,
         },
-        // Only while the URL is still the profile's own: a flag that sent
-        // this run elsewhere is not a reason to start the profile's server.
-        engine: match flag_url.is_none() && flags.backend.is_none_or(|b| Some(b) == profile.backend)
-        {
-            true => profile
-                .engine
-                .as_ref()
-                .and_then(|engine| Some((engine.clone(), config.engines.get(engine)?.clone()))),
-            false => None,
-        },
+        engine,
         // The flag over the profile, and the backend's own where neither
         // says: fenced, the transport every earlier recording was made
         // under, except where no recording predates the backend.
@@ -1864,6 +1888,46 @@ mod tests {
     fn resolved(text: &str, flags: Flags<'_>) -> Resolved {
         let config = config(text).expect("the file loads");
         resolve(&config, Some(Path::new(PATH)), flags).expect("it resolves")
+    }
+
+    /// A profile that names an engine sends to the engine's port: the one its
+    /// table names, whatever port the profile's URL was written with, or the
+    /// one this process placed an automatic engine on — and the same one the
+    /// next time it resolves.
+    #[test]
+    fn a_profile_on_an_engine_sends_to_the_engine_s_port() {
+        let text = r#"
+            [engine.fixed]
+            kind = "llama"
+            port = 8123
+            [engine.test-auto-resolve]
+            kind = "llama"
+            [provider.fixed]
+            backend = "openai"
+            url = "http://127.0.0.1:8080/v1"
+            engine = "fixed"
+            [provider.placed]
+            backend = "openai"
+            engine = "test-auto-resolve"
+            "#;
+        let named = |name| Flags {
+            provider: Some(name),
+            ..Flags::default()
+        };
+        assert_eq!(
+            resolved(text, named("fixed")).url,
+            "http://127.0.0.1:8123/v1"
+        );
+        let placed = resolved(text, named("placed"));
+        let port = crate::engines::placed("test-auto-resolve").expect("placed");
+        assert_ne!(port, 8123, "not where a table says another listens");
+        assert_eq!(placed.url, format!("http://127.0.0.1:{port}/v1"));
+        assert_eq!(
+            placed.engine.as_ref().map(|(_, e)| e.port),
+            Some(Some(port))
+        );
+        assert_eq!(resolved(text, named("placed")).url, placed.url, "it stays");
+        crate::engines::unplace("test-auto-resolve");
     }
 
     /// The Messages API's own keys, a model's over its profile's; native

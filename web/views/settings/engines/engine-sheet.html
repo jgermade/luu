@@ -55,7 +55,9 @@
 
   // Read where they are used: the parent's view moves under the sheet.
   const status = () => view?.engines?.[name]?.status || null
-  const taken = () => !!status()?.answering && status()?.state !== "running"
+  // Only for a port the table names: an automatic engine is placed again on
+  // a free one when it starts.
+  const taken = () => !!view?.engines?.[name]?.port && !!status()?.answering && status()?.state !== "running"
   const port = () => view?.engines?.[name]?.port || defaultPort(kind)
   $: lines = view?.engines?.[name]?.status?.log || []
   $: TABS = [

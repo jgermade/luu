@@ -2272,17 +2272,29 @@ is sent to it.
 kind = "llama"          # llama | mlx | ollama
 binary = "managed"      # luu's own copy; a path; or absent: found on PATH
 # enabled = false       # kept, and disabled: luu does not start it
-port = 8080             # the first free one from the kind's own, when luu writes it
+# port = 8080           # absent: placed on the first free one from the kind's own
 args = ["-c", "8192"]
 # model = "ollama:qwen2.5-coder:7b" # read, never asked: the session's model is the one loaded
 
 [provider.gemma]
 backend = "openai"
-url = "http://127.0.0.1:8080/v1"
-engine = "gemma"
+engine = "gemma"        # sends wherever gemma listens; a `url` keeps only its path
 ```
 
-**The profile keeps its URL**, so the destination a run prints is still one line of the file.
+**The port is the engine's, and only the engine's.** A profile that names an engine sends to
+the port that engine listens on — the one its table names, or, with none, the one this process
+**places** it on: the first free port from the kind's own, past every port a table names and
+every other placement, chosen the first time anything needs the engine's address and kept for
+the life of the process (`engines::place`), so every backend built for it dials the same one.
+The profile's own URL keeps its path and loses its port. It used to be the other way round — *the
+profile keeps its URL, so the destination a run prints is still one line of the file* — and the
+copy of the port in the profile went stale the first time the engine moved, which is a
+`connection refused` on a port nothing was going to answer. What the line was for still holds:
+a run prints where it sends before it sends, with the port it placed. A port somebody needs to
+know in advance is written in the table, and is kept exactly as before. An automatic port that
+something else has taken by the time the engine starts is placed again, never "used as it is":
+luu's own port is not somebody else's server. See
+[`RECORD/2026-10-26.ports-luu-places.completed.md`](RECORD/2026-10-26.ports-luu-places.completed.md).
 **It is a child of `luu serve`** and dies with it: stopped on SIGINT and SIGTERM, and
 `kill_on_drop` for every other way the handle goes. **luu's own copy is an official release by
 tag** — `b11236` for llama.cpp, `v0.34.4` for ollama, moved by `version` — downloaded into
@@ -2362,11 +2374,14 @@ provider and that model. *Chat* talks to the engine on that model in the sheet, 
 session**: `POST /api/engines/{name}/chat` runs `ensure` and streams the reply as NDJSON, with no
 system prompt, no tools, no budget and nothing recorded, to the engine's own `127.0.0.1` URL and
 never a provider's. *Output* is what it printed, a line's colour saying what it is. The switch on
-a card reads *Enabled*. **luu picks the port**: `GET
-/api/engines/port` is the first from the kind's own upward that no table names and a bind on
-`127.0.0.1` finds free, within a hundred and under the ephemeral range, and the form and *use*
-write it; when something else answers on an engine's port anyway, the sheet offers *move to port
-N*, which rewrites the table and every provider whose URL still says the old one. **Uninstall
+a card reads *Enabled*. **luu picks the port**, by default every time it starts: the form's
+*Auto* — ticked for a new engine, and *use* never asks — leaves `port` out. Unticked, `GET
+/api/engines/port` is the first from the kind's own upward that no table names, no automatic
+engine was placed on, and a bind on `127.0.0.1` finds free, within a hundred and under the
+ephemeral range, and the form writes it; when something else answers on a fixed port anyway, the
+sheet offers *move to port N*, which rewrites the table and every provider whose URL still says
+the old one. **An ollama engine nothing has started lists ollama's store on this disk**, by
+ollama's own names, instead of asking a port nothing answers on. **Uninstall
 asks, then removes the engine** (`POST /api/engines/{name}/uninstall`, luu's own copy only):
 stopped, its copy deleted unless another table runs it, and `[engine.<name>]` taken out of the
 file with the providers that start it. **The form is an installer** in a wide `SubModal` of

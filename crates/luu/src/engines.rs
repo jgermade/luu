@@ -317,6 +317,80 @@ pub fn free_port(kind: EngineKind, named: &[u16]) -> Option<u16> {
         .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
 }
 
+// ---- where it listens ------------------------------------------------------
+
+/// The ports this process placed its automatic engines on, by engine name. An
+/// `[engine.<name>]` with no `port` is placed the first time anything needs
+/// its address — the session that starts it, the page listing its models —
+/// on the first free port from its kind's own, and **stays there for the life
+/// of the process**, so every backend built for it in the meantime dials the
+/// same port. A fact about this process and not about the file, which is why
+/// it is not written down. See
+/// `RECORD/2026-10-26.ports-luu-places.completed.md`.
+static PLACED: std::sync::Mutex<BTreeMap<String, u16>> = std::sync::Mutex::new(BTreeMap::new());
+
+fn placements() -> std::sync::MutexGuard<'static, BTreeMap<String, u16>> {
+    PLACED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Where this process placed `name`, if it has.
+pub fn placed(name: &str) -> Option<u16> {
+    placements().get(name).copied()
+}
+
+/// Every port this process placed an engine on.
+pub fn placed_ports() -> Vec<u16> {
+    placements().values().copied().collect()
+}
+
+/// Where `name` listens for this process: where it was placed, or — the first
+/// time — the first free port from its kind's own that no table names
+/// (`fixed`) and no other automatic engine was placed on. `None` when
+/// [`free_port`] finds none.
+pub fn place(name: &str, kind: EngineKind, fixed: &[u16]) -> Option<u16> {
+    let mut placed = placements();
+    if let Some(port) = placed.get(name) {
+        return Some(*port);
+    }
+    let taken: Vec<u16> = fixed.iter().chain(placed.values()).copied().collect();
+    let port = free_port(kind, &taken)?;
+    placed.insert(name.to_string(), port);
+    Some(port)
+}
+
+/// Forgets where `name` was placed, so the next [`place`] looks again: what
+/// happens when something that is not luu's has taken its port since.
+pub fn unplace(name: &str) {
+    placements().remove(name);
+}
+
+/// The port `name` listens on: its table's, or where this process placed it.
+/// `None` for an automatic engine nothing has needed yet.
+pub fn port_of(name: &str, engine: &Engine) -> Option<u16> {
+    engine.port.or_else(|| placed(name))
+}
+
+/// Whether `engine` is an automatic one this process placed at its current
+/// port, as opposed to one whose table names the port.
+fn is_placed(name: &str, engine: &Engine) -> bool {
+    engine.port.is_some() && placed(name) == engine.port
+}
+
+/// `url` sent to `port` instead, its scheme, host and path kept: a profile
+/// that names an engine sends wherever that engine listens, whatever port
+/// its own URL was written with. `None` for a URL that will not parse.
+pub fn at_port(url: &str, port: u16) -> Option<String> {
+    let mut parsed = reqwest::Url::parse(url).ok()?;
+    parsed.set_port(Some(port)).ok()?;
+    let text = parsed.to_string();
+    // `Url` writes a bare host with a slash after it; a URL that had none
+    // keeps having none, so the line a run prints is the one in the file.
+    Some(match url.ends_with('/') || !text.ends_with('/') {
+        true => text,
+        false => text.trim_end_matches('/').to_string(),
+    })
+}
+
 /// Whether a version and a variant the page sent may be joined into a path
 /// under the state directory: a release tag's characters, and not led by a
 /// `.`, so neither `..` nor a hidden directory is a name. Install had taken
@@ -348,6 +422,20 @@ fn in_use(name: &str, engine: &Engine) -> Result<(), String> {
             "engine `{name}` is not in use: switch it on in Settings → Engines"
         )),
     }
+}
+
+/// The port a start binds: the table's, where this process placed it, or a
+/// place found now.
+fn listening(name: &str, engine: &Engine) -> Result<u16, String> {
+    port_of(name, engine)
+        .or_else(|| place(name, engine.kind, &[]))
+        .ok_or_else(|| {
+            let from = engine.kind.default_port();
+            format!(
+                "no free port for engine {name} from {from} to {}",
+                from + PORTS_TRIED - 1
+            )
+        })
 }
 
 /// The file `-m` is given: a reference out of [`crate::models`], or a path.
@@ -665,8 +753,12 @@ fn pipe(
 
 impl Supervisor {
     pub async fn status(&self, name: &str, engine: &Engine) -> Status {
-        let port = engine.port.unwrap_or(engine.kind.default_port());
-        let answering = answering(engine.kind, port).await;
+        // An automatic engine nothing has placed listens nowhere yet, and
+        // asking its kind's own port would report whoever else is there.
+        let answering = match port_of(name, engine) {
+            Some(port) => answering(engine.kind, port).await,
+            None => false,
+        };
         let mut slots = self.slots.lock().await;
         let slot = slots.entry(name.to_string()).or_default();
         slot.reap();
@@ -692,7 +784,7 @@ impl Supervisor {
     pub async fn start(&self, name: &str, engine: &Engine) -> Result<(), String> {
         in_use(name, engine)?;
         let binary = resolve_binary(engine)?;
-        let port = engine.port.unwrap_or(engine.kind.default_port());
+        let port = listening(name, engine)?;
         let mut slots = self.slots.lock().await;
         let slot = slots.entry(name.to_string()).or_default();
         slot.reap();
@@ -885,7 +977,7 @@ impl Supervisor {
     async fn ensure_now(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<(), String> {
         // Before anything is downloaded for it, as well as before it runs.
         in_use(name, engine)?;
-        let port = engine.port.unwrap_or(engine.kind.default_port());
+        let port = listening(name, engine)?;
         let ours = {
             let mut slots = self.slots.lock().await;
             let slot = slots.entry(name.to_string()).or_default();
@@ -899,6 +991,18 @@ impl Supervisor {
             }
             _ => {
                 if answering(engine.kind, port).await {
+                    // A fixed port that answers is used as it is: it is not
+                    // luu's to restart. A port luu *placed* this engine on is
+                    // luu's, and something else answering there means it was
+                    // taken since — so it is placed again, and the session,
+                    // whose backend dials the old port, is asked to start anew.
+                    if is_placed(name, engine) {
+                        unplace(name);
+                        return Err(format!(
+                            "port {port}, where luu placed engine {name}, answers and is not \
+                             luu's: start a new session to place it on a free one"
+                        ));
+                    }
                     return Ok(());
                 }
             }
@@ -1298,6 +1402,42 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An automatic engine is placed once per process — past every port a
+    /// table names and every other placement — and stays there, so every
+    /// backend built for it dials the same port.
+    #[test]
+    fn an_automatic_engine_is_placed_once_and_stays() {
+        let kind = EngineKind::Llama;
+        let first = place("test-placed-a", kind, &[]).expect("a free port");
+        assert_eq!(placed("test-placed-a"), Some(first));
+        assert_eq!(place("test-placed-a", kind, &[]), Some(first), "it stays");
+        let other = place("test-placed-b", kind, &[first + 1]).expect("another");
+        assert_ne!(other, first, "not where another automatic engine is");
+        assert_ne!(other, first + 1, "not where a table says one listens");
+        assert!(placed_ports().contains(&first) && placed_ports().contains(&other));
+        unplace("test-placed-a");
+        assert_eq!(placed("test-placed-a"), None);
+        unplace("test-placed-b");
+    }
+
+    /// A profile's URL keeps its path and takes its engine's port.
+    #[test]
+    fn a_url_moves_to_another_port_with_its_path() {
+        assert_eq!(
+            at_port("http://127.0.0.1:8080/v1", 8081).as_deref(),
+            Some("http://127.0.0.1:8081/v1")
+        );
+        assert_eq!(
+            at_port("http://127.0.0.1:11434", 11435).as_deref(),
+            Some("http://127.0.0.1:11435")
+        );
+        assert_eq!(
+            at_port("http://127.0.0.1:8080/", 9000).as_deref(),
+            Some("http://127.0.0.1:9000/")
+        );
+        assert_eq!(at_port("not a url", 9000), None);
+    }
 
     /// A port is free when no table names it and nothing listens on it, and
     /// the search goes up from the kind's own.

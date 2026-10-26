@@ -997,7 +997,10 @@ test("an engine is added with its provider, started, and stopped from Settings",
   // chooses the one its engine loads.
   await expect(form.getByRole("radio", { name: /llama\.cpp/ })).toHaveAttribute("aria-checked", "true")
   await expect(form.getByLabel("Name", { exact: true })).toHaveValue(/^llama(-\d+)?$/)
-  await expect(form.getByLabel("Port", { exact: true })).toHaveValue(/^\d+$/)
+  // Where it listens is luu's to choose, unless somebody unticks Auto.
+  const auto = form.getByRole("checkbox", { name: "Auto" })
+  await expect(auto).toBeChecked()
+  await expect(form.getByLabel("Port", { exact: true })).toBeDisabled()
   await expect(form.getByText("Model", { exact: true })).toHaveCount(0)
   await expect(form.getByRole("button", { name: "Install" })).toBeVisible()
   await form.getByLabel("Name", { exact: true }).fill("fake")
@@ -1010,6 +1013,10 @@ test("an engine is added with its provider, started, and stopped from Settings",
   const add = form.getByRole("button", { name: "Add engine" })
   await expect(add).toBeDisabled()
   await path.fill(fake)
+  // Unticked, it starts from the first free one, and takes a number.
+  await auto.click()
+  await expect(auto).not.toBeChecked()
+  await expect(form.getByLabel("Port", { exact: true })).toHaveValue(/^\d+$/)
   await form.getByLabel("Port", { exact: true }).fill("8097")
   await add.click()
   await expect(form).toHaveCount(0)
@@ -1231,6 +1238,20 @@ test("the models on this machine are listed by where they came from", async ({ p
   // And which engine cannot load which, in the server's words.
   const big = catalog.models.find(m => m.label.startsWith("big:27b-mlx"))
   expect(Object.keys(big.cannot).sort()).toEqual(["llama", "mlx"])
+
+  // An ollama engine nothing has started lists ollama's store on this disk,
+  // by ollama's own names — not `connection refused` from a port it is not on.
+  const file = join(home, "config.toml")
+  const before = readFileSync(file, "utf8")
+  writeFileSync(file, `${before.trimEnd()}\n\n[engine.idle-ollama]\nkind = "ollama"\nbinary = "/bin/false"\n\n` +
+    `[provider.idle-ollama]\nbackend = "ollama"\nengine = "idle-ollama"\n`)
+  try {
+    const listed = await (await fetch(`${BASE}/api/providers/idle-ollama/models`)).json()
+    expect(listed.reason ?? null).toBeNull()
+    expect(listed.models.sort()).toEqual(["big:27b-mlx", "tiny:1b"])
+  } finally {
+    writeFileSync(file, before)
+  }
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
@@ -1658,6 +1679,13 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   expect(onDisk).toContain(`binary = "${system}"`)
   expect(onDisk).toContain(`[provider.${name}]`)
   expect(onDisk).not.toContain("enabled")
+  // On a port luu chooses: none in its table, no URL on its provider, and
+  // the card says where it will be rather than a port it may not get.
+  const table = onDisk.slice(onDisk.indexOf(`[engine.${name}]`)).split("\n\n")[0]
+  expect(table).not.toContain("port")
+  const profile = onDisk.slice(onDisk.indexOf(`[provider.${name}]`)).split("\n\n")[0]
+  expect(profile).not.toContain("url")
+  await expect(used).toContainText("a free port, chosen when it starts")
   // Its provider is in Models while the engine is enabled, and only then.
   const inModels = page.locator(".modal .models-pane .prov", { has: page.locator(`strong:text-is("${name}")`) })
   await page.click('.modal .rail button:has-text("Models")')
