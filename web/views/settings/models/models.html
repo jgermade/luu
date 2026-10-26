@@ -223,17 +223,14 @@
   /* The foot pads itself, beside a `.pane-main` that pads the content; the
      pane they sit in pads nothing — as in Engines. */
   .modal-foot { padding: .2rem 1.75rem 0; }
+  /* A line under the columns, not a box of its own: flush with their edges,
+     and the *default* tag is what says it is chosen. */
   .builtin {
     display: flex;
     align-items: center;
     gap: .8rem;
-    padding: .55rem .85rem;
     font-size: 13px;
-    border: 1px solid var(--luu-border);
-    border-radius: 8px;
-    background: var(--luu-surface, #ffffff);
   }
-  .builtin.default { border-left: 3px solid var(--luu-accent); }
   .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
   .who strong { color: var(--luu-fg-muted); font-weight: 600; }
   .who .dim { font-size: 12px; overflow-wrap: anywhere; }
