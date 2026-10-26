@@ -1258,15 +1258,18 @@ via `<PathText>` with the full host directory in hover title, and settings forms
 **Settings is sections down the side**, not one scroll, because the sections are not steps.
 Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport height (`calc(100dvh - 4.5rem)`),
 and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (the folder `serve` was started in, and luu's own — the folder chosen under the first is the inspector foot's, which names it and changes it), *Models*
-(the providers file the next run reads, laid out as the new session's dialog: the providers in
-one column and the models of the one in focus in the other, that provider's default, *use →* and
-edit over its models, and *+ provider* under the list — with the built-in mock as a row of its
-own above them, chosen when the file names no default, because a server that fell back to it
-used to show a table with nothing chosen; the providers are **read-only**, and each is added,
-edited, renamed or — in its form's *Danger zone* — removed in its own form in a modal, which
-writes that one profile and nothing else, at once; the default alone is set from the list; see
-[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md)
-and [`RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`](RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
+(the providers file the next run reads, laid out as the new session's dialog: the providers the
+pickers offer — none whose engine is switched off in *Engines* — in one column and the models of
+the one in focus in the other, under a head with that provider's *make default* and edit; a click
+on a model makes it and its provider the default. *+ provider* is in the pane's pinned foot, as
+*+ engine* is in Engines', and the built-in mock is a row of its own under the columns, chosen
+when the file names no default, because a server that fell back to it used to show a table with
+nothing chosen; the providers are **read-only**, and each is added, edited, renamed or — in its
+form's *Danger zone* — removed in its own form in a modal, which writes that one profile and
+nothing else, at once; the default alone is set from the list; see
+[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md),
+[`RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`](RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md)
+and [`RECORD/2026-10-26.models-a-click-is-the-default.completed.md`](RECORD/2026-10-26.models-a-click-is-the-default.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
 starts](#a-model-server-luu-starts)) and *Resend* (the three
 rules that decide how much of the history a turn pays for again). *Resend* is beside *Models* and
 not inside *General* on the same rule that keeps `config.toml` and `localStorage` apart: General
@@ -1298,7 +1301,7 @@ own seven (clock, cog, sliders, server, repeat, clip, speech bubble) — and eve
 needs no second set for the light theme. These were text glyphs (`↻`, `▾`/`▸`, `▪`/`▫`, `≡`),
 and a text glyph's size, weight and baseline belong to whichever font on the machine carries
 that codepoint, so none of them lined up with the 16px box a theme's file icons occupy. The
-exception is prose: the `→` in `use →` is a word, not a control, and stays a character.
+exception is prose: the `→` in `move it →` is a word, not a control, and stays a character.
 
 The panels are fed by four plain `GET`s — `/api/workspace/{tree,file,git-status,git-diff}` —
 plus a stream that says when to ask again. `git-status` answers `{ repository, files }`, and a
@@ -1879,7 +1882,13 @@ the profile's cap is written as an exception of its own. Models outside *tools*
 get a transport select, fenced or native, and the models without tools can be
 left out of the pickers. Saving without connecting stays, for a server that is
 off. **The form does not make a provider the default** — the list does, with
-*make default*, and opens the form only for a remote host to be typed. An edit
+*make default* or a click on one of its models, and opens the form only for a
+remote host to be typed. **A provider whose engine luu starts has no Connect**:
+its Models tab is what its pickers offer — for llama.cpp or mlx the models on
+this machine the engine loads, for ollama what that ollama lists — and a
+catalog says nothing of tools, so each of a llama.cpp or mlx engine's models
+has its own fenced or native, written under its reference in
+`[provider.<name>.models."<reference>"]`: the name a session on it resolves. An edit
 asks the saved provider the same, through
 `GET /api/providers/{name}/models?facts=1` — the picker's route, which without
 `facts` pays no per-model request and lists only what is switched on. Behind
@@ -2327,8 +2336,8 @@ neither (`origin`, the server's answer) — and nothing is removed from the page
 **used or not**. Used, a found binary becomes `[engine.<kind>]` with that `binary` and the
 provider that starts it; not used, a table keeps everything and gains `enabled = false`, which
 luu **does not start** (`ensure` and the start route refuse, naming the switch) and whose
-providers **leave the pickers** (`idle` on `GET /api/providers`), while staying in Settings →
-Models. A version or variant the page sends is a name or it is refused — it is joined into a
+providers **leave the pickers** (`idle` on `GET /api/providers`), Settings → Models among
+them: the switch is where such a provider comes back. A version or variant the page sends is a name or it is refused — it is joined into a
 path under the state directory. The actions are icons (start, stop, output, install, uninstall,
 edit), and the output is a `SubModal` with each line coloured by what it says. See
 [`RECORD/2026-10-26.engines-found-used-and-owned.completed.md`](RECORD/2026-10-26.engines-found-used-and-owned.completed.md).

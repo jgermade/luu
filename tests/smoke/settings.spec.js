@@ -1086,11 +1086,19 @@ test("a new default and the chat's picker both move the session without a restar
 
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
-  // The default is the one thing changed from the list, and written at once.
+  // The default is the one thing changed from the list, and written at once:
+  // a click on a model makes it and its provider the default.
   const pane = page.locator(".modal .models-pane")
   await pane.locator(".prov", { has: page.locator('strong:text-is("here")') }).click()
-  await pane.locator('.models-head button:has-text("make default")').click()
+  await expect(pane.locator('.models-head button:has-text("make default")')).toHaveCount(1)
+  // Nothing in the head starts a session any more: that is the picker's.
+  await expect(pane.locator(".models-head button", { hasText: "use →" })).toHaveCount(0)
+  await pane.locator("button.model", { hasText: "mock" }).click()
   await expect(pane.locator(".models-head .tag.default")).toHaveCount(1)
+  await expect(pane.locator("button.model.on")).toHaveText(/mock/)
+  await expect(pane.locator('.models-head button:has-text("make default")')).toHaveCount(0)
+  // And the mock's row, under the columns, is no longer the default.
+  await expect(pane.locator(".builtin .tag.default")).toHaveCount(0)
   await expect(page.locator(".modal")).toContainText("the live session is on here")
   const after = await (await fetch(`${BASE}/api/settings`)).json()
   expect(after.profile).toBe("here")
@@ -1192,6 +1200,39 @@ test("the models on this machine are listed by where they came from", async ({ p
   await expect(off).toHaveAttribute("aria-disabled", "true")
   await expect(off).toHaveAttribute("title", /llama.cpp loads GGUF only/)
   await page.keyboard.press("Escape")
+
+  // Its provider's form lists the same models, and each one's tool calls
+  // are chosen there and kept under its own name in the provider's entries.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
+  const pane = page.locator(".modal .models-pane")
+  await pane.locator(".prov", { has: page.locator('strong:text-is("fake")') }).click()
+  await pane.getByRole("button", { name: "Edit fake" }).click()
+  const form = page.getByRole("dialog", { name: "Provider fake" })
+  await expect(form.getByRole("button", { name: "Connect" })).toHaveCount(0)
+  await form.getByRole("tab", { name: /Models/ }).click()
+  await expect(form.locator("li.model .mname")).toHaveText(["tiny:1b (ollama)", "small-Q4_K_M (huggingface)"])
+  const calls = form.getByRole("radiogroup", { name: "Tool calls of ollama:tiny:1b" })
+  await expect(calls.getByRole("radio", { name: "fenced" })).toHaveAttribute("aria-checked", "true")
+  await calls.getByRole("radio", { name: "native" }).click()
+  await form.getByRole("button", { name: "Save" }).click()
+  await expect(form).toHaveCount(0)
+  let table = readFileSync(join(home, "config.toml"), "utf8")
+  table = table.slice(table.indexOf("[provider.fake]"))
+  expect(table).toMatch(/\[provider\.fake\.models\."ollama:tiny:1b"\]\ntool-calls = "native"\n/)
+  expect(table).not.toContain("huggingface:")
+  // The columns say so on that model alone.
+  const tiny = pane.locator("button.model", { hasText: "tiny:1b (ollama)" })
+  await expect(tiny.locator(".tools.native")).toHaveCount(1)
+  await expect(pane.locator("button.model", { hasText: "small-Q4_K_M" }).locator(".tools.native")).toHaveCount(0)
+  // And back, which leaves no entry behind.
+  await pane.getByRole("button", { name: "Edit fake" }).click()
+  await form.getByRole("tab", { name: /Models/ }).click()
+  await calls.getByRole("radio", { name: "fenced" }).click()
+  await form.getByRole("button", { name: "Save" }).click()
+  await expect(form).toHaveCount(0)
+  expect(readFileSync(join(home, "config.toml"), "utf8")).not.toContain("[provider.fake.models")
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
   expect(errors).toEqual([])
 })
@@ -1554,6 +1595,11 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   expect(onDisk).toContain(`binary = "${system}"`)
   expect(onDisk).toContain(`[provider.${name}]`)
   expect(onDisk).not.toContain("enabled")
+  // Its provider is in Models while the engine is enabled, and only then.
+  const inModels = page.locator(".modal .models-pane .prov", { has: page.locator(`strong:text-is("${name}")`) })
+  await page.click('.modal .rail button:has-text("Models")')
+  await expect(inModels).toHaveCount(1)
+  await page.click('.modal .rail button:has-text("Engines")')
 
   // Off: the table stays, one key says so, and the provider is idle.
   await used.getByRole("switch").click()
@@ -1563,6 +1609,10 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   expect(onDisk.match(/enabled = false/g)).toHaveLength(1)
   const providers = await (await fetch(`${BASE}/api/providers`)).json()
   expect(providers.idle).toEqual([name])
+  await page.click('.modal .rail button:has-text("Models")')
+  await expect(page.locator(".modal .models-pane .prov").first()).toBeVisible()
+  await expect(inModels).toHaveCount(0)
+  await page.click('.modal .rail button:has-text("Engines")')
 
   // luu's own copy, laid out as a download leaves it, and named by a table.
   const copy = join(home, "engines", "llama", "b11236")

@@ -5,9 +5,11 @@
   // what the server says of its tools, with a window each and the default
   // among them. An edit has a third, **Danger zone**, which is where it is
   // removed: the one thing the form does that cannot be saved back. *Models* opens once Connect has spoken to the server, or, on
-  // an edit, once the saved provider has answered. See
+  // an edit, once the saved provider has answered — for a provider whose
+  // engine luu starts, that is the models on this machine the engine loads,
+  // each with how its tools travel. See
   // `RECORD/2026-10-21.connecting-a-provider.completed.md` and its section of
-  // 2026-10-22.
+  // 2026-10-22, and `RECORD/2026-10-26.models-a-click-is-the-default.completed.md`.
   //
   // **It writes one profile and nothing else.** The body is the file as the
   // server last answered it, with this profile put in (or, for an edit, put in
@@ -16,6 +18,7 @@
   // list's *make default* opens it so for a remote host to be typed — and
   // `saved(name)` is told what was written.
   const { state, saveProviders, probeProvider, providerModels } = await import("@web/lib/store.js")
+  const { modelLabel } = await import("@web/lib/engines.js")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const Button = await import("@web/theme/default/components/button.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
@@ -99,8 +102,9 @@
   // leaves whatever the file held for it alone.
   let list = null
   let connecting = false
-  // A provider whose server luu starts lists this machine's models, which
-  // Settings → Engines is where to choose; it does not connect from here.
+  // A provider whose server luu starts lists this machine's models — the
+  // same list its pickers offer — and does not connect from here: its URL is
+  // the engine's, and the engine may not be running.
   const engineOwned = !!was.engine
 
   // The default model; "" is none chosen, which is *the first listed*.
@@ -170,8 +174,10 @@
 
   // An edit asks the provider as saved what it serves — the request the
   // chat's picker already makes, with the facts — and its Models tab opens
-  // on the answer.
-  if (editing && !engineOwned) {
+  // on the answer. A local engine's answer is the models on the disk it
+  // loads, with no facts: every one is *not said*, so each has its own
+  // fenced|native, kept per model in this provider's entries.
+  if (editing) {
     list = { models: [], facts: {}, saved: true, loading: true }
     providerModels(editing, { facts: true }).then(answer => {
       list = answer.reason && !answer.models?.length
@@ -223,6 +229,8 @@
           key: m,
           kind: "model",
           name: m,
+          // A catalog reference reads as the pickers read it: `x (llama.cpp)`.
+          label: modelLabel(m),
           group,
           off: isOff(m),
           chosen: defaultModel === m,
@@ -301,14 +309,14 @@
   // ---- the tabs ----------------------------------------------------------
 
   // Models opens on an answer, or on an edit's question to the saved
-  // provider while it is asked; an engine's models are Settings → Engines'.
+  // provider while it is asked.
   $: tabs = [
     { value: "connection", label: "Connection" },
     {
       value: "models",
       label: "Models",
       count: list && !list.loading && !list.error ? listed.length : null,
-      disabled: !list || engineOwned,
+      disabled: !list,
     },
     ...(editing ? [{ value: "danger", label: "Danger zone" }] : []),
   ]
@@ -478,8 +486,8 @@
     </dd>
 
     <dd :if="engineOwned" class="note">
-      luu starts this provider's server, so its models are this machine's:
-      they are chosen in Settings → Engines.
+      luu starts this provider's server, so its models are the ones on this
+      machine it loads: <strong>Models</strong> says how each one's tools travel.
     </dd>
   </dl>
 
@@ -517,7 +525,7 @@
         <label :if="row.kind === 'model'" class="pick" :title="row.chosen ? 'Click again for none' : 'Make it the default'">
           <input type="radio" name="default-model" :checked="row.chosen" :disabled="row.off"
                  @click="toggleDefault(row.name)">
-          <span class="mname">{{ row.name }}</span>
+          <span class="mname" :title="row.name">{{ row.label }}</span>
           <span :if="row.off" class="dim">left out</span>
         </label>
         <!-- Both cells on every row, empty where they have nothing, so the

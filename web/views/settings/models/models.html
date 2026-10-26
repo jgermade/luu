@@ -2,15 +2,18 @@
   // The providers in `config.toml`, as the new session's dialog lays them
   // out: the providers in one column and the models of the one in focus in
   // the other (`provider-models.html`), with that provider's own actions over
-  // its models and *+ provider* under the list. What this server resolved for
-  // the live session used to be a card above it, and is not here: the chat's
-  // head and the turn say where a session sends. See
-  // `RECORD/2026-09-07.configuring-from-the-browser.completed.md` and
-  // `RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`.
+  // its models and *+ provider* in the pane's foot, as *+ engine* is in
+  // Engines'. What this server resolved for the live session used to be a
+  // card above it, and is not here: the chat's head and the turn say where a
+  // session sends. See
+  // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`,
+  // `RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md` and
+  // `RECORD/2026-10-26.models-a-click-is-the-default.completed.md`.
   const { state, saveProviders, loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const PathText = await import("@web/components/path-text.html")
   const Button = await import("@web/theme/default/components/button.html")
-  const { openStarter, editStarter } = await import("@web/lib/ui.js")
+  const { openStarter } = await import("@web/lib/ui.js")
+  const { modelLabel } = await import("@web/lib/engines.js")
   const ProviderForm = await import("./provider-form.html")
   const ProviderModels = await import("@web/views/chat/provider-models.html")
 
@@ -32,14 +35,17 @@
   const saved = () => { refreshSettings() }
 
   // The default is the one thing changed from the list, because it is the one
-  // thing changed often, and it is written at once. A default off this
-  // machine needs its host typed — the same declaration `-p` is on the
-  // command line — so that refusal opens the profile's form with *default*
-  // ticked, where the question is asked.
+  // thing changed often, and it is written at once: a provider from its
+  // *make default*, or a provider and its model from a click on the model. A
+  // default off this machine needs its host typed — the same declaration `-p`
+  // is on the command line — so that refusal opens the profile's form with
+  // *default* ticked, where the question is asked.
   let defaultError = null
-  const makeDefault = async name => {
+  const makeDefault = async (name, model = "") => {
     defaultError = null
-    const result = await saveProviders({ default: name || null, providers: state.providers?.providers || {} })
+    const providers = { ...(state.providers?.providers || {}) }
+    if (name && model) providers[name] = { ...providers[name], model }
+    const result = await saveProviders({ default: name || null, providers })
     await refreshSettings()
     if (result?.ok) return
     if (result?.declaration && name) return openForm(name, true)
@@ -50,15 +56,20 @@
   // The provider whose models are on show, as the columns say it.
   let focused = ""
   $: here = state.providers?.providers?.[focused] || null
-  // What a session there would start on, said over its models.
+  // What a session there would start on, said over its models — a catalog
+  // reference as its rows name it.
   $: said = here
-    ? [here.url, here.model, here["context-limit"] ? `${here["context-limit"]} tokens` : ""].filter(Boolean).join(" · ")
+    ? [here.url, modelLabel(here.model), here["context-limit"] ? `${here["context-limit"]} tokens` : ""].filter(Boolean).join(" · ")
     : ""
-  // A model chosen here starts a session on it, as *use →* does on the
-  // provider's own model.
-  const startOn = async ({ provider, model }) => {
-    await openStarter(provider)
-    if (model) editStarter({ model })
+  // A model clicked here is the default: its provider in `default`, the model
+  // in the provider's `model`. It used to open the new session's dialog on
+  // it, which the chat's picker and *New session* already do. A provider
+  // that lists nothing offers *its own model*, which moves the default and
+  // leaves the profile's model as it is.
+  const chooseDefault = ({ provider, model }) => {
+    const p = state.providers?.providers?.[provider]
+    if (state.providers?.default === provider && (!model || p?.model === model)) return
+    makeDefault(provider, model)
   }
   // How each model travels is the columns' to say, one icon per model, in
   // `provider.rs`'s own order — see
@@ -81,19 +92,6 @@
 
 <div class="models-pane">
   <div class="pane-main">
-    <!-- The first run. The server decides this (`unconfigured`), the page only
-         shows it: a browser working it out from the backend name would be a second
-         copy of a rule that already has one. -->
-    <div :if="state.settings?.unconfigured" class="first-run">
-      <strong>Nothing says where this machine sends.</strong>
-      <p>
-        There is no provider in <code>config.toml</code> and no destination was
-        typed on the command line, so this server fell back to the mock — which
-        answers in sentences and is nowhere. Add one below, then start a
-        session on it.
-      </p>
-    </div>
-
     <div class="ds-hero">
       <div class="ds-hero-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -110,6 +108,20 @@
         <h4 class="ds-hero-title">Modelos y proveedores</h4>
         <p class="ds-hero-desc">Los perfiles configurados (Ollama, OpenAI, Anthropic, llama-server y remotos) y los modelos que sirve cada uno.</p>
       </div>
+    </div>
+
+    <!-- The first run, under the hero rather than over it. The server decides
+         this (`unconfigured`), the page only shows it: a browser working it
+         out from the backend name would be a second copy of a rule that
+         already has one. -->
+    <div :if="state.settings?.unconfigured" class="first-run">
+      <strong>Nothing says where this machine sends.</strong>
+      <p>
+        There is no provider in <code>config.toml</code> and no destination was
+        typed on the command line, so this server fell back to the mock — which
+        answers in sentences and is nowhere. Add one below, then start a
+        session on it.
+      </p>
     </div>
 
     <section class="pane-group">
@@ -133,8 +145,34 @@
 
       <p :if="defaultError" class="error">{{ defaultError }}</p>
 
-      <!-- The built-in mock first, because "no default" in the file is it. It
-           is not a profile, so it is not in the columns. -->
+      <!-- The profiles the pickers offer — a provider whose engine is
+           switched off in Engines is not one — and the models of the one in
+           focus; ✓ is the default, and its own model. A click on a model
+           makes it the default. -->
+      <div class="browse" :if="state.providers">
+        <ProviderModels :provider="state.providers.default || ''"
+                        :model="state.providers.providers?.[state.providers.default]?.model || ''"
+                        :disabled="!editable"
+                        @focus="focused = $event.detail" @choose="chooseDefault($event.detail)">
+          <template :slot.head>
+            <span :if="said" class="said">{{ said }}</span>
+            <span :if="state.providers?.default === focused" class="tag default">default</span>
+            <span :if="focused === state.providers?.running" class="tag" title="What this server is sending to">running</span>
+            <span :if="here?.remote" class="tag warn" title="Declared as off this machine">remote</span>
+            <span :if="overridden(focused)" class="tag warn"
+                  title="A model's own `tool-calls` differs from the profile's: a run with -m resolves that model's entry over this. Open the provider to see which.">per-model tools</span>
+            <button type="button" class="link" :if="here && state.providers?.default !== focused" :disabled="!editable"
+                    @click="makeDefault(focused)">make default</button>
+            <Button :if="here" square variant="ghost" size="sm" :title="`Edit ${focused}`" :label="`Edit ${focused}`"
+                    :disabled="!editable" @click="openForm(focused)">
+              <svg class="ic"><use href="#i-edit"/></svg>
+            </Button>
+          </template>
+        </ProviderModels>
+      </div>
+
+      <!-- The built-in mock last, under the providers: "no default" in the
+           file is it, and it is not a profile, so it is not in the columns. -->
       <div class="builtin" :class.default="!state.providers?.default">
         <div class="who">
           <strong>mock</strong>
@@ -150,37 +188,15 @@
                   @click="makeDefault('')">make default</button>
         </div>
       </div>
-
-      <!-- Every profile in the file and the models of the one in focus; ✓ is
-           the default, and its own model. -->
-      <div class="browse" :if="state.providers">
-        <ProviderModels every :provider="state.providers.default || ''"
-                        :model="state.providers.providers?.[state.providers.default]?.model || ''"
-                        @focus="focused = $event.detail" @choose="startOn($event.detail)">
-          <template :slot.head>
-            <span :if="said" class="said">{{ said }}</span>
-            <span :if="state.providers?.default === focused" class="tag default">default</span>
-            <span :if="focused === state.providers?.running" class="tag" title="What this server is sending to">running</span>
-            <span :if="here?.remote" class="tag warn" title="Declared as off this machine">remote</span>
-            <span :if="overridden(focused)" class="tag warn"
-                  title="A model's own `tool-calls` differs from the profile's: a run with -m resolves that model's entry over this. Open the provider to see which.">per-model tools</span>
-            <button type="button" class="link" :if="here && state.providers?.default !== focused" :disabled="!editable"
-                    @click="makeDefault(focused)">make default</button>
-            <button type="button" class="link" :if="here" title="Start a session on this provider"
-                    @click="openStarter(focused)">use →</button>
-            <Button :if="here" square variant="ghost" size="sm" :title="`Edit ${focused}`" :label="`Edit ${focused}`"
-                    :disabled="!editable" @click="openForm(focused)">
-              <svg class="ic"><use href="#i-edit"/></svg>
-            </Button>
-          </template>
-        </ProviderModels>
-      </div>
-      <!-- Under the list, outside it: one more. -->
-      <div class="under" :if="state.providers">
-        <button type="button" class="add" :disabled="!editable" @click="openForm()">+ provider</button>
-      </div>
     </section>
 
+  </div>
+
+  <!-- Pinned to the bottom of the pane, as *+ engine* is in Engines. -->
+  <div class="modal-foot">
+    <div class="modal-actions">
+      <button type="button" class="add" :disabled="!editable" @click="openForm()">+ provider</button>
+    </div>
   </div>
 </div>
 
@@ -204,12 +220,13 @@
   }
   .browse .said { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .browse .ic { width: 14px; height: 14px; }
-  .under { margin-top: .5rem; }
+  /* The foot pads itself, beside a `.pane-main` that pads the content; the
+     pane they sit in pads nothing — as in Engines. */
+  .modal-foot { padding: .2rem 1.75rem 0; }
   .builtin {
     display: flex;
     align-items: center;
     gap: .8rem;
-    margin-bottom: .6rem;
     padding: .55rem .85rem;
     font-size: 13px;
     border: 1px solid var(--luu-border);
