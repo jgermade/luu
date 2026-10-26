@@ -57,8 +57,13 @@ pub struct LocalModel {
     pub name: String,
     pub source: Source,
     /// `name (source)`, and the format where it is not GGUF: what a person
-    /// picks from.
+    /// picks from, in one string — a tooltip, a log line.
     pub label: String,
+    /// The same, as the pickers draw it beside the bare name: whose place it
+    /// is in — `luu` for luu's own models directory, `system` for another
+    /// tool's — then that tool, then the format where it is not GGUF.
+    /// `["system", "ollama"]`, `["system", "huggingface", "mlx"]`, `["luu"]`.
+    pub badge: Vec<&'static str>,
     /// `gguf`; `mlx` for MLX weights (a Hugging Face directory whose
     /// `config.json` carries MLX's `quantization`, or ollama's MLX models);
     /// `safetensors` for an unquantized Hugging Face directory. Everything is
@@ -213,11 +218,19 @@ fn entry(
         "gguf" => format!("{shown} ({})", source.as_str()),
         other => format!("{shown} ({}, {other})", source.as_str()),
     };
+    let mut badge = match source {
+        Source::Luu => vec!["luu"],
+        other => vec!["system", other.as_str()],
+    };
+    if format != "gguf" {
+        badge.push(format);
+    }
     LocalModel {
         reference: format!("{}:{key}", source.as_str()),
         name: shown,
         source,
         label,
+        badge,
         format,
         size,
         path: path.display().to_string(),
@@ -521,6 +534,7 @@ mod tests {
             name: String::new(),
             source,
             label: String::new(),
+            badge: Vec::new(),
             format,
             size: 0,
             path: String::new(),

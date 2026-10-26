@@ -20,6 +20,7 @@
   const Button = await import("@web/theme/default/components/button.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const BrandIcon = await import("@web/components/brand-icon.html")
+  const OriginBadge = await import("@web/components/origin-badge.html")
 
   // False once it should leave: `SubModal` plays the exit, then `close`
   // unmounts it.
@@ -172,7 +173,8 @@
       <label :each="m in loadable" :key="m.reference" class="model" :class.on="chosen === m.reference">
         <input type="radio" name="engine-model" :checked="chosen === m.reference" @change="chosen = m.reference">
         <BrandIcon :src="brandSrc(modelBrand(m.reference))" />
-        <span class="label">{{ m.label }}</span>
+        <span class="label" :title="m.label">{{ m.name }}</span>
+        <OriginBadge :parts="m.badge || []" />
         <span class="dim small">{{ gb(m.size) }}</span>
       </label>
     </div>

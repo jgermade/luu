@@ -19,6 +19,7 @@
   // the host of a remote one is typed over the list, where it is held.
   const { state, saveProviders, probeProvider, providerModels } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
+  const OriginBadge = await import("@web/components/origin-badge.html")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const Button = await import("@web/theme/default/components/button.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
@@ -178,7 +179,8 @@
     providerModels(editing, { facts: true }).then(answer => {
       list = answer.reason && !answer.models?.length
         ? { models: [], facts: {}, saved: true, error: answer.reason }
-        : { models: answer.models || [], facts: answer.facts || {}, saved: true }
+        : { models: answer.models || [], facts: answer.facts || {}, labels: answer.labels || {},
+            badges: answer.badges || {}, saved: true }
     })
   }
 
@@ -225,8 +227,10 @@
           key: m,
           kind: "model",
           name: m,
-          // A catalog reference reads as the pickers read it: `x (llama.cpp)`.
-          label: modelLabel(m),
+          // A catalog reference reads as the pickers read it: its name, and
+          // beside it where it comes from.
+          label: list?.labels?.[m] || modelLabel(m),
+          badge: list?.badges?.[m] || [],
           group,
           off: isOff(m),
           chosen: defaultModel === m,
@@ -515,6 +519,7 @@
           <input type="radio" name="default-model" :checked="row.chosen" :disabled="row.off"
                  @click="toggleDefault(row.name)">
           <span class="mname" :title="row.name">{{ row.label }}</span>
+          <OriginBadge :parts="row.badge" />
           <span :if="row.off" class="dim">left out</span>
         </label>
         <!-- Both cells on every row, empty where they have nothing, so the

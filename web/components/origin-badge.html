@@ -1,0 +1,40 @@
+<script :setup="{ parts = [] }">
+  // Where a model comes from, beside its name: whose place it is in, then the
+  // tool, then a format that is not GGUF — `[luu|ollama]` for a model luu's
+  // own copy of ollama serves, `[system|huggingface|mlx]` for MLX weights in
+  // the machine's Hugging Face cache, `[luu]` for luu's own models folder.
+  // The server says which (`badges` on a provider's models, `badge` on the
+  // catalog's); see `RECORD/2026-10-26.where-a-model-comes-from.completed.md`.
+  //
+  //   <OriginBadge :parts="shown.badges[name]" />
+  //
+  // **Self-contained**, like everything in `components/`, and nothing at all
+  // with no parts: a model a remote API lists has no place on this machine.
+  // The whole of it is one title, for whoever cannot read the segments.
+</script>
+
+<span :if="parts?.length" class="origin" :class.luu="parts[0] === 'luu'" :title="parts.join(' · ')">
+  <span :each="part in parts" :key="part" class="part">{{ part }}</span>
+</span>
+
+<style scoped>
+  .origin {
+    display: inline-flex;
+    flex: none;
+    align-items: stretch;
+    border: 1px solid var(--luu-border);
+    border-radius: 4px;
+    overflow: hidden;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--luu-fg-muted);
+    white-space: nowrap;
+  }
+  .part { padding: 0 .3rem; }
+  .part + .part { border-left: 1px solid var(--luu-border); }
+  /* luu's own, in its accent — as the Engines cards say `luu:`. */
+  .origin.luu { border-color: var(--luu-accent); }
+  .origin.luu .part:first-child { color: var(--luu-accent); }
+  .origin.luu .part + .part { border-left-color: var(--luu-accent); }
+</style>

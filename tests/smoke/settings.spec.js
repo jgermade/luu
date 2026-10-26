@@ -1353,7 +1353,10 @@ test("the models on this machine are listed by where they came from", async ({ p
   await page.click('.modal .rail button:has-text("Engines")')
   await page.locator(".engines-pane section.engine", { hasText: "fake" }).getByRole("button", { name: "Start" }).click()
   const start = page.getByRole("dialog", { name: "fake", exact: true })
-  await expect(start.locator(".model .label")).toHaveText(["tiny:1b (ollama)", "small-Q4_K_M (huggingface)"])
+  // Each by its name, and beside it where it comes from: the machine's
+  // ollama store, its Hugging Face cache.
+  await expect(start.locator(".model .label")).toHaveText(["tiny:1b", "small-Q4_K_M"])
+  await expect(start.locator(".model .origin")).toHaveText(["systemollama", "systemhuggingface"])
   await start.getByRole("button", { name: "Close" }).click()
   await expect(start).toHaveCount(0)
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
@@ -1362,15 +1365,15 @@ test("the models on this machine are listed by where they came from", async ({ p
   await page.click(".options .dest")
   await page.locator(".options .menu .prov", { hasText: "fake" }).click()
   const group = page.locator(".options .menu .models")
-  await expect(group.locator("button.model .name")).toHaveText([
-    "tiny:1b (ollama)",
-    "small-Q4_K_M (huggingface)",
-  ])
+  await expect(group.locator("button.model .name")).toHaveText(["tiny:1b", "small-Q4_K_M"])
+  await expect(group.locator("button.model .origin")).toHaveCount(2)
+  await expect(group.locator("button.model .origin").first()).toHaveAttribute("title", "system · ollama")
   // The one it cannot load is there, greyed, with a warning and why.
   const off = group.locator(".model.off")
   await expect(off).toHaveCount(1)
   await expect(off).toContainText("⚠")
-  await expect(off).toContainText("big:27b-mlx (ollama, mlx)")
+  await expect(off.locator(".name")).toHaveText("big:27b-mlx")
+  await expect(off.locator(".origin")).toHaveAttribute("title", "system · ollama · mlx")
   await expect(off).toHaveAttribute("aria-disabled", "true")
   await expect(off).toHaveAttribute("title", /llama.cpp loads GGUF only/)
   await page.keyboard.press("Escape")
@@ -1385,7 +1388,8 @@ test("the models on this machine are listed by where they came from", async ({ p
   const form = page.getByRole("dialog", { name: "Provider fake" })
   await expect(form.getByRole("button", { name: "Connect" })).toHaveCount(0)
   await form.getByRole("tab", { name: /Models/ }).click()
-  await expect(form.locator("li.model .mname")).toHaveText(["tiny:1b (ollama)", "small-Q4_K_M (huggingface)"])
+  await expect(form.locator("li.model .mname")).toHaveText(["tiny:1b", "small-Q4_K_M"])
+  await expect(form.locator("li.model .origin").first()).toHaveAttribute("title", "system · ollama")
   const calls = form.getByRole("radiogroup", { name: "Tool calls of ollama:tiny:1b" })
   await expect(calls.getByRole("radio", { name: "fenced" })).toHaveAttribute("aria-checked", "true")
   await calls.getByRole("radio", { name: "native" }).click()
@@ -1396,7 +1400,7 @@ test("the models on this machine are listed by where they came from", async ({ p
   expect(table).toMatch(/\[provider\.fake\.models\."ollama:tiny:1b"\]\ntool-calls = "native"\n/)
   expect(table).not.toContain("huggingface:")
   // The columns say so on that model alone.
-  const tiny = pane.locator("button.model", { hasText: "tiny:1b (ollama)" })
+  const tiny = pane.locator("button.model", { hasText: "tiny:1b" })
   await expect(tiny.locator(".tools.native")).toHaveCount(1)
   await expect(pane.locator("button.model", { hasText: "small-Q4_K_M" }).locator(".tools.native")).toHaveCount(0)
   // And back, which leaves no entry behind.

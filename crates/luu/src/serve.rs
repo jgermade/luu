@@ -6604,10 +6604,16 @@ struct ProviderModels {
     suggested: Option<String>,
     /// Where that suggestion came from, so the page can say.
     suggested_from: Option<&'static str>,
-    /// What to show for each model: `qwen2.5-coder:7b (ollama)`. Where a name
-    /// is absent the page shows the name itself.
+    /// What to show for each model: `qwen2.5-coder:7b` for a catalog
+    /// reference. Where a name is absent the page shows the name itself.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     labels: std::collections::BTreeMap<String, String>,
+    /// Where each model comes from, drawn beside its name: whose place it is
+    /// — `luu` (its own copy of ollama, its own models directory) or `system`
+    /// — then the tool, then a format that is not GGUF. Absent for a model a
+    /// remote API lists: there is no place on this machine to name.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    badges: std::collections::BTreeMap<String, Vec<&'static str>>,
     /// Models on this machine the provider's engine cannot load, with why:
     /// shown greyed out rather than hidden, so a model that is on the disk
     /// does not look missing. See `models::LocalModel::runs_on`.
@@ -6632,6 +6638,7 @@ struct ModelsAsk {
 struct Unavailable {
     model: String,
     label: String,
+    badge: Vec<&'static str>,
     reason: String,
 }
 
@@ -6678,6 +6685,13 @@ async fn get_provider_models(
         .filter(|(_, e)| e.kind != crate::provider::EngineKind::Ollama)
         .map(|(_, e)| e.clone());
     let mut labels = std::collections::BTreeMap::new();
+    let mut badges: std::collections::BTreeMap<String, Vec<&'static str>> =
+        std::collections::BTreeMap::new();
+    // Whose ollama lists them: luu's own copy, or one the machine had.
+    let ollama_badge = match resolved.engine.as_ref() {
+        Some((_, engine)) if engine.binary.as_deref() == Some("managed") => vec!["luu", "ollama"],
+        _ => vec!["system", "ollama"],
+    };
     let mut unavailable = Vec::new();
     let (models, reason) = match &local_engine {
         Some(engine) => {
@@ -6695,11 +6709,13 @@ async fn get_provider_models(
                         if !models.contains(&model.reference) {
                             models.push(model.reference.clone());
                         }
-                        labels.insert(model.reference, model.label);
+                        badges.insert(model.reference.clone(), model.badge);
+                        labels.insert(model.reference, model.name);
                     }
                     Err(reason) => unavailable.push(Unavailable {
                         model: model.reference,
-                        label: model.label,
+                        label: model.name,
+                        badge: model.badge,
                         reason,
                     }),
                 }
@@ -6718,7 +6734,7 @@ async fn get_provider_models(
                 // Named by where they came from, the way the catalog is.
                 if resolved.kind == crate::provider::BackendKind::Ollama {
                     for model in &models {
-                        labels.insert(model.clone(), format!("{model} (ollama)"));
+                        badges.insert(model.clone(), ollama_badge.clone());
                     }
                 }
                 (models, None)
@@ -6741,7 +6757,9 @@ async fn get_provider_models(
                     .into_iter()
                     .filter(|m| m.source == crate::models::Source::Ollama)
                     .map(|m| {
-                        labels.insert(m.name.clone(), m.label.clone());
+                        let mut badge = ollama_badge.clone();
+                        badge.extend(m.badge.iter().skip(2));
+                        badges.insert(m.name.clone(), badge);
                         m.name
                     })
                     .collect();
@@ -6790,6 +6808,7 @@ async fn get_provider_models(
         suggested,
         suggested_from,
         labels,
+        badges,
         unavailable,
         facts,
     })
