@@ -203,6 +203,11 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
 #
+# Providers and models wear their brand's mark in the pickers: thirteen in
+# `web/brands/` (Simple Icons, CC0), or a pack — `[ui] brand-icons`, a folder of
+# `<slug>.svg`, chosen in Appearance → Brand marks, where `npm install
+# @lobehub/icons-static-svg` in `web/` is found by itself.
+#
 # Monaco and xterm.js are the optional dependencies and they are *node* ones,
 # in `web/package.json` rather than vendored into the tree: `make install`
 # fetches them and the binary serves them from disk. `Appearance → Editor` offers

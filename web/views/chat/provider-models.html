@@ -23,6 +23,12 @@
   // provider's name over its models — where its own actions go.
   const { state, providerModels, offeredProviders } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
+  const { brandSrc, providerBrand, modelBrand, loadBrands } = await import("@web/lib/brands.js")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  // Each provider and model wears its brand's mark where one is known — see
+  // `lib/brands.js`, which also says where the marks are drawn from.
+  loadBrands()
+  const markOf = name => brandSrc(providerBrand(state.providers?.providers?.[name]))
 
   const flag = v => v === "" || v === true || v === "true"
   $: isDisabled = flag(disabled)
@@ -116,6 +122,7 @@
               :aria-selected="String(name === focus)"
               @click="focusOn(name)" @mouseenter="focusOn(name)" @focus="focusOn(name)">
         <span class="check">{{ name === provider ? "✓" : "" }}</span>
+        <span class="mark"><BrandIcon :src="markOf(name)" /></span>
         <span class="text">
           <strong>{{ name }}</strong>
           <span class="dim small">{{ describe(name) }}</span>
@@ -127,6 +134,7 @@
 
   <div class="models" role="listbox" aria-label="Models">
     <div class="models-head dim small">
+      <BrandIcon :src="markOf(focus)" size="12px" />
       <strong>{{ focus }}</strong>
       <span :if="profile.engine">· engine {{ profile.engine }}</span>
       <span :if="$slots.head" class="head-acts"><slot.head /></span>
@@ -139,6 +147,7 @@
             :disabled="isDisabled"
             @click="choose(focus, name)">
       <span class="check">{{ focus === provider &amp;&amp; name === model ? "✓" : "" }}</span>
+      <span class="mark"><BrandIcon :src="brandSrc(modelBrand(name))" size="12px" /></span>
       <span class="name">{{ shown?.labels?.[name] || modelLabel(name) }}</span>
       <span class="tools" :class.native="transportOf(profile, name) === 'native'"
             :title="transportTitle(transportOf(profile, name))">
@@ -156,6 +165,7 @@
          class="model off" role="option" aria-disabled="true"
          :title="u.reason">
       <span class="check warn">⚠</span>
+      <span class="mark"><BrandIcon :src="brandSrc(modelBrand(u.model))" size="12px" /></span>
       <span class="name">{{ u.label }}</span>
     </div>
     <!-- A provider whose list is empty is still a destination: its own
@@ -240,6 +250,9 @@
   .model.off .name { font-style: italic; }
   .model .warn { color: var(--luu-warn); }
   .check { width: 1em; flex: none; color: var(--luu-accent); }
+  /* One width whether or not there is a mark, so the names line up. */
+  .mark { width: 14px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+  .model .mark { align-self: center; }
   .model .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* How this model's tools travel, last in the row: a plug for the request's
      own `tools` field, braces for text in the prompt. Muted until it is

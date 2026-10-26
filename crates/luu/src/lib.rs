@@ -33,6 +33,7 @@ use crate::session::{
 use anyhow::{Context, Result};
 
 pub mod auth;
+pub mod brands;
 pub mod config;
 pub mod engines;
 pub mod export;

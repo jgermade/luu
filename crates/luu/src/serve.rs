@@ -382,6 +382,10 @@ struct App {
     /// The editors' icon themes as last found, looked for again behind
     /// whoever asks — see [`crate::icons::Detected`].
     detected: Arc<crate::icons::Detected>,
+    /// The pack of brand marks `[ui] brand-icons` names, read the first time
+    /// the page asks and swapped whole when Settings writes another — see
+    /// [`put_brands`]. `None` until then.
+    brands: std::sync::RwLock<Option<Arc<Brands>>>,
     /// The model servers this server started, and the downloads of luu's own
     /// copies. Children of this process — see [`Serving::run`] for how they
     /// stop with it, and `crate::engines` for the rest.
@@ -779,7 +783,65 @@ pub struct StdioOptions {
     pub store: Option<PathBuf>,
 }
 
+/// The brand marks as this server draws them: what `[ui] brand-icons` says,
+/// the pack it loaded, and why it did not where it did not.
+#[derive(Default)]
+struct Brands {
+    named: Option<std::path::PathBuf>,
+    pack: crate::brands::Pack,
+    error: Option<String>,
+}
+
+impl Brands {
+    fn from_file() -> Self {
+        let named = crate::provider::Config::load()
+            .ok()
+            .and_then(|(config, _)| config.ui().and_then(|ui| ui.brand_icons.clone()));
+        let (pack, error) = match &named {
+            None => (crate::brands::Pack::default(), None),
+            Some(named) => match crate::brands::load(&crate::provider::expand_home(named)) {
+                Ok(pack) => (pack, None),
+                Err(error) => (crate::brands::Pack::default(), Some(error)),
+            },
+        };
+        Self { named, pack, error }
+    }
+}
+
 impl App {
+    /// The brand marks as they stand, read from the file the first time.
+    /// Blocking: it may read `config.toml` and a folder.
+    fn brands(&self) -> Arc<Brands> {
+        if let Some(brands) = self
+            .brands
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
+            return brands;
+        }
+        let mut slot = self
+            .brands
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.get_or_insert_with(|| Arc::new(Brands::from_file()))
+            .clone()
+    }
+
+    /// Puts a new pack in place, one revision on from the one it replaces.
+    fn swap_brands(&self, named: Option<std::path::PathBuf>, mut pack: crate::brands::Pack) {
+        let mut slot = self
+            .brands
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pack.revision = slot.as_ref().map_or(0, |b| b.pack.revision) + 1;
+        *slot = Some(Arc::new(Brands {
+            named,
+            pack,
+            error: None,
+        }));
+    }
+
     /// The icon theme as it stands. A clone of the `Arc`, so no lock is held
     /// past this line.
     fn icons(&self) -> Arc<crate::icons::Theme> {
@@ -1031,6 +1093,7 @@ impl App {
             postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
+            brands: std::sync::RwLock::new(None),
             engines: Arc::default(),
             tasks: Arc::default(),
             inflight: Arc::default(),
@@ -1504,6 +1567,17 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
                 crate::icons::IMPORT_MAX_BYTES + 1024 * 1024,
             )),
         )
+        // The brand marks the pickers draw: the pack this machine names, the
+        // ones it has, and one mark by its slug — never a path. See
+        // `crate::brands`.
+        .route("/api/brands", get(get_brands).put(put_brands))
+        .route(
+            "/api/brands/import",
+            post(import_brands).layer(axum::extract::DefaultBodyLimit::max(
+                crate::icons::IMPORT_MAX_BYTES + 1024 * 1024,
+            )),
+        )
+        .route("/api/brands/icon/{slug}", get(get_brand_icon))
         .route("/api/postures", get(get_postures).put(put_postures))
         .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
@@ -4615,31 +4689,10 @@ async fn import_icon_theme(
         )
             .into_response();
     };
-    let mut files = Vec::new();
-    let mut total = 0usize;
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(field)) => field,
-            Ok(None) => break,
-            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        };
-        let Some(name) = field.file_name().map(str::to_string) else {
-            continue;
-        };
-        let bytes = match field.bytes().await {
-            Ok(bytes) => bytes,
-            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        };
-        total += bytes.len();
-        if total > crate::icons::IMPORT_MAX_BYTES || files.len() >= crate::icons::IMPORT_MAX_FILES {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "the folder is too big to be an icon theme",
-            )
-                .into_response();
-        }
-        files.push((name, bytes.to_vec()));
-    }
+    let files = match picked_files(&mut multipart, "an icon theme").await {
+        Ok(files) => files,
+        Err(response) => return *response,
+    };
     let imported =
         match tokio::task::spawn_blocking(move || crate::icons::import(&folder, files)).await {
             Ok(Ok(imported)) => imported,
@@ -4648,22 +4701,268 @@ async fn import_icon_theme(
                 return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
             }
         };
-    // Written as `~/…` when it can be, so the file reads the same on another
-    // machine with the same layout.
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let named = match home
-        .as_deref()
-        .and_then(|home| imported.strip_prefix(home).ok())
-    {
-        Some(rest) => std::path::Path::new("~").join(rest),
-        None => imported,
-    };
+    let named = tilde(imported);
     let applied =
         blocking(move || apply_icon_theme(&state, Some(named)).map(|()| icon_theme_view(&state)))
             .await;
     match applied {
         Ok(view) => Json(view).into_response(),
         Err(response) => *response,
+    }
+}
+
+/// A picked folder, as the page sends it: every file part, by its relative
+/// path, within the importer's limits. `what` names it in the refusal.
+async fn picked_files(
+    multipart: &mut axum::extract::Multipart,
+    what: &str,
+) -> Result<Vec<(String, Vec<u8>)>, Box<Response>> {
+    let mut files = Vec::new();
+    let mut total = 0usize;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                return Err(Box::new(
+                    (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+                ));
+            }
+        };
+        let Some(name) = field.file_name().map(str::to_string) else {
+            continue;
+        };
+        let bytes = match field.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(Box::new(
+                    (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+                ));
+            }
+        };
+        total += bytes.len();
+        if total > crate::icons::IMPORT_MAX_BYTES || files.len() >= crate::icons::IMPORT_MAX_FILES {
+            return Err(Box::new(
+                (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!("the folder is too big to be {what}"),
+                )
+                    .into_response(),
+            ));
+        }
+        files.push((name, bytes.to_vec()));
+    }
+    Ok(files)
+}
+
+/// Written as `~/…` when it can be, so the file reads the same on another
+/// machine with the same layout.
+fn tilde(path: std::path::PathBuf) -> std::path::PathBuf {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(rest) => std::path::Path::new("~").join(rest),
+        None => path,
+    }
+}
+
+// ---- brand marks ----------------------------------------------------------
+
+/// `<state dir>/brand-icons`, beside `config.toml`: where a pack is imported.
+fn brands_folder() -> Option<std::path::PathBuf> {
+    Some(
+        crate::provider::Config::path_for_writing()?
+            .parent()?
+            .join("brand-icons"),
+    )
+}
+
+/// `[ui] brand-icons` as Settings shows it, and what the pickers need to
+/// draw a mark: which slugs the pack has, under which revision.
+#[derive(serde::Serialize)]
+struct BrandsView {
+    /// What the file says, as written.
+    named: Option<String>,
+    /// The same, as the canonical path a found pack's `path` is, so the page
+    /// can tell which one is chosen.
+    chosen: Option<String>,
+    /// The pack's name, when it loaded.
+    loaded: Option<String>,
+    /// Why it did not.
+    error: Option<String>,
+    revision: u64,
+    slugs: Vec<String>,
+    /// Every pack on this machine: imported into luu's folder, or installed
+    /// with npm beside the page's other optional packages.
+    found: Vec<crate::brands::Found>,
+    folder: Option<String>,
+    editable: bool,
+    refused: Option<String>,
+}
+
+fn brands_view(state: &AppRouterState) -> BrandsView {
+    let brands = state.app.brands();
+    let folder = brands_folder();
+    BrandsView {
+        named: brands.named.as_ref().map(|p| p.display().to_string()),
+        chosen: brands.named.as_ref().map(|p| {
+            let p = crate::provider::expand_home(p);
+            std::fs::canonicalize(&p).unwrap_or(p).display().to_string()
+        }),
+        loaded: (!brands.pack.slugs().is_empty()).then(|| brands.pack.name.clone()),
+        error: brands.error.clone(),
+        revision: brands.pack.revision,
+        slugs: brands.pack.slugs(),
+        found: crate::brands::discover(folder.as_deref(), &node_modules()),
+        folder: folder.map(|f| f.display().to_string()),
+        editable: state.providers_editable,
+        refused: (!state.providers_editable).then(|| {
+            "this server is bound off loopback, and a pack of marks is a path on this machine. \
+             Edit config.toml on the machine itself."
+                .to_string()
+        }),
+    }
+}
+
+async fn get_brands(State(state): State<AppRouterState>) -> Response {
+    Json(blocking(move || brands_view(&state)).await).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct BrandsAsk {
+    #[serde(rename = "brand-icons")]
+    brand_icons: Option<String>,
+}
+
+async fn put_brands(State(state): State<AppRouterState>, Json(asked): Json<BrandsAsk>) -> Response {
+    let named = asked
+        .brand_icons
+        .map(|named| named.trim().to_string())
+        .filter(|named| !named.is_empty())
+        .map(std::path::PathBuf::from);
+    let applied = blocking(move || apply_brands(&state, named).map(|()| brands_view(&state))).await;
+    match applied {
+        Ok(view) => Json(view).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// The write both routes end in: load, write `[ui]`, swap.
+fn apply_brands(
+    state: &AppRouterState,
+    named: Option<std::path::PathBuf>,
+) -> Result<(), Box<Response>> {
+    let refuse = |status: StatusCode, text: String| Box::new((status, text).into_response());
+    if !state.providers_editable {
+        return Err(refuse(
+            StatusCode::FORBIDDEN,
+            "the brand marks are read-only on a server bound off loopback".into(),
+        ));
+    }
+    let Some(path) = crate::provider::Config::path_for_writing() else {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml"
+                .into(),
+        ));
+    };
+    let pack = match &named {
+        None => crate::brands::Pack::default(),
+        Some(named) => crate::brands::load(&crate::provider::expand_home(named))
+            .map_err(|error| refuse(StatusCode::UNPROCESSABLE_ENTITY, error))?,
+    };
+    // Built from the file on disk, and the rest of `[ui]` as it was: this
+    // route owns one key of it.
+    let current = crate::provider::Config::load()
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let mut ui = current.ui().cloned().unwrap_or_default();
+    ui.brand_icons = named.clone();
+    current
+        .with_ui(ui)
+        .write(&path)
+        .map_err(|error| refuse(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    state.app.swap_brands(named, pack);
+    Ok(())
+}
+
+/// A picked folder or zip of marks, written under `<state dir>/brand-icons`
+/// if it loads as a pack, and chosen.
+async fn import_brands(
+    State(state): State<AppRouterState>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "the brand marks are read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(folder) = blocking(brands_folder).await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to import into",
+        )
+            .into_response();
+    };
+    let files = match picked_files(&mut multipart, "a pack of marks").await {
+        Ok(files) => files,
+        Err(response) => return *response,
+    };
+    let imported =
+        match tokio::task::spawn_blocking(move || crate::brands::import(&folder, files)).await {
+            Ok(Ok(imported)) => imported,
+            Ok(Err(error)) => return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response(),
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        };
+    let named = tilde(imported);
+    let applied =
+        blocking(move || apply_brands(&state, Some(named)).map(|()| brands_view(&state))).await;
+    match applied {
+        Ok(view) => Json(view).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// One mark, by its slug in the pack's table, as SVG and nothing else.
+async fn get_brand_icon(State(state): State<AppRouterState>, Path(slug): Path<String>) -> Response {
+    let slug = slug.strip_suffix(".svg").unwrap_or(&slug).to_string();
+    let brands = blocking({
+        let state = state.clone();
+        move || state.app.brands()
+    })
+    .await;
+    let Some(path) = crate::brands::is_slug(&slug)
+        .then(|| brands.pack.path(&slug))
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, "no such mark").into_response();
+    };
+    match tokio::fs::read(path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "image/svg+xml"),
+                // The page asks with the pack's `revision` in the URL.
+                (header::CACHE_CONTROL, "public, max-age=3600"),
+                // Drawn as a mask or an image, never as a document.
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; style-src 'unsafe-inline'",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not read the mark: {error}"),
+        )
+            .into_response(),
     }
 }
 
@@ -8705,6 +9004,7 @@ mod tests {
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),
+            brands: std::sync::RwLock::new(None),
             engines: Arc::default(),
             tasks: Arc::default(),
             inflight: Arc::default(),

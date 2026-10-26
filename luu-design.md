@@ -1364,7 +1364,18 @@ shapes: a folder, open or shut, and a sheet per kind of file, coloured by token.
 `config.toml` only if it loads, and is swapped in live. The manifest's `revision`, in every icon
 URL, keeps the browser's cache honest. A versioned extension path that an update removed resolves
 to the newest version beside it. See
-[`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
+[`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md).
+**Brand marks are the one exception to *nothing is vendored***: a mark is its owner's and there is
+one per brand, so there is no taste to tie the page to. Thirteen come with the page
+(`web/brands/`, from Simple Icons, CC0, named by lobehub's slugs), drawn as a mask over
+`currentColor` beside each provider (by backend and URL host) and model (by family, after the
+catalog's prefix) in the two columns the pickers share; nothing known is no mark. `[ui]
+brand-icons` names a pack instead — a folder of `<slug>.svg`, or one with `icons/` in it — offered
+by Settings → Appearance → Brand marks from `<state dir>/brand-icons/` (imported like a theme) and
+from `web/node_modules/@lobehub/icons-static-svg` (installed with npm, like Monaco), read into a
+slug → file table that `/api/brands/icon/{slug}` serves as SVG and nothing else; a slug the pack
+lacks is the page's own. See
+[`RECORD/2026-10-26.brand-icons.completed.md`](RECORD/2026-10-26.brand-icons.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
 grammar crates — `Makefile`, `Containerfile` and `Dockerfile` found by name, having no extension
 to be found by — sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does

@@ -549,6 +549,11 @@ pub struct Ui {
     /// page's own two glyphs — see `crate::icons`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_theme: Option<PathBuf>,
+    /// A pack of brand marks — a folder of `<slug>.svg`, or one with an
+    /// `icons/` folder of them — drawn instead of the page's own few. See
+    /// `crate::brands`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brand_icons: Option<PathBuf>,
 }
 
 /// `[sessions]`. One setting so far.

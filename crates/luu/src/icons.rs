@@ -641,7 +641,27 @@ pub const IMPORT_MAX_BYTES: usize = 32 * 1024 * 1024;
 pub const IMPORT_MAX_FILES: usize = 5_000;
 
 /// Writes a picked folder under `root` and returns where it landed, **only if
-/// it loads as a theme**.
+/// it loads as a theme**. See [`import_folder`] for the rest.
+pub fn import(root: &Path, files: Vec<(String, Vec<u8>)>) -> Result<PathBuf, String> {
+    import_folder(root, files, |staging| {
+        // A theme that loads and draws nothing is a theme JSON without its
+        // icons — it names them by path, and a JSON alone does not carry them.
+        // Refused rather than imported to show the tree's own shapes under
+        // another name.
+        let theme = load(staging)?;
+        match theme.paths.is_empty() {
+            true => Err(
+                "it names icons that were not included: a theme JSON needs its icons \
+                         beside it — add the folder it is in, or a zip of it"
+                    .into(),
+            ),
+            false => Ok(()),
+        }
+    })
+}
+
+/// Writes a picked folder under `root` and returns where it landed, **only if
+/// `check` passes on it** — what makes it a theme, or a pack of marks.
 ///
 /// `files` are `(relative path, bytes)` as a browser's directory picker sends
 /// them, every path starting with the picked folder's own name. That name,
@@ -651,7 +671,11 @@ pub const IMPORT_MAX_FILES: usize = 5_000;
 /// normal components, so no `..`, no root and no drive. The folder is written
 /// to a hidden sibling first and renamed into place once it loads, so a bad
 /// import never replaces a good one of the same name.
-pub fn import(root: &Path, files: Vec<(String, Vec<u8>)>) -> Result<PathBuf, String> {
+pub fn import_folder(
+    root: &Path,
+    files: Vec<(String, Vec<u8>)>,
+    check: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<PathBuf, String> {
     if files.is_empty() {
         return Err("the folder was empty".into());
     }
@@ -719,19 +743,7 @@ pub fn import(root: &Path, files: Vec<(String, Vec<u8>)>) -> Result<PathBuf, Str
             std::fs::write(&target, bytes)
                 .map_err(|error| format!("{}: {error}", target.display()))?;
         }
-        // A theme that loads and draws nothing is a theme JSON without its
-        // icons — it names them by path, and a JSON alone does not carry them.
-        // Refused rather than imported to show the tree's own shapes under
-        // another name.
-        let theme = load(&staging)?;
-        match theme.paths.is_empty() {
-            true => Err(
-                "it names icons that were not included: a theme JSON needs its icons \
-                         beside it — add the folder it is in, or a zip of it"
-                    .into(),
-            ),
-            false => Ok(()),
-        }
+        check(&staging)
     })();
     if let Err(error) = written {
         let _ = std::fs::remove_dir_all(&staging);

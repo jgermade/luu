@@ -1408,7 +1408,7 @@ test("the editors' icon packs are looked for in the background and kept", async 
   })
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Appearance")')
-  const list = page.locator(".theme-list")
+  const list = page.locator('.theme-list[aria-label="Icons pack"]')
   await expect(list).toContainText("looking in the editors' extensions…")
   // Nothing waits on the look.
   await expect(list.getByRole("radio", { name: /The tree's own/ })).toBeEnabled()
@@ -1572,6 +1572,69 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   await expect(own.getByRole("button", { name: "Install" })).toBeVisible()
   expect(existsSync(copy)).toBe(false)
   expect(readFileSync(join(home, "config.toml"), "utf8")).toContain("[engine.own]")
+
+  expect(errors).toEqual([])
+})
+
+/**
+ * A provider and its models wear their brand's mark: the page's own few, and
+ * a pack's instead once Appearance chooses one, by slug and never by path.
+ * See `RECORD/2026-10-26.brand-icons.completed.md`.
+ */
+test("providers and models wear their brand's mark, from the page's own or a pack", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  // On a port nothing answers, so the models are the profile's own.
+  const file = join(home, "config.toml")
+  writeFileSync(file, `${readFileSync(file, "utf8").trimEnd()}\n\n[provider.qwen-box]\nbackend = "ollama"\n` +
+    `url = "http://127.0.0.1:9"\nmodel = "qwen2.5-coder:7b"\n`)
+  const mine = join(home, "brand-icons", "mine")
+  mkdirSync(mine, { recursive: true })
+  writeFileSync(join(mine, "qwen.svg"), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>')
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
+
+  const pane = page.locator(".modal .models-pane")
+  const row = pane.locator(".prov", { has: page.locator('strong:text-is("qwen-box")') })
+  await expect(row.locator(".brand")).toHaveAttribute("style", /brands\/ollama\.svg/)
+  await row.click()
+  const model = pane.locator(".model", { hasText: "qwen2.5-coder:7b" })
+  await expect(model.locator(".brand")).toHaveAttribute("style", /brands\/qwen\.svg/)
+
+  // A pack instead: found where luu imports them, chosen, and written.
+  await page.click('.modal .rail button:has-text("Appearance")')
+  const marks = page.locator(".brands-group")
+  await marks.getByRole("radio", { name: /mine/ }).click()
+  await expect(marks.getByRole("radio", { name: /mine/ })).toHaveAttribute("aria-checked", "true")
+  expect(readFileSync(file, "utf8")).toContain("brand-icons = ")
+  await expect(marks.locator(".brand-preview li", { hasText: "Qwen" }).locator(".brand"))
+    .toHaveAttribute("style", /api\/brands\/icon\/qwen\.svg/)
+  // What the pack lacks is the page's own.
+  await expect(marks.locator(".brand-preview li", { hasText: "Ollama" }).locator(".brand"))
+    .toHaveAttribute("style", /brands\/ollama\.svg/)
+  const served = await fetch(`${BASE}/api/brands/icon/qwen.svg`)
+  expect(served.status).toBe(200)
+  expect(served.headers.get("content-type")).toBe("image/svg+xml")
+  for (const asked of ["..%2Fconfig.toml", "ollama.svg", "QWEN.svg"]) {
+    expect((await fetch(`${BASE}/api/brands/icon/${asked}`)).status, asked).toBe(404)
+  }
+
+  await page.click('.modal .rail button:has-text("Models")')
+  await pane.locator(".prov", { has: page.locator('strong:text-is("qwen-box")') }).click()
+  await expect(model.locator(".brand")).toHaveAttribute("style", /api\/brands\/icon\/qwen\.svg/)
+
+  // And back to the page's own, which is the key gone.
+  await page.click('.modal .rail button:has-text("Appearance")')
+  await marks.getByRole("radio", { name: /The page's own/ }).click()
+  await expect(marks.getByRole("radio", { name: /The page's own/ })).toHaveAttribute("aria-checked", "true")
+  expect(readFileSync(file, "utf8")).not.toContain("brand-icons")
 
   expect(errors).toEqual([])
 })
