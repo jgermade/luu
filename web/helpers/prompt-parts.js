@@ -20,7 +20,7 @@
 /// already in rather than being guessed into another: a colour is a claim.
 /// See `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
 
-/// `blocks` is `[{ role, text }]`, as `turn-inspect.html` cuts the prompt at
+/// `blocks` is `[{ role, text }]`, as `context-view.html` cuts the prompt at
 /// its role markers. `asked` is what the person typed; `notes` the authority
 /// notes' words this session was sent under. Returns the same blocks, each
 /// with `parts: [{ bucket, text }]`.

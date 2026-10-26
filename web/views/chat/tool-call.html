@@ -1,4 +1,4 @@
-<script :setup="{ part = null, live = false }">
+<script :setup="{ part = null, live = false, grouped = false }">
   // One tool call in the chat, where the model wrote it — in place of the
   // ```tool block the text carries. `part` is a segment out of
   // `segments.js`: the call the block became, or only what the block says.
@@ -8,10 +8,14 @@
   // not forty lines of it. The raw block stays in the inspector, which is the
   // place for what the model sent. See
   // `RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`.
+  //
+  // `grouped` — drawn as one row of a run of calls (`tool-group.html`),
+  // which is the box, rather than as a box of its own.
 
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const Checkbox = await import("@web/theme/default/components/checkbox.html")
   const { answerCall } = await import("@web/lib/store.js")
+  const { readLines } = await import("@web/helpers/calls.js")
 
   let open = false
 
@@ -25,6 +29,8 @@
     : typeof args.path === "string"
       ? args.path
       : Object.values(args).find(v => typeof v === "string") || ""
+  // And, for a read that may not have been the whole file, which lines.
+  $: lines = readLines(part)
   // A call the floor refused and a person is being asked about. The question
   // is drawn open and not behind the caret: the turn is waiting on it.
   $: held = call?.held || null
@@ -78,10 +84,12 @@
   // under the card without opening it, so a turn reads as what it did and
   // not only as what it asked. Not while it runs or waits, not once the card
   // is open — the body has all of it — and not for a refusal, which the
-  // status already says.
+  // status already says. Not for a read either: what came back is the file,
+  // which the head already names, with its lines — the content is what the
+  // model read, not what the call did.
   const PREVIEW_LINES = 3
   $: preview = (() => {
-    if (open || held || !call?.verdict?.allowed || !call.output?.trim()) return null
+    if (open || held || part?.name === "read_file" || !call?.verdict?.allowed || !call.output?.trim()) return null
     const lines = call.output.replace(/\s+$/, "").split("\n")
     return { text: lines.slice(0, PREVIEW_LINES).join("\n"), more: Math.max(0, lines.length - PREVIEW_LINES) }
   })()
@@ -89,13 +97,14 @@
   $: pretty = JSON.stringify(args, null, 2)
 </script>
 
-<div class="call" :class.open="open">
+<div class="call" :class.open="open" :class.grouped="grouped">
   <button type="button" class="head" :disabled="!detailed" @click="open = !open"
           :title="call?.verdict?.rule || ''">
     <svg :if="detailed" class="ic caret" :class.open="open"><use href="#i-caret"/></svg>
     <span class="dot" :class="status.kind"></span>
     <b class="name">{{ part?.name || "tool" }}</b>
     <span class="subject">{{ subject }}</span>
+    <span :if="lines" class="lines">{{ lines }}</span>
     <span class="status" :class="status.kind">{{ status.word }}</span>
     <span :if="took" class="took">{{ took }}</span>
   </button>
@@ -169,6 +178,8 @@
     text-align: left;
     cursor: pointer;
   }
+  /* One row of a run: the run's box is the border. */
+  .call.grouped { margin: 0; border: 0; border-radius: 0; background: none; }
   .head:disabled { cursor: default; }
   .caret { width: 12px; height: 12px; flex: none; transition: transform .15s; }
   .caret.open { transform: rotate(90deg); }
@@ -179,7 +190,7 @@
   .dot.ask { background: var(--luu-warn, #b7791f); animation: pulse 1s ease-in-out infinite; }
   .name { color: var(--luu-accent, #2f5bbd); font-weight: 600; flex: none; }
   .subject {
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -187,7 +198,9 @@
     color: var(--luu-fg, #1a1d23);
     font-family: var(--mono, ui-monospace, monospace);
   }
-  .status { flex: none; color: var(--luu-fg-muted, #5b6472); }
+  /* Right after the path, so a range reads as part of what was asked. */
+  .lines { flex: none; color: var(--luu-fg-muted, #5b6472); }
+  .status { flex: none; margin-left: auto; color: var(--luu-fg-muted, #5b6472); }
   .status.ok { color: var(--luu-bucket-history, #4c8a2e); }
   .status.ask { color: var(--luu-warn, #b7791f); font-weight: 600; }
   .question { padding: .1rem .6rem .55rem; border-top: 1px solid var(--luu-border, #c8c8c8); }

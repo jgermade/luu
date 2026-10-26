@@ -1,44 +1,90 @@
-<script :setup>
-  // The context as it stands: what the newest turn sent, opened from the
-  // indicator beside the composer. The same view as a turn's own Context tab
-  // (`context-view.html`), about the one turn somebody about to type is
-  // adding to — so "how full is it, and with what" has an answer before the
-  // next prompt rather than after it. Nothing is fetched: it is the budget
-  // and the prompt the trace channel last sent. See
-  // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
+<script :setup="{ turn = null }">
+  // A turn's context: what it sent, what it was made of, and what came back.
+  // One modal, opened two ways — from the indicator beside the composer, with
+  // no `turn`, about the newest turn as it stands, so "how full is it, and
+  // with what" has an answer before the next prompt rather than after it; and
+  // from a turn's meta line in the chat, about that turn. Both used to be
+  // different modals asking the same question, and one of them answered it
+  // with less. Nothing is fetched: it is the budget and the prompt the trace
+  // channel sent, and the turns `keepTurn` or a reload put in `state.history`.
+  // See `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
   const { state } = await import("@web/lib/store.js")
-  const { closeContext } = await import("@web/lib/ui.js")
+  const { closeContext, closeInspect } = await import("@web/lib/ui.js")
+  const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const Modal = await import("@web/components/modal.html")
   const ContextView = await import("./context-view.html")
 
-  // `state.budget` is read where it is used, never copied into this
-  // component's store: `$: budget = state.budget` put one store's object in
-  // another's, and jq79 woke the effect that read it a hundred times in a row
-  // — the loop the smoke suite caught intermittently. See
-  // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
-  $: sent = (state.budget?.buckets || []).filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
-  $: reserve = (state.budget?.buckets || []).find(b => b.name === "reserve")?.tokens || 0
-  // The turn's own window, or the session's where that turn had none.
-  $: limit = state.budget?.limit || state.settings?.window || null
-  $: percent = limit ? Math.round((sent / limit) * 100) : null
-  $: turn = state.history.length ? state.history[state.history.length - 1].turn : null
-  $: asked = [...state.messages].reverse().find(m => m.role === "user")?.text || ""
-  // The reply to that prompt, streaming or done: the one thing the context as
-  // it stands has that the prompt it was measured from cannot.
-  const replyTo = (messages, turn) => {
-    const last = messages[messages.length - 1]
-    return last?.role === "assistant" && (turn === null || last.turn === turn) ? last.text || "" : ""
+  // What the modal is about, read out of the store wherever it is used and
+  // copied nowhere: a fresh object every call, so nothing that belongs to
+  // `state` is ever assigned into this component's store. `$: budget =
+  // state.budget` did that once, and jq79 woke the effect that read it a
+  // hundred times in a row — the loop the smoke suite caught intermittently.
+  //
+  // Without a `turn` it is the live fields, not the newest entry of
+  // `state.history`: a turn that is still running has sent its prompt and is
+  // not kept yet.
+  const about = () => {
+    if (turn != null) {
+      const kept = state.history.find(entry => entry.turn === turn) || {}
+      const message = state.messages.find(m => m.role === "assistant" && m.turn === turn) || null
+      const usage = kept.usage || message?.usage || null
+      return {
+        turn,
+        budget: kept.budget || null,
+        backendPrompt: usage?.prompt_tokens ?? null,
+        prompt: kept.prompt || "",
+        toolSpecs: kept.toolSpecs || "",
+        extraCalls: kept.extraCalls || [],
+        tools: kept.tools || [],
+        asked: state.messages.find(m => m.role === "user" && m.turn === turn)?.text || "",
+        message,
+        reason: kept.reason || message?.reason || null,
+        usage,
+      }
+    }
+    const newest = state.history.length ? state.history[state.history.length - 1].turn : null
+    // The reply to that prompt, streaming or done: the one thing the context
+    // as it stands has that the prompt it was measured from cannot.
+    const last = state.messages[state.messages.length - 1]
+    const message = last?.role === "assistant" && (newest === null || last.turn === newest) ? last : null
+    return {
+      turn: newest,
+      budget: state.budget,
+      backendPrompt: state.budget?.backendPrompt ?? null,
+      prompt: state.prompt || "",
+      toolSpecs: state.toolSpecs || "",
+      extraCalls: state.extraCalls || [],
+      tools: state.tools || [],
+      asked: [...state.messages].reverse().find(m => m.role === "user")?.text || "",
+      message,
+      reason: message?.reason || null,
+      usage: message?.usage || null,
+    }
   }
-  $: answer = replyTo(state.messages, turn)
+
+  $: shown = about().turn
+  $: sent = (about().budget?.buckets || []).filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
+  $: reserve = (about().budget?.buckets || []).find(b => b.name === "reserve")?.tokens || 0
+  // The turn's own window, or the session's where that turn had none.
+  $: limit = about().budget?.limit || state.settings?.window || null
+  $: percent = limit ? Math.round((sent / limit) * 100) : null
+  $: measured = !!about().budget
+  $: backendPrompt = about().backendPrompt
+  $: hasPrompt = !!about().prompt
+  // How the turn went, once it has ended: how it ended, what it wrote back,
+  // and how fast — the meta line's facts, at the width they were written for.
+  $: reason = about().reason
+  $: completion = about().usage?.completion_tokens ?? null
+  $: t = timing(about().message, about().tools)
   $: notes = [state.settings?.authority?.draft?.text, state.settings?.authority?.plan?.text].filter(Boolean)
   // How this turn's tools travelled, read from what it actually sent rather
   // than from what the profile says: `toolSpecs` is the request's own `tools`
   // field (native only), and the fenced transport puts the definitions in the
   // prompt's `# Tools` block. Neither is present when the session has no tools
   // or the trace was off, and then there is nothing true to say.
-  $: transport = state.toolSpecs
+  $: transport = about().toolSpecs
     ? "native"
-    : (state.prompt || "").includes("# Tools") ? "fenced" : null
+    : about().prompt.includes("# Tools") ? "fenced" : null
 
   // The whole context as it was sent, for pasting into a conversation: the
   // prompt's exact bytes, and under the native transport the request's own
@@ -46,8 +92,7 @@
   // the model saw. The answer is not context: it was never sent.
   let copied = false
   const contextText = () => {
-    const prompt = state.prompt || ""
-    const specs = state.toolSpecs || ""
+    const { prompt, toolSpecs: specs } = about()
     return specs ? `${prompt}\n\n# the request's tools field, sent beside this text\n${specs}` : prompt
   }
   const copyContext = async () => {
@@ -59,29 +104,45 @@
     copied = true
     setTimeout(() => { copied = false }, 1500)
   }
+  const close = () => turn != null ? closeInspect() : closeContext()
 </script>
 
-<Modal title="Context" width="64rem" @close="closeContext()">
+<Modal :title="turn != null ? 'Turn ' + turn : 'Context'" width="64rem" @close="close()">
   <template :slot.head>
-    <span :if="turn !== null" class="dim">as of turn {{ turn }}</span>
+    <span :if="turn == null && shown !== null" class="dim">as of turn {{ shown }}</span>
+    <span :if="turn != null && state.model" class="dim">{{ state.model }}</span>
   </template>
 
-  <div :if="state.budget" class="facts">
-    <div><span class="k">context</span><b :class.warn="percent !== null && percent >= 80">{{ sent }} / {{ limit || "—" }}</b></div>
+  <div :if="measured || reason" class="facts">
+    <div :if="measured" :title="percent !== null
+           ? 'Tokens sent this turn, of the window'
+           : 'Tokens sent this turn, of a window luu does not know: set the profile\'s context-limit'">
+      <span class="k">context</span><b :class.warn="percent !== null && percent >= 80">{{ sent }} / {{ limit || "—" }}</b>
+    </div>
     <div :if="state.settings?.window_from === 'server'"
          title="Nothing declared a window, so luu asked the server which it serves">
       <span class="k">window from</span><b>the server</b>
     </div>
     <div :if="reserve"><span class="k">kept for the answer</span><b>{{ reserve }}</b></div>
-    <div :if="state.budget.backendPrompt"
-         title="What the server counted. The difference from ours is the chat template, and under native tool calls the tools it rendered.">
-      <span class="k">the server counted</span><b>{{ state.budget.backendPrompt }}</b>
+    <div :if="backendPrompt"
+         title="What the server counted, over every call the turn made. The difference from ours is the chat template, and under native tool calls the tools it rendered.">
+      <span class="k">the server counted</span><b>{{ backendPrompt }}</b>
     </div>
     <div :if="transport"
          title="Read from this turn, not from the profile: native sent the tools in the request's own field, fenced put them in the prompt as text.">
       <span class="k">tools</span><b>{{ transport }}</b>
     </div>
-    <button type="button" class="copy" :disabled="!state.prompt"
+    <div :if="reason"><span class="k">ended</span><b :class.warn="reason !== 'stop'">{{ reason }}</b></div>
+    <div :if="reason && completion !== null"><span class="k">completion</span><b>{{ completion }}</b></div>
+    <div :if="reason && speedLabel(t)"
+         title="Completion tokens over first-token-to-end. A turn that ran tools spent part of that running them, so it is a floor.">
+      <span class="k">speed</span><b>{{ speedLabel(t) }}</b>
+    </div>
+    <div :if="reason && t.first != null" title="From the turn starting to the first token — a model loading included">
+      <span class="k">first token</span><b>{{ seconds(t.first) }}</b>
+    </div>
+    <div :if="reason && t.total != null"><span class="k">total</span><b>{{ seconds(t.total) }}</b></div>
+    <button type="button" class="copy" :disabled="!hasPrompt"
             :title="copied ? 'Copied' : 'Copy the whole context, as it was sent'"
             :aria-label="copied ? 'Copied' : 'Copy the whole context, as it was sent'"
             @click="copyContext()">
@@ -94,14 +155,14 @@
     <!-- The content pads itself, and so does the foot beside it: the body
          holds both and pads neither. -->
     <div class="modal-main">
-      <p :if="!state.budget" class="dim">
+      <p :if="!measured && turn == null" class="dim">
         Nothing has been sent in this session yet. The context is measured when a
         turn is built, so it is here from the first prompt on.
       </p>
-      <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
-                   :budget="state.budget"
-                   :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
-                   :window="state.settings?.window || null" :answer="answer" :tools="state.tools || []" />
+      <ContextView :if="measured || turn != null" :prompt="about().prompt" :toolSpecs="about().toolSpecs"
+                   :budget="about().budget"
+                   :asked="about().asked" :extraCalls="about().extraCalls" :notes="notes"
+                   :window="state.settings?.window || null" :answer="about().message?.text || ''" :tools="about().tools" />
     </div>
   </section>
 </Modal>

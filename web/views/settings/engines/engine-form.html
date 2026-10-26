@@ -9,6 +9,7 @@
   const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("@web/lib/engines.js")
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
+  const PathText = await import("@web/components/path-text.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Select = await import("@web/theme/default/components/select.html")
   const Checkbox = await import("@web/theme/default/components/checkbox.html")
@@ -49,6 +50,7 @@
     catalog = listed.view.models
     roots = listed.view.roots
   }
+  $: rootPaths = Object.values(roots).filter(Boolean)
   let withProvider = !editing
   let saving = false
   let error = ""
@@ -223,7 +225,7 @@
           <span :each="m in unloadable" :key="m.reference" class="blocked"
                 :title="m.cannot[kind]">{{ m.label }}</span>
           <span class="dim">— {{ unloadable[0].cannot[kind] }}{{ unloadable.length > 1 ? " (hover each for its own reason)" : "" }}</span>
-          <span :if="!catalog.length">None found in {{ Object.values(roots).filter(Boolean).join(", ") }}.</span>
+          <span :if="!catalog.length">None found in <span :each="root, i in rootPaths" :key="root"><PathText :path="root" :home="state.settings?.home" />{{ i < rootPaths.length - 1 ? ", " : "" }}</span>.</span>
         </dd>
 
         <dt>Arguments</dt>

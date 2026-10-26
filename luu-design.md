@@ -1257,7 +1257,7 @@ via `<PathText>` with the full host directory in hover title, and settings forms
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps.
 Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport height (`calc(100dvh - 4.5rem)`),
-and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
+and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (the folder `serve` was started in, and luu's own — the folder chosen under the first is the inspector foot's, which names it and changes it), *Models*
 (what this server resolved, then the providers file the next run reads — with the built-in mock
 as a row of its own, chosen when the file names no default, because a server that fell back to
 it used to show a table with nothing chosen; the providers are a **read-only list**, and each is
@@ -1565,7 +1565,12 @@ The rest follows from that:
   time, using the same forms `parse_call` accepts (a fence, or a bare `{"name": …}` at the start of
   a line). It pairs each block, in order, with the turn's `tool_call`/`tool_result`, and
   `tool-call.html` draws each one as a card: the name, what the call is about, how it went, and
-  the arguments and output behind a click. A block still being written is a placeholder, and a
+  the arguments and output behind a click. A `read_file` that may not have read the whole file
+  names its lines beside the path (`lines 120–159`, from `start_line` and the lines that came
+  back), and shows nothing of the file under its head: what came back is what the model read,
+  not what the call did. Calls in a row with nothing said between them are one box
+  (`tool-group.html`, grouped by `segments.js`'s `runs`), every card in it on show and opened
+  by its own click. A block still being written is a placeholder, and a
   tail that could be the start of one is held back for the frame or two it takes to tell. While a
   live answer ends on a call that has run, a line under it says the model is reading what the
   call returned, until the next token. What the model wrote while reasoning — `<think>…</think>`,
@@ -1584,29 +1589,34 @@ The rest follows from that:
   reads `≥`. No count from the backend means no speed, never zero. The times are the page's clock
   live and `TurnView`'s `at_ms` after a reload. `first_token_at_ms` is folded from the `token`
   lines' own stamps, so every recording has it and no format moved. A click opens
-  `turn-inspect.html`, a `<dialog>` with three tabs: the context, the answer as the model wrote
-  it (fences included), and each tool call. **The context is grouped by what each piece is**
+  `context-modal.html` about that turn — **the modal the context indicator opens** about the
+  newest one, not a second one with fewer facts: the window's use, the answer's reserve, what the
+  server counted, how the tools travelled, and, once the turn has ended, how it ended, what it
+  wrote, its speed and its times; the copy; and the grouped context with the answer last, as
+  the turn went. **The context is grouped by what each piece is**
   (`context-view.html`): system, tools, map, summaries, history, code, prompt, in the legend's
   order and colours, each a card under its bucket's count, with an earlier exchange keeping
   who said it. The boundaries are read back from what the renderer always writes (`# Tools`,
   `# Repository map`, a fold's `[job closed]`, a `// path` fragment, the question at the end),
   in `prompt-parts.js`, because the wire carries counts and not spans. **No block scrolls unless
   asked to**: one too large to read at a glance is clipped with a fade and offers *show all*
-  (inline) or *scroll* (a box of its own). Nothing is fetched: it is the turn `state.history`
+  (inline) or *scroll* — the same box made scrollable, so the lines being read stay where they
+  were — in its head and again at the fade. Nothing is fetched: it is the turn `state.history`
   already holds.
 - **The composer: attach on the left, the context on the right.** The clip that names the open
   file in the prompt sits left of the input. The right end of the options row is the context
   indicator: the newest turn's buckets as a small bar in the legend's colours and the tokens sent
   over the window, `1.5k / 8k`, the count amber from 80% of it and red from 95%. Where the window
-  is unknown it reads `1.5k / —` and says why. The turn modal and the context modal carry the
-  same partial over total. The indicator reads the newest turn whether it happened live or came
-  back from the server, so a reload does not leave it empty. A click opens `context-modal.html`, the same grouped view
-  about that turn, with the window's use, the answer's reserve and what the server counted, and
-  the answer to it last, marked as not sent yet — **as the turn went**, where it used tools:
+  is unknown it reads `1.5k / —` and says why. The modal carries the same partial over total.
+  The indicator reads the newest turn whether it happened live or came back from the server, so
+  a reload does not leave it empty. A click opens `context-modal.html` with no turn: the same
+  modal as a meta line's, about the newest turn as it stands — which may still be running, so it
+  reads the live fields rather than `state.history` — and the answer to it last, marked as not
+  sent yet — **as the turn went**, where it used tools:
   each reply up to its call, what that call gave back as the model got it, and what the next call
   sent, cut where each call's step ended (`ToolCallView.at`, kept by the page and the server's
   fold alike). A card in the chat shows the first lines of its result under it without being
-  opened. See
+  opened, except a read's. See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
 - **The transcript follows its end while it is at its end** (`Scrollable`'s `autoscroll`): any
   scroll up leaves it at once, and only scrolling back to the end picks it up again. The chat's

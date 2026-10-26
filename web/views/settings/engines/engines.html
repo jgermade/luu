@@ -175,7 +175,7 @@
           <dt>Binary</dt>
           <dd>
             <span class="dim">{{ binaryWord(view.engines[name].binary) }}</span>
-            <code :if="view.engines[name].resolved">{{ view.engines[name].resolved }}</code>
+            <code :if="view.engines[name].resolved"><PathText :path="view.engines[name].resolved" :home="state.settings?.home" /></code>
             <span :if="view.engines[name].problem" class="warn">{{ view.engines[name].problem }}</span>
             <button type="button" class="link"
                     :if="view.engines[name].binary === 'managed' && !view.engines[name].resolved"
@@ -226,7 +226,7 @@
       </section>
 
       <p class="dim small" :if="view?.root">
-        luu's own copies go in <code>{{ view.root }}</code>, one directory per
+        luu's own copies go in <code><PathText :path="view.root" :home="state.settings?.home" /></code>, one directory per
         version, checked against the sha256 GitHub publishes before they are
         unpacked.
       </p>

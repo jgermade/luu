@@ -990,7 +990,10 @@ test("an engine is added with its provider, started, and stopped from Settings",
 
   const card = page.locator(".engines-pane section.engine", { hasText: "fake" })
   await expect(card.locator(".state")).toHaveText("stopped")
-  await expect(card).toContainText(fake)
+  // Under the state directory, so written from `luu:`, with the whole path on
+  // hover.
+  await expect(card).toContainText("luu:/bin/llama-server")
+  await expect(card.locator(`.path-text[title="${fake}"]`)).toHaveCount(1)
 
   await card.locator('button:has-text("start")').click()
   await expect(card.locator(".state")).toHaveText(/starting|running/)

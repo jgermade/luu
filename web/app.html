@@ -56,7 +56,7 @@
   const ModelPicker = await import("@web/views/chat/model-picker.html")
   const SessionsDialog = await import("@web/views/chat/sessions-dialog.html")
   const ToolCall = await import("@web/views/chat/tool-call.html")
-  const TurnInspect = await import("@web/views/chat/turn-inspect.html")
+  const ToolGroup = await import("@web/views/chat/tool-group.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
   const PermissionsDialog = await import("@web/views/chat/permissions-dialog.html")
   // What a person answered for the session and has not taken back: under the
@@ -69,7 +69,7 @@
   const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
   const TerminalPanel = await import("@web/views/editor/terminal.html")
   const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
-  const { segments } = await import("@web/helpers/segments.js")
+  const { segments, runs } = await import("@web/helpers/segments.js")
   const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
   const { markdown } = await import("@web/helpers/markdown.js")
@@ -420,7 +420,10 @@
     const rows = list.map(entry => {
       if (entry.kind !== "message" || entry.message.role !== "assistant") return transcriptRows.keep(entry.id, entry)
       const { parts, live, reading, timing } = partsOf(entry.message)
-      const kept = parts.map(part => transcriptRows.keep(`${entry.id}:${part.i}`, part))
+      // And calls in a row as one part, kept under a key of its own: the run
+      // shares its first call's `i`, and that key is the call's.
+      const kept = runs(parts.map(part => transcriptRows.keep(`${entry.id}:${part.i}`, part)))
+        .map(part => part.kind === "tools" ? transcriptRows.keep(`${entry.id}:run${part.i}`, part) : part)
       return transcriptRows.keep(entry.id, { ...entry, parts: kept, live, reading, timing })
     })
     transcriptRows.sweep()
@@ -916,6 +919,7 @@
                   <Scrollable :x="true" background="var(--luu-code-ground)"><pre><code :html="snippetHtml(`${entry.id}:${part.i}`, part, snippet.lit)"></code></pre></Scrollable>
                 </figure>
                 <ToolCall :if="part.kind === 'tool'" :part="part" :live="part.live" />
+                <ToolGroup :if="part.kind === 'tools'" :calls="part.calls" />
                 <!-- What the model wrote while reasoning: folded, because it is
                      not the answer, and behind a click, because it is often
                      the reason for one. -->
@@ -1297,7 +1301,7 @@
 <Project :if="workspace.picker.open && !state.settingsOpen" />
 <SettingsModal :if="state.settingsOpen" />
 <SessionsDialog :if="ui.sessions && !state.settingsOpen" />
-<TurnInspect :if="ui.inspecting != null" />
+<ContextModal :if="ui.inspecting != null" :turn="ui.inspecting" />
 <ContextModal :if="ui.contextOpen" />
 <PermissionsDialog :if="ui.permissions && !state.settingsOpen" />
 <DiffModal :if="ui.diff" />

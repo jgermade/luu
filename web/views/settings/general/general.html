@@ -1,9 +1,10 @@
 <script :setup>
-  // Everything about the workspace this page is looking at: the folder `luu
-  // serve` was started in, and the one chosen under it. How the page looks
+  // Where this page's luu works: the folder `luu serve` was started in, and
+  // luu's own. The folder chosen under the first is the inspector foot's, which
+  // names it and changes it, so it is not said again here. How the page looks
   // moved to Appearance on 2026-10-21. See
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
-  const { workspace, openPicker } = await import("@web/lib/workspace.js")
+  const { workspace } = await import("@web/lib/workspace.js")
   const { state } = await import("@web/lib/store.js")
 </script>
 
@@ -20,7 +21,7 @@
   </div>
   <div class="ds-hero-body">
     <h4 class="ds-hero-title">General</h4>
-    <p class="ds-hero-desc">La carpeta en la que se inició <code>luu serve</code>, y la que miran los paneles.</p>
+    <p class="ds-hero-desc">La carpeta en la que se inició <code>luu serve</code>, y la de luu.</p>
   </div>
 </div>
 <section class="pane-group">
@@ -29,16 +30,6 @@
     <dt>Working dir</dt>
     <dd>
       <span class="path">{{ workspace.base || "—" }}</span>
-    </dd>
-    <dt>Looking at</dt>
-    <dd>
-      <span class="path">{{ workspace.root ? workspace.root : "the whole workspace" }}</span>
-      <button type="button" class="link" @click="openPicker()">change</button>
-    </dd>
-    <dd class="note">
-      The folder <code>luu serve</code> was started in is the ceiling; what is
-      chosen is a subdirectory of it. Nothing here widens what the panels can
-      reach — the sandbox already decided that.
     </dd>
     <!-- luu's own directory, the one every path of luu's own is written
          under as `:luu` — so this is where the name is given. -->

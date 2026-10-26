@@ -1,0 +1,25 @@
+<script :setup="{ calls = [] }">
+  // Calls the model made one after another, with nothing said between them,
+  // as one box: the cards one under another, each still its own line and
+  // still opened by its own click. Six reads in a row are one thing the
+  // model did — looking around — and six boxes said it as six. `calls` are
+  // `tool` parts out of `segments.js`, grouped by `runs`.
+  const ToolCall = await import("./tool-call.html")
+</script>
+
+<div class="calls">
+  <div :each="part in calls" :key="part.i" class="row">
+    <ToolCall :part="part" :live="part.live" :grouped="true" />
+  </div>
+</div>
+
+<style scoped>
+  /* The card's own box, so a run reads as one of them. */
+  .calls {
+    margin: .35rem 0;
+    border: 1px solid var(--luu-border, #c8c8c8);
+    border-radius: 6px;
+    background: var(--luu-sunken, #eef0f4);
+  }
+  .row + .row { border-top: 1px solid var(--luu-border, #c8c8c8); }
+</style>

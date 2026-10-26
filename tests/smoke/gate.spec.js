@@ -257,8 +257,9 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(card.locator(".status")).toHaveText("done")
   await expect(page.locator("article.assistant", { hasText: "```tool" })).toHaveCount(0)
 
-  // The meta line opens the turn: the prompt it was sent, cut at its roles,
-  // the answer as the model wrote it, and the calls. See
+  // The meta line opens the turn, in the same modal the indicator by the
+  // composer opens: the prompt it was sent, cut at its roles, and the answer
+  // as the turn went, its call and what that call gave back. See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
   const meta = page.locator("article.assistant button.meta").last()
   // `→ sent ← received - 🕑 first → last - speed`
@@ -267,16 +268,32 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await meta.click()
   const turn = page.getByRole("dialog", { name: /^Turn / })
   await expect(turn).toBeVisible()
+  // The indicator's facts, and how the turn ended.
+  await expect(turn.locator(".facts")).toContainText("fenced")
+  await expect(turn.locator(".facts")).toContainText("ended")
+  await expect(turn.locator(".facts .copy")).toBeEnabled()
   // Grouped by what each piece is, each in its bucket's colour: the tool
   // definitions under tools, the question under prompt.
   await expect(turn.locator('.group[data-bucket="tools"] pre')).toContainText("# Tools")
   await expect(turn.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
   await expect(turn.locator(".group header b").first()).toHaveText("system")
-  await turn.locator(".tabs button", { hasText: "Answer" }).click()
-  await expect(turn.locator("pre.raw")).toContainText("```tool")
-  await expect(turn.locator("pre.raw")).toContainText(ANSWER)
-  await turn.locator(".tabs button", { hasText: "Tools" }).click()
-  await expect(turn.locator(".role b")).toHaveText("read_file")
+  const went = turn.locator('.group[data-bucket="answer"]')
+  await expect(went.locator(".entry.reply pre").first()).toContainText("```tool")
+  await expect(went.locator(".entry.result .role")).toHaveText("tool · read_file")
+  await expect(went.locator(".entry.reply pre").last()).toContainText(ANSWER)
+  // A block too big to read at a glance is clipped, with its ways in at the
+  // fade as well as in its head — and *scroll* keeps the box it was clipped
+  // to, so the lines being read do not move.
+  const big = turn.locator('.group[data-bucket="tools"]')
+  const box = big.locator(".body")
+  await expect(box).toHaveClass(/\bclip\b/)
+  // `offsetHeight`, not the bounding box: the modal is still scaling in.
+  const height = () => box.evaluate(element => element.offsetHeight)
+  const clipped = await height()
+  await big.locator("footer button", { hasText: "scroll" }).click()
+  await expect(box).toHaveClass(/\bscroll\b/)
+  expect(await height()).toBe(clipped)
+  await expect(big.locator("footer button", { hasText: "collapse" })).toBeVisible()
   await turn.locator(".modal-head button", { hasText: "close" }).click()
   await expect(turn).toBeHidden()
 
