@@ -1576,6 +1576,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines", get(get_engines).put(put_engines))
         .route("/api/engine", get(live_engine))
         .route("/api/engines/install", post(install_engine))
+        .route("/api/engines/uninstall", post(uninstall_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
         // Other machines' `luu serve`, reached through this one: the list, and
@@ -5408,6 +5409,9 @@ struct EngineView {
     /// The binary it would run, or why there is none.
     resolved: Option<String>,
     problem: Option<String>,
+    /// Where that binary comes from: `luu` for luu's own copy, `system` for
+    /// one this machine had, `path` for one the file names that is neither.
+    origin: &'static str,
     /// Where a profile for it sends.
     url: String,
     /// The profiles that name it.
@@ -5422,6 +5426,8 @@ struct EnginesView {
     engines: std::collections::BTreeMap<String, EngineView>,
     /// Every copy of each kind's binary on this machine.
     found: std::collections::BTreeMap<&'static str, Vec<String>>,
+    /// The ones of those no engine runs: what the pane offers to use.
+    discovered: Vec<Discovered>,
     /// The version luu downloads when a table names none.
     pinned: std::collections::BTreeMap<&'static str, &'static str>,
     /// luu's own copies already downloaded, per kind, by directory name.
@@ -5429,6 +5435,12 @@ struct EnginesView {
     /// Where they go.
     root: Option<String>,
     installs: Vec<crate::engines::Install>,
+}
+
+#[derive(serde::Serialize)]
+struct Discovered {
+    kind: crate::provider::EngineKind,
+    path: String,
 }
 
 const KINDS: [crate::provider::EngineKind; 3] = [
@@ -5444,22 +5456,64 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
     // binary each engine resolves to, what this machine has installed, and
     // luu's own copies.
     let listed = config.engines().clone();
-    let (mut resolved, found, root, managed) = blocking(move || {
+    let (mut resolved, mut origins, found, discovered, root, managed) = blocking(move || {
         let resolved: std::collections::BTreeMap<String, Result<PathBuf, String>> = listed
             .iter()
             .map(|(name, engine)| (name.clone(), crate::engines::resolve_binary(engine)))
             .collect();
+        let real = |path: &PathBuf| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let on_machine: Vec<(crate::provider::EngineKind, PathBuf)> = KINDS
+            .iter()
+            .flat_map(|kind| {
+                crate::engines::discover(*kind)
+                    .into_iter()
+                    .map(|p| (*kind, p))
+            })
+            .collect();
         let found: std::collections::BTreeMap<&'static str, Vec<String>> = KINDS
             .iter()
             .map(|kind| {
-                let found = crate::engines::discover(*kind)
-                    .into_iter()
-                    .map(|p| p.display().to_string())
+                let found = on_machine
+                    .iter()
+                    .filter(|(k, _)| k == kind)
+                    .map(|(_, p)| p.display().to_string())
                     .collect();
                 (kind.as_str(), found)
             })
             .collect();
         let root = crate::engines::root();
+        // A binary under luu's own directory is luu's, whatever the table
+        // calls it; one the machine has is the system's.
+        let origins: std::collections::BTreeMap<String, &'static str> = listed
+            .iter()
+            .map(|(name, engine)| {
+                let at = resolved.get(name).and_then(|r| r.as_ref().ok()).map(real);
+                let origin = match (engine.binary.as_deref(), &at) {
+                    (Some("managed"), _) => "luu",
+                    (_, Some(at)) if root.as_ref().is_some_and(|r| at.starts_with(real(r))) => {
+                        "luu"
+                    }
+                    (None, _) => "system",
+                    (_, Some(at)) if on_machine.iter().any(|(_, p)| real(p) == *at) => "system",
+                    _ => "path",
+                };
+                (name.clone(), origin)
+            })
+            .collect();
+        // What a table already runs, switched off or not, is not offered again.
+        let named: Vec<PathBuf> = resolved
+            .values()
+            .filter_map(|r| r.as_ref().ok())
+            .map(real)
+            .collect();
+        let discovered: Vec<Discovered> = on_machine
+            .iter()
+            .filter(|(_, path)| !named.contains(&real(path)))
+            .map(|(kind, path)| Discovered {
+                kind: *kind,
+                path: path.display().to_string(),
+            })
+            .collect();
         let managed: std::collections::BTreeMap<&'static str, Vec<String>> = KINDS
             .iter()
             .map(|kind| {
@@ -5477,7 +5531,7 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
                 (kind.as_str(), copies)
             })
             .collect();
-        (resolved, found, root, managed)
+        (resolved, origins, found, discovered, root, managed)
     })
     .await;
     let mut engines = std::collections::BTreeMap::new();
@@ -5503,6 +5557,7 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
                 config: engine.clone(),
                 resolved,
                 problem,
+                origin: origins.remove(name).unwrap_or("path"),
             },
         );
     }
@@ -5516,6 +5571,7 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
         }),
         engines,
         found,
+        discovered,
         pinned: KINDS.iter().map(|k| (k.as_str(), k.pinned())).collect(),
         managed,
         root: root.map(|root| root.display().to_string()),
@@ -5653,10 +5709,17 @@ async fn put_engines(
             }
         }
     }
+    // Stopped once written: the ones the write takes away, and the ones it
+    // switches off, which luu no longer runs.
     let removed: Vec<String> = current
         .engines()
         .keys()
-        .filter(|name| !asked.engines.contains_key(*name))
+        .filter(|name| {
+            asked
+                .engines
+                .get(*name)
+                .is_none_or(|engine| !engine.enabled)
+        })
         .cloned()
         .collect();
     if let Err(error) = write_config(current.with_engines(asked.engines), path).await {
@@ -5728,6 +5791,27 @@ struct InstallAsk {
     variant: Option<String>,
 }
 
+/// Removes luu's own copy of one release. See [`crate::engines::Supervisor::uninstall`].
+async fn uninstall_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<InstallAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let blank = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    if let Err(error) = state
+        .app
+        .engines
+        .uninstall(asked.kind, blank(asked.version), blank(asked.variant))
+        .await
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    engines_answer(&state).await
+}
+
 async fn install_engine(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
@@ -5762,6 +5846,9 @@ struct ProvidersView {
     refused: Option<String>,
     default: Option<String>,
     providers: std::collections::BTreeMap<String, crate::provider::Profile>,
+    /// The profiles whose engine is switched off, which the pickers leave
+    /// out. See `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
+    idle: Vec<String>,
     /// The profile *this* server is running, which the file's default may no
     /// longer be: the file can be edited while a server that resolved hours ago
     /// keeps sending where it was pointed.
@@ -5823,6 +5910,18 @@ async fn providers_view(
         },
         default: config.default_name().map(str::to_string),
         providers: config.profiles().clone(),
+        idle: config
+            .profiles()
+            .iter()
+            .filter(|(_, profile)| {
+                profile
+                    .engine
+                    .as_ref()
+                    .and_then(|engine| config.engines().get(engine))
+                    .is_some_and(|engine| !engine.enabled)
+            })
+            .map(|(name, _)| name.clone())
+            .collect(),
         running: running.clone(),
         follows,
         waiting: match follows && running.as_deref() != config.default_name() {

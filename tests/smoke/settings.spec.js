@@ -47,11 +47,15 @@ function binary() {
 let server = null
 /** @type {string} */
 let home
+/** A directory on the server's `PATH`, outside `home`: what "this machine
+ * has" means to the engines test that puts a binary there. */
+let found
 
 test.beforeAll(async () => {
   // Its own state directory: this suite *writes* `config.toml`, so running it
   // against the config of the person running it would edit their machine.
   home = mkdtempSync(join(tmpdir(), "luu-settings-"))
+  found = mkdtempSync(join(tmpdir(), "luu-found-"))
   writeFileSync(
     join(home, "config.toml"),
     '[provider.here]\nbackend = "mock"\nmodel = "mock"\n',
@@ -123,7 +127,7 @@ test.beforeAll(async () => {
       env: {
         ...process.env,
         LUU_HOME: home,
-        PATH: `${brewBin}:${path}`,
+        PATH: `${brewBin}:${found}:${path}`,
         OLLAMA_MODELS: join(home, "stores/ollama"),
         HF_HUB_CACHE: join(home, "stores/hub"),
         LLAMA_CACHE: join(home, "stores/llama.cpp"),
@@ -154,6 +158,7 @@ test.beforeAll(async () => {
 test.afterAll(() => {
   server?.kill("SIGTERM")
   rmSync(home, { recursive: true, force: true })
+  rmSync(found, { recursive: true, force: true })
 })
 
 /**
@@ -963,7 +968,9 @@ test("an engine is added with its provider, started, and stopped from Settings",
 
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Engines")')
-  await expect(page.locator(".engines-pane")).toContainText("None yet")
+  // None the file names. What this machine has may be there, as found cards.
+  await expect(page.locator(".engines-pane .pane-group")).toBeVisible()
+  await expect(page.locator(".engines-pane section.engine:not(.found)")).toHaveCount(0)
 
   await page.locator('.engines-pane button.add:has-text("+ engine")').click()
   const form = page.getByRole("dialog", { name: "Add an engine" })
@@ -995,10 +1002,23 @@ test("an engine is added with its provider, started, and stopped from Settings",
   await expect(card).toContainText("luu:/bin/llama-server")
   await expect(card.locator(`.path-text[title="${fake}"]`)).toHaveCount(1)
 
-  await card.locator('button:has-text("start")').click()
+  // A path the file names, neither luu's own copy nor one the machine had.
+  await expect(card.locator(".origin")).toHaveText("path")
+
+  // Its actions are icons, named for a screen reader and a tooltip.
+  await card.getByRole("button", { name: "Start" }).click()
   await expect(card.locator(".state")).toHaveText(/starting|running/)
-  await expect(card.locator("pre.log")).toContainText("stand-in on 8097", { timeout: 10_000 })
-  await card.locator('button:has-text("stop")').click()
+  // The output is a sheet over the pane, each line coloured by what it says:
+  // the command luu ran first.
+  await expect(card.getByRole("button", { name: "Output" })).toBeEnabled({ timeout: 10_000 })
+  await card.getByRole("button", { name: "Output" }).click()
+  // The innermost dialog holding it: Settings' own holds it too.
+  const sheet = page.locator("dialog", { has: page.locator("pre.log") }).last()
+  await expect(sheet.locator("pre.log")).toContainText("stand-in on 8097", { timeout: 10_000 })
+  await expect(sheet.locator(".line.cmd").first()).toContainText("llama-server")
+  await sheet.locator("button.close").click()
+  await expect(sheet).toBeHidden()
+  await card.getByRole("button", { name: "Stop" }).click()
   await expect(card.locator(".state")).toHaveText("exited")
   await expect(card).toContainText("stopped from luu")
 
@@ -1117,7 +1137,7 @@ test("the models on this machine are listed by where they came from", async ({ p
   // The engine form offers the two llama.cpp can load, and says why not the third.
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Engines")')
-  await page.locator(".engines-pane section.engine", { hasText: "fake" }).locator('button:has-text("edit")').click()
+  await page.locator(".engines-pane section.engine", { hasText: "fake" }).getByRole("button", { name: "Edit" }).click()
   const form = page.getByRole("dialog", { name: "Engine fake" })
   const models = form.locator("select").nth(2)
   await expect(models.locator("option")).toHaveText([
@@ -1469,4 +1489,73 @@ test("a theme is added as a zip, dropped on the frame, and a bare JSON is refuse
   })
   await expect(page.locator(".appearance-pane")).toContainText("icons that were not included")
   await expect(page.getByRole("radio", { name: /Dropped Icons/ })).toHaveAttribute("aria-checked", "true")
+})
+
+/**
+ * A binary the machine already has is a card before anybody writes it down:
+ * *system*, not used, and used with one switch — its engine and the provider
+ * that starts it. Switched off, the table stays with `enabled = false` and its
+ * provider leaves the pickers. And luu's own copy, once it is on disk, is
+ * uninstalled from its card and leaves the table in place. Last in the file:
+ * the provider it writes would otherwise be in every picker after it. See
+ * `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
+ */
+test("engines the machine has are used and not used, and luu's own copy uninstalls", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const system = join(found, "llama-server")
+  writeFileSync(system, '#!/bin/sh\nexec python3 -m http.server --bind 127.0.0.1 "$4"\n')
+  chmodSync(system, 0o755)
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Engines")')
+
+  const card = page.locator(".engines-pane section.engine.found", { hasText: system })
+  await expect(card.locator(".origin")).toHaveText("system")
+  await expect(card.locator(".state")).toHaveText("not used")
+  // Nothing removes it: it is used or it is not, and it cannot start until it is.
+  await expect(card.getByRole("button", { name: "Remove" })).toHaveCount(0)
+  await expect(card.getByRole("button", { name: "Start" })).toBeDisabled()
+
+  await card.getByRole("switch").click()
+  const used = page.locator(".engines-pane section.engine:not(.found)", { hasText: system })
+  await expect(used.locator(".origin")).toHaveText("system")
+  await expect(used.getByRole("switch")).toHaveAttribute("aria-checked", "true")
+  const name = (await used.locator("header strong").textContent()).trim()
+  let onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain(`[engine.${name}]`)
+  expect(onDisk).toContain(`binary = "${system}"`)
+  expect(onDisk).toContain(`[provider.${name}]`)
+  expect(onDisk).not.toContain("enabled")
+
+  // Off: the table stays, one key says so, and the provider is idle.
+  await used.getByRole("switch").click()
+  await expect(used.locator(".state")).toHaveText("not used")
+  onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain(`[engine.${name}]`)
+  expect(onDisk.match(/enabled = false/g)).toHaveLength(1)
+  const providers = await (await fetch(`${BASE}/api/providers`)).json()
+  expect(providers.idle).toEqual([name])
+
+  // luu's own copy, laid out as a download leaves it, and named by a table.
+  const copy = join(home, "engines", "llama", "b11236")
+  mkdirSync(copy, { recursive: true })
+  writeFileSync(join(copy, "llama-server"), "#!/bin/sh\n")
+  chmodSync(join(copy, "llama-server"), 0o755)
+  writeFileSync(join(home, "config.toml"),
+    `${readFileSync(join(home, "config.toml"), "utf8").trimEnd()}\n\n[engine.own]\nkind = "llama"\nbinary = "managed"\nport = 8099\n`)
+  const own = page.locator(".engines-pane section.engine", { has: page.locator("header strong", { hasText: /^own$/ }) })
+  await expect(own.locator(".origin")).toHaveText("luu:", { timeout: 10_000 })
+  await own.getByRole("button", { name: "Uninstall" }).click()
+  await expect(own.getByRole("button", { name: "Install" })).toBeVisible()
+  expect(existsSync(copy)).toBe(false)
+  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain("[engine.own]")
+
+  expect(errors).toEqual([])
 })

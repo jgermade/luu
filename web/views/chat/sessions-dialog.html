@@ -6,7 +6,7 @@
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`, and for what
   // each tab decides, `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`
   // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
-  const { state, resumeSession, deleteSession, archiveSession, refreshSessionsList } = await import("@web/lib/store.js")
+  const { state, resumeSession, deleteSession, archiveSession, refreshSessionsList, offeredProviders } = await import("@web/lib/store.js")
   const {
     ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
     chooseRuntime, chooseList,
@@ -38,7 +38,7 @@
   // switches inside a session — every per-turn number is backend-specific, and
   // one label over two backends is a comparison nobody can make.
 
-  $: profileNames = Object.keys(state.providers?.providers || {})
+  $: profileNames = offeredProviders()
   // The choice of where it sends, said once beside the two columns' label:
   // the provider, the model, and where that model came from.
   $: sendsSaid = !ui.starter?.provider

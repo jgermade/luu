@@ -181,7 +181,10 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #                                       # Hugging Face or <state dir>/models
 #
 # Downloading luu's copy, starting it, switching its model when the chat picks
-# another, and stopping it when no session uses it are all automatic.
+# another, and stopping it when no session uses it are all automatic. The pane
+# also lists the binaries this machine already has, as cards nobody wrote yet:
+# a switch uses one (its table and a provider) or stops using one — the table
+# stays, with `enabled = false` — and luu's own copy is uninstalled from its card.
 #
 # Settings → Runtimes is where a session's commands may run: each container
 # runtime (docker, podman, nerdctl, colima, container) probed for whether it is

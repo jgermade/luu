@@ -24,6 +24,17 @@ export const startEngine = name => call("POST", `./api/engines/${encodeURICompon
 export const stopEngine = name => call("POST", `./api/engines/${encodeURIComponent(name)}/stop`, {})
 export const installEngine = (kind, version, variant) =>
   call("POST", "./api/engines/install", { kind, version: version || null, variant: variant || null })
+/// Removes luu's own copy of that release; the tables that name it stay.
+export const uninstallEngine = (kind, version, variant) =>
+  call("POST", "./api/engines/uninstall", { kind, version: version || null, variant: variant || null })
+
+/// What the file says of one engine, out of the view — which also carries its
+/// status, the resolved binary and the linked providers. `enabled` is among
+/// the keys, so a write of one table does not switch another back on.
+export const tableOf = e => Object.fromEntries(
+  ["kind", "binary", "version", "variant", "port", "model", "args", "ready-timeout", "enabled"]
+    .filter(key => e[key] !== undefined && e[key] !== null)
+    .map(key => [key, e[key]]))
 
 /// What a profile for this engine is: the backend each kind speaks, and the
 /// URL its port answers on. The same two facts `EngineKind::url` states.

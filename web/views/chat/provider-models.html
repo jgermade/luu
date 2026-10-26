@@ -16,14 +16,14 @@
   // scrolls in its column — so the box does not move while lists arrive.
   // `typable` adds a field under the models for one the provider does not
   // list: a model not pulled yet is still a name worth writing down.
-  const { state, providerModels } = await import("@web/lib/store.js")
+  const { state, providerModels, offeredProviders } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
 
   const flag = v => v === "" || v === true || v === "true"
   $: isDisabled = flag(disabled)
   $: canType = flag(typable)
 
-  $: names = Object.keys(state.providers?.providers || {})
+  $: names = offeredProviders()
   // The provider whose models the second column shows.
   let focus = ""
   // name → { loading, models, reason, labels, unavailable }. Kept while this

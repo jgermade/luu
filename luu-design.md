@@ -2237,6 +2237,7 @@ is sent to it.
 [engine.gemma]
 kind = "llama"          # llama | mlx | ollama
 binary = "managed"      # luu's own copy; a path; or absent: found on PATH
+# enabled = false       # kept, and not used: luu does not start it
 port = 8080
 model = "ollama:qwen2.5-coder:7b"   # -m, out of what this machine already has
 args = ["-c", "8192"]
@@ -2302,6 +2303,22 @@ matmul. A provider whose engine is llama.cpp or mlx lists every model it can loa
 picker, and the ones it cannot **greyed out, with a warning and the reason as a tooltip**, so a
 model on the disk never looks missing.
 See [`RECORD/2026-09-28.a-model-server-luu-starts.completed.md`](RECORD/2026-09-28.a-model-server-luu-starts.completed.md).
+
+**Settings → Engines lists what the machine has, not only what the file says.** Every binary
+`engines::discover` finds that no table runs is a card of its own, *not used* (`discovered` on
+`GET /api/engines`, compared after `canonicalize`). Each card says where its binary comes from —
+`luu:` for luu's own copy, `system` for one the machine had, `path` for one the file names that is
+neither (`origin`, the server's answer) — and nothing is removed from the page: a card is
+**used or not**. Used, a found binary becomes `[engine.<kind>]` with that `binary` and the
+provider that starts it; not used, a table keeps everything and gains `enabled = false`, which
+luu **does not start** (`ensure` and the start route refuse, naming the switch) and whose
+providers **leave the pickers** (`idle` on `GET /api/providers`), while staying in Settings →
+Models. **luu's own copy installs and uninstalls** from its card (`POST /api/engines/uninstall`,
+refused while an engine runs from it), and the table that names it stays. A version or variant
+the page sends is a name or it is refused — it is joined into a path under the state directory.
+The actions are icons (start, stop, output, install, uninstall, edit), and the output is a
+`SubModal` with each line coloured by what it says. See
+[`RECORD/2026-10-26.engines-found-used-and-owned.completed.md`](RECORD/2026-10-26.engines-found-used-and-owned.completed.md).
 
 ### Settings
 

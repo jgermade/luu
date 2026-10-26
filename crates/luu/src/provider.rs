@@ -319,7 +319,7 @@ impl ToolCalls {
 ///
 /// Every key but `kind` is optional, and absent means the kind's own answer:
 /// the binary found on this machine, the pinned version, the usual port.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Engine {
     pub kind: EngineKind,
@@ -351,6 +351,27 @@ pub struct Engine {
     /// can be tuned: `-hf` downloads the model on first use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_timeout: Option<u64>,
+    /// `false` is an engine kept and not used: luu does not start it, and its
+    /// providers leave the pickers. Switching it back on is the table as it
+    /// was. See `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
+    #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self {
+            kind: EngineKind::default(),
+            binary: None,
+            version: None,
+            variant: None,
+            port: None,
+            model: None,
+            args: Vec::new(),
+            ready_timeout: None,
+            enabled: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -1672,6 +1693,25 @@ mod tests {
         // And the file round-trips through the writer with the table in it.
         let written = config(text).unwrap().render().unwrap();
         assert!(written.contains("[engine.gemma]"), "{written}");
+        assert!(
+            !written.contains("enabled"),
+            "on is the key absent: {written}"
+        );
+    }
+
+    /// An engine switched off keeps its table and says so in one key, which
+    /// is written only when it is `false`. See
+    /// `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
+    #[test]
+    fn an_engine_switched_off_is_one_key() {
+        let text = "[engine.gemma]\nkind = \"llama\"\nport = 8081\nenabled = false\n";
+        let loaded = config(text).unwrap();
+        let engine = &loaded.engines()["gemma"];
+        assert!(!engine.enabled);
+        assert_eq!(engine.port, Some(8081));
+        let written = loaded.render().unwrap();
+        assert_eq!(written.matches("enabled = false").count(), 1, "{written}");
+        assert!(config("[engine.x]\nkind = \"llama\"\n").unwrap().engines()["x"].enabled);
     }
 
     /// A model's own entry sits between the flag and the profile, for the

@@ -631,10 +631,11 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // them at once and is worth one assertion of its own.
   // 23, Appearance's palette since 2026-10-21, and since 2026-10-23 the
   // permissions' shield and a session's archive, restore and delete; since
-  // 2026-10-25 the picker's two tool transports, a plug and braces.
+  // 2026-10-25 the picker's two tool transports, a plug and braces; since
+  // 2026-10-26 an engine card's play, stop and download.
   // The tree's own shapes are the theme's, in `theme/default/files.svg`, not
   // the page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(30)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(33)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be

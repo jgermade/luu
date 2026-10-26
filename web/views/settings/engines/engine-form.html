@@ -1,4 +1,4 @@
-<script :setup="{ view = null, editing = '', saved = null, close = null }">
+<script :setup="{ view = null, editing = '', found = null, saved = null, close = null }">
   // One `[engine.<name>]`, added or edited, over Settings → Engines. Adding one
   // also writes the provider that starts it, because an engine nothing names
   // is a server no session will ever ask for.
@@ -6,7 +6,11 @@
   // The binary is a choice among what the server found, luu's own copy, or a
   // path — and the path must end in the kind's own binary name, which the
   // server checks again: see `accepts_from_page` in `crate::engines`.
-  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("@web/lib/engines.js")
+  //
+  // `found` — `{ kind, path, name }`, a binary the machine has that no table
+  // runs yet: the form opens as a new engine on it, under the name its card
+  // showed.
+  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel, tableOf } = await import("@web/lib/engines.js")
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
   const PathText = await import("@web/components/path-text.html")
@@ -24,10 +28,12 @@
   const split = line =>
     [...line.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(m => m[1] ?? m[2] ?? m[3])
 
-  let name = editing || ""
-  let kind = current?.kind || "llama"
+  let name = editing || found?.name || ""
+  let kind = current?.kind || found?.kind || "llama"
   // "" found automatically, "managed", a found path, or "custom".
-  let binary = !current
+  let binary = found
+    ? found.path
+    : !current
     ? "managed"
     : !current.binary
       ? ""
@@ -74,11 +80,6 @@
   $: canSave = !!trimmed && !badName && !clash && !badPath && !badPort && !saving
     && !(binary === "custom" && !path.trim())
 
-  const configOf = e => Object.fromEntries(
-    ["kind", "binary", "version", "variant", "port", "model", "args", "ready-timeout"]
-      .filter(key => e[key] !== undefined && e[key] !== null)
-      .map(key => [key, e[key]]))
-
   const table = () => ({
     kind,
     ...(binary === "custom" ? { binary: path.trim() } : binary ? { binary } : {}),
@@ -88,6 +89,8 @@
     ...(kind !== "ollama" && model ? { model } : {}),
     ...(args.trim() ? { args: split(args) } : {}),
     ...(readyTimeout.trim() ? { "ready-timeout": Number(readyTimeout) } : {}),
+    // Edited, not switched: an engine that was off stays off.
+    ...(current?.enabled === false ? { enabled: false } : {}),
   })
 
   const save = async () => {
@@ -95,7 +98,7 @@
     saving = true
     error = ""
     const engines = Object.fromEntries(
-      Object.entries(view?.engines || {}).map(([n, e]) => [n, configOf(e)]))
+      Object.entries(view?.engines || {}).map(([n, e]) => [n, tableOf(e)]))
     engines[trimmed] = table()
     const written = await saveEngines(engines)
     if (!written.ok) {
