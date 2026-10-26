@@ -429,7 +429,9 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
   margin-top: auto;
   background: var(--luu-surface);
   border-top: 1px solid var(--luu-border);
+  border-bottom: 1px solid var(--luu-border);
   padding: .2rem 1rem 0;
+  margin-bottom: -1px;
   z-index: 2;
 }
 .modal-actions {
