@@ -651,6 +651,10 @@ pub struct Install {
     pub total: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What it did, a line per step, as the form's *View details* shows it:
+    /// the release asked for, the asset and its digest, the download in
+    /// tenths, the check, the unpack, and where the copy landed or why not.
+    pub log: Vec<String>,
 }
 
 /// The engines this server started, and the downloads it is running.
@@ -1234,22 +1238,44 @@ impl Supervisor {
                     done: 0,
                     total: 0,
                     error: None,
+                    log: Vec::new(),
                 },
             );
         }
         let this = self.clone();
         tokio::spawn(async move {
             let dir = managed_dir(&root, kind, &version, variant.as_deref());
+            this.say(
+                &key,
+                format!(
+                    "$ install {} {version}{} into {}",
+                    kind.as_str(),
+                    variant
+                        .as_deref()
+                        .map(|v| format!(" ({v})"))
+                        .unwrap_or_default(),
+                    dir.display()
+                ),
+            );
             let result = this.download(&key, kind, &version, &asset, &dir).await;
             this.update(&key, |install| match result {
-                Ok(()) => install.state = "done",
+                Ok(()) => {
+                    install.state = "done";
+                    install.log.push("done".into());
+                }
                 Err(error) => {
                     install.state = "failed";
+                    install.log.push(format!("failed: {error}"));
                     install.error = Some(error);
                 }
             });
         });
         Ok(())
+    }
+
+    /// One line of an install's log.
+    fn say(&self, key: &str, line: String) {
+        self.update(key, |install| install.log.push(line));
     }
 
     async fn download(
@@ -1277,6 +1303,7 @@ impl Supervisor {
         }
 
         let client = http();
+        self.say(key, format!("asking GitHub for {} {version}", kind.repo()));
         let release: Release = client
             .get(format!(
                 "https://api.github.com/repos/{}/releases/tags/{version}",
@@ -1304,6 +1331,14 @@ impl Supervisor {
             .ok_or("GitHub publishes no sha256 for this asset, so it cannot be checked")?
             .to_ascii_lowercase();
         self.update(key, |i| i.total = found.size);
+        self.say(
+            key,
+            format!(
+                "{asset} · {:.1} MB · sha256 {}",
+                found.size as f64 / 1e6,
+                expected
+            ),
+        );
 
         let parent = dir.parent().ok_or("no parent directory")?;
         tokio::fs::create_dir_all(parent)
@@ -1314,6 +1349,7 @@ impl Supervisor {
             .await
             .map_err(|e| format!("creating {}: {e}", part.display()))?;
         let mut hasher = sha2::Sha256::new();
+        self.say(key, format!("downloading {}", found.browser_download_url));
         let mut stream = client
             .get(&found.browser_download_url)
             .send()
@@ -1328,13 +1364,27 @@ impl Supervisor {
             file.write_all(&chunk)
                 .await
                 .map_err(|e| format!("writing {}: {e}", part.display()))?;
+            let before = done;
             done += chunk.len() as u64;
             self.update(key, |i| i.done = done);
+            // A line a tenth, not a line a chunk.
+            if found.size > 0 && done * 10 / found.size > before * 10 / found.size {
+                self.say(
+                    key,
+                    format!(
+                        "  {:.1} of {:.1} MB · {}%",
+                        done as f64 / 1e6,
+                        found.size as f64 / 1e6,
+                        done * 100 / found.size
+                    ),
+                );
+            }
         }
         file.flush().await.map_err(|e| e.to_string())?;
         drop(file);
 
         self.update(key, |i| i.state = "verifying");
+        self.say(key, "verifying its sha256 against GitHub's".into());
         let actual: String = hasher
             .finalize()
             .iter()
@@ -1348,9 +1398,11 @@ impl Supervisor {
             ));
         }
 
+        self.say(key, "sha256 matches".into());
         // Unpacked beside and renamed into place, so a failed unpack never
         // leaves half a copy where `resolve_binary` would find it.
         self.update(key, |i| i.state = "unpacking");
+        self.say(key, format!("$ tar -xf {}", part.display()));
         let staging = parent.join(format!(
             ".{}.unpack",
             dir.file_name().and_then(|n| n.to_str()).unwrap_or("copy")
@@ -1394,6 +1446,9 @@ impl Supervisor {
             .map_err(|e| format!("moving the copy into {}: {e}", dir.display()))?;
         if top.is_some() {
             let _ = tokio::fs::remove_dir_all(&staging).await;
+        }
+        if let Some(binary) = find_in(dir, kind.binary_name()) {
+            self.say(key, format!("installed {}", binary.display()));
         }
         Ok(())
     }

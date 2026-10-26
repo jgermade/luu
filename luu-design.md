@@ -2318,7 +2318,10 @@ until `serve` exits. `luu chat` and `luu stdio` start it for the length of the r
 
 **A switch does not wait for the load; the first call does.** Choosing another model answers
 as soon as the session points there, and the engine loads behind the answer
-(`Supervisor::warm`). The session's backend is wrapped (`engines::Started`) so every call runs
+(`Supervisor::warm`). **A default is not a use**: a session that follows the file's default —
+the one `serve` starts on, or one a click on a model moves while it has no turns — warms nothing,
+and its engine starts at its first turn; its window is asked once something has started the
+engine on that model, never by starting it. The session's backend is wrapped (`engines::Started`) so every call runs
 `ensure` first: a turn sent while the model loads waits for it on the server, and an engine that
 cannot start reaches the turn as a transport error. `ensure` is one at a time per engine, so the
 warm-up and the first turn cannot restart it under each other. **An `ensure` says which phase it
@@ -2389,7 +2392,11 @@ file with the providers that start it. **The form is an installer** in a wide `S
 `InputContainer`s: the kind as cards (with whether this machine has a release of it,
 `cannot_install`), where the binary comes from, the name and port filled in, *Advanced* for the
 arguments; *Install* downloads luu's copy there and closes when it is on disk — unpacked without
-an archive's single top folder, so `luu:/engines/llama/b11236/llama-server`. See
+an archive's single top folder, so `luu:/engines/llama/b11236/llama-server`. While it downloads
+the button reads *Installing…*, and *View details* beside it puts a terminal over the form: the
+install's own log (`log` on each of `installs`), a line per step — the release asked for, the
+asset and its sha256, the download in tenths, the check, the unpack, where the copy landed or
+why not. Open when the copy lands, the sheet stays, with *Close*. See
 [`RECORD/2026-10-26.engines-installed-and-started.completed.md`](RECORD/2026-10-26.engines-installed-and-started.completed.md).
 
 ### Settings

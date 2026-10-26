@@ -93,6 +93,16 @@
   let error = ""
   // The download *Install* started, as the server reports it.
   let download = null
+  // Its log, kept past a failure so *View details* still has it, and whether
+  // the terminal over the form is up. Open when the copy lands, the sheet
+  // stays to show it rather than closing under the reader.
+  let log = []
+  let details = false
+  let finished = false
+  const toBottom = () => requestAnimationFrame(() => {
+    const out = $self(".terminal pre")
+    if (out) out.scrollTop = out.scrollHeight
+  })
   let polling = null
 
   // A name and a port to start from, for a new one: the kind's own name,
@@ -176,7 +186,13 @@
       const now = (answer.view.installs || []).find(i => i.kind === kind && i.version === wanted &&
         (i.variant || "") === variant.trim())
       download = now || download
-      if (now?.state === "done" || (!now && (answer.view.managed?.[kind] || []).length > copies.length)) return leave()
+      if (now?.log) { log = now.log; toBottom() }
+      if (now?.state === "done" || (!now && (answer.view.managed?.[kind] || []).length > copies.length)) {
+        if (!details) return leave()
+        finished = true
+        saving = false
+        return
+      }
       if (now?.state === "failed") {
         error = now.error || "the download failed"
         download = null
@@ -250,7 +266,14 @@
 
 <SubModal :open="open" :title="editing ? `Engine ${editing}` : 'Add an engine'" width="46rem"
           height="min(36rem, calc(100dvh - 14rem))" @close="leave()">
-  <div class="installer">
+  <!-- *View details*: what the install did, a line per step, as a terminal
+       over the form. -->
+  <div :if="details" class="terminal" role="log" aria-label="Install output">
+    <pre><span :each="line in log.length ? log : ['waiting for the server…']" :key="line"
+               class="line" :class.cmd="line.startsWith('$ ')" :class.err="line.startsWith('failed')"
+               :class.ok="line === 'done'">{{ line }}</span></pre>
+  </div>
+  <div :if="!details" class="installer">
     <!-- 1. Which kind: fixed once written, so only offered when adding. -->
     <section class="step">
       <h4><span class="n">1</span> Engine</h4>
@@ -363,7 +386,13 @@
 
   <template :slot.foot>
     <span class="left"><Button variant="ghost" @click="leave()">Cancel</Button></span>
-    <Button variant="primary" :disabled="!canSave" :loading="saving" @click="save()">
+    <!-- Left of the button that is working: what it is doing. -->
+    <Button :if="download || log.length" variant="ghost"
+            @click="details = !details, details && toBottom()">{{ details ? "Hide details" : "View details" }}</Button>
+    <Button :if="finished" variant="primary" @click="leave()">Close</Button>
+    <!-- A spinner while the table is written; the word while the copy
+         downloads, which takes long enough to want one. -->
+    <Button :if="!finished" variant="primary" :disabled="!canSave" :loading="saving && !download" @click="save()">
       {{ download ? "Installing…" : editing ? "Save" : installs ? "Install" : "Add engine" }}
     </Button>
   </template>
@@ -432,6 +461,36 @@
   .port-field .auto { position: absolute; top: .5rem; right: .75rem; font-size: 12px; }
   .advanced summary { cursor: pointer; font-size: 12px; font-weight: 600; margin-bottom: .5rem; }
   .downloading { display: flex; align-items: center; gap: .6rem; font-size: 12px; }
+  /* A terminal: dark in both themes, monospace, its own scroll, the newest
+     line at the bottom. */
+  .terminal {
+    height: 100%;
+    min-height: 24rem;
+    display: flex;
+    border-radius: 8px;
+    background: #0d1117;
+    overflow: hidden;
+  }
+  /* Over the page's own `pre`, which is a light box with a border. */
+  .terminal pre {
+    flex: 1;
+    margin: 0;
+    padding: .75rem 1rem;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    overflow: auto;
+    font-family: var(--luu-font-mono, ui-monospace, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    color: #c9d1d9;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .terminal .line { display: block; }
+  .terminal .cmd { color: #79c0ff; }
+  .terminal .err { color: #ff7b72; }
+  .terminal .ok { color: #7ee787; }
   .downloading progress { flex: 1; }
   .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
   .small { font-size: 11px; }

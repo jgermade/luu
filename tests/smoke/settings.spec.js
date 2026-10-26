@@ -1182,6 +1182,47 @@ test("a provider that lists no models says so, and a typed model is the default"
 })
 
 /**
+ * A default is not a use: a click that makes an engine's provider the
+ * default points the live session there and starts nothing. The engine
+ * starts at the session's first turn. See
+ * `RECORD/2026-10-26.ports-luu-places.completed.md`.
+ */
+test("a default on an engine starts nothing until its first turn", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const file = join(home, "config.toml")
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const pane = page.locator(".modal .models-pane")
+    await pane.locator(".prov", { has: page.locator('strong:text-is("fake")') }).click()
+    await pane.locator("button.model", { hasText: "tiny:1b" }).click()
+    await expect.poll(() => readFileSync(file, "utf8")).toContain('default = "fake"')
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBe("fake")
+    // Long enough for a warm to have spawned it, and nothing did.
+    await page.waitForTimeout(1500)
+    const engines = await (await fetch(`${BASE}/api/engines`)).json()
+    expect(engines.engines.fake.status.state).not.toBe("running")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: now.providers }),
+    })
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  }
+  expect(errors).toEqual([])
+})
+
+/**
  * Changing where a session sends needs no restart: a new `default` is taken up
  * by an empty live session nobody pointed anywhere, and the chat's own picker
  * lists every provider with the models it serves and moves the session there.

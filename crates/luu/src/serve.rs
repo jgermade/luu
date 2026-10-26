@@ -1469,6 +1469,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         exposure,
     )?);
     let starts = crate::engines::for_run(&provider);
+    let provider_named = provider.named;
 
     let app = App::create(StdioOptions {
         backend,
@@ -1499,11 +1500,13 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     })
     .await?;
 
-    // The profile this server resolved names an engine: started now, in the
-    // background, so the first turn is not the one that waits for a model to
-    // load — and if it is, it waits on this rather than meeting a closed port,
-    // because the backend is wrapped the way every switch wraps it. A failure
-    // is said here and again by the turn that meets it.
+    // The profile this server resolved names an engine: wrapped, so the first
+    // turn waits for it rather than meeting a closed port. Started now, in
+    // the background, only when the start *named* it (`-p`, `-m`): a default
+    // is not a use, and its engine starts at its first turn. A failure is
+    // said by the turn that meets it. See
+    // `RECORD/2026-10-26.ports-luu-places.completed.md`, *first use*.
+    let named = provider_named;
     if let Some((name, engine)) = starts {
         let mut destination = app.destination.write().await;
         let current = destination.as_ref();
@@ -1522,7 +1525,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             engine: Some((name.clone(), engine.clone())),
             tool_calls: current.tool_calls,
         });
-        app.engines.warm(&name, &engine);
+        if named {
+            app.engines.warm(&name, &engine);
+        }
     }
     learn_window(app.clone());
 
@@ -7154,6 +7159,27 @@ fn learn_window(app: Arc<App>) {
         if asked.budget.limit.is_some() {
             return;
         }
+        // An engine is asked once something has started it — a warm, or the
+        // first turn — and never started *to be asked*: asking it is a load,
+        // and a default nobody has used yet is not one to load. Waits while
+        // the session stays pointed here, and leaves when it moves.
+        if let Some((name, engine)) = &asked.engine {
+            loop {
+                // Ready on *this* model: a llama.cpp engine ready on another
+                // would be restarted by the question.
+                if app
+                    .engines
+                    .readiness(name)
+                    .is_some_and(|ready| ready.state == "ready" && ready.model == engine.model)
+                {
+                    break;
+                }
+                if !Arc::ptr_eq(&*app.destination.read().await, &asked) {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
         let window = match asked.backend.window().await {
             Ok(Some(window)) => window,
             _ => return,
@@ -8388,8 +8414,12 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         "the live session now sends here",
     );
     release_engines(app, sending.settings.profile.as_deref()).await;
-    // Loaded behind the answer rather than inside it — see `destination_for`.
-    if let Some((name, engine)) = &sending.engine {
+    // Loaded behind the answer rather than inside it — see `destination_for` —
+    // when this session *chose* it. One that follows the file's default has
+    // chosen nothing, and its engine starts at its first turn.
+    if let Some((name, engine)) = &sending.engine
+        && (asked.provider.is_some() || asked.model.is_some())
+    {
         app.engines.warm(name, engine);
     }
     learn_window(app.clone());

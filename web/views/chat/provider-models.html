@@ -137,59 +137,62 @@
     </li>
   </ul>
 
-  <div class="models" role="listbox" aria-label="Models">
+  <div class="models">
     <div class="models-head dim small">
       <BrandIcon :src="markOf(focus)" size="12px" />
       <strong>{{ focus }}</strong>
       <span :if="profile.engine">· engine {{ profile.engine }}</span>
       <span :if="$slots.head" class="head-acts"><slot.head /></span>
     </div>
-    <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
-    <p :if="shown?.reason &amp;&amp; !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
-    <button :each="name in models" :key="name" type="button"
-            class="model" role="option"
-            :class.on="focus === provider &amp;&amp; name === model"
-            :disabled="isDisabled"
-            @click="choose(focus, name)">
-      <span class="check">{{ focus === provider &amp;&amp; name === model ? "✓" : "" }}</span>
-      <span class="mark"><BrandIcon :src="brandSrc(modelBrand(name))" size="12px" /></span>
-      <span class="name">{{ shown?.labels?.[name] || modelLabel(name) }}</span>
-      <span class="tools" :class.native="transportOf(profile, name) === 'native'"
-            :title="transportTitle(transportOf(profile, name))">
-        <svg class="ic" role="img" :aria-label="transportTitle(transportOf(profile, name))">
-          <use :href="transportOf(profile, name) === 'native' ? '#i-tools-native' : '#i-tools-fenced'"/>
-        </svg>
-      </span>
-    </button>
-    <!-- On this machine and not loadable by this provider's engine — an
-         MLX model under llama.cpp, ollama's own MLX under anything but
-         ollama. Shown rather than hidden, so a model on the disk does not
-         look missing; the tooltip is the server's own reason. Not a
-         button: a disabled one shows no tooltip in every browser. -->
-    <div :each="u in shown?.unavailable || []" :key="u.model"
-         class="model off" role="option" aria-disabled="true"
-         :title="u.reason">
-      <span class="check warn">⚠</span>
-      <span class="mark"><BrandIcon :src="brandSrc(modelBrand(u.model))" size="12px" /></span>
-      <span class="name">{{ u.label }}</span>
+    <!-- The list scrolls under the head, which stays. -->
+    <div class="list" role="listbox" aria-label="Models">
+      <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
+      <p :if="shown?.reason &amp;&amp; !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
+      <button :each="name in models" :key="name" type="button"
+              class="model" role="option"
+              :class.on="focus === provider &amp;&amp; name === model"
+              :disabled="isDisabled"
+              @click="choose(focus, name)">
+        <span class="check">{{ focus === provider &amp;&amp; name === model ? "✓" : "" }}</span>
+        <span class="mark"><BrandIcon :src="brandSrc(modelBrand(name))" size="12px" /></span>
+        <span class="name">{{ shown?.labels?.[name] || modelLabel(name) }}</span>
+        <span class="tools" :class.native="transportOf(profile, name) === 'native'"
+              :title="transportTitle(transportOf(profile, name))">
+          <svg class="ic" role="img" :aria-label="transportTitle(transportOf(profile, name))">
+            <use :href="transportOf(profile, name) === 'native' ? '#i-tools-native' : '#i-tools-fenced'"/>
+          </svg>
+        </span>
+      </button>
+      <!-- On this machine and not loadable by this provider's engine — an
+           MLX model under llama.cpp, ollama's own MLX under anything but
+           ollama. Shown rather than hidden, so a model on the disk does not
+           look missing; the tooltip is the server's own reason. Not a
+           button: a disabled one shows no tooltip in every browser. -->
+      <div :each="u in shown?.unavailable || []" :key="u.model"
+           class="model off" role="option" aria-disabled="true"
+           :title="u.reason">
+        <span class="check warn">⚠</span>
+        <span class="mark"><BrandIcon :src="brandSrc(modelBrand(u.model))" size="12px" /></span>
+        <span class="name">{{ u.label }}</span>
+      </div>
+      <!-- A provider whose list is empty is still a destination: its own
+           model, or the one the server picks. Said, when the server gave no
+           reason: an empty answer, or a 404 from a server that does not list
+           its models at all, which the backend reads as none. -->
+      <p :if="shown &amp;&amp; !shown.loading &amp;&amp; !shown.models.length &amp;&amp; !shown.reason" class="dim small pad">
+        {{ focus }} lists no models{{ canType ? ": type one below" : "" }}.
+      </p>
+      <button :if="shown &amp;&amp; !shown.loading &amp;&amp; !models.length" type="button"
+              class="model" :disabled="isDisabled" @click="choose(focus, '')">
+        <span class="check"></span>
+        <span class="name dim">use it with its own model</span>
+      </button>
+      <label :if="canType &amp;&amp; shown &amp;&amp; !shown.loading" class="typed">
+        <span class="dim small">another model</span>
+        <input type="text" :value="typed" :disabled="isDisabled" placeholder="a model name, then Enter"
+               @input="typed = $event.target.value" @keydown.enter="chooseTyped()">
+      </label>
     </div>
-    <!-- A provider whose list is empty is still a destination: its own
-         model, or the one the server picks. Said, when the server gave no
-         reason: an empty answer, or a 404 from a server that does not list
-         its models at all, which the backend reads as none. -->
-    <p :if="shown &amp;&amp; !shown.loading &amp;&amp; !shown.models.length &amp;&amp; !shown.reason" class="dim small pad">
-      {{ focus }} lists no models{{ canType ? ": type one below" : "" }}.
-    </p>
-    <button :if="shown &amp;&amp; !shown.loading &amp;&amp; !models.length" type="button"
-            class="model" :disabled="isDisabled" @click="choose(focus, '')">
-      <span class="check"></span>
-      <span class="name dim">use it with its own model</span>
-    </button>
-    <label :if="canType &amp;&amp; shown &amp;&amp; !shown.loading" class="typed">
-      <span class="dim small">another model</span>
-      <input type="text" :value="typed" :disabled="isDisabled" placeholder="a model name, then Enter"
-             @input="typed = $event.target.value" @keydown.enter="chooseTyped()">
-    </label>
   </div>
 </div>
 
@@ -233,18 +236,20 @@
   .prov:hover .dim, .prov:focus-visible .dim { color: var(--luu-fg); }
   .prov:hover .go { opacity: .8; }
   .prov .go { width: 10px; height: 10px; opacity: .4; flex: none; }
-  /* The same .5rem steps as the providers' column: rows inset by .5rem and
-     padded by .5rem, so every name starts 1rem in — the head's too. */
-  .models { overflow-y: auto; padding: 0 .5rem .5rem; min-height: 0; }
+  /* A head that stays and a list that scrolls under it. The same .5rem
+     steps as the providers' column: rows inset by .5rem and padded by .5rem,
+     so every name starts 1rem in — the head's too. */
+  .models { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .list { flex: 1; min-height: 0; overflow-y: auto; padding: .5rem; }
   /* Whose models these are, ruled off from them, edge to edge. */
   .models-head {
     display: flex;
     align-items: center;
     gap: .5rem;
+    flex: none;
     box-sizing: border-box;
     min-height: 3rem;
     padding: .5rem 1rem;
-    margin: 0 -.5rem .5rem;
     border-bottom: 1px solid var(--luu-border);
   }
   .head-acts { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; }
