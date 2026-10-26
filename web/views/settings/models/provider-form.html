@@ -2,8 +2,9 @@
   // A provider, added or edited, as a sheet over Settings with two tabs:
   // **Connection** — name, backend, URL, key, and the Messages API's own
   // keys — and **Models**, what it serves: every model it lists, grouped by
-  // what the server says of its tools, with a window each and the default
-  // among them. An edit has a third, **Danger zone**, which is where it is
+  // what the server says of its tools, with a window and a transport each —
+  // and no default among them, which is luu's to have and the columns' to
+  // choose. An edit has a third, **Danger zone**, which is where it is
   // removed: the one thing the form does that cannot be saved back. *Models* opens once Connect has spoken to the server, or, on
   // an edit, once the saved provider has answered — for a provider whose
   // engine luu starts, that is the models on this machine the engine loads,
@@ -108,8 +109,11 @@
   // the engine's, and the engine may not be running.
   const engineOwned = !!was.engine
 
-  // The default model; "" is none chosen, which is *the first listed*.
-  let defaultModel = was.model || ""
+  // The model the profile names, carried as the file has it. **The form does
+  // not choose it**: there is one default, luu's — a provider and a model,
+  // chosen with a click in the columns — and a radio here made every
+  // provider look like it had a default of its own.
+  const ownModel = was.model || ""
   // Same window for every model: the profile's `context-limit`. Otherwise one
   // per model, in `windows`, and the profile has none.
   const savedWindows = Object.fromEntries(Object.entries(saved_entries)
@@ -215,7 +219,7 @@
   const HEADS = { tools: "Tools", unsaid: "Not said", none: "No tools" }
   // Everything a row reads is an argument, because a `$:` runs again for what
   // it names and not for what a function it calls happens to read.
-  const buildRows = (_list, _windows, _transports, _leaving, _default, _profileTransport) => ["tools", "unsaid", "none"].flatMap(group => {
+  const buildRows = (_list, _windows, _transports, _leaving, _profileTransport) => ["tools", "unsaid", "none"].flatMap(group => {
     const members = listed.filter(m => groupOf(m) === group)
     if (!members.length) return []
     return [
@@ -233,7 +237,6 @@
           badge: list?.badges?.[m] || [],
           group,
           off: isOff(m),
-          chosen: defaultModel === m,
           window: windows[m] ?? "",
           over: overOf(m, windows[m]),
           placeholder: facts.window_is === "served" ? String(facts.window) : facts.window_is === "trained" ? "Ollama's" : "—",
@@ -248,19 +251,18 @@
       }),
     ]
   })
-  $: rows = buildRows(list, windows, transports, leaving, defaultModel, profileTransport)
+  $: rows = buildRows(list, windows, transports, leaving, profileTransport)
   $: anyFenced = rows.some(r => r.kind === "model" && !r.off && r.group !== "tools" && r.transport === "fenced")
   $: invalid = (!sameWindow && rows.some(r => r.kind === "model" && r.over)) || commonOver
 
-  const toggleDefault = m => { defaultModel = defaultModel === m ? "" : m }
   const setWindow = (m, value) => { windows = { ...windows, [m]: value } }
   const setTransport = (m, value) => { transports = { ...transports, [m]: value } }
 
   // ---- what the model says of thinking, effort and its cap ---------------
 
-  // The model a new session here starts on: the default, or the first
-  // listed. What its server says of it is what the three placeholders say.
-  $: reference = defaultModel || listed[0] || ""
+  // The model the placeholders speak of: the one the profile names, or the
+  // first listed. What its server says of it is what the three say.
+  $: reference = ownModel || listed[0] || ""
   $: told = (reference && list?.facts?.[reference]) || {}
   const count = v => { const n = Number(String(v).trim()); return Number.isInteger(n) && n > 0 ? n : null }
   // The cap luu sends a model with nothing typed: its own default, or less
@@ -344,7 +346,7 @@
       }
       return out
     }
-    if (defaultModel) out.model = defaultModel
+    if (ownModel) out.model = ownModel
     if (sameWindow && commonWindow.trim()) out["context-limit"] = Number(commonWindow)
     if (profileTransport !== transportFor(backend)) out["tool-calls"] = profileTransport
     // Exceptions only. An entry for a model the server did not list now is
@@ -507,21 +509,14 @@
       </span>
     </div>
 
-    <p :if="listed.length" class="dim pick-note">
-      The default is what a new session here starts on.
-      <span :if="!defaultModel">None chosen: the first listed.</span>
-    </p>
-
     <ul :if="listed.length" class="models">
       <li :each="row in rows" :key="row.key" :class="row.kind" :class.off="row.off">
         <span :if="row.kind === 'head'" class="head">{{ row.label }}</span>
-        <label :if="row.kind === 'model'" class="pick" :title="row.chosen ? 'Click again for none' : 'Make it the default'">
-          <input type="radio" name="default-model" :checked="row.chosen" :disabled="row.off"
-                 @click="toggleDefault(row.name)">
+        <span :if="row.kind === 'model'" class="pick">
           <span class="mname" :title="row.name">{{ row.label }}</span>
           <OriginBadge :parts="row.badge" />
           <span :if="row.off" class="dim">left out</span>
-        </label>
+        </span>
         <!-- Both cells on every row, empty where they have nothing, so the
              columns line up down the list. -->
         <span :if="row.kind === 'model'" class="wcell">
@@ -585,7 +580,6 @@
   .inline { display: flex; gap: .6rem; align-items: center; }
   .windows { display: flex; align-items: center; gap: 1rem; min-height: 2rem; }
   .common { display: flex; align-items: center; gap: .4rem; }
-  .pick-note { margin: .6rem 0 .3rem; }
   .win {
     width: 6.5rem; flex: none; box-sizing: border-box; padding: .25rem .4rem; font: inherit; font-size: 12px;
     border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
@@ -601,7 +595,7 @@
     align-items: center; padding: .3rem 0;
   }
   .models li.model.off .mname { color: var(--luu-fg-muted); text-decoration: line-through; }
-  .pick { display: flex; gap: .45rem; align-items: center; min-width: 0; cursor: pointer; }
+  .pick { display: flex; gap: .5rem; align-items: center; min-width: 0; }
   .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wcell { display: flex; align-items: center; gap: .4rem; }
   .tcell { display: flex; justify-content: flex-end; }

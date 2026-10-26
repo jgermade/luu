@@ -567,7 +567,8 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(form.getByRole("tab", { name: /Models/ })).toBeEnabled()
   await expect(form.getByRole("tab", { name: /Models/ })).toContainText("2")
   await form.getByRole("tab", { name: /Models/ }).click()
-  await form.locator('label.pick:has-text("tiny") input').first().click()
+  // No default among them: there is one, luu's, chosen in the columns.
+  await expect(form.locator('li.model input[type="radio"]')).toHaveCount(0)
   await form.getByRole("button", { name: "Add provider" }).click()
   await expect(form).toHaveCount(0)
 
@@ -575,7 +576,7 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   const onDisk = readFileSync(join(home, "config.toml"), "utf8")
   expect(onDisk).toContain("[provider.local]")
   expect(onDisk).toContain(`url = "${server.at}"`)
-  expect(onDisk).toContain('model = "tiny"')
+  expect(onDisk.slice(onDisk.indexOf("[provider.local]"))).not.toContain("model = ")
   expect(onDisk).toContain("[provider.here]")
   // Laid out as the new session's dialog: the providers in one column, the
   // models of the one in focus in the other.
@@ -604,15 +605,21 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await openEdit("local")
   const edit = page.getByRole("dialog", { name: "Provider local" })
   await edit.getByRole("tab", { name: /Models/ }).click()
-  const pick = name => edit.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) }).locator('input[type="radio"]')
-  await expect(pick("tiny")).toBeChecked()
-  await pick("tiny-q4").click()
+  await expect(edit.locator("li.model .mname")).toHaveText(["tiny", "tiny-q4"])
   await edit.getByRole("button", { name: "Save" }).click()
   await expect(edit).toHaveCount(0)
-  server.close()
-  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
+  // The default is a model chosen in the columns, and the ✓ says which; the
+  // head over them says where the provider is, and no model.
   await focus("local")
-  await expect(pane.locator(".models-head")).toContainText("tiny-q4")
+  await pane.locator("button.model", { hasText: "tiny-q4" }).click()
+  await expect.poll(() => readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
+  await expect(pane.locator("button.model.on")).toHaveText(/tiny-q4/)
+  await expect(pane.locator(".models-head .said")).not.toContainText("tiny")
+  // And the mock again, which the tests after this one start from.
+  await builtin.getByRole("button", { name: "make default" }).click()
+  await expect(builtin.locator(".tag.default")).toHaveCount(1)
+  await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  server.close()
 
   // Renamed, and the old name is gone rather than left beside it; then
   // removed, asked twice.
@@ -900,12 +907,7 @@ test("an anthropic provider connects with its key and writes its thinking", asyn
     await expect(form.locator("li.head")).toHaveText(["Tools"])
     const row = name => form.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) })
     await expect(row("claude-haiku-4-5")).toContainText("up to 200000")
-    // Haiku as the default: the placeholders follow it.
-    await row("claude-haiku-4-5").locator('input[type="radio"]').click()
     await form.getByRole("tab", { name: "Connection" }).click()
-    await expect(firstThinking).toHaveText("the server's default — claude-haiku-4-5 takes a budget")
-    await expect(form.locator("select.effort option").first()).toHaveText("the server's default — claude-haiku-4-5 takes none")
-    await expect(form.locator("input.max-tokens")).toHaveAttribute("placeholder", "8192")
 
     // A budget that does not fit under a model's cap is refused before it is
     // sent — Haiku's 8192, whatever the profile's.
@@ -915,11 +917,10 @@ test("an anthropic provider connects with its key and writes its thinking", asyn
     await expect(add).toBeDisabled()
     await form.locator("select.thinking").selectOption("adaptive")
     await form.locator("select.effort").selectOption("high")
-    // Past what the default model takes is refused too.
-    await form.locator("input.max-tokens").fill("32000")
+    // Past what the model the placeholders speak of takes is refused too.
+    await form.locator("input.max-tokens").fill("200000")
     await expect(add).toBeDisabled()
-    await modelsTab.click()
-    await row("claude-opus-5-5").locator('input[type="radio"]').click()
+    await form.locator("input.max-tokens").fill("32000")
     await expect(add).toBeEnabled()
     await add.click()
     await expect(form).toHaveCount(0)
@@ -927,7 +928,9 @@ test("an anthropic provider connects with its key and writes its thinking", asyn
     const written = readFileSync(join(home, "config.toml"), "utf8")
     const table = written.slice(written.indexOf("[provider.claude]"))
     expect(table).toContain('backend = "anthropic"')
-    expect(table).toContain('model = "claude-opus-5-5"')
+    // No model chosen in the form: there is no default per provider.
+    const own = table.slice(0, table.search(/\n\[provider\.(?!claude[.\]])/) >>> 0)
+    expect(own).not.toMatch(/^model = /m)
     expect(table).toContain('thinking = "adaptive"')
     expect(table).toContain('effort = "high"')
     expect(table).toContain("max-tokens = 32000")
@@ -1399,17 +1402,23 @@ test("the models on this machine are listed by where they came from", async ({ p
   table = table.slice(table.indexOf("[provider.fake]"))
   expect(table).toMatch(/\[provider\.fake\.models\."ollama:tiny:1b"\]\ntool-calls = "native"\n/)
   expect(table).not.toContain("huggingface:")
-  // The columns say so on that model alone.
-  const tiny = pane.locator("button.model", { hasText: "tiny:1b" })
+  // The columns say so on that model alone, the word only while its row is
+  // under the pointer.
+  const tiny = pane.locator(".row", { hasText: "tiny:1b" })
   await expect(tiny.locator(".tools.native")).toHaveCount(1)
-  await expect(pane.locator("button.model", { hasText: "small-Q4_K_M" }).locator(".tools.native")).toHaveCount(0)
-  // And back, which leaves no entry behind.
-  await pane.getByRole("button", { name: "Edit fake" }).click()
-  await form.getByRole("tab", { name: /Models/ }).click()
-  await calls.getByRole("radio", { name: "fenced" }).click()
-  await form.getByRole("button", { name: "Save" }).click()
-  await expect(form).toHaveCount(0)
-  expect(readFileSync(join(home, "config.toml"), "utf8")).not.toContain("[provider.fake.models")
+  await expect(pane.locator(".row", { hasText: "small-Q4_K_M" }).locator(".tools.native")).toHaveCount(0)
+  await expect(tiny.locator(".tools .word")).toBeHidden()
+  await tiny.hover()
+  await expect(tiny.locator(".tools .word")).toHaveText("native")
+  // And back from the row itself: the toggle writes it at once, and fenced —
+  // the provider's own — leaves no entry behind.
+  await tiny.getByRole("button", { name: "Tool calls of ollama:tiny:1b: native" }).click()
+  await expect(tiny.locator(".tools .word")).toHaveText("fenced")
+  await expect.poll(() => readFileSync(join(home, "config.toml"), "utf8")).not.toContain("[provider.fake.models")
+  // The badge is right after the name, not at the row's far end.
+  const name = await tiny.locator(".name").boundingBox()
+  const badge = await tiny.locator(".origin").boundingBox()
+  expect(badge.x - (name.x + name.width)).toBeLessThan(16)
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
   expect(errors).toEqual([])

@@ -1267,7 +1267,11 @@ always some model — and so does one typed under them, for a server that lists 
 and a badge of where it comes from, the server's to say: `luu · ollama` for one luu's own copy of
 ollama lists, `system · huggingface` for a file in the machine's cache, `luu` for luu's own models
 folder, and the format where it is not GGUF — see
-[`RECORD/2026-10-26.where-a-model-comes-from.completed.md`](RECORD/2026-10-26.where-a-model-comes-from.completed.md). *+ provider* is in the pane's pinned foot, as
+[`RECORD/2026-10-26.where-a-model-comes-from.completed.md`](RECORD/2026-10-26.where-a-model-comes-from.completed.md).
+Right of the row, how the model's tools travel: an icon, its word beside it while the row is under
+the pointer, and — in Settings, on loopback — a toggle that writes the model's own `tool-calls`
+where it differs from the provider's and takes it away where it does not. The head over the
+models says where the provider is, never a model: a provider has no default of its own. *+ provider* is in the pane's pinned foot, as
 *+ engine* is in Engines', and the built-in mock is a row of its own under the columns, chosen
 when the file names no default, because a server that fell back to it used to show a table with
 nothing chosen; the providers are **read-only**, and each is added, edited, renamed or — in its
@@ -1884,11 +1888,14 @@ are grouped by what the server said of their tools — *tools*, *not said*, *no
 tools*, because a server that says nothing has not said *no*. Each has a window,
 prefilled and capped by what the server reports: on Ollama a choice under the
 training maximum (`/api/show`), on llama-server or vLLM the server's own
-`n_ctx`, which a smaller number only budgets under. The default is a radio that
-can be cleared — none is *the first listed* — and what the server says of it
-fills the Anthropic keys' placeholders: the thinking and effort it takes, and
-the cap a reply gets when nothing is typed, which a model that takes less than
-the profile's cap is written as an exception of its own. Models outside *tools*
+`n_ctx`, which a smaller number only budgets under. **There is no default among
+them**: luu has one default, a provider and a model, chosen in the columns, and a
+radio here made every provider look as if it had its own. The profile's `model` —
+what `-p <name>` with no `-m` starts on, and luu's default model when the profile is
+the default — is carried as the file has it. What the server says of that model,
+or of the first listed, fills the Anthropic keys' placeholders: the thinking and
+effort it takes, and the cap a reply gets when nothing is typed, which a model
+that takes less than the profile's cap is written as an exception of its own. Models outside *tools*
 get a transport select, fenced or native, and the models without tools can be
 left out of the pickers. Saving without connecting stays, for a server that is
 off. **The form does not make a provider the default** — the list does, with a

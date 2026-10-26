@@ -14,7 +14,6 @@
   const Button = await import("@web/theme/default/components/button.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const { openStarter } = await import("@web/lib/ui.js")
-  const { modelLabel } = await import("@web/lib/engines.js")
   const ProviderForm = await import("./provider-form.html")
   const ProviderModels = await import("@web/views/chat/provider-models.html")
 
@@ -75,10 +74,10 @@
   // The provider whose models are on show, as the columns say it.
   let focused = ""
   $: here = state.providers?.providers?.[focused] || null
-  // What a session there would start on, said over its models — a catalog
-  // reference as its rows name it.
+  // Where it is, said over its models — and no model: a provider has no
+  // default of its own. luu's is the ✓ in the columns.
   $: said = here
-    ? [here.url, modelLabel(here.model), here["context-limit"] ? `${here["context-limit"]} tokens` : ""].filter(Boolean).join(" · ")
+    ? [here.url, here["context-limit"] ? `${here["context-limit"]} tokens` : ""].filter(Boolean).join(" · ")
     : ""
   // A model clicked here is the default: its provider in `default`, the model
   // in the provider's `model`. It used to open the new session's dialog on
@@ -94,6 +93,25 @@
   // `provider.rs`'s own order — see
   // `RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`.
   const profileTransport = p => p?.["tool-calls"] || (p?.backend === "anthropic" ? "native" : "fenced")
+  // And flipped from its row, written at once as the form writes it: an
+  // exception on the model where it differs from its provider, and nothing
+  // where it is the same.
+  const setTransport = async ({ provider, model, transport }) => {
+    defaultError = null
+    const providers = { ...(state.providers?.providers || {}) }
+    const profile = { ...providers[provider] }
+    const models = { ...(profile.models || {}) }
+    const entry = { ...(models[model] || {}) }
+    if (transport === profileTransport(profile)) delete entry["tool-calls"]
+    else entry["tool-calls"] = transport
+    if (Object.keys(entry).length) models[model] = entry
+    else delete models[model]
+    if (Object.keys(models).length) profile.models = models
+    else delete profile.models
+    providers[provider] = profile
+    const result = await saveProviders({ default: state.providers?.default ?? null, providers })
+    if (!result?.ok) defaultError = state.providersError || "the write was refused"
+  }
   // A model whose own entry disagrees with the profile: a run with `-m` can
   // travel differently from what the row says, and the row should not hide it.
   const overridden = name => {
@@ -199,8 +217,9 @@
       <div class="browse" :if="state.providers">
         <ProviderModels :provider="state.providers.default || ''"
                         :model="state.providers.providers?.[state.providers.default]?.model || ''"
-                        :disabled="!editable" typable
-                        @focus="focused = $event.detail" @choose="chooseDefault($event.detail)">
+                        :disabled="!editable" typable :toggles="editable"
+                        @focus="focused = $event.detail" @choose="chooseDefault($event.detail)"
+                        @transport="setTransport($event.detail)">
           <template :slot.head>
             <span :if="said" class="said">{{ said }}</span>
             <span :if="state.providers?.default === focused" class="tag default">default</span>
