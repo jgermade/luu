@@ -129,7 +129,8 @@
   // The runtime a new session's image runs on first; the others are offered
   // after it. Docker where config.toml says none. See
   // `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`.
-  $: defaultRuntime = view?.default_runtime || "docker"
+  // `""` is this machine: no session starts in a container nobody chose.
+  $: defaultRuntime = view?.default_runtime || ""
   const makeDefault = async runtime => {
     busy = `default:${runtime}`
     took(await saveDefaultRuntime(runtime))
@@ -165,7 +166,8 @@
 
     <p class="dim small">
       Un runtime es utilizable cuando está instalado, responde a comprobaciones y cuenta con las imágenes declaradas en las políticas.
-      El marcado como <em>default</em> es donde corre primero la imagen de una sesión nueva.
+      <span :if="view && !defaultRuntime">Las sesiones empiezan en <strong>esta máquina</strong>; marca un runtime como <em>default</em> para que empiecen en su contenedor, la primera de <code>luu serve</code> incluida.</span>
+      <span :if="defaultRuntime">Las sesiones empiezan en <strong>{{ defaultRuntime }}</strong>, el <em>default</em>, la primera de <code>luu serve</code> incluida; sus dos checks lo devuelven a esta máquina.</span>
       <span :if="view?.path">Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />.</span>
       <span :if="!view && !error" class="skeleton-pulse">Comprobando runtimes instalados…</span>
     </p>
@@ -219,15 +221,17 @@
                   @click="stop(r.runtime)">
             <svg class="ic"><use href="#i-stop"/></svg>
           </Button>
-          <!-- Running is a green check; the default is two. The default's is
-               where it is, not a button: there is nothing to make it. -->
-          <span :if="r.path && defaultRuntime === r.runtime" class="mark" role="img"
-                :aria-label="r.answers ? 'The default, running' : 'The default, not running'"
-                :title="r.answers ? 'The default, and running: new sessions run their image here first' : 'The default: new sessions run their image here first — not running now'">
+          <!-- Running is a green check; the default is two, which take it
+               back: sessions start on this machine again. -->
+          <Button :if="defaultRuntime === r.runtime" square variant="ghost" size="sm"
+                  :title="r.answers ? 'The default, and running: sessions start here · click to start them on this machine again' : 'The default, not running now · click to start sessions on this machine again'"
+                  label="Default: start on this machine again"
+                  :disabled="!view?.editable || !!busy"
+                  @click="makeDefault('host')">
             <svg class="ic" :class.up="r.answers"><use href="#i-check-double"/></svg>
-          </span>
+          </Button>
           <Button :if="defaultRuntime !== r.runtime" square variant="ghost" size="sm"
-                  :title="!r.path ? 'Install it to make it the default' : r.answers ? 'Running · make it the default: new sessions run their image here first' : 'Make it the default: new sessions run their image here first'"
+                  :title="!r.path ? 'Install it to make it the default' : r.answers ? 'Running · make it the default: sessions start here' : 'Make it the default: sessions start here'"
                   label="Make default"
                   :disabled="!view?.editable || !!busy || !r.path"
                   @click="makeDefault(r.runtime)">
@@ -350,15 +354,6 @@
   /* Running: green, on the check that makes it the default and on the two
      that say it is. */
   .actions .ic.up { color: var(--luu-ok); }
-  /* Where a square ghost button would be, so the actions line up. */
-  .actions .mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--luu-control-sm, 28px);
-    height: var(--luu-control-sm, 28px);
-    color: var(--luu-fg-muted);
-  }
   .runtime p { margin: .35rem 0 0; }
   .state {
     font-size: 11px;

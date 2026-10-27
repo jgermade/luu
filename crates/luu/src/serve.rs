@@ -1456,6 +1456,9 @@ pub struct Serving {
     listener: tokio::net::TcpListener,
     router: Router,
     app: Arc<App>,
+    /// What the routes are handed, for what `serve` does through one of them
+    /// before it answers anybody: see [`start_on_default`].
+    state: AppRouterState,
 }
 
 impl Serving {
@@ -1511,8 +1514,69 @@ async fn asked_to_stop() {
 
 pub async fn serve(options: ServeOptions) -> Result<()> {
     let serving = bind(options).await?;
+    start_on_default(&serving.state).await;
     println!("luu serve → http://{}", serving.address());
     serving.run().await
+}
+
+/// The first session in `[runtimes] default`, where config.toml names a
+/// container runtime: made as the new session's dialog makes one with nothing
+/// else chosen — that runtime, the first image a posture or an environment
+/// names, and the empty lists — through the same route. Where it cannot run there — the
+/// runtime does not answer, the image is not built — the session stays on
+/// this server's own policy file, and the line says why. In `serve` and not
+/// in [`bind`], which a test calls: a test does not read the `config.toml` of
+/// whoever runs it. See
+/// `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
+async fn start_on_default(state: &AppRouterState) {
+    let Some(runtime) = load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| config.default_runtime())
+    else {
+        return;
+    };
+    let app = &state.app;
+    // Over stdio, or with no policy files to choose from, nothing is chosen.
+    let Some(describe) = &app.describe_for else {
+        return;
+    };
+    let places = places_for_lists(app, describe).await;
+    let Some(place) = places
+        .iter()
+        .find(|place| place.runtime == runtime.as_str() && place.image.is_some())
+    else {
+        eprintln!(
+            "runtime — this machine: {runtime} is the default, and no posture or environment \
+             in config.toml names an image to run on it"
+        );
+        return;
+    };
+    let image = place.image.clone().unwrap_or_default();
+    if let Some(missing) = &place.missing {
+        eprintln!("runtime — this machine: {runtime} is the default, and {missing}");
+        return;
+    }
+    let asked = serde_json::json!({
+        "runtime": runtime.as_str(),
+        "image": image,
+        "lists": {},
+    });
+    let answer = create_session(
+        State(state.clone()),
+        axum::body::Bytes::from(asked.to_string()),
+    )
+    .await;
+    match answer.status().is_success() {
+        true => eprintln!("runtime — {runtime} · {image}, the default in config.toml"),
+        false => {
+            let said = axum::body::to_bytes(answer.into_body(), 64 * 1024)
+                .await
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
+            eprintln!("runtime — this machine: starting on {runtime} · {image} failed: {said}");
+        }
+    }
 }
 
 pub async fn bind(options: ServeOptions) -> Result<Serving> {
@@ -1628,6 +1692,17 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     // copy of a public binary, and a browser navigating to a page cannot carry
     // an `Authorization` header, so gating it would only make the guarded
     // server unusable from the client written for it.
+    let state = AppRouterState {
+        app: app.clone(),
+        auth: auth.clone(),
+        // Loopback only, and decided here because this is where the bound
+        // address is known. Writing a `default` provider redirects every
+        // future run on this machine, outside the gate and after the
+        // session ends — a larger authority than approving one job, and
+        // not one a bearer token should carry.
+        providers_editable: address.ip().is_loopback(),
+        origin: origin.clone(),
+    };
     let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
@@ -1792,17 +1867,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/h/{name}/{*path}", get(host_page))
         .route("/{*path}", get(asset_handler))
-        .with_state(AppRouterState {
-            app: app.clone(),
-            auth: auth.clone(),
-            // Loopback only, and decided here because this is where the bound
-            // address is known. Writing a `default` provider redirects every
-            // future run on this machine, outside the gate and after the
-            // session ends — a larger authority than approving one job, and
-            // not one a bearer token should carry.
-            providers_editable: address.ip().is_loopback(),
-            origin: origin.clone(),
-        })
+        .with_state(state.clone())
         // Outermost, so it sees every request — the guarded half, the page's
         // own files, and a request the token check refused — and the time it
         // took is the time the client waited. See `crate::log`.
@@ -1823,6 +1888,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         listener,
         router,
         app,
+        state,
     })
 }
 
@@ -4385,6 +4451,10 @@ struct PosturesView {
     /// image a posture or an environment names on every container runtime:
     /// the new session's *Runtime*. See [`places_for_lists`].
     runtimes: Vec<Where>,
+    /// `[runtimes] default`: the container runtime the dialog starts a session
+    /// in before anything else is chosen. Absent is this machine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_runtime: Option<&'static str>,
 }
 
 /// What a session may be allowed to do, by name.
@@ -5261,6 +5331,11 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         postures: app.postures(),
         environments: app.environments().keys().cloned().collect(),
         runtimes,
+        default_runtime: load_config()
+            .await
+            .ok()
+            .and_then(|(config, _)| config.default_runtime())
+            .map(agent_core::worker::Runtime::as_str),
     })
     .into_response()
 }
@@ -5301,8 +5376,9 @@ struct RuntimesView {
     running: Option<String>,
     /// `[terminal] host`.
     host_shell: &'static str,
-    /// `[runtimes] default`: the container runtime an image runs on first.
-    default_runtime: &'static str,
+    /// `[runtimes] default`: the container runtime a session starts in, or
+    /// `None` for this machine.
+    default_runtime: Option<&'static str>,
 }
 
 /// The images a runtime is asked about and may build: the ones a policy file
@@ -5372,9 +5448,8 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         .as_str();
     let default_runtime = config
         .as_ref()
-        .map(|config| config.default_runtime())
-        .unwrap_or(agent_core::worker::Runtime::CONTAINED[0])
-        .as_str();
+        .and_then(|config| config.default_runtime())
+        .map(agent_core::worker::Runtime::as_str);
     Json(RuntimesView {
         path: config_path().await.map(|path| path.display().to_string()),
         editable: refused.is_none(),
@@ -5692,9 +5767,9 @@ struct DefaultRuntimeAsk {
     runtime: agent_core::worker::Runtime,
 }
 
-/// Writes `[runtimes] default`: the container runtime an image runs on first
-/// in the new session's *Runtime*. A container runtime or nothing — `host`
-/// and `direct` are not where an image runs. Docker is written as no table.
+/// Writes `[runtimes] default`: the container runtime a session starts in.
+/// `host` is this machine again, written as no table; `direct` runs no image
+/// and is refused.
 async fn put_default_runtime(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
@@ -5703,11 +5778,12 @@ async fn put_default_runtime(
     if let Err(refused) = engines_allowed(&state, &headers) {
         return *refused;
     }
-    if !asked.runtime.is_contained() {
+    let host = asked.runtime == agent_core::worker::Runtime::Host;
+    if !host && !asked.runtime.is_contained() {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             format!(
-                "`{}` runs no image: the default is a container runtime",
+                "`{}` runs no image: the default is this machine or a container runtime",
                 asked.runtime.as_str()
             ),
         )
@@ -5725,8 +5801,7 @@ async fn put_default_runtime(
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     };
     let runtimes = crate::provider::Runtimes {
-        default: (asked.runtime != agent_core::worker::Runtime::CONTAINED[0])
-            .then_some(asked.runtime),
+        default: (!host).then_some(asked.runtime),
     };
     if let Err(error) = write_config(current.with_runtimes(runtimes), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
@@ -8571,12 +8646,14 @@ async fn tool_budget(app: &App, destination: &Destination) -> u32 {
 
 /// Every place a session made from lists may run, as [`Where`]s: this
 /// machine, and each image [`images_named`] finds on every container runtime
-/// — the default one first (`[runtimes] default`, Docker where the file says
-/// none). What the new session's dialog offers as *Runtime*.
+/// — the default one first (`[runtimes] default`; Docker first where the file
+/// names none, and this machine is the default). What the new session's
+/// dialog offers as *Runtime*.
 async fn places_for_lists(app: &App, describe: &DescribeFactory) -> Vec<Where> {
     let first = load_config()
         .await
-        .map(|(config, _)| config.default_runtime())
+        .ok()
+        .and_then(|(config, _)| config.default_runtime())
         .unwrap_or(agent_core::worker::Runtime::CONTAINED[0]);
     let places = std::iter::once(crate::policies::Place::host()).chain(
         images_named(app)

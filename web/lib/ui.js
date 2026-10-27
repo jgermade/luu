@@ -259,13 +259,18 @@ const KINDS = ["shell", "network", "files"]
 
 /// The runtime and lists the last session started with, each where it still
 /// is: a runtime this machine still offers, a list `config.toml` still has.
+/// The runtime Settings → Runtimes marks as the default comes first, where it
+/// is offered: the first of its places. See
+/// `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
 function rememberedStart(policies) {
   let kept = {}
   try {
     kept = JSON.parse(prefs.start || "{}") || {}
   } catch {}
   const options = runtimeOptions(state.postures)
-  const runtime = options.find(option => option.value === kept.runtime && !option.disabled)?.value
+  const preferred = state.postures?.default_runtime
+  const runtime = (preferred && options.find(option => option.runtime === preferred && option.image && !option.disabled)?.value)
+    || options.find(option => option.value === kept.runtime && !option.disabled)?.value
     || options.find(option => !option.disabled)?.value
     || "host|"
   const lists = Object.fromEntries(KINDS.map(kind => {

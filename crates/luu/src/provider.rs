@@ -609,11 +609,13 @@ impl Default for Sessions {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Runtimes {
-    /// The container runtime an image runs on first in the new session's
-    /// *Runtime* — the others are offered after it. Absent is Docker, the
-    /// first of [`agent_core::worker::Runtime::CONTAINED`]. Chosen in Settings
-    /// → Runtimes. See
-    /// `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`.
+    /// The container runtime a session starts in: the first session of
+    /// `luu serve`, and the new session's *Runtime* before anything else is
+    /// chosen — the others are offered after it. **Absent is this machine**:
+    /// no session starts in a container nobody chose. Chosen in Settings →
+    /// Runtimes. See
+    /// `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`
+    /// and `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<agent_core::worker::Runtime>,
 }
@@ -1311,7 +1313,7 @@ impl Config {
     }
 
     /// The file as Settings → Runtimes hands back the default runtime: `None`
-    /// is Docker again, written as no table.
+    /// is this machine again, written as no table.
     pub fn with_runtimes(&self, runtimes: Runtimes) -> Self {
         Self {
             runtimes: (runtimes != Runtimes::default()).then_some(runtimes),
@@ -1431,11 +1433,9 @@ impl Config {
             .filter(|steps| *steps > 0)
     }
 
-    /// The container runtime an image runs on where nothing names one.
-    pub fn default_runtime(&self) -> agent_core::worker::Runtime {
-        self.runtimes
-            .and_then(|runtimes| runtimes.default)
-            .unwrap_or(agent_core::worker::Runtime::CONTAINED[0])
+    /// The container runtime a session starts in, or `None` for this machine.
+    pub fn default_runtime(&self) -> Option<agent_core::worker::Runtime> {
+        self.runtimes.and_then(|runtimes| runtimes.default)
     }
 
     /// Who the terminal may open a host shell for, defaulted where the file
@@ -1915,24 +1915,29 @@ mod tests {
         assert!(config("max-tool-step = 3\n").is_err());
     }
 
-    /// `[runtimes] default`: Docker until the file names another, kept
-    /// through a write, and Docker written back as no table.
+    /// `[runtimes] default`: this machine until the file names a container
+    /// runtime — Docker too, written out — kept through a write, and this
+    /// machine again written back as no table.
     #[test]
-    fn an_image_runs_on_docker_until_the_file_names_another_runtime() {
+    fn a_session_starts_on_this_machine_until_the_file_names_a_runtime() {
         use agent_core::worker::Runtime;
         let none = config("").expect("an empty file loads");
-        assert_eq!(none.default_runtime(), Runtime::Docker);
+        assert_eq!(none.default_runtime(), None);
+        let docker = none.with_runtimes(Runtimes {
+            default: Some(Runtime::Docker),
+        });
+        assert!(docker.render().unwrap().contains("default = \"docker\""));
         let podman = none.with_runtimes(Runtimes {
             default: Some(Runtime::Podman),
         });
-        assert_eq!(podman.default_runtime(), Runtime::Podman);
+        assert_eq!(podman.default_runtime(), Some(Runtime::Podman));
         let rendered = podman.render().expect("it renders");
         assert!(
             rendered.contains("[runtimes]\ndefault = \"podman\""),
             "{rendered}"
         );
         let again = config(&rendered).expect("it loads again");
-        assert_eq!(again.default_runtime(), Runtime::Podman);
+        assert_eq!(again.default_runtime(), Some(Runtime::Podman));
         let back = again.with_runtimes(Runtimes::default());
         assert!(!back.render().unwrap().contains("[runtimes]"));
         assert!(config("[runtimes]\ndefualt = \"podman\"\n").is_err());

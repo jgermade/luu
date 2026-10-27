@@ -1537,44 +1537,48 @@ test("runtimes, postures and the host shell are configured from Settings", async
   }
   const config = () => readFileSync(join(home, "config.toml"), "utf8")
 
-  // Docker is the default while the file names none, and says so on its
-  // card; one that is installed is made the default from its own, by the
-  // check among its icon actions. See
-  // `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`.
+  // While the file names none, sessions start on this machine and no card
+  // says *default*; one that is installed is made the default from its own,
+  // by the check among its icon actions, and its two checks take it back.
+  // See `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
   const card = runtime => pane.locator(".runtime", { has: page.locator("header strong", { hasText: new RegExp(`^${runtime}$`) }) })
-  await expect(card("docker").locator(".state.default")).toHaveText("default")
-  await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(0)
-  // The default wears two checks where the others have the button; a check
-  // is green while its runtime answers.
-  await expect(card("docker").locator('.actions .mark use[href="#i-check-double"]')).toHaveCount(1)
+  await expect(pane.locator(".state.default")).toHaveCount(0)
+  await expect(pane).toContainText("Las sesiones empiezan en esta máquina")
+  await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(1)
+  // A check is green while its runtime answers.
   await expect(card("nerdctl").locator(".state").first()).toHaveText("answering")
   await expect(card("nerdctl").locator(".actions svg.ic.up use[href='#i-check']")).toHaveCount(1)
   await card("nerdctl").locator(".actions").getByRole("button", { name: "Make default" }).click()
   await expect(card("nerdctl").locator(".state.default")).toHaveText("default")
-  await expect(card("nerdctl").locator(".actions .mark svg.ic.up use[href='#i-check-double']")).toHaveCount(1)
-  await expect(card("docker").locator(".state.default")).toHaveCount(0)
-  await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(1)
+  // The default wears two, green while it answers.
+  const twice = card("nerdctl").getByRole("button", { name: "Default: start on this machine again" })
+  await expect(twice.locator("svg.ic.up use[href='#i-check-double']")).toHaveCount(1)
   expect(config()).toContain("[runtimes]")
   expect(config()).toContain('default = "nerdctl"')
-  // And a new session's image is offered on it first.
+  // And the new session's dialog is told, and offers an image on it first.
   const lists = await (await fetch(`${BASE}/api/postures`)).json()
+  expect(lists.default_runtime).toBe("nerdctl")
   const contained = lists.runtimes.filter(place => place.image)
   if (contained.length) expect(contained[0].runtime).toBe("nerdctl")
-  // Only a container runtime may be the default; Docker is written as no table.
-  const notContained = await fetch(`${BASE}/api/runtimes/default`, {
+  // Docker is written out like any other; `direct` runs no image.
+  const put = runtime => fetch(`${BASE}/api/runtimes/default`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ runtime: "host" }),
+    body: JSON.stringify({ runtime }),
   })
-  expect(notContained.status).toBe(422)
-  const back = await fetch(`${BASE}/api/runtimes/default`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ runtime: "docker" }),
-  })
-  expect(back.status).toBe(200)
-  expect((await back.json()).default_runtime).toBe("docker")
-  expect(config()).not.toContain("[runtimes]")
+  expect((await put("direct")).status).toBe(422)
+  const docker = await put("docker")
+  expect(docker.status).toBe(200)
+  expect((await docker.json()).default_runtime).toBe("docker")
+  expect(config()).toContain('default = "docker"')
+  await put("nerdctl")
+  await page.locator('.runtimes-pane a, .runtimes-pane button.link', { hasText: "check again" }).first().click()
+  // The two checks take it back: this machine, written as no table.
+  await expect(twice).toBeVisible()
+  await twice.click()
+  await expect(pane.locator(".state.default")).toHaveCount(0)
+  await expect.poll(config).not.toContain("[runtimes]")
+  expect((await (await fetch(`${BASE}/api/postures`)).json()).default_runtime).toBeUndefined()
 
   // Stopped from its card, where it says how — Colima's own `colima stop`, a
   // task like a start, its output kept while it runs or if it fails. Nerdctl's

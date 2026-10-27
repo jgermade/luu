@@ -1049,10 +1049,16 @@ access = "execute"
   ones at the top of the checkout and never one the page types, and the server
   replaces the postures it offers at once. Postures are no longer read only at
   startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)).
-  **And one container runtime is the default**: `[runtimes] default`, written
-  from its card (`PUT /api/runtimes/default`, a container runtime only, Docker
-  as no table), is where a session made from lists runs its image first in the
-  new session's *Runtime* — the others are offered after it. A card's actions
+  **And one container runtime may be the default**: `[runtimes] default`,
+  written from its card (`PUT /api/runtimes/default`; `host`, written as no
+  table, is this machine again), is where sessions start — the first one of
+  `luu serve`, made through the same route as the dialog's from that runtime,
+  the first image a posture or an environment names and the empty lists, and
+  the new session's *Runtime* before anything else is chosen. **Absent is this
+  machine**, and no card says *default*: a session in a container nobody chose
+  was a label promising what the server did not do. Where the default cannot
+  run, the first session stays on this machine and `serve`'s output says why
+  ([`RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`](RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md)). A card's actions
   are icons, as an engine's: install, start, stop, make default
   ([`RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`](RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md)).
   The check says both things at once: green while the runtime answers, and
