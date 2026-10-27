@@ -1,11 +1,13 @@
 //! What Settings → Runtimes shows and does: whether each container runtime is
 //! installed, answers, and has the images the postures name; the tasks that
 //! change that — install where Homebrew can without root, start, build an
-//! image — and which policy files in the base a posture may name.
+//! image — and which policy files in the base a posture may name. And the one
+//! thing a session asks of it: start a runtime that is down.
 //!
 //! Every line run here is one `agent_core::worker::Runtime` built — this
 //! module runs them and reads what they say, and knows no runtime's API. See
-//! `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
+//! `RECORD/2026-10-01.runtimes-in-settings.completed.md` and
+//! `RECORD/2026-10-27.runtimes-without-the-wait.completed.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -22,6 +24,17 @@ const PROBE: Duration = Duration::from_secs(5);
 
 /// The last lines of a build kept for the page: enough to read why it failed.
 const TAIL: usize = 40;
+
+/// How long a session waits for a runtime it started to answer. `open -a
+/// Docker` returns long before the daemon does, and a VM boots in seconds to
+/// tens of seconds; past this it is not coming up for this session.
+const WAKING: Duration = Duration::from_secs(120);
+
+/// The image built from a release rather than from source: `Containerfile`'s
+/// final stage over the release's own Linux binary. Carried in the binary,
+/// because the base it would be read from is usually not luu's checkout. See
+/// `RECORD/2026-10-27.runtimes-without-the-wait.completed.md`.
+const RELEASE_CONTAINERFILE: &str = include_str!("../../../Containerfile.release");
 
 /// One container runtime, as the section shows it.
 #[derive(Debug, Clone, Serialize)]
@@ -111,19 +124,23 @@ pub struct ImageView {
     pub present: Option<bool>,
 }
 
-/// Every container runtime, probed at once, each against every image in
-/// `images`.
-pub async fn probe_all(images: &[String]) -> Vec<RuntimeView> {
-    let probes = Runtime::CONTAINED.map(|runtime| probe(runtime, images.to_vec()));
-    futures_util::future::join_all(probes).await
+/// Every container runtime as far as it can be seen **without asking it**:
+/// installed or not, and how to install it. Nothing is run, so it answers at
+/// once, and [`probe`] asks each one on its own — the page fills each card
+/// when its runtime answers rather than when the slowest one does.
+pub fn seen_all(images: &[String]) -> Vec<RuntimeView> {
+    Runtime::CONTAINED
+        .iter()
+        .map(|&runtime| seen(runtime, images))
+        .collect()
 }
 
-async fn probe(runtime: Runtime, images: Vec<String>) -> RuntimeView {
+fn seen(runtime: Runtime, images: &[String]) -> RuntimeView {
     let program = runtime.program().unwrap_or_default();
     let path = agent_core::worker::which(program).map(|path| path.display().to_string());
-    let mut view = RuntimeView {
+    RuntimeView {
         runtime: runtime.as_str().to_string(),
-        path: path.clone(),
+        path,
         hint: runtime.install_hint(),
         answers: None,
         detail: None,
@@ -144,8 +161,14 @@ async fn probe(runtime: Runtime, images: Vec<String>) -> RuntimeView {
                 present: None,
             })
             .collect(),
-    };
-    if path.is_none() {
+    }
+}
+
+/// One runtime, asked: whether it answers, and whether its store has each of
+/// `images`. Not installed is said without running anything.
+pub async fn probe(runtime: Runtime, images: &[String]) -> RuntimeView {
+    let mut view = seen(runtime, images);
+    if view.path.is_none() {
         return view;
     }
     let Some(argv) = runtime.probe_argv() else {
@@ -196,6 +219,48 @@ async fn run(argv: &[String]) -> Result<(), String> {
 
 // ---- tasks ------------------------------------------------------------------
 
+/// Where an image's luu comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuildFrom {
+    /// This version's release, for Linux: no compiler, no checkout.
+    #[default]
+    Release,
+    /// `<base>/Containerfile`, which compiles the checkout inside the image.
+    Source,
+}
+
+/// The line that builds `image`, run in the base for a source build and in
+/// [`release_context`] for a release one.
+fn build_line(runtime: Runtime, image: &str, from: BuildFrom) -> Option<Vec<String>> {
+    match from {
+        BuildFrom::Source => runtime.build_argv(image, "Containerfile", ".", &[]),
+        BuildFrom::Release => runtime.build_argv(
+            image,
+            "Containerfile.release",
+            ".",
+            &[("LUU_VERSION", env!("CARGO_PKG_VERSION"))],
+        ),
+    }
+}
+
+/// The directory a release build runs in: [`RELEASE_CONTAINERFILE`] and
+/// nothing else, so the context sent to the runtime is one small file. Under
+/// the state directory rather than the system's temporary one, because
+/// colima's `nerdctl` builds inside its VM and sees only what is shared with
+/// it, which is the home directory.
+fn release_context() -> Result<PathBuf, String> {
+    let dir = crate::provider::Config::path_for_writing()
+        .and_then(|config| config.parent().map(|state| state.join("worker-image")))
+        .unwrap_or_else(|| std::env::temp_dir().join("luu-worker-image"));
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("creating {}: {error}", dir.display()))?;
+    let file = dir.join("Containerfile.release");
+    std::fs::write(&file, RELEASE_CONTAINERFILE)
+        .map_err(|error| format!("writing {}: {error}", file.display()))?;
+    Ok(dir)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskView {
     /// `build`, `install` or `start`.
@@ -229,23 +294,38 @@ impl Tasks {
             .collect()
     }
 
-    /// Starts `runtime build` of `image` from `<base>/Containerfile`. A build
-    /// of this image is minutes, because it compiles luu inside it.
-    pub fn build(&self, runtime: Runtime, image: &str, base: &Path) -> Result<(), String> {
-        let containerfile = base.join("Containerfile");
-        if !containerfile.is_file() {
+    /// Starts `runtime build` of `image`, from the release or from source.
+    ///
+    /// From the release it is seconds: [`RELEASE_CONTAINERFILE`], written into
+    /// a directory of its own under the state directory, fetches this
+    /// version's Linux binary and checks it against the release's
+    /// `SHA256SUMS`. Nothing in the base is read. From source it is
+    /// `<base>/Containerfile`, which compiles luu inside the image and takes
+    /// minutes, and exists only where the base is luu's own checkout.
+    pub fn build(
+        &self,
+        runtime: Runtime,
+        image: &str,
+        from: BuildFrom,
+        base: &Path,
+    ) -> Result<(), String> {
+        if from == BuildFrom::Source && !base.join("Containerfile").is_file() {
             return Err(format!(
-                "there is no Containerfile in {}, which is what the image is built from",
+                "there is no Containerfile in {}, which is what the image is built from \
+                 source with",
                 base.display()
             ));
         }
-        let argv = runtime
-            .build_argv(image, "Containerfile", ".")
+        let argv = build_line(runtime, image, from)
             .ok_or_else(|| format!("`{runtime}` builds no images"))?;
         if agent_core::worker::which(&argv[0]).is_none() {
             return Err(format!("`{}` is not installed on this machine", argv[0]));
         }
-        self.start("build", runtime, Some(image), vec![argv], base)
+        let dir = match from {
+            BuildFrom::Source => base.to_path_buf(),
+            BuildFrom::Release => release_context()?,
+        };
+        self.start("build", runtime, Some(image), vec![argv], &dir)
     }
 
     /// Installs it, where [`install_steps`] has a line for it.
@@ -362,6 +442,76 @@ async fn run_step(argv: &[String], base: &Path, note: &impl Fn(String)) -> Resul
     }
 }
 
+// ---- a session's runtime -------------------------------------------------------
+
+/// How long the lines that start a runtime may take, together. Podman's
+/// includes `machine init` where there is no machine yet, which downloads the
+/// VM's image once.
+const STARTING: Duration = Duration::from_secs(600);
+
+/// Whether `runtime` is down in a way [`wake`] can fix: installed, silent to
+/// its probe, and with a line to start it. Asked only after a worker failed to
+/// start, so a healthy session pays nothing for it.
+pub async fn asleep(runtime: Runtime) -> bool {
+    let Some(argv) = runtime.probe_argv() else {
+        return false;
+    };
+    if start_steps(runtime).is_none() || agent_core::worker::which(&argv[0]).is_none() {
+        return false;
+    }
+    run(&argv).await.is_err()
+}
+
+/// Starts a runtime a session needs, and waits until it answers.
+///
+/// The lines are [`start_steps`], the ones *start it* runs in Settings, so
+/// there is one definition of starting a runtime. Then the probe, once a
+/// second for [`WAKING`]. Every step and every line it prints goes to `say`.
+/// Nothing stops it afterwards: a podman machine or a colima VM is shared with
+/// whatever else runs in it, and it is not luu's to stop. See
+/// `RECORD/2026-10-27.runtimes-without-the-wait.completed.md`.
+pub async fn wake(runtime: Runtime, say: impl Fn(String)) -> Result<(), String> {
+    let steps = start_steps(runtime)
+        .ok_or_else(|| format!("`{runtime}` is not started by luu: it takes root"))?;
+    let probe = runtime
+        .probe_argv()
+        .ok_or_else(|| format!("`{runtime}` has nothing to start"))?;
+    let here = std::env::temp_dir();
+    let started = tokio::time::timeout(STARTING, async {
+        for argv in &steps {
+            say(format!("$ {}", argv.join(" ")));
+            run_step(argv, &here, &say)
+                .await
+                .map_err(|status| format!("`{}` failed: {status}", argv.join(" ")))?;
+        }
+        Ok::<(), String>(())
+    })
+    .await;
+    match started {
+        Err(_) => {
+            return Err(format!(
+                "starting it took longer than {}s",
+                STARTING.as_secs()
+            ));
+        }
+        Ok(Err(error)) => return Err(error),
+        Ok(Ok(())) => {}
+    }
+    let deadline = tokio::time::Instant::now() + WAKING;
+    loop {
+        match run(&probe).await {
+            Ok(()) => return Ok(()),
+            Err(said) if tokio::time::Instant::now() >= deadline => {
+                return Err(format!(
+                    "started, and still not answering after {}s: {said}",
+                    WAKING.as_secs()
+                ));
+            }
+            Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+        }
+    }
+}
+
 // ---- policy files -------------------------------------------------------------
 
 /// A policy file a posture may name, and where it would run.
@@ -425,7 +575,7 @@ mod tests {
         if agent_core::worker::which("container").is_some() {
             return;
         }
-        let view = probe(Runtime::Container, vec!["luu-worker:dev".into()]).await;
+        let view = probe(Runtime::Container, &["luu-worker:dev".into()]).await;
         assert_eq!(view.path, None);
         assert_eq!(view.answers, None, "nothing was run: {view:?}");
         assert!(view.hint.is_some());
@@ -493,9 +643,66 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("luu-build-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a directory");
         let refused = tasks
-            .build(Runtime::Docker, "luu-worker:dev", &dir)
+            .build(Runtime::Docker, "luu-worker:dev", BuildFrom::Source, &dir)
             .unwrap_err();
         assert!(refused.contains("no Containerfile"), "{refused}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The release's image is the source's image with another binary in it:
+    /// the final stages agree, instruction for instruction, but for where
+    /// `COPY --from` takes `luu` from. A package added to one and not the
+    /// other is an image whose `commands` depend on how it was built.
+    #[test]
+    fn the_release_image_is_the_source_image_but_for_the_binary() {
+        fn last_stage(file: &str) -> Vec<String> {
+            // Instructions, with their continuation lines joined, from the
+            // last `FROM` on.
+            let mut instructions: Vec<String> = Vec::new();
+            let mut open = false;
+            for line in file.lines().map(str::trim) {
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                match open {
+                    true => instructions.last_mut().unwrap().push_str(line),
+                    false => instructions.push(line.to_string()),
+                }
+                open = line.ends_with('\\');
+            }
+            let from = instructions
+                .iter()
+                .rposition(|line| line.starts_with("FROM "))
+                .expect("a FROM");
+            instructions[from..]
+                .iter()
+                .map(|line| match line.starts_with("COPY --from=") {
+                    // Where it lands, and not where it came from.
+                    true => format!("COPY --from=… {}", line.rsplit(' ').next().unwrap()),
+                    false => line.clone(),
+                })
+                .collect()
+        }
+        let source = last_stage(include_str!("../../../Containerfile"));
+        assert_eq!(last_stage(RELEASE_CONTAINERFILE), source);
+        assert!(
+            source.contains(&"COPY --from=… /usr/local/bin/luu".to_string()),
+            "{source:?}"
+        );
+        assert!(RELEASE_CONTAINERFILE.contains("sha256sum -c"));
+    }
+
+    #[test]
+    fn a_release_build_carries_this_version_and_reads_no_checkout() {
+        let line = build_line(Runtime::Docker, "luu-worker:dev", BuildFrom::Release).unwrap();
+        let version = format!("LUU_VERSION={}", env!("CARGO_PKG_VERSION"));
+        assert!(line.contains(&version), "{line:?}");
+        assert!(
+            line.contains(&"Containerfile.release".to_string()),
+            "{line:?}"
+        );
+        assert!(RELEASE_CONTAINERFILE.contains("ARG LUU_VERSION"));
+        let line = build_line(Runtime::Docker, "luu-worker:dev", BuildFrom::Source).unwrap();
+        assert!(!line.iter().any(|word| word == "--build-arg"), "{line:?}");
     }
 }

@@ -1641,6 +1641,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // `crate::runtimes`.
         .route("/api/runtimes", get(get_runtimes))
         .route("/api/runtimes/tasks", get(get_tasks))
+        .route("/api/runtimes/{runtime}", get(get_runtime))
         .route("/api/runtimes/{runtime}/build", post(build_image))
         .route("/api/runtimes/{runtime}/install", post(install_runtime))
         .route("/api/runtimes/{runtime}/start", post(start_runtime))
@@ -5097,8 +5098,16 @@ struct RuntimesView {
     path: Option<String>,
     editable: bool,
     refused: Option<String>,
-    /// Where an image is built from, and where a policy file is looked for.
+    /// Where an image is built from source, and where a policy file is
+    /// looked for.
     base: String,
+    /// Whether the base has a `Containerfile`, so an image can also be built
+    /// from source here, and not only from the release.
+    from_source: bool,
+    /// The release a build fetches luu from: this build's own version.
+    release: &'static str,
+    /// Each runtime as far as it is seen **without asking it** — installed or
+    /// not. `GET /api/runtimes/{runtime}` asks one.
     runtimes: Vec<crate::runtimes::RuntimeView>,
     tasks: Vec<crate::runtimes::TaskView>,
     postures: std::collections::BTreeMap<String, PostureRow>,
@@ -5123,47 +5132,66 @@ fn images_of<'a>(places: impl Iterator<Item = &'a Option<Where>>) -> Vec<String>
     images
 }
 
-async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap) -> Response {
-    let app = &state.app;
-    let base = app.agency().await.sandbox.base().to_path_buf();
+/// The postures and the policy files in `base`, each with where it would run.
+async fn postures_and_policies(
+    app: &App,
+    base: &std::path::Path,
+) -> (
+    std::collections::BTreeMap<String, PostureRow>,
+    Vec<PolicyRow>,
+) {
     let postures = app.postures();
     let describe = app.describe_for.clone();
-    let (postures, policies) = {
-        let base = base.clone();
-        blocking(move || {
-            let place = |policy: Option<PathBuf>| {
-                describe.as_ref().map(|d| d(policy.map(Chosen::File), None))
-            };
-            let postures: std::collections::BTreeMap<_, _> = postures
-                .into_iter()
-                .map(|(name, posture)| {
-                    (
-                        name,
-                        PostureRow {
-                            policy: posture.policy.display().to_string(),
-                            place: place(Some(posture.policy.clone())),
-                        },
-                    )
-                })
-                .collect();
-            let policies: Vec<_> = crate::runtimes::policy_files(&base)
-                .into_iter()
-                .map(|file| PolicyRow {
-                    place: place(Some(base.join(&file.path))),
-                    path: file.path,
-                })
-                .collect();
-            (postures, policies)
-        })
-        .await
-    };
-    let images = images_of(
+    let base = base.to_path_buf();
+    blocking(move || {
+        let place =
+            |policy: Option<PathBuf>| describe.as_ref().map(|d| d(policy.map(Chosen::File), None));
+        let postures: std::collections::BTreeMap<_, _> = postures
+            .into_iter()
+            .map(|(name, posture)| {
+                (
+                    name,
+                    PostureRow {
+                        policy: posture.policy.display().to_string(),
+                        place: place(Some(posture.policy.clone())),
+                    },
+                )
+            })
+            .collect();
+        let policies: Vec<_> = crate::runtimes::policy_files(&base)
+            .into_iter()
+            .map(|file| PolicyRow {
+                place: place(Some(base.join(&file.path))),
+                path: file.path,
+            })
+            .collect();
+        (postures, policies)
+    })
+    .await
+}
+
+/// The images a runtime is asked about: the ones the postures and the policy
+/// files here name.
+fn images_here(
+    postures: &std::collections::BTreeMap<String, PostureRow>,
+    policies: &[PolicyRow],
+) -> Vec<String> {
+    images_of(
         postures
             .values()
             .map(|row| &row.place)
             .chain(policies.iter().map(|row| &row.place)),
-    );
-    let runtimes = crate::runtimes::probe_all(&images).await;
+    )
+}
+
+/// Settings → Runtimes without a probe: every process this starts is one the
+/// page asked for by name, through [`get_runtime`], so a runtime that takes
+/// its five seconds to say nothing holds up only its own card.
+async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap) -> Response {
+    let app = &state.app;
+    let base = app.agency().await.sandbox.base().to_path_buf();
+    let (postures, policies) = postures_and_policies(app, &base).await;
+    let runtimes = crate::runtimes::seen_all(&images_here(&postures, &policies));
     let refused = engines_allowed(state, headers).err().map(|_| {
         "Runtimes are configured from a browser on this machine: a posture is what a session \
          may do, and a build is a process this machine runs."
@@ -5178,6 +5206,8 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         path: config_path().await.map(|path| path.display().to_string()),
         editable: refused.is_none(),
         refused,
+        from_source: base.join("Containerfile").is_file(),
+        release: env!("CARGO_PKG_VERSION"),
         base: base.display().to_string(),
         runtimes,
         tasks: app.tasks.list(),
@@ -5194,6 +5224,21 @@ async fn get_runtimes(
     State(state): State<AppRouterState>,
 ) -> Response {
     runtimes_answer(&state, &headers).await
+}
+
+/// One runtime, asked: whether it answers and which of the images here its
+/// store has. What the page calls once per installed runtime, each card
+/// filled when its own answer arrives.
+async fn get_runtime(State(state): State<AppRouterState>, Path(runtime): Path<String>) -> Response {
+    let runtime = match contained(&runtime) {
+        Ok(runtime) => runtime,
+        Err(refused) => return *refused,
+    };
+    let app = &state.app;
+    let base = app.agency().await.sandbox.base().to_path_buf();
+    let (postures, policies) = postures_and_policies(app, &base).await;
+    let images = images_here(&postures, &policies);
+    Json(crate::runtimes::probe(runtime, &images).await).into_response()
 }
 
 /// The tasks alone: what the section polls while one runs, because the
@@ -5265,6 +5310,10 @@ async fn start_runtime(
 #[derive(serde::Deserialize)]
 struct BuildAsk {
     image: String,
+    /// `release` (the default: this version's Linux binary, no compiler) or
+    /// `source` (the base's `Containerfile`).
+    #[serde(default)]
+    from: crate::runtimes::BuildFrom,
 }
 
 async fn build_image(
@@ -5318,7 +5367,7 @@ async fn build_image(
         )
             .into_response();
     }
-    match app.tasks.build(runtime, &asked.image, &base) {
+    match app.tasks.build(runtime, &asked.image, asked.from, &base) {
         Ok(()) => Json(app.tasks.list()).into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }

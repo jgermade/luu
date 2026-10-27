@@ -1,0 +1,40 @@
+# `luu-worker`, from a release rather than from source: the same image as
+# `Containerfile`, with the binary the release already built for Linux instead
+# of a `cargo build` inside the image.
+#
+# What Settings → Runtimes builds by default, with no checkout needed: luu
+# carries this file and builds it from an empty directory, passing its own
+# version.
+#
+#   docker build -t luu-worker:dev -f Containerfile.release \
+#     --build-arg LUU_VERSION=0.1.4 .
+#
+# Not the host's binary: on macOS that is a Mach-O, and on Linux it is linked
+# against the host's glibc, which may be newer than bookworm's. The release's
+# Linux builds are made on the oldest Ubuntu runner for exactly that reason.
+# The download is checked against the release's own `SHA256SUMS`, as
+# `pages/setup.sh` checks it. A release whose worker protocol differs from the
+# luu that starts it is refused at the handshake, and `Containerfile` is the
+# way back. See RECORD/2026-10-27.runtimes-without-the-wait.completed.md.
+
+FROM rust:1-bookworm AS fetch
+ARG LUU_VERSION
+RUN set -eu; \
+    test -n "$LUU_VERSION" || { echo "LUU_VERSION is not set: --build-arg LUU_VERSION=<x.y.z>" >&2; exit 1; }; \
+    asset="luu-$(uname -m)-unknown-linux-gnu"; \
+    release="https://github.com/jgermade/luu/releases/download/v${LUU_VERSION}"; \
+    cd /tmp; \
+    curl -fsSLO "$release/$asset.tar.gz"; \
+    curl -fsSLO "$release/SHA256SUMS"; \
+    grep " $asset.tar.gz\$" SHA256SUMS | sha256sum -c -; \
+    tar -xzf "$asset.tar.gz"; \
+    install -m 0755 "$asset/luu" /luu
+
+# The final stage is `Containerfile`'s, word for word but for where the binary
+# comes from, and a test holds the two to that.
+FROM rust:1-bookworm
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=fetch /luu /usr/local/bin/luu
+CMD ["luu", "worker"]

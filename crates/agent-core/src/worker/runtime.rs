@@ -131,15 +131,22 @@ impl Runtime {
     }
 
     /// The line that builds `image` from `containerfile`, with `context` as
-    /// the build context. One spelling for all five, which each of them
-    /// documents.
+    /// the build context and each of `args` as a `--build-arg`. One spelling
+    /// for all five, which each of them documents.
     pub fn build_argv(
         self,
         image: &str,
         containerfile: &str,
         context: &str,
+        args: &[(&str, &str)],
     ) -> Option<Vec<String>> {
-        self.with(&["build", "-t", image, "-f", containerfile, context])
+        let mut argv = self.with(&["build", "-t", image, "-f", containerfile])?;
+        for (name, value) in args {
+            argv.push("--build-arg".to_string());
+            argv.push(format!("{name}={value}"));
+        }
+        argv.push(context.to_string());
+        Some(argv)
     }
 
     /// How a person gets this runtime, as text to copy. luu installs none of
@@ -835,7 +842,7 @@ mod tests {
         );
         assert_eq!(
             Runtime::Podman
-                .build_argv("luu-worker:dev", "Containerfile", ".")
+                .build_argv("luu-worker:dev", "Containerfile", ".", &[])
                 .unwrap(),
             [
                 "podman",
@@ -844,6 +851,30 @@ mod tests {
                 "luu-worker:dev",
                 "-f",
                 "Containerfile",
+                "."
+            ]
+        );
+        // The release's file takes the version, and the context stays last.
+        assert_eq!(
+            Runtime::Colima
+                .build_argv(
+                    "luu-worker:dev",
+                    "Containerfile.release",
+                    ".",
+                    &[("LUU_VERSION", "0.1.4")]
+                )
+                .unwrap(),
+            [
+                "colima",
+                "nerdctl",
+                "--",
+                "build",
+                "-t",
+                "luu-worker:dev",
+                "-f",
+                "Containerfile.release",
+                "--build-arg",
+                "LUU_VERSION=0.1.4",
                 "."
             ]
         );

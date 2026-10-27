@@ -4,7 +4,7 @@
   // shell on the host. A runtime is usable when it is installed, answers, has
   // the image, and a posture uses it — this section shows all four and changes
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
-  const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
+  const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
     await import("@web/lib/runtimes.js")
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
@@ -15,6 +15,9 @@
   let view = null
   let error = ""
   let busy = ""
+  // The runtimes being asked right now, by name: each card is filled when its
+  // own runtime answers, not when the slowest one does.
+  let asking = {}
   // The posture being added: `{ name, policy }`, or `null`.
   let adding = null
 
@@ -27,9 +30,34 @@
     }
     return result.ok
   }
+  // The section comes without a probe — installed or not is `which`, and the
+  // postures need none — and then each installed runtime is asked on its own.
+  // A card that had an answer keeps it while it is asked again, so *check
+  // again* does not blank what it is about to confirm.
+  const refresh = async () => {
+    const before = Object.fromEntries((view?.runtimes || []).map(r => [r.runtime, r]))
+    const result = await loadRuntimes()
+    if (!result.ok) return took(result)
+    const installed = result.view.runtimes.filter(r => r.path)
+    result.view.runtimes = result.view.runtimes.map(r => {
+      const old = before[r.runtime]
+      return r.path && old?.path === r.path && old.answers != null ? old : r
+    })
+    took(result)
+    asking = Object.fromEntries(installed.map(r => [r.runtime, true]))
+    for (const { runtime } of installed) {
+      probeRuntime(runtime).then(answer => {
+        const { [runtime]: _, ...rest } = asking
+        asking = rest
+        if (!answer.ok) return (error = answer.error)
+        if (view) view = { ...view, runtimes: view.runtimes.map(r => r.runtime === runtime ? answer.view : r) }
+      })
+    }
+    return true
+  }
   const check = async () => {
     busy = "check"
-    const ok = took(await loadRuntimes())
+    const ok = await refresh()
     busy = ""
     if (ok && (view?.tasks || []).some(t => t.state === "running")) follow()
   }
@@ -51,7 +79,7 @@
       if (result.ok && view) view = { ...view, tasks: result.view }
       if (result.ok && result.view.some(b => b.state === "running")) return setTimeout(poll, 1500)
       polling = false
-      took(await loadRuntimes())
+      await refresh()
     }
     return () => {
       if (polling) return
@@ -78,7 +106,8 @@
     }
     busy = ""
   }
-  const build = (runtime, image) => task(`build:${runtime}:${image}`, () => buildImage(runtime, image))
+  const build = (runtime, image, from = "release") =>
+    task(`build:${runtime}:${image}`, () => buildImage(runtime, image, from))
   const install = runtime => task(`install:${runtime}`, () => installRuntime(runtime))
   const start = runtime => task(`start:${runtime}`, () => startRuntime(runtime))
   const taskOf = (kind, runtime, image = null) =>
@@ -120,8 +149,10 @@
     : place.runtime === "direct" ? "direct (no container)"
     : place.image ? `${place.runtime} · ${place.image}` : place.runtime
   const answerWord = r => !r.path ? "not installed"
+    : r.answers == null && asking[r.runtime] ? "comprobando…"
     : r.answers ? "answering" : "installed, not answering"
   $: names = Object.keys(view?.postures || {})
+  $: anyAsking = Object.keys(asking).length > 0
   $: unused = (view?.policies || []).filter(p => !names.some(n => view.postures[n].policy === p.path))
 </script>
 
@@ -165,7 +196,8 @@
     <section :each="r in view?.runtimes || []" :key="r.runtime" class="runtime" :class.off="!r.path">
       <header>
         <strong>{{ r.runtime }}</strong>
-        <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
+        <span class="state" :class.up="r.answers" :class.down="r.answers === false"
+              :class.skeleton-pulse="asking[r.runtime] && r.answers == null">{{ answerWord(r) }}</span>
         <code :if="r.path" class="dim small">{{ r.path }}</code>
       </header>
       <!-- Installed from here where Homebrew can do it with the person's own
@@ -190,8 +222,15 @@
           <code>{{ i.image }}</code>
           <span :if="i.present" class="state up">built</span>
           <span :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" class="state down">not built</span>
+          <!-- From the release by default: this version's Linux binary, no
+               compiler. From source only where the base has a Containerfile,
+               which is luu's own checkout. -->
           <button :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
+                  :title="`luu ${view.release}'s Linux binary, from its GitHub release`"
                   :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image)">build</button>
+          <button :if="view.from_source && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link dim"
+                  title="Compiles this checkout inside the image: minutes, and what a change to the worker needs"
+                  :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image, 'source')">from source</button>
           <span :if="buildOf(r.runtime, i.image)?.state === 'running'" class="state">building…</span>
           <span :if="buildOf(r.runtime, i.image)?.state === 'failed'" class="state down">the last build failed</span>
           <div :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre></Scrollable></div>
@@ -200,8 +239,8 @@
       </ul>
     </section>
     <p class="dim small">
-      <button type="button" class="link" :disabled="!!busy || !view" @click="check()">check again</button>
-      <span :if="busy === 'check'"> · asking each runtime…</span>
+      <button type="button" class="link" :disabled="!!busy || !view || anyAsking" @click="check()">check again</button>
+      <span :if="busy === 'check' || anyAsking"> · asking each runtime…</span>
     </p>
   </section>
 

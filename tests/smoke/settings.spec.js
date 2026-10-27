@@ -1497,6 +1497,15 @@ test("runtimes, postures and the host shell are configured from Settings", async
   }
   const config = () => readFileSync(join(home, "config.toml"), "utf8")
 
+  // The section comes without a probe, and each runtime is asked on its own,
+  // so the slowest one holds up only its own card.
+  const seen = await (await fetch(`${BASE}/api/runtimes`)).json()
+  expect(seen.runtimes.map(r => r.answers)).toEqual([null, null, null, null, null])
+  expect(seen.release).toMatch(/^\d+\.\d+\.\d+/)
+  const one = await (await fetch(`${BASE}/api/runtimes/nerdctl`)).json()
+  expect(one.runtime).toBe("nerdctl")
+  expect((await fetch(`${BASE}/api/runtimes/host`)).status).toBe(400)
+
   // A posture, named by a policy file out of the list — this checkout's.
   await pane.locator('button.add:has-text("+ posture")').click()
   await pane.locator('.adding input[placeholder="name"]').fill("boxed")
@@ -1527,6 +1536,19 @@ test("runtimes, postures and the host shell are configured from Settings", async
   })
   expect(built.status).toBe(400)
   expect(await built.text()).toContain("no policy file here names")
+  // From source as well as from the release, and from nothing else.
+  const fromSource = await fetch(`${BASE}/api/runtimes/docker/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "somebody/else:latest", from: "source" }),
+  })
+  expect(fromSource.status).toBe(400)
+  const fromElsewhere = await fetch(`${BASE}/api/runtimes/docker/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "luu-worker:dev", from: "somewhere" }),
+  })
+  expect(fromElsewhere.status).toBe(422)
 
   // Installed from here, where Homebrew can: macOS only, and with the
   // stand-in above rather than the real thing.

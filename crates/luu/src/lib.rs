@@ -1494,9 +1494,36 @@ impl SandboxArgs {
                 if let Some(gap) = worker_config.runtime.cannot() {
                     eprintln!("warning: {}: {gap}", worker_config.runtime);
                 }
-                let worker = Worker::start(&spec, sandbox.commands())
-                    .await
-                    .with_context(|| format!("the {} worker", spec.label()))?;
+                let worker = match Worker::start(&spec, sandbox.commands()).await {
+                    Ok(worker) => worker,
+                    // A runtime that is down — a podman machine, colima,
+                    // Docker Desktop — is started by the lines Settings' *start
+                    // it* runs, and the worker asked once more. Asked only
+                    // after a failure, so a healthy session pays nothing. See
+                    // `RECORD/2026-10-27.runtimes-without-the-wait.completed.md`.
+                    Err(first) if runtimes::asleep(worker_config.runtime).await => {
+                        let runtime = worker_config.runtime;
+                        let say = |line: String| {
+                            eprintln!("{runtime}: {line}");
+                            tracing::info!(target: "luu::runtimes", %runtime, "{line}");
+                        };
+                        say("it does not answer, so it is being started".into());
+                        runtimes::wake(runtime, say).await.map_err(|error| {
+                            anyhow::anyhow!(
+                                "the {} worker: {first}; starting {runtime} did not help: {error}",
+                                spec.label()
+                            )
+                        })?;
+                        Worker::start(&spec, sandbox.commands())
+                            .await
+                            .with_context(|| {
+                                format!("the {} worker, after starting {runtime}", spec.label())
+                            })?
+                    }
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("the {} worker", spec.label()));
+                    }
+                };
                 Some(std::sync::Arc::new(worker))
             }
         };
