@@ -527,6 +527,17 @@ test("a session is made from where it runs and its lists, and the page says whic
   // machine has, and the lists: none in the file, so the empty one each.
   await expect(starter.locator("select.preset")).toHaveCount(0)
   await expect(starter.locator("select.runtime")).toHaveValue("host|")
+  // This machine's mark at its start, and beside it what that means, as
+  // tall as the field's box.
+  await expect(starter.locator('[data-row="where"] .lead use[href="#i-machine"]')).toHaveCount(1)
+  const means = starter.locator('[data-row="where"] .means')
+  await expect(means).toContainText("On this machine, as you")
+  const [box, beside] = await Promise.all([
+    starter.locator('[data-row="where"] label.box').boundingBox(),
+    means.boundingBox(),
+  ])
+  expect(Math.abs(box.height - beside.height)).toBeLessThan(1)
+  expect(Math.abs(box.y - beside.y)).toBeLessThan(1)
   for (const kind of ["shell", "network", "files"]) {
     await expect(starter.locator(`select.list-${kind} option`)).toHaveText(["empty"])
   }
@@ -626,10 +637,11 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // 23, Appearance's palette since 2026-10-21, and since 2026-10-23 the
   // permissions' shield and a session's archive, restore and delete; since
   // 2026-10-25 the picker's two tool transports, a plug and braces; since
-  // 2026-10-26 an engine card's play, stop and download.
+  // 2026-10-26 an engine card's play, stop and download; since 2026-10-27
+  // this machine, which a `host` runtime wears.
   // The tree's own shapes are the theme's, in `theme/default/files.svg`, not
   // the page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(33)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(34)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be

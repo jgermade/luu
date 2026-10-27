@@ -213,7 +213,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
 #
-# Providers and models wear their brand's mark in the pickers: eighteen in
+# Providers, models and container runtimes wear their brand's mark: twenty-one in
 # `web/brands/` (Simple Icons, CC0 but for MiniMax's — see its README), or a pack — `[ui] brand-icons`, a folder of
 # `<slug>.svg`, chosen in Appearance → Brand marks, where `npm install
 # @lobehub/icons-static-svg` in `web/` is found by itself.

@@ -8,8 +8,9 @@ import { apiHeaders } from "./store.js"
 
 /// The page's own, by slug: the files in `web/brands/`.
 const BUILTIN = new Set([
-  "alibabacloud", "anthropic", "claude", "deepseek", "gemini", "google", "huggingface", "kimi",
-  "llamacpp", "lmstudio", "meta", "minimax", "mistral", "mlx", "ollama", "qwen", "vllm", "zai",
+  "alibabacloud", "anthropic", "claude", "containerd", "deepseek", "docker", "gemini", "google",
+  "huggingface", "kimi", "llamacpp", "lmstudio", "meta", "minimax", "mistral", "mlx", "ollama",
+  "podman", "qwen", "vllm", "zai",
 ])
 export const builtinCount = BUILTIN.size
 
@@ -66,6 +67,19 @@ export function brandSrc(slugs, view = brands.view) {
 /// An engine's marks, by its kind: llama.cpp's, mlx-serve's and Ollama's own.
 const ENGINES = { llama: ["llamacpp", "ggml"], mlx: ["mlx"], ollama: ["ollama"] }
 export const engineBrand = kind => ENGINES[kind] || []
+
+/// A container runtime's marks, by its name: nerdctl is containerd's own
+/// client, and wears containerd's. Colima has none to draw, and Apple's
+/// `container` none it may be drawn with, so a pack's or nothing — the
+/// caller draws a box. `host` and `direct` are this machine, not a brand.
+const RUNTIMES = {
+  docker: ["docker"],
+  podman: ["podman"],
+  nerdctl: ["nerdctl", "containerd"],
+  colima: ["colima"],
+  container: ["container"],
+}
+export const runtimeBrand = runtime => RUNTIMES[runtime] || []
 
 /// Hosts that say whose API a URL is. A local server says nothing: an
 /// OpenAI-compatible `127.0.0.1` is a `llama-server` far more often than it

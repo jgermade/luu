@@ -1008,7 +1008,11 @@ access = "execute"
   posture or an environment names, on any container runtime this machine has
   (`/api/postures`' `runtimes`), so the page never names an image of its own; the shell,
   network and files lists by name, an unchosen one the empty list (read the folder, ask the
-  rest), what the last session used offered first; and where it sends, in the chat dropup's two
+  rest), what the last session used offered first — the runtime with what choosing it means
+  beside it, as tall as the field's box: this machine as the person, its terminal the whole
+  account; or the folder and the image's tools, no network a list does not allow (see
+  [`RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md`](RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md));
+  and where it sends, in the chat dropup's two
   columns (`provider-models.html`, one component for both). `POST /api/sessions` with `lists`
   and no posture is `Policies::compose`, named by its lists and recorded with
   `record::Composed` — the runtime and image it was asked with (`record::FORMAT` 24) — so a
@@ -1379,9 +1383,12 @@ URL, keeps the browser's cache honest. A versioned extension path that an update
 to the newest version beside it. See
 [`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md).
 **Brand marks are the one exception to *nothing is vendored***: a mark is its owner's and there is
-one per brand, so there is no taste to tie the page to. Fifteen come with the page
+one per brand, so there is no taste to tie the page to. Twenty-one come with the page
 (`web/brands/`: Simple Icons' under CC0, named by lobehub's slugs, and llama.cpp's, mlx-serve's
-and Ollama's own, which an engine's card and the installer's kinds wear too), drawn as a mask over
+and Ollama's own, which an engine's card and the installer's kinds wear too; and Docker's,
+Podman's and containerd's — nerdctl's — which a runtime wears in Settings → Runtimes and at the
+start of the new session's *Runtime*, a box for colima and Apple's `container` and this machine
+for `host`), drawn as a mask over
 `currentColor` beside each provider (by backend and URL host) and model (by family, after the
 catalog's prefix) in the two columns the pickers share; nothing known is no mark. `[ui]
 brand-icons` names a pack instead — a folder of `<slug>.svg`, or one with `icons/` in it — offered
@@ -1389,7 +1396,8 @@ by Settings → Appearance → Brand marks from `<state dir>/brand-icons/` (impo
 from `web/node_modules/@lobehub/icons-static-svg` (installed with npm, like Monaco), read into a
 slug → file table that `/api/brands/icon/{slug}` serves as SVG and nothing else; a slug the pack
 lacks is the page's own. See
-[`RECORD/2026-10-26.brand-icons.completed.md`](RECORD/2026-10-26.brand-icons.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
+[`RECORD/2026-10-26.brand-icons.completed.md`](RECORD/2026-10-26.brand-icons.completed.md) and
+[`RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md`](RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
 grammar crates — `Makefile`, `Containerfile` and `Dockerfile` found by name, having no extension
 to be found by — sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does

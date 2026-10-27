@@ -19,6 +19,11 @@ effect". It is here under those terms, not under CC0, and only to say which
 provider or model a row is. A pack that has its own `minimax.svg` is drawn
 instead, as for every slug.
 
+`docker.svg`, `podman.svg` and `containerd.svg` are the container runtimes'
+marks, from the same release: nerdctl is containerd's own client and wears
+containerd's. Colima has no mark there, and Apple's `container` is Apple's, so
+those two are drawn as a box.
+
 Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`,
 `zdotai` → `zai` (Z.ai, which makes GLM). `alibabacloud` is Alibaba Cloud's,
 worn by its hosts and by Alibaba's Wan until a pack has a mark of Wan's own.

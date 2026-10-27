@@ -1495,6 +1495,15 @@ test("runtimes, postures and the host shell are configured from Settings", async
   for (const runtime of ["docker", "podman", "nerdctl", "colima", "container"]) {
     await expect(pane.locator(".runtime header strong", { hasText: new RegExp(`^${runtime}$`) })).toHaveCount(1)
   }
+  // Each wears its mark: its own, containerd's for nerdctl, and a box for
+  // the two the page has none of.
+  const header = runtime => pane.locator(".runtime header", { has: page.locator("strong", { hasText: new RegExp(`^${runtime}$`) }) })
+  for (const [runtime, mark] of [["docker", "docker"], ["podman", "podman"], ["nerdctl", "containerd"]]) {
+    await expect(header(runtime).locator(".brand")).toHaveAttribute("style", new RegExp(`brands/${mark}\\.svg`))
+  }
+  for (const runtime of ["colima", "container"]) {
+    await expect(header(runtime).locator('use[href="#i-box"]')).toHaveCount(1)
+  }
   const config = () => readFileSync(join(home, "config.toml"), "utf8")
 
   // A posture, named by a policy file out of the list — this checkout's.
@@ -1827,15 +1836,6 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   await expect(inModels).toHaveCount(0)
   await page.click('.modal .rail button:has-text("Engines")')
 
-  // luu's own copy, laid out as a download leaves it, and named by a table.
-  const copy = join(home, "engines", "llama", "b11236")
-  mkdirSync(copy, { recursive: true })
-  writeFileSync(join(copy, "llama-server"), "#!/bin/sh\n")
-  chmodSync(join(copy, "llama-server"), 0o755)
-  writeFileSync(join(home, "config.toml"),
-    `${readFileSync(join(home, "config.toml"), "utf8").trimEnd()}\n\n[engine.own]\nkind = "llama"\nbinary = "managed"\nport = 8099\n`)
-  const own = page.locator(".engines-pane section.engine", { has: page.locator("header strong", { hasText: /^own$/ }) })
-  await expect(own.locator(".origin")).toHaveText("luu:", { timeout: 10_000 })
   // Renamed from its form, since it is never removed: the table and the
   // provider that starts it in one write, the provider under its own name.
   // See `RECORD/2026-10-27.an-engine-is-renamed.completed.md`.
@@ -1852,6 +1852,15 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   expect(onDisk.slice(onDisk.indexOf(`[provider.${name}]`)).split("\n\n")[0]).toContain('engine = "mine"')
   expect(onDisk.match(/enabled = false/g)).toHaveLength(1)
 
+  // luu's own copy, laid out as a download leaves it, and named by a table.
+  const copy = join(home, "engines", "llama", "b11236")
+  mkdirSync(copy, { recursive: true })
+  writeFileSync(join(copy, "llama-server"), "#!/bin/sh\n")
+  chmodSync(join(copy, "llama-server"), 0o755)
+  writeFileSync(join(home, "config.toml"),
+    `${readFileSync(join(home, "config.toml"), "utf8").trimEnd()}\n\n[engine.own]\nkind = "llama"\nbinary = "managed"\nport = 8099\n`)
+  const own = page.locator(".engines-pane section.engine", { has: page.locator("header strong", { hasText: /^own$/ }) })
+  await expect(own.locator(".origin")).toHaveText("luu:", { timeout: 10_000 })
   // Asked first, with what goes; then the copy, the table and the card.
   await own.getByRole("button", { name: "Uninstall" }).click()
   const asking = page.getByRole("dialog", { name: "Uninstall own" })

@@ -11,6 +11,9 @@
   const { state } = await import("@web/lib/store.js")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Select = await import("@web/theme/default/components/select.html")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  const { brandSrc, runtimeBrand, loadBrands } = await import("@web/lib/brands.js")
+  loadBrands()
 
   let view = null
   let error = ""
@@ -164,6 +167,8 @@
 
     <section :each="r in view?.runtimes || []" :key="r.runtime" class="runtime" :class.off="!r.path">
       <header>
+        <BrandIcon :if="brandSrc(runtimeBrand(r.runtime))" :src="brandSrc(runtimeBrand(r.runtime))" size="16px" />
+        <svg :if="!brandSrc(runtimeBrand(r.runtime))" class="ic"><use href="#i-box"/></svg>
         <strong>{{ r.runtime }}</strong>
         <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
         <code :if="r.path" class="dim small">{{ r.path }}</code>
