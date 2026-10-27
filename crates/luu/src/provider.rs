@@ -1232,6 +1232,11 @@ impl Config {
     pub fn write(&self, path: &Path) -> Result<(), ConfigError> {
         let text = self.render()?;
         Self::from_toml(&text, &path.display().to_string())?;
+        // One write at a time in this process: they share the temporary
+        // beside the file, and two at once had the first rename take the
+        // second's — which then failed, and the page said 422.
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
                 path: parent.display().to_string(),
@@ -1872,6 +1877,29 @@ mod tests {
         assert!(!off.sessions().auto_name);
         assert!(off.render().unwrap().contains("auto-name = false"));
         assert!(Config::from_toml("[sessions]\nautoname = false\n", "c").is_err());
+    }
+
+    /// Two writes at once both land. They shared one temporary name, so the
+    /// first rename took the second's file and the second failed — a 422 on
+    /// the page when one change was saved twice, on Enter and on `change`.
+    #[test]
+    fn writes_at_once_each_land() {
+        let dir = std::env::temp_dir().join(format!("luu-writes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        let base = config("").expect("an empty file loads");
+        let handles: Vec<_> = (1..=16)
+            .map(|steps| {
+                let (config, path) = (base.with_max_tool_steps(Some(steps)), path.clone());
+                std::thread::spawn(move || config.write(&path))
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().expect("each write lands");
+        }
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(config(&written).is_ok(), "{written}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `max-tool-steps`: the model's over its provider's over the file's own,
