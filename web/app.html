@@ -1372,18 +1372,20 @@
   }
   .resize.right { right: -4px; }
   .resize.left { left: -4px; }
+  /* Under the pointer, a line in the theme's accent, wide enough to read as
+     the thing being held — and held while it is dragged. */
   .resize::after {
     content: "";
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 3px;
-    width: 2px;
-    background: var(--luu-divider);
+    left: 2px;
+    width: 4px;
+    background: var(--luu-accent);
     opacity: 0;
     transition: opacity .12s;
   }
-  .resize:hover::after, .resize:focus-visible::after { opacity: 1; }
+  .resize:hover::after, .resize:focus-visible::after, .resize:active::after { opacity: 1; }
   .resize:focus-visible { outline: none; }
 
   .col-head, .col-foot {

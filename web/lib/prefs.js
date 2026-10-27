@@ -121,6 +121,9 @@ export const prefs = $reactive({
   /// cannot squeeze the content column out of a narrow one.
   inspectorWidth: keptWidth("luu.width.inspector"),
   chatWidth: keptWidth("luu.width.chat"),
+  /// The terminal panel's height in pixels, as last dragged from its top
+  /// edge, or `null` for the stylesheet's 16rem.
+  terminalHeight: keptWidth("luu.height.terminal"),
   /// Where the last session ran, as `posture|runtime` (see `lib/places.js`):
   /// what a new session is offered first. Set when a session is started and
   /// when one is moved, and checked against `/api/postures` before it is
@@ -255,6 +258,17 @@ export function setWidth(column, px) {
   try {
     if (px == null) localStorage.removeItem(`luu.width.${column}`)
     else localStorage.setItem(`luu.width.${column}`, String(Math.round(px)))
+  } catch {
+    // Unremembered, still applied.
+  }
+}
+
+/// The terminal's height, or `null` to forget it.
+export function setTerminalHeight(px) {
+  prefs.terminalHeight = px == null ? null : Math.round(px)
+  try {
+    if (px == null) localStorage.removeItem("luu.height.terminal")
+    else localStorage.setItem("luu.height.terminal", String(Math.round(px)))
   } catch {
     // Unremembered, still applied.
   }

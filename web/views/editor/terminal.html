@@ -7,7 +7,11 @@
   // colours are written for a dark ground. See
   // `RECORD/2026-10-01.a-terminal-in-the-container.completed.md` and
   // `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+  //
+  // Its top edge is dragged, as a column's side is: the height is
+  // `--terminal-h` on `.app`, kept in `localStorage` (`lib/resize.js`).
   const { terminal, attach } = await import("@web/lib/terminal.js")
+  const { startTerminalDrag, nudgeTerminal, resetTerminalHeight } = await import("@web/lib/resize.js")
 
   await $mounted()
   // The host is a plain element xterm draws into, attached by hand for the
@@ -26,6 +30,11 @@
 
 <!-- Dark on any page: a shell's colours are written for a dark ground. -->
 <section class="terminal" data-tone="dark">
+  <div class="resize-y" role="separator" aria-orientation="horizontal"
+       aria-label="Resize the terminal" tabindex="0" title="Drag to resize · double-click to reset"
+       @pointerdown="startTerminalDrag($event)"
+       @keydown="nudgeTerminal($event)"
+       @dblclick="resetTerminalHeight()"></div>
   <p :if="terminal.moveError" class="warn note">{{ terminal.moveError }}</p>
   <p :if="terminal.info && !terminal.info.available" class="dim note">{{ terminal.info.reason }}</p>
   <p :if="terminal.info?.available && !terminal.info?.xterm" class="dim note">
@@ -38,15 +47,44 @@
 
 <style scoped>
   .terminal {
+    position: relative;
     display: flex;
     flex-direction: column;
     flex: none;
-    height: 16rem;
+    height: var(--terminal-h, 16rem);
     min-height: 6rem;
+    /* A height kept on a tall window cannot squeeze the file out of a short
+       one: the drag clamps against the column, this against the window. */
+    max-height: calc(100dvh - 14rem);
     border-top: 1px solid var(--luu-border);
     background: var(--luu-bg);
     color: var(--luu-fg);
   }
+  /* The handle: an 8px strip over the top border, as a column's side has, and
+     the same accent line under the pointer and while it is held. */
+  .resize-y {
+    position: absolute;
+    top: -5px;
+    left: 0;
+    right: 0;
+    height: 8px;
+    z-index: 5;
+    cursor: row-resize;
+    touch-action: none;
+  }
+  .resize-y::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 2px;
+    height: 4px;
+    background: var(--luu-accent);
+    opacity: 0;
+    transition: opacity .12s;
+  }
+  .resize-y:hover::after, .resize-y:focus-visible::after, .resize-y:active::after { opacity: 1; }
+  .resize-y:focus-visible { outline: none; }
   .note { margin: 0; padding: .6rem .8rem; font-size: 12px; line-height: 1.5; }
   .warn { color: var(--luu-warn); }
   .host { flex: 1; min-height: 0; padding: .2rem 0 0 .4rem; overflow: hidden; }

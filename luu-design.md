@@ -1085,6 +1085,11 @@ on a narrow one without being forgotten. A drag writes a CSS property and nothin
 the pointer is let go. Double click is back to the default, and the arrow keys move a focused edge.
 In two columns only the inspector's edge is there. See
 [`RECORD/2026-10-01.columns-that-are-dragged.completed.md`](RECORD/2026-10-01.columns-that-are-dragged.completed.md).
+**The terminal's top edge is dragged the same way**, up for taller: `--terminal-h` on `.app`
+beside the widths, kept as `luu.height.terminal`, clamped so the file above keeps 200px and the
+window keeps the rest, double click to forget it, the arrow keys to nudge it. Every edge, under
+the pointer and while it is held, is a 4px line in the theme's accent. See
+[`RECORD/2026-10-27.the-terminal-has-a-height.completed.md`](RECORD/2026-10-27.the-terminal-has-a-height.completed.md).
 
 There is **no page-wide header**. There was, and every control on it belonged to a column: the
 two destination tags and the status word are the chat's session, the fixtures picker is its

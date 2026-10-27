@@ -628,6 +628,7 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
    handle: no text gets selected and the cursor does not flicker back over
    whatever the pointer crosses. */
 html.resizing, html.resizing * { cursor: col-resize !important; user-select: none !important; }
+html.resizing-rows, html.resizing-rows * { cursor: row-resize !important; user-select: none !important; }
 
 /* ==========================================================================
    Design System (DS) - Foundations, Cards, Heroes, Badges & Visual Enhancers

@@ -67,7 +67,9 @@
   }
 </script>
 
-<Modal :open="open" title="Runtime" width="34rem" @close="leave()">
+<!-- Hung from the top: the box that appears under the places once one is
+     chosen grows the dialog downward, and the places stay where they were. -->
+<Modal :open="open" title="Runtime" width="34rem" align="top" @close="leave()">
   <p class="lead dim">Where this session's commands run: the model's, and the terminal's.</p>
 
   <div class="places" role="radiogroup" aria-label="Runtime">

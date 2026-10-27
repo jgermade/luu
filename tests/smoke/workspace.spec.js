@@ -224,6 +224,19 @@ test("the tab shows a changed file's diff in a modal", async ({ page }) => {
   await expect(foot.locator(".title")).toHaveText("Runtime")
   await expect(foot.locator("button.place")).toHaveText("host")
   await expect(foot.locator('button.place use[href="#i-machine"]')).toHaveCount(1)
+  // Its top edge is dragged taller, the height kept; a double click forgets it.
+  const section = page.locator(".content section.terminal")
+  const tall = (await section.boundingBox()).height
+  const edge = await section.locator(".resize-y").boundingBox()
+  await page.mouse.move(edge.x + 100, edge.y + 4)
+  await page.mouse.down()
+  await page.mouse.move(edge.x + 100, edge.y - 80, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(async () => (await section.boundingBox()).height).toBeGreaterThan(tall + 60)
+  expect(Number(await page.evaluate(() => localStorage.getItem("luu.height.terminal")))).toBeGreaterThan(tall + 60)
+  await section.locator(".resize-y").dblclick()
+  await expect.poll(async () => Math.round((await section.boundingBox()).height)).toBe(Math.round(tall))
+  expect(await page.evaluate(() => localStorage.getItem("luu.height.terminal"))).toBeNull()
   // Its dialog names the place it runs now; with nowhere else to go, there is
   // nothing to confirm and nothing to move.
   await foot.locator("button.place").click()
