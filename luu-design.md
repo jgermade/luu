@@ -1660,8 +1660,9 @@ The rest follows from that:
   sent yet — **as the turn went**, where it used tools:
   each reply up to its call, what that call gave back as the model got it, and what the next call
   sent, cut where each call's step ended (`ToolCallView.at`, kept by the page and the server's
-  fold alike). A card in the chat shows the first lines of its result under it without being
-  opened, except a read's. See
+  fold alike). A card in the chat is its head line until it is clicked — what it did is its
+  status, and what it returned is behind the click (until 2026-10-27 its first three lines
+  showed under it, and a run of calls read as a wall of listings). See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
 - **The transcript follows its end while it is at its end** (`Scrollable`'s `autoscroll`): any
   scroll up leaves it at once, and only scrolling back to the end picks it up again. The chat's

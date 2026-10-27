@@ -281,19 +281,24 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(went.locator(".entry.reply pre").first()).toContainText("```tool")
   await expect(went.locator(".entry.result .role")).toHaveText("tool · read_file")
   await expect(went.locator(".entry.reply pre").last()).toContainText(ANSWER)
-  // A block too big to read at a glance is clipped, with its ways in at the
-  // fade as well as in its head — and *scroll* keeps the box it was clipped
-  // to, so the lines being read do not move.
+  // A block too big to read at a glance is clipped, with its ways in centred
+  // over the fade as well as in its head — and *scroll* keeps the box it was
+  // clipped to, so the lines being read do not move. Taken, the ways in at the
+  // fade go; *collapse* is the head's.
   const big = turn.locator('.group[data-bucket="tools"]')
   const box = big.locator(".body")
   await expect(box).toHaveClass(/\bclip\b/)
   // `offsetHeight`, not the bounding box: the modal is still scaling in.
   const height = () => box.evaluate(element => element.offsetHeight)
   const clipped = await height()
+  // Over the fade: the foot's top is inside the body's box.
+  const [bodyBox, footBox] = await Promise.all([box.boundingBox(), big.locator("footer.over-fade").boundingBox()])
+  expect(footBox.y).toBeLessThan(bodyBox.y + bodyBox.height)
   await big.locator("footer button", { hasText: "scroll" }).click()
   await expect(box).toHaveClass(/\bscroll\b/)
   expect(await height()).toBe(clipped)
-  await expect(big.locator("footer button", { hasText: "collapse" })).toBeVisible()
+  await expect(big.locator("footer")).toHaveCount(0)
+  await expect(big.locator("header button", { hasText: "collapse" })).toBeVisible()
   await turn.locator(".modal-head button", { hasText: "close" }).click()
   await expect(turn).toBeHidden()
 
