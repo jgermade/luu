@@ -338,10 +338,11 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(context.locator('.group[data-bucket="answer"] pre')).toContainText(ANSWER)
   await context.locator(".modal-head button", { hasText: "close" }).click()
 
-  // One entry where its turns were.
-  const live = page.locator(".live-job")
+  // One entry where its turns were: from the menu against the session's name.
+  const live = page.locator(".chat .col-head .job-menu")
   await expect(live).toBeVisible()
-  await live.locator("button", { hasText: "close & fold" }).click()
+  await live.locator("button.trigger").click()
+  await page.getByRole("menuitem", { name: /Close & fold/ }).click()
   await expect(live).toBeHidden({ timeout: 15_000 })
   await expect(page.locator(".fold .summary").first()).toBeVisible()
 
@@ -1256,10 +1257,13 @@ async function gateOnWidePosture(page) {
   await composer.fill("what is published?")
   await page.click('.composer button[type="submit"]')
 
-  // The drafting turn lands, which is what opens the draft to plan over.
-  const live = page.locator(".live-job")
+  // The drafting turn lands, which is what opens the draft to plan over —
+  // planned from the menu against the session's name.
+  const live = page.locator(".chat .col-head .job-menu")
   await expect(live).toBeVisible({ timeout: 30_000 })
-  await live.locator("button", { hasText: "plan this" }).click()
+  await expect(live.locator("button.trigger")).toContainText(/draft \d+/)
+  await live.locator("button.trigger").click()
+  await page.getByRole("menuitem", { name: /Plan this/ }).click()
 
   const gate = page.locator(".gate")
   await expect(gate).toBeVisible({ timeout: 30_000 })

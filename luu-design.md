@@ -62,11 +62,14 @@ when a drafting turn's answer carries a plan block, or a person asks for one wit
 `request_plan` — and what that planning call reads is **the draft**, because *the
 plan is what the draft compacts to*. It used to read a held prompt, before
 anything had been looked at, which is a small model's worst case. No prompt is
-held any more: a prompt runs, in the draft, always.
+held any more: a prompt runs, in the draft, always. The open job is named in the
+chat's head, in a menu right against the session's name — the name as wide as it
+is, not the bar — whose items are its doors: *Plan this* for a draft, *Close &
+fold* for either (a row over the composer until 2026-10-27).
 
 **And the page reads the alternation, on both surfaces.** A fold says which
-half it was — *draft 3* or *job 4*, from the same `!plan` rule the live-job
-block uses — and why it ended, which is now three rungs and not two:
+half it was — *draft 3* or *job 4*, from the same `!plan` rule the open job's
+menu uses — and why it ended, which is now three rungs and not two:
 `ClosedBy::Approval` beside `User` and `ExitCode`, because under the alternation
 most drafts end by having a plan approved out of them and a recording that
 called that *a person folded it* could not count either. `protocol::VERSION` 8
@@ -180,7 +183,7 @@ can be paused as a write can — and a yes runs it **with everything it implies*
 writable and the session's network (to be looked at again). A write is asked inside the working
 directory and under no files `deny`; outside the folder nothing is asked. The question is
 *Allow* or *Deny*, with an *Apply to session* box: ticked, a yes is a `granted` line on the
-stream and a no a `forbidden` one, each listed under the draft with a × that sends
+stream and a no a `forbidden` one, each listed over the composer with a × that sends
 `revoke_grant`. Taken back is a `revoked` line, and the session's list keeps the answer, marked
 (`api::SessionAnswer`); a resume puts back what was not taken back, and a new session starts
 with nothing. Still only in a draft, never for what `deny` names, and not where approvals must

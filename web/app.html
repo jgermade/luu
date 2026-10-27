@@ -70,6 +70,7 @@
   const TerminalPanel = await import("@web/views/editor/terminal.html")
   const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
   const RuntimeDialog = await import("@web/views/editor/runtime-dialog.html")
+  const Menu = await import("@web/theme/default/components/menu.html")
   const { segments, runs } = await import("@web/helpers/segments.js")
   const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
@@ -821,10 +822,24 @@
         :if="renaming"
         class="name-edit"
         :value="nameDraft"
+        :size="Math.max(6, nameDraft.length + 1)"
         autofocus
         @input="nameDraft = $event.target.value"
         @blur="commitRename()"
         @keydown.enter="commitRename()">
+      <!-- The open job's two doors, right against the name it belongs to: a
+           draft may be planned, and either may be closed and folded. They
+           were a row of their own over the composer until 2026-10-27. -->
+      <span :if="live &amp;&amp; !proposed" class="job-menu">
+        <Menu size="sm" variant="ghost" :label="drafting ? `draft ${live?.id}` : `job ${live?.id}`"
+              :title="`${drafting ? 'draft' : 'job'} ${live?.id} · ${live?.objective || ''}`"
+              :disabled="replaying"
+              :items="[
+                ...(drafting ? [{ value: 'plan', label: 'Plan this', disabled: running }] : []),
+                { value: 'close', label: 'Close & fold', disabled: running },
+              ]"
+              @select="$event.detail === 'plan' ? requestPlan() : closeJob(live?.id)" />
+      </span>
 
       <div class="acts">
         <button type="button" title="New session — where it sends, and which model"
@@ -1166,25 +1181,8 @@
           </div>
         </div>
 
-        <!-- The open job, and which half of the alternation it is. A draft
-             offers the other door to the gate: ask for a plan over what has
-             been drafted so far. A plan job is work that was approved, and the
-             only thing left to do with it is fold it. -->
-        <div :if="live &amp;&amp; !proposed" class="live-job">
-          <span :if="drafting">draft {{ live?.id }} · {{ live?.objective }}</span>
-          <span :if="!drafting">job {{ live?.id }} · {{ live?.objective }}</span>
-          <button
-            :if="drafting"
-            type="button"
-            class="link"
-            :disabled="running || replaying"
-            @click="requestPlan()">
-            plan this
-          </button>
-          <button type="button" class="link" :disabled="running || replaying" @click="closeJob(live?.id)">
-            close &amp; fold
-          </button>
-        </div>
+        <!-- The open job's *plan this* and *close & fold* are in the head,
+             in the menu beside the session's name. -->
         <!-- What a person answered for the session: its drafts do these, or
              are refused them, without asking until one is taken back. See
              `crate::grants`. -->
@@ -1603,9 +1601,10 @@
   /* Not positioned, and nothing hangs from it: the bar is `overflow: hidden`
      so that nothing in it wraps, which clipped the history when it was a
      popover here to the 2px above the border. It is a modal now. */
+  /* As wide as the name, not the bar: the job's menu sits against it. */
   .name, .name-edit {
     min-width: 0;
-    flex: 1;
+    flex: 0 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1623,6 +1622,8 @@
   }
   .name:hover { background: var(--luu-bg); }
   .name-edit {
+    field-sizing: content;
+    min-width: 6ch;
     background: var(--luu-bg);
     border: 1px solid var(--luu-accent);
     border-radius: 6px;
@@ -1631,7 +1632,8 @@
     font-weight: 600;
     padding: .15rem .35rem;
   }
-  .acts { display: flex; align-items: center; gap: .15rem; flex: none; }
+  .job-menu { flex: none; margin-right: auto; font-size: 12px; }
+  .acts { display: flex; align-items: center; gap: .15rem; flex: none; margin-left: auto; }
   .acts button {
     background: none;
     border: 0;
@@ -1907,12 +1909,6 @@
   .narrow { display: flex; align-items: center; gap: .5rem; margin: .35rem 0; font-size: 12px; }
   .narrow > .dim { min-width: 5.5rem; }
 
-  .live-job {
-    display: flex; align-items: center; gap: .6rem;
-    margin: 0 1rem .4rem; font-size: 13px; color: var(--luu-fg-muted);
-  }
-  .live-job span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .live-job button { margin-left: auto; }
   /* What a person allowed for the session, each one a chip with its ×. */
   .grants {
     display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem;
