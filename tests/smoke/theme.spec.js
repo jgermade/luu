@@ -177,7 +177,9 @@ test("an input container, a typeahead, and an index inside a box", async ({ page
   const containers = page.locator("#input-container")
   const url = containers.getByRole("textbox", { name: "URL" })
   await expect(url).toHaveAccessibleDescription("where the server listens, /v1 included for OpenAI")
-  await containers.getByText("URL", { exact: true }).click()
+  // The name is drawn over the field and lets the pointer through, so a click
+  // where it is lands on the field: forced, because the field is what takes it.
+  await containers.getByText("URL", { exact: true }).click({ force: true })
   await expect(url).toBeFocused()
   await url.fill("http://127.0.0.1:8080/v1")
   await expect(containers.locator(".state")).toContainText('url: "http://127.0.0.1:8080/v1"')
