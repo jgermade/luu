@@ -2673,9 +2673,13 @@ The browser names a host and never a URL. The token is a path the page never
 reads. The proxy and `PUT /api/hosts` answer only on a loopback-bound server to
 a loopback `Host`, and an `Origin`, when there is one, must be this server: off
 loopback, this server's token would carry the host's approvals. The project
-modal behind the inspector's foot is host, then folder, then runtime and model,
-and *Open* starts the session on the chosen host and loads its page. See
-[`RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`](RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md).
+modal behind the inspector's foot is host, then folder, and *Use this folder*
+keeps the session on screen — or, on another host, loads that host's page and
+the session it has. Where a session runs and what it sends to are the sessions
+dialog's: the modal chose them too until 2026-10-27, a second way to make a
+session. See
+[`RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`](RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md)
+and [`RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md`](RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md).
 
 ## Suggested work order
 
