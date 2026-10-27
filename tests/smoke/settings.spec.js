@@ -1537,6 +1537,21 @@ test("runtimes, postures and the host shell are configured from Settings", async
   }
   const config = () => readFileSync(join(home, "config.toml"), "utf8")
 
+  // The section comes without a probe, and each runtime is asked on its own,
+  // so the slowest one holds up only its own card.
+  const seen = await (await fetch(`${BASE}/api/runtimes`)).json()
+  expect(seen.runtimes.map(r => r.answers)).toEqual([null, null, null, null, null])
+  expect(seen.release).toMatch(/^\d+\.\d+\.\d+/)
+  const one = await (await fetch(`${BASE}/api/runtimes/nerdctl`)).json()
+  expect(one.runtime).toBe("nerdctl")
+  // Each image says which luu its worker is, where it could be asked, and
+  // nothing it could not know where it could not.
+  for (const image of one.images) {
+    expect(Object.keys(image)).toEqual(
+      expect.arrayContaining(["present", "from", "worker", "stale", "cure", "unasked"]))
+  }
+  expect((await fetch(`${BASE}/api/runtimes/host`)).status).toBe(400)
+
   // While the file names none, sessions start on this machine and no card
   // says *default*; one that is installed is made the default from its own,
   // by the check among its icon actions, and its two checks take it back.
@@ -1621,6 +1636,19 @@ test("runtimes, postures and the host shell are configured from Settings", async
   })
   expect(built.status).toBe(400)
   expect(await built.text()).toContain("no policy file here names")
+  // From source as well as from the release, and from nothing else.
+  const fromSource = await fetch(`${BASE}/api/runtimes/docker/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "somebody/else:latest", from: "source" }),
+  })
+  expect(fromSource.status).toBe(400)
+  const fromElsewhere = await fetch(`${BASE}/api/runtimes/docker/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "luu-worker:dev", from: "somewhere" }),
+  })
+  expect(fromElsewhere.status).toBe(422)
 
   // Installed from here, where Homebrew can: macOS only, and with the
   // stand-in above rather than the real thing.

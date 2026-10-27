@@ -198,12 +198,21 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # *Auto*, on by default, is the port left out.
 #
 # Settings → Runtimes is where a session's commands may run: each container
-# runtime (docker, podman, nerdctl, colima, container) probed for whether it is
-# installed, answers, and has the images the policy files name — with install
-# (podman and colima, by Homebrew on macOS, as the person), start, and a build
-# of an image that is missing; the `[posture.*]` table, a new one naming a policy file
-# out of the ones at the top of the checkout; and `[terminal] host`. Writes are
-# loopback-only, like Engines.
+# runtime (docker, podman, nerdctl, colima, container) probed — each on its own,
+# its card filled when it answers — for whether it is installed, answers, and
+# has the images the policy files name — with install (podman and colima, by
+# Homebrew on macOS, as the person), start, and a build of an image that is
+# missing: from this version's release (seconds, `Containerfile.release`) or,
+# in luu's own checkout and nowhere else, from source (minutes); the
+# `[posture.*]` table, a new one naming a policy file out of the ones at the top
+# of the checkout; and `[terminal] host`. Writes are loopback-only, like Engines.
+# A session whose runtime is down starts it with the same lines *start it* runs,
+# and asks the worker again; nothing it installs in the container is kept.
+# `built` means *this luu's worker*: the image's worker is asked for its hello,
+# whose `build` is a hash of agent-core's sources, and one from another version
+# or other sources reads `out of date`. An image luu built from a release and
+# whose version moved is rebuilt from this version's release when a session
+# starts on it; any other stale image is said (stderr, the log, `luu tools`).
 #
 # Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed
@@ -288,6 +297,9 @@ echo '{"type":"approve_plan","job":2,"files":["Cargo.toml"]}' \
 # `--worker direct` is the same seam with no container at all, which is how the
 # IPC gets tested where no runtime is installed.
 docker build -t luu-worker:dev -f Containerfile .
+# or the same image around the release's own Linux binary, with no compiler —
+# what Settings builds by default, and from any directory
+docker build -t luu-worker:dev -f Containerfile.release --build-arg LUU_VERSION=0.1.4 .
 cargo run --bin luu -- tools --sandbox luu.container.toml
 cargo run --bin luu -- chat "hola" --sandbox luu.container.toml
 cargo run --bin luu -- tools --worker direct          # the seam, no container

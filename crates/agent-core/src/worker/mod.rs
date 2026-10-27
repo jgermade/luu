@@ -50,6 +50,16 @@ pub use runtime::{Runtime, RuntimeError, TerminalLine, WorkerConfig, WorkerSpec}
 /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
 pub const PROTOCOL: u32 = 2;
 
+/// Which sources this worker is built from: a hash `build.rs` takes over
+/// agent-core's own and the workspace's `Cargo.toml` and `Cargo.lock`.
+///
+/// `PROTOCOL` says whether the two sides can *parse* each other; this says
+/// whether they are the same *code*. A fix to `read_file` or to the seccomp
+/// filter moves this and not that, and an image built before it is the old
+/// fix, running quietly. See [`Hello::differs`] and
+/// `RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md`.
+pub const BUILD: &str = env!("LUU_WORKER_BUILD");
+
 /// One thing the host asks the worker to do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -89,6 +99,11 @@ pub struct Hello {
     /// The worker's own `luu` version, so a stale image is a fact rather than a
     /// mystery.
     pub version: String,
+    /// The sources it is built from, [`BUILD`] on its side. Absent from a
+    /// worker built before workers said it, which is therefore not this one.
+    /// Optional, so a host from before it reads a hello that carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     /// Every command the policy allows, and where it resolved — `None` when it
     /// is not on this side's `PATH` at all.
     pub commands: Vec<CommandOnPath>,
@@ -117,6 +132,43 @@ impl Hello {
             .filter(|found| found.path.is_some())
             .map(|found| found.name.as_str())
             .collect()
+    }
+
+    /// Which luu it is, as a person reads it: `0.1.4 (3f2a9c1b)`.
+    pub fn identity(&self) -> String {
+        identity(&self.version, self.build.as_deref())
+    }
+
+    /// How this worker is not this luu's, or `None` when it is: the same
+    /// version built from the same sources. The one rule the session start,
+    /// Settings and `luu tools` all ask.
+    pub fn differs(&self) -> Option<String> {
+        let ours = identity(env!("CARGO_PKG_VERSION"), Some(BUILD));
+        match self.build.as_deref() {
+            _ if self.version != env!("CARGO_PKG_VERSION") => Some(format!(
+                "its worker is luu {}, and this is luu {ours}",
+                self.identity()
+            )),
+            None => Some(format!(
+                "its worker is luu {}, from before a worker said which sources it was built \
+                 from, and this is luu {ours}",
+                self.version
+            )),
+            Some(theirs) if theirs != BUILD => Some(format!(
+                "its worker is luu {} built from other sources, and this is luu {ours}",
+                self.identity()
+            )),
+            Some(_) => None,
+        }
+    }
+}
+
+/// A version and the first eight characters of a build, the way a row has
+/// room for them.
+fn identity(version: &str, build: Option<&str>) -> String {
+    match build {
+        Some(build) => format!("{version} ({})", build.get(..8).unwrap_or(build)),
+        None => version.to_string(),
     }
 }
 
@@ -204,9 +256,15 @@ pub enum WorkerError {
     },
     #[error(
         "the worker speaks protocol {theirs} and this build speaks {ours}: \
-         the image is from a different version of luu, so rebuild it"
+         the image is from a different version of luu ({version}), so rebuild it"
     )]
-    Protocol { ours: u32, theirs: u32 },
+    Protocol {
+        ours: u32,
+        theirs: u32,
+        /// The worker's own luu version, which is what decides whether a
+        /// rebuild from the release can help.
+        version: String,
+    },
     #[error("the worker said nothing before it was asked: {0}")]
     NoHello(String),
 }
@@ -363,6 +421,7 @@ impl Worker {
             return Err(WorkerError::Protocol {
                 ours: PROTOCOL,
                 theirs: hello.protocol,
+                version: hello.version,
             });
         }
         Ok((pipe, hello))
@@ -521,8 +580,17 @@ impl Executor for Worker {
     fn describe(&self) -> Option<String> {
         let mut text = format!(
             "  worker     {} — luu {}, protocol {}\n",
-            self.label, self.hello.version, self.hello.protocol,
+            self.label,
+            self.hello.identity(),
+            self.hello.protocol,
         );
+        // An image is the easiest thing here to leave stale, and the protocol
+        // only catches the half of it that cannot be parsed.
+        if self.is_contained()
+            && let Some(differs) = self.hello.differs()
+        {
+            text.push_str(&format!("  stale      {differs}: rebuild the image\n"));
+        }
         // Zero on a healthy session, and worth printing anyway: a session that
         // has replaced its worker four times is a broken image wearing the
         // costume of a slow one.
@@ -640,6 +708,7 @@ pub async fn serve_stdio(
     let hello = Response::Hello(Hello {
         protocol: PROTOCOL,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        build: Some(BUILD.to_string()),
         commands: commands
             .iter()
             .map(|name| CommandOnPath {
@@ -697,4 +766,43 @@ pub fn which(name: &str) -> Option<PathBuf> {
             .map(|directory| directory.join(name))
             .find(|candidate| candidate.is_file())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hello(version: &str, build: Option<&str>) -> Hello {
+        Hello {
+            protocol: PROTOCOL,
+            version: version.to_string(),
+            build: build.map(str::to_string),
+            commands: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_worker_is_this_luu_s_only_when_version_and_build_both_are() {
+        let ours = env!("CARGO_PKG_VERSION");
+        assert_eq!(hello(ours, Some(BUILD)).differs(), None);
+        let other = hello("0.0.1", Some(BUILD)).differs().unwrap();
+        assert!(other.contains("luu 0.0.1 ("), "{other}");
+        let sources = hello(ours, Some("00000000aaaaaaaa")).differs().unwrap();
+        assert!(sources.contains("built from other sources"), "{sources}");
+        // A worker from before workers said: never vouched for.
+        let unsaid = hello(ours, None).differs().unwrap();
+        assert!(unsaid.contains("from before a worker said"), "{unsaid}");
+    }
+
+    #[test]
+    fn a_hello_without_a_build_still_reads_and_one_with_it_still_writes_for_an_old_host() {
+        let old: Response = serde_json::from_str(
+            r#"{"kind":"hello","protocol":2,"version":"0.1.4","commands":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(old, Response::Hello(hello("0.1.4", None)));
+        let new = serde_json::to_string(&Response::Hello(hello("0.1.4", Some(BUILD)))).unwrap();
+        assert!(new.contains(&format!(r#""build":"{BUILD}""#)), "{new}");
+        assert_eq!(BUILD.len(), 16, "{BUILD}");
+    }
 }

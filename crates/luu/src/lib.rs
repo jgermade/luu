@@ -24,7 +24,7 @@ use agent_core::task::{ApprovedBy, ClosedBy, Plan, PlanSource};
 use agent_core::tools::Tools;
 use agent_core::trace::TraceMessage;
 use agent_core::turn::{EndReason, TurnEvent};
-use agent_core::worker::{Runtime, Worker, WorkerConfig, WorkerSpec, serve_stdio};
+use agent_core::worker::{Runtime, Worker, WorkerConfig, WorkerError, WorkerSpec, serve_stdio};
 
 use crate::provider::BackendKind;
 use crate::session::{
@@ -1497,9 +1497,7 @@ impl SandboxArgs {
                 if let Some(gap) = worker_config.runtime.cannot() {
                     eprintln!("warning: {}: {gap}", worker_config.runtime);
                 }
-                let worker = Worker::start(&spec, sandbox.commands())
-                    .await
-                    .with_context(|| format!("the {} worker", spec.label()))?;
+                let worker = start_worker(&spec, sandbox.commands()).await?;
                 Some(std::sync::Arc::new(worker))
             }
         };
@@ -1516,6 +1514,96 @@ impl SandboxArgs {
             worker,
         )
         .with_lists(lists))
+    }
+}
+
+/// A session's worker, started, with what luu can do about the two ways a
+/// contained one goes wrong while nobody touches it.
+///
+/// **A runtime that is down** — a podman machine, colima, Docker Desktop — is
+/// started by the lines Settings' *start it* runs, and the worker asked once
+/// more. **An image that is not this luu's worker** — another version, or the
+/// same version from other sources, by [`agent_core::worker::Hello::differs`]
+/// or by the protocol it was refused for — is rebuilt from this version's
+/// release when luu built it from a release and the version is what moved:
+/// seconds, and the only case a rebuild from a release can fix. Every other
+/// case is said, on stderr and in the log, and the session goes on with the
+/// worker it has where it has one. Both are asked only after the worker has
+/// answered or failed, so a healthy session pays nothing. See
+/// `RECORD/2026-10-27.runtimes-without-the-wait.completed.md` and
+/// `RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md`.
+async fn start_worker(spec: &WorkerSpec, commands: &[String]) -> Result<Worker> {
+    let runtime = spec.runtime;
+    let label = spec.label();
+    let say = |line: String| {
+        eprintln!("{runtime}: {line}");
+        tracing::info!(target: "luu::runtimes", %runtime, "{line}");
+    };
+    let started = match Worker::start(spec, commands).await {
+        Err(first) if runtimes::asleep(runtime).await => {
+            say("it does not answer, so it is being started".into());
+            runtimes::wake(runtime, &say).await.map_err(|error| {
+                anyhow::anyhow!(
+                    "the {label} worker: {first}; starting {runtime} did not help: {error}"
+                )
+            })?;
+            Worker::start(spec, commands).await
+        }
+        started => started,
+    };
+    let image = match spec.image.as_deref() {
+        Some(image) if runtime.is_contained() => image,
+        _ => return started.with_context(|| format!("the {label} worker")),
+    };
+    // Which luu the image's worker is, against this one: said by its hello,
+    // or by the protocol the handshake refused it for.
+    let stale = match &started {
+        Ok(worker) => worker
+            .hello()
+            .differs()
+            .map(|why| (why, worker.hello().version.clone())),
+        Err(refused @ WorkerError::Protocol { version, .. }) => {
+            Some((refused.to_string(), version.clone()))
+        }
+        Err(_) => None,
+    };
+    let Some((why, version)) = stale else {
+        return started.with_context(|| format!("the {label} worker"));
+    };
+    let ours = env!("CARGO_PKG_VERSION");
+    let release = runtimes::built_from(runtime, image).await.as_deref() == Some("release");
+    if !release || version == ours {
+        let advice = match release {
+            true => "the release is this same version, so only a build from source can help",
+            false => "rebuild it in Settings → Runtimes",
+        };
+        say(format!("{image}: {why}; {advice}"));
+        return started.with_context(|| format!("the {label} worker"));
+    }
+    say(format!(
+        "{image}: {why}; rebuilding it from luu {ours}'s release"
+    ));
+    match runtimes::rebuild(runtime, image, &say).await {
+        Ok(()) => {
+            if let Ok(old) = &started {
+                old.end().await;
+            }
+            Worker::start(spec, commands)
+                .await
+                .with_context(|| format!("the {label} worker, after rebuilding {image}"))
+        }
+        Err(error) => match started {
+            Ok(old) => {
+                say(format!(
+                    "{image} was not rebuilt, and the session keeps the worker it has: {error}"
+                ));
+                Ok(old)
+            }
+            Err(refused) => Err(anyhow::anyhow!(
+                "the {label} worker: {refused}; rebuilding {image} from the release did not \
+                 help: {error}"
+            )),
+        },
     }
 }
 

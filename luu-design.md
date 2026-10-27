@@ -924,7 +924,48 @@ access = "execute"
   `luu.container.toml` is the wide-open posture, a separate file so that in three
   weeks nobody has to tell a default from a leftover. `scratch`/distroless is
   wrong here: the container's whole job is running `cargo`, `rustc`, `git`, `rg`
-  and `ls`, and a minimal image has none of them.
+  and `ls`, and a minimal image has none of them. **Two files declare it, and one
+  image comes out of either**: `Containerfile` compiles the checkout inside the
+  image (minutes, and only where the base is luu's checkout), and
+  `Containerfile.release` takes this version's Linux binary from its GitHub
+  release, checked against its `SHA256SUMS` (seconds, and from anywhere — the
+  binary carries the file and builds it from `<state dir>/worker-image/`). A test
+  holds their final stages to each other, and Settings builds from the release
+  unless asked for *from source*. Not the host's own binary: a Mach-O on macOS,
+  and on Linux linked against a glibc that may be newer than the image's. A
+  release whose worker protocol differs is refused at the handshake. See
+  [`RECORD/2026-10-27.runtimes-without-the-wait.completed.md`](RECORD/2026-10-27.runtimes-without-the-wait.completed.md).
+- **An image knows which luu it carries, and is held to it.** `PROTOCOL` says
+  whether the two sides can parse each other; `agent_core::worker::BUILD` says
+  whether they are the same code — a hash `crates/agent-core/build.rs` takes over
+  agent-core's sources and the workspace's `Cargo.toml` and `Cargo.lock`, content
+  and not a commit, so two uncommitted states differ and a build from source
+  (which has no `.git`) computes it over the same files its `COPY` brought in.
+  The hello carries it (`build`, optional: no protocol bump), and
+  `Hello::differs` is the one rule — same version, same build — that `luu tools`
+  (a `stale` line), Settings (`built`, or `out of date` with the reason, asked by
+  starting the image's worker with nothing to do) and the session start all ask.
+  luu labels what it builds `luu.from=release|source`; at a session start an
+  image labelled `release` whose version is not this one is **rebuilt from this
+  version's release** and the worker started again (seconds), the protocol
+  refusal included, and everything else is said and kept: a source image is
+  minutes per agent-core edit, and a release of this same version would bring
+  the same release back. See
+  [`RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md`](RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md).
+- **Nothing a session installs outlives its container.** `--rm` and a worker as
+  PID 1 mean a posture move, a replaced worker and the end of a session each
+  start again from the image; the worker is the person's uid, so `apt-get` has
+  no root to install with anyway, and only the bind-mounted base persists. A
+  per-session snapshot is not a feature: it would make the image generated. A
+  project that needs more tools declares them, `FROM luu-worker:dev`, under a
+  policy file of its own.
+- **A runtime that is down is started when a session needs it.** When the worker
+  will not start and the runtime does not answer its probe, the lines Settings'
+  *start it* runs are run (`podman machine start`, `colima start`,
+  `open -a Docker`, `container system start`), the probe is asked until it
+  answers (two minutes at most), and the worker once more. Asked only after a
+  failure, so a healthy session pays nothing; never stopped afterwards, because a
+  machine or a VM is shared with whatever else the person runs in it.
 - **`commands = [...]` is the image's manifest.** The worker is the only process
   standing on the image's `PATH`, so its handshake answers which allowed commands
   the image actually has, and `luu tools` prints the gap under `absent` —
@@ -1065,7 +1106,12 @@ access = "execute"
   doubled on the default. A runtime stops where it starts from the page —
   the app, the machine, `colima stop`, `container system stop` — and never the
   one the live session runs on
-  ([`RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md`](RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md)). See
+  ([`RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md`](RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md)).
+  `/api/runtimes` answers **without a probe** — installed or not is `which` — and the
+  page asks each installed runtime through `/api/runtimes/{runtime}`, filling its
+  card when it answers, so a runtime that takes its five seconds to say nothing
+  holds up only itself
+  ([`RECORD/2026-10-27.runtimes-without-the-wait.completed.md`](RECORD/2026-10-27.runtimes-without-the-wait.completed.md)). See
   [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md). `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
