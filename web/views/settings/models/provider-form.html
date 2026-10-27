@@ -1,21 +1,26 @@
-<script :setup="{ taken = [], editing = '', defaulting = false, saved = null, close = null }">
+<script :setup="{ taken = [], editing = '', saved = null, close = null }">
   // A provider, added or edited, as a sheet over Settings with two tabs:
   // **Connection** — name, backend, URL, key, and the Messages API's own
   // keys — and **Models**, what it serves: every model it lists, grouped by
-  // what the server says of its tools, with a window each and the default
-  // among them. An edit has a third, **Danger zone**, which is where it is
+  // what the server says of its tools, with a window and a transport each —
+  // and no default among them, which is luu's to have and the columns' to
+  // choose. An edit has a third, **Danger zone**, which is where it is
   // removed: the one thing the form does that cannot be saved back. *Models* opens once Connect has spoken to the server, or, on
-  // an edit, once the saved provider has answered. See
+  // an edit, once the saved provider has answered — for a provider whose
+  // engine luu starts, that is the models on this machine the engine loads,
+  // each with how its tools travel. See
   // `RECORD/2026-10-21.connecting-a-provider.completed.md` and its section of
-  // 2026-10-22.
+  // 2026-10-22, and `RECORD/2026-10-26.models-a-click-is-the-default.completed.md`.
   //
   // **It writes one profile and nothing else.** The body is the file as the
   // server last answered it, with this profile put in (or, for an edit, put in
   // place of the one it was). `taken` is every name in the file, `editing` the
-  // one being edited (`""` to add), `defaulting` makes it the default — the
-  // list's *make default* opens it so for a remote host to be typed — and
-  // `saved(name)` is told what was written.
+  // one being edited (`""` to add), and `saved(name)` is told what was
+  // written. A default is never made here: a click on a model makes it, and
+  // the host of a remote one is typed over the list, where it is held.
   const { state, saveProviders, probeProvider, providerModels } = await import("@web/lib/store.js")
+  const { modelLabel } = await import("@web/lib/engines.js")
+  const OriginBadge = await import("@web/components/origin-badge.html")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const Button = await import("@web/theme/default/components/button.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
@@ -62,9 +67,10 @@
   const LEVELS = ["low", "medium", "high", "xhigh", "max"]
 
   // The profile as the file has it, for an edit. `remote`, `engine` and
-  // `key-file` are not fields here and are carried through: `remote` is only
-  // ever written after the host was typed, `engine` is Settings → Engines' to
-  // set, and the key's file is luu's to place.
+  // `key-file` are not fields here and are carried through: `remote` is
+  // written when a provider off this machine is confirmed as luu's default
+  // (Settings → Models asks), `engine` is Settings → Engines' to set, and the
+  // key's file is luu's to place.
   const was = editing ? state.providers?.providers?.[editing] || {} : {}
   const saved_entries = was.models || {}
 
@@ -89,8 +95,8 @@
   let effort = was.effort || ""
   let maxTokens = was["max-tokens"] != null ? String(was["max-tokens"]) : ""
   // No box for it: a provider is made the default from the list. It stays the
-  // default through an edit and a rename, and `defaulting` is the list asking.
-  const makeDefault = defaulting || (!!editing && state.providers?.default === editing)
+  // default through an edit and a rename.
+  const makeDefault = !!editing && state.providers?.default === editing
 
   // ---- models -----------------------------------------------------------
 
@@ -99,12 +105,16 @@
   // leaves whatever the file held for it alone.
   let list = null
   let connecting = false
-  // A provider whose server luu starts lists this machine's models, which
-  // Settings → Engines is where to choose; it does not connect from here.
+  // A provider whose server luu starts lists this machine's models — the
+  // same list its pickers offer — and does not connect from here: its URL is
+  // the engine's, and the engine may not be running.
   const engineOwned = !!was.engine
 
-  // The default model; "" is none chosen, which is *the first listed*.
-  let defaultModel = was.model || ""
+  // The model the profile names, carried as the file has it. **The form does
+  // not choose it**: there is one default, luu's — a provider and a model,
+  // chosen with a click in the columns — and a radio here made every
+  // provider look like it had a default of its own.
+  const ownModel = was.model || ""
   // Same window for every model: the profile's `context-limit`. Otherwise one
   // per model, in `windows`, and the profile has none.
   const savedWindows = Object.fromEntries(Object.entries(saved_entries)
@@ -127,9 +137,6 @@
   let armed = false
   let saving = false
   let error = null
-  // The one refusal a person can answer: a remote default asks for its host.
-  let declaration = null
-  let typed = ""
 
   $: chosen = BACKENDS.find(b => b.value === backend) || BACKENDS[0]
   $: trimmed = name.trim()
@@ -143,7 +150,6 @@
   // shuts the Models tab with it.
   const forget = () => {
     if (list && !list.saved) { list = null; tab = "connection" }
-    declaration = null
   }
 
   const connect = async () => {
@@ -170,13 +176,16 @@
 
   // An edit asks the provider as saved what it serves — the request the
   // chat's picker already makes, with the facts — and its Models tab opens
-  // on the answer.
-  if (editing && !engineOwned) {
+  // on the answer. A local engine's answer is the models on the disk it
+  // loads, with no facts: every one is *not said*, so each has its own
+  // fenced|native, kept per model in this provider's entries.
+  if (editing) {
     list = { models: [], facts: {}, saved: true, loading: true }
     providerModels(editing, { facts: true }).then(answer => {
       list = answer.reason && !answer.models?.length
         ? { models: [], facts: {}, saved: true, error: answer.reason }
-        : { models: answer.models || [], facts: answer.facts || {}, saved: true }
+        : { models: answer.models || [], facts: answer.facts || {}, labels: answer.labels || {},
+            badges: answer.badges || {}, saved: true }
     })
   }
 
@@ -211,7 +220,7 @@
   const HEADS = { tools: "Tools", unsaid: "Not said", none: "No tools" }
   // Everything a row reads is an argument, because a `$:` runs again for what
   // it names and not for what a function it calls happens to read.
-  const buildRows = (_list, _windows, _transports, _leaving, _default, _profileTransport) => ["tools", "unsaid", "none"].flatMap(group => {
+  const buildRows = (_list, _windows, _transports, _leaving, _profileTransport) => ["tools", "unsaid", "none"].flatMap(group => {
     const members = listed.filter(m => groupOf(m) === group)
     if (!members.length) return []
     return [
@@ -223,9 +232,12 @@
           key: m,
           kind: "model",
           name: m,
+          // A catalog reference reads as the pickers read it: its name, and
+          // beside it where it comes from.
+          label: list?.labels?.[m] || modelLabel(m),
+          badge: list?.badges?.[m] || [],
           group,
           off: isOff(m),
-          chosen: defaultModel === m,
           window: windows[m] ?? "",
           over: overOf(m, windows[m]),
           placeholder: facts.window_is === "served" ? String(facts.window) : facts.window_is === "trained" ? "Ollama's" : "—",
@@ -240,19 +252,18 @@
       }),
     ]
   })
-  $: rows = buildRows(list, windows, transports, leaving, defaultModel, profileTransport)
+  $: rows = buildRows(list, windows, transports, leaving, profileTransport)
   $: anyFenced = rows.some(r => r.kind === "model" && !r.off && r.group !== "tools" && r.transport === "fenced")
   $: invalid = (!sameWindow && rows.some(r => r.kind === "model" && r.over)) || commonOver
 
-  const toggleDefault = m => { defaultModel = defaultModel === m ? "" : m }
   const setWindow = (m, value) => { windows = { ...windows, [m]: value } }
   const setTransport = (m, value) => { transports = { ...transports, [m]: value } }
 
   // ---- what the model says of thinking, effort and its cap ---------------
 
-  // The model a new session here starts on: the default, or the first
-  // listed. What its server says of it is what the three placeholders say.
-  $: reference = defaultModel || listed[0] || ""
+  // The model the placeholders speak of: the one the profile names, or the
+  // first listed. What its server says of it is what the three say.
+  $: reference = ownModel || listed[0] || ""
   $: told = (reference && list?.facts?.[reference]) || {}
   const count = v => { const n = Number(String(v).trim()); return Number.isInteger(n) && n > 0 ? n : null }
   // The cap luu sends a model with nothing typed: its own default, or less
@@ -296,19 +307,18 @@
     && (!count(thinkingBudget) || count(thinkingBudget) < 1024 || count(thinkingBudget) >= lowestCap)
 
   $: canSave = !!trimmed && !clash && !saving && !invalid && !list?.loading && !maxBad && !budgetBad
-    && (!declaration || typed.trim() === declaration.host)
 
   // ---- the tabs ----------------------------------------------------------
 
   // Models opens on an answer, or on an edit's question to the saved
-  // provider while it is asked; an engine's models are Settings → Engines'.
+  // provider while it is asked.
   $: tabs = [
     { value: "connection", label: "Connection" },
     {
       value: "models",
       label: "Models",
       count: list && !list.loading && !list.error ? listed.length : null,
-      disabled: !list || engineOwned,
+      disabled: !list,
     },
     ...(editing ? [{ value: "danger", label: "Danger zone" }] : []),
   ]
@@ -337,7 +347,7 @@
       }
       return out
     }
-    if (defaultModel) out.model = defaultModel
+    if (ownModel) out.model = ownModel
     if (sameWindow && commonWindow.trim()) out["context-limit"] = Number(commonWindow)
     if (profileTransport !== transportFor(backend)) out["tool-calls"] = profileTransport
     // Exceptions only. An entry for a model the server did not list now is
@@ -383,7 +393,7 @@
     error = null
     const result = await saveProviders({
       default: defaultAfter(),
-      providers: { ...others(), [trimmed]: profile(!!declaration || !!was.remote) },
+      providers: { ...others(), [trimmed]: profile(!!was.remote) },
       ...(keyed && keyValue.trim() ? { keys: { [trimmed]: keyValue } } : {}),
     })
     saving = false
@@ -392,13 +402,7 @@
       leave()
       return
     }
-    // Asked for the host: keep the form, and show the question inside it.
-    if (result?.declaration && !declaration) {
-      declaration = result.declaration
-      typed = ""
-    } else {
-      error = state.providersError || "the write was refused"
-    }
+    error = state.providersError || "the write was refused"
   }
 
   // The file without this profile; the default goes back to the mock if it
@@ -426,7 +430,7 @@
   <dl :if="tab === 'connection'" class="settings form">
     <dt>Name</dt>
     <dd>
-      <TextInput :model="name" placeholder="local" autofocus :warn="clash" @input="declaration = null" />
+      <TextInput :model="name" placeholder="local" autofocus :warn="clash" />
       <span :if="clash" class="warn">already a provider of that name</span>
     </dd>
 
@@ -478,8 +482,8 @@
     </dd>
 
     <dd :if="engineOwned" class="note">
-      luu starts this provider's server, so its models are this machine's:
-      they are chosen in Settings → Engines.
+      luu starts this provider's server, so its models are the ones on this
+      machine it loads: <strong>Models</strong> says how each one's tools travel.
     </dd>
   </dl>
 
@@ -506,20 +510,14 @@
       </span>
     </div>
 
-    <p :if="listed.length" class="dim pick-note">
-      The default is what a new session here starts on.
-      <span :if="!defaultModel">None chosen: the first listed.</span>
-    </p>
-
     <ul :if="listed.length" class="models">
       <li :each="row in rows" :key="row.key" :class="row.kind" :class.off="row.off">
         <span :if="row.kind === 'head'" class="head">{{ row.label }}</span>
-        <label :if="row.kind === 'model'" class="pick" :title="row.chosen ? 'Click again for none' : 'Make it the default'">
-          <input type="radio" name="default-model" :checked="row.chosen" :disabled="row.off"
-                 @click="toggleDefault(row.name)">
-          <span class="mname">{{ row.name }}</span>
+        <span :if="row.kind === 'model'" class="pick">
+          <span class="mname" :title="row.name">{{ row.label }}</span>
+          <OriginBadge :parts="row.badge" />
           <span :if="row.off" class="dim">left out</span>
-        </label>
+        </span>
         <!-- Both cells on every row, empty where they have nothing, so the
              columns line up down the list. -->
         <span :if="row.kind === 'model'" class="wcell">
@@ -564,15 +562,6 @@
 
   <p :if="error" class="error">{{ error }}</p>
 
-  <div :if="declaration" class="declare">
-    <p>
-      <strong>{{ declaration.profile }}</strong> sends to
-      <strong>{{ declaration.host }}</strong>, which is not this machine, and
-      it would become the default. Type the host to confirm.
-    </p>
-    <TextInput :model="typed" :placeholder="declaration.host" />
-  </div>
-
   <template :slot.foot>
     <!-- Leaving on the left; what keeps the form on the right. Removing is
          the danger zone's, not the foot's. -->
@@ -581,7 +570,7 @@
     </span>
     <Button :if="!engineOwned" :loading="connecting" @click="connect()">{{ connecting ? "Connecting…" : "Connect" }}</Button>
     <Button variant="primary" :disabled="!canSave" :loading="saving" @click="save()">
-      {{ saving ? "Saving…" : declaration ? "Confirm and save" : editing ? "Save" : "Add provider" }}
+      {{ saving ? "Saving…" : editing ? "Save" : "Add provider" }}
     </Button>
   </template>
 </SubModal>
@@ -592,7 +581,6 @@
   .inline { display: flex; gap: .6rem; align-items: center; }
   .windows { display: flex; align-items: center; gap: 1rem; min-height: 2rem; }
   .common { display: flex; align-items: center; gap: .4rem; }
-  .pick-note { margin: .6rem 0 .3rem; }
   .win {
     width: 6.5rem; flex: none; box-sizing: border-box; padding: .25rem .4rem; font: inherit; font-size: 12px;
     border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
@@ -608,7 +596,7 @@
     align-items: center; padding: .3rem 0;
   }
   .models li.model.off .mname { color: var(--luu-fg-muted); text-decoration: line-through; }
-  .pick { display: flex; gap: .45rem; align-items: center; min-width: 0; cursor: pointer; }
+  .pick { display: flex; gap: .5rem; align-items: center; min-width: 0; }
   .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wcell { display: flex; align-items: center; gap: .4rem; }
   .tcell { display: flex; justify-content: flex-end; }
@@ -616,7 +604,6 @@
   .rnote { grid-column: 1 / -1; font-size: 11px; color: var(--luu-fg-muted); padding-left: 1.4rem; }
   .rnote.warn { color: var(--luu-warn, #b26a00); }
   .leave { margin-top: .7rem; }
-  .declare { margin-top: 1rem; }
   .danger {
     display: flex;
     flex-direction: column;
@@ -629,7 +616,6 @@
   }
   .danger strong { color: var(--luu-bad); }
   .danger p { margin: 0; font-size: 12px; line-height: 1.5; }
-  .declare p { margin: 0 0 .5rem; }
   /* On the left of the foot, away from the buttons that keep the form. */
   .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
 </style>

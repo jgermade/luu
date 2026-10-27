@@ -517,10 +517,12 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await page.click('.modal .rail button:has-text("Models")')
 
   // No default in the file: the mock is what this server runs, and the table
-  // says so instead of showing nothing chosen.
+  // says so instead of showing nothing chosen — and the banner says why: the
+  // file has a provider, and none is the default.
   const builtin = page.locator(".modal .models-pane .builtin")
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
   await expect(builtin.locator(".tag:not(.default)")).toHaveText("running")
+  await expect(page.locator(".modal .models-pane .first-run")).toContainText("No provider is the default")
 
   await page.locator('.modal button.add:has-text("+ provider")').click()
   const form = page.getByRole("dialog", { name: "Add a provider" })
@@ -565,7 +567,8 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(form.getByRole("tab", { name: /Models/ })).toBeEnabled()
   await expect(form.getByRole("tab", { name: /Models/ })).toContainText("2")
   await form.getByRole("tab", { name: /Models/ }).click()
-  await form.locator('label.pick:has-text("tiny") input').first().click()
+  // No default among them: there is one, luu's, chosen in the columns.
+  await expect(form.locator('li.model input[type="radio"]')).toHaveCount(0)
   await form.getByRole("button", { name: "Add provider" }).click()
   await expect(form).toHaveCount(0)
 
@@ -573,15 +576,17 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   const onDisk = readFileSync(join(home, "config.toml"), "utf8")
   expect(onDisk).toContain("[provider.local]")
   expect(onDisk).toContain(`url = "${server.at}"`)
-  expect(onDisk).toContain('model = "tiny"')
+  expect(onDisk.slice(onDisk.indexOf("[provider.local]"))).not.toContain("model = ")
   expect(onDisk).toContain("[provider.here]")
   // Laid out as the new session's dialog: the providers in one column, the
   // models of the one in focus in the other.
   const pane = page.locator(".modal .models-pane")
   const names = pane.locator(".prov strong")
   await expect(names).toHaveText(["here", "local"])
-  // The list is read-only: no inputs in it, and nothing to save under it.
-  await expect(pane.locator(".browse input")).toHaveCount(0)
+  // The list is read-only: no input in it but the one a model is typed
+  // into, and nothing to save under it.
+  await expect(pane.locator(".browse input")).toHaveCount(1)
+  await expect(pane.locator(".browse .typed input")).toHaveCount(1)
   await expect(page.locator(".modal .section.on button.save")).toHaveCount(0)
   // Not asked to be the default, so the mock still is.
   await expect(builtin.locator(".tag.default")).toHaveCount(1)
@@ -600,15 +605,21 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await openEdit("local")
   const edit = page.getByRole("dialog", { name: "Provider local" })
   await edit.getByRole("tab", { name: /Models/ }).click()
-  const pick = name => edit.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) }).locator('input[type="radio"]')
-  await expect(pick("tiny")).toBeChecked()
-  await pick("tiny-q4").click()
+  await expect(edit.locator("li.model .mname")).toHaveText(["tiny", "tiny-q4"])
   await edit.getByRole("button", { name: "Save" }).click()
   await expect(edit).toHaveCount(0)
-  server.close()
-  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
+  // The default is a model chosen in the columns, and the ✓ says which; the
+  // head over them says where the provider is, and no model.
   await focus("local")
-  await expect(pane.locator(".models-head")).toContainText("tiny-q4")
+  await pane.locator("button.model", { hasText: "tiny-q4" }).click()
+  await expect.poll(() => readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
+  await expect(pane.locator("button.model.on")).toHaveText(/tiny-q4/)
+  await expect(pane.locator(".models-head .said")).not.toContainText("tiny")
+  // And the mock again, which the tests after this one start from.
+  await builtin.getByRole("button", { name: "make default" }).click()
+  await expect(builtin.locator(".tag.default")).toHaveCount(1)
+  await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  server.close()
 
   // Renamed, and the old name is gone rather than left beside it; then
   // removed, asked twice.
@@ -896,12 +907,7 @@ test("an anthropic provider connects with its key and writes its thinking", asyn
     await expect(form.locator("li.head")).toHaveText(["Tools"])
     const row = name => form.locator("li.model", { has: page.locator(`.mname:text-is("${name}")`) })
     await expect(row("claude-haiku-4-5")).toContainText("up to 200000")
-    // Haiku as the default: the placeholders follow it.
-    await row("claude-haiku-4-5").locator('input[type="radio"]').click()
     await form.getByRole("tab", { name: "Connection" }).click()
-    await expect(firstThinking).toHaveText("the server's default — claude-haiku-4-5 takes a budget")
-    await expect(form.locator("select.effort option").first()).toHaveText("the server's default — claude-haiku-4-5 takes none")
-    await expect(form.locator("input.max-tokens")).toHaveAttribute("placeholder", "8192")
 
     // A budget that does not fit under a model's cap is refused before it is
     // sent — Haiku's 8192, whatever the profile's.
@@ -911,11 +917,10 @@ test("an anthropic provider connects with its key and writes its thinking", asyn
     await expect(add).toBeDisabled()
     await form.locator("select.thinking").selectOption("adaptive")
     await form.locator("select.effort").selectOption("high")
-    // Past what the default model takes is refused too.
-    await form.locator("input.max-tokens").fill("32000")
+    // Past what the model the placeholders speak of takes is refused too.
+    await form.locator("input.max-tokens").fill("200000")
     await expect(add).toBeDisabled()
-    await modelsTab.click()
-    await row("claude-opus-5-5").locator('input[type="radio"]').click()
+    await form.locator("input.max-tokens").fill("32000")
     await expect(add).toBeEnabled()
     await add.click()
     await expect(form).toHaveCount(0)
@@ -923,7 +928,9 @@ test("an anthropic provider connects with its key and writes its thinking", asyn
     const written = readFileSync(join(home, "config.toml"), "utf8")
     const table = written.slice(written.indexOf("[provider.claude]"))
     expect(table).toContain('backend = "anthropic"')
-    expect(table).toContain('model = "claude-opus-5-5"')
+    // No model chosen in the form: there is no default per provider.
+    const own = table.slice(0, table.search(/\n\[provider\.(?!claude[.\]])/) >>> 0)
+    expect(own).not.toMatch(/^model = /m)
     expect(table).toContain('thinking = "adaptive"')
     expect(table).toContain('effort = "high"')
     expect(table).toContain("max-tokens = 32000")
@@ -995,7 +1002,10 @@ test("an engine is added with its provider, started, and stopped from Settings",
   // chooses the one its engine loads.
   await expect(form.getByRole("radio", { name: /llama\.cpp/ })).toHaveAttribute("aria-checked", "true")
   await expect(form.getByLabel("Name", { exact: true })).toHaveValue(/^llama(-\d+)?$/)
-  await expect(form.getByLabel("Port", { exact: true })).toHaveValue(/^\d+$/)
+  // Where it listens is luu's to choose, unless somebody unticks Auto.
+  const auto = form.getByRole("checkbox", { name: "Auto" })
+  await expect(auto).toBeChecked()
+  await expect(form.getByLabel("Port", { exact: true })).toBeDisabled()
   await expect(form.getByText("Model", { exact: true })).toHaveCount(0)
   await expect(form.getByRole("button", { name: "Install" })).toBeVisible()
   await form.getByLabel("Name", { exact: true }).fill("fake")
@@ -1008,6 +1018,10 @@ test("an engine is added with its provider, started, and stopped from Settings",
   const add = form.getByRole("button", { name: "Add engine" })
   await expect(add).toBeDisabled()
   await path.fill(fake)
+  // Unticked, it starts from the first free one, and takes a number.
+  await auto.click()
+  await expect(auto).not.toBeChecked()
+  await expect(form.getByLabel("Port", { exact: true })).toHaveValue(/^\d+$/)
   await form.getByLabel("Port", { exact: true }).fill("8097")
   await add.click()
   await expect(form).toHaveCount(0)
@@ -1063,6 +1077,174 @@ test("an engine is added with its provider, started, and stopped from Settings",
 })
 
 /**
+ * A provider off this machine becomes the default only when a person says so,
+ * at the moment it does: a click on one of its models asks, in a modal naming
+ * the host, and the answer writes the default and `remote = true` together —
+ * or, cancelled, writes nothing. A default the file already holds (written by
+ * hand) is confirmed through the same modal. See
+ * `RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`.
+ */
+test("a remote provider becomes the default through a confirmation", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const file = join(home, "config.toml")
+  const before = readFileSync(file, "utf8")
+  writeFileSync(file, `${before.trimEnd()}\n\n[provider.faraway]\nbackend = "openai"\n` +
+    `url = "https://models.example.invalid/v1"\nmodel = "far-1"\n`)
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const pane = page.locator(".modal .models-pane")
+    await pane.locator(".prov", { has: page.locator('strong:text-is("faraway")') }).click()
+    const ask = page.getByRole("dialog", { name: "Make faraway the default" })
+
+    // Asked, naming the host; cancelled, nothing is written.
+    await pane.locator("button.model", { hasText: "far-1" }).click()
+    await expect(ask).toContainText("models.example.invalid")
+    await ask.getByRole("button", { name: "Cancel" }).click()
+    await expect(ask).toHaveCount(0)
+    expect(readFileSync(file, "utf8")).not.toContain('default = "faraway"')
+
+    // Confirmed: the default and the consent in one write, nothing held, and
+    // the live session follows.
+    await pane.locator("button.model", { hasText: "far-1" }).click()
+    await ask.getByRole("button", { name: "Make it the default" }).click()
+    await expect(ask).toHaveCount(0)
+    await expect.poll(() => readFileSync(file, "utf8")).toContain('default = "faraway"')
+    expect(readFileSync(file, "utf8")).toContain("remote = true")
+    await expect(pane.locator(".first-run.held")).toHaveCount(0)
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBe("faraway")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+
+    // Written by hand without the word: held, and confirmed the same way.
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: (await (await fetch(`${BASE}/api/providers`)).json()).providers }),
+    })
+    writeFileSync(file, `${before.trimEnd()}\n\n[provider.faraway]\nbackend = "openai"\n` +
+      `url = "https://models.example.invalid/v1"\nmodel = "far-1"\n`)
+    writeFileSync(file, `default = "faraway"\n${readFileSync(file, "utf8")}`)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const held = pane.locator(".first-run.held")
+    await expect(held).toContainText("faraway is the default")
+    await expect(held).toContainText("models.example.invalid")
+    await expect(pane.locator(".first-run:not(.held)")).toHaveCount(0)
+    await held.getByRole("button", { name: "Confirm…" }).click()
+    await ask.getByRole("button", { name: "Make it the default" }).click()
+    await expect(held).toHaveCount(0)
+    await expect.poll(() => readFileSync(file, "utf8")).toContain("remote = true")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    // Back as it was for the tests after this one, the live session included.
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    delete now.providers.faraway
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: now.providers }),
+    })
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  }
+  expect(errors).toEqual([])
+})
+
+/**
+ * A server that does not list its models — a 404 on `/v1/models`, which the
+ * anthropic backend reads as none — says so in the columns, and a model
+ * typed under them is the default, as a click on a listed one is.
+ */
+test("a provider that lists no models says so, and a typed model is the default", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const silent = createServer((req, res) => res.writeHead(404).end())
+  await new Promise(done => silent.listen(0, "127.0.0.1", done))
+  const at = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (silent.address()).port}/apps/anthropic`
+  const file = join(home, "config.toml")
+  const before = readFileSync(file, "utf8")
+  writeFileSync(file, `${before.trimEnd()}\n\n[provider.unlisted]\nbackend = "anthropic"\nurl = "${at}"\n`)
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const pane = page.locator(".modal .models-pane")
+    await pane.locator(".prov", { has: page.locator('strong:text-is("unlisted")') }).click()
+    await expect(pane.locator(".models")).toContainText("unlisted lists no models: type one below")
+    await pane.locator('.typed input').fill("typed-1")
+    await pane.locator('.typed input').press("Enter")
+    await expect.poll(() => readFileSync(file, "utf8")).toContain('default = "unlisted"')
+    expect(readFileSync(file, "utf8")).toContain('model = "typed-1"')
+    await expect(pane.locator("button.model.on")).toContainText("typed-1")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    // Back as it was, the live session included, whatever happened above.
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    delete now.providers.unlisted
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: now.providers }),
+    })
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+    silent.close()
+  }
+  expect(errors).toEqual([])
+})
+
+/**
+ * A default is not a use: a click that makes an engine's provider the
+ * default points the live session there and starts nothing. The engine
+ * starts at the session's first turn. See
+ * `RECORD/2026-10-26.ports-luu-places.completed.md`.
+ */
+test("a default on an engine starts nothing until its first turn", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const file = join(home, "config.toml")
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const pane = page.locator(".modal .models-pane")
+    await pane.locator(".prov", { has: page.locator('strong:text-is("fake")') }).click()
+    await pane.locator("button.model", { hasText: "tiny:1b" }).click()
+    await expect.poll(() => readFileSync(file, "utf8")).toContain('default = "fake"')
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBe("fake")
+    // Long enough for a warm to have spawned it, and nothing did.
+    await page.waitForTimeout(1500)
+    const engines = await (await fetch(`${BASE}/api/engines`)).json()
+    expect(engines.engines.fake.status.state).not.toBe("running")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: now.providers }),
+    })
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  }
+  expect(errors).toEqual([])
+})
+
+/**
  * Changing where a session sends needs no restart: a new `default` is taken up
  * by an empty live session nobody pointed anywhere, and the chat's own picker
  * lists every provider with the models it serves and moves the session there.
@@ -1086,11 +1268,19 @@ test("a new default and the chat's picker both move the session without a restar
 
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
-  // The default is the one thing changed from the list, and written at once.
+  // The default is the one thing changed from the list, and written at once:
+  // a click on a model makes it and its provider the default.
   const pane = page.locator(".modal .models-pane")
   await pane.locator(".prov", { has: page.locator('strong:text-is("here")') }).click()
-  await pane.locator('.models-head button:has-text("make default")').click()
+  // Nothing in the head makes a default or starts a session: a default is a
+  // model, and a session is the picker's.
+  await expect(pane.locator(".models-head button", { hasText: "make default" })).toHaveCount(0)
+  await expect(pane.locator(".models-head button", { hasText: "use →" })).toHaveCount(0)
+  await pane.locator("button.model", { hasText: "mock" }).click()
   await expect(pane.locator(".models-head .tag.default")).toHaveCount(1)
+  await expect(pane.locator("button.model.on")).toHaveText(/mock/)
+  // And the mock's row, under the columns, is no longer the default.
+  await expect(pane.locator(".builtin .tag.default")).toHaveCount(0)
   await expect(page.locator(".modal")).toContainText("the live session is on here")
   const after = await (await fetch(`${BASE}/api/settings`)).json()
   expect(after.profile).toBe("here")
@@ -1161,6 +1351,20 @@ test("the models on this machine are listed by where they came from", async ({ p
   const big = catalog.models.find(m => m.label.startsWith("big:27b-mlx"))
   expect(Object.keys(big.cannot).sort()).toEqual(["llama", "mlx"])
 
+  // An ollama engine nothing has started lists ollama's store on this disk,
+  // by ollama's own names — not `connection refused` from a port it is not on.
+  const file = join(home, "config.toml")
+  const before = readFileSync(file, "utf8")
+  writeFileSync(file, `${before.trimEnd()}\n\n[engine.idle-ollama]\nkind = "ollama"\nbinary = "/bin/false"\n\n` +
+    `[provider.idle-ollama]\nbackend = "ollama"\nengine = "idle-ollama"\n`)
+  try {
+    const listed = await (await fetch(`${BASE}/api/providers/idle-ollama/models`)).json()
+    expect(listed.reason ?? null).toBeNull()
+    expect(listed.models.sort()).toEqual(["big:27b-mlx", "tiny:1b"])
+  } finally {
+    writeFileSync(file, before)
+  }
+
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
   await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
@@ -1171,7 +1375,10 @@ test("the models on this machine are listed by where they came from", async ({ p
   await page.click('.modal .rail button:has-text("Engines")')
   await page.locator(".engines-pane section.engine", { hasText: "fake" }).getByRole("button", { name: "Start" }).click()
   const start = page.getByRole("dialog", { name: "fake", exact: true })
-  await expect(start.locator(".model .label")).toHaveText(["tiny:1b (ollama)", "small-Q4_K_M (huggingface)"])
+  // Each by its name, and beside it where it comes from: the machine's
+  // ollama store, its Hugging Face cache.
+  await expect(start.locator(".model .label")).toHaveText(["tiny:1b", "small-Q4_K_M"])
+  await expect(start.locator(".model .origin")).toHaveText(["systemollama", "systemhuggingface"])
   await start.getByRole("button", { name: "Close" }).click()
   await expect(start).toHaveCount(0)
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
@@ -1180,18 +1387,58 @@ test("the models on this machine are listed by where they came from", async ({ p
   await page.click(".options .dest")
   await page.locator(".options .menu .prov", { hasText: "fake" }).click()
   const group = page.locator(".options .menu .models")
-  await expect(group.locator("button.model .name")).toHaveText([
-    "tiny:1b (ollama)",
-    "small-Q4_K_M (huggingface)",
-  ])
+  await expect(group.locator("button.model .name")).toHaveText(["tiny:1b", "small-Q4_K_M"])
+  await expect(group.locator("button.model .origin")).toHaveCount(2)
+  await expect(group.locator("button.model .origin").first()).toHaveAttribute("title", "system · ollama")
   // The one it cannot load is there, greyed, with a warning and why.
   const off = group.locator(".model.off")
   await expect(off).toHaveCount(1)
   await expect(off).toContainText("⚠")
-  await expect(off).toContainText("big:27b-mlx (ollama, mlx)")
+  await expect(off.locator(".name")).toHaveText("big:27b-mlx")
+  await expect(off.locator(".origin")).toHaveAttribute("title", "system · ollama · mlx")
   await expect(off).toHaveAttribute("aria-disabled", "true")
   await expect(off).toHaveAttribute("title", /llama.cpp loads GGUF only/)
   await page.keyboard.press("Escape")
+
+  // Its provider's form lists the same models, and each one's tool calls
+  // are chosen there and kept under its own name in the provider's entries.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
+  const pane = page.locator(".modal .models-pane")
+  await pane.locator(".prov", { has: page.locator('strong:text-is("fake")') }).click()
+  await pane.getByRole("button", { name: "Edit fake" }).click()
+  const form = page.getByRole("dialog", { name: "Provider fake" })
+  await expect(form.getByRole("button", { name: "Connect" })).toHaveCount(0)
+  await form.getByRole("tab", { name: /Models/ }).click()
+  await expect(form.locator("li.model .mname")).toHaveText(["tiny:1b", "small-Q4_K_M"])
+  await expect(form.locator("li.model .origin").first()).toHaveAttribute("title", "system · ollama")
+  const calls = form.getByRole("radiogroup", { name: "Tool calls of ollama:tiny:1b" })
+  await expect(calls.getByRole("radio", { name: "fenced" })).toHaveAttribute("aria-checked", "true")
+  await calls.getByRole("radio", { name: "native" }).click()
+  await form.getByRole("button", { name: "Save" }).click()
+  await expect(form).toHaveCount(0)
+  let table = readFileSync(join(home, "config.toml"), "utf8")
+  table = table.slice(table.indexOf("[provider.fake]"))
+  expect(table).toMatch(/\[provider\.fake\.models\."ollama:tiny:1b"\]\ntool-calls = "native"\n/)
+  expect(table).not.toContain("huggingface:")
+  // The columns say so on that model alone, the word only while its row is
+  // under the pointer.
+  const tiny = pane.locator(".row", { hasText: "tiny:1b" })
+  await expect(tiny.locator(".tools.native")).toHaveCount(1)
+  await expect(pane.locator(".row", { hasText: "small-Q4_K_M" }).locator(".tools.native")).toHaveCount(0)
+  await expect(tiny.locator(".tools .word")).toBeHidden()
+  await tiny.hover()
+  await expect(tiny.locator(".tools .word")).toHaveText("native")
+  // And back from the row itself: the toggle writes it at once, and fenced —
+  // the provider's own — leaves no entry behind.
+  await tiny.getByRole("button", { name: "Tool calls of ollama:tiny:1b: native" }).click()
+  await expect(tiny.locator(".tools .word")).toHaveText("fenced")
+  await expect.poll(() => readFileSync(join(home, "config.toml"), "utf8")).not.toContain("[provider.fake.models")
+  // The badge is right after the name, not at the row's far end.
+  const name = await tiny.locator(".name").boundingBox()
+  const badge = await tiny.locator(".origin").boundingBox()
+  expect(badge.x - (name.x + name.width)).toBeLessThan(16)
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
   expect(errors).toEqual([])
 })
@@ -1554,6 +1801,18 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   expect(onDisk).toContain(`binary = "${system}"`)
   expect(onDisk).toContain(`[provider.${name}]`)
   expect(onDisk).not.toContain("enabled")
+  // On a port luu chooses: none in its table, no URL on its provider, and
+  // the card says where it will be rather than a port it may not get.
+  const table = onDisk.slice(onDisk.indexOf(`[engine.${name}]`)).split("\n\n")[0]
+  expect(table).not.toContain("port")
+  const profile = onDisk.slice(onDisk.indexOf(`[provider.${name}]`)).split("\n\n")[0]
+  expect(profile).not.toContain("url")
+  await expect(used).toContainText("a free port, chosen when it starts")
+  // Its provider is in Models while the engine is enabled, and only then.
+  const inModels = page.locator(".modal .models-pane .prov", { has: page.locator(`strong:text-is("${name}")`) })
+  await page.click('.modal .rail button:has-text("Models")')
+  await expect(inModels).toHaveCount(1)
+  await page.click('.modal .rail button:has-text("Engines")')
 
   // Off: the table stays, one key says so, and the provider is idle.
   await used.getByRole("switch").click()
@@ -1563,6 +1822,10 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   expect(onDisk.match(/enabled = false/g)).toHaveLength(1)
   const providers = await (await fetch(`${BASE}/api/providers`)).json()
   expect(providers.idle).toEqual([name])
+  await page.click('.modal .rail button:has-text("Models")')
+  await expect(page.locator(".modal .models-pane .prov").first()).toBeVisible()
+  await expect(inModels).toHaveCount(0)
+  await page.click('.modal .rail button:has-text("Engines")')
 
   // luu's own copy, laid out as a download leaves it, and named by a table.
   const copy = join(home, "engines", "llama", "b11236")
@@ -1600,7 +1863,9 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   // On a port nothing answers, so the models are the profile's own.
   const file = join(home, "config.toml")
   writeFileSync(file, `${readFileSync(file, "utf8").trimEnd()}\n\n[provider.qwen-box]\nbackend = "ollama"\n` +
-    `url = "http://127.0.0.1:9"\nmodel = "qwen2.5-coder:7b"\n`)
+    `url = "http://127.0.0.1:9"\nmodel = "qwen2.5-coder:7b"\n\n[provider.ali]\nbackend = "openai"\n` +
+    `url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"\nmodel = "glm-5.2"\n\n` +
+    `[provider.mm]\nbackend = "anthropic"\nurl = "https://api.minimax.io/anthropic"\nmodel = "MiniMax-M2"\n`)
   const mine = join(home, "brand-icons", "mine")
   mkdirSync(mine, { recursive: true })
   writeFileSync(join(mine, "qwen.svg"), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>')
@@ -1617,6 +1882,22 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   await row.click()
   const model = pane.locator(".model", { hasText: "qwen2.5-coder:7b" })
   await expect(model.locator(".brand")).toHaveAttribute("style", /brands\/qwen\.svg/)
+  // An engine's provider wears its engine's mark: its URL is 127.0.0.1 and
+  // says nothing of whose server it is.
+  await expect(pane.locator(".prov", { has: page.locator('strong:text-is("fake")') }).locator(".brand"))
+    .toHaveAttribute("style", /brands\/llamacpp\.svg/)
+  // Alibaba Cloud's host is Alibaba Cloud's, and GLM is Z.ai's.
+  const ali = pane.locator(".prov", { has: page.locator('strong:text-is("ali")') })
+  await expect(ali.locator(".brand")).toHaveAttribute("style", /brands\/alibabacloud\.svg/)
+  await ali.click()
+  await expect(pane.locator(".model", { hasText: "glm-5.2" }).locator(".brand"))
+    .toHaveAttribute("style", /brands\/zai\.svg/)
+  // MiniMax's, by its host and by its model's name.
+  const mm = pane.locator(".prov", { has: page.locator('strong:text-is("mm")') })
+  await expect(mm.locator(".brand")).toHaveAttribute("style", /brands\/minimax\.svg/)
+  await mm.click()
+  await expect(pane.locator(".model", { hasText: "MiniMax-M2" }).locator(".brand"))
+    .toHaveAttribute("style", /brands\/minimax\.svg/)
 
   // A pack instead: found where luu imports them, chosen, and written.
   await page.click('.modal .rail button:has-text("Appearance")')

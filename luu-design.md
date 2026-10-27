@@ -1258,15 +1258,28 @@ via `<PathText>` with the full host directory in hover title, and settings forms
 **Settings is sections down the side**, not one scroll, because the sections are not steps.
 Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport height (`calc(100dvh - 4.5rem)`),
 and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (the folder `serve` was started in, and luu's own — the folder chosen under the first is the inspector foot's, which names it and changes it), *Models*
-(the providers file the next run reads, laid out as the new session's dialog: the providers in
-one column and the models of the one in focus in the other, that provider's default, *use →* and
-edit over its models, and *+ provider* under the list — with the built-in mock as a row of its
-own above them, chosen when the file names no default, because a server that fell back to it
-used to show a table with nothing chosen; the providers are **read-only**, and each is added,
-edited, renamed or — in its form's *Danger zone* — removed in its own form in a modal, which
-writes that one profile and nothing else, at once; the default alone is set from the list; see
-[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md)
-and [`RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`](RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
+(the providers file the next run reads, laid out as the new session's dialog: the providers the
+pickers offer — none whose engine is switched off in *Engines* — in one column and the models of
+the one in focus in the other, under a head with that provider's edit; a click on a model makes
+it and its provider the default — a provider has no *make default* of its own, since a default is
+always some model — and so does one typed under them, for a server that lists none (a 404 on its
+`/v1/models` is read as none, and the column says so). A model on this machine is its bare name
+and a badge of where it comes from, the server's to say: `luu · ollama` for one luu's own copy of
+ollama lists, `system · huggingface` for a file in the machine's cache, `luu` for luu's own models
+folder, and the format where it is not GGUF — see
+[`RECORD/2026-10-26.where-a-model-comes-from.completed.md`](RECORD/2026-10-26.where-a-model-comes-from.completed.md).
+Right of the row, how the model's tools travel: an icon, its word beside it while the row is under
+the pointer, and — in Settings, on loopback — a toggle that writes the model's own `tool-calls`
+where it differs from the provider's and takes it away where it does not. The head over the
+models says where the provider is, never a model: a provider has no default of its own. *+ provider* is in the pane's pinned foot, as
+*+ engine* is in Engines', and the built-in mock is a row of its own under the columns, chosen
+when the file names no default, because a server that fell back to it used to show a table with
+nothing chosen; the providers are **read-only**, and each is added, edited, renamed or — in its
+form's *Danger zone* — removed in its own form in a modal, which writes that one profile and
+nothing else, at once; the default alone is set from the list; see
+[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md),
+[`RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`](RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md)
+and [`RECORD/2026-10-26.models-a-click-is-the-default.completed.md`](RECORD/2026-10-26.models-a-click-is-the-default.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
 starts](#a-model-server-luu-starts)) and *Resend* (the three
 rules that decide how much of the history a turn pays for again). *Resend* is beside *Models* and
 not inside *General* on the same rule that keeps `config.toml` and `localStorage` apart: General
@@ -1298,7 +1311,7 @@ own seven (clock, cog, sliders, server, repeat, clip, speech bubble) — and eve
 needs no second set for the light theme. These were text glyphs (`↻`, `▾`/`▸`, `▪`/`▫`, `≡`),
 and a text glyph's size, weight and baseline belong to whichever font on the machine carries
 that codepoint, so none of them lined up with the 16px box a theme's file icons occupy. The
-exception is prose: the `→` in `use →` is a word, not a control, and stays a character.
+exception is prose: the `→` in `move it →` is a word, not a control, and stays a character.
 
 The panels are fed by four plain `GET`s — `/api/workspace/{tree,file,git-status,git-diff}` —
 plus a stream that says when to ask again. `git-status` answers `{ repository, files }`, and a
@@ -1845,13 +1858,20 @@ sends, and a `default` provider outlives the session and the gate, which makes
 it a larger authority than approving one job. Off loopback the section renders
 disabled and says why.
 
-**The browser never decides whether a URL is off the machine.** It writes what it
-was given; the loader — the same one every run reads the file with — refuses a
-default that leaves the machine without `remote = true`, and the refusal names
-the profile and the host. The page then asks for that host to be *typed* and
-retries with the declaration in place. So the rule has one implementation, and
-the word is produced by a person answering the machine's objection rather than
-by a checkbox the program pre-ticked. A key typed into the form is written to a
+**The browser never decides whether a URL is off the machine.** The loader — the same one
+every run reads the file with — **holds** a default that leaves the machine without `remote =
+true`, and `GET /api/providers` names the profile and the host (`held`); `GET
+/api/providers/where` answers the same question for a profile before anything is written.
+**Consent is asked when a provider becomes the default**: a click on a model of a provider off
+this machine that has not said `remote = true` opens a confirmation naming the host — *every run
+that names no provider sends its prompts there* — and *Make it the default* writes the default
+and `remote = true` in one write, while *Cancel* writes nothing. A held default — written by hand,
+or chosen before this asked — has a *Confirm…* that opens the same modal. **The default and the
+consent are two facts**, given by one person at one moment, and a provider is never consented to
+before somebody wants it as the default. It used to be the host typed back, over the columns,
+after the default had been written. See
+[`RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`](RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md)
+and [`RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`](RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md). A key typed into the form is written to a
 file before `config.toml` is, and the file holds a path, for the reason the
 provider section gives.
 
@@ -1871,15 +1891,23 @@ are grouped by what the server said of their tools — *tools*, *not said*, *no
 tools*, because a server that says nothing has not said *no*. Each has a window,
 prefilled and capped by what the server reports: on Ollama a choice under the
 training maximum (`/api/show`), on llama-server or vLLM the server's own
-`n_ctx`, which a smaller number only budgets under. The default is a radio that
-can be cleared — none is *the first listed* — and what the server says of it
-fills the Anthropic keys' placeholders: the thinking and effort it takes, and
-the cap a reply gets when nothing is typed, which a model that takes less than
-the profile's cap is written as an exception of its own. Models outside *tools*
+`n_ctx`, which a smaller number only budgets under. **There is no default among
+them**: luu has one default, a provider and a model, chosen in the columns, and a
+radio here made every provider look as if it had its own. The profile's `model` —
+what `-p <name>` with no `-m` starts on, and luu's default model when the profile is
+the default — is carried as the file has it. What the server says of that model,
+or of the first listed, fills the Anthropic keys' placeholders: the thinking and
+effort it takes, and the cap a reply gets when nothing is typed, which a model
+that takes less than the profile's cap is written as an exception of its own. Models outside *tools*
 get a transport select, fenced or native, and the models without tools can be
 left out of the pickers. Saving without connecting stays, for a server that is
-off. **The form does not make a provider the default** — the list does, with
-*make default*, and opens the form only for a remote host to be typed. An edit
+off. **The form does not make a provider the default** — the list does, with a
+click on one of its models, and never opens the form for it. **A provider whose engine luu starts has no Connect**:
+its Models tab is what its pickers offer — for llama.cpp or mlx the models on
+this machine the engine loads, for ollama what that ollama lists — and a
+catalog says nothing of tools, so each of a llama.cpp or mlx engine's models
+has its own fenced or native, written under its reference in
+`[provider.<name>.models."<reference>"]`: the name a session on it resolves. An edit
 asks the saved provider the same, through
 `GET /api/providers/{name}/models?facts=1` — the picker's route, which without
 `facts` pays no per-model request and lists only what is switched on. Behind
@@ -2196,8 +2224,14 @@ Local-first promises that nothing leaves the machine without the destination
 having been typed, and a profile is a destination typed once, weeks ago —
 except that `-p workstation` *is* typing it, at the moment of use. The default
 is the only shape where nothing was typed, so it is the only one that must have
-been written down; a `config.toml` that arrived from elsewhere fails to load if
-its default points off the machine. **A box on the LAN counts as off the
+been written down. A `config.toml` whose default points off the machine without
+saying so **loads with that default held**: nothing is sent there, a run with no
+`-p` refuses at the moment it would have sent, `serve` starts on the mock, and
+the page asks for it to be confirmed, in a modal naming the host. It used to fail to load, which took every other
+table down with it — the page that could have fixed it included. A `remote =
+true` on a default that is this machine is dropped by the loader and left out
+of the next write: no consent is given or taken by it, so that one migrates by
+itself. **A box on the LAN counts as off the
 machine** — the commitment says *the machine*, not *the building* — and a host
 that cannot be parsed counts as off it too. Every run that has somewhere to send
 prints where, before it sends: `provider: workstation → openai@192.168.1.40:8080
@@ -2253,17 +2287,29 @@ is sent to it.
 kind = "llama"          # llama | mlx | ollama
 binary = "managed"      # luu's own copy; a path; or absent: found on PATH
 # enabled = false       # kept, and disabled: luu does not start it
-port = 8080             # the first free one from the kind's own, when luu writes it
+# port = 8080           # absent: placed on the first free one from the kind's own
 args = ["-c", "8192"]
 # model = "ollama:qwen2.5-coder:7b" # read, never asked: the session's model is the one loaded
 
 [provider.gemma]
 backend = "openai"
-url = "http://127.0.0.1:8080/v1"
-engine = "gemma"
+engine = "gemma"        # sends wherever gemma listens; a `url` keeps only its path
 ```
 
-**The profile keeps its URL**, so the destination a run prints is still one line of the file.
+**The port is the engine's, and only the engine's.** A profile that names an engine sends to
+the port that engine listens on — the one its table names, or, with none, the one this process
+**places** it on: the first free port from the kind's own, past every port a table names and
+every other placement, chosen the first time anything needs the engine's address and kept for
+the life of the process (`engines::place`), so every backend built for it dials the same one.
+The profile's own URL keeps its path and loses its port. It used to be the other way round — *the
+profile keeps its URL, so the destination a run prints is still one line of the file* — and the
+copy of the port in the profile went stale the first time the engine moved, which is a
+`connection refused` on a port nothing was going to answer. What the line was for still holds:
+a run prints where it sends before it sends, with the port it placed. A port somebody needs to
+know in advance is written in the table, and is kept exactly as before. An automatic port that
+something else has taken by the time the engine starts is placed again, never "used as it is":
+luu's own port is not somebody else's server. See
+[`RECORD/2026-10-26.ports-luu-places.completed.md`](RECORD/2026-10-26.ports-luu-places.completed.md).
 **It is a child of `luu serve`** and dies with it: stopped on SIGINT and SIGTERM, and
 `kill_on_drop` for every other way the handle goes. **luu's own copy is an official release by
 tag** — `b11236` for llama.cpp, `v0.34.4` for ollama, moved by `version` — downloaded into
@@ -2286,7 +2332,10 @@ until `serve` exits. `luu chat` and `luu stdio` start it for the length of the r
 
 **A switch does not wait for the load; the first call does.** Choosing another model answers
 as soon as the session points there, and the engine loads behind the answer
-(`Supervisor::warm`). The session's backend is wrapped (`engines::Started`) so every call runs
+(`Supervisor::warm`). **A default is not a use**: a session that follows the file's default —
+the one `serve` starts on, or one a click on a model moves while it has no turns — warms nothing,
+and its engine starts at its first turn; its window is asked once something has started the
+engine on that model, never by starting it. The session's backend is wrapped (`engines::Started`) so every call runs
 `ensure` first: a turn sent while the model loads waits for it on the server, and an engine that
 cannot start reaches the turn as a transport error. `ensure` is one at a time per engine, so the
 warm-up and the first turn cannot restart it under each other. **An `ensure` says which phase it
@@ -2327,8 +2376,8 @@ neither (`origin`, the server's answer) — and nothing is removed from the page
 **used or not**. Used, a found binary becomes `[engine.<kind>]` with that `binary` and the
 provider that starts it; not used, a table keeps everything and gains `enabled = false`, which
 luu **does not start** (`ensure` and the start route refuse, naming the switch) and whose
-providers **leave the pickers** (`idle` on `GET /api/providers`), while staying in Settings →
-Models. A version or variant the page sends is a name or it is refused — it is joined into a
+providers **leave the pickers** (`idle` on `GET /api/providers`), Settings → Models among
+them: the switch is where such a provider comes back. A version or variant the page sends is a name or it is refused — it is joined into a
 path under the state directory. The actions are icons (start, stop, output, install, uninstall,
 edit), and the output is a `SubModal` with each line coloured by what it says. See
 [`RECORD/2026-10-26.engines-found-used-and-owned.completed.md`](RECORD/2026-10-26.engines-found-used-and-owned.completed.md).
@@ -2343,18 +2392,25 @@ provider and that model. *Chat* talks to the engine on that model in the sheet, 
 session**: `POST /api/engines/{name}/chat` runs `ensure` and streams the reply as NDJSON, with no
 system prompt, no tools, no budget and nothing recorded, to the engine's own `127.0.0.1` URL and
 never a provider's. *Output* is what it printed, a line's colour saying what it is. The switch on
-a card reads *Enabled*. **luu picks the port**: `GET
-/api/engines/port` is the first from the kind's own upward that no table names and a bind on
-`127.0.0.1` finds free, within a hundred and under the ephemeral range, and the form and *use*
-write it; when something else answers on an engine's port anyway, the sheet offers *move to port
-N*, which rewrites the table and every provider whose URL still says the old one. **Uninstall
+a card reads *Enabled*. **luu picks the port**, by default every time it starts: the form's
+*Auto* — ticked for a new engine, and *use* never asks — leaves `port` out. Unticked, `GET
+/api/engines/port` is the first from the kind's own upward that no table names, no automatic
+engine was placed on, and a bind on `127.0.0.1` finds free, within a hundred and under the
+ephemeral range, and the form writes it; when something else answers on a fixed port anyway, the
+sheet offers *move to port N*, which rewrites the table and every provider whose URL still says
+the old one. **An ollama engine nothing has started lists ollama's store on this disk**, by
+ollama's own names, instead of asking a port nothing answers on. **Uninstall
 asks, then removes the engine** (`POST /api/engines/{name}/uninstall`, luu's own copy only):
 stopped, its copy deleted unless another table runs it, and `[engine.<name>]` taken out of the
 file with the providers that start it. **The form is an installer** in a wide `SubModal` of
 `InputContainer`s: the kind as cards (with whether this machine has a release of it,
 `cannot_install`), where the binary comes from, the name and port filled in, *Advanced* for the
 arguments; *Install* downloads luu's copy there and closes when it is on disk — unpacked without
-an archive's single top folder, so `luu:/engines/llama/b11236/llama-server`. See
+an archive's single top folder, so `luu:/engines/llama/b11236/llama-server`. While it downloads
+the button reads *Installing…*, and *View details* beside it puts a terminal over the form: the
+install's own log (`log` on each of `installs`), a line per step — the release asked for, the
+asset and its sha256, the download in tenths, the check, the unpack, where the copy landed or
+why not. Open when the copy lands, the sheet stays, with *Close*. See
 [`RECORD/2026-10-26.engines-installed-and-started.completed.md`](RECORD/2026-10-26.engines-installed-and-started.completed.md).
 
 ### Settings

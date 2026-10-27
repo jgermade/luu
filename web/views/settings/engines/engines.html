@@ -11,7 +11,7 @@
   // install and uninstall, `system` for one it found. See
   // `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
   const { loadEngines, saveEngines, stopEngine, installEngine, uninstallEngine,
-          tableOf, profileFor, freePort } = await import("@web/lib/engines.js")
+          tableOf, profileFor } = await import("@web/lib/engines.js")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const Switch = await import("@web/theme/default/components/switch.html")
   const Button = await import("@web/theme/default/components/button.html")
@@ -81,22 +81,17 @@
     engines[name] = on ? rest : { ...rest, enabled: false }
     await act(`use:${name}`, () => saveEngines(engines))
   }
-  // A binary the machine has, used: its table, on the kind's own port unless
-  // another engine has it, and the provider that starts it — what *+ engine*
-  // writes with its box ticked.
+  // A binary the machine has, used: its table, on a port luu chooses, and the
+  // provider that starts it — what *+ engine* writes with its box ticked.
   const useFound = async card => {
     const { kind, path } = card.found
-    // A port nothing has: the kind's own, or the first free one above it.
-    const free = await freePort(kind)
-    if (!free.ok) return void (error = free.error)
-    const port = free.port
     const engines = tables()
-    engines[card.name] = { kind, binary: path, port }
+    engines[card.name] = { kind, binary: path }
     if (!(await act(`use:${card.key}`, () => saveEngines(engines)))) return
     await loadProviders()
     const providers = { ...(state.providers?.providers || {}) }
     if (providers[card.name]) return
-    providers[card.name] = profileFor(card.name, kind, port)
+    providers[card.name] = profileFor(card.name, kind, null)
     const result = await saveProviders({ default: state.providers?.default ?? null, providers })
     if (!result?.ok) error = `The engine was written, and its provider was not: ${state.providersError}`
   }
@@ -300,7 +295,9 @@
 
           <dt :if="card.engine">Sends</dt>
           <dd :if="card.engine">
-            <code>{{ card.engine.url }}</code>
+            <code :if="card.engine.url">{{ card.engine.url }}</code>
+            <span :if="!card.engine.url" class="dim">a free port, chosen when it starts</span>
+            <span :if="card.engine.url && !card.engine.port" class="dim" title="No port in its table: luu chose this one, and may choose another next time it starts">· automatic</span>
             <span :if="!card.engine.providers.length" class="dim">· no provider names it</span>
             <span :each="p in card.engine.providers" :key="p">· {{ p }}</span>
           </dd>

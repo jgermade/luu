@@ -20,6 +20,7 @@
   const Button = await import("@web/theme/default/components/button.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const BrandIcon = await import("@web/components/brand-icon.html")
+  const OriginBadge = await import("@web/components/origin-badge.html")
 
   // False once it should leave: `SubModal` plays the exit, then `close`
   // unmounts it.
@@ -55,7 +56,9 @@
 
   // Read where they are used: the parent's view moves under the sheet.
   const status = () => view?.engines?.[name]?.status || null
-  const taken = () => !!status()?.answering && status()?.state !== "running"
+  // Only for a port the table names: an automatic engine is placed again on
+  // a free one when it starts.
+  const taken = () => !!view?.engines?.[name]?.port && !!status()?.answering && status()?.state !== "running"
   const port = () => view?.engines?.[name]?.port || defaultPort(kind)
   $: lines = view?.engines?.[name]?.status?.log || []
   $: TABS = [
@@ -170,7 +173,8 @@
       <label :each="m in loadable" :key="m.reference" class="model" :class.on="chosen === m.reference">
         <input type="radio" name="engine-model" :checked="chosen === m.reference" @change="chosen = m.reference">
         <BrandIcon :src="brandSrc(modelBrand(m.reference))" />
-        <span class="label">{{ m.label }}</span>
+        <span class="label" :title="m.label">{{ m.name }}</span>
+        <OriginBadge :parts="m.badge || []" />
         <span class="dim small">{{ gb(m.size) }}</span>
       </label>
     </div>
@@ -249,7 +253,7 @@
   .model:hover { background: var(--luu-sunken); }
   .model.on { background: var(--luu-selected); color: var(--luu-accent); }
   .model input { margin: 0; }
-  .model .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model .label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .provider { margin-top: .8rem; }
   .chat { display: flex; flex-direction: column; gap: .7rem; }
   .chat > p { margin: 0; }

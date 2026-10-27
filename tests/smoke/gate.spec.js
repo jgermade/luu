@@ -475,8 +475,8 @@ test("choosing another provider in the dialog lists that provider's models", asy
   await expect(sends.locator(".models button.model").first()).toContainText("mock-there")
   // Beside it, how this model's tools travel: these profiles never set
   // `tool-calls`, so the fenced icon — braces, not the native plug.
-  await expect(sends.locator(".models button.model .tools").first()).toBeVisible()
-  await expect(sends.locator(".models button.model use").first())
+  await expect(sends.locator(".models .row .tools").first()).toBeVisible()
+  await expect(sends.locator(".models .row .tools use").first())
     .toHaveAttribute("href", "#i-tools-fenced")
   await sends.locator(".models button.model", { hasText: "mock-there" }).click()
   await expect(chosen).toContainText("there · mock-there")

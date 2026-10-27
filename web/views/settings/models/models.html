@@ -2,15 +2,18 @@
   // The providers in `config.toml`, as the new session's dialog lays them
   // out: the providers in one column and the models of the one in focus in
   // the other (`provider-models.html`), with that provider's own actions over
-  // its models and *+ provider* under the list. What this server resolved for
-  // the live session used to be a card above it, and is not here: the chat's
-  // head and the turn say where a session sends. See
-  // `RECORD/2026-09-07.configuring-from-the-browser.completed.md` and
-  // `RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md`.
-  const { state, saveProviders, loadProviders, refreshSettings } = await import("@web/lib/store.js")
+  // its models and *+ provider* in the pane's foot, as *+ engine* is in
+  // Engines'. What this server resolved for the live session used to be a
+  // card above it, and is not here: the chat's head and the turn say where a
+  // session sends. See
+  // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`,
+  // `RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md` and
+  // `RECORD/2026-10-26.models-a-click-is-the-default.completed.md`.
+  const { state, saveProviders, loadProviders, refreshSettings, providerWhere } = await import("@web/lib/store.js")
   const PathText = await import("@web/components/path-text.html")
   const Button = await import("@web/theme/default/components/button.html")
-  const { openStarter, editStarter } = await import("@web/lib/ui.js")
+  const SubModal = await import("@web/theme/default/components/sub-modal.html")
+  const { openStarter } = await import("@web/lib/ui.js")
   const ProviderForm = await import("./provider-form.html")
   const ProviderModels = await import("@web/views/chat/provider-models.html")
 
@@ -26,44 +29,97 @@
   // it. The edit over a provider's models opens `provider-form.html`, which
   // adds, edits, renames and — in its danger zone — removes one profile and
   // writes it at once; the list is the file as the server last answered it.
-  // `form` is `{ editing, defaulting }`, or `null` while no form is open.
+  // `form` is `{ editing }`, or `null` while no form is open.
   let form = null
-  const openForm = (editing = "", defaulting = false) => { form = { editing, defaulting } }
+  const openForm = (editing = "") => { form = { editing } }
   const saved = () => { refreshSettings() }
 
   // The default is the one thing changed from the list, because it is the one
-  // thing changed often, and it is written at once. A default off this
-  // machine needs its host typed — the same declaration `-p` is on the
-  // command line — so that refusal opens the profile's form with *default*
-  // ticked, where the question is asked.
+  // thing changed often, and it is written at once: a provider and its model
+  // from a click on the model, or the mock from its row. `remote` is the
+  // consent a provider off this machine needs to be it, written in the same
+  // write once the confirmation below has been answered. See
+  // `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md` and
+  // `RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`.
   let defaultError = null
-  const makeDefault = async name => {
+  const makeDefault = async (name, model = "", remote = false) => {
     defaultError = null
-    const result = await saveProviders({ default: name || null, providers: state.providers?.providers || {} })
+    const providers = { ...(state.providers?.providers || {}) }
+    if (name && (model || remote)) {
+      providers[name] = { ...providers[name], ...(model ? { model } : {}), ...(remote ? { remote: true } : {}) }
+    }
+    const result = await saveProviders({ default: name || null, providers })
     await refreshSettings()
-    if (result?.ok) return
-    if (result?.declaration && name) return openForm(name, true)
-    defaultError = state.providersError || "the write was refused"
+    if (!result?.ok) defaultError = state.providersError || "the write was refused"
   }
+
+  // **Asked when it becomes the default, not before.** A provider off this
+  // machine that has not said `remote = true` is luu's default only once a
+  // person confirms it, in a modal that names the host: every run that names
+  // no provider would send there. Cancel writes nothing. Whether a URL is
+  // this machine is the server's to say (`/api/providers/where`), never
+  // worked out here. `confirming` is `{ provider, model, host }` while it is
+  // open.
+  let confirming = null
+  const confirmDefault = async () => {
+    const { provider, model } = confirming
+    confirming = null
+    await makeDefault(provider, model, true)
+  }
+  // A default the file already holds — added before this asked, or written
+  // by hand — is confirmed with the same modal.
+  $: held = state.providers?.held || null
+  // Why the live session is on the mock, when nobody chose it: the file
+  // names no provider at all, or names some and makes none the default. A
+  // held default says so on its own line.
+  $: noProviders = !Object.keys(state.providers?.providers || {}).length
 
   $: profileNames = Object.keys(state.providers?.providers || {})
   // The provider whose models are on show, as the columns say it.
   let focused = ""
   $: here = state.providers?.providers?.[focused] || null
-  // What a session there would start on, said over its models.
+  // Where it is, said over its models — and no model: a provider has no
+  // default of its own. luu's is the ✓ in the columns.
   $: said = here
-    ? [here.url, here.model, here["context-limit"] ? `${here["context-limit"]} tokens` : ""].filter(Boolean).join(" · ")
+    ? [here.url, here["context-limit"] ? `${here["context-limit"]} tokens` : ""].filter(Boolean).join(" · ")
     : ""
-  // A model chosen here starts a session on it, as *use →* does on the
-  // provider's own model.
-  const startOn = async ({ provider, model }) => {
-    await openStarter(provider)
-    if (model) editStarter({ model })
+  // A model clicked here is the default: its provider in `default`, the model
+  // in the provider's `model`. It used to open the new session's dialog on
+  // it, which the chat's picker and *New session* already do. A provider
+  // that lists nothing offers *its own model*, which moves the default and
+  // leaves the profile's model as it is.
+  const chooseDefault = async ({ provider, model }) => {
+    const p = state.providers?.providers?.[provider]
+    if (state.providers?.default === provider && (!model || p?.model === model) && !held) return
+    if (p && !p.remote && p.backend !== "mock") {
+      const where = await providerWhere(p.backend || "ollama", p.url || "")
+      if (where && !where.this_machine) return void (confirming = { provider, model, host: where.host })
+    }
+    makeDefault(provider, model)
   }
   // How each model travels is the columns' to say, one icon per model, in
   // `provider.rs`'s own order — see
   // `RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`.
   const profileTransport = p => p?.["tool-calls"] || (p?.backend === "anthropic" ? "native" : "fenced")
+  // And flipped from its row, written at once as the form writes it: an
+  // exception on the model where it differs from its provider, and nothing
+  // where it is the same.
+  const setTransport = async ({ provider, model, transport }) => {
+    defaultError = null
+    const providers = { ...(state.providers?.providers || {}) }
+    const profile = { ...providers[provider] }
+    const models = { ...(profile.models || {}) }
+    const entry = { ...(models[model] || {}) }
+    if (transport === profileTransport(profile)) delete entry["tool-calls"]
+    else entry["tool-calls"] = transport
+    if (Object.keys(entry).length) models[model] = entry
+    else delete models[model]
+    if (Object.keys(models).length) profile.models = models
+    else delete profile.models
+    providers[provider] = profile
+    const result = await saveProviders({ default: state.providers?.default ?? null, providers })
+    if (!result?.ok) defaultError = state.providersError || "the write was refused"
+  }
   // A model whose own entry disagrees with the profile: a run with `-m` can
   // travel differently from what the row says, and the row should not hide it.
   const overridden = name => {
@@ -81,19 +137,6 @@
 
 <div class="models-pane">
   <div class="pane-main">
-    <!-- The first run. The server decides this (`unconfigured`), the page only
-         shows it: a browser working it out from the backend name would be a second
-         copy of a rule that already has one. -->
-    <div :if="state.settings?.unconfigured" class="first-run">
-      <strong>Nothing says where this machine sends.</strong>
-      <p>
-        There is no provider in <code>config.toml</code> and no destination was
-        typed on the command line, so this server fell back to the mock — which
-        answers in sentences and is nowhere. Add one below, then start a
-        session on it.
-      </p>
-    </div>
-
     <div class="ds-hero">
       <div class="ds-hero-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -109,6 +152,42 @@
       <div class="ds-hero-body">
         <h4 class="ds-hero-title">Modelos y proveedores</h4>
         <p class="ds-hero-desc">Los perfiles configurados (Ollama, OpenAI, Anthropic, llama-server y remotos) y los modelos que sirve cada uno.</p>
+      </div>
+    </div>
+
+    <!-- The live session on the mock because nobody chose anything, under the
+         hero rather than over it. The server decides that (`unconfigured`),
+         the page only says why: no provider at all, or no default among
+         them. A held default has its own line. -->
+    <div :if="state.settings?.unconfigured && !held && !state.providers?.default" class="first-run">
+      <strong>Nothing says where this machine sends.</strong>
+      <p :if="noProviders">
+        There is no provider in <code>config.toml</code> and no destination was
+        typed on the command line, so this server fell back to the mock — which
+        answers in sentences and is nowhere. Add one with <strong>+ provider</strong>,
+        then click one of its models to make it the default.
+      </p>
+      <p :if="!noProviders">
+        No provider is the default and no destination was typed on the command
+        line, so this server fell back to the mock — which answers in sentences
+        and is nowhere. Click a model below to make it the default: the live
+        session moves there while it has no turns.
+      </p>
+    </div>
+
+    <!-- A default chosen and not yet consented to: it points off this machine
+         and its profile does not say `remote = true` — a provider added before
+         its form had the box, or one written by hand. Nothing goes there
+         until it is ticked, here or in its form. -->
+    <div :if="held" class="first-run held">
+      <strong>{{ held.profile }} is the default, and is not this machine.</strong>
+      <p>
+        Nothing is sent to <strong>{{ held.host }}</strong> as the default until
+        that is confirmed: until then this server stays on the mock.
+      </p>
+      <div class="confirm">
+        <Button size="sm" :disabled="!editable"
+                @click="confirming = { provider: held.profile, model: '', host: held.host }">Confirm…</Button>
       </div>
     </div>
 
@@ -133,8 +212,35 @@
 
       <p :if="defaultError" class="error">{{ defaultError }}</p>
 
-      <!-- The built-in mock first, because "no default" in the file is it. It
-           is not a profile, so it is not in the columns. -->
+      <!-- The profiles the pickers offer — a provider whose engine is
+           switched off in Engines is not one — and the models of the one in
+           focus; ✓ is the default, and its own model. A click on a model
+           makes it the default: the provider has no *make default* of its
+           own, since a default is always some model. A model typed under
+           the list is one too, for a server that lists none. -->
+      <div class="browse" :if="state.providers">
+        <ProviderModels :provider="state.providers.default || ''"
+                        :model="state.providers.providers?.[state.providers.default]?.model || ''"
+                        :disabled="!editable" typable :toggles="editable"
+                        @focus="focused = $event.detail" @choose="chooseDefault($event.detail)"
+                        @transport="setTransport($event.detail)">
+          <template :slot.head>
+            <span :if="said" class="said">{{ said }}</span>
+            <span :if="state.providers?.default === focused" class="tag default">default</span>
+            <span :if="focused === state.providers?.running" class="tag" title="What this server is sending to">running</span>
+            <span :if="here?.remote" class="tag warn" title="Declared as off this machine">remote</span>
+            <span :if="overridden(focused)" class="tag warn"
+                  title="A model's own `tool-calls` differs from the profile's: a run with -m resolves that model's entry over this. Open the provider to see which.">per-model tools</span>
+            <Button :if="here" square variant="ghost" size="sm" :title="`Edit ${focused}`" :label="`Edit ${focused}`"
+                    :disabled="!editable" @click="openForm(focused)">
+              <svg class="ic"><use href="#i-edit"/></svg>
+            </Button>
+          </template>
+        </ProviderModels>
+      </div>
+
+      <!-- The built-in mock last, under the providers: "no default" in the
+           file is it, and it is not a profile, so it is not in the columns. -->
       <div class="builtin" :class.default="!state.providers?.default">
         <div class="who">
           <strong>mock</strong>
@@ -150,42 +256,39 @@
                   @click="makeDefault('')">make default</button>
         </div>
       </div>
-
-      <!-- Every profile in the file and the models of the one in focus; ✓ is
-           the default, and its own model. -->
-      <div class="browse" :if="state.providers">
-        <ProviderModels every :provider="state.providers.default || ''"
-                        :model="state.providers.providers?.[state.providers.default]?.model || ''"
-                        @focus="focused = $event.detail" @choose="startOn($event.detail)">
-          <template :slot.head>
-            <span :if="said" class="said">{{ said }}</span>
-            <span :if="state.providers?.default === focused" class="tag default">default</span>
-            <span :if="focused === state.providers?.running" class="tag" title="What this server is sending to">running</span>
-            <span :if="here?.remote" class="tag warn" title="Declared as off this machine">remote</span>
-            <span :if="overridden(focused)" class="tag warn"
-                  title="A model's own `tool-calls` differs from the profile's: a run with -m resolves that model's entry over this. Open the provider to see which.">per-model tools</span>
-            <button type="button" class="link" :if="here && state.providers?.default !== focused" :disabled="!editable"
-                    @click="makeDefault(focused)">make default</button>
-            <button type="button" class="link" :if="here" title="Start a session on this provider"
-                    @click="openStarter(focused)">use →</button>
-            <Button :if="here" square variant="ghost" size="sm" :title="`Edit ${focused}`" :label="`Edit ${focused}`"
-                    :disabled="!editable" @click="openForm(focused)">
-              <svg class="ic"><use href="#i-edit"/></svg>
-            </Button>
-          </template>
-        </ProviderModels>
-      </div>
-      <!-- Under the list, outside it: one more. -->
-      <div class="under" :if="state.providers">
-        <button type="button" class="add" :disabled="!editable" @click="openForm()">+ provider</button>
-      </div>
     </section>
 
   </div>
+
+  <!-- Pinned to the bottom of the pane, as *+ engine* is in Engines. -->
+  <div class="modal-foot">
+    <div class="modal-actions">
+      <button type="button" class="add" :disabled="!editable" @click="openForm()">+ provider</button>
+    </div>
+  </div>
 </div>
 
-<ProviderForm :if="form" :taken="profileNames" :editing="form.editing" :defaulting="form.defaulting"
+<ProviderForm :if="form" :taken="profileNames" :editing="form.editing"
               :saved="saved" :close="() => { form = null }" />
+
+<!-- A provider off this machine becoming the default: said, and asked. -->
+<SubModal :open="!!confirming" :title="confirming ? `Make ${confirming.provider} the default` : ''"
+          width="34rem" @close="confirming = null">
+  <div :if="confirming" class="asks">
+    <p>
+      <strong>{{ confirming.provider }}</strong> sends to
+      <strong>{{ confirming.host }}</strong>, which is not this machine.
+    </p>
+    <p>
+      As luu's default, every run that names no provider — a new session,
+      <code>luu chat</code> with no <code>-p</code> — sends its prompts there.
+    </p>
+  </div>
+  <template :slot.foot>
+    <span class="left"><Button variant="ghost" @click="confirming = null">Cancel</Button></span>
+    <Button variant="primary" @click="confirmDefault()">Make it the default</Button>
+  </template>
+</SubModal>
 
 <style scoped>
   .models-pane {
@@ -204,19 +307,20 @@
   }
   .browse .said { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .browse .ic { width: 14px; height: 14px; }
-  .under { margin-top: .5rem; }
+  .held .confirm { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; }
+  .asks p { margin: 0 0 .5rem; font-size: 12.5px; line-height: 1.5; }
+  .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
+  /* The foot pads itself, beside a `.pane-main` that pads the content; the
+     pane they sit in pads nothing — as in Engines. */
+  .modal-foot { padding: .2rem 1.75rem 0; }
+  /* A line under the columns, not a box of its own: flush with their edges,
+     and the *default* tag is what says it is chosen. */
   .builtin {
     display: flex;
     align-items: center;
     gap: .8rem;
-    margin-bottom: .6rem;
-    padding: .55rem .85rem;
     font-size: 13px;
-    border: 1px solid var(--luu-border);
-    border-radius: 8px;
-    background: var(--luu-surface, #ffffff);
   }
-  .builtin.default { border-left: 3px solid var(--luu-accent); }
   .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
   .who strong { color: var(--luu-fg-muted); font-weight: 600; }
   .who .dim { font-size: 12px; overflow-wrap: anywhere; }

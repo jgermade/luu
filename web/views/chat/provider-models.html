@@ -1,4 +1,4 @@
-<script :setup="{ provider = '', model = '', disabled = false, typable = false, every = false }">
+<script :setup="{ provider = '', model = '', disabled = false, typable = false, toggles = false }">
   // Where a session sends, chosen in two columns: the providers in
   // `config.toml`, and the models of the one in focus — what *it* can serve,
   // asked of it when it is focused (`/models`). For a provider whose engine
@@ -17,24 +17,29 @@
   // `typable` adds a field under the models for one the provider does not
   // list: a model not pulled yet is still a name worth writing down.
   //
-  // **And a third, Settings → Models**, where providers are kept rather than
-  // chosen: `every` lists the ones whose engine is switched off too, it emits
-  // `focus` with the provider in focus, and the `head` slot sits right of that
-  // provider's name over its models — where its own actions go.
+  // **And a third, Settings → Models**, where a click on a model makes it the
+  // default: it emits `focus` with the provider in focus, and the `head` slot
+  // sits right of that provider's name over its models — where its own
+  // actions go. All three list the same providers: a provider whose engine is
+  // switched off in Engines is in none of them.
   const { state, providerModels, offeredProviders } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
   const { brandSrc, providerBrand, modelBrand, loadBrands } = await import("@web/lib/brands.js")
   const BrandIcon = await import("@web/components/brand-icon.html")
+  const OriginBadge = await import("@web/components/origin-badge.html")
   // Each provider and model wears its brand's mark where one is known — see
   // `lib/brands.js`, which also says where the marks are drawn from.
   loadBrands()
-  const markOf = name => brandSrc(providerBrand(state.providers?.providers?.[name]))
+  const markOf = name => brandSrc(providerBrand(state.providers?.providers?.[name], state.providers?.engines))
 
   const flag = v => v === "" || v === true || v === "true"
   $: isDisabled = flag(disabled)
   $: canType = flag(typable)
+  // Where a model's transport may be flipped from its row: Settings → Models,
+  // which writes the file, and only there — the pickers show it and leave it.
+  $: canToggle = flag(toggles) && !flag(disabled)
 
-  $: names = flag(every) ? Object.keys(state.providers?.providers || {}) : offeredProviders()
+  $: names = offeredProviders()
   // The provider whose models the second column shows.
   let focus = ""
   // name → { loading, models, reason, labels, unavailable }. Kept while this
@@ -42,24 +47,29 @@
   let lists = {}
   $: shown = lists[focus] || null
   $: profile = state.providers?.providers?.[focus] || {}
+  // What the server listed, and first the model the profile names when the
+  // list leaves it out: it is a choice whether or not the provider lists it —
+  // what a session there starts on. Worked out as it is drawn rather than
+  // when the list arrived, so a model chosen since — typed for a server that
+  // lists none — is there at once.
+  $: models = (() => {
+    const listed = shown?.models || []
+    const own = profile.model
+    return own && shown && !shown.loading && !listed.includes(own) ? [own, ...listed] : listed
+  })()
 
   const load = async name => {
     if (!name || lists[name]) return
     lists = { ...lists, [name]: { loading: true, models: [], labels: {}, unavailable: [] } }
     const answer = await providerModels(name)
-    // The model the profile names is a choice whether or not the provider
-    // lists it — it is what a session there starts on — so it is first when
-    // the list leaves it out.
-    const own = state.providers?.providers?.[name]?.model
-    const listed = answer.models || []
-    const models = own && !listed.includes(own) ? [own, ...listed] : listed
     lists = {
       ...lists,
       [name]: {
         loading: false,
-        models,
+        models: answer.models || [],
         reason: answer.reason || null,
         labels: answer.labels || {},
+        badges: answer.badges || {},
         unavailable: answer.unavailable || [],
       },
     }
@@ -99,6 +109,12 @@
   // `RECORD/2026-10-25.the-transport-a-run-resolves.completed.md`.
   const profileTransport = p => p?.["tool-calls"] || (p?.backend === "anthropic" ? "native" : "fenced")
   const transportOf = (p, model) => p?.models?.[model]?.["tool-calls"] || profileTransport(p)
+  // The other one, for the caller to write: `transport` with `{ provider,
+  // model, transport }`, as `choose` hands up a choice.
+  const flip = name => {
+    const next = transportOf(profile, name) === "native" ? "fenced" : "native"
+    $emit("transport", { provider: focus, model: name, transport: next })
+  }
   const transportTitle = transport =>
     transport === "native"
       ? "native tools — sent in the request's own `tools` field"
@@ -132,54 +148,80 @@
     </li>
   </ul>
 
-  <div class="models" role="listbox" aria-label="Models">
+  <div class="models">
     <div class="models-head dim small">
       <BrandIcon :src="markOf(focus)" size="12px" />
       <strong>{{ focus }}</strong>
       <span :if="profile.engine">· engine {{ profile.engine }}</span>
       <span :if="$slots.head" class="head-acts"><slot.head /></span>
     </div>
-    <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
-    <p :if="shown?.reason &amp;&amp; !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
-    <button :each="name in shown?.models || []" :key="name" type="button"
-            class="model" role="option"
-            :class.on="focus === provider &amp;&amp; name === model"
-            :disabled="isDisabled"
-            @click="choose(focus, name)">
-      <span class="check">{{ focus === provider &amp;&amp; name === model ? "✓" : "" }}</span>
-      <span class="mark"><BrandIcon :src="brandSrc(modelBrand(name))" size="12px" /></span>
-      <span class="name">{{ shown?.labels?.[name] || modelLabel(name) }}</span>
-      <span class="tools" :class.native="transportOf(profile, name) === 'native'"
-            :title="transportTitle(transportOf(profile, name))">
-        <svg class="ic" role="img" :aria-label="transportTitle(transportOf(profile, name))">
-          <use :href="transportOf(profile, name) === 'native' ? '#i-tools-native' : '#i-tools-fenced'"/>
-        </svg>
-      </span>
-    </button>
-    <!-- On this machine and not loadable by this provider's engine — an
-         MLX model under llama.cpp, ollama's own MLX under anything but
-         ollama. Shown rather than hidden, so a model on the disk does not
-         look missing; the tooltip is the server's own reason. Not a
-         button: a disabled one shows no tooltip in every browser. -->
-    <div :each="u in shown?.unavailable || []" :key="u.model"
-         class="model off" role="option" aria-disabled="true"
-         :title="u.reason">
-      <span class="check warn">⚠</span>
-      <span class="mark"><BrandIcon :src="brandSrc(modelBrand(u.model))" size="12px" /></span>
-      <span class="name">{{ u.label }}</span>
+    <!-- The list scrolls under the head, which stays. -->
+    <div class="list" role="listbox" aria-label="Models">
+      <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
+      <p :if="shown?.reason &amp;&amp; !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
+      <!-- A row is the model's own button — choosing it — and beside it, not
+           in it, how its tools travel: a button cannot hold another, and the
+           transport is a toggle where the caller writes the file. Its word
+           shows while the row is under the pointer. -->
+      <div :each="name in models" :key="name" class="row" :class.off="isDisabled">
+        <button type="button" class="model" role="option"
+                :class.on="focus === provider &amp;&amp; name === model"
+                :disabled="isDisabled"
+                @click="choose(focus, name)">
+          <span class="check">{{ focus === provider &amp;&amp; name === model ? "✓" : "" }}</span>
+          <span class="mark"><BrandIcon :src="brandSrc(modelBrand(name))" size="12px" /></span>
+          <span class="name">{{ shown?.labels?.[name] || modelLabel(name) }}</span>
+          <OriginBadge :parts="shown?.badges?.[name] || []" />
+        </button>
+        <button :if="canToggle" type="button" class="tools toggle"
+                :class.native="transportOf(profile, name) === 'native'"
+                :title="`${transportTitle(transportOf(profile, name))} — click for ${transportOf(profile, name) === 'native' ? 'fenced' : 'native'}`"
+                :aria-label="`Tool calls of ${name}: ${transportOf(profile, name)}`"
+                @click="flip(name)">
+          <span class="word">{{ transportOf(profile, name) }}</span>
+          <svg class="ic" aria-hidden="true">
+            <use :href="transportOf(profile, name) === 'native' ? '#i-tools-native' : '#i-tools-fenced'"/>
+          </svg>
+        </button>
+        <span :if="!canToggle" class="tools" :class.native="transportOf(profile, name) === 'native'"
+              :title="transportTitle(transportOf(profile, name))">
+          <span class="word">{{ transportOf(profile, name) }}</span>
+          <svg class="ic" role="img" :aria-label="transportTitle(transportOf(profile, name))">
+            <use :href="transportOf(profile, name) === 'native' ? '#i-tools-native' : '#i-tools-fenced'"/>
+          </svg>
+        </span>
+      </div>
+      <!-- On this machine and not loadable by this provider's engine — an
+           MLX model under llama.cpp, ollama's own MLX under anything but
+           ollama. Shown rather than hidden, so a model on the disk does not
+           look missing; the tooltip is the server's own reason. Not a
+           button: a disabled one shows no tooltip in every browser. -->
+      <div :each="u in shown?.unavailable || []" :key="u.model"
+           class="model off" role="option" aria-disabled="true"
+           :title="u.reason">
+        <span class="check warn">⚠</span>
+        <span class="mark"><BrandIcon :src="brandSrc(modelBrand(u.model))" size="12px" /></span>
+        <span class="name">{{ u.label }}</span>
+        <OriginBadge :parts="u.badge || []" />
+      </div>
+      <!-- A provider whose list is empty is still a destination: its own
+           model, or the one the server picks. Said, when the server gave no
+           reason: an empty answer, or a 404 from a server that does not list
+           its models at all, which the backend reads as none. -->
+      <p :if="shown &amp;&amp; !shown.loading &amp;&amp; !shown.models.length &amp;&amp; !shown.reason" class="dim small pad">
+        {{ focus }} lists no models{{ canType ? ": type one below" : "" }}.
+      </p>
+      <button :if="shown &amp;&amp; !shown.loading &amp;&amp; !models.length" type="button"
+              class="model" :disabled="isDisabled" @click="choose(focus, '')">
+        <span class="check"></span>
+        <span class="name dim">use it with its own model</span>
+      </button>
+      <label :if="canType &amp;&amp; shown &amp;&amp; !shown.loading" class="typed">
+        <span class="dim small">another model</span>
+        <input type="text" :value="typed" :disabled="isDisabled" placeholder="a model name, then Enter"
+               @input="typed = $event.target.value" @keydown.enter="chooseTyped()">
+      </label>
     </div>
-    <!-- A provider whose list is empty is still a destination: its own
-         model, or the one the server picks. -->
-    <button :if="shown &amp;&amp; !shown.loading &amp;&amp; !shown.models.length" type="button"
-            class="model" :disabled="isDisabled" @click="choose(focus, '')">
-      <span class="check"></span>
-      <span class="name dim">use it with its own model</span>
-    </button>
-    <label :if="canType &amp;&amp; shown &amp;&amp; !shown.loading" class="typed">
-      <span class="dim small">another model</span>
-      <input type="text" :value="typed" :disabled="isDisabled" placeholder="a model name, then Enter"
-             @input="typed = $event.target.value" @keydown.enter="chooseTyped()">
-    </label>
   </div>
 </div>
 
@@ -190,23 +232,24 @@
     height: 100%;
     min-height: 0;
   }
+  /* Every space in this column is a step of .5rem. */
   .providers {
     list-style: none;
     margin: 0;
-    padding: .3rem;
+    padding: .5rem;
     overflow-y: auto;
     border-right: 1px solid var(--luu-border);
   }
   .prov {
     display: flex;
     align-items: center;
-    gap: .4rem;
+    gap: .5rem;
     width: 100%;
     text-align: left;
     background: none;
     border: 0;
     border-radius: 6px;
-    padding: .35rem .4rem;
+    padding: .5rem;
     color: var(--luu-fg);
     font: inherit;
     font-size: 12px;
@@ -222,17 +265,33 @@
   .prov:hover .dim, .prov:focus-visible .dim { color: var(--luu-fg); }
   .prov:hover .go { opacity: .8; }
   .prov .go { width: 10px; height: 10px; opacity: .4; flex: none; }
-  .models { overflow-y: auto; padding: .3rem 0; min-height: 0; }
-  .models-head { display: flex; align-items: center; gap: .35rem; padding: .2rem .8rem .3rem; min-height: 1.9rem; }
+  /* A head that stays and a list that scrolls under it. The same .5rem
+     steps as the providers' column: rows inset by .5rem and padded by .5rem,
+     so every name starts 1rem in — the head's too. */
+  .models { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .list { flex: 1; min-height: 0; overflow-y: auto; padding: .5rem; }
+  /* Whose models these are, ruled off from them, edge to edge. */
+  .models-head {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex: none;
+    box-sizing: border-box;
+    min-height: 3rem;
+    padding: .5rem 1rem;
+    border-bottom: 1px solid var(--luu-border);
+  }
   .head-acts { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; }
   .model {
     display: flex;
-    gap: .4rem;
+    align-items: center;
+    gap: .5rem;
     width: 100%;
     text-align: left;
     background: none;
     border: 0;
-    padding: .25rem .8rem;
+    border-radius: 6px;
+    padding: .5rem;
     font: inherit;
     font-size: 12px;
     font-weight: 400;
@@ -244,6 +303,13 @@
     color: var(--luu-accent);
     outline: none;
   }
+  /* A model's row: its button, and its transport beside it. The ground is the
+     row's, so the two read as one line under the pointer. */
+  .row { display: flex; align-items: center; border-radius: 6px; }
+  .row .model { flex: 1; min-width: 0; }
+  .row .model, .row .model:hover:not(:disabled), .row .model:focus-visible { background: none; }
+  .row:hover:not(.off), .row:has(.model:focus-visible) { background: var(--luu-selected); }
+  .row:hover:not(.off) .model { color: var(--luu-accent); }
   .model.off:hover { background: var(--luu-hover); color: var(--luu-fg); }
   .model.on { color: var(--luu-accent); }
   .model.off { color: var(--luu-fg-muted); cursor: help; }
@@ -252,20 +318,43 @@
   .check { width: 1em; flex: none; color: var(--luu-accent); }
   /* One width whether or not there is a mark, so the names line up. */
   .mark { width: 14px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
-  .model .mark { align-self: center; }
-  .model .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The name as wide as it is, and the badge right after it. */
+  .model .name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* How this model's tools travel, last in the row: a plug for the request's
      own `tools` field, braces for text in the prompt. Muted until it is
-     native, because fenced is the default and the exception is the news. */
-  .model .tools { display: inline-flex; flex: none; color: var(--luu-fg-muted); }
-  .model .tools .ic { width: 13px; height: 13px; }
-  .model .tools.native { color: var(--luu-bucket-tools, var(--luu-accent)); }
-  .model:hover .tools { color: inherit; }
-  .model.on .tools.native { color: var(--luu-accent); }
-  .pad { margin: 0; padding: .2rem .8rem; }
+     native, because fenced is the default and the exception is the news. Its
+     word shows while the row is under the pointer; as a toggle, the word and
+     the icon are a button under the pointer. A border that is always there
+     and only coloured on hover, so nothing moves. */
+  .tools {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    flex: none;
+    margin-right: .5rem;
+    padding: .125rem .25rem;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: none;
+    font: inherit;
+    font-size: 11px;
+    color: var(--luu-fg-muted);
+  }
+  .tools .ic { width: 13px; height: 13px; }
+  .tools .word { display: none; }
+  .row:hover .tools .word, .tools:focus-visible .word { display: inline; }
+  .tools.native { color: var(--luu-bucket-tools, var(--luu-accent)); }
+  .row:hover:not(.off) .tools { color: var(--luu-accent); }
+  .tools.toggle { cursor: pointer; }
+  .tools.toggle:hover, .tools.toggle:focus-visible {
+    border-color: var(--luu-accent);
+    background: var(--luu-surface, #ffffff);
+    outline: none;
+  }
+  .pad { margin: 0; padding: .5rem; }
   .small { font-size: 11px; }
   .dim { color: var(--luu-fg-muted); }
-  .typed { display: flex; flex-direction: column; gap: .2rem; margin: .4rem .8rem 0; }
+  .typed { display: flex; flex-direction: column; gap: .5rem; margin: .5rem .5rem 0; }
   .typed input {
     padding: .3rem .5rem;
     border: 1px solid var(--luu-border);

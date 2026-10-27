@@ -127,9 +127,12 @@ cargo run --bin luu -- chat "hola" -p workstation -m qwen2.5-coder:14b
 # Models row shows the effective one for the default model, not the profile's.
 cargo run --bin luu -- chat "read AGENTS.md" -p workstation --tool-calls native
 # The profile `default` names must carry `remote = true` when its URL is not
-# this machine — a LAN box included — or the file does not load: with no `-p`,
-# nobody typed the destination. Naming it is typing it, so every other profile
-# is free of the word.
+# this machine — a LAN box included — or that default is *held*: the file loads,
+# nothing is sent there, a run with no `-p` refuses, `serve` stays on the mock,
+# and Settings → Models asks for it to be confirmed, in a modal naming the host,
+# when a click makes it the default. With no `-p`, nobody typed the
+# destination. Naming it is typing it, so every other profile is free
+# of the word.
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 # sessions are cached in the state directory's sessions.db by default, so a
 # restart does not lose the conversation: `--store <path>` moves it,
@@ -177,7 +180,8 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [engine.gemma]
 #   kind = "llama"
 #   binary = "managed"
-#   port = 8080
+#   # port = 8080 — absent, luu places it on the first free port from the
+#   # kind's own each time it starts, and its providers send there
 #
 # It loads the session's model — any GGUF from ollama, llama.cpp, Hugging Face
 # or <state dir>/models, chosen in the chat or the new session's dialog.
@@ -188,7 +192,9 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # a switch uses one (its table and a provider) or stops using one — the table
 # stays, with `enabled = false` — and uninstalling luu's own copy, asked first,
 # removes it with its table and providers. Play picks the model and starts a
-# chat on it; the engine's port is the first free one from the kind's own.
+# chat on it. A provider that names an engine sends to that engine's port —
+# its table's, or where luu placed it — whatever its own URL says; the form's
+# *Auto*, on by default, is the port left out.
 #
 # Settings → Runtimes is where a session's commands may run: each container
 # runtime (docker, podman, nerdctl, colima, container) probed for whether it is
@@ -207,8 +213,8 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
 #
-# Providers and models wear their brand's mark in the pickers: thirteen in
-# `web/brands/` (Simple Icons, CC0), or a pack — `[ui] brand-icons`, a folder of
+# Providers and models wear their brand's mark in the pickers: eighteen in
+# `web/brands/` (Simple Icons, CC0 but for MiniMax's — see its README), or a pack — `[ui] brand-icons`, a folder of
 # `<slug>.svg`, chosen in Appearance → Brand marks, where `npm install
 # @lobehub/icons-static-svg` in `web/` is found by itself.
 #

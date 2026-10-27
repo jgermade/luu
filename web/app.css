@@ -398,6 +398,13 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
 }
 .declare p { margin: 0 0 .5rem; font-size: 12px; line-height: 1.5; }
 .declare input { width: 18rem; margin-right: .5rem; }
+/* Settings → Models: the providers' column and the head over the models on a
+   ground of their own, a step off the white the models sit on. Here and not
+   in `provider-models.html`, because the pickers that share it keep theirs. */
+.models-pane .providers, .models-pane .models-head { background: #f9f9f9; }
+:root[data-theme="dark"] .models-pane .providers,
+:root[data-theme="dark"] .models-pane .models-head { background: #1b1b1b; }
+
 /* The first run. Loud on purpose and once: a page that opens on a chat box
    answering from a fixture is the one thing this says out loud. */
 .first-run {

@@ -1469,6 +1469,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         exposure,
     )?);
     let starts = crate::engines::for_run(&provider);
+    let provider_named = provider.named;
 
     let app = App::create(StdioOptions {
         backend,
@@ -1499,11 +1500,13 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     })
     .await?;
 
-    // The profile this server resolved names an engine: started now, in the
-    // background, so the first turn is not the one that waits for a model to
-    // load — and if it is, it waits on this rather than meeting a closed port,
-    // because the backend is wrapped the way every switch wraps it. A failure
-    // is said here and again by the turn that meets it.
+    // The profile this server resolved names an engine: wrapped, so the first
+    // turn waits for it rather than meeting a closed port. Started now, in
+    // the background, only when the start *named* it (`-p`, `-m`): a default
+    // is not a use, and its engine starts at its first turn. A failure is
+    // said by the turn that meets it. See
+    // `RECORD/2026-10-26.ports-luu-places.completed.md`, *first use*.
+    let named = provider_named;
     if let Some((name, engine)) = starts {
         let mut destination = app.destination.write().await;
         let current = destination.as_ref();
@@ -1522,7 +1525,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             engine: Some((name.clone(), engine.clone())),
             tool_calls: current.tool_calls,
         });
-        app.engines.warm(&name, &engine);
+        if named {
+            app.engines.warm(&name, &engine);
+        }
     }
     learn_window(app.clone());
 
@@ -1552,6 +1557,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/policies", get(get_policies).put(put_policies))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/probe", post(probe_provider))
+        .route("/api/providers/where", get(provider_where))
         .route("/api/providers/{name}/models", get(get_provider_models))
         .route("/api/resend", get(get_resend).put(put_resend))
         .route("/api/authority", get(get_authority).put(put_authority))
@@ -5713,8 +5719,10 @@ struct EngineView {
     /// Where that binary comes from: `luu` for luu's own copy, `system` for
     /// one this machine had, `path` for one the file names that is neither.
     origin: &'static str,
-    /// Where a profile for it sends.
-    url: String,
+    /// Where a profile for it sends: its table's port, or where this process
+    /// placed an automatic one. `None` for an automatic engine nothing has
+    /// needed yet — it has no port until something does.
+    url: Option<String>,
     /// The profiles that name it.
     providers: Vec<String>,
 }
@@ -5849,9 +5857,7 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
             name.clone(),
             EngineView {
                 status: supervisor.status(name, engine).await,
-                url: engine
-                    .kind
-                    .url(engine.port.unwrap_or(engine.kind.default_port())),
+                url: crate::engines::port_of(name, engine).map(|port| engine.kind.url(port)),
                 providers: config
                     .profiles()
                     .iter()
@@ -6098,9 +6104,20 @@ async fn start_engine(
         }
         engine.model = Some(model);
     }
+    // An automatic engine is placed now if nothing has placed it, and placed
+    // again if something that is not luu's has taken its port since; one
+    // whose table names a port is the sheet's to move.
+    let automatic = engine.port.is_none();
+    if automatic {
+        let status = state.app.engines.status(&name, &engine).await;
+        if status.answering && status.state != "running" {
+            crate::engines::unplace(&name);
+        }
+        engine.port = place_engine(&name, &engine).await;
+    }
     let status = state.app.engines.status(&name, &engine).await;
     if status.answering && status.state != "running" {
-        let port = engine.port.unwrap_or(engine.kind.default_port());
+        let port = crate::engines::port_of(&name, &engine).unwrap_or(engine.kind.default_port());
         return (
             StatusCode::CONFLICT,
             format!("something already answers on port {port}, and it is not one luu started"),
@@ -6133,6 +6150,17 @@ struct InstallAsk {
     variant: Option<String>,
 }
 
+/// Where an automatic engine listens for this process, placed now if nothing
+/// has: past every port a table names, as `provider::resolve` places it.
+async fn place_engine(name: &str, engine: &crate::provider::Engine) -> Option<u16> {
+    let fixed: Vec<u16> = match load_config().await {
+        Ok((config, _)) => config.engines().values().filter_map(|e| e.port).collect(),
+        Err(_) => Vec::new(),
+    };
+    let (name, kind) = (name.to_string(), engine.kind);
+    blocking(move || crate::engines::place(&name, kind, &fixed)).await
+}
+
 /// The first free port for a kind, from its own upward: what the form and
 /// *use* write, and what the start sheet offers to move a busy engine to. See
 /// [`crate::engines::free_port`].
@@ -6151,14 +6179,13 @@ async fn free_engine_port(
                 .into_response();
         }
     };
-    let named: Vec<u16> = match load_config().await {
-        Ok((config, _)) => config
-            .engines()
-            .values()
-            .map(|e| e.port.unwrap_or(e.kind.default_port()))
-            .collect(),
+    // Every port a table names, and every one this process placed an
+    // automatic engine on.
+    let mut named: Vec<u16> = match load_config().await {
+        Ok((config, _)) => config.engines().values().filter_map(|e| e.port).collect(),
         Err(_) => Vec::new(),
     };
+    named.extend(crate::engines::placed_ports());
     match blocking(move || crate::engines::free_port(kind, &named)).await {
         Some(port) => Json(serde_json::json!({ "port": port })).into_response(),
         None => (
@@ -6243,10 +6270,13 @@ async fn chat_engine(
     if asked.messages.is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "nothing was said").into_response();
     }
+    if engine.port.is_none() {
+        engine.port = place_engine(&name, &engine).await;
+    }
     if let Err(error) = state.app.engines.ensure(&name, &engine).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
     }
-    let port = engine.port.unwrap_or(engine.kind.default_port());
+    let port = crate::engines::port_of(&name, &engine).unwrap_or(engine.kind.default_port());
     let backend = crate::probe_backend(
         match ollama {
             true => crate::provider::BackendKind::Ollama,
@@ -6430,6 +6460,16 @@ struct ProvidersView {
     /// The profiles whose engine is switched off, which the pickers leave
     /// out. See `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
     idle: Vec<String>,
+    /// The default, when it is held: it points off this machine and does not
+    /// say `remote = true`, so no run with nothing named sends there — this
+    /// server included — until the host is typed back. See
+    /// `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held: Option<Declaration>,
+    /// Each engine's kind, by its name: what a profile with `engine` wears as
+    /// its mark — its URL is `127.0.0.1` and says nothing of whose server it
+    /// is.
+    engines: std::collections::BTreeMap<String, crate::provider::EngineKind>,
     /// The profile *this* server is running, which the file's default may no
     /// longer be: the file can be edited while a server that resolved hours ago
     /// keeps sending where it was pointed.
@@ -6503,9 +6543,18 @@ async fn providers_view(
             })
             .map(|(name, _)| name.clone())
             .collect(),
+        engines: config
+            .engines()
+            .iter()
+            .map(|(name, engine)| (name.clone(), engine.kind))
+            .collect(),
+        held: config.held().map(|held| Declaration {
+            profile: held.name.clone(),
+            host: crate::provider::authority_of(&held.url).to_string(),
+        }),
         running: running.clone(),
         follows,
-        waiting: match follows && running.as_deref() != config.default_name() {
+        waiting: match follows && running.as_deref() != config.usable_default() {
             false => None,
             true => {
                 let session = state.app.session.lock().await;
@@ -6556,10 +6605,16 @@ struct ProviderModels {
     suggested: Option<String>,
     /// Where that suggestion came from, so the page can say.
     suggested_from: Option<&'static str>,
-    /// What to show for each model: `qwen2.5-coder:7b (ollama)`. Where a name
-    /// is absent the page shows the name itself.
+    /// What to show for each model: `qwen2.5-coder:7b` for a catalog
+    /// reference. Where a name is absent the page shows the name itself.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     labels: std::collections::BTreeMap<String, String>,
+    /// Where each model comes from, drawn beside its name: whose place it is
+    /// — `luu` (its own copy of ollama, its own models directory) or `system`
+    /// — then the tool, then a format that is not GGUF. Absent for a model a
+    /// remote API lists: there is no place on this machine to name.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    badges: std::collections::BTreeMap<String, Vec<&'static str>>,
     /// Models on this machine the provider's engine cannot load, with why:
     /// shown greyed out rather than hidden, so a model that is on the disk
     /// does not look missing. See `models::LocalModel::runs_on`.
@@ -6584,6 +6639,7 @@ struct ModelsAsk {
 struct Unavailable {
     model: String,
     label: String,
+    badge: Vec<&'static str>,
     reason: String,
 }
 
@@ -6630,6 +6686,13 @@ async fn get_provider_models(
         .filter(|(_, e)| e.kind != crate::provider::EngineKind::Ollama)
         .map(|(_, e)| e.clone());
     let mut labels = std::collections::BTreeMap::new();
+    let mut badges: std::collections::BTreeMap<String, Vec<&'static str>> =
+        std::collections::BTreeMap::new();
+    // Whose ollama lists them: luu's own copy, or one the machine had.
+    let ollama_badge = match resolved.engine.as_ref() {
+        Some((_, engine)) if engine.binary.as_deref() == Some("managed") => vec!["luu", "ollama"],
+        _ => vec!["system", "ollama"],
+    };
     let mut unavailable = Vec::new();
     let (models, reason) = match &local_engine {
         Some(engine) => {
@@ -6647,11 +6710,13 @@ async fn get_provider_models(
                         if !models.contains(&model.reference) {
                             models.push(model.reference.clone());
                         }
-                        labels.insert(model.reference, model.label);
+                        badges.insert(model.reference.clone(), model.badge);
+                        labels.insert(model.reference, model.name);
                     }
                     Err(reason) => unavailable.push(Unavailable {
                         model: model.reference,
-                        label: model.label,
+                        label: model.name,
+                        badge: model.badge,
                         reason,
                     }),
                 }
@@ -6670,10 +6735,39 @@ async fn get_provider_models(
                 // Named by where they came from, the way the catalog is.
                 if resolved.kind == crate::provider::BackendKind::Ollama {
                     for model in &models {
-                        labels.insert(model.clone(), format!("{model} (ollama)"));
+                        badges.insert(model.clone(), ollama_badge.clone());
                     }
                 }
                 (models, None)
+            }
+            // An ollama engine luu starts and nothing has started yet answers
+            // on no port — an automatic one has none at all — and what it
+            // would serve is ollama's store on this disk, by ollama's own
+            // names. Asking the port was a `connection refused` on every
+            // picker that showed the provider before a session had used it.
+            Err(_)
+                if resolved
+                    .engine
+                    .as_ref()
+                    .is_some_and(|(_, e)| e.kind == crate::provider::EngineKind::Ollama) =>
+            {
+                let catalog = tokio::task::spawn_blocking(crate::models::catalog)
+                    .await
+                    .unwrap_or_default();
+                let models: Vec<String> = catalog
+                    .into_iter()
+                    .filter(|m| m.source == crate::models::Source::Ollama)
+                    .map(|m| {
+                        let mut badge = ollama_badge.clone();
+                        badge.extend(m.badge.iter().skip(2));
+                        badges.insert(m.name.clone(), badge);
+                        m.name
+                    })
+                    .collect();
+                let reason = models
+                    .is_empty()
+                    .then(|| "no model in ollama's store on this machine".to_string());
+                (models, reason)
             }
             Err(error) => (Vec::new(), Some(error.to_string())),
         },
@@ -6715,27 +6809,27 @@ async fn get_provider_models(
         suggested,
         suggested_from,
         labels,
+        badges,
         unavailable,
         facts,
     })
     .into_response()
 }
 
-/// Why a write was refused, in a shape an editor can act on.
-///
-/// **The rule lives in one place and it is not this one.** The browser never
-/// decides whether a URL is off the machine; it writes what it was given, is
-/// refused by the loader, and is told which host to have somebody type back.
-/// A second implementation of `is_this_machine` in JavaScript is how the two
-/// drift until the page cheerfully saves a file the next run cannot load.
+/// Why a write was refused, in the loader's own words.
 #[derive(serde::Serialize)]
 struct WriteRefused {
     message: String,
-    /// Set only for the one refusal a person can answer: a default that leaves
-    /// this machine and has not said so. The host is what they type.
-    declaration: Option<Declaration>,
 }
 
+/// A default the file holds: it points off this machine and does not say
+/// `remote = true`, so nothing is sent there until somebody types `host`.
+///
+/// **The rule lives in one place and it is not this one.** The browser never
+/// decides whether a URL is off the machine; the loader does, and the view
+/// says which profile is held and which host to have somebody type back. A
+/// second implementation of `is_this_machine` in JavaScript is how the two
+/// would drift.
 #[derive(serde::Serialize)]
 struct Declaration {
     profile: String,
@@ -6774,6 +6868,35 @@ struct Probed {
     /// The server's own refusal, which is the useful one: a 401 names the key,
     /// a connection error names the URL.
     error: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct WhereAsk {
+    #[serde(default)]
+    backend: Option<crate::provider::BackendKind>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+/// Whether a destination is this machine, by the loader's own rule: what
+/// Settings → Models asks before a provider becomes luu's default, to know
+/// whether to ask for `remote = true` first. The URL as typed, or the backend's own when
+/// none is. Reads nothing and reaches nothing — the rule has one
+/// implementation, `provider::is_this_machine`, and this is it asked from a
+/// page rather than a second copy of it in JavaScript. See
+/// `RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`.
+async fn provider_where(Query(ask): Query<WhereAsk>) -> Response {
+    let url = ask
+        .url
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .or_else(|| ask.backend?.default_url().map(str::to_string))
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "host": crate::provider::authority_of(&url),
+        "this_machine": url.is_empty() || crate::provider::is_this_machine(&url),
+    }))
+    .into_response()
 }
 
 async fn probe_provider(
@@ -6932,7 +7055,6 @@ async fn put_policies(
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(WriteRefused {
                 message: error.to_string(),
-                declaration: None,
             }),
         )
             .into_response();
@@ -7039,7 +7161,6 @@ async fn put_providers(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     Json(WriteRefused {
                         message: format!("{error:#}"),
-                        declaration: None,
                     }),
                 )
                     .into_response();
@@ -7047,28 +7168,24 @@ async fn put_providers(
         }
     }
     let config = current.from_parts(edit.default, edit.providers);
-    // Checked by the loader that will read it back, so the rule a remote
-    // default has to declare itself is enforced here by being the same rule.
+    // Checked by the loader that will read it back. A remote default that
+    // does not say so is written, and held — see `ProvidersView::held`.
     if let Err(error) = write_config(config.clone(), path).await {
-        let declaration = match &error {
-            crate::provider::ConfigError::UndeclaredRemoteDefault { name, url, .. } => {
-                Some(Declaration {
-                    profile: name.clone(),
-                    host: crate::provider::authority_of(url).to_string(),
-                })
-            }
-            _ => None,
-        };
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(WriteRefused {
                 message: error.to_string(),
-                declaration,
             }),
         )
             .into_response();
     }
-    follow_the_default(&state, config.default_name()).await;
+    // Followed only where it is usable: a held default is chosen and not yet
+    // a destination, and the file as written is what says which.
+    let usable = load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| config.usable_default().map(str::to_string));
+    follow_the_default(&state, usable.as_deref()).await;
     match providers_view(&state).await {
         Ok(view) => Json(view).into_response(),
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
@@ -7090,6 +7207,27 @@ fn learn_window(app: Arc<App>) {
         let asked = app.destination().await;
         if asked.budget.limit.is_some() {
             return;
+        }
+        // An engine is asked once something has started it — a warm, or the
+        // first turn — and never started *to be asked*: asking it is a load,
+        // and a default nobody has used yet is not one to load. Waits while
+        // the session stays pointed here, and leaves when it moves.
+        if let Some((name, engine)) = &asked.engine {
+            loop {
+                // Ready on *this* model: a llama.cpp engine ready on another
+                // would be restarted by the question.
+                if app
+                    .engines
+                    .readiness(name)
+                    .is_some_and(|ready| ready.state == "ready" && ready.model == engine.model)
+                {
+                    break;
+                }
+                if !Arc::ptr_eq(&*app.destination.read().await, &asked) {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
         }
         let window = match asked.backend.window().await {
             Ok(Some(window)) => window,
@@ -8150,7 +8288,9 @@ async fn destination_for(
     let (config, path) = load_config()
         .await
         .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-    let resolved = crate::provider::resolve(
+    // With nothing named and the default held, the mock, as `serve` started:
+    // a new session is not the place the host gets typed.
+    let resolved = crate::provider::resolve_holding(
         &config,
         path.as_deref(),
         crate::provider::Flags {
@@ -8323,8 +8463,12 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         "the live session now sends here",
     );
     release_engines(app, sending.settings.profile.as_deref()).await;
-    // Loaded behind the answer rather than inside it — see `destination_for`.
-    if let Some((name, engine)) = &sending.engine {
+    // Loaded behind the answer rather than inside it — see `destination_for` —
+    // when this session *chose* it. One that follows the file's default has
+    // chosen nothing, and its engine starts at its first turn.
+    if let Some((name, engine)) = &sending.engine
+        && (asked.provider.is_some() || asked.model.is_some())
+    {
         app.engines.warm(name, engine);
     }
     learn_window(app.clone());

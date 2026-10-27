@@ -8,8 +8,8 @@ import { apiHeaders } from "./store.js"
 
 /// The page's own, by slug: the files in `web/brands/`.
 const BUILTIN = new Set([
-  "anthropic", "claude", "deepseek", "gemini", "google", "huggingface", "kimi",
-  "llamacpp", "lmstudio", "meta", "mistral", "mlx", "ollama", "qwen", "vllm",
+  "alibabacloud", "anthropic", "claude", "deepseek", "gemini", "google", "huggingface", "kimi",
+  "llamacpp", "lmstudio", "meta", "minimax", "mistral", "mlx", "ollama", "qwen", "vllm", "zai",
 ])
 export const builtinCount = BUILTIN.size
 
@@ -76,7 +76,8 @@ const HOSTS = [
   [/(^|\.)deepseek\.com$/, ["deepseek"]],
   [/(^|\.)minimaxi?\.(io|com|chat)$/, ["minimax"]],
   [/(^|\.)(moonshot\.(cn|ai)|kimi\.(com|ai))$/, ["kimi", "moonshot"]],
-  [/(^|\.)(bigmodel\.cn|z\.ai)$/, ["zhipu"]],
+  [/(^|\.)(bigmodel\.cn|z\.ai)$/, ["zai", "zhipu"]],
+  [/(^|\.)(aliyuncs\.com|alibabacloud\.com|aliyun\.com)$/, ["alibabacloud", "alibaba"]],
   [/(^|\.)mistral\.ai$/, ["mistral"]],
   [/(^|\.)googleapis\.com$/, ["gemini", "google"]],
   [/(^|\.)huggingface\.co$/, ["huggingface"]],
@@ -85,10 +86,13 @@ const HOSTS = [
   [/(^|\.)together\.(ai|xyz)$/, ["together"]],
 ]
 
-/// A provider's marks, best first: ollama's backend is ollama's, anything else
+/// A provider's marks, best first: an engine's provider wears its engine's
+/// (`kinds` is `engines` on `/api/providers`, name → kind — its URL is
+/// `127.0.0.1` and says nothing), ollama's backend is ollama's, anything else
 /// by its URL's host.
-export function providerBrand(profile) {
+export function providerBrand(profile, kinds = {}) {
   if (!profile) return []
+  if (profile.engine && kinds?.[profile.engine]) return engineBrand(kinds[profile.engine])
   const backend = profile.backend || "ollama"
   if (backend === "ollama") return ["ollama"]
   if (backend === "mock") return []
@@ -110,7 +114,9 @@ const MODELS = [
   [/mistral|mixtral|codestral|devstral|ministral|magistral|pixtral/, ["mistral"]],
   [/kimi|moonshot/, ["kimi", "moonshot"]],
   [/minimax|abab/, ["minimax"]],
-  [/glm/, ["zhipu", "chatglm"]],
+  [/glm/, ["zai", "zhipu", "chatglm"]],
+  // Alibaba's Wan, which wears Alibaba Cloud's mark until a pack has its own.
+  [/^wanx?\d/, ["wan", "alibabacloud"]],
   [/^phi[-\d]/, ["microsoft"]],
 ]
 const SOURCES = ["ollama", "llama.cpp", "huggingface", "luu"]

@@ -1248,8 +1248,7 @@ export async function checkConfigured() {
 /// Writes the file, and takes the server's answer as the new truth.
 ///
 /// The server re-parses what it would write before replacing anything, so a
-/// rejection here is the same message a hand-edited file gets — including the
-/// one that says a remote default has to declare itself.
+/// rejection here is the same message a hand-edited file gets.
 export async function saveProviders(body) {
   state.providersError = null
   try {
@@ -1259,22 +1258,20 @@ export async function saveProviders(body) {
       body: JSON.stringify(body),
     })
     if (!res.ok) {
-      // One refusal is answerable rather than only reportable: a default that
-      // leaves this machine and has not said so. The server names the host and
-      // the caller asks for it to be typed — the declaration is produced by a
-      // person, which is the whole content of the rule.
       // JSON when the loader refused the file; plain text when the request
       // never reached it — a body that would not deserialize, a server bound
       // off loopback. Either way the server's own words, never a stand-in that
-      // hides which of them it was.
+      // hides which of them it was. A remote default with no `remote = true`
+      // is not refused: it is written and held, and `held` on the answer says
+      // which host to have typed back.
       const text = await res.text().catch(() => "")
       let refused = null
       try { refused = JSON.parse(text) } catch { /* plain text */ }
       state.providersError = refused?.message || text.trim() || `the write was refused (${res.status})`
-      return { ok: false, declaration: refused?.declaration || null }
+      return { ok: false }
     }
     state.providers = await res.json()
-    return { ok: true, declaration: null }
+    return { ok: true }
   } catch (e) {
     state.providersError = `${e}`
     return false
@@ -1436,6 +1433,19 @@ export async function newSession(choice) {
   } catch (e) {
     state.error = `Could not create session: ${e}`
     return false
+  }
+}
+
+/// Whether a destination is this machine, as the server's loader decides it:
+/// `{ host, this_machine }`, for `backend` and the URL as typed (the
+/// backend's own where none is). `null` when it cannot be asked.
+export async function providerWhere(backend, url) {
+  try {
+    const query = new URLSearchParams({ ...(backend ? { backend } : {}), ...(url ? { url } : {}) })
+    const res = await fetch(`./api/providers/where?${query}`, { headers: apiHeaders() })
+    return res.ok ? await res.json() : null
+  } catch {
+    return null
   }
 }
 

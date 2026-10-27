@@ -73,13 +73,36 @@
   let variant = current?.variant || ""
   let name = editing || found?.name || ""
   let port = current?.port ? String(current.port) : ""
+  // **Automatic by default**: no `port` in the table, and luu places the
+  // engine on the first free port from its kind's own when something first
+  // needs it. A table that names a port is a port somebody chose, and an
+  // edit shows it so. See `RECORD/2026-10-26.ports-luu-places.completed.md`.
+  let auto = !current?.port
+  // Where an automatic one listens now, if this process has placed it.
+  const placedAt = (() => {
+    try { return current?.url ? new URL(current.url).port : "" } catch { return "" }
+  })()
   let args = (current?.args || []).map(quote).join(" ")
   let readyTimeout = current?.["ready-timeout"] ? String(current["ready-timeout"]) : ""
   let withProvider = !editing
   let saving = false
+  // The name this form wrote, once it has: the view it is handed back has the
+  // engine in it, and the engine being added is not a clash with itself while
+  // its provider is written or its copy downloads.
+  let wrote = ""
   let error = ""
   // The download *Install* started, as the server reports it.
   let download = null
+  // Its log, kept past a failure so *View details* still has it, and whether
+  // the terminal over the form is up. Open when the copy lands, the sheet
+  // stays to show it rather than closing under the reader.
+  let log = []
+  let details = false
+  let finished = false
+  const toBottom = () => requestAnimationFrame(() => {
+    const out = $self(".terminal pre")
+    if (out) out.scrollTop = out.scrollHeight
+  })
   let polling = null
 
   // A name and a port to start from, for a new one: the kind's own name,
@@ -93,8 +116,16 @@
   const suggest = async k => {
     if (editing) return
     if (!name.trim() || name === suggested) name = suggested = freeName(k)
+    if (!auto) await suggestPort(k)
+  }
+  // A fixed port starts from the first one nothing has.
+  const suggestPort = async k => {
     const free = await freePort(k)
     if (free.ok && !port.trim()) port = String(free.port)
+  }
+  const setAuto = on => {
+    auto = on
+    if (!on) suggestPort(kind)
   }
   suggest(kind)
   const chooseKind = k => {
@@ -118,12 +149,12 @@
   $: haveCopy = copies.includes(variant.trim() ? `${version.trim() || pinned}-${variant.trim()}` : (version.trim() || pinned))
   $: trimmed = name.trim()
   $: badName = !!trimmed && !/^[A-Za-z0-9_-]+$/.test(trimmed)
-  $: clash = !editing && !!trimmed && !!view?.engines?.[trimmed]
+  $: clash = !editing && !!trimmed && trimmed !== wrote && !!view?.engines?.[trimmed]
   $: badPath = source === "path" && !!path.trim() && path.trim().split("/").pop() !== bin
   $: portNumber = Number(port.trim() || defaultPort(kind))
-  $: badPort = !Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535
-  $: portTaken = !!port.trim() && Object.entries(view?.engines || {})
-    .some(([n, e]) => n !== editing && (e.port || defaultPort(e.kind)) === portNumber)
+  $: badPort = !auto && (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535)
+  $: portTaken = !auto && !!port.trim() && Object.entries(view?.engines || {})
+    .some(([n, e]) => n !== (editing || wrote) && e.port === portNumber)
   $: installs = source === "managed" && !haveCopy
   $: canSave = !!trimmed && !badName && !clash && !badPath && !badPort && !portTaken && !saving && !download
     && !(source === "path" && !path.trim()) && !(source === "found" && !foundPath)
@@ -136,7 +167,7 @@
     ...(source === "path" ? { binary: path.trim() } : {}),
     ...(source === "managed" && version.trim() ? { version: version.trim() } : {}),
     ...(source === "managed" && variant.trim() ? { variant: variant.trim() } : {}),
-    port: portNumber,
+    ...(auto ? {} : { port: portNumber }),
     // An old table's own model, kept as it was: nothing here asks for one.
     ...(current?.model ? { model: current.model } : {}),
     ...(args.trim() ? { args: split(args) } : {}),
@@ -155,7 +186,13 @@
       const now = (answer.view.installs || []).find(i => i.kind === kind && i.version === wanted &&
         (i.variant || "") === variant.trim())
       download = now || download
-      if (now?.state === "done" || (!now && (answer.view.managed?.[kind] || []).length > copies.length)) return leave()
+      if (now?.log) { log = now.log; toBottom() }
+      if (now?.state === "done" || (!now && (answer.view.managed?.[kind] || []).length > copies.length)) {
+        if (!details) return leave()
+        finished = true
+        saving = false
+        return
+      }
       if (now?.state === "failed") {
         error = now.error || "the download failed"
         download = null
@@ -179,6 +216,7 @@
       error = written.error
       return
     }
+    wrote = trimmed
     saved?.(written.view)
 
     // The providers that send to it: a new one, or the URLs of the linked
@@ -188,13 +226,15 @@
     const providers = { ...(state.providers?.providers || {}) }
     let changed = false
     if (withProvider && !providers[trimmed]) {
-      providers[trimmed] = profileFor(trimmed, kind, portNumber)
+      providers[trimmed] = profileFor(trimmed, kind, auto ? null : portNumber)
       changed = true
     }
+    // A provider sends to its engine's port whatever its URL says; this keeps
+    // the file saying the same where it can.
     const before = current?.url
     const after = written.view.engines[trimmed]?.url
     for (const linked of current?.providers || []) {
-      if (before !== after && providers[linked]?.url === before) {
+      if (after && before !== after && providers[linked]?.url === before) {
         providers[linked] = { ...providers[linked], url: after }
         changed = true
       }
@@ -226,7 +266,14 @@
 
 <SubModal :open="open" :title="editing ? `Engine ${editing}` : 'Add an engine'" width="46rem"
           height="min(36rem, calc(100dvh - 14rem))" @close="leave()">
-  <div class="installer">
+  <!-- *View details*: what the install did, a line per step, as a terminal
+       over the form. -->
+  <div :if="details" class="terminal" role="log" aria-label="Install output">
+    <pre><span :each="line in log.length ? log : ['waiting for the server…']" :key="line"
+               class="line" :class.cmd="line.startsWith('$ ')" :class.err="line.startsWith('failed')"
+               :class.ok="line === 'done'">{{ line }}</span></pre>
+  </div>
+  <div :if="!details" class="installer">
     <!-- 1. Which kind: fixed once written, so only offered when adding. -->
     <section class="step">
       <h4><span class="n">1</span> Engine</h4>
@@ -304,12 +351,17 @@
       <div class="row">
         <InputContainer label="Name" :model="name" :disabled="!!editing" placeholder="llama"
                         :error="badName ? 'letters, digits, - and _' : clash ? 'already an engine of that name' : ''" />
-        <InputContainer label="Port" :model="port" :placeholder="String(defaultPort(kind))"
-                        :error="badPort ? 'a port is 1–65535' : portTaken ? 'another engine listens there' : ''"
-                        :description="editing ? '' : 'the first free one from the kind\'s own'" />
+        <!-- The port, and inside its box whether luu chooses it. -->
+        <div class="port-field">
+          <InputContainer label="Port" :model="auto ? '' : port" :disabled="auto"
+                          :placeholder="auto ? (placedAt ? `${placedAt} for now` : 'chosen when it starts') : String(defaultPort(kind))"
+                          :error="badPort ? 'a port is 1–65535' : portTaken ? 'another engine listens there' : ''"
+                          :description="auto ? 'the first free one from the kind\'s own, each time luu starts' : ''" />
+          <span class="auto"><Checkbox :model="auto" label="Auto" @change="setAuto($event.detail)" /></span>
+        </div>
       </div>
       <Checkbox :if="!editing" :model="withProvider" @change="withProvider = $event.detail">
-        also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
+        <span>also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it</span>
       </Checkbox>
     </section>
 
@@ -334,7 +386,13 @@
 
   <template :slot.foot>
     <span class="left"><Button variant="ghost" @click="leave()">Cancel</Button></span>
-    <Button variant="primary" :disabled="!canSave" :loading="saving" @click="save()">
+    <!-- Left of the button that is working: what it is doing. -->
+    <Button :if="download || log.length" variant="ghost"
+            @click="details = !details, details && toBottom()">{{ details ? "Hide details" : "View details" }}</Button>
+    <Button :if="finished" variant="primary" @click="leave()">Close</Button>
+    <!-- A spinner while the table is written; the word while the copy
+         downloads, which takes long enough to want one. -->
+    <Button :if="!finished" variant="primary" :disabled="!canSave" :loading="saving && !download" @click="save()">
       {{ download ? "Installing…" : editing ? "Save" : installs ? "Install" : "Add engine" }}
     </Button>
   </template>
@@ -396,8 +454,43 @@
   .source input { margin: .15rem 0 0; }
   .source-text { display: flex; flex-direction: column; gap: .1rem; font-size: 12.5px; }
   .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .6rem; margin: .1rem 0 .3rem; }
+  /* The checkbox sits in the box's top right, beside the field's name, and
+     outside the box's own label so a click on it is not a click on the
+     input. */
+  .port-field { position: relative; }
+  .port-field .auto { position: absolute; top: .5rem; right: .75rem; font-size: 12px; }
   .advanced summary { cursor: pointer; font-size: 12px; font-weight: 600; margin-bottom: .5rem; }
   .downloading { display: flex; align-items: center; gap: .6rem; font-size: 12px; }
+  /* A terminal: dark in both themes, monospace, its own scroll, the newest
+     line at the bottom. */
+  .terminal {
+    height: 100%;
+    min-height: 24rem;
+    display: flex;
+    border-radius: 8px;
+    background: #0d1117;
+    overflow: hidden;
+  }
+  /* Over the page's own `pre`, which is a light box with a border. */
+  .terminal pre {
+    flex: 1;
+    margin: 0;
+    padding: .75rem 1rem;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    overflow: auto;
+    font-family: var(--luu-font-mono, ui-monospace, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    color: #c9d1d9;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .terminal .line { display: block; }
+  .terminal .cmd { color: #79c0ff; }
+  .terminal .err { color: #ff7b72; }
+  .terminal .ok { color: #7ee787; }
   .downloading progress { flex: 1; }
   .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
   .small { font-size: 11px; }

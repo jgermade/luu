@@ -107,12 +107,14 @@ export const tableOf = e => Object.fromEntries(
     .filter(key => e[key] !== undefined && e[key] !== null)
     .map(key => [key, e[key]]))
 
-/// What a profile for this engine is: the backend each kind speaks, and the
-/// URL its port answers on. The same two facts `EngineKind::url` states.
+/// What a profile for this engine is: the backend each kind speaks, and — for
+/// an engine on a port of its own choosing — the URL that port answers on. The
+/// same two facts `EngineKind::url` states. An automatic engine's profile has
+/// no URL: it sends wherever the engine was placed. `port` is `null` for one.
 export function profileFor(name, kind, port) {
-  return kind === "ollama"
-    ? { backend: "ollama", url: `http://127.0.0.1:${port}`, engine: name }
-    : { backend: "openai", url: `http://127.0.0.1:${port}/v1`, engine: name }
+  const backend = kind === "ollama" ? "ollama" : "openai"
+  if (port == null) return { backend, engine: name }
+  return { backend, url: kind === "ollama" ? `http://127.0.0.1:${port}` : `http://127.0.0.1:${port}/v1`, engine: name }
 }
 
 /// Each kind's own port — `EngineKind::default_port`.
