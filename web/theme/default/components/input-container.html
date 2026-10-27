@@ -15,7 +15,8 @@
   name = ''
 }">
   // One control and what is said about it, in one box: its name inside the
-  // border, at the top; the control under it, borderless; what it is for
+  // border, at the top; the control filling the box under it, borderless —
+  // the name is drawn over the control, so all of the box is it; what it is for
   // under the box, or what is wrong with it in place of that. `type="select"`
   // makes the control a `<select>` of `options`; anything else is an
   // `<input>` of that type.
@@ -70,7 +71,7 @@
          :class.has-problem="!!error"
          :class.has-warning="!error && !!warning"
          :class.off="isDisabled"
-         :class.choice="isSelect"
+         :class.named="!!label"
          :class.leading="!!$slots.lead">
     <span :if="label" class="name">
       {{ label }}<span :if="isRequired" class="mark" aria-hidden="true">*</span>
@@ -127,35 +128,43 @@
     line-height: var(--luu-leading);
   }
 
+  /* The control is the whole box: the `<input>` or `<select>` fills it edge to
+     edge, padded to clear the name, and the name is drawn over it and lets the
+     pointer through — so a click anywhere in the border lands on the control
+     itself, and a `<select>` opens from all of it, not only its own line. */
   .box {
+    --name-h: calc(var(--luu-text-xs) * var(--luu-leading-tight));
     position: relative;
     display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: var(--luu-space-2) var(--luu-space-3);
     border: var(--luu-border-width) solid var(--luu-border);
     border-radius: var(--luu-radius-md);
-    background: var(--luu-surface);
+    background: var(--luu-field);
     color: var(--luu-fg);
-    cursor: text;
     transition: border-color var(--luu-duration-fast) ease, box-shadow var(--luu-duration-fast) ease,
                 background var(--luu-duration-fast) ease;
   }
-  .box.choice { cursor: pointer; }
   .box:hover:not(.off) { border-color: var(--luu-border-strong); }
   .box:active:not(.off) { background: var(--luu-active); }
   .box:focus-within {
     border-color: var(--luu-focus);
     box-shadow: 0 0 0 1px var(--luu-focus);
-    background: var(--luu-surface);
+    background: var(--luu-field);
   }
   .has-problem, .has-problem:hover:not(.off) { border-color: var(--luu-bad); }
   .has-problem:focus-within { border-color: var(--luu-bad); box-shadow: 0 0 0 1px var(--luu-bad); }
   .has-warning, .has-warning:hover:not(.off) { border-color: var(--luu-warn); }
   .has-warning:focus-within { border-color: var(--luu-warn); box-shadow: 0 0 0 1px var(--luu-warn); }
-  .off { opacity: .55; background: var(--luu-sunken); cursor: not-allowed; }
+  .off { opacity: .55; background: var(--luu-field-off); }
 
   .name {
+    position: absolute;
+    top: var(--luu-space-2);
+    left: var(--luu-space-3);
+    right: var(--luu-space-3);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    pointer-events: none;
     color: var(--luu-fg-muted);
     font-size: var(--luu-text-xs);
     font-weight: var(--luu-weight-medium);
@@ -166,11 +175,13 @@
   .mark { color: var(--luu-bad); margin-left: .15rem; }
 
   input, select {
+    flex: 1;
     width: 100%;
     min-width: 0;
     margin: 0;
-    padding: 0;
+    padding: var(--luu-space-2) var(--luu-space-3);
     border: 0;
+    border-radius: inherit;
     background: transparent;
     color: inherit;
     font: inherit;
@@ -181,9 +192,10 @@
   }
   /* Against a page whose own rule dims a disabled element: the box is dimmed
      once, here. */
+  .named input, .named select { padding-top: calc(var(--luu-space-2) + var(--name-h) + 1px); }
   input:disabled, select:disabled { opacity: 1; cursor: not-allowed; }
   input::placeholder { color: var(--luu-fg-subtle); }
-  select { appearance: none; padding-right: 1.5rem; cursor: inherit; }
+  select { appearance: none; padding-right: calc(var(--luu-space-3) + 1.5rem); cursor: pointer; }
   option { background: var(--luu-surface); color: var(--luu-fg); }
   /* On the value's line, at its start, the way the caret is at its end. */
   .lead {
@@ -196,7 +208,7 @@
     color: var(--luu-fg-muted);
     pointer-events: none;
   }
-  .leading input, .leading select { padding-left: 1.4rem; }
+  .leading input, .leading select { padding-left: calc(var(--luu-space-3) + 1.4rem); }
   .caret {
     position: absolute;
     right: var(--luu-space-3);

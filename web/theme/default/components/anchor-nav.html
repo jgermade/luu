@@ -8,7 +8,8 @@
   //
   //   <AnchorNav :items="[{ id: 'models', label: 'Models' }, 'engines']" />
   //
-  // An item is `{ id, label }`, or a string that is both. **The one being
+  // An item is `{ id, label }`, or a string that is both; `{ group: "Forms" }`
+  // is a heading over the items after it, not a link. **The one being
   // read** is the last whose top has passed `offset` pixels from the top of
   // the window — the height of a sticky head, if the page has one — and at the
   // very bottom of what scrolls it is the last, however short, or a short last
@@ -18,7 +19,8 @@
   // so two of these on one page do not answer each other's scrolling. The id
   // goes up through `:model` and as `change`.
 
-  $: links = items.map(item => typeof item === "string" ? { id: item, label: item } : item)
+  $: entries = items.map(item => typeof item === "string" ? { id: item, label: item } : item)
+  $: links = entries.filter(entry => !entry.group)
 
   let current = model || ""
   const mark = id => {
@@ -160,12 +162,14 @@
 </script>
 
 <nav class="anchors" :aria-label="label || null">
-  <a :each="link in links"
-     :key="link.id"
-     :href="`#${link.id}`"
-     :class.on="link.id === current"
-     :aria-current="link.id === current ? 'location' : null"
-     @click="go($event, link.id)">{{ link.label }}</a>
+  <span :each="entry in entries" :key="entry.group ? `group:${entry.group}` : entry.id" class="entry">
+    <span :if="entry.group" class="group" role="heading" aria-level="3">{{ entry.group }}</span>
+    <a :if="!entry.group"
+       :href="`#${entry.id}`"
+       :class.on="entry.id === current"
+       :aria-current="entry.id === current ? 'location' : null"
+       @click="go($event, entry.id)">{{ entry.label }}</a>
+  </span>
 </nav>
 
 <style scoped>
@@ -176,6 +180,16 @@
     font-family: var(--luu-font-sans);
     font-size: var(--luu-text-md);
   }
+  .entry { display: contents; }
+  .group {
+    padding: var(--luu-space-1) var(--luu-space-2);
+    color: var(--luu-fg-subtle);
+    font-size: var(--luu-text-xs);
+    font-weight: var(--luu-weight-medium);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .entry:not(:first-child) > .group { margin-top: var(--luu-space-3); }
   a {
     padding: var(--luu-space-1) var(--luu-space-2);
     /* Square on the side the bar is, so the bar runs straight down the edge;

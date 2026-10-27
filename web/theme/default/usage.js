@@ -409,6 +409,19 @@ export const USAGE = {
 <Typeahead label="Model" :model="model" :options="options" placeholder="a model name"
            @select="pick($event.detail)" />`)] },
 
+  "typeahead-container": { title: "TypeaheadContainer", parts: [one("typeahead-container", "TypeaheadContainer",
+    "A Typeahead in an InputContainer's box: the label inside it, the description, warning or error under it, the list as it is typed.",
+    "model-field.html", `<script :setup="{ models = [] }">
+  const TypeaheadContainer = await import("@theme/components/typeahead-container.html")
+
+  let model = ""
+  $: options = models.map(m => ({ value: m.name, label: m.name, description: m.size }))
+</script>
+
+<TypeaheadContainer label="Model" description="one the provider has pulled"
+                    :model="model" :options="options" placeholder="a model name"
+                    @select="$emit('pick', $event.detail)" />`)] },
+
   tabs: { title: "Tabs", parts: [one("tabs", "Tabs",
     "Views of one thing, one at a time. Only the strip is the component's: the owner shows the panel :model names.",
     "turn-panel.html", `<script :setup="{ turn = {} }">

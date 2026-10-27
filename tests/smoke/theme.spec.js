@@ -87,7 +87,7 @@ test("every section renders, and the tokens are read back from the CSS", async (
   const errors = await demo(page)
   // Every link in the index has its section, and every section its link.
   const ids = await page.locator(".index a").evaluateAll(links => links.map(a => a.hash.slice(1)))
-  expect(ids).toHaveLength(26)
+  expect(ids).toHaveLength(27)
   for (const id of ids) await expect(page.locator(`section#${id}`)).toHaveCount(1)
   // The page's ground, as the computed style has it.
   await expect(page.locator(".swatch").first().locator(".value")).toHaveText("#f4f5f8")
@@ -177,7 +177,9 @@ test("an input container, a typeahead, and an index inside a box", async ({ page
   const containers = page.locator("#input-container")
   const url = containers.getByRole("textbox", { name: "URL" })
   await expect(url).toHaveAccessibleDescription("where the server listens, /v1 included for OpenAI")
-  await containers.getByText("URL", { exact: true }).click()
+  // The name is drawn over the field and lets the pointer through, so a click
+  // where it is lands on the field: forced, because the field is what takes it.
+  await containers.getByText("URL", { exact: true }).click({ force: true })
   await expect(url).toBeFocused()
   await url.fill("http://127.0.0.1:8080/v1")
   await expect(containers.locator(".state")).toContainText('url: "http://127.0.0.1:8080/v1"')
@@ -188,6 +190,23 @@ test("an input container, a typeahead, and an index inside a box", async ({ page
   await expect(containers.getByRole("alert")).toHaveCount(0)
   await containers.getByRole("combobox", { name: "Backend" }).selectOption("mock")
   await expect(containers.locator(".state")).toContainText("backend: mock")
+  // The control fills the box, the name drawn over it: all of the box is it.
+  const [frame, field] = await Promise.all([
+    containers.locator("label").first().boundingBox(),
+    url.boundingBox(),
+  ])
+  expect(field.height).toBeGreaterThan(frame.height - 4)
+  expect(field.width).toBeGreaterThan(frame.width - 4)
+
+  // The same box around a typeahead: named, described, and its list.
+  const tc = page.locator("#typeahead-container")
+  const tcModel = tc.getByRole("combobox", { name: "Model" })
+  await expect(tcModel).toHaveAccessibleDescription("one the provider has pulled")
+  await tcModel.fill("gemma")
+  await expect(page.getByRole("listbox", { name: "Model" }).getByRole("option")).toHaveCount(2)
+  await tcModel.press("ArrowDown")
+  await tcModel.press("Enter")
+  await expect(tc.locator(".state")).toContainText('taken: "gemma3:12b"')
 
   // Typed, filtered, chosen by the keyboard; a disabled option is skipped.
   const typeahead = page.locator("#typeahead")
@@ -665,7 +684,7 @@ test("each section opens how it is used, a tab per component, coloured", async (
 
   // Every section has one, and one component is a plain modal: the Button,
   // used in a parent that imports it, written as a tag, coloured.
-  await expect(page.locator(".content section.section > .head").getByRole("button", { name: "Integrate" })).toHaveCount(26)
+  await expect(page.locator(".content section.section > .head").getByRole("button", { name: "Integrate" })).toHaveCount(27)
   await page.locator("#button").getByRole("button", { name: "Integrate" }).first().click()
   dialog = page.getByRole("dialog", { name: "Button" })
   await expect(dialog).toBeVisible()
