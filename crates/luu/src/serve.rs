@@ -1638,6 +1638,10 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // asks, and `RECORD/2026-10-01.a-terminal-in-the-container.completed.md`.
         .route("/ws/terminal", get(terminal_socket))
         .route("/api/terminal", get(get_terminal).put(put_terminal))
+        .route(
+            "/api/runtimes/default",
+            axum::routing::put(put_default_runtime),
+        )
         // What Settings → Runtimes shows and does: the runtimes probed, the
         // images they have, and a build of one that is missing. See
         // `crate::runtimes`.
@@ -5157,6 +5161,8 @@ struct RuntimesView {
     running: Option<String>,
     /// `[terminal] host`.
     host_shell: &'static str,
+    /// `[runtimes] default`: the container runtime an image runs on first.
+    default_runtime: &'static str,
 }
 
 /// The images a runtime is asked about and may build: the ones a policy file
@@ -5218,10 +5224,16 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
          may do, and a build is a process this machine runs."
             .to_string()
     });
-    let host_shell = load_config()
-        .await
-        .map(|(config, _)| config.terminal().host)
+    let config = load_config().await.map(|(config, _)| config).ok();
+    let host_shell = config
+        .as_ref()
+        .map(|config| config.terminal().host)
         .unwrap_or_default()
+        .as_str();
+    let default_runtime = config
+        .as_ref()
+        .map(|config| config.default_runtime())
+        .unwrap_or(agent_core::worker::Runtime::CONTAINED[0])
         .as_str();
     Json(RuntimesView {
         path: config_path().await.map(|path| path.display().to_string()),
@@ -5234,6 +5246,7 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         policies,
         running: app.posture.lock().await.clone(),
         host_shell,
+        default_runtime,
     })
     .into_response()
 }
@@ -5496,6 +5509,53 @@ async fn put_terminal(
     };
     let terminal = crate::provider::Terminal { host: asked.host };
     if let Err(error) = write_config(current.with_terminal(terminal), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    runtimes_answer(&state, &headers).await
+}
+
+#[derive(serde::Deserialize)]
+struct DefaultRuntimeAsk {
+    runtime: agent_core::worker::Runtime,
+}
+
+/// Writes `[runtimes] default`: the container runtime an image runs on first
+/// in the new session's *Runtime*. A container runtime or nothing — `host`
+/// and `direct` are not where an image runs. Docker is written as no table.
+async fn put_default_runtime(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<DefaultRuntimeAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    if !asked.runtime.is_contained() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "`{}` runs no image: the default is a container runtime",
+                asked.runtime.as_str()
+            ),
+        )
+            .into_response();
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let runtimes = crate::provider::Runtimes {
+        default: (asked.runtime != agent_core::worker::Runtime::CONTAINED[0])
+            .then_some(asked.runtime),
+    };
+    if let Err(error) = write_config(current.with_runtimes(runtimes), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     runtimes_answer(&state, &headers).await
@@ -8263,15 +8323,20 @@ async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRu
 }
 
 /// Every place a session made from lists may run, as [`Where`]s: this
-/// machine, and each image [`images_named`] finds on every container runtime.
-/// What the new session's dialog offers as *Runtime*.
+/// machine, and each image [`images_named`] finds on every container runtime
+/// — the default one first (`[runtimes] default`, Docker where the file says
+/// none). What the new session's dialog offers as *Runtime*.
 async fn places_for_lists(app: &App, describe: &DescribeFactory) -> Vec<Where> {
+    let first = load_config()
+        .await
+        .map(|(config, _)| config.default_runtime())
+        .unwrap_or(agent_core::worker::Runtime::CONTAINED[0]);
     let places = std::iter::once(crate::policies::Place::host()).chain(
         images_named(app)
             .await
             .into_iter()
             .map(|(image, image_paths)| crate::policies::Place {
-                runtime: agent_core::worker::Runtime::CONTAINED[0],
+                runtime: first,
                 image: Some(image),
                 image_paths,
             }),

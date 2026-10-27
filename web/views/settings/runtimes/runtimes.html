@@ -4,8 +4,9 @@
   // shell on the host. A runtime is usable when it is installed, answers, has
   // the image, and a posture uses it — this section shows all four and changes
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
-  const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
+  const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell, saveDefaultRuntime } =
     await import("@web/lib/runtimes.js")
+  const Button = await import("@web/theme/default/components/button.html")
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
   const { state } = await import("@web/lib/store.js")
@@ -120,6 +121,16 @@
     busy = ""
   }
 
+  // The runtime a new session's image runs on first; the others are offered
+  // after it. Docker where config.toml says none. See
+  // `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`.
+  $: defaultRuntime = view?.default_runtime || "docker"
+  const makeDefault = async runtime => {
+    busy = `default:${runtime}`
+    took(await saveDefaultRuntime(runtime))
+    busy = ""
+  }
+
   // Where a posture would run, in the words the terminal's picker uses.
   const runs = place => !place ? "?"
     : place.runtime === "direct" ? "direct (no container)"
@@ -149,6 +160,7 @@
 
     <p class="dim small">
       Un runtime es utilizable cuando está instalado, responde a comprobaciones y cuenta con las imágenes declaradas en las políticas.
+      El marcado como <em>default</em> es donde corre primero la imagen de una sesión nueva.
       <span :if="view?.path">Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />.</span>
       <span :if="!view && !error" class="skeleton-pulse">Comprobando runtimes instalados…</span>
     </p>
@@ -175,22 +187,42 @@
         <svg :if="!markOf(r.runtime)" class="ic"><use href="#i-box"/></svg>
         <strong>{{ r.runtime }}</strong>
         <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
+        <span :if="defaultRuntime === r.runtime" class="state default"
+              title="A new session's image runs here first; the others are offered after it">default</span>
         <code :if="r.path" class="dim small">{{ r.path }}</code>
+        <span class="grow"></span>
+        <!-- What can be done to it, as Engines draws its own: installed from
+             here where Homebrew can do it with the person's own authority,
+             started where it says how, and made the default. -->
+        <span class="actions">
+          <Button :if="!r.path && r.install" square variant="ghost" size="sm"
+                  :title="`Install · ${r.install}`" label="Install"
+                  :disabled="!view?.editable || !!busy || taskOf('install', r.runtime)?.state === 'running'"
+                  @click="install(r.runtime)">
+            <svg class="ic"><use href="#i-download"/></svg>
+          </Button>
+          <Button :if="r.answers === false && r.startable" square variant="ghost" size="sm"
+                  title="Start it" label="Start"
+                  :disabled="!view?.editable || !!busy || taskOf('start', r.runtime)?.state === 'running'"
+                  @click="start(r.runtime)">
+            <svg class="ic"><use href="#i-play"/></svg>
+          </Button>
+          <Button :if="defaultRuntime !== r.runtime" square variant="ghost" size="sm"
+                  :title="r.path ? 'Make it the default: new sessions run their image here first' : 'Install it to make it the default'"
+                  label="Make default"
+                  :disabled="!view?.editable || !!busy || !r.path"
+                  @click="makeDefault(r.runtime)">
+            <svg class="ic"><use href="#i-check"/></svg>
+          </Button>
+        </span>
       </header>
-      <!-- Installed from here where Homebrew can do it with the person's own
-           authority; said, as a command, where it would take root. -->
+      <!-- Said, as a command, where it would take root. -->
       <p :if="!r.path" class="small hint">
-        <button :if="r.install && taskOf('install', r.runtime)?.state !== 'running'" type="button"
-                :disabled="!view?.editable || !!busy" @click="install(r.runtime)">install</button>
         <code :if="r.install">{{ r.install }}</code>
         <span :if="!r.install" class="dim">{{ (r.hint || "").replaceAll("`", "") }}</span>
         <span :if="!r.install && r.install_refused" class="dim"> — {{ r.install_refused }}</span>
       </p>
-      <p :if="r.answers === false" class="warn small">
-        {{ r.detail }}
-        <button :if="r.startable && taskOf('start', r.runtime)?.state !== 'running'" type="button" class="link"
-                :disabled="!view?.editable || !!busy" @click="start(r.runtime)">start it</button>
-      </p>
+      <p :if="r.answers === false" class="warn small">{{ r.detail }}</p>
       <div :if="showing(taskOf('install', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
       <div :if="showing(taskOf('start', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
       <p :if="r.path && r.gap" class="dim small">{{ r.gap }}</p>
@@ -292,6 +324,9 @@
   .runtime.off { opacity: .7; }
   .runtime header { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
   .runtime header strong { font-size: 14px; font-weight: 600; color: var(--luu-fg); text-transform: capitalize; }
+  .runtime .grow { flex: 1; }
+  .actions { display: inline-flex; align-items: center; gap: .15rem; }
+  .actions .ic { width: 15px; height: 15px; }
   .runtime p { margin: .35rem 0 0; }
   .state {
     font-size: 11px;
@@ -311,6 +346,12 @@
     color: var(--luu-warn);
     border-color: var(--luu-warn);
     background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
+  }
+  .state.default {
+    color: var(--luu-accent);
+    border-color: var(--luu-accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .06));
+    font-weight: 500;
   }
   .images { list-style: none; margin: .5rem 0 0; padding: 0; }
   .images li {

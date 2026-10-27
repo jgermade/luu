@@ -64,8 +64,10 @@ plan is what the draft compacts to*. It used to read a held prompt, before
 anything had been looked at, which is a small model's worst case. No prompt is
 held any more: a prompt runs, in the draft, always. The open job is named in the
 chat's head, in a menu right against the session's name — the name as wide as it
-is, not the bar — whose items are its doors: *Plan this* for a draft, *Close &
-fold* for either (a row over the composer until 2026-10-27).
+is, not the bar — named *draft* or *plan*, which half it is, with its number in
+the title. Its items are its doors, each with a line under it on what it does:
+*Plan this* for a draft, *Close & fold* for either (a row over the composer
+until 2026-10-27).
 
 **And the page reads the alternation, on both surfaces.** A fold says which
 half it was — *draft 3* or *job 4*, from the same `!plan` rule the open job's
@@ -1032,7 +1034,13 @@ access = "execute"
   **Settings → Runtimes writes the postures table**, naming a policy file out of the
   ones at the top of the checkout and never one the page types, and the server
   replaces the postures it offers at once. Postures are no longer read only at
-  startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)). See
+  startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)).
+  **And one container runtime is the default**: `[runtimes] default`, written
+  from its card (`PUT /api/runtimes/default`, a container runtime only, Docker
+  as no table), is where a session made from lists runs its image first in the
+  new session's *Runtime* — the others are offered after it. A card's actions
+  are icons, as an engine's: install, start, make default
+  ([`RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`](RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md)). See
   [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md). `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).

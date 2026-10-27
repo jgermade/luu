@@ -831,12 +831,12 @@
            draft may be planned, and either may be closed and folded. They
            were a row of their own over the composer until 2026-10-27. -->
       <span :if="live &amp;&amp; !proposed" class="job-menu">
-        <Menu size="sm" variant="ghost" :label="drafting ? `draft ${live?.id}` : `job ${live?.id}`"
+        <Menu size="sm" variant="ghost" :label="drafting ? 'draft' : 'plan'"
               :title="`${drafting ? 'draft' : 'job'} ${live?.id} · ${live?.objective || ''}`"
               :disabled="replaying"
               :items="[
-                ...(drafting ? [{ value: 'plan', label: 'Plan this', disabled: running }] : []),
-                { value: 'close', label: 'Close & fold', disabled: running },
+                ...(drafting ? [{ value: 'plan', label: 'Plan this', note: 'what was drafted, at the gate', disabled: running }] : []),
+                { value: 'close', label: 'Close & fold', note: 'one summary from here on', disabled: running },
               ]"
               @select="$event.detail === 'plan' ? requestPlan() : closeJob(live?.id)" />
       </span>

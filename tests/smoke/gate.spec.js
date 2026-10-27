@@ -1261,8 +1261,12 @@ async function gateOnWidePosture(page) {
   // planned from the menu against the session's name.
   const live = page.locator(".chat .col-head .job-menu")
   await expect(live).toBeVisible({ timeout: 30_000 })
-  await expect(live.locator("button.trigger")).toContainText(/draft \d+/)
+  // Which half of the alternation it is, and no number: the number is in its
+  // title, and in the fold it becomes.
+  await expect(live.locator("button.trigger")).toHaveText("draft")
   await live.locator("button.trigger").click()
+  // What each door does, under its name.
+  await expect(page.getByRole("menuitem", { name: /Plan this/ }).locator(".note")).toHaveText("what was drafted, at the gate")
   await page.getByRole("menuitem", { name: /Plan this/ }).click()
 
   const gate = page.locator(".gate")

@@ -92,6 +92,10 @@ test.beforeAll(async () => {
       'chmod +x "$(dirname "$0")/$2"\n',
   )
   chmodSync(join(brewBin, "brew"), 0o755)
+  // And a `nerdctl` that answers, so one runtime besides Docker is installed
+  // wherever the suite runs and can be made the default.
+  writeFileSync(join(brewBin, "nerdctl"), '#!/bin/sh\ncase "$1" in info) exit 0;; *) exit 1;; esac\n')
+  chmodSync(join(brewBin, "nerdctl"), 0o755)
   // And no podman but the one it installs. The Runtimes test needs a machine
   // without one, and luu finds runtimes on PATH alone, so every directory
   // holding a real one is replaced, in its place, by a folder of links to
@@ -1512,6 +1516,40 @@ test("runtimes, postures and the host shell are configured from Settings", async
   }
   const config = () => readFileSync(join(home, "config.toml"), "utf8")
 
+  // Docker is the default while the file names none, and says so on its
+  // card; one that is installed is made the default from its own, by the
+  // check among its icon actions. See
+  // `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`.
+  const card = runtime => pane.locator(".runtime", { has: page.locator("header strong", { hasText: new RegExp(`^${runtime}$`) }) })
+  await expect(card("docker").locator(".state.default")).toHaveText("default")
+  await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(0)
+  await expect(card("nerdctl").locator(".state").first()).toHaveText("answering")
+  await card("nerdctl").locator(".actions").getByRole("button", { name: "Make default" }).click()
+  await expect(card("nerdctl").locator(".state.default")).toHaveText("default")
+  await expect(card("docker").locator(".state.default")).toHaveCount(0)
+  await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(1)
+  expect(config()).toContain("[runtimes]")
+  expect(config()).toContain('default = "nerdctl"')
+  // And a new session's image is offered on it first.
+  const lists = await (await fetch(`${BASE}/api/postures`)).json()
+  const contained = lists.runtimes.filter(place => place.image)
+  if (contained.length) expect(contained[0].runtime).toBe("nerdctl")
+  // Only a container runtime may be the default; Docker is written as no table.
+  const notContained = await fetch(`${BASE}/api/runtimes/default`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runtime: "host" }),
+  })
+  expect(notContained.status).toBe(422)
+  const back = await fetch(`${BASE}/api/runtimes/default`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runtime: "docker" }),
+  })
+  expect(back.status).toBe(200)
+  expect((await back.json()).default_runtime).toBe("docker")
+  expect(config()).not.toContain("[runtimes]")
+
   // A posture, named by a policy file out of the list — this checkout's.
   await pane.locator('button.add:has-text("+ posture")').click()
   await pane.locator('.adding input[placeholder="name"]').fill("boxed")
@@ -1550,9 +1588,9 @@ test("runtimes, postures and the host shell are configured from Settings", async
     await expect(podman.locator(".hint code")).toContainText("brew-bin/brew install podman")
     // The three that need an administrator say so, with no button.
     const docker = pane.locator(".runtime", { has: page.locator("header strong", { hasText: /^container$/ }) })
-    await expect(docker.locator('button:has-text("install")')).toHaveCount(0)
+    await expect(docker.getByRole("button", { name: "Install" })).toHaveCount(0)
     await expect(docker).toContainText("not from here: its package needs an administrator")
-    await podman.locator('button:has-text("install")').click()
+    await podman.locator(".actions").getByRole("button", { name: "Install" }).click()
     // When the task ends the runtimes are asked again: installed, answering,
     // and with the image the policy files name not built yet.
     await expect(podman.locator(".state").first()).toHaveText("answering", { timeout: 15_000 })

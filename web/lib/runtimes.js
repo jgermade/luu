@@ -29,6 +29,9 @@ export const installRuntime = runtime =>
 export const startRuntime = runtime =>
   call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/start`, {})
 export const saveHostShell = host => call("PUT", "./api/terminal", { host })
+/// `[runtimes] default`: the container runtime a new session's image runs on
+/// first. Answers with the whole view, like the writes above.
+export const saveDefaultRuntime = runtime => call("PUT", "./api/runtimes/default", { runtime })
 
 /// The whole `[posture.*]` table, the way the page writes every table. The
 /// terminal's picker reads the postures too, so it is told.
