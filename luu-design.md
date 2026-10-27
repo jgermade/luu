@@ -1383,12 +1383,13 @@ URL, keeps the browser's cache honest. A versioned extension path that an update
 to the newest version beside it. See
 [`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md).
 **Brand marks are the one exception to *nothing is vendored***: a mark is its owner's and there is
-one per brand, so there is no taste to tie the page to. Twenty-one come with the page
+one per brand, so there is no taste to tie the page to. Twenty-three come with the page
 (`web/brands/`: Simple Icons' under CC0, named by lobehub's slugs, and llama.cpp's, mlx-serve's
 and Ollama's own, which an engine's card and the installer's kinds wear too; and Docker's,
-Podman's and containerd's — nerdctl's — which a runtime wears in Settings → Runtimes and at the
-start of the new session's *Runtime*, a box for colima and Apple's `container` and this machine
-for `host`), drawn as a mask over
+Podman's and containerd's — nerdctl's — with Colima's llama (its favicon, as a mask) and Apple
+`container`'s switches (traced from its app icon), which a runtime wears in Settings → Runtimes, its loading
+placeholders included, and at the start of the new session's *Runtime*; a box for a runtime
+with none, and this machine for `host`), drawn as a mask over
 `currentColor` beside each provider (by backend and URL host) and model (by family, after the
 catalog's prefix) in the two columns the pickers share; nothing known is no mark. `[ui]
 brand-icons` names a pack instead — a folder of `<slug>.svg`, or one with `icons/` in it — offered

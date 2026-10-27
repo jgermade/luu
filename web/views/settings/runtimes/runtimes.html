@@ -14,6 +14,8 @@
   const BrandIcon = await import("@web/components/brand-icon.html")
   const { brandSrc, runtimeBrand, loadBrands } = await import("@web/lib/brands.js")
   loadBrands()
+  // A runtime's mark, or `null` for the two with none: they are drawn as a box.
+  const markOf = runtime => brandSrc(runtimeBrand(runtime))
 
   let view = null
   let error = ""
@@ -156,6 +158,8 @@
     <div :if="!view && !error" class="runtime-placeholders">
       <div :each="name in ['docker', 'podman', 'nerdctl', 'colima', 'container']" :key="name" class="runtime-skeleton">
         <header>
+          <BrandIcon :if="markOf(name)" :src="markOf(name)" size="16px" />
+          <svg :if="!markOf(name)" class="ic"><use href="#i-box"/></svg>
           <strong>{{ name }}</strong>
           <span class="skeleton-badge skeleton-pulse">comprobando…</span>
         </header>
@@ -167,8 +171,8 @@
 
     <section :each="r in view?.runtimes || []" :key="r.runtime" class="runtime" :class.off="!r.path">
       <header>
-        <BrandIcon :if="brandSrc(runtimeBrand(r.runtime))" :src="brandSrc(runtimeBrand(r.runtime))" size="16px" />
-        <svg :if="!brandSrc(runtimeBrand(r.runtime))" class="ic"><use href="#i-box"/></svg>
+        <BrandIcon :if="markOf(r.runtime)" :src="markOf(r.runtime)" size="16px" />
+        <svg :if="!markOf(r.runtime)" class="ic"><use href="#i-box"/></svg>
         <strong>{{ r.runtime }}</strong>
         <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
         <code :if="r.path" class="dim small">{{ r.path }}</code>

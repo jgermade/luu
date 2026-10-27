@@ -21,8 +21,8 @@ instead, as for every slug.
 
 `docker.svg`, `podman.svg` and `containerd.svg` are the container runtimes'
 marks, from the same release: nerdctl is containerd's own client and wears
-containerd's. Colima has no mark there, and Apple's `container` is Apple's, so
-those two are drawn as a box.
+containerd's. Simple Icons has none for Colima or for Apple's `container`; see
+below.
 
 Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`,
 `zdotai` → `zai` (Z.ai, which makes GLM). `alibabacloud` is Alibaba Cloud's,
@@ -34,3 +34,10 @@ starts: `ollama.svg` is `docs/ollama-logo.svg` from
 llama.cpp's mark as its project draws it, and `mlx.svg` is the X of
 [mlx-serve](https://github.com/ddalcu/mlx-serve)'s app icon, traced flat
 without its tile and its bevel.
+
+And two for container runtimes. `container.svg` is the three switches of
+[apple/container](https://github.com/apple/container)'s app icon, traced flat
+the same way, each knob a hole; it is the project's icon, not Apple's logo,
+which stays out. `colima.svg` is Colima's own favicon (`colima.run`), its paths
+unchanged inside an SVG `<mask>` — strokes shown, its white and green fills cut
+out — so that drawn as a mask it is the logo's line art and not a silhouette.

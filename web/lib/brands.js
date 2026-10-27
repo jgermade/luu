@@ -8,9 +8,9 @@ import { apiHeaders } from "./store.js"
 
 /// The page's own, by slug: the files in `web/brands/`.
 const BUILTIN = new Set([
-  "alibabacloud", "anthropic", "claude", "containerd", "deepseek", "docker", "gemini", "google",
-  "huggingface", "kimi", "llamacpp", "lmstudio", "meta", "minimax", "mistral", "mlx", "ollama",
-  "podman", "qwen", "vllm", "zai",
+  "alibabacloud", "anthropic", "claude", "colima", "container", "containerd", "deepseek", "docker",
+  "gemini", "google", "huggingface", "kimi", "llamacpp", "lmstudio", "meta", "minimax", "mistral",
+  "mlx", "ollama", "podman", "qwen", "vllm", "zai",
 ])
 export const builtinCount = BUILTIN.size
 
@@ -69,9 +69,8 @@ const ENGINES = { llama: ["llamacpp", "ggml"], mlx: ["mlx"], ollama: ["ollama"] 
 export const engineBrand = kind => ENGINES[kind] || []
 
 /// A container runtime's marks, by its name: nerdctl is containerd's own
-/// client, and wears containerd's. Colima has none to draw, and Apple's
-/// `container` none it may be drawn with, so a pack's or nothing — the
-/// caller draws a box. `host` and `direct` are this machine, not a brand.
+/// client, and wears containerd's. Nothing found is no mark, and the caller
+/// draws a box. `host` and `direct` are this machine, not a brand.
 const RUNTIMES = {
   docker: ["docker"],
   podman: ["podman"],

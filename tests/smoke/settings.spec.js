@@ -1489,20 +1489,26 @@ test("runtimes, postures and the host shell are configured from Settings", async
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
   await page.click('.inspector .col-foot button[title="Settings"]')
+  // Held while it asks: the placeholders wear each runtime's mark already.
+  // Once answered, the route lets every later ask through as it is.
+  let answer = () => {}
+  const asked = new Promise(done => { answer = done })
+  await page.route("**/api/runtimes", async route => { await asked; await route.continue() })
   await page.click('.modal .rail button:has-text("Runtimes")')
   const pane = page.locator(".runtimes-pane")
+  await expect(pane.locator(".runtime-skeleton header .brand")).toHaveCount(5)
+  await expect(pane.locator('.runtime-skeleton header use[href="#i-box"]')).toHaveCount(0)
+  answer()
   await expect(pane.locator(".runtime")).toHaveCount(5, { timeout: 15_000 })
   for (const runtime of ["docker", "podman", "nerdctl", "colima", "container"]) {
     await expect(pane.locator(".runtime header strong", { hasText: new RegExp(`^${runtime}$`) })).toHaveCount(1)
   }
-  // Each wears its mark: its own, containerd's for nerdctl, and a box for
-  // the two the page has none of.
+  // Each wears its mark: its own, and containerd's for nerdctl.
   const header = runtime => pane.locator(".runtime header", { has: page.locator("strong", { hasText: new RegExp(`^${runtime}$`) }) })
-  for (const [runtime, mark] of [["docker", "docker"], ["podman", "podman"], ["nerdctl", "containerd"]]) {
+  for (const [runtime, mark] of [
+    ["docker", "docker"], ["podman", "podman"], ["nerdctl", "containerd"], ["colima", "colima"], ["container", "container"],
+  ]) {
     await expect(header(runtime).locator(".brand")).toHaveAttribute("style", new RegExp(`brands/${mark}\\.svg`))
-  }
-  for (const runtime of ["colima", "container"]) {
-    await expect(header(runtime).locator('use[href="#i-box"]')).toHaveCount(1)
   }
   const config = () => readFileSync(join(home, "config.toml"), "utf8")
 
