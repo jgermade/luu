@@ -27,23 +27,29 @@
   const Tooltip = await import("@theme/components/tooltip.html")
   const InputContainer = await import("@theme/components/input-container.html")
   const Typeahead = await import("@theme/components/typeahead.html")
+  const TypeaheadContainer = await import("@theme/components/typeahead-container.html")
   const Section = await import("@theme/components/section.html")
   const Scrollable = await import("@theme/components/scrollable.html")
   const AnchorNav = await import("@theme/components/anchor-nav.html")
   const TabModal = await import("@theme/components/tab-modal.html")
   const SubModal = await import("@theme/components/sub-modal.html")
 
-  const SECTIONS = [
-    ["colours", "Colours"], ["foundations", "Type · Shape · Motion"], ["files", "File icons"],
-    ["button", "Button"], ["badge", "Badge"], ["alert", "Alert"], ["card", "Card"],
-    ["scrollable", "Scrollable"], ["progress", "Progress · Spinner"], ["kbd", "Kbd"],
-    ["text-input", "TextInput"], ["textarea", "Textarea"], ["select", "Select"],
-    ["checkbox", "Checkbox"], ["radio-group", "RadioGroup"], ["switch", "Switch"],
-    ["segmented", "Choice segmented"], ["sizes", "Sizes"], ["field", "Field"],
-    ["input-container", "InputContainer"], ["typeahead", "Typeahead"],
-    ["tabs", "Tabs"], ["anchors", "Section · AnchorNav"], ["menu", "Menu"], ["tooltip", "Tooltip"], ["modals", "Modals"],
+  // The sections in groups, as the index lists them and the page draws them:
+  // a group is a heading over its sections, in both.
+  const GROUPS = [
+    ["foundations-group", "Foundations", [["colours", "Colours"], ["foundations", "Type · Shape · Motion"], ["files", "File icons"]]],
+    ["display-group", "Display", [["button", "Button"], ["badge", "Badge"], ["alert", "Alert"], ["card", "Card"],
+      ["scrollable", "Scrollable"], ["progress", "Progress · Spinner"], ["kbd", "Kbd"]]],
+    ["forms-group", "Forms", [["text-input", "TextInput"], ["textarea", "Textarea"], ["select", "Select"],
+      ["typeahead", "Typeahead"], ["checkbox", "Checkbox"], ["radio-group", "RadioGroup"], ["switch", "Switch"],
+      ["segmented", "Choice segmented"], ["field", "Field"], ["input-container", "InputContainer"],
+      ["typeahead-container", "TypeaheadContainer"], ["sizes", "Sizes"]]],
+    ["navigation-group", "Navigation · Overlays", [["tabs", "Tabs"], ["anchors", "Section · AnchorNav"],
+      ["menu", "Menu"], ["tooltip", "Tooltip"], ["modals", "Modals"]]],
   ]
-  const ANCHORS = SECTIONS.map(([id, label]) => ({ id, label }))
+  const ANCHORS = GROUPS.flatMap(([, group, sections]) =>
+    [{ group }, ...sections.map(([id, label]) => ({ id, label }))])
+  const SECTIONS = GROUPS.flatMap(([, , sections]) => sections)
 
   // ---- the theme ------------------------------------------------------------
 
@@ -72,7 +78,7 @@
   // Read back from the computed style, so the page shows what the CSS says
   // rather than a copy of it; again whenever the theme moves.
   const COLOURS = [
-    ["Grounds", ["bg", "sunken", "surface", "hover", "selected"]],
+    ["Grounds", ["bg", "sunken", "surface", "field", "field-off", "hover", "selected"]],
     ["Lines and ink", ["border", "border-strong", "fg", "fg-muted", "fg-subtle"]],
     ["Accent", ["accent", "accent-hover", "on-accent", "accent-soft", "focus"]],
     ["Tones", ["ok", "ok-soft", "warn", "warn-soft", "bad", "bad-soft"]],
@@ -296,6 +302,9 @@
   let taModel = ""
   let taPicked = ""
   let taStrict = "ollama"
+  let tcModel = ""
+  let tcPicked = ""
+  let tcBackend = "ollama"
 
   const MINI = [
     { id: "mini-draft", label: "Draft" },
@@ -535,6 +544,7 @@
 
   <main class="content">
 
+    <p class="group-title">Foundations</p>
     <!-- ---- colours ------------------------------------------------------ -->
     <Section id="colours" title="Colours" divided>
       <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('colours')"><svg class="btn-ic"
@@ -663,6 +673,7 @@
       </div>
     </Section>
 
+    <p class="group-title">Display</p>
     <!-- ---- button ------------------------------------------------------- -->
     <Section id="button" title="Button" divided>
       <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('button')"><svg class="btn-ic"
@@ -859,6 +870,7 @@
       </div>
     </Section>
 
+    <p class="group-title">Forms</p>
     <!-- ---- text input --------------------------------------------------- -->
     <Section id="text-input" title="TextInput" divided>
       <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('text-input')"><svg class="btn-ic"
@@ -913,6 +925,26 @@
         <Select invalid model="invalid" :options="['invalid']" label="Invalid" />
         <Select disabled model="disabled" :options="['disabled']" label="Disabled" />
         <p class="state">backend: <code>{{ backend }}</code> · model: <code>{{ model || "—" }}</code></p>
+      </div>
+    </Section>
+
+    <!-- ---- typeahead ----------------------------------------------------- -->
+    <Section id="typeahead" title="Typeahead" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('typeahead')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
+      <template :slot.lead>A name typed, with what it could be listed under it as it is typed. The
+        arrows move in the list, Enter takes one, ESC closes it; what matched is marked. What is
+        typed is a value too — unless <code>strict</code>, which puts the last real one back.</template>
+      <div class="demo stack narrow">
+        <Typeahead label="Model" :model="taModel" :options="TA_MODELS" placeholder="a model name"
+                   @select="taPicked = $event.detail" />
+        <Typeahead label="Backend, strict" strict :model="taStrict" :options="BACKENDS"
+                   placeholder="one of the backends" />
+        <Typeahead label="Small" size="sm" :options="TA_MODELS" placeholder="small" />
+        <Typeahead label="Loading" loading :options="[]" placeholder="asking the provider…" />
+        <Typeahead label="Disabled" disabled model="qwen2.5-coder:7b" :options="TA_MODELS" />
+        <p class="state">typed: <code>{{ JSON.stringify(taModel) }}</code> · taken:
+          <code>{{ JSON.stringify(taPicked) }}</code> · strict: <code>{{ JSON.stringify(taStrict) }}</code></p>
       </div>
     </Section>
 
@@ -988,26 +1020,6 @@
       </div>
     </Section>
 
-    <!-- ---- sizes: one row per size, every control on it ------------------- -->
-    <Section id="sizes" title="Sizes" divided>
-      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('sizes')"><svg class="btn-ic"
-        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
-      <template :slot.lead>One <code>size</code> for every control — <code>sm</code>, <code>md</code>,
-        <code>lg</code> — read from <code>--luu-control-sm|md|lg</code>: the same height, the same
-        corners and the same type, so a row of them lines up whatever is on it.</template>
-      <div class="demo stack">
-        <div :each="z in CONTROL_SIZES" :key="z" class="row size-row" :data-size="z">
-          <code class="size-name">{{ z }} · {{ read[`control-${z}`] || "" }}</code>
-          <span class="cell"><Button :size="z" variant="primary">Save</Button></span>
-          <span class="cell"><Button :size="z">Cancel</Button></span>
-          <span class="cell wide"><TextInput :size="z" placeholder="a name" :label="`Name, ${z}`" /></span>
-          <span class="cell wide"><Select :size="z" :model="backend" :options="BACKENDS" :label="`Backend, ${z}`" /></span>
-          <span class="cell"><ChoiceSegmented :size="z" :label="`Columns, ${z}`" :model="layout" :options="['two', 'three']" /></span>
-          <span class="cell wide"><Typeahead :size="z" :label="`Model, ${z}`" :options="TA_MODELS" placeholder="a model" /></span>
-        </div>
-      </div>
-    </Section>
-
     <!-- ---- field -------------------------------------------------------- -->
     <Section id="field" title="Field" divided>
       <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('field')"><svg class="btn-ic"
@@ -1069,26 +1081,51 @@
         name: <code>{{ JSON.stringify(icName) }}</code> · window: <code>{{ icWindow }}</code></p>
     </Section>
 
-    <!-- ---- typeahead ----------------------------------------------------- -->
-    <Section id="typeahead" title="Typeahead" divided>
-      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('typeahead')"><svg class="btn-ic"
+    <!-- ---- typeahead container ----------------------------------------- -->
+    <Section id="typeahead-container" title="TypeaheadContainer" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('typeahead-container')"><svg class="btn-ic"
         viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
-      <template :slot.lead>A name typed, with what it could be listed under it as it is typed. The
-        arrows move in the list, Enter takes one, ESC closes it; what matched is marked. What is
-        typed is a value too — unless <code>strict</code>, which puts the last real one back.</template>
-      <div class="demo stack narrow">
-        <Typeahead label="Model" :model="taModel" :options="TA_MODELS" placeholder="a model name"
-                   @select="taPicked = $event.detail" />
-        <Typeahead label="Backend, strict" strict :model="taStrict" :options="BACKENDS"
-                   placeholder="one of the backends" />
-        <Typeahead label="Small" size="sm" :options="TA_MODELS" placeholder="small" />
-        <Typeahead label="Loading" loading :options="[]" placeholder="asking the provider…" />
-        <Typeahead label="Disabled" disabled model="qwen2.5-coder:7b" :options="TA_MODELS" />
-        <p class="state">typed: <code>{{ JSON.stringify(taModel) }}</code> · taken:
-          <code>{{ JSON.stringify(taPicked) }}</code> · strict: <code>{{ JSON.stringify(taStrict) }}</code></p>
+      <template :slot.lead>A <code>Typeahead</code> in an <code>InputContainer</code>'s box: the name inside
+        the border, the list under the box as it is typed, and what it is for — or what is wrong with
+        it — under the box.</template>
+      <div class="demo grid two">
+        <div class="stack">
+          <TypeaheadContainer label="Model" :model="tcModel" :options="TA_MODELS" placeholder="a model name"
+                              description="one the provider has pulled" @select="tcPicked = $event.detail" />
+          <TypeaheadContainer label="Backend" required strict :model="tcBackend" :options="BACKENDS"
+                              :error="tcBackend ? '' : 'one of the backends'" />
+        </div>
+        <div class="stack">
+          <TypeaheadContainer label="Loading" loading :options="[]" placeholder="asking the provider…"
+                              warning="the provider has not answered yet" />
+          <TypeaheadContainer label="Disabled" disabled model="qwen2.5-coder:7b" :options="TA_MODELS" />
+        </div>
+      </div>
+      <p class="state">typed: <code>{{ JSON.stringify(tcModel) }}</code> · taken:
+        <code>{{ JSON.stringify(tcPicked) }}</code> · backend: <code>{{ JSON.stringify(tcBackend) }}</code></p>
+    </Section>
+
+    <!-- ---- sizes: one row per size, every control on it ------------------- -->
+    <Section id="sizes" title="Sizes" divided>
+      <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('sizes')"><svg class="btn-ic"
+        viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></svg>Integrate</Button></template>
+      <template :slot.lead>One <code>size</code> for every control — <code>sm</code>, <code>md</code>,
+        <code>lg</code> — read from <code>--luu-control-sm|md|lg</code>: the same height, the same
+        corners and the same type, so a row of them lines up whatever is on it.</template>
+      <div class="demo stack">
+        <div :each="z in CONTROL_SIZES" :key="z" class="row size-row" :data-size="z">
+          <code class="size-name">{{ z }} · {{ read[`control-${z}`] || "" }}</code>
+          <span class="cell"><Button :size="z" variant="primary">Save</Button></span>
+          <span class="cell"><Button :size="z">Cancel</Button></span>
+          <span class="cell wide"><TextInput :size="z" placeholder="a name" :label="`Name, ${z}`" /></span>
+          <span class="cell wide"><Select :size="z" :model="backend" :options="BACKENDS" :label="`Backend, ${z}`" /></span>
+          <span class="cell"><ChoiceSegmented :size="z" :label="`Columns, ${z}`" :model="layout" :options="['two', 'three']" /></span>
+          <span class="cell wide"><Typeahead :size="z" :label="`Model, ${z}`" :options="TA_MODELS" placeholder="a model" /></span>
+        </div>
       </div>
     </Section>
 
+    <p class="group-title">Navigation · Overlays</p>
     <!-- ---- tabs --------------------------------------------------------- -->
     <Section id="tabs" title="Tabs" divided>
       <template :slot.actions><Button size="sm" variant="ghost" @click="openUsage('tabs')"><svg class="btn-ic"
@@ -1431,6 +1468,16 @@
     gap: var(--luu-space-7);
     padding-top: var(--luu-space-7);
     --luu-anchor-offset: 6rem;
+  }
+  /* A group's heading, over its first section, as the index has it. The
+     column's gap is above it; its first section follows close. */
+  .group-title {
+    margin: 0 0 calc(var(--luu-space-4) - var(--luu-space-7));
+    color: var(--luu-fg-subtle);
+    font-size: var(--luu-text-sm);
+    font-weight: var(--luu-weight-bold);
+    text-transform: uppercase;
+    letter-spacing: .06em;
   }
   h3 {
     margin: 0 0 var(--luu-space-2);

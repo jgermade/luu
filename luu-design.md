@@ -1675,15 +1675,15 @@ The rest follows from that:
   `tokens.css` (colour by role, type, space, radii, control heights, shadows, motion, all
   `--luu-*`, durations `0ms` under reduced motion), `luu.css` (luu's own surfaces: the bars'
   ground, dividers, the tree's and the chat's grounds and inks, the context buckets, Monokai, the
-  terminal's ANSI colours; the file icons' colours, for `files.svg`), twenty-six components that
+  terminal's ANSI colours; the file icons' colours, for `files.svg`), twenty-seven components that
   draw with those tokens and no fallbacks — among them `Scrollable` (something that scrolls on a
   ground that does not, so a bounce shows the content's ground; the theme's modal bodies, menus
-  and typeahead scroll through it, the only components that import another), `InputContainer` (a control, its name and its description in one box), `Typeahead`
-  (a text field with a list that narrows as it is typed into), `Section` and `AnchorNav` (parts
-  of a page that can be linked to, and an index that marks the one being read), `TabModal` (a
+  and typeahead scroll through it, the only components that import another), `InputContainer` (a control, its name and its description in one box — the `<input>` or `<select>` fills the box and the name is drawn over it, so all of it is the control), `Typeahead`
+  (a text field with a list that narrows as it is typed into), `TypeaheadContainer` (a `Typeahead` in an `InputContainer`'s box), `Section` and `AnchorNav` (parts
+  of a page that can be linked to, and an index that marks the one being read, its items under group headings when it is given them), `TabModal` (a
   modal whose head is its tabs, with a `bar` above its body for a search) and `SubModal` (a sheet
   out of a modal's head over its body, with or without tabs) — and
-  a demo of the components at `/theme/default/` — a folder path serves its `index.html`, and
+  a demo of the components at `/theme/default/`, its sections in groups (Foundations, Display, Forms, Navigation · Overlays) — a folder path serves its `index.html`, and
   without the slash redirects to it. Each of the demo's sections says how it is used:
   *Integrate* beside its title opens a modal of its own, a tab per component when it has
   several, each snippet the file of a parent component that uses it (`usage.js`), coloured by

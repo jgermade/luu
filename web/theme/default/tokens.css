@@ -20,6 +20,11 @@
   --luu-bg: #f4f5f8;
   --luu-sunken: #eaedf2;
   --luu-surface: #ffffff;
+  /* What a control is typed or chosen in, and the same control switched off.
+     Their own pair, not `surface` and `sunken`: in the dark the darker ground
+     reads as the one that takes input, so there the two swap. */
+  --luu-field: #ffffff;
+  --luu-field-off: #eaedf2;
   /* A row or an item under the pointer, and one that is chosen: a tint of the
      accent over the surface, never the accent itself — that is a control
      that is on. */
@@ -140,6 +145,8 @@
   --luu-bg: #111111;
   --luu-sunken: #0a0a0a;
   --luu-surface: #232323;
+  --luu-field: #0a0a0a;
+  --luu-field-off: #2a2a2a;
   --luu-hover: #222222;
   --luu-active: #2e2e2e;
   --luu-selected: #2a3241;
