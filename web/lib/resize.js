@@ -1,5 +1,5 @@
 // @ts-check
-/// Dragging the edge between two columns.
+/// Dragging the edge between two columns, and the terminal panel's top edge.
 ///
 /// The inspector and the chat are the two columns with a width of their own;
 /// the content column is whatever is left. Each width is a custom property on
@@ -12,7 +12,7 @@
 /// read it; the width goes to `prefs` (and `localStorage`) once, when the
 /// pointer is let go. See `RECORD/2026-10-01.columns-that-are-dragged.completed.md`.
 
-import { prefs, setWidth } from "./prefs.js"
+import { prefs, setWidth, setTerminalHeight } from "./prefs.js"
 
 /// The narrowest either column is dragged to. The stylesheet has its own
 /// floor too; this one is what the drag stops at, so the handle stays under
@@ -111,11 +111,92 @@ export function resetWidth(column) {
   setWidth(column, null)
 }
 
+// ---- the terminal's height ---------------------------------------------------
+//
+// The same drag, turned on its side: the panel's top edge, between the file
+// and the shell. Its height is `--terminal-h` on `.app` beside the widths,
+// written while dragging and kept once let go.
+
+/// The lowest the panel is dragged to, and how much of the column the file
+/// above it keeps: a head, a foot, and a few lines.
+const TERMINAL_MIN = 96
+const FILE_KEEPS = 200
+
+function terminalNow() {
+  // `section`: xterm draws a `div.terminal` of its own inside it.
+  const panel = document.querySelector(".content section.terminal")
+  return panel ? panel.getBoundingClientRect().height : 0
+}
+
+/// @param {number} px
+function terminalClamp(px) {
+  const column = document.querySelector(".app > .col.content")
+  const tallest = column ? column.getBoundingClientRect().height - FILE_KEEPS : px
+  return Math.max(TERMINAL_MIN, Math.min(Math.max(TERMINAL_MIN, tallest), px))
+}
+
+/// @param {number} px
+function showTerminal(px) {
+  /** @type {HTMLElement | null} */
+  const app = document.querySelector(".app")
+  app?.style.setProperty("--terminal-h", `${Math.round(px)}px`)
+}
+
+/// `pointerdown` on the panel's top edge: up makes it taller.
+/// @param {PointerEvent} event
+export function startTerminalDrag(event) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  /** @type {HTMLElement} */
+  const handle = /** @type {HTMLElement} */ (event.currentTarget)
+  handle.setPointerCapture(event.pointerId)
+  const from = event.clientY
+  const start = terminalNow()
+  let height = start
+  document.documentElement.classList.add("resizing-rows")
+
+  /** @param {PointerEvent} move */
+  const onMove = move => {
+    height = terminalClamp(start - (move.clientY - from))
+    showTerminal(height)
+  }
+  const onUp = () => {
+    handle.removeEventListener("pointermove", onMove)
+    handle.removeEventListener("pointerup", onUp)
+    handle.removeEventListener("pointercancel", onUp)
+    document.documentElement.classList.remove("resizing-rows")
+    if (Math.round(height) !== Math.round(start)) setTerminalHeight(height)
+  }
+  handle.addEventListener("pointermove", onMove)
+  handle.addEventListener("pointerup", onUp)
+  handle.addEventListener("pointercancel", onUp)
+}
+
+/// Up and down on the focused edge: the edge moves the way the arrow points.
+/// @param {KeyboardEvent} event
+export function nudgeTerminal(event) {
+  const sign = { ArrowUp: 1, ArrowDown: -1 }[event.key]
+  if (!sign) return
+  event.preventDefault()
+  const height = terminalClamp(terminalNow() + sign * STEP)
+  showTerminal(height)
+  setTerminalHeight(height)
+}
+
+/// Double click: back to the stylesheet's height, and forgotten.
+export function resetTerminalHeight() {
+  /** @type {HTMLElement | null} */
+  const app = document.querySelector(".app")
+  app?.style.removeProperty("--terminal-h")
+  setTerminalHeight(null)
+}
+
 /// The style `.app` carries for what is remembered, for the template to bind.
 /// @returns {string}
 export function widthStyle() {
   return [
     prefs.inspectorWidth != null ? `--inspector-w:${prefs.inspectorWidth}px` : "",
     prefs.chatWidth != null ? `--chat-w:${prefs.chatWidth}px` : "",
+    prefs.terminalHeight != null ? `--terminal-h:${prefs.terminalHeight}px` : "",
   ].filter(Boolean).join(";")
 }

@@ -20,6 +20,7 @@
   const { brandSrc, engineBrand, loadBrands } = await import("@web/lib/brands.js")
   loadBrands()
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
+  const { ui } = await import("@web/lib/ui.js")
   const EngineForm = await import("./engine-form.html")
   const EngineSheet = await import("./engine-sheet.html")
 
@@ -44,7 +45,13 @@
     }
     return result.ok
   }
-  loadEngines().then(took)
+  // A sheet asked for from outside — the engine's state in the chat's foot
+  // opens its output — once the view it reads is here, and only once.
+  const asked = ui.engineSheet
+  ui.engineSheet = null
+  loadEngines().then(result => {
+    if (took(result) && asked && view?.engines?.[asked.name]) sheet = asked
+  })
 
   // Polled while this section is on screen, and only then: the timer is
   // cleared when the section is destroyed (`$destroyed`, since jq79 0.7.4).

@@ -85,6 +85,19 @@ struct Session {
     /// nothing else is. See
     /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     held: Option<Held>,
+    /// A turn that made every tool call its budget allows, waiting on a person
+    /// to say whether it may go on. At most one, for `held`'s reason. See
+    /// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+    limit_held: Option<HeldLimit>,
+}
+
+/// A turn waiting at its tool budget on a person's answer, named by the call
+/// that found it spent.
+struct HeldLimit {
+    turn: TurnId,
+    step: u32,
+    index: u32,
+    answer: tokio::sync::oneshot::Sender<agent_core::protocol::Extension>,
 }
 
 /// One call waiting on a person's answer.
@@ -114,6 +127,62 @@ struct Watching {
     base: PathBuf,
 }
 
+/// The same person, at a turn's tool budget: publishes
+/// [`ServerMessage::LimitReached`] and waits for [`ClientMessage::ExtendLimit`].
+/// A sender dropped without an answer — the session replaced under it — is
+/// *stop*, the end the turn would have had with nobody to ask. *No limit for
+/// the session* is remembered here, before the turn goes on.
+impl agent_core::agent::Extender for Watching {
+    fn extend<'a>(
+        &'a self,
+        step: u32,
+        index: u32,
+        used: u32,
+        more: u32,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = agent_core::protocol::Extension> + Send + 'a>,
+    > {
+        use agent_core::protocol::Extension;
+        Box::pin(async move {
+            let (answer, answered) = tokio::sync::oneshot::channel();
+            // Held before it is announced, for `ask`'s reason.
+            {
+                let mut session = self.app.session.lock().await;
+                session.limit_held = Some(HeldLimit {
+                    turn: self.turn,
+                    step,
+                    index,
+                    answer,
+                });
+            }
+            let _ = self
+                .events
+                .send(TurnEvent::LimitReached {
+                    step,
+                    index,
+                    used,
+                    more,
+                })
+                .await;
+            let answer = answered.await.unwrap_or(Extension::Stop);
+            {
+                let mut session = self.app.session.lock().await;
+                if session.limit_held.as_ref().is_some_and(|held| {
+                    held.turn == self.turn && held.step == step && held.index == index
+                }) {
+                    session.limit_held = None;
+                }
+            }
+            if answer == Extension::Session {
+                self.app
+                    .tools_unlimited
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            answer
+        })
+    }
+}
+
 impl agent_core::agent::Asker for Watching {
     fn ask<'a>(
         &'a self,
@@ -121,6 +190,7 @@ impl agent_core::agent::Asker for Watching {
         index: u32,
         call: &'a agent_core::tools::ToolCall,
         refused: &'a str,
+        unheld: Option<&'a str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = agent_core::agent::Answer> + Send + 'a>>
     {
         Box::pin(async move {
@@ -143,6 +213,7 @@ impl agent_core::agent::Asker for Watching {
                     index,
                     call: call.clone(),
                     refused: refused.to_string(),
+                    unheld: unheld.map(str::to_string),
                 })
                 .await;
             let answer = answered.await.unwrap_or(agent_core::agent::Answer::Deny);
@@ -372,6 +443,12 @@ struct App {
     /// What a person allowed for the live session's drafts, until taken back.
     /// Emptied by a new session, refilled from the stream by a resume.
     grants: crate::grants::Answered,
+    /// `--max-tool-steps`, when it was given. See [`tool_budget`].
+    tool_steps: Option<u32>,
+    /// A person answered *no limit for the session* at a turn's tool budget:
+    /// its turns make every call the model asks for. Cleared by a new session,
+    /// refilled from the stream by a resume, as `grants` is.
+    tools_unlimited: std::sync::atomic::AtomicBool,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
@@ -781,6 +858,9 @@ pub struct StdioOptions {
     pub constrain: Option<crate::ConstrainKind>,
     /// Where sessions are cached between restarts.
     pub store: Option<PathBuf>,
+    /// `--max-tool-steps`, when it was given: over every `max-tool-steps`
+    /// in config.toml. `None` reads the file at each turn.
+    pub max_tool_steps: Option<u32>,
 }
 
 /// The brand marks as this server draws them: what `[ui] brand-icons` says,
@@ -888,6 +968,7 @@ impl App {
             constrain,
             store,
             approvers,
+            max_tool_steps,
         } = options;
         let started_at = now_ms();
 
@@ -1080,6 +1161,7 @@ impl App {
                 pending: None,
                 narrowed: None,
                 held: None,
+                limit_held: None,
             }),
             events: broadcast::channel(1024).0,
             recorder,
@@ -1090,6 +1172,8 @@ impl App {
             postures: std::sync::RwLock::new(postures),
             environments: std::sync::RwLock::new(environments),
             grants: Default::default(),
+            tool_steps: max_tool_steps,
+            tools_unlimited: Default::default(),
             postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
@@ -1357,6 +1441,9 @@ pub struct ServeOptions {
     /// memory for the life of the process, which is what `serve` did before the
     /// store existed.
     pub store: Option<PathBuf>,
+    /// `--max-tool-steps`, when it was given: over every `max-tool-steps`
+    /// in config.toml. `None` reads the file at each turn.
+    pub max_tool_steps: Option<u32>,
 }
 
 /// A server that has its port and has not started answering yet.
@@ -1369,6 +1456,9 @@ pub struct Serving {
     listener: tokio::net::TcpListener,
     router: Router,
     app: Arc<App>,
+    /// What the routes are handed, for what `serve` does through one of them
+    /// before it answers anybody: see [`start_on_default`].
+    state: AppRouterState,
 }
 
 impl Serving {
@@ -1424,8 +1514,69 @@ async fn asked_to_stop() {
 
 pub async fn serve(options: ServeOptions) -> Result<()> {
     let serving = bind(options).await?;
+    start_on_default(&serving.state).await;
     println!("luu serve → http://{}", serving.address());
     serving.run().await
+}
+
+/// The first session in `[runtimes] default`, where config.toml names a
+/// container runtime: made as the new session's dialog makes one with nothing
+/// else chosen — that runtime, the first image a posture or an environment
+/// names, and the empty lists — through the same route. Where it cannot run there — the
+/// runtime does not answer, the image is not built — the session stays on
+/// this server's own policy file, and the line says why. In `serve` and not
+/// in [`bind`], which a test calls: a test does not read the `config.toml` of
+/// whoever runs it. See
+/// `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
+async fn start_on_default(state: &AppRouterState) {
+    let Some(runtime) = load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| config.default_runtime())
+    else {
+        return;
+    };
+    let app = &state.app;
+    // Over stdio, or with no policy files to choose from, nothing is chosen.
+    let Some(describe) = &app.describe_for else {
+        return;
+    };
+    let places = places_for_lists(app, describe).await;
+    let Some(place) = places
+        .iter()
+        .find(|place| place.runtime == runtime.as_str() && place.image.is_some())
+    else {
+        eprintln!(
+            "runtime — this machine: {runtime} is the default, and no posture or environment \
+             in config.toml names an image to run on it"
+        );
+        return;
+    };
+    let image = place.image.clone().unwrap_or_default();
+    if let Some(missing) = &place.missing {
+        eprintln!("runtime — this machine: {runtime} is the default, and {missing}");
+        return;
+    }
+    let asked = serde_json::json!({
+        "runtime": runtime.as_str(),
+        "image": image,
+        "lists": {},
+    });
+    let answer = create_session(
+        State(state.clone()),
+        axum::body::Bytes::from(asked.to_string()),
+    )
+    .await;
+    match answer.status().is_success() {
+        true => eprintln!("runtime — {runtime} · {image}, the default in config.toml"),
+        false => {
+            let said = axum::body::to_bytes(answer.into_body(), 64 * 1024)
+                .await
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
+            eprintln!("runtime — this machine: starting on {runtime} · {image} failed: {said}");
+        }
+    }
 }
 
 pub async fn bind(options: ServeOptions) -> Result<Serving> {
@@ -1459,6 +1610,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         store,
         approvers,
         icons,
+        max_tool_steps,
     } = options;
     // Before anything else, and before the listener exists: a port that would
     // publish task approval to the network is not a port this binds and then
@@ -1469,6 +1621,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         exposure,
     )?);
     let starts = crate::engines::for_run(&provider);
+    let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
 
     let app = App::create(StdioOptions {
@@ -1497,6 +1650,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         constrain,
         store,
         approvers,
+        max_tool_steps,
     })
     .await?;
 
@@ -1516,6 +1670,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
                 app.engines.clone(),
                 name.clone(),
                 engine.clone(),
+                rebuild,
             )),
             model: current.model.clone(),
             budget: current.budget,
@@ -1537,6 +1692,17 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     // copy of a public binary, and a browser navigating to a page cannot carry
     // an `Authorization` header, so gating it would only make the guarded
     // server unusable from the client written for it.
+    let state = AppRouterState {
+        app: app.clone(),
+        auth: auth.clone(),
+        // Loopback only, and decided here because this is where the bound
+        // address is known. Writing a `default` provider redirects every
+        // future run on this machine, outside the gate and after the
+        // session ends — a larger authority than approving one job, and
+        // not one a bearer token should carry.
+        providers_editable: address.ip().is_loopback(),
+        origin: origin.clone(),
+    };
     let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
@@ -1554,6 +1720,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/settings", get(get_settings))
         .route("/api/settings.json", get(get_settings))
         .route("/api/providers", get(get_providers).put(put_providers))
+        .route("/api/tool-steps", axum::routing::put(put_tool_steps))
         .route("/api/policies", get(get_policies).put(put_policies))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/probe", post(probe_provider))
@@ -1636,14 +1803,20 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // asks, and `RECORD/2026-10-01.a-terminal-in-the-container.completed.md`.
         .route("/ws/terminal", get(terminal_socket))
         .route("/api/terminal", get(get_terminal).put(put_terminal))
+        .route(
+            "/api/runtimes/default",
+            axum::routing::put(put_default_runtime),
+        )
         // What Settings → Runtimes shows and does: the runtimes probed, the
         // images they have, and a build of one that is missing. See
         // `crate::runtimes`.
         .route("/api/runtimes", get(get_runtimes))
         .route("/api/runtimes/tasks", get(get_tasks))
+        .route("/api/runtimes/{runtime}", get(get_runtime))
         .route("/api/runtimes/{runtime}/build", post(build_image))
         .route("/api/runtimes/{runtime}/install", post(install_runtime))
         .route("/api/runtimes/{runtime}/start", post(start_runtime))
+        .route("/api/runtimes/{runtime}/stop", post(stop_runtime))
         // Moves the live session to another posture, between jobs. See
         // [`put_session_posture`].
         .route(
@@ -1658,6 +1831,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines/install", post(install_engine))
         .route("/api/engines/port", get(free_engine_port))
         .route("/api/engines/{name}/uninstall", post(uninstall_engine))
+        .route("/api/engines/{name}/rename", post(rename_engine))
         .route("/api/engines/{name}/chat", post(chat_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
@@ -1671,7 +1845,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .layer(middleware::from_fn_with_state(auth.clone(), require_token));
 
     let router = guarded
-        .route("/", get(|| serve_asset("index.html")))
+        .route(
+            "/",
+            get(|headers: axum::http::HeaderMap| async move {
+                serve_asset("index.html", &headers).await
+            }),
+        )
         // Monaco, when this machine has it. Ungated for the same reason the
         // embedded UI is: it is a third-party editor, the same bytes in every
         // copy, and a `<script>` tag cannot carry an `Authorization` header.
@@ -1681,20 +1860,15 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // This server's own page, under a host's prefix: every request it
         // makes is relative, so served here its API is the host's.
         .route("/h/{name}", get(host_page_bare))
-        .route("/h/{name}/", get(|| serve_asset("index.html")))
+        .route(
+            "/h/{name}/",
+            get(|headers: axum::http::HeaderMap| async move {
+                serve_asset("index.html", &headers).await
+            }),
+        )
         .route("/h/{name}/{*path}", get(host_page))
         .route("/{*path}", get(asset_handler))
-        .with_state(AppRouterState {
-            app: app.clone(),
-            auth: auth.clone(),
-            // Loopback only, and decided here because this is where the bound
-            // address is known. Writing a `default` provider redirects every
-            // future run on this machine, outside the gate and after the
-            // session ends — a larger authority than approving one job, and
-            // not one a bearer token should carry.
-            providers_editable: address.ip().is_loopback(),
-            origin: origin.clone(),
-        })
+        .with_state(state.clone())
         // Outermost, so it sees every request — the guarded half, the page's
         // own files, and a request the token check refused — and the time it
         // took is the time the client waited. See `crate::log`.
@@ -1715,6 +1889,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         listener,
         router,
         app,
+        state,
     })
 }
 
@@ -1732,8 +1907,8 @@ struct AppRouterState {
     origin: Option<String>,
 }
 
-async fn asset_handler(uri: Uri) -> Response {
-    serve_asset(uri.path().trim_start_matches('/')).await
+async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
+    serve_asset(uri.path().trim_start_matches('/'), &headers).await
 }
 
 /// One embedded file, or a folder's `index.html`.
@@ -1742,15 +1917,51 @@ async fn asset_handler(uri: Uri) -> Response {
 /// that is where its page's relative URLs resolve from. Without the slash it
 /// redirects there, relatively, so the same answer holds under a host's prefix.
 /// See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
-async fn serve_asset(path: &str) -> Response {
+///
+/// **Revalidated, never stale**: each file carries its sha256 as its `ETag`
+/// and `no-cache`, so a reload asks and gets a bodyless 304 for what did not
+/// change, and a new binary's page is never an old one out of the browser's
+/// cache. They went out with neither until 2026-10-27, and a reload fetched
+/// every one of them whole. See
+/// `RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`.
+async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
     let file = match path.is_empty() || path.ends_with('/') {
         true => format!("{path}index.html"),
         false => path.to_owned(),
     };
     match Ui::get(&file) {
         Some(found) => {
+            let tag = format!(
+                "\"{}\"",
+                found
+                    .metadata
+                    .sha256_hash()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            );
+            let unchanged = headers
+                .get(header::IF_NONE_MATCH)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|asked| {
+                    asked
+                        .split(',')
+                        .any(|one| one.trim().trim_start_matches("W/") == tag)
+                });
+            let kept = [
+                (header::ETAG, tag),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ];
+            if unchanged {
+                return (StatusCode::NOT_MODIFIED, kept).into_response();
+            }
             let mime = mime_guess::from_path(&file).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], found.data).into_response()
+            (
+                [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                kept,
+                found.data,
+            )
+                .into_response()
         }
         None if Ui::get(&format!("{path}/index.html")).is_some() => {
             let folder = path.rsplit('/').next().unwrap_or(path);
@@ -2416,6 +2627,40 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 }
             }
         }
+        // Whether a turn at its tool budget may go on. Applied only to the
+        // call that is waiting, so an answer that raced the turn's end is
+        // refused rather than carried to the next one.
+        ClientMessage::ExtendLimit {
+            turn,
+            step,
+            index,
+            answer,
+        } => {
+            let index = index.unwrap_or(1);
+            let held = {
+                let mut session = app.session.lock().await;
+                match &session.limit_held {
+                    Some(held) if held.turn == turn && held.step == step && held.index == index => {
+                        session.limit_held.take()
+                    }
+                    _ => None,
+                }
+            };
+            match held {
+                Some(held) => {
+                    let _ = held.answer.send(answer);
+                }
+                None => {
+                    refuse(
+                        app,
+                        "extend_limit",
+                        Refusal::Call,
+                        format!("no turn waits at its tool limit at turn {turn}, step {step}"),
+                    )
+                    .await;
+                }
+            }
+        }
         // A yes or a no for the session taken back: the next call it covered
         // is asked again. Taking back what is not in force changes nothing
         // and says nothing.
@@ -2740,6 +2985,7 @@ async fn request_plan(app: Arc<App>) {
             session.current = None;
             session.cancel = None;
             session.held = None;
+            session.limit_held = None;
         }
 
         // Cancelled or broken: there is no proposal, and inventing one would
@@ -3748,6 +3994,16 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         _ => None,
     };
 
+    // How many tool calls it may make before it asks: none to count where a
+    // person said *no limit for the session*.
+    let budget = match app
+        .tools_unlimited
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        true => u32::MAX,
+        false => tool_budget(&app, &sending).await,
+    };
+
     // What a session nobody named is named from, once this turn is over —
     // see [`name_session`]. Kept before the task takes the prompt.
     let named_from = prompt.clone();
@@ -3827,12 +4083,15 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             request,
             agency.executor(),
             sandbox.as_ref(),
-            agency.limits,
+            agency.limits.with_max_steps(budget),
             app.schema_retry.as_ref(),
             wider.as_ref().map(|ceiling| agent_core::agent::Ask {
                 ceiling,
                 person: &watching,
             }),
+            // Any turn may ask at its tool budget: going on is not an
+            // authority a plan grants, only time and the window it spends.
+            Some(&watching),
             tx,
             cancel_rx,
         )
@@ -3874,6 +4133,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             session.current = None;
             session.cancel = None;
             session.held = None;
+            session.limit_held = None;
 
             // After the turn is in the history, so the close sees this turn's
             // steps — the ones that just ran the command it closes on. Before
@@ -4192,6 +4452,10 @@ struct PosturesView {
     /// image a posture or an environment names on every container runtime:
     /// the new session's *Runtime*. See [`places_for_lists`].
     runtimes: Vec<Where>,
+    /// `[runtimes] default`: the container runtime the dialog starts a session
+    /// in before anything else is chosen. Absent is this machine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_runtime: Option<&'static str>,
 }
 
 /// What a session may be allowed to do, by name.
@@ -5068,6 +5332,11 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         postures: app.postures(),
         environments: app.environments().keys().cloned().collect(),
         runtimes,
+        default_runtime: load_config()
+            .await
+            .ok()
+            .and_then(|(config, _)| config.default_runtime())
+            .map(agent_core::worker::Runtime::as_str),
     })
     .into_response()
 }
@@ -5097,8 +5366,18 @@ struct RuntimesView {
     path: Option<String>,
     editable: bool,
     refused: Option<String>,
-    /// Where an image is built from, and where a policy file is looked for.
+    /// Where an image is built from source, and where a policy file is
+    /// looked for.
     base: String,
+    /// Whether the base is luu's own checkout, so an image can also be built
+    /// from source here, and not only from the release. A project's own
+    /// `Containerfile` is not luu's worker. See
+    /// [`crate::runtimes::is_luu_checkout`].
+    from_source: bool,
+    /// The release a build fetches luu from: this build's own version.
+    release: &'static str,
+    /// Each runtime as far as it is seen **without asking it** — installed or
+    /// not. `GET /api/runtimes/{runtime}` asks one.
     runtimes: Vec<crate::runtimes::RuntimeView>,
     tasks: Vec<crate::runtimes::TaskView>,
     postures: std::collections::BTreeMap<String, PostureRow>,
@@ -5108,6 +5387,9 @@ struct RuntimesView {
     running: Option<String>,
     /// `[terminal] host`.
     host_shell: &'static str,
+    /// `[runtimes] default`: the container runtime a session starts in, or
+    /// `None` for this machine.
+    default_runtime: Option<&'static str>,
 }
 
 /// The images a runtime is asked about and may build: the ones a policy file
@@ -5123,61 +5405,87 @@ fn images_of<'a>(places: impl Iterator<Item = &'a Option<Where>>) -> Vec<String>
     images
 }
 
-async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap) -> Response {
-    let app = &state.app;
-    let base = app.agency().await.sandbox.base().to_path_buf();
+/// The postures and the policy files in `base`, each with where it would run.
+async fn postures_and_policies(
+    app: &App,
+    base: &std::path::Path,
+) -> (
+    std::collections::BTreeMap<String, PostureRow>,
+    Vec<PolicyRow>,
+) {
     let postures = app.postures();
     let describe = app.describe_for.clone();
-    let (postures, policies) = {
-        let base = base.clone();
-        blocking(move || {
-            let place = |policy: Option<PathBuf>| {
-                describe.as_ref().map(|d| d(policy.map(Chosen::File), None))
-            };
-            let postures: std::collections::BTreeMap<_, _> = postures
-                .into_iter()
-                .map(|(name, posture)| {
-                    (
-                        name,
-                        PostureRow {
-                            policy: posture.policy.display().to_string(),
-                            place: place(Some(posture.policy.clone())),
-                        },
-                    )
-                })
-                .collect();
-            let policies: Vec<_> = crate::runtimes::policy_files(&base)
-                .into_iter()
-                .map(|file| PolicyRow {
-                    place: place(Some(base.join(&file.path))),
-                    path: file.path,
-                })
-                .collect();
-            (postures, policies)
-        })
-        .await
-    };
-    let images = images_of(
+    let base = base.to_path_buf();
+    blocking(move || {
+        let place =
+            |policy: Option<PathBuf>| describe.as_ref().map(|d| d(policy.map(Chosen::File), None));
+        let postures: std::collections::BTreeMap<_, _> = postures
+            .into_iter()
+            .map(|(name, posture)| {
+                (
+                    name,
+                    PostureRow {
+                        policy: posture.policy.display().to_string(),
+                        place: place(Some(posture.policy.clone())),
+                    },
+                )
+            })
+            .collect();
+        let policies: Vec<_> = crate::runtimes::policy_files(&base)
+            .into_iter()
+            .map(|file| PolicyRow {
+                place: place(Some(base.join(&file.path))),
+                path: file.path,
+            })
+            .collect();
+        (postures, policies)
+    })
+    .await
+}
+
+/// The images a runtime is asked about: the ones the postures and the policy
+/// files here name.
+fn images_here(
+    postures: &std::collections::BTreeMap<String, PostureRow>,
+    policies: &[PolicyRow],
+) -> Vec<String> {
+    images_of(
         postures
             .values()
             .map(|row| &row.place)
             .chain(policies.iter().map(|row| &row.place)),
-    );
-    let runtimes = crate::runtimes::probe_all(&images).await;
+    )
+}
+
+/// Settings → Runtimes without a probe: every process this starts is one the
+/// page asked for by name, through [`get_runtime`], so a runtime that takes
+/// its five seconds to say nothing holds up only its own card.
+async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap) -> Response {
+    let app = &state.app;
+    let base = app.agency().await.sandbox.base().to_path_buf();
+    let (postures, policies) = postures_and_policies(app, &base).await;
+    let runtimes = crate::runtimes::seen_all(&images_here(&postures, &policies));
     let refused = engines_allowed(state, headers).err().map(|_| {
         "Runtimes are configured from a browser on this machine: a posture is what a session \
          may do, and a build is a process this machine runs."
             .to_string()
     });
-    let host_shell = load_config()
-        .await
-        .map(|(config, _)| config.terminal().host)
+    let config = load_config().await.map(|(config, _)| config).ok();
+    let host_shell = config
+        .as_ref()
+        .map(|config| config.terminal().host)
         .unwrap_or_default()
         .as_str();
+    let default_runtime = config
+        .as_ref()
+        .and_then(|config| config.default_runtime())
+        .map(agent_core::worker::Runtime::as_str);
     Json(RuntimesView {
         path: config_path().await.map(|path| path.display().to_string()),
         editable: refused.is_none(),
         refused,
+        from_source: crate::runtimes::is_luu_checkout(&base),
+        release: env!("CARGO_PKG_VERSION"),
         base: base.display().to_string(),
         runtimes,
         tasks: app.tasks.list(),
@@ -5185,6 +5493,7 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         policies,
         running: app.posture.lock().await.clone(),
         host_shell,
+        default_runtime,
     })
     .into_response()
 }
@@ -5194,6 +5503,21 @@ async fn get_runtimes(
     State(state): State<AppRouterState>,
 ) -> Response {
     runtimes_answer(&state, &headers).await
+}
+
+/// One runtime, asked: whether it answers and which of the images here its
+/// store has. What the page calls once per installed runtime, each card
+/// filled when its own answer arrives.
+async fn get_runtime(State(state): State<AppRouterState>, Path(runtime): Path<String>) -> Response {
+    let runtime = match contained(&runtime) {
+        Ok(runtime) => runtime,
+        Err(refused) => return *refused,
+    };
+    let app = &state.app;
+    let base = app.agency().await.sandbox.base().to_path_buf();
+    let (postures, policies) = postures_and_policies(app, &base).await;
+    let images = images_here(&postures, &policies);
+    Json(crate::runtimes::probe(runtime, &images).await).into_response()
 }
 
 /// The tasks alone: what the section polls while one runs, because the
@@ -5262,9 +5586,46 @@ async fn start_runtime(
     }
 }
 
+/// Stops a runtime, where `crate::runtimes::stop_steps` has a line for it —
+/// and not the one the live session runs its commands in, which would leave
+/// it with nowhere to run them: move the session first.
+async fn stop_runtime(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(runtime): Path<String>,
+    Json(_): Json<serde_json::Value>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let runtime = match contained(&runtime) {
+        Ok(runtime) => runtime,
+        Err(refused) => return *refused,
+    };
+    let agency = state.app.agency().await;
+    // `docker (luu-worker:dev)`: the word before the image.
+    let live = agency.posture(None).runtime;
+    if live.split(' ').next() == Some(runtime.as_str()) {
+        return (
+            StatusCode::CONFLICT,
+            format!("the live session runs its commands on {runtime}: move it elsewhere first"),
+        )
+            .into_response();
+    }
+    let base = agency.sandbox.base().to_path_buf();
+    match state.app.tasks.halt(runtime, &base) {
+        Ok(()) => Json(state.app.tasks.list()).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct BuildAsk {
     image: String,
+    /// `release` (the default: this version's Linux binary, no compiler) or
+    /// `source` (the base's `Containerfile`).
+    #[serde(default)]
+    from: crate::runtimes::BuildFrom,
 }
 
 async fn build_image(
@@ -5318,7 +5679,7 @@ async fn build_image(
         )
             .into_response();
     }
-    match app.tasks.build(runtime, &asked.image, &base) {
+    match app.tasks.build(runtime, &asked.image, asked.from, &base) {
         Ok(()) => Json(app.tasks.list()).into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
@@ -5447,6 +5808,53 @@ async fn put_terminal(
     };
     let terminal = crate::provider::Terminal { host: asked.host };
     if let Err(error) = write_config(current.with_terminal(terminal), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    runtimes_answer(&state, &headers).await
+}
+
+#[derive(serde::Deserialize)]
+struct DefaultRuntimeAsk {
+    runtime: agent_core::worker::Runtime,
+}
+
+/// Writes `[runtimes] default`: the container runtime a session starts in.
+/// `host` is this machine again, written as no table; `direct` runs no image
+/// and is refused.
+async fn put_default_runtime(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<DefaultRuntimeAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let host = asked.runtime == agent_core::worker::Runtime::Host;
+    if !host && !asked.runtime.is_contained() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "`{}` runs no image: the default is this machine or a container runtime",
+                asked.runtime.as_str()
+            ),
+        )
+            .into_response();
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let runtimes = crate::provider::Runtimes {
+        default: (!host).then_some(asked.runtime),
+    };
+    if let Err(error) = write_config(current.with_runtimes(runtimes), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     runtimes_answer(&state, &headers).await
@@ -5651,14 +6059,17 @@ async fn host_page_bare(Path(name): Path<String>) -> Response {
 }
 
 /// This server's own page and its assets, under a host's prefix.
-async fn host_page(Path((_, path)): Path<(String, String)>) -> Response {
+async fn host_page(
+    Path((_, path)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     if let Some(rest) = path.strip_prefix("vendor/monaco/") {
         return installed_asset(monaco_root(), "monaco", rest).await;
     }
     if let Some(rest) = path.strip_prefix("vendor/xterm/") {
         return installed_asset(xterm_root(), "xterm.js", rest).await;
     }
-    serve_asset(&path).await
+    serve_asset(&path, &headers).await
 }
 
 // ---- engines ---------------------------------------------------------------
@@ -5958,7 +6369,9 @@ struct LiveEngine {
 async fn live_engine(State(state): State<AppRouterState>) -> Response {
     let sending = state.app.destination().await;
     Json(sending.engine.as_ref().map(|(name, _)| LiveEngine {
-        name: name.clone(),
+        // By the name it has now, which a rename since the session began
+        // moved.
+        name: state.app.engines.current(name),
         readiness: state.app.engines.readiness(name),
     }))
     .into_response()
@@ -5995,16 +6408,8 @@ async fn put_engines(
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     };
     for (name, engine) in &asked.engines {
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("`{name}` is not an engine name: letters, digits, `-` and `_`"),
-            )
-                .into_response();
+        if let Err(refused) = engine_name(name) {
+            return *refused;
         }
         // The page may name only the kind's own binary; a path the file
         // already had is kept as it was, whoever wrote it.
@@ -6036,11 +6441,118 @@ async fn put_engines(
         })
         .cloned()
         .collect();
+    let named: Vec<String> = asked.engines.keys().cloned().collect();
     if let Err(error) = write_config(current.with_engines(asked.engines), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
+    state.app.engines.forget_renamed(&named);
     for name in removed {
         state.app.engines.stop(&name).await;
+    }
+    engines_answer(&state).await
+}
+
+/// What `[engine.<name>]` may be called: it is a TOML key, a path segment in
+/// `/api/engines/{name}/…`, and a word in a log line.
+fn engine_name(name: &str) -> Result<(), Box<Response>> {
+    match !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        true => Ok(()),
+        false => Err(Box::new(
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("`{name}` is not an engine name: letters, digits, `-` and `_`"),
+            )
+                .into_response(),
+        )),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RenameAsk {
+    to: String,
+}
+
+/// `[engine.<name>]` becomes `[engine.<to>]`, and every profile whose `engine`
+/// named it names `to` — one write, because the loader refuses a file where a
+/// profile names a table that is not there, whichever half went first. The
+/// providers keep their own names: a profile is renamed in Models. What luu
+/// runs for it moves with the name and does not restart; see
+/// [`crate::engines::Supervisor::rename`] and
+/// `RECORD/2026-10-27.an-engine-is-renamed.completed.md`.
+async fn rename_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Json(asked): Json<RenameAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let to = asked.to.trim().to_string();
+    if let Err(refused) = engine_name(&to) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let mut engines = current.engines().clone();
+    let Some(table) = engines.remove(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    if to == name {
+        return engines_answer(&state).await;
+    }
+    if engines.contains_key(&to) {
+        return (
+            StatusCode::CONFLICT,
+            format!("there is an [engine.{to}] already"),
+        )
+            .into_response();
+    }
+    engines.insert(to.clone(), table);
+    let providers = current
+        .profiles()
+        .iter()
+        .map(|(provider, profile)| {
+            let mut profile = profile.clone();
+            if profile.engine.as_deref() == Some(name.as_str()) {
+                profile.engine = Some(to.clone());
+            }
+            (provider.clone(), profile)
+        })
+        .collect();
+    // Before the file: a refusal here — it is starting — leaves both as
+    // they were.
+    if let Err(error) = state.app.engines.rename(&name, &to).await {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    let default = current.default_name().map(str::to_string);
+    if let Err(error) = write_config(
+        current.from_parts(default, providers).with_engines(engines),
+        path,
+    )
+    .await
+    {
+        // Back as it was, since the file is.
+        let _ = state.app.engines.rename(&to, &name).await;
+        state.app.engines.forget_renamed([&to]);
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     engines_answer(&state).await
 }
@@ -6270,13 +6782,16 @@ async fn chat_engine(
     if asked.messages.is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "nothing was said").into_response();
     }
+    // Placed past every port a table names, and left automatic: `ensure`
+    // places it again if something that is not luu's has taken that port,
+    // and answers with the one it listens on.
     if engine.port.is_none() {
-        engine.port = place_engine(&name, &engine).await;
+        place_engine(&name, &engine).await;
     }
-    if let Err(error) = state.app.engines.ensure(&name, &engine).await {
-        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
-    }
-    let port = crate::engines::port_of(&name, &engine).unwrap_or(engine.kind.default_port());
+    let port = match state.app.engines.ensure(&name, &engine).await {
+        Ok(port) => port,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response(),
+    };
     let backend = crate::probe_backend(
         match ollama {
             true => crate::provider::BackendKind::Ollama,
@@ -6485,6 +7000,16 @@ struct ProvidersView {
     /// is in it. Read from disk here rather than kept in `config.toml`, where
     /// even two ends of a key would be two ends of a key in every backup.
     keys: std::collections::BTreeMap<String, crate::secret::Preview>,
+    /// The file's own `max-tool-steps`: Settings → General's, what a provider
+    /// and a model that say none get. `None` is the default below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tool_steps: Option<u32>,
+    /// What none of the file's three says is.
+    default_max_tool_steps: u32,
+    /// `--max-tool-steps`, when this server was started with it: over the
+    /// file's three, which the page then says do nothing until it is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_steps_flag: Option<u32>,
 }
 
 async fn providers_view(
@@ -6573,7 +7098,48 @@ async fn providers_view(
             }
         },
         keys,
+        max_tool_steps: config.general_max_tool_steps(),
+        default_max_tool_steps: agent_core::agent::DEFAULT_MAX_STEPS,
+        tool_steps_flag: state.app.tool_steps,
     })
+}
+
+#[derive(serde::Deserialize)]
+struct ToolStepsAsk {
+    /// `None`, or 0, is the default again: no key in the file.
+    steps: Option<u32>,
+}
+
+/// Writes the file's own `max-tool-steps` — Settings → General's — and answers
+/// with the providers' view, which carries it. Read at each turn, so the next
+/// one counts by it. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+async fn put_tool_steps(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<ToolStepsAsk>,
+) -> Response {
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "the tool limit is read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    if let Err(error) = write_config(current.with_max_tool_steps(asked.steps), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    get_providers(State(state)).await
 }
 
 async fn get_providers(State(state): State<AppRouterState>) -> Response {
@@ -8109,16 +8675,43 @@ async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRu
     .await
 }
 
+/// How many tool calls a turn on `destination` may make before it asks
+/// whether it may go on: `--max-tool-steps` where it was given, else the
+/// model's `max-tool-steps`, its provider's, the file's own (Settings →
+/// General), else [`agent_core::agent::DEFAULT_MAX_STEPS`]. The file is read
+/// at each turn, so what Settings writes reaches the next one without a new
+/// session. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+async fn tool_budget(app: &App, destination: &Destination) -> u32 {
+    if let Some(steps) = app.tool_steps {
+        return steps.max(1);
+    }
+    load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| {
+            config.max_tool_steps(destination.settings.profile.as_deref(), &destination.model)
+        })
+        .unwrap_or(agent_core::agent::DEFAULT_MAX_STEPS)
+}
+
 /// Every place a session made from lists may run, as [`Where`]s: this
-/// machine, and each image [`images_named`] finds on every container runtime.
-/// What the new session's dialog offers as *Runtime*.
+/// machine, and each image [`images_named`] finds on every container runtime
+/// — the default one first (`[runtimes] default`; Docker first where the file
+/// names none, and this machine is the default). What the new session's
+/// dialog offers as *Runtime*.
 async fn places_for_lists(app: &App, describe: &DescribeFactory) -> Vec<Where> {
+    let first = load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| config.default_runtime())
+        .unwrap_or(agent_core::worker::Runtime::CONTAINED[0]);
     let places = std::iter::once(crate::policies::Place::host()).chain(
         images_named(app)
             .await
             .into_iter()
             .map(|(image, image_paths)| crate::policies::Place {
-                runtime: agent_core::worker::Runtime::CONTAINED[0],
+                runtime: first,
                 image: Some(image),
                 image_paths,
             }),
@@ -8345,6 +8938,7 @@ async fn destination_for(
             app.engines.clone(),
             name.clone(),
             engine.clone(),
+            crate::rebuild_for(&resolved),
         )),
         None => backend,
     };
@@ -8481,11 +9075,14 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         previous.shutdown().await;
     }
     *app.posture.lock().await = posture_name.clone();
-    // A new session starts with nothing allowed by anybody.
+    // A new session starts with nothing allowed by anybody, and its turns
+    // counted again.
     app.grants
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clear();
+    app.tools_unlimited
+        .store(false, std::sync::atomic::Ordering::SeqCst);
 
     let started_at = now_ms();
     let new_id = session_id(started_at);
@@ -8918,6 +9515,11 @@ async fn resume_session(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) =
         crate::grants::Answers::in_force(&loaded_view.grants);
+    // And whether a person lifted its tool limit.
+    app.tools_unlimited.store(
+        loaded_view.tools_unlimited,
+        std::sync::atomic::Ordering::SeqCst,
+    );
 
     *app.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store
@@ -9414,6 +10016,7 @@ mod tests {
                 pending: None,
                 narrowed: None,
                 held: None,
+                limit_held: None,
             }),
             events: broadcast::channel(1024).0,
             recorder: None,
@@ -9427,6 +10030,8 @@ mod tests {
             postures: Default::default(),
             environments: Default::default(),
             grants: Default::default(),
+            tool_steps: None,
+            tools_unlimited: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),

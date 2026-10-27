@@ -404,6 +404,14 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
 .models-pane .providers, .models-pane .models-head { background: #f9f9f9; }
 :root[data-theme="dark"] .models-pane .providers,
 :root[data-theme="dark"] .models-pane .models-head { background: #1b1b1b; }
+/* The chat's model menu, the same way on its own dark ground: the providers'
+   column, the head and the foot a step darker than the models, and the
+   provider in focus on the models' ground — the tab they hang from — rather
+   than the island's near-black. */
+.chat-foot .picker .menu .providers,
+.chat-foot .picker .menu .models-head,
+.chat-foot .picker .menu > footer { background: var(--luu-menu-side); }
+.chat-foot .picker .menu .prov.on { background: var(--luu-menu); }
 
 /* The first run. Loud on purpose and once: a page that opens on a chat box
    answering from a fixture is the one thing this says out loud. */
@@ -620,6 +628,7 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
    handle: no text gets selected and the cursor does not flicker back over
    whatever the pointer crosses. */
 html.resizing, html.resizing * { cursor: col-resize !important; user-select: none !important; }
+html.resizing-rows, html.resizing-rows * { cursor: row-resize !important; user-select: none !important; }
 
 /* ==========================================================================
    Design System (DS) - Foundations, Cards, Heroes, Badges & Visual Enhancers

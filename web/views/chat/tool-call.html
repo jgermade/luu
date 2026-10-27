@@ -80,19 +80,10 @@
                 ? { word: call.asked ? "allowed for the session" : "allowed earlier", kind: "ok" }
                 : { word: call.asked ? "allowed once" : "done", kind: "ok" }
   $: took = call?.duration_ms != null ? `${call.duration_ms} ms` : ""
-  // What came back, at a glance: the first lines of what the model got,
-  // under the card without opening it, so a turn reads as what it did and
-  // not only as what it asked. Not while it runs or waits, not once the card
-  // is open — the body has all of it — and not for a refusal, which the
-  // status already says. Not for a read either: what came back is the file,
-  // which the head already names, with its lines — the content is what the
-  // model read, not what the call did.
-  const PREVIEW_LINES = 3
-  $: preview = (() => {
-    if (open || held || part?.name === "read_file" || !call?.verdict?.allowed || !call.output?.trim()) return null
-    const lines = call.output.replace(/\s+$/, "").split("\n")
-    return { text: lines.slice(0, PREVIEW_LINES).join("\n"), more: Math.max(0, lines.length - PREVIEW_LINES) }
-  })()
+  // **Collapsed until clicked**: the head line and nothing under it. What
+  // came back used to show its first three lines under the card, and a run
+  // of calls read as a wall of directory listings; what a call did is its
+  // status, and what it returned is a click away.
   $: detailed = !part?.pending && (call || part?.raw)
   $: pretty = JSON.stringify(args, null, 2)
 </script>
@@ -109,17 +100,16 @@
     <span :if="took" class="took">{{ took }}</span>
   </button>
 
-  <button :if="preview" type="button" class="preview" title="Show all of it" @click="open = true">
-    <pre>{{ preview.text }}</pre>
-    <span :if="preview.more" class="more">+{{ preview.more }} {{ preview.more === 1 ? "line" : "lines" }}</span>
-  </button>
-
   <div :if="held" class="question">
     <p :if="!asksCommand" class="why">The draft may not write this. Allow it?
       <span class="dim">— {{ held.refused }}</span></p>
     <p :if="asksCommand" class="why">The draft may not run <code>{{ args.argv?.[0] }}</code>
       — the shell list leaves it to you. Allow it?
       <span class="dim">It runs with what the session may write and reach.</span></p>
+    <!-- Where this machine's kernel cannot hold a command, said before the
+         click: a yes runs it as you, held by its resource limits only. -->
+    <p :if="held.unheld" class="unheld">Nothing on this machine holds it ({{ held.unheld }}):
+      allowed, it runs as you, held only by its resource limits.</p>
     <div :if="asksCommand" class="out"><Scrollable :x="true" frame="well" background="var(--luu-bg, #f4f5f8)"><pre>{{ subject }}</pre></Scrollable></div>
     <div :if="writes !== null" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre>{{ writes }}</pre></Scrollable></div>
     <div :if="replaces" class="label">replaces</div>
@@ -205,31 +195,14 @@
   .status.ask { color: var(--luu-warn, #b7791f); font-weight: 600; }
   .question { padding: .1rem .6rem .55rem; border-top: 1px solid var(--luu-border, #c8c8c8); }
   .why { margin: .4rem 0 .2rem; overflow-wrap: anywhere; }
-  .preview {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    padding: .2rem .55rem .3rem 1.95rem;
-    border: 0;
-    border-top: 1px solid var(--luu-border, #c8c8c8);
-    background: none;
-    color: var(--luu-fg-muted, #5b6472);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
+  .unheld {
+    margin: .3rem 0 .2rem;
+    padding: .3rem .5rem;
+    border-radius: 5px;
+    background: var(--luu-warn-soft, #fdf7e9);
+    color: var(--luu-warn, #8a5d12);
+    overflow-wrap: anywhere;
   }
-  .preview:hover { color: var(--luu-fg, #1a1d23); }
-  .preview pre {
-    margin: 0;
-    padding: 0;
-    border: 0;
-    background: none;
-    font: 11px/1.45 var(--luu-font-mono, monospace);
-    white-space: pre;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .preview .more { font-size: 11px; }
   .answers { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .5rem; }
   .answers .session { margin-left: .4rem; }
   .answers button {

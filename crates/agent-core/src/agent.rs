@@ -64,7 +64,8 @@ pub enum Answer {
 ///
 /// `ask` resolves when they have. What carries the question there — a socket,
 /// a pipe, a test's script — is the caller's business, the way where a tool
-/// runs is [`Executor`]'s.
+/// runs is [`Executor`]'s. `unheld` is what will not hold the call if they say
+/// yes — see [`unheld`] — for the question to say before they answer.
 pub trait Asker: Send + Sync {
     fn ask<'a>(
         &'a self,
@@ -72,7 +73,23 @@ pub trait Asker: Send + Sync {
         index: u32,
         call: &'a ToolCall,
         refused: &'a str,
+        unheld: Option<&'a str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>>;
+}
+
+/// What will not hold `call` under `sandbox`: for a command, the part of the
+/// kernel this machine lacks — Landlock and seccomp, off Linux — where the
+/// sandbox runs it anyway (`best-effort`). `None` for a call the kernel holds,
+/// and for every in-process tool, which our own check holds.
+pub fn unheld(call: &ToolCall, sandbox: &Sandbox) -> Option<String> {
+    if call.name != "run_command" {
+        return None;
+    }
+    let program = call.arguments.get("argv")?.as_array()?.first()?.as_str()?;
+    match sandbox.prepare_command(program).ok()?.verdict.enforced_by {
+        crate::sandbox::Applied::Partial { missing, .. } => Some(missing),
+        _ => None,
+    }
 }
 
 /// What a call the turn's sandbox refused may still become.
@@ -107,6 +124,26 @@ impl Ceiling for Sandbox {
     }
 }
 
+/// Somebody who can let a turn go on past its tool budget: a person, by way of
+/// whoever watches the session.
+///
+/// Asked only when the model's reply asks for a call the budget has no room
+/// for — never when the budget is spent and the model may yet answer — and
+/// `extend` resolves when they have answered. `more` is how many calls *more*
+/// would allow: the budget the turn started with. Remembering a
+/// [`crate::protocol::Extension::Session`] is the extender's, as remembering a
+/// session grant is the [`Asker`]'s. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+pub trait Extender: Send + Sync {
+    fn extend<'a>(
+        &'a self,
+        step: u32,
+        index: u32,
+        used: u32,
+        more: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::protocol::Extension> + Send + 'a>>;
+}
+
 /// What a draft's turn may escalate to: a person, and how far their yes may
 /// reach. The caller stamps what the ceiling hands back
 /// [`crate::sandbox::Authority::Person`]. See
@@ -136,6 +173,8 @@ pub const PERSON_FORBADE: &str = "a person refused calls like this one for the r
 ///
 /// A default, not a law. Too low and the agent cannot finish an investigation;
 /// too high and a model that has decided to `list_dir` forever costs a session.
+/// Where a person can be asked ([`Extender`]), spending it is a question, not
+/// the end of the turn.
 pub const DEFAULT_MAX_STEPS: u32 = 8;
 
 /// What bounds a turn: how many calls it may make, and how long any one of them
@@ -237,6 +276,7 @@ pub async fn run_agent_turn(
     limits: Limits,
     schema_retry: Option<&SchemaRetry>,
     ask: Option<Ask<'_>>,
+    extend: Option<&dyn Extender>,
     events: mpsc::Sender<TurnEvent>,
     cancel: watch::Receiver<bool>,
 ) -> AgentOutcome {
@@ -251,8 +291,20 @@ pub async fn run_agent_turn(
     } = request;
     let mut steps: Vec<ToolStep> = Vec::new();
     let mut usage: Option<Usage> = None;
+    // What the turn may make in all: the limit, raised by every *more* a
+    // person answers, and gone with *no limit*.
+    let more = limits.max_steps.max(1);
+    let mut budget = more;
+    // A person answered *stop*: the turn ends on `tool_limit`, as one with
+    // nobody to ask always has.
+    let mut stopped = false;
 
-    for step in 1..=limits.max_steps.max(1) {
+    // Every round ends by returning, or on the budget: with nobody to ask once
+    // it is spent, and with somebody once they say *stop*. Each round runs at
+    // least one call or returns, so a budget bounds the rounds too.
+    let mut step = 0;
+    loop {
+        step += 1;
         // Tokens are forwarded as they arrive; the intermediate `Ended` is not,
         // because a turn ends once and a client that saw three would draw three.
         let (inner, mut inbox) = mpsc::channel::<TurnEvent>(256);
@@ -414,15 +466,64 @@ pub async fn run_agent_turn(
         // one `tool_calls` list and N tool messages. See
         // `RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md`.
         messages.push(Message::assistant(outcome.text.clone()));
-        let budget = limits.max_steps.max(1);
         for (n, call) in calls.into_iter().enumerate() {
             let index = (n + 1) as u32;
             // The cap counts executed calls, which is what `--max-tool-steps`
-            // always said it capped; a call past it is left in the reply
-            // unexecuted, and the turn ends on it as it ends on a cancelled
-            // one — the page says *not run* and the recording says `ToolLimit`.
+            // always said it capped. A call past it is put to a person where
+            // there is one: *more* raises the budget and the call runs, *no
+            // limit* lifts it. Otherwise — nobody to ask, or *stop* — it is
+            // left in the reply unexecuted, and the turn ends on it as it ends
+            // on a cancelled one: the page says *not run* and the recording
+            // says `ToolLimit`.
             if steps.len() as u32 >= budget {
-                break;
+                let Some(extender) = extend else {
+                    break;
+                };
+                let used = steps.len() as u32;
+                let mut cancelled = cancel.clone();
+                let answer = tokio::select! {
+                    answer = extender.extend(step, index, used, more) => Some(answer),
+                    _ = cancelled.wait_for(|cancelled| *cancelled) => None,
+                };
+                let session = match answer {
+                    Some(crate::protocol::Extension::More) => {
+                        budget = budget.saturating_add(more);
+                        false
+                    }
+                    Some(crate::protocol::Extension::Session) => {
+                        budget = u32::MAX;
+                        true
+                    }
+                    Some(crate::protocol::Extension::Stop) => {
+                        stopped = true;
+                        break;
+                    }
+                    // Cancelled while it waited: the turn ends where a cancel
+                    // ends any turn.
+                    None => {
+                        let _ = events
+                            .send(TurnEvent::Ended {
+                                reason: EndReason::Cancelled,
+                                usage: None,
+                            })
+                            .await;
+                        return AgentOutcome {
+                            text: outcome.text.clone(),
+                            steps,
+                            reason: EndReason::Cancelled,
+                            usage,
+                            error: None,
+                        };
+                    }
+                };
+                let _ = events
+                    .send(TurnEvent::LimitExtended {
+                        step,
+                        index,
+                        budget: (budget != u32::MAX).then_some(budget),
+                        session,
+                    })
+                    .await;
             }
 
             // Emitted before the sandbox is consulted, so a denial reads as a
@@ -461,8 +562,9 @@ pub async fn run_agent_turn(
             }
             if let (Some(ask), Escalation::Ask(wider)) = (ask, &escalation) {
                 let mut cancelled = cancel.clone();
+                let gap = unheld(&call, wider);
                 let answer = tokio::select! {
-                    answer = ask.person.ask(step, index, &call, &result.verdict.rule) => Some(answer),
+                    answer = ask.person.ask(step, index, &call, &result.verdict.rule, gap.as_deref()) => Some(answer),
                     _ = cancelled.wait_for(|cancelled| *cancelled) => None,
                 };
                 match answer {
@@ -543,9 +645,11 @@ pub async fn run_agent_turn(
             steps.push(taken);
         }
         // The budget is spent — mid-reply or at its end — and the model is
-        // still working. Asking it again would spend a call of the window on
-        // a turn that has none left to give.
-        if steps.len() as u32 >= budget {
+        // still working. With nobody to ask, asking the model again would
+        // spend a call of the window on a turn that has none left to give.
+        // With somebody, the model is asked: it may answer, and if it asks for
+        // another call that is when the person is asked.
+        if stopped || (extend.is_none() && steps.len() as u32 >= budget) {
             break;
         }
     }
@@ -751,6 +855,16 @@ mod tests {
         max_steps: u32,
         schema_retry: Option<&SchemaRetry>,
     ) -> (Vec<TurnEvent>, AgentOutcome) {
+        drive_extended(fixture, replies, max_steps, schema_retry, None).await
+    }
+
+    async fn drive_extended(
+        fixture: &Fixture,
+        replies: &[&str],
+        max_steps: u32,
+        schema_retry: Option<&SchemaRetry>,
+        extend: Option<&dyn Extender>,
+    ) -> (Vec<TurnEvent>, AgentOutcome) {
         let backend = Scripted::new(replies);
         let tools = crate::tools::Tools::standard();
         let (tx, mut rx) = mpsc::channel(256);
@@ -778,11 +892,152 @@ mod tests {
             Limits::default().with_max_steps(max_steps),
             schema_retry,
             None,
+            extend,
             tx,
             cancel,
         )
         .await;
         (drain.await.unwrap(), outcome)
+    }
+
+    /// A person at the tool budget who answers from a script, in order, and
+    /// remembers what they were asked.
+    struct Answering {
+        answers: std::sync::Mutex<Vec<crate::protocol::Extension>>,
+        asked: std::sync::Mutex<Vec<(u32, u32, u32, u32)>>,
+    }
+
+    impl Answering {
+        fn new(answers: &[crate::protocol::Extension]) -> Self {
+            Self {
+                answers: std::sync::Mutex::new(answers.iter().rev().copied().collect()),
+                asked: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Extender for Answering {
+        fn extend<'a>(
+            &'a self,
+            step: u32,
+            index: u32,
+            used: u32,
+            more: u32,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = crate::protocol::Extension> + Send + 'a>,
+        > {
+            self.asked.lock().unwrap().push((step, index, used, more));
+            let answer = self
+                .answers
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap_or(crate::protocol::Extension::Stop);
+            Box::pin(async move { answer })
+        }
+    }
+
+    fn list_dir() -> String {
+        "```tool\n{\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}\n```".to_string()
+    }
+
+    /// With somebody to ask, a spent budget is a question, asked only when the
+    /// model asks for a call past it: *more* gives another budget's worth and
+    /// the call runs; the model answers in the end, and the turn is a `stop`.
+    #[tokio::test]
+    async fn a_spent_budget_is_put_to_a_person_and_more_lets_the_turn_go_on() {
+        use crate::protocol::Extension;
+        let fixture = Fixture::new("extended");
+        let call = list_dir();
+        let person = Answering::new(&[Extension::More]);
+        let (events, outcome) = drive_extended(
+            &fixture,
+            &[&call, &call, &call, "Two files."],
+            2,
+            None,
+            Some(&person),
+        )
+        .await;
+        assert_eq!(outcome.reason, EndReason::Stop);
+        assert_eq!(outcome.steps.len(), 3);
+        assert_eq!(outcome.text, "Two files.");
+        // Asked once, at the third call, which is the first past two.
+        assert_eq!(*person.asked.lock().unwrap(), vec![(3, 1, 2, 2)]);
+        let extended: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                TurnEvent::LimitExtended {
+                    budget, session, ..
+                } => Some((*budget, *session)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(extended, vec![(Some(4), false)]);
+    }
+
+    /// *Stop* is the end every turn had before anybody was asked: `tool_limit`,
+    /// the call left unrun. *No limit for the session* lifts the budget and
+    /// says so, budget `None`.
+    #[tokio::test]
+    async fn stop_ends_on_the_limit_and_the_session_answer_lifts_it() {
+        use crate::protocol::Extension;
+        let fixture = Fixture::new("stopped");
+        let call = list_dir();
+        let person = Answering::new(&[Extension::Stop]);
+        let (events, outcome) = drive_extended(
+            &fixture,
+            &[&call, &call, "unreached"],
+            1,
+            None,
+            Some(&person),
+        )
+        .await;
+        assert_eq!(outcome.reason, EndReason::ToolLimit);
+        assert_eq!(outcome.steps.len(), 1);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, TurnEvent::LimitExtended { .. }))
+        );
+
+        let person = Answering::new(&[Extension::Session]);
+        let (events, outcome) = drive_extended(
+            &fixture,
+            &[&call, &call, &call, &call, "Done."],
+            1,
+            None,
+            Some(&person),
+        )
+        .await;
+        assert_eq!(outcome.reason, EndReason::Stop);
+        assert_eq!(outcome.steps.len(), 4);
+        assert_eq!(
+            person.asked.lock().unwrap().len(),
+            1,
+            "asked once, then never"
+        );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            TurnEvent::LimitExtended {
+                budget: None,
+                session: true,
+                ..
+            }
+        )));
+    }
+
+    /// The budget spent at the end of a reply asks the model again where a
+    /// person can be asked: it may answer, and then nobody is asked at all.
+    #[tokio::test]
+    async fn a_model_that_answers_at_the_budget_is_not_held_for_a_question() {
+        let fixture = Fixture::new("answers");
+        let call = list_dir();
+        let person = Answering::new(&[]);
+        let (_, outcome) =
+            drive_extended(&fixture, &[&call, &call, "Done."], 2, None, Some(&person)).await;
+        assert_eq!(outcome.reason, EndReason::Stop);
+        assert_eq!(outcome.steps.len(), 2);
+        assert!(person.asked.lock().unwrap().is_empty());
     }
 
     /// A path that is open, readable and never answers: a FIFO with nobody at
@@ -836,6 +1091,7 @@ mod tests {
             &tools,
             &fixture.sandbox,
             Limits::default().with_tool_timeout(Duration::from_millis(300)),
+            None,
             None,
             None,
             tx,
@@ -1183,6 +1439,7 @@ mod tests {
             Limits::default(),
             Some(&retry),
             None,
+            None,
             tx,
             cancel,
         )
@@ -1316,6 +1573,7 @@ mod tests {
             _index: u32,
             call: &'a ToolCall,
             refused: &'a str,
+            _unheld: Option<&'a str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {
             self.asked
                 .lock()
@@ -1336,6 +1594,7 @@ mod tests {
             _index: u32,
             _call: &'a ToolCall,
             _refused: &'a str,
+            _unheld: Option<&'a str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {
             Box::pin(std::future::pending())
         }
@@ -1391,6 +1650,7 @@ mod tests {
             Limits::default(),
             None,
             Some(Ask { ceiling, person }),
+            None,
             tx,
             cancel,
         )

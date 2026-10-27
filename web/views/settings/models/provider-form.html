@@ -123,6 +123,17 @@
   let sameWindow = was["context-limit"] != null && !Object.keys(savedWindows).length
   let commonWindow = was["context-limit"] != null ? String(was["context-limit"]) : ""
   let windows = savedWindows
+  // How many tool calls a turn makes before it asks whether to go on: this
+  // provider's `max-tool-steps`, over Settings → General's, and each model's
+  // over it. Empty is the next one up. See
+  // `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+  let toolSteps = was["max-tool-steps"] != null ? String(was["max-tool-steps"]) : ""
+  let stepsByModel = Object.fromEntries(Object.entries(saved_entries)
+    .filter(([, e]) => e["max-tool-steps"] != null)
+    .map(([m, e]) => [m, String(e["max-tool-steps"])]))
+  $: generalSteps = state.providers?.max_tool_steps ?? state.providers?.default_max_tool_steps ?? 8
+  const stepsInvalid = v => String(v ?? "").trim() !== "" && !(Number.isInteger(Number(v)) && Number(v) > 0)
+  const setSteps = (m, value) => { stepsByModel = { ...stepsByModel, [m]: value } }
   // A transport chosen by hand, by model; absent is what the server's answer
   // implies.
   let transports = Object.fromEntries(Object.entries(saved_entries)
@@ -220,7 +231,7 @@
   const HEADS = { tools: "Tools", unsaid: "Not said", none: "No tools" }
   // Everything a row reads is an argument, because a `$:` runs again for what
   // it names and not for what a function it calls happens to read.
-  const buildRows = (_list, _windows, _transports, _leaving, _profileTransport) => ["tools", "unsaid", "none"].flatMap(group => {
+  const buildRows = (_list, _windows, _transports, _leaving, _profileTransport, _steps) => ["tools", "unsaid", "none"].flatMap(group => {
     const members = listed.filter(m => groupOf(m) === group)
     if (!members.length) return []
     return [
@@ -240,6 +251,7 @@
           off: isOff(m),
           window: windows[m] ?? "",
           over: overOf(m, windows[m]),
+          steps: stepsByModel[m] ?? "",
           placeholder: facts.window_is === "served" ? String(facts.window) : facts.window_is === "trained" ? "Ollama's" : "—",
           hint: facts.window_is === "served"
             ? `the server's ${facts.window}; lower is a budget`
@@ -252,9 +264,10 @@
       }),
     ]
   })
-  $: rows = buildRows(list, windows, transports, leaving, profileTransport)
+  $: rows = buildRows(list, windows, transports, leaving, profileTransport, stepsByModel)
   $: anyFenced = rows.some(r => r.kind === "model" && !r.off && r.group !== "tools" && r.transport === "fenced")
   $: invalid = (!sameWindow && rows.some(r => r.kind === "model" && r.over)) || commonOver
+    || stepsInvalid(toolSteps) || rows.some(r => r.kind === "model" && stepsInvalid(r.steps))
 
   const setWindow = (m, value) => { windows = { ...windows, [m]: value } }
   const setTransport = (m, value) => { transports = { ...transports, [m]: value } }
@@ -332,6 +345,7 @@
       ...(keyed && keyFile ? { "key-file": keyFile } : {}),
       ...(remote ? { remote: true } : {}),
       ...(was.engine ? { engine: was.engine } : {}),
+      ...(count(toolSteps) ? { "max-tool-steps": count(toolSteps) } : {}),
     }
     if (backend === "anthropic") {
       if (thinkingMode === "budget") out.thinking = count(thinkingBudget)
@@ -366,6 +380,7 @@
           && most < (count(maxTokens) || DEFAULT_MAX_TOKENS)) entry["max-tokens"] = most
       if (!sameWindow && String(windows[m] ?? "").trim()) entry["context-limit"] = Number(windows[m])
       if (transportOf(m) !== profileTransport) entry["tool-calls"] = transportOf(m)
+      if (count(stepsByModel[m])) entry["max-tool-steps"] = count(stepsByModel[m])
       if (isOff(m)) entry.enabled = false
       if (Object.keys(entry).length) models[m] = entry
     }
@@ -481,6 +496,14 @@
       it unless thinking is <strong>adaptive</strong>.
     </dd>
 
+    <dt>Tool calls per turn</dt>
+    <dd class="inline">
+      <input class="steps" inputmode="numeric" aria-label="Tool calls per turn"
+             :value="toolSteps" :placeholder="String(generalSteps)" :class.invalid="stepsInvalid(toolSteps)"
+             @input="toolSteps = $event.target.value">
+      <span class="dim">before a turn asks to go on; empty is General's ({{ generalSteps }}), and a model may say its own under <strong>Models</strong></span>
+    </dd>
+
     <dd :if="engineOwned" class="note">
       luu starts this provider's server, so its models are the ones on this
       machine it loads: <strong>Models</strong> says how each one's tools travel.
@@ -524,6 +547,12 @@
           <input :if="!sameWindow" class="win" inputmode="numeric" :value="row.window" :placeholder="row.placeholder"
                  :class.invalid="row.over" @input="setWindow(row.name, $event.target.value)">
           <span :if="!sameWindow && row.hint" class="dim hint">{{ row.hint }}</span>
+        </span>
+        <span :if="row.kind === 'model'" class="scell">
+          <input class="steps" inputmode="numeric" :aria-label="'Tool calls per turn on ' + row.name"
+                 title="Tool calls a turn on this model makes before it asks to go on"
+                 :value="row.steps" :placeholder="toolSteps.trim() || String(generalSteps)"
+                 :class.invalid="stepsInvalid(row.steps)" @input="setSteps(row.name, $event.target.value)">
         </span>
         <span :if="row.kind === 'model'" class="tcell">
           <ChoiceSegmented :if="row.group !== 'tools'" size="sm" :label="'Tool calls of ' + row.name"
@@ -586,13 +615,20 @@
     border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
   }
   .win.invalid { border-color: var(--luu-bad, #c62828); }
+  /* A window's look, its own name: a row holds both, and each is found by
+     what it is. */
+  .steps {
+    width: 4rem; flex: none; box-sizing: border-box; padding: .25rem .4rem; font: inherit; font-size: 12px;
+    border: 1px solid var(--luu-border); border-radius: 4px; background: var(--luu-surface); color: inherit;
+  }
+  .steps.invalid { border-color: var(--luu-bad, #c62828); }
   .models { list-style: none; margin: 0; padding: 0; }
   .models li.head {
     font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--luu-fg-muted);
     margin-top: .7rem; padding-bottom: .2rem; border-bottom: 1px solid var(--luu-border);
   }
   .models li.model {
-    display: grid; grid-template-columns: minmax(0, 1fr) 14rem 8.5rem; gap: .2rem .6rem;
+    display: grid; grid-template-columns: minmax(0, 1fr) 14rem 4rem 8.5rem; gap: .2rem .6rem;
     align-items: center; padding: .3rem 0;
   }
   .models li.model.off .mname { color: var(--luu-fg-muted); text-decoration: line-through; }
@@ -600,6 +636,7 @@
   .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wcell { display: flex; align-items: center; gap: .4rem; }
   .tcell { display: flex; justify-content: flex-end; }
+  .scell { display: flex; align-items: center; }
   .hint { font-size: 11px; white-space: nowrap; }
   .rnote { grid-column: 1 / -1; font-size: 11px; color: var(--luu-fg-muted); padding-left: 1.4rem; }
   .rnote.warn { color: var(--luu-warn, #b26a00); }

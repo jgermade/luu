@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use agent_core::agent::{Ceiling, Escalation};
 use agent_core::protocol::{Grant, GrantKind};
-use agent_core::sandbox::{Authority, Sandbox};
+use agent_core::sandbox::{Authority, Enforcement, Sandbox};
 use agent_core::tools::{ToolCall, writes_one_path};
 
 use crate::policies::Resolved;
@@ -145,22 +145,41 @@ impl Ceiling for DraftCeiling {
             }
             GrantKind::Command => {
                 let program = grant.target.as_str();
-                // Already allowed, so refused for something other than its
-                // name — a yes would change nothing; or denied.
-                if refused_under
+                // Denied, or already allowed and refused for something a yes
+                // would not change. Allowed and refused all the same is the
+                // kernel's gap — the one refusal left once the name passes —
+                // which a yes may run past, below.
+                let listed = refused_under
                     .commands()
                     .iter()
-                    .any(|allowed| allowed == program)
-                    || self.denied_commands.iter().any(|denied| denied == program)
+                    .any(|allowed| allowed == program);
+                if self.denied_commands.iter().any(|denied| denied == program)
+                    || (listed && refused_under.prepare_command(program).is_ok())
                 {
                     return Escalation::Refused;
                 }
                 let mut policy = self.wider.to_policy();
                 policy.allow_command(program);
-                match Sandbox::new(&policy, self.wider.base()) {
-                    Ok(sandbox) => sandbox.under(self.wider.authority().clone()),
-                    Err(_) => return Escalation::Refused,
+                let Ok(mut sandbox) = Sandbox::new(&policy, self.wider.base()) else {
+                    return Escalation::Refused;
+                };
+                // **A person's yes runs what the kernel here cannot hold.**
+                // Off Linux there is no Landlock and no seccomp, and under
+                // `kernel` every command is refused — so a yes would be a
+                // question whose answer changes nothing. The yes is the
+                // person's, about this command, told before the click that
+                // only its resource limits will hold it (`agent::unheld`), and
+                // the verdict names the gap. What nobody answered is still
+                // refused: the floor is not widened. See
+                // `RECORD/2026-10-27.a-yes-runs-what-the-kernel-cannot-hold.completed.md`.
+                if sandbox.prepare_command(program).is_err() {
+                    policy.enforcement = Enforcement::BestEffort;
+                    match Sandbox::new(&policy, self.wider.base()) {
+                        Ok(lenient) => sandbox = lenient,
+                        Err(_) => return Escalation::Refused,
+                    }
                 }
+                sandbox.under(self.wider.authority().clone())
             }
         };
         // Only what could be asked about can have been answered, so a no for
@@ -349,10 +368,19 @@ mod tests {
             matches!(ceiling.escalate(&run("make"), &floor), Escalation::Ask(_)),
             "in no list: asked, since 2026-10-23"
         );
-        assert!(
-            matches!(ceiling.escalate(&run("ls"), &floor), Escalation::Refused),
-            "ls was not refused for its name, so a yes would change nothing"
-        );
+        // ls is allowed: where the kernel holds it the floor runs it, so a
+        // refusal was for something a yes would not change; where it cannot,
+        // the refusal was the kernel's, and a yes runs past it.
+        match floor.prepare_command("ls") {
+            Ok(_) => assert!(
+                matches!(ceiling.escalate(&run("ls"), &floor), Escalation::Refused),
+                "ls was not refused for its name, so a yes would change nothing"
+            ),
+            Err(_) => assert!(matches!(
+                ceiling.escalate(&run("ls"), &floor),
+                Escalation::Ask(_)
+            )),
+        }
 
         let git = Grant {
             kind: GrantKind::Command,
@@ -392,6 +420,34 @@ mod tests {
             ceiling.escalate(&run("curl"), &floor),
             Escalation::Refused
         ));
+    }
+
+    /// A yes runs: whatever holds a command on this machine, the sandbox a
+    /// person's yes runs it under can run it — the kernel where there is one,
+    /// its resource limits where there is none — and the question says what
+    /// will not hold it exactly where something will not.
+    #[test]
+    fn a_yes_to_a_command_can_run_it_here() {
+        let root = scratch("unheld");
+        let environment = environment("[shell.s]\nallow = [\"ls\"]\n");
+        let (session, floor) = sandboxes(&root, &environment);
+        let ceiling = DraftCeiling::new(
+            &session,
+            Some(&environment),
+            Answered::default(),
+            Authority::Person(None),
+        );
+        let git = call("run_command", serde_json::json!({ "argv": ["git"] }));
+        let Escalation::Ask(wider) = ceiling.escalate(&git, &floor) else {
+            panic!("git is asked")
+        };
+        assert!(wider.prepare_command("git").is_ok(), "a yes runs it");
+        let held_here = session.prepare_command("ls").is_ok();
+        assert_eq!(
+            agent_core::agent::unheld(&git, &wider).is_none(),
+            held_here,
+            "said where the kernel cannot hold it, and only there"
+        );
     }
 
     /// A resume puts back what the list leaves in force, yes and no.

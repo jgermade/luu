@@ -11,13 +11,16 @@
     ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
     chooseRuntime, chooseList,
   } = await import("@web/lib/ui.js")
-  const { runtimeOptions } = await import("@web/lib/places.js")
+  const { runtimeOptions, placeMark } = await import("@web/lib/places.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Button = await import("@web/theme/default/components/button.html")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const ProviderModels = await import("./provider-models.html")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  const { loadBrands } = await import("@web/lib/brands.js")
+  loadBrands()
 
   // Three tabs: start one, the earlier ones, and the ones put away. An
   // archived session is still there to restore — archiving keeps it out of
@@ -57,6 +60,23 @@
   $: runtimeSaid = runtimes.find(r => r.value === ui.starter?.runtime)?.title
     ? `where its commands run · ${runtimes.find(r => r.value === ui.starter?.runtime).title}`
     : "where its commands run"
+  // What choosing it means, beside the field: what the session's commands
+  // see there, and what the other kind would see instead. A host session is
+  // the account — its terminal included — and a container is the folder and
+  // the image. See `luu-design.md`, *the container*, and
+  // `RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md`.
+  $: runtimeChosen = runtimes.find(r => r.value === ui.starter?.runtime)
+  $: runtimeMeans = !runtimeChosen
+    ? ""
+    : runtimeChosen.runtime === "host"
+      ? "On this machine, as you: your own tools and files, and its terminal is your whole account. A container would see only this folder."
+      : runtimeChosen.runtime === "direct"
+        ? "On this machine, as you, with nothing holding it: there to test the worker without a container, not to work in."
+        : `Inside ${runtimeChosen.label}: only this folder and the image's tools, and no network unless a list allows it. The host would be your whole account.`
+  // Its mark, at the start of the field: the runtime's brand where the page
+  // or a pack has one, a box for a container runtime with none, and this
+  // machine for `host` and `direct`.
+  $: runtimeMark = placeMark(runtimeChosen?.runtime)
 
   const KINDS = [
     { key: "shell", label: "Shell" },
@@ -216,7 +236,13 @@
         <InputContainer label="Runtime" type="select" select-class="runtime"
                         :options="runtimes" :model="ui.starter?.runtime" :description="runtimeSaid"
                         :disabled="runtimes.length < 2"
-                        @change="chooseRuntime($event.detail)" />
+                        @change="chooseRuntime($event.detail)">
+          <template :slot.lead>
+            <BrandIcon :if="runtimeMark.src" :src="runtimeMark.src" size="14px" />
+            <svg :if="!runtimeMark.src" class="ic mark"><use :href="runtimeMark.glyph"/></svg>
+          </template>
+        </InputContainer>
+        <p :if="runtimeMeans" class="means">{{ runtimeMeans }}</p>
       </div>
 
       <div :if="choosable" class="row three" data-row="lists">
@@ -357,6 +383,21 @@
   .row { display: grid; gap: var(--luu-space-3); align-items: start; }
   .row.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mark { width: 14px; height: 14px; }
+  /* As tall as the field's box beside it — `.box` in input-container.html:
+     its padding, its label's line, its value's line and its border — so the
+     text stands against the box and not against the line under it. */
+  .means {
+    display: flex;
+    align-items: center;
+    height: calc(2 * var(--luu-space-2) + var(--luu-text-xs) * var(--luu-leading-tight) + 1px
+                 + var(--luu-text-md) * var(--luu-leading) + 2 * var(--luu-border-width));
+    margin: 0;
+    color: var(--luu-fg-muted);
+    font-size: var(--luu-text-sm);
+    line-height: var(--luu-leading-tight);
+    overflow: hidden;
+  }
   .sends { display: flex; flex-direction: column; gap: .35rem; }
   .sends-head { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
   .sends-head .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -372,6 +413,7 @@
   /* A phone's width: one under the other. */
   @media (max-width: 36rem) {
     .row.two, .row.three { grid-template-columns: minmax(0, 1fr); }
+    .means { height: auto; }
   }
   .count { margin-right: auto; }
   /* White over the body's grey: the search is part of the head's side of the

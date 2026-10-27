@@ -98,6 +98,10 @@ pub struct ToolCallView {
     /// waiting on nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// With `held`: what will not hold the call if it is allowed. See
+    /// [`crate::protocol::ServerMessage::CallHeld`]'s `unheld`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unheld: Option<String>,
     /// Where in the turn's reply this call's step ended: the length of the
     /// text streamed before the call, in UTF-16 units — what a page indexes a
     /// string by — so the reply can be cut into what each round trip said.
@@ -249,6 +253,23 @@ pub struct TurnView {
     #[serde(default)]
     pub first_token_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
+    /// What the turn is waiting on when it has made every tool call its
+    /// budget allows and the model asked for another — `limit_reached` —
+    /// until a person answers or the turn ends. Absent in every stream before
+    /// protocol 12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<LimitView>,
+}
+
+/// A turn waiting on a person at its tool budget: the call that found it
+/// spent, how many it made, and how many *more* would allow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitView {
+    pub step: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    pub used: u32,
+    pub more: u32,
 }
 
 impl TurnView {
@@ -278,6 +299,7 @@ impl TurnView {
             started_at_ms,
             first_token_at_ms: None,
             ended_at_ms: None,
+            limit: None,
         }
     }
 
@@ -696,6 +718,12 @@ pub struct SessionView {
     /// dropped. Empty in a stream before protocol 10.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grants: Vec<SessionAnswer>,
+    /// A person answered *no limit for the session* at a turn's tool budget
+    /// (`limit_extended` with `session`): its turns make as many calls as the
+    /// model asks for, and a resume keeps it so. False in every stream before
+    /// protocol 12.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tools_unlimited: bool,
     /// The three resend rules the stream's **last** header names — what this
     /// session's turns were rendered under.
     ///
@@ -760,6 +788,7 @@ impl SessionView {
             format: Some(record::FORMAT),
             posture: None,
             grants: Vec::new(),
+            tools_unlimited: false,
             repeat: None,
             prune: None,
             results: None,
@@ -1230,13 +1259,39 @@ impl SessionView {
                     view.reason = Some(*reason);
                     view.usage = *usage;
                     view.ended_at_ms = Some(at_ms);
+                    view.limit = None;
                 }
             }
             ServerMessage::Failed { turn, message } => {
                 if let Some(view) = self.turn_mut(*turn) {
                     view.error = Some(message.clone());
                     view.ended_at_ms = Some(at_ms);
+                    view.limit = None;
                 }
+            }
+            // The question, on the turn it holds, until it is answered or the
+            // turn ends.
+            ServerMessage::LimitReached {
+                turn,
+                step,
+                index,
+                used,
+                more,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.limit = Some(LimitView {
+                        step: *step,
+                        index: *index,
+                        used: *used,
+                        more: *more,
+                    });
+                }
+            }
+            ServerMessage::LimitExtended { turn, session, .. } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.limit = None;
+                }
+                self.tools_unlimited |= *session;
             }
             ServerMessage::ToolCall {
                 turn,
@@ -1264,6 +1319,7 @@ impl SessionView {
                         asked: None,
                         grant: None,
                         held: None,
+                        unheld: None,
                         at: Some(view.text.encode_utf16().count()),
                     });
                 }
@@ -1276,6 +1332,7 @@ impl SessionView {
                 step,
                 index,
                 refused,
+                unheld,
                 ..
             } => {
                 if let Some(view) = self.turn_mut(*turn)
@@ -1284,6 +1341,7 @@ impl SessionView {
                     })
                 {
                     call.held = Some(refused.clone());
+                    call.unheld = unheld.clone();
                 }
             }
             ServerMessage::ToolResult {
@@ -1314,6 +1372,7 @@ impl SessionView {
                     call.asked = *asked;
                     call.grant = *grant;
                     call.held = None;
+                    call.unheld = None;
                 }
             }
             // What a person answered for the session, as the stream last left

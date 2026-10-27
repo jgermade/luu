@@ -30,6 +30,11 @@ export const installEngine = (kind, version, variant) =>
 /// providers that start it. See `uninstall_engine`.
 export const uninstallEngine = name =>
   call("POST", `./api/engines/${encodeURIComponent(name)}/uninstall`, {})
+/// Renames an engine, and the providers that start it with it — one write,
+/// which the page cannot make from its two. What luu runs for it keeps
+/// running. See `rename_engine`.
+export const renameEngine = (name, to) =>
+  call("POST", `./api/engines/${encodeURIComponent(name)}/rename`, { to })
 
 /// Talks to an engine on a model, outside any session: `messages` is the
 /// conversation so far, `onText` is handed each piece of the reply as it

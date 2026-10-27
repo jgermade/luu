@@ -59,6 +59,10 @@ export const ui = $reactive({
   /// are kept and for how long — or `null`. A switch no longer waits for the
   /// model to load, so this is where the wait is seen instead. See `watchEngine`.
   engine: null,
+  /// An engine's sheet Settings → Engines opens on once it has loaded —
+  /// `{ name, tab }` — asked for from outside Settings: the engine's state
+  /// in the chat's foot opens its output. `null` once taken.
+  engineSheet: null,
   /// The model the last switch left, while its feedback is on screen.
   switchedFrom: null,
   /// Which turn the inspection modal shows, or `null` when it is closed.
@@ -77,8 +81,10 @@ export const ui = $reactive({
   answered: [],
 })
 
-export function openSettingsAt(section) {
-  ui.section = ["models", "appearance", "policies"].includes(section) ? section : "general"
+/// `sheet` is an engine's — `{ name, tab }` — for `engines`.
+export function openSettingsAt(section, sheet = null) {
+  ui.section = ["models", "appearance", "engines", "policies"].includes(section) ? section : "general"
+  ui.engineSheet = section === "engines" ? sheet : null
   return openSettings()
 }
 
@@ -253,13 +259,18 @@ const KINDS = ["shell", "network", "files"]
 
 /// The runtime and lists the last session started with, each where it still
 /// is: a runtime this machine still offers, a list `config.toml` still has.
+/// The runtime Settings → Runtimes marks as the default comes first, where it
+/// is offered: the first of its places. See
+/// `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
 function rememberedStart(policies) {
   let kept = {}
   try {
     kept = JSON.parse(prefs.start || "{}") || {}
   } catch {}
   const options = runtimeOptions(state.postures)
-  const runtime = options.find(option => option.value === kept.runtime && !option.disabled)?.value
+  const preferred = state.postures?.default_runtime
+  const runtime = (preferred && options.find(option => option.runtime === preferred && option.image && !option.disabled)?.value)
+    || options.find(option => option.value === kept.runtime && !option.disabled)?.value
     || options.find(option => !option.disabled)?.value
     || "host|"
   const lists = Object.fromEntries(KINDS.map(kind => {

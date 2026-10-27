@@ -89,6 +89,28 @@ pub enum TurnEvent {
         index: u32,
         call: crate::tools::ToolCall,
         refused: String,
+        /// What would not hold the call a yes runs — the kernel's half, on a
+        /// machine that has none — so the question says it before the click.
+        unheld: Option<String>,
+    },
+    /// The turn has made `used` calls, every one its budget allows, and the
+    /// model asks for call `index` of `step`: a person is being asked whether
+    /// it may go on, `more` calls more or with no limit. Sent by whoever asks
+    /// — an [`crate::agent::Extender`] — on the turn's own channel, as
+    /// [`Self::CallHeld`] is.
+    LimitReached {
+        step: u32,
+        index: u32,
+        used: u32,
+        more: u32,
+    },
+    /// A person let it go on: the budget is now `budget` calls in all, or
+    /// none (`None`); `session` when that lasts the session.
+    LimitExtended {
+        step: u32,
+        index: u32,
+        budget: Option<u32>,
+        session: bool,
     },
     /// What it did, including the verdict and who enforced it. The call's
     /// `index` rides on the [`ToolStep`].

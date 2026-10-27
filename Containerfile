@@ -13,6 +13,12 @@
 #   docker build -t luu-worker:dev -f Containerfile .
 #   cargo run --bin luu -- tools --sandbox luu.container.toml
 #
+# `Containerfile.release` is the same image around the release's own Linux
+# binary, with no compiler and no checkout: what Settings → Runtimes builds
+# unless asked for *from source*, which is this file. Their final stages are
+# held to each other by a test, so change both or neither. See
+# RECORD/2026-10-27.runtimes-without-the-wait.completed.md.
+#
 # Named `Containerfile` rather than `Dockerfile` for the same reason the runtime
 # is a name rather than an integration: Podman, nerdctl and Buildah read this
 # file under this name, and `docker build -f` takes it happily.

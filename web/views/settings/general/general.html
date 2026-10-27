@@ -5,7 +5,35 @@
   // moved to Appearance on 2026-10-21. See
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
   const { workspace } = await import("@web/lib/workspace.js")
-  const { state } = await import("@web/lib/store.js")
+  const { state, loadProviders, saveToolSteps } = await import("@web/lib/store.js")
+  if (!state.providers) loadProviders()
+
+  // How many tool calls a turn makes before it asks whether to go on, where
+  // neither its provider nor its model says: `max-tool-steps` in
+  // config.toml. Written when the field is left, as Settings writes a field.
+  // See `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+  let steps = null
+  $: shown = steps ?? (state.providers?.max_tool_steps != null ? String(state.providers.max_tool_steps) : "")
+  const bad = text => text.trim() !== "" && !(Number.isInteger(Number(text)) && Number(text) > 0)
+  $: stepsBad = bad(shown)
+  let stepsSaved = ""
+  // From the field itself, on `change` — which Enter fires as well as leaving
+  // it — once per value, and only when it says something the file does not
+  // already. Enter's own handler beside `change` saved twice.
+  let savingSteps
+  const saveSteps = async text => {
+    if (bad(text)) return
+    const value = text.trim() === "" ? null : Number(text)
+    if (value === savingSteps || value === (state.providers?.max_tool_steps ?? null)) return
+    savingSteps = value
+    const result = await saveToolSteps(value)
+    savingSteps = undefined
+    if (result.ok) {
+      steps = null
+      stepsSaved = value === null ? "back to the default" : "saved"
+      setTimeout(() => { stepsSaved = "" }, 2000)
+    }
+  }
 </script>
 
 <div class="general-pane pane-main">
@@ -44,12 +72,43 @@
     </dd>
   </dl>
 </section>
+<section class="pane-group">
+  <h3>Turns</h3>
+  <dl class="settings">
+    <dt>Tool calls per turn</dt>
+    <dd class="inline">
+      <input class="steps" inputmode="numeric" aria-label="Tool calls per turn"
+             :value="shown" :placeholder="String(state.providers?.default_max_tool_steps ?? 8)"
+             :class.invalid="stepsBad" :disabled="state.providers && !state.providers.editable"
+             @input="steps = $event.target.value" @change="saveSteps($event.target.value)">
+      <span :if="stepsSaved" class="dim">{{ stepsSaved }}</span>
+      <span :if="stepsBad" class="warn">a whole number, 1 or more</span>
+    </dd>
+    <dd class="note">
+      A turn that makes this many asks before the next one: another as many,
+      no limit for the session, or stop. In <strong>Auto</strong> it goes on by
+      itself. A provider or a model can set its own in <strong>Models</strong>;
+      this is what holds where they say nothing. Empty is
+      {{ state.providers?.default_max_tool_steps ?? 8 }}.
+    </dd>
+    <dd :if="state.providers?.tool_steps_flag" class="note warn">
+      This server was started with <code>--max-tool-steps {{ state.providers.tool_steps_flag }}</code>,
+      which holds over this and over every provider's and model's until it is
+      started without it.
+    </dd>
+    <dd :if="state.providersError" class="warn">{{ state.providersError }}</dd>
+  </dl>
+</section>
 </div>
 
 <style scoped>
   /* A column, padded and spaced by `.pane-main` (app.css); the pane pads
      nothing. */
   .general-pane { flex: 1 0 auto; }
+  .inline { display: flex; align-items: center; gap: .6rem; }
+  .steps { width: 5rem; }
+  .steps.invalid { border-color: var(--luu-bad); }
+  .warn { color: var(--luu-warn); }
   .path {
     font-family: ui-monospace, monospace;
     font-size: 12px;

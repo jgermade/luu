@@ -106,9 +106,9 @@ test("a terminal opens in the session's container, survives being hidden, and en
   const foot = page.locator(".content .col-foot")
   const rows = panel.locator(".xterm-rows")
   await expect(foot.locator('.state.open[data-place="container"]')).toHaveCount(1, { timeout: 15_000 })
-  // Named by where it runs, the posture under it, and the one posture that
-  // runs elsewhere offered beside it.
-  await expect(foot.locator(".dropup .face")).toHaveText("docker · luu-worker:dev")
+  // Named by where it runs, under *Runtime*, with Docker's mark.
+  await expect(foot.locator("button.place")).toHaveText("docker · luu-worker:dev")
+  await expect(foot.locator("button.place .brand")).toHaveAttribute("style", /brands\/docker\.svg/)
 
   // The worker's uid, the base at its own path, and the colours the page draws.
   const uid = execSync("id -u").toString().trim()
@@ -135,30 +135,46 @@ test("a terminal opens in the session's container, survives being hidden, and en
   await expect(rows).toContainText("M=kept")
   expect(inside()).toContain("sleep")
 
-  // Moved to the host from the panel: the session moves, its container goes,
-  // and the shell opens again on this machine. `/.dockerenv` is the one fact
-  // that tells the two apart on any host, Linux included.
+  // Moved to the host from its dialog: the session moves, its container goes,
+  // and the shell opens again on this machine. Not until the box that says
+  // what stays behind is ticked. `/.dockerenv` is the one fact that tells the
+  // two apart on any host, Linux included.
   const where = "test -f /.dockerenv && echo IN=con''tainer || echo IN=ho''st\n"
-  await foot.locator(".dropup .face").click()
-  await expect(foot.locator(".dropup .opt .hint", { hasText: "host · luu.toml" })).toHaveCount(1)
-  await foot.locator(".dropup .opt", { has: page.locator(".label", { hasText: /^host$/ }) }).click()
+  const dialog = page.getByRole("dialog", { name: "Runtime" })
+  const place = label => dialog.locator("button.place", { has: page.locator(".label", { hasText: label }) })
+  const moveTo = async label => {
+    await foot.locator("button.place").click()
+    await place(label).click()
+    const move = dialog.getByRole("button", { name: "Move the session" })
+    await expect(move).toBeDisabled()
+    await dialog.getByRole("checkbox").check({ force: true })
+    await move.click()
+    await expect(dialog).toHaveCount(0, { timeout: 30_000 })
+  }
+  await foot.locator("button.place").click()
+  await expect(place(/^host/).locator(".hint")).toContainText("luu.toml")
+  await place(/^host/).click()
+  await expect(dialog).toContainText("Its container goes with the move")
+  await dialog.getByRole("button", { name: "Cancel" }).click()
+  await moveTo(/^host/)
   await expect(foot.locator('.state.open[data-place="host"]')).toHaveCount(1, { timeout: 15_000 })
-  await expect(foot.locator(".dropup .face")).toHaveText("host")
+  await expect(foot.locator("button.place")).toHaveText("host")
   await panel.locator(".host").click()
   await page.keyboard.type(where)
   await expect(rows).toContainText("IN=host")
   // And back, into a container of its own — the first one went with the move.
-  await foot.locator(".dropup .face").click()
+  await foot.locator("button.place").click()
   // Every container runtime is offered for the container posture, and the
   // ones this machine lacks are there, off, saying so.
   for (const runtime of ["podman", "nerdctl", "colima", "container"]) {
-    const option = foot.locator(".dropup .opt", { has: page.locator(".label", { hasText: `${runtime} · luu-worker:dev` }) })
+    const option = place(`${runtime} · luu-worker:dev`)
     if (!execSync(`command -v ${runtime} || true`, { shell: "/bin/sh" }).toString().trim()) {
       await expect(option).toBeDisabled()
       await expect(option.locator(".hint")).toContainText("not installed")
     }
   }
-  await foot.locator(".dropup .opt", { has: page.locator(".label", { hasText: "docker · luu-worker:dev" }) }).click()
+  await dialog.getByRole("button", { name: "Cancel" }).click()
+  await moveTo("docker · luu-worker:dev")
   await expect(foot.locator('.state.open[data-place="container"]')).toHaveCount(1, { timeout: 30_000 })
   await panel.locator(".host").click()
   await page.keyboard.type(where)

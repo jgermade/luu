@@ -62,11 +62,16 @@ when a drafting turn's answer carries a plan block, or a person asks for one wit
 `request_plan` — and what that planning call reads is **the draft**, because *the
 plan is what the draft compacts to*. It used to read a held prompt, before
 anything had been looked at, which is a small model's worst case. No prompt is
-held any more: a prompt runs, in the draft, always.
+held any more: a prompt runs, in the draft, always. The open job is named in the
+chat's head, in a menu right against the session's name — the name as wide as it
+is, not the bar — named *draft* or *plan*, which half it is, with its number in
+the title. Its items are its doors, each with a line under it on what it does:
+*Plan this* for a draft, *Close & fold* for either (a row over the composer
+until 2026-10-27).
 
 **And the page reads the alternation, on both surfaces.** A fold says which
-half it was — *draft 3* or *job 4*, from the same `!plan` rule the live-job
-block uses — and why it ended, which is now three rungs and not two:
+half it was — *draft 3* or *job 4*, from the same `!plan` rule the open job's
+menu uses — and why it ended, which is now three rungs and not two:
 `ClosedBy::Approval` beside `User` and `ExitCode`, because under the alternation
 most drafts end by having a plan approved out of them and a recording that
 called that *a person folded it* could not count either. `protocol::VERSION` 8
@@ -180,7 +185,7 @@ can be paused as a write can — and a yes runs it **with everything it implies*
 writable and the session's network (to be looked at again). A write is asked inside the working
 directory and under no files `deny`; outside the folder nothing is asked. The question is
 *Allow* or *Deny*, with an *Apply to session* box: ticked, a yes is a `granted` line on the
-stream and a no a `forbidden` one, each listed under the draft with a × that sends
+stream and a no a `forbidden` one, each listed over the composer with a × that sends
 `revoke_grant`. Taken back is a `revoked` line, and the session's list keeps the answer, marked
 (`api::SessionAnswer`); a resume puts back what was not taken back, and a new session starts
 with nothing. Still only in a draft, never for what `deny` names, and not where approvals must
@@ -189,6 +194,14 @@ be signed. At the gate, a plan on a session built from lists may get whatever th
 since approving it is that person's yes, for the job; a policy file stays the outer bound. `protocol::VERSION`
 11, `record::FORMAT` 23. See
 [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+**A person's yes runs what the kernel here cannot hold** (since 2026-10-27): off Linux there is
+no Landlock and no seccomp, and under `enforcement = "kernel"` every command a draft makes was
+refused — after the yes as before it. The ceiling now gives the yes `best-effort` where the
+kernel cannot hold the command, so it runs held by its resource limits only, and asks about a
+listed command the kernel refused too; `call_held` carries `unheld` — what will not hold it —
+and the card says so before the click, and the verdict names the gap after. What nobody
+answered is refused as before: the default still denies rather than run a child unheld. See
+[`RECORD/2026-10-27.a-yes-runs-what-the-kernel-cannot-hold.completed.md`](RECORD/2026-10-27.a-yes-runs-what-the-kernel-cannot-hold.completed.md).
 
 **What was granted and refused is read in one place, so the lists can start lax and be
 narrowed.** *Permissions*, a dialog from the shield in the chat's head. **Activity** is every
@@ -570,7 +583,19 @@ The model never executes anything directly — it only emits a structured reques
   Capped at `--max-tool-steps` (8), which counts **executed calls** — a reply
   that carries three spends three of them — and exhausting it ends the turn with
   `EndReason::ToolLimit` rather than presenting an investigation cut short as a
-  conclusion.
+  conclusion. **In `serve` the cap is a question, not an end** (protocol 12,
+  `record::FORMAT` 25): when the model's reply asks for a call past it, the turn
+  waits on a person — `limit_reached`, answered by `extend_limit` with *more*
+  (another budget's worth), *no limit for the session* (kept through a resume)
+  or *stop*, which is the `tool_limit` every turn had. It is asked only when a
+  call past the budget is asked for, never because the budget ran out at a reply
+  the model may yet answer. **Auto answers *more* itself**, so a turn in Auto has
+  no limit and Manual asks again. **The number is the model's `max-tool-steps`,
+  then its provider's, then the file's own (Settings → General), then 8**; read
+  at each turn, so Settings reaches the next one; `--max-tool-steps` holds over
+  all three. `luu stdio` asks as `serve` does, on its own channel; `luu chat`
+  has nobody to ask, and ends on it as before. See
+  [`RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`](RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md).
 - **The steps are messages, and they alternate**: a turn renders as `user(prompt)`,
   then `assistant(call) · user(result)` per step, then `assistant(answer)` — where
   a step that carried more than one call is its reply once and one result after
@@ -899,7 +924,48 @@ access = "execute"
   `luu.container.toml` is the wide-open posture, a separate file so that in three
   weeks nobody has to tell a default from a leftover. `scratch`/distroless is
   wrong here: the container's whole job is running `cargo`, `rustc`, `git`, `rg`
-  and `ls`, and a minimal image has none of them.
+  and `ls`, and a minimal image has none of them. **Two files declare it, and one
+  image comes out of either**: `Containerfile` compiles the checkout inside the
+  image (minutes, and only where the base is luu's checkout), and
+  `Containerfile.release` takes this version's Linux binary from its GitHub
+  release, checked against its `SHA256SUMS` (seconds, and from anywhere — the
+  binary carries the file and builds it from `<state dir>/worker-image/`). A test
+  holds their final stages to each other, and Settings builds from the release
+  unless asked for *from source*. Not the host's own binary: a Mach-O on macOS,
+  and on Linux linked against a glibc that may be newer than the image's. A
+  release whose worker protocol differs is refused at the handshake. See
+  [`RECORD/2026-10-27.runtimes-without-the-wait.completed.md`](RECORD/2026-10-27.runtimes-without-the-wait.completed.md).
+- **An image knows which luu it carries, and is held to it.** `PROTOCOL` says
+  whether the two sides can parse each other; `agent_core::worker::BUILD` says
+  whether they are the same code — a hash `crates/agent-core/build.rs` takes over
+  agent-core's sources and the workspace's `Cargo.toml` and `Cargo.lock`, content
+  and not a commit, so two uncommitted states differ and a build from source
+  (which has no `.git`) computes it over the same files its `COPY` brought in.
+  The hello carries it (`build`, optional: no protocol bump), and
+  `Hello::differs` is the one rule — same version, same build — that `luu tools`
+  (a `stale` line), Settings (`built`, or `out of date` with the reason, asked by
+  starting the image's worker with nothing to do) and the session start all ask.
+  luu labels what it builds `luu.from=release|source`; at a session start an
+  image labelled `release` whose version is not this one is **rebuilt from this
+  version's release** and the worker started again (seconds), the protocol
+  refusal included, and everything else is said and kept: a source image is
+  minutes per agent-core edit, and a release of this same version would bring
+  the same release back. See
+  [`RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md`](RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md).
+- **Nothing a session installs outlives its container.** `--rm` and a worker as
+  PID 1 mean a posture move, a replaced worker and the end of a session each
+  start again from the image; the worker is the person's uid, so `apt-get` has
+  no root to install with anyway, and only the bind-mounted base persists. A
+  per-session snapshot is not a feature: it would make the image generated. A
+  project that needs more tools declares them, `FROM luu-worker:dev`, under a
+  policy file of its own.
+- **A runtime that is down is started when a session needs it.** When the worker
+  will not start and the runtime does not answer its probe, the lines Settings'
+  *start it* runs are run (`podman machine start`, `colima start`,
+  `open -a Docker`, `container system start`), the probe is asked until it
+  answers (two minutes at most), and the worker once more. Asked only after a
+  failure, so a healthy session pays nothing; never stopped afterwards, because a
+  machine or a VM is shared with whatever else the person runs in it.
 - **`commands = [...]` is the image's manifest.** The worker is the only process
   standing on the image's `PATH`, so its handshake answers which allowed commands
   the image actually has, and `luu tools` prints the gap under `absent` —
@@ -1008,8 +1074,14 @@ access = "execute"
   posture or an environment names, on any container runtime this machine has
   (`/api/postures`' `runtimes`), so the page never names an image of its own; the shell,
   network and files lists by name, an unchosen one the empty list (read the folder, ask the
-  rest), what the last session used offered first; and where it sends, in the chat dropup's two
-  columns (`provider-models.html`, one component for both). `POST /api/sessions` with `lists`
+  rest), what the last session used offered first — the runtime with what choosing it means
+  beside it, as tall as the field's box: this machine as the person, its terminal the whole
+  account; or the folder and the image's tools, no network a list does not allow (see
+  [`RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md`](RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md));
+  and where it sends, in the chat dropup's two
+  columns (`provider-models.html`, one component for both; in Settings → Models
+  the head's mark and name are the button that edits the provider, a pencil
+  right after the name). `POST /api/sessions` with `lists`
   and no posture is `Policies::compose`, named by its lists and recorded with
   `record::Composed` — the runtime and image it was asked with (`record::FORMAT` 24) — so a
   resume from the history asks for the same again; with a posture or an environment it is as
@@ -1017,7 +1089,29 @@ access = "execute"
   **Settings → Runtimes writes the postures table**, naming a policy file out of the
   ones at the top of the checkout and never one the page types, and the server
   replaces the postures it offers at once. Postures are no longer read only at
-  startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)). See
+  startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)).
+  **And one container runtime may be the default**: `[runtimes] default`,
+  written from its card (`PUT /api/runtimes/default`; `host`, written as no
+  table, is this machine again), is where sessions start — the first one of
+  `luu serve`, made through the same route as the dialog's from that runtime,
+  the first image a posture or an environment names and the empty lists, and
+  the new session's *Runtime* before anything else is chosen. **Absent is this
+  machine**, and no card says *default*: a session in a container nobody chose
+  was a label promising what the server did not do. Where the default cannot
+  run, the first session stays on this machine and `serve`'s output says why
+  ([`RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`](RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md)). A card's actions
+  are icons, as an engine's: install, start, stop, make default
+  ([`RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`](RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md)).
+  The check says both things at once: green while the runtime answers, and
+  doubled on the default. A runtime stops where it starts from the page —
+  the app, the machine, `colima stop`, `container system stop` — and never the
+  one the live session runs on
+  ([`RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md`](RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md)).
+  `/api/runtimes` answers **without a probe** — installed or not is `which` — and the
+  page asks each installed runtime through `/api/runtimes/{runtime}`, filling its
+  card when it answers, so a runtime that takes its five seconds to say nothing
+  holds up only itself
+  ([`RECORD/2026-10-27.runtimes-without-the-wait.completed.md`](RECORD/2026-10-27.runtimes-without-the-wait.completed.md)). See
   [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md). `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
@@ -1081,6 +1175,11 @@ on a narrow one without being forgotten. A drag writes a CSS property and nothin
 the pointer is let go. Double click is back to the default, and the arrow keys move a focused edge.
 In two columns only the inspector's edge is there. See
 [`RECORD/2026-10-01.columns-that-are-dragged.completed.md`](RECORD/2026-10-01.columns-that-are-dragged.completed.md).
+**The terminal's top edge is dragged the same way**, up for taller: `--terminal-h` on `.app`
+beside the widths, kept as `luu.height.terminal`, clamped so the file above keeps 200px and the
+window keeps the rest, double click to forget it, the arrow keys to nudge it. Every edge, under
+the pointer and while it is held, is a 4px line in the theme's accent. See
+[`RECORD/2026-10-27.the-terminal-has-a-height.completed.md`](RECORD/2026-10-27.the-terminal-has-a-height.completed.md).
 
 There is **no page-wide header**. There was, and every control on it belonged to a column: the
 two destination tags and the status word are the chat's session, the fixtures picker is its
@@ -1098,12 +1197,19 @@ modal, which leaves the file on screen. See
 The column has **one foot**, at its bottom: what a status bar says about the
 open thing (`cut at 512 KB`, a diff's two sides) and at the far right **the terminal**'s
 toggle, lit while it is up. The terminal is a panel, dark whatever the page is, *above* that
-foot, and while it is up the foot carries its controls too (the picker that moves the session,
-named by where each posture runs — `host`, `docker · luu-worker:dev` — with the posture and its
-file under each, and a runtime this machine lacks offered off — and a contained posture offered
-on every container runtime, since they share the image and the argv, while a host posture is
-offered once — the same list the session starter offers, and a new session is offered where
-the last one started or was moved to: [`RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md`](RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md)),
+foot, and while it is up the foot carries its controls too (*Runtime*: a button naming where the
+session runs, with its runtime's mark, that opens **a dialog that moves the session** — every
+place by where it runs, `host`, `docker · luu-worker:dev`, with its mark and the posture and its
+file under each, a runtime this machine lacks offered off, a contained posture on every
+container runtime since they share the image and the argv, a host posture once — the same list
+the session starter offers; a move waits on a box that says what stays behind, what the model
+installed where the session runs now, and a container it leaves goes with everything in it. The
+dialog is mounted at the page's root, so it takes the page's tone and not the foot's: [`RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md`](RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md).
+A session made from lists is no posture, and is named by where it runs all the same — `host`,
+`podman · luu-worker:dev` — in the foot and first in the dialog; and a new session whose
+commands run elsewhere — a container of its own, or this machine instead of one — ends the open
+shell and opens it again there (`followSession`): [`RECORD/2026-10-27.the-new-session-s-runtime-in-the-foot.completed.md`](RECORD/2026-10-27.the-new-session-s-runtime-in-the-foot.completed.md).
+A new session is offered where the last one started or was moved to: [`RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md`](RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md)),
 holding a shell where the session runs, which hiding does not end and `exit`
 does — there is no button for it
 ([`RECORD/2026-10-01.the-foot-names-its-file.completed.md`](RECORD/2026-10-01.the-foot-names-its-file.completed.md)) — and, the way VS Code does it, a single click opens a **preview** tab, in
@@ -1379,9 +1485,14 @@ URL, keeps the browser's cache honest. A versioned extension path that an update
 to the newest version beside it. See
 [`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md).
 **Brand marks are the one exception to *nothing is vendored***: a mark is its owner's and there is
-one per brand, so there is no taste to tie the page to. Fifteen come with the page
+one per brand, so there is no taste to tie the page to. Twenty-four come with the page
 (`web/brands/`: Simple Icons' under CC0, named by lobehub's slugs, and llama.cpp's, mlx-serve's
-and Ollama's own, which an engine's card and the installer's kinds wear too), drawn as a mask over
+and Ollama's own, which an engine's card and the installer's kinds wear too; Gemma's, which a
+Gemma model wears in place of Google's; and Docker's,
+Podman's and containerd's — nerdctl's — with Colima's llama (its favicon, as a mask) and Apple
+`container`'s switches (traced from its app icon), which a runtime wears in Settings → Runtimes, its loading
+placeholders included, and at the start of the new session's *Runtime*; a box for a runtime
+with none, and this machine for `host`), drawn as a mask over
 `currentColor` beside each provider (by backend and URL host) and model (by family, after the
 catalog's prefix) in the two columns the pickers share; nothing known is no mark. `[ui]
 brand-icons` names a pack instead — a folder of `<slug>.svg`, or one with `icons/` in it — offered
@@ -1389,7 +1500,8 @@ by Settings → Appearance → Brand marks from `<state dir>/brand-icons/` (impo
 from `web/node_modules/@lobehub/icons-static-svg` (installed with npm, like Monaco), read into a
 slug → file table that `/api/brands/icon/{slug}` serves as SVG and nothing else; a slug the pack
 lacks is the page's own. See
-[`RECORD/2026-10-26.brand-icons.completed.md`](RECORD/2026-10-26.brand-icons.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
+[`RECORD/2026-10-26.brand-icons.completed.md`](RECORD/2026-10-26.brand-icons.completed.md) and
+[`RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md`](RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
 grammar crates — `Makefile`, `Containerfile` and `Dockerfile` found by name, having no extension
 to be found by — sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does
@@ -1586,6 +1698,11 @@ The rest follows from that:
 - **Dev loop**: `jq79 dev` hot-reloads components with no bundler. Serve the directory from disk in
   debug builds (`#[cfg(debug_assertions)]`) and from `rust-embed` in release — the dev server applies
   no transforms, so both paths serve the same bytes. No Vite proxy to configure.
+- **Caching**: each file goes out with its sha256 as `ETag` and `no-cache`, so a reload is a
+  bodyless 304 for what did not change and never a stale page after an upgrade; and the page
+  keeps each component's text for the visit (`lib/components-once.js`, before jq79), since
+  jq79 fetches a component every time a setup imports it. See
+  [`RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`](RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md).
 - **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
   keeps existing DOM when the transcript is appended to.
 - **Tool calls in the transcript**: an assistant reply is drawn as prose and tool calls, not as
@@ -1643,8 +1760,9 @@ The rest follows from that:
   sent yet — **as the turn went**, where it used tools:
   each reply up to its call, what that call gave back as the model got it, and what the next call
   sent, cut where each call's step ended (`ToolCallView.at`, kept by the page and the server's
-  fold alike). A card in the chat shows the first lines of its result under it without being
-  opened, except a read's. See
+  fold alike). A card in the chat is its head line until it is clicked — what it did is its
+  status, and what it returned is behind the click (until 2026-10-27 its first three lines
+  showed under it, and a run of calls read as a wall of listings). See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
 - **The transcript follows its end while it is at its end** (`Scrollable`'s `autoscroll`): any
   scroll up leaves it at once, and only scrolling back to the end picks it up again. The chat's
@@ -1973,7 +2091,14 @@ there are no turns, or moves this one with its history (the starter's
 *Continue here*) when there are. Who answers the gate (*Manual* / *Auto*) sits
 beside it as a dropup too (`components/dropup.html`), each answer with the line
 that says what it means, because a status bar has room for one word and not for
-the explanation.
+the explanation. **The columns' feet** are a step lighter than the bars
+(`--luu-foot`) — the editor's and the chat's first, for their dropups, and the
+inspector's with them so the three read as one band — and a dropup's menu
+lighter again (`--luu-menu`), with its face bordered in the strong line, so the
+buttons read on the foot and the menu on the page. The model menu's columns are
+laid as Settings → Models lays them: the providers, the head and the foot a step
+darker (`--luu-menu-side`) than the models, and the provider in focus on the
+models' own ground.
 
 **And so do the three resend rules.** `POST /api/sessions` takes `repeat`,
 `prune` and `results` beside the three above — `always`/`once`, `never`/`behind`,
@@ -2310,6 +2435,11 @@ know in advance is written in the table, and is kept exactly as before. An autom
 something else has taken by the time the engine starts is placed again, never "used as it is":
 luu's own port is not somebody else's server. See
 [`RECORD/2026-10-26.ports-luu-places.completed.md`](RECORD/2026-10-26.ports-luu-places.completed.md).
+**And the session follows it there**: `ensure` answers with the port the engine answers on,
+and `engines::Started` builds the session's backend again for it, so an automatic port is
+never the person's to deal with — there is no *start a new session* any more. The resolved
+engine of a profile keeps no `port`, so whatever asks where it listens asks the placement
+([`RECORD/2026-10-27.an-automatic-port-moves-under-the-session.completed.md`](RECORD/2026-10-27.an-automatic-port-moves-under-the-session.completed.md)).
 **It is a child of `luu serve`** and dies with it: stopped on SIGINT and SIGTERM, and
 `kill_on_drop` for every other way the handle goes. **luu's own copy is an official release by
 tag** — `b11236` for llama.cpp, `v0.34.4` for ollama, moved by `version` — downloaded into
@@ -2342,7 +2472,8 @@ warm-up and the first turn cannot restart it under each other. **An `ensure` say
 is in** — `stopping` (with `from`, the model the engine was running), `downloading`, `starting`,
 then `ready` or `failed` — on one clock for the whole switch, and the page reads it from
 `GET /api/engine`. Beside the picker: `starting qwen2.5-coder:14b 3s · qwen2.5-coder:7b stopped`,
-then `ready in 4s` for a few seconds, or `could not start` with the reason as its tooltip. What is
+then `ready in 4s` for a few seconds, or `could not start` with the reason as its tooltip; a
+click on it opens the engine's sheet in Settings → Engines on *Output*. What is
 happening and for how long comes first, because a chat column is narrow and the end is what gets
 cut. When the switch moved to *another* engine, the old one was stopped before the answer came
 back and the server has no `from` for it; the page remembers what it left. **A turn that waits
@@ -2402,7 +2533,17 @@ the old one. **An ollama engine nothing has started lists ollama's store on this
 ollama's own names, instead of asking a port nothing answers on. **Uninstall
 asks, then removes the engine** (`POST /api/engines/{name}/uninstall`, luu's own copy only):
 stopped, its copy deleted unless another table runs it, and `[engine.<name>]` taken out of the
-file with the providers that start it. **The form is an installer** in a wide `SubModal` of
+file with the providers that start it. **An engine is renamed from its form** — the one way out
+of a name for an engine on a binary the machine had, which is never removed: `POST
+/api/engines/{name}/rename` with `{ to }` writes `[engine.<to>]` and repoints every profile's
+`engine` in one write (the loader refuses a file where a profile names a missing table,
+whichever of two writes went first), and the providers keep their own names. What luu runs
+moves with it and does not restart — `Supervisor::rename` carries the slot, its readiness, its
+`ensure` gate and the placed port — and the old name keeps reaching it for the live session,
+which resolved its engine by that name, until a table has that name again; refused while it
+starts. See
+[`RECORD/2026-10-27.an-engine-is-renamed.completed.md`](RECORD/2026-10-27.an-engine-is-renamed.completed.md).
+**The form is an installer** in a wide `SubModal` of
 `InputContainer`s: the kind as cards (with whether this machine has a release of it,
 `cannot_install`), where the binary comes from, the name and port filled in, *Advanced* for the
 arguments; *Install* downloads luu's copy there and closes when it is on disk — unpacked without
@@ -2638,9 +2779,13 @@ The browser names a host and never a URL. The token is a path the page never
 reads. The proxy and `PUT /api/hosts` answer only on a loopback-bound server to
 a loopback `Host`, and an `Origin`, when there is one, must be this server: off
 loopback, this server's token would carry the host's approvals. The project
-modal behind the inspector's foot is host, then folder, then runtime and model,
-and *Open* starts the session on the chosen host and loads its page. See
-[`RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`](RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md).
+modal behind the inspector's foot is host, then folder, and *Use this folder*
+keeps the session on screen — or, on another host, loads that host's page and
+the session it has. Where a session runs and what it sends to are the sessions
+dialog's: the modal chose them too until 2026-10-27, a second way to make a
+session. See
+[`RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`](RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md)
+and [`RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md`](RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md).
 
 ## Suggested work order
 

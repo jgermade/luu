@@ -131,15 +131,40 @@ impl Runtime {
     }
 
     /// The line that builds `image` from `containerfile`, with `context` as
-    /// the build context. One spelling for all five, which each of them
+    /// the build context, each of `args` as a `--build-arg` and each of
+    /// `labels` as a `--label`. One spelling for all five, which each of them
     /// documents.
     pub fn build_argv(
         self,
         image: &str,
         containerfile: &str,
         context: &str,
+        args: &[(&str, &str)],
+        labels: &[(&str, &str)],
     ) -> Option<Vec<String>> {
-        self.with(&["build", "-t", image, "-f", containerfile, context])
+        let mut argv = self.with(&["build", "-t", image, "-f", containerfile])?;
+        for (flag, pairs) in [("--build-arg", args), ("--label", labels)] {
+            for (name, value) in pairs {
+                argv.push(flag.to_string());
+                argv.push(format!("{name}={value}"));
+            }
+        }
+        argv.push(context.to_string());
+        Some(argv)
+    }
+
+    /// The line that starts `image`'s worker with nothing to do: it says its
+    /// hello, finds its input closed, and exits — so the container lives as
+    /// long as the answer. How Settings asks which luu an image carries
+    /// without a session, by the handshake itself rather than by anything
+    /// written down beside the image. No network where the runtime can say so.
+    pub fn hello_argv(self, image: &str) -> Option<Vec<String>> {
+        let mut words = vec!["run", "--rm"];
+        if self.cannot().is_none() {
+            words.extend(["--network", "none"]);
+        }
+        words.extend([image, "luu", "worker"]);
+        self.with(&words)
     }
 
     /// How a person gets this runtime, as text to copy. luu installs none of
@@ -835,7 +860,7 @@ mod tests {
         );
         assert_eq!(
             Runtime::Podman
-                .build_argv("luu-worker:dev", "Containerfile", ".")
+                .build_argv("luu-worker:dev", "Containerfile", ".", &[], &[])
                 .unwrap(),
             [
                 "podman",
@@ -847,6 +872,55 @@ mod tests {
                 "."
             ]
         );
+        // The release's file takes the version, and the context stays last.
+        assert_eq!(
+            Runtime::Colima
+                .build_argv(
+                    "luu-worker:dev",
+                    "Containerfile.release",
+                    ".",
+                    &[("LUU_VERSION", "0.1.4")],
+                    &[("luu.from", "release")]
+                )
+                .unwrap(),
+            [
+                "colima",
+                "nerdctl",
+                "--",
+                "build",
+                "-t",
+                "luu-worker:dev",
+                "-f",
+                "Containerfile.release",
+                "--build-arg",
+                "LUU_VERSION=0.1.4",
+                "--label",
+                "luu.from=release",
+                "."
+            ]
+        );
+        // The worker asked for its hello alone: no network where the runtime
+        // can say so, and no flag it does not have where it cannot.
+        assert_eq!(
+            Runtime::Docker.hello_argv("luu-worker:dev").unwrap(),
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "luu-worker:dev",
+                "luu",
+                "worker"
+            ]
+        );
+        assert!(
+            !Runtime::Container
+                .hello_argv("luu-worker:dev")
+                .unwrap()
+                .contains(&"--network".to_string())
+        );
+        assert!(Runtime::Host.hello_argv("luu-worker:dev").is_none());
         // No container, no lines and no hint.
         for none in [Runtime::Host, Runtime::Direct] {
             assert!(none.probe_argv().is_none() && none.install_hint().is_none());

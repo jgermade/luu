@@ -3,7 +3,7 @@
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approvePlan, declinePlan, requestPlan, closeJob, reopenJob, revokeGrant,
-          renameSession,
+          renameSession, extendLimit,
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
   const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
@@ -12,7 +12,7 @@
   const { ui, openSettingsAt, openStarter, openHistory, checkModel,
           watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal,
           openPermissions } = await import("@web/lib/ui.js")
-  const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
+  const { terminal, followSession } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const { modelLabel } = await import("@web/lib/engines.js")
   const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
@@ -69,6 +69,8 @@
   const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
   const TerminalPanel = await import("@web/views/editor/terminal.html")
   const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
+  const RuntimeDialog = await import("@web/views/editor/runtime-dialog.html")
+  const Menu = await import("@web/theme/default/components/menu.html")
   const { segments, runs } = await import("@web/helpers/segments.js")
   const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
@@ -368,6 +370,23 @@
   // prompt sent now is the answer *more changes*.
   $: proposed = state.pending
   $: answeredFor = maybeAnswer(proposed)
+
+  // **Auto answers the tool limit too, with *more*.** The same decision as the
+  // gate's — made once, by a person, instead of per question — so a turn in
+  // Auto has no limit: each time its budget is spent the page asks for
+  // another. Back in Manual, the next question is the person's. Once per
+  // question, for `maybeAnswer`'s reason. See
+  // `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+  const extendedFor = new Set()
+  const maybeExtend = limit => {
+    if (!limit || prefs.confirm !== "auto" || state.replay) return ""
+    const key = `${limit.turn}:${limit.step}:${limit.index}`
+    if (extendedFor.has(key)) return ""
+    extendedFor.add(key)
+    extendLimit("more")
+    return key
+  }
+  $: limitAnsweredFor = maybeExtend(state.limit, prefs.confirm)
   // The job turns land in: the last one not closed. It is a draft until a plan
   // is approved, which is the alternation on the screen.
   $: live = (state.jobs || state.tasks).filter(j => j.state === "open").slice(-1)[0] || null
@@ -445,7 +464,8 @@
     // nothing on screen moving. A call held for a person is not this: it is
     // waiting on them, and says so on its own card.
     const last = parts[parts.length - 1]
-    const reading = live && last?.kind === "tool" && !!last.call?.verdict && !last.call.held
+    // Nor is a turn at its tool budget: it waits on the question under it.
+    const reading = live && last?.kind === "tool" && !!last.call?.verdict && !last.call.held && !state.limit
       ? last.name || "the call"
       : ""
     return { parts, live, reading, timing: timing(message, tools) }
@@ -495,7 +515,8 @@
   $: changedHere = activeChanged(workspace.tabs, workspace.active, workspace.status)
 
   // Whether the live session has a container to open a shell in. Asked again
-  // when the session or its posture moves, and memoized on those, because
+  // when the session or its posture moves — and the shell opened again where
+  // the new one runs (`followSession`) — and memoized on those, because
   // jq79 wakes this line on a write to any field of `state`. Not until the
   // socket has said there is a server, and never in a replay: the static twin
   // answers `/api/terminal` with a 404 in the console.
@@ -504,7 +525,7 @@
     return (live, key) => {
       if (live && key !== last) {
         last = key
-        loadTerminal()
+        followSession()
       }
       return key
     }
@@ -591,6 +612,8 @@
     <path d="m8.5 20.5-3-2.5 3-2.5"/>
   </symbol>
   <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></symbol>
+  <!-- This machine: where a `host` or `direct` session's commands run. -->
+  <symbol id="i-machine" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11.5" rx="1.5"/><path d="M8.5 19.5h7M12 16v3.5"/></symbol>
   <symbol id="i-server" viewBox="0 0 24 24">
     <rect x="3.5" y="4.5" width="17" height="6" rx="2"/>
     <rect x="3.5" y="13.5" width="17" height="6" rx="2"/>
@@ -617,6 +640,8 @@
        eye for opening an HTML block as the page it is. -->
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <!-- Settings → Runtimes: the default runtime, a check doubled. -->
+  <symbol id="i-check-double" viewBox="0 0 24 24"><path d="m2 12.5 4.5 4.5L16 7.5"/><path d="m11.5 16 1 1L22 7.5"/></symbol>
   <!-- The chat head's column switch: Chrome's devtools "dock to right", a
        window with a panel down its right side. -->
   <symbol id="i-dock" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/><path d="M14.5 4.5H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-4.5z" style="fill: currentColor; stroke: none"/></symbol>
@@ -818,10 +843,24 @@
         :if="renaming"
         class="name-edit"
         :value="nameDraft"
+        :size="Math.max(6, nameDraft.length + 1)"
         autofocus
         @input="nameDraft = $event.target.value"
         @blur="commitRename()"
         @keydown.enter="commitRename()">
+      <!-- The open job's two doors, right against the name it belongs to: a
+           draft may be planned, and either may be closed and folded. They
+           were a row of their own over the composer until 2026-10-27. -->
+      <span :if="live &amp;&amp; !proposed" class="job-menu">
+        <Menu size="sm" variant="ghost" :label="drafting ? 'draft' : 'plan'"
+              :title="`${drafting ? 'draft' : 'job'} ${live?.id} · ${live?.objective || ''}`"
+              :disabled="replaying"
+              :items="[
+                ...(drafting ? [{ value: 'plan', label: 'Plan this', note: 'what was drafted, at the gate', disabled: running }] : []),
+                { value: 'close', label: 'Close & fold', note: 'one summary from here on', disabled: running },
+              ]"
+              @select="$event.detail === 'plan' ? requestPlan() : closeJob(live?.id)" />
+      </span>
 
       <div class="acts">
         <button type="button" title="New session — where it sends, and which model"
@@ -955,6 +994,22 @@
             <div :if="entry.reading" class="waiting" aria-live="polite">
               <span class="dot"></span>
               <span>the model is reading what {{ entry.reading }} returned…</span>
+            </div>
+
+            <!-- The turn made every tool call its budget allows and the model
+                 asked for another: it waits here rather than ending. *More* is
+                 another budget's worth; *no limit* lasts the session. In Auto
+                 the page answers *more* itself. -->
+            <div :if="entry.live && state.limit" class="limit-ask" role="group" aria-label="Tool limit">
+              <p class="why">
+                <strong>{{ state.limit.used }} tool calls</strong>, this turn's limit, and the
+                model asked for another. Go on?
+              </p>
+              <div class="answers">
+                <button type="button" class="primary" @click="extendLimit('more')">Continue · {{ state.limit.more }} more</button>
+                <button type="button" @click="extendLimit('session')">No limit this session</button>
+                <button type="button" @click="extendLimit('stop')">Stop here</button>
+              </div>
             </div>
 
             <!-- The turn's facts, and the way into everything behind them: the
@@ -1163,25 +1218,8 @@
           </div>
         </div>
 
-        <!-- The open job, and which half of the alternation it is. A draft
-             offers the other door to the gate: ask for a plan over what has
-             been drafted so far. A plan job is work that was approved, and the
-             only thing left to do with it is fold it. -->
-        <div :if="live &amp;&amp; !proposed" class="live-job">
-          <span :if="drafting">draft {{ live?.id }} · {{ live?.objective }}</span>
-          <span :if="!drafting">job {{ live?.id }} · {{ live?.objective }}</span>
-          <button
-            :if="drafting"
-            type="button"
-            class="link"
-            :disabled="running || replaying"
-            @click="requestPlan()">
-            plan this
-          </button>
-          <button type="button" class="link" :disabled="running || replaying" @click="closeJob(live?.id)">
-            close &amp; fold
-          </button>
-        </div>
+        <!-- The open job's *plan this* and *close & fold* are in the head,
+             in the menu beside the session's name. -->
         <!-- What a person answered for the session: its drafts do these, or
              are refused them, without asking until one is taken back. See
              `crate::grants`. -->
@@ -1311,6 +1349,9 @@
 <PermissionsDialog :if="ui.permissions && !state.settingsOpen" />
 <DiffModal :if="ui.diff" />
 <SnippetPreview :if="snippet.preview !== null" />
+<!-- Opened from the content column's foot, which is a dark island: mounted
+     here, it takes the page's tone. -->
+<RuntimeDialog :if="terminal.choosing" :close="() => { terminal.choosing = false }" />
 
 <!-- The shell's own styles, and nothing else's. `scoped` rewrites every
      selector below to also match `[data-jq79="…"]`, the attribute jq79 stamps
@@ -1366,18 +1407,20 @@
   }
   .resize.right { right: -4px; }
   .resize.left { left: -4px; }
+  /* Under the pointer, a line in the theme's accent, wide enough to read as
+     the thing being held — and held while it is dragged. */
   .resize::after {
     content: "";
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 3px;
-    width: 2px;
-    background: var(--luu-divider);
+    left: 2px;
+    width: 4px;
+    background: var(--luu-accent);
     opacity: 0;
     transition: opacity .12s;
   }
-  .resize:hover::after, .resize:focus-visible::after { opacity: 1; }
+  .resize:hover::after, .resize:focus-visible::after, .resize:active::after { opacity: 1; }
   .resize:focus-visible { outline: none; }
 
   .col-head, .col-foot {
@@ -1397,6 +1440,9 @@
   }
   .col-head { border-bottom: 1px solid var(--luu-border); }
   .col-foot { border-top: 1px solid var(--luu-border); font-size: 12px; color: var(--luu-fg-muted); }
+  /* The feet: a step lighter than the heads, so a dropup's face reads — the
+     inspector's too, so the three read as one band along the bottom. */
+  .col > .col-foot { background: var(--luu-foot); }
   .col-main { flex: 1; min-height: 0; overflow: auto; }
 
   .inspector { border-right: 1px solid var(--luu-divider); background: var(--luu-tree-bg); }
@@ -1592,9 +1638,10 @@
   /* Not positioned, and nothing hangs from it: the bar is `overflow: hidden`
      so that nothing in it wraps, which clipped the history when it was a
      popover here to the 2px above the border. It is a modal now. */
+  /* As wide as the name, not the bar: the job's menu sits against it. */
   .name, .name-edit {
     min-width: 0;
-    flex: 1;
+    flex: 0 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1612,6 +1659,8 @@
   }
   .name:hover { background: var(--luu-bg); }
   .name-edit {
+    field-sizing: content;
+    min-width: 6ch;
     background: var(--luu-bg);
     border: 1px solid var(--luu-accent);
     border-radius: 6px;
@@ -1620,7 +1669,8 @@
     font-weight: 600;
     padding: .15rem .35rem;
   }
-  .acts { display: flex; align-items: center; gap: .15rem; flex: none; }
+  .job-menu { flex: none; margin-right: auto; font-size: 12px; }
+  .acts { display: flex; align-items: center; gap: .15rem; flex: none; margin-left: auto; }
   .acts button {
     background: none;
     border: 0;
@@ -1762,6 +1812,28 @@
   .meta:hover .sym.out, .meta:focus-visible .sym.out { color: #145bff; }
   .meta:hover .sym.in, .meta:focus-visible .sym.in { color: #337a00; }
   .waiting { display: flex; align-items: center; gap: .45rem; font-size: 12px; color: var(--luu-fg-muted); }
+  /* The tool limit's question, as a held call's is asked: a card under the
+     turn's last call, its answers as that card's are drawn. */
+  .limit-ask {
+    margin: .4rem 0;
+    padding: .5rem .6rem;
+    border: 1px solid var(--luu-warn, #b7791f);
+    border-radius: 6px;
+    background: var(--luu-warn-soft, #fdf7e9);
+    font-size: 12.5px;
+  }
+  .limit-ask .why { margin: 0; }
+  .limit-ask .answers { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .45rem; }
+  .limit-ask .answers button {
+    padding: .25rem .7rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 5px;
+    background: var(--luu-bg);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .limit-ask .answers button.primary { background: var(--luu-accent); border-color: var(--luu-accent); color: #fff; }
   .waiting .dot {
     width: 7px; height: 7px; border-radius: 50%; flex: none;
     background: var(--luu-accent); animation: waiting 1s ease-in-out infinite;
@@ -1896,12 +1968,6 @@
   .narrow { display: flex; align-items: center; gap: .5rem; margin: .35rem 0; font-size: 12px; }
   .narrow > .dim { min-width: 5.5rem; }
 
-  .live-job {
-    display: flex; align-items: center; gap: .6rem;
-    margin: 0 1rem .4rem; font-size: 13px; color: var(--luu-fg-muted);
-  }
-  .live-job span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .live-job button { margin-left: auto; }
   /* What a person allowed for the session, each one a chip with its ×. */
   .grants {
     display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem;

@@ -281,19 +281,24 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(went.locator(".entry.reply pre").first()).toContainText("```tool")
   await expect(went.locator(".entry.result .role")).toHaveText("tool · read_file")
   await expect(went.locator(".entry.reply pre").last()).toContainText(ANSWER)
-  // A block too big to read at a glance is clipped, with its ways in at the
-  // fade as well as in its head — and *scroll* keeps the box it was clipped
-  // to, so the lines being read do not move.
+  // A block too big to read at a glance is clipped, with its ways in centred
+  // over the fade as well as in its head — and *scroll* keeps the box it was
+  // clipped to, so the lines being read do not move. Taken, the ways in at the
+  // fade go; *collapse* is the head's.
   const big = turn.locator('.group[data-bucket="tools"]')
   const box = big.locator(".body")
   await expect(box).toHaveClass(/\bclip\b/)
   // `offsetHeight`, not the bounding box: the modal is still scaling in.
   const height = () => box.evaluate(element => element.offsetHeight)
   const clipped = await height()
+  // Over the fade: the foot's top is inside the body's box.
+  const [bodyBox, footBox] = await Promise.all([box.boundingBox(), big.locator("footer.over-fade").boundingBox()])
+  expect(footBox.y).toBeLessThan(bodyBox.y + bodyBox.height)
   await big.locator("footer button", { hasText: "scroll" }).click()
   await expect(box).toHaveClass(/\bscroll\b/)
   expect(await height()).toBe(clipped)
-  await expect(big.locator("footer button", { hasText: "collapse" })).toBeVisible()
+  await expect(big.locator("footer")).toHaveCount(0)
+  await expect(big.locator("header button", { hasText: "collapse" })).toBeVisible()
   await turn.locator(".modal-head button", { hasText: "close" }).click()
   await expect(turn).toBeHidden()
 
@@ -333,10 +338,11 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(context.locator('.group[data-bucket="answer"] pre')).toContainText(ANSWER)
   await context.locator(".modal-head button", { hasText: "close" }).click()
 
-  // One entry where its turns were.
-  const live = page.locator(".live-job")
+  // One entry where its turns were: from the menu against the session's name.
+  const live = page.locator(".chat .col-head .job-menu")
   await expect(live).toBeVisible()
-  await live.locator("button", { hasText: "close & fold" }).click()
+  await live.locator("button.trigger").click()
+  await page.getByRole("menuitem", { name: /Close & fold/ }).click()
   await expect(live).toBeHidden({ timeout: 15_000 })
   await expect(page.locator(".fold .summary").first()).toBeVisible()
 
@@ -527,6 +533,17 @@ test("a session is made from where it runs and its lists, and the page says whic
   // machine has, and the lists: none in the file, so the empty one each.
   await expect(starter.locator("select.preset")).toHaveCount(0)
   await expect(starter.locator("select.runtime")).toHaveValue("host|")
+  // This machine's mark at its start, and beside it what that means, as
+  // tall as the field's box.
+  await expect(starter.locator('[data-row="where"] .lead use[href="#i-machine"]')).toHaveCount(1)
+  const means = starter.locator('[data-row="where"] .means')
+  await expect(means).toContainText("On this machine, as you")
+  const [box, beside] = await Promise.all([
+    starter.locator('[data-row="where"] label.box').boundingBox(),
+    means.boundingBox(),
+  ])
+  expect(Math.abs(box.height - beside.height)).toBeLessThan(1)
+  expect(Math.abs(box.y - beside.y)).toBeLessThan(1)
   for (const kind of ["shell", "network", "files"]) {
     await expect(starter.locator(`select.list-${kind} option`)).toHaveText(["empty"])
   }
@@ -626,10 +643,11 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // 23, Appearance's palette since 2026-10-21, and since 2026-10-23 the
   // permissions' shield and a session's archive, restore and delete; since
   // 2026-10-25 the picker's two tool transports, a plug and braces; since
-  // 2026-10-26 an engine card's play, stop and download.
+  // 2026-10-26 an engine card's play, stop and download; since 2026-10-27
+  // this machine, which a `host` runtime wears.
   // The tree's own shapes are the theme's, in `theme/default/files.svg`, not
   // the page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(33)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(35)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be
@@ -1105,14 +1123,15 @@ test("the workspace can be narrowed to a subdirectory of where serve started", a
   // place a tree can start.
   await expect(picker.locator(".folders .row")).not.toHaveCount(0)
   await expect(picker.locator('.folders .row:has-text("Cargo.toml")')).toHaveCount(0)
-  // A project, not only a folder: the host first — this machine, with no
-  // `[host.*]` in a fresh state directory — and a session's runtime and model
-  // last. Nothing under the base is a repository of its own, so nothing is
-  // marked; `tests/hosts.rs` and `workspace.rs` test the mark and the hop.
+  // A project is a host and a folder: the host first — this machine, with no
+  // `[host.*]` in a fresh state directory — and nothing about the session,
+  // which is the sessions dialog's. Nothing under the base is a repository of
+  // its own, so nothing is marked; `tests/hosts.rs` and `workspace.rs` test
+  // the mark and the hop.
   await expect(picker.locator(".hosts .pick")).toHaveCount(1)
   await expect(picker.locator(".hosts .pick")).toContainText("localhost")
-  await expect(picker.locator(".run select, .run p").first()).toBeVisible()
-  await expect(picker.locator("button.save", { hasText: "Open" })).toBeVisible()
+  await expect(picker.locator(".run")).toHaveCount(0)
+  await expect(picker.locator("button", { hasText: /^Open$/ })).toHaveCount(0)
   await expect(picker.locator(".folders .repo")).toHaveCount(0)
 
   await picker.locator('.folders .row:has-text("crates")').click()
@@ -1238,10 +1257,17 @@ async function gateOnWidePosture(page) {
   await composer.fill("what is published?")
   await page.click('.composer button[type="submit"]')
 
-  // The drafting turn lands, which is what opens the draft to plan over.
-  const live = page.locator(".live-job")
+  // The drafting turn lands, which is what opens the draft to plan over —
+  // planned from the menu against the session's name.
+  const live = page.locator(".chat .col-head .job-menu")
   await expect(live).toBeVisible({ timeout: 30_000 })
-  await live.locator("button", { hasText: "plan this" }).click()
+  // Which half of the alternation it is, and no number: the number is in its
+  // title, and in the fold it becomes.
+  await expect(live.locator("button.trigger")).toHaveText("draft")
+  await live.locator("button.trigger").click()
+  // What each door does, under its name.
+  await expect(page.getByRole("menuitem", { name: /Plan this/ }).locator(".note")).toHaveText("what was drafted, at the gate")
+  await page.getByRole("menuitem", { name: /Plan this/ }).click()
 
   const gate = page.locator(".gate")
   await expect(gate).toBeVisible({ timeout: 30_000 })
