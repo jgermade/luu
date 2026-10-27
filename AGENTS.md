@@ -154,8 +154,9 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # double click keeps it. Its foot is the file's icon and path, a diff button
 # (a modal) while git counts the file as changed, and at the far right a
 # terminal: a shell where the session's commands run (its container, or this
-# machine), in a panel under the editor whose picker moves the session to
-# another posture between jobs. A host shell is the whole account, so
+# machine), in a panel under the editor whose *Runtime* button opens a dialog
+# that moves the session to another posture between jobs, once a box saying
+# what stays behind is ticked. A host shell is the whole account, so
 # `[terminal] host` decides who gets one: `loopback` (the default), `always`
 # (whoever holds the token) or `never`.
 #

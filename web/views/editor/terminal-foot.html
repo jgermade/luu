@@ -1,65 +1,47 @@
 <script :setup>
-  // The terminal's controls, in the content column's foot whether the panel
-  // is up or put away — where the session's commands run is true either way:
-  // the column has one foot, under the terminal, rather than a foot for the
-  // file and a second one for the shell. The foot's own button is what shows
-  // and hides the panel. Where the session's commands run,
-  // and the way to move them — moving is the session's, not only the
-  // terminal's, so the model's next command runs there too. The picker opens
-  // upward, which a foot wants. See
-  // `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
-  const { terminal, restartTerminal, moveSession } = await import("@web/lib/terminal.js")
+  // Where the session's commands run, in the content column's foot whether
+  // the terminal is up or put away — that is true either way: the column has
+  // one foot, under the terminal, rather than a foot for the file and a
+  // second one for the shell. The foot's own button is what shows and hides
+  // the panel. See `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+  //
+  // **Named *Runtime*, and moved through a dialog.** The place is the
+  // session's, not only the terminal's — the model's next command runs there
+  // too — and a move leaves behind whatever the model installed where it ran,
+  // which a dropup had no room to say. The button shows where it runs now, by
+  // its mark and its name; the dialog (`runtime-dialog.html`, mounted at the
+  // page's root so it takes the page's tone) chooses another. See
+  // `RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md`.
+  const { terminal, restartTerminal } = await import("@web/lib/terminal.js")
   const { state, loadPostures } = await import("@web/lib/store.js")
-  const Dropup = await import("@web/components/dropup.html")
-  const { placeOptions } = await import("@web/lib/places.js")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  const { placeOptions, livePlace, placeMark } = await import("@web/lib/places.js")
+  const { loadBrands } = await import("@web/lib/brands.js")
+  loadBrands()
 
   if (!state.postures) loadPostures()
 
-  // The server's own policy file, and every `[posture.<name>]` in
-  // `config.toml` — what a page may choose is bounded by what somebody typed
-  // on this machine. **Named by where it runs**, because that is the question
-  // a terminal answers; which posture and which file are the line under it.
-  // A runtime this machine does not have is offered, off, saying so.
-  //
-  // **A contained posture is offered on every container runtime**, its own
-  // first: one image and one argv but for its first word. A host posture is
-  // offered once, because its paths are on this machine. See `lib/places.js`,
-  // which the session starter shares.
-  $: environments = placeOptions(state.postures)
   $: choosable = !!state.postures?.choosable
-  // Which option the live session is: its posture, and — where it runs on a
-  // runtime other than the one that posture names — that runtime. The label
-  // is `docker (luu-worker:dev)` or `host`; its first word is the runtime.
-  const declaredOf = name => (name ? state.postures?.places?.[name] : state.postures?.own)?.[0]?.runtime
-  $: liveRuntime = (terminal.info?.posture?.runtime || "").split(" ")[0]
-  $: liveName = terminal.info?.posture?.name || ""
-  $: here = `${liveName}|${liveRuntime && liveRuntime !== declaredOf(liveName) ? liveRuntime : ""}`
-  // Only what the picker does not already say: an open shell needs no word,
+  $: here = livePlace(state.postures, terminal.info?.posture)
+  $: hereOption = placeOptions(state.postures).find(o => o.value === here)
+  $: mark = placeMark(hereOption?.where)
+  // Only what the button does not already say: an open shell needs no word,
   // and neither does one never opened.
   $: said = terminal.moving
     ? "moving the session…"
     : (terminal.status === "open" || terminal.status === "idle" ? "" : terminal.status)
-
-  // Against what the server last said and not against `here`: the dropup
-  // writes its model back before it emits, so `here` is already the new name.
-  // The shell is drawn by the panel above this foot, so that is the host it
-  // opens again in.
-  const move = value => {
-    const [name, runtime] = value.split("|")
-    const live = terminal.info?.posture
-    const liveWord = (live?.runtime || "").split(" ")[0]
-    const same = name === (live?.name || "")
-      && (runtime || declaredOf(name)) === liveWord
-    if (same) return
-    moveSession(name, runtime || null, document.querySelector(".content .terminal .host"))
-  }
 </script>
 
 <span class="terminal-foot">
-  <span class="title">Terminal</span>
-  <Dropup :if="choosable" class="env" :options="environments" :model="here"
-          :disabled="terminal.moving" title="Where this session's commands run"
-          @change="move($event.detail)" />
+  <span class="title">Runtime</span>
+  <button :if="choosable" type="button" class="face place" :disabled="terminal.moving"
+          :title="hereOption ? `${hereOption.title} — move the session` : 'Where this session\'s commands run'"
+          aria-haspopup="dialog"
+          @click="terminal.choosing = true">
+    <BrandIcon :if="mark.src" :src="mark.src" size="12px" />
+    <svg :if="!mark.src" class="ic mark"><use :href="mark.glyph"/></svg>
+    <span class="label">{{ hereOption?.label || "…" }}</span>
+  </button>
   <span class="dim state" :class="terminal.status" :data-place="terminal.info?.place || ''">{{ said }}</span>
   <!-- Open again, once the shell has ended. -->
   <button :if="terminal.status === 'ended'" type="button" class="icon"
@@ -78,6 +60,29 @@
     font-size: 12px;
   }
   .title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--luu-fg-muted); }
+  /* `components/dropup.html`'s face, with the place's mark before its name:
+     one bordered button, like every choice in the page's feet. */
+  .face {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    min-width: 0;
+    max-width: 16rem;
+    background: var(--luu-bg);
+    color: var(--luu-fg);
+    border: 1px solid var(--luu-border-strong);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.5;
+    padding: .1rem .55rem;
+    cursor: pointer;
+  }
+  .face:hover:not(:disabled) { border-color: var(--luu-accent); }
+  .face:disabled { opacity: .5; cursor: default; }
+  .face .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .face .mark { width: 12px; height: 12px; }
   .state { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .state.ended { color: var(--luu-warn); }
   /* The content column's `.foot-btn`: one bar, one kind of control. */

@@ -9,6 +9,7 @@
 ///
 /// The value is `posture|runtime`: the posture's name (`""` is the server's
 /// own) and the runtime where it is not the one that posture names.
+import { brandSrc, runtimeBrand } from "./brands.js"
 
 /// How a place reads: by where it runs, which is the question both pickers
 /// answer.
@@ -16,7 +17,7 @@ const runs = place => !place ? "?"
   : place.runtime === "direct" ? "direct (no container)"
   : place.image ? `${place.runtime} · ${place.image}` : place.runtime
 
-/// `[{ value, posture, runtime, name, label, title, disabled }]` out of what
+/// `[{ value, posture, runtime, where, name, label, title, disabled }]` out of what
 /// `/api/postures` answered. A runtime this machine does not have is in the
 /// list, disabled, saying so.
 export function placeOptions(postures) {
@@ -26,6 +27,8 @@ export function placeOptions(postures) {
       value: `${name}|${runtime}`,
       posture: name,
       runtime,
+      // The runtime it runs on, variant or not: what its mark is.
+      where: place?.runtime || "",
       name: label,
       label: runs(place),
       title: place?.missing
@@ -41,6 +44,26 @@ export function placeOptions(postures) {
     ...[...Object.keys(postures?.postures || {}), ...(postures?.environments || [])].flatMap(name =>
       variants(name, name, postures?.places?.[name])),
   ]
+}
+
+/// Which of `placeOptions` the live session is, from `/api/terminal`'s
+/// `posture` — `{ name, runtime }`, the runtime a word and maybe an image
+/// after it: its posture, and the runtime only where it is not the one that
+/// posture names.
+export function livePlace(postures, live) {
+  const name = live?.name || ""
+  const runtime = (live?.runtime || "").split(" ")[0]
+  const declared = (name ? postures?.places?.[name] : postures?.own)?.[0]?.runtime
+  return `${name}|${runtime && runtime !== declared ? runtime : ""}`
+}
+
+/// The mark a place wears, by the runtime it runs on: this machine for `host`
+/// and `direct`, the runtime's brand where there is one, and a box for a
+/// container runtime with none — `{ src, glyph }`, one of them set.
+export function placeMark(where) {
+  if (!where || where === "host" || where === "direct") return { src: null, glyph: "#i-machine" }
+  const src = brandSrc(runtimeBrand(where))
+  return { src, glyph: src ? null : "#i-box" }
 }
 
 /// `value` if it is still a place that can be chosen, else the server's own.

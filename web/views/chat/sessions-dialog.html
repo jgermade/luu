@@ -11,7 +11,7 @@
     ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
     chooseRuntime, chooseList,
   } = await import("@web/lib/ui.js")
-  const { runtimeOptions } = await import("@web/lib/places.js")
+  const { runtimeOptions, placeMark } = await import("@web/lib/places.js")
   const TabModal = await import("@web/theme/default/components/tab-modal.html")
   const InputContainer = await import("@web/theme/default/components/input-container.html")
   const TextInput = await import("@web/theme/default/components/text-input.html")
@@ -19,7 +19,7 @@
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const ProviderModels = await import("./provider-models.html")
   const BrandIcon = await import("@web/components/brand-icon.html")
-  const { brandSrc, runtimeBrand, loadBrands } = await import("@web/lib/brands.js")
+  const { loadBrands } = await import("@web/lib/brands.js")
   loadBrands()
 
   // Three tabs: start one, the earlier ones, and the ones put away. An
@@ -76,8 +76,7 @@
   // Its mark, at the start of the field: the runtime's brand where the page
   // or a pack has one, a box for a container runtime with none, and this
   // machine for `host` and `direct`.
-  $: runtimeMark = runtimeChosen ? brandSrc(runtimeBrand(runtimeChosen.runtime)) : null
-  $: runtimeGlyph = !runtimeChosen || ["host", "direct"].includes(runtimeChosen.runtime) ? "#i-machine" : "#i-box"
+  $: runtimeMark = placeMark(runtimeChosen?.runtime)
 
   const KINDS = [
     { key: "shell", label: "Shell" },
@@ -239,8 +238,8 @@
                         :disabled="runtimes.length < 2"
                         @change="chooseRuntime($event.detail)">
           <template :slot.lead>
-            <BrandIcon :if="runtimeMark" :src="runtimeMark" size="14px" />
-            <svg :if="!runtimeMark" class="ic mark"><use :href="runtimeGlyph"/></svg>
+            <BrandIcon :if="runtimeMark.src" :src="runtimeMark.src" size="14px" />
+            <svg :if="!runtimeMark.src" class="ic mark"><use :href="runtimeMark.glyph"/></svg>
           </template>
         </InputContainer>
         <p :if="runtimeMeans" class="means">{{ runtimeMeans }}</p>

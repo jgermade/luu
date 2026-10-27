@@ -27,6 +27,9 @@ export const terminal = $reactive({
   /// move was refused.
   moving: false,
   moveError: null,
+  /// Whether the dialog that moves it is open: `views/editor/runtime-dialog.html`,
+  /// opened from the foot and mounted at the page's root.
+  choosing: false,
   /// `idle` (no shell), `connecting`, `open`, or `ended` (the shell exited,
   /// or the container it was in went away).
   status: "idle",

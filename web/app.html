@@ -69,6 +69,7 @@
   const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
   const TerminalPanel = await import("@web/views/editor/terminal.html")
   const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
+  const RuntimeDialog = await import("@web/views/editor/runtime-dialog.html")
   const { segments, runs } = await import("@web/helpers/segments.js")
   const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
@@ -1313,6 +1314,9 @@
 <PermissionsDialog :if="ui.permissions && !state.settingsOpen" />
 <DiffModal :if="ui.diff" />
 <SnippetPreview :if="snippet.preview !== null" />
+<!-- Opened from the content column's foot, which is a dark island: mounted
+     here, it takes the page's tone. -->
+<RuntimeDialog :if="terminal.choosing" :close="() => { terminal.choosing = false }" />
 
 <!-- The shell's own styles, and nothing else's. `scoped` rewrites every
      selector below to also match `[data-jq79="…"]`, the attribute jq79 stamps
@@ -1399,6 +1403,9 @@
   }
   .col-head { border-bottom: 1px solid var(--luu-border); }
   .col-foot { border-top: 1px solid var(--luu-border); font-size: 12px; color: var(--luu-fg-muted); }
+  /* The two feet with choices in them: a step lighter, so a dropup's face
+     reads. */
+  .content > .col-foot, .chat > .col-foot { background: var(--luu-foot); }
   .col-main { flex: 1; min-height: 0; overflow: auto; }
 
   .inspector { border-right: 1px solid var(--luu-divider); background: var(--luu-tree-bg); }

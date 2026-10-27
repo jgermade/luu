@@ -1102,12 +1102,15 @@ modal, which leaves the file on screen. See
 The column has **one foot**, at its bottom: what a status bar says about the
 open thing (`cut at 512 KB`, a diff's two sides) and at the far right **the terminal**'s
 toggle, lit while it is up. The terminal is a panel, dark whatever the page is, *above* that
-foot, and while it is up the foot carries its controls too (the picker that moves the session,
-named by where each posture runs — `host`, `docker · luu-worker:dev` — with the posture and its
-file under each, and a runtime this machine lacks offered off — and a contained posture offered
-on every container runtime, since they share the image and the argv, while a host posture is
-offered once — the same list the session starter offers, and a new session is offered where
-the last one started or was moved to: [`RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md`](RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md)),
+foot, and while it is up the foot carries its controls too (*Runtime*: a button naming where the
+session runs, with its runtime's mark, that opens **a dialog that moves the session** — every
+place by where it runs, `host`, `docker · luu-worker:dev`, with its mark and the posture and its
+file under each, a runtime this machine lacks offered off, a contained posture on every
+container runtime since they share the image and the argv, a host posture once — the same list
+the session starter offers; a move waits on a box that says what stays behind, what the model
+installed where the session runs now, and a container it leaves goes with everything in it. The
+dialog is mounted at the page's root, so it takes the page's tone and not the foot's: [`RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md`](RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md).
+A new session is offered where the last one started or was moved to: [`RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md`](RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md)),
 holding a shell where the session runs, which hiding does not end and `exit`
 does — there is no button for it
 ([`RECORD/2026-10-01.the-foot-names-its-file.completed.md`](RECORD/2026-10-01.the-foot-names-its-file.completed.md)) — and, the way VS Code does it, a single click opens a **preview** tab, in
@@ -1982,7 +1985,10 @@ there are no turns, or moves this one with its history (the starter's
 *Continue here*) when there are. Who answers the gate (*Manual* / *Auto*) sits
 beside it as a dropup too (`components/dropup.html`), each answer with the line
 that says what it means, because a status bar has room for one word and not for
-the explanation.
+the explanation. **The two feet with choices in them** — the editor's and the
+chat's — are a step lighter than the bars (`--luu-foot`), and a dropup's menu
+lighter again (`--luu-menu`), with its face bordered in the strong line, so the
+buttons read on the foot and the menu on the page.
 
 **And so do the three resend rules.** `POST /api/sessions` takes `repeat`,
 `prune` and `results` beside the three above — `always`/`once`, `never`/`behind`,

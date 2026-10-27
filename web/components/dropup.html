@@ -94,7 +94,7 @@
     gap: .3rem;
     background: var(--luu-bg, #f4f5f8);
     color: var(--luu-fg, #1a1d23);
-    border: 1px solid var(--luu-border, #c8c8c8);
+    border: 1px solid var(--luu-border-strong, #a3a3a3);
     border-radius: 6px;
     font: inherit;
     font-size: 11px;
@@ -121,8 +121,10 @@
     z-index: 41;
     min-width: 14rem;
     max-width: min(22rem, 90vw);
-    background: var(--luu-raised, #fff);
-    border: 1px solid var(--luu-border, #c8c8c8);
+    /* The page's menu ground where it has one — a step lighter than the foot
+       it opens from — and a raised one where it does not. */
+    background: var(--luu-menu, var(--luu-raised, #fff));
+    border: 1px solid var(--luu-border-strong, #a3a3a3);
     border-radius: 8px;
     box-shadow: 0 8px 24px rgb(0 0 0 / .25);
     padding: .3rem;
@@ -140,7 +142,7 @@
     font: inherit;
     cursor: pointer;
   }
-  .opt:hover:not(:disabled), .opt:focus-visible { background: var(--luu-sunken, #eceef2); outline: none; }
+  .opt:hover:not(:disabled), .opt:focus-visible { background: var(--luu-menu-hover, var(--luu-sunken, #eceef2)); outline: none; }
   .opt:disabled { opacity: .5; cursor: default; }
   .opt.on .label { color: var(--luu-accent, #2f5bbd); }
   .check { width: 1em; flex: none; font-size: 12px; color: var(--luu-accent, #2f5bbd); }
