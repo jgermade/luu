@@ -19,10 +19,9 @@
      both tones, and the root is painted with it, so a bounce at the window's
      edge runs on into the bars rather than off a white page. */
   --luu-bar: #191919;
-  /* The feet that hold choices — the editor's and the chat's — a step lighter
-     than the bars, so a dropup's face reads on them; and the menu a dropup
-     opens from one, lighter again, with its own hover. Dark in both tones,
-     like the bars they sit in. */
+  /* The columns' feet, a step lighter than the bars, so a dropup's face
+     reads on them; and the menu a dropup opens from one, lighter again, with
+     its own hover. Dark in both tones, like the bars they sit in. */
   --luu-foot: #303030;
   --luu-menu: #393939;
   --luu-menu-hover: #474747;

@@ -155,7 +155,10 @@ async fn probe(runtime: Runtime, images: Vec<String>) -> RuntimeView {
         Ok(_) => view.answers = Some(true),
         Err(said) => {
             view.answers = Some(false);
-            view.detail = Some(said);
+            view.detail = Some(match runtime {
+                Runtime::Podman => podman_machine().await.unwrap_or(said),
+                _ => said,
+            });
             view.startable = start_steps(runtime).is_some();
             return view;
         }
@@ -166,6 +169,54 @@ async fn probe(runtime: Runtime, images: Vec<String>) -> RuntimeView {
         }
     }
     view
+}
+
+/// Why podman does not answer, where its machine says so: on a Mac every
+/// `podman` reaches the containers through a VM, and `podman info` against a
+/// stopped one says only *cannot connect* — with advice to list the
+/// connections, which are there whether the machine runs or not. `None` where
+/// there is no machine to ask about, or it is running and podman still cannot
+/// reach it: then podman's own words are the better ones.
+async fn podman_machine() -> Option<String> {
+    let mut command = tokio::process::Command::new("podman");
+    command
+        .args(["machine", "list", "--format", "json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(PROBE, command.output())
+        .await
+        .ok()?
+        .ok()?;
+    machine_said(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// [`podman_machine`]'s reading of `podman machine list --format json`: the
+/// default machine — or the only one — and whether it is up.
+fn machine_said(json: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Machine {
+        name: String,
+        #[serde(default)]
+        default: bool,
+        #[serde(default)]
+        running: bool,
+        #[serde(default)]
+        starting: bool,
+    }
+    let machines: Vec<Machine> = serde_json::from_str(json).ok()?;
+    let machine = match machines.iter().find(|m| m.default) {
+        Some(machine) => machine,
+        None if machines.len() == 1 => &machines[0],
+        None => return None,
+    };
+    let name = machine.name.trim_end_matches('*');
+    match (machine.running, machine.starting) {
+        (true, _) => None,
+        (false, true) => Some(format!("its machine, {name}, is starting")),
+        (false, false) => Some(format!("its machine, {name}, is not running")),
+    }
 }
 
 /// Runs one line under [`PROBE`], answering with its first line of complaint
@@ -402,6 +453,29 @@ pub fn policy_files(base: &Path) -> Vec<PolicyFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stopped machine is said by name, in place of podman's advice to list
+    /// the connections; a running one, or none, leaves podman's own words.
+    #[test]
+    fn podman_says_which_machine_is_not_running() {
+        let list = |running: bool, starting: bool| {
+            format!(
+                r#"[{{"Name":"podman-machine-default*","Default":true,"Running":{running},"Starting":{starting},"LastUp":"Never"}},
+                   {{"Name":"other","Default":false,"Running":true,"Starting":false}}]"#
+            )
+        };
+        assert_eq!(
+            machine_said(&list(false, false)).as_deref(),
+            Some("its machine, podman-machine-default, is not running")
+        );
+        assert_eq!(
+            machine_said(&list(false, true)).as_deref(),
+            Some("its machine, podman-machine-default, is starting")
+        );
+        assert_eq!(machine_said(&list(true, false)), None);
+        assert_eq!(machine_said("[]"), None, "Linux: no machine");
+        assert_eq!(machine_said("not json"), None);
+    }
 
     #[test]
     fn a_policy_file_is_one_that_says_so_and_cargo_toml_is_not() {

@@ -1991,8 +1991,9 @@ there are no turns, or moves this one with its history (the starter's
 *Continue here*) when there are. Who answers the gate (*Manual* / *Auto*) sits
 beside it as a dropup too (`components/dropup.html`), each answer with the line
 that says what it means, because a status bar has room for one word and not for
-the explanation. **The two feet with choices in them** — the editor's and the
-chat's — are a step lighter than the bars (`--luu-foot`), and a dropup's menu
+the explanation. **The columns' feet** are a step lighter than the bars
+(`--luu-foot`) — the editor's and the chat's first, for their dropups, and the
+inspector's with them so the three read as one band — and a dropup's menu
 lighter again (`--luu-menu`), with its face bordered in the strong line, so the
 buttons read on the foot and the menu on the page. The model menu's columns are
 laid as Settings → Models lays them: the providers, the head and the foot a step

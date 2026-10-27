@@ -1405,9 +1405,9 @@
   }
   .col-head { border-bottom: 1px solid var(--luu-border); }
   .col-foot { border-top: 1px solid var(--luu-border); font-size: 12px; color: var(--luu-fg-muted); }
-  /* The two feet with choices in them: a step lighter, so a dropup's face
-     reads. */
-  .content > .col-foot, .chat > .col-foot { background: var(--luu-foot); }
+  /* The feet: a step lighter than the heads, so a dropup's face reads — the
+     inspector's too, so the three read as one band along the bottom. */
+  .col > .col-foot { background: var(--luu-foot); }
   .col-main { flex: 1; min-height: 0; overflow: auto; }
 
   .inspector { border-right: 1px solid var(--luu-divider); background: var(--luu-tree-bg); }
