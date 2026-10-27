@@ -15,7 +15,7 @@
 /// Monaco is: `/api/terminal` says whether it is here.
 
 import { $reactive } from "@web/vendor/jq79.js"
-import { apiHeaders, socketUrl, refreshSettings } from "./store.js"
+import { apiHeaders, socketUrl, refreshSettings, state } from "./store.js"
 import { setPlace } from "./prefs.js"
 
 export const terminal = $reactive({
@@ -43,6 +43,36 @@ let socket = null
 let observer = null
 
 const encoder = new TextEncoder()
+
+/// Where the open shell runs, as `followSession` compares it: the place
+/// `/api/terminal` named when it was opened — and, in a container, the
+/// session, since every session has a container of its own. `null` while no
+/// shell is open.
+let openedIn = null
+/// The panel's box, the last time it was drawn: where a shell opened again
+/// for a new session goes.
+let lastHost = null
+
+const placeOfShell = () => {
+  const info = terminal.info
+  if (!info?.available) return ""
+  return info.place === "container"
+    ? `container|${state.session}|${info.posture?.runtime || ""}`
+    : "host"
+}
+
+/// What the live session allows, asked again whenever the session may have
+/// changed — and the shell with it. A new session, or one moved, runs its
+/// commands somewhere else: a container of its own, or this machine instead of
+/// one. The shell open is ended and opened again there, in the panel it was
+/// in, so the terminal is where the session is. On this machine a new session
+/// keeps the shell: it is the same account in the same folder.
+export async function followSession() {
+  await loadTerminal()
+  if (!term || openedIn === null || openedIn === placeOfShell()) return
+  endTerminal()
+  if (lastHost?.isConnected) await attach(lastHost)
+}
 
 /// What the live session allows, asked again whenever the session may have
 /// changed.
@@ -107,6 +137,7 @@ function sendSize() {
 }
 
 function connect() {
+  openedIn = placeOfShell()
   terminal.status = "connecting"
   const opened = new WebSocket(socketUrl("/ws/terminal"))
   opened.binaryType = "arraybuffer"
@@ -129,6 +160,7 @@ function connect() {
 /// Puts the shell in `host`, starting one if there is none. Called by the
 /// panel every time it is drawn.
 export async function attach(host) {
+  lastHost = host
   if (!terminal.info?.available || !terminal.info?.xterm) return
   const { Terminal, FitAddon } = await xterm()
   if (!host.isConnected) return
@@ -180,6 +212,7 @@ export function endTerminal() {
   term?.dispose()
   term = null
   fit = null
+  openedIn = null
   terminal.status = "idle"
 }
 

@@ -1134,6 +1134,10 @@ container runtime since they share the image and the argv, a host posture once �
 the session starter offers; a move waits on a box that says what stays behind, what the model
 installed where the session runs now, and a container it leaves goes with everything in it. The
 dialog is mounted at the page's root, so it takes the page's tone and not the foot's: [`RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md`](RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md).
+A session made from lists is no posture, and is named by where it runs all the same — `host`,
+`podman · luu-worker:dev` — in the foot and first in the dialog; and a new session whose
+commands run elsewhere — a container of its own, or this machine instead of one — ends the open
+shell and opens it again there (`followSession`): [`RECORD/2026-10-27.the-new-session-s-runtime-in-the-foot.completed.md`](RECORD/2026-10-27.the-new-session-s-runtime-in-the-foot.completed.md).
 A new session is offered where the last one started or was moved to: [`RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md`](RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md)),
 holding a shell where the session runs, which hiding does not end and `exit`
 does — there is no button for it

@@ -153,6 +153,31 @@ test("a session is made from a runtime and three lists, and comes back made from
   expect(made.lists.files.name).toBe("(empty)")
   await say("hola")
 
+  // The Editor's foot names where it runs, though it is no posture: this
+  // machine, by its mark — it said "…" until 2026-10-27. Its dialog draws it
+  // as where the session is now.
+  const foot = page.locator(".content .col-foot")
+  await expect(foot.locator("button.place")).toHaveText("host")
+  await expect(foot.locator('button.place use[href="#i-machine"]')).toHaveCount(1)
+  await foot.locator("button.place").click()
+  const runtime = page.getByRole("dialog", { name: "Runtime" })
+  await expect(runtime.getByRole("radio", { checked: true })).toContainText("now")
+  await runtime.getByRole("button", { name: "Cancel" }).click()
+  await expect(runtime).toHaveCount(0)
+  // And one in a container, by its runtime and its image, from what
+  // `/api/terminal` says of it: this machine may have no runtime to run one.
+  const contained = await page.evaluate(async () => {
+    const { hereOption, placeMark } = await import("./lib/places.js")
+    const option = hereOption(null, {
+      name: "tools+registries",
+      runtime: "podman (luu-worker:dev)",
+      composed: { runtime: "podman", image: "luu-worker:dev" },
+    })
+    return { label: option.label, mark: placeMark(option.where).src }
+  })
+  expect(contained.label).toBe("podman · luu-worker:dev")
+  expect(contained.mark).toContain("brands/podman.svg")
+
   // The next one is offered what this one was made from; started empty.
   await page.click('.chat .acts button[title^="New session"]')
   await expect(select("list-shell")).toHaveValue("tools")

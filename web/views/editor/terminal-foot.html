@@ -15,15 +15,15 @@
   const { terminal, restartTerminal } = await import("@web/lib/terminal.js")
   const { state, loadPostures } = await import("@web/lib/store.js")
   const BrandIcon = await import("@web/components/brand-icon.html")
-  const { placeOptions, livePlace, placeMark } = await import("@web/lib/places.js")
+  const { hereOption: placeHere, placeMark } = await import("@web/lib/places.js")
   const { loadBrands } = await import("@web/lib/brands.js")
   loadBrands()
 
   if (!state.postures) loadPostures()
 
   $: choosable = !!state.postures?.choosable
-  $: here = livePlace(state.postures, terminal.info?.posture)
-  $: hereOption = placeOptions(state.postures).find(o => o.value === here)
+  // A session made from lists is no posture, and is named by where it runs.
+  $: hereOption = placeHere(state.postures, terminal.info?.posture)
   $: mark = placeMark(hereOption?.where)
   // Only what the button does not already say: an open shell needs no word,
   // and neither does one never opened.

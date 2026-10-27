@@ -57,6 +57,36 @@ export function livePlace(postures, live) {
   return `${name}|${runtime && runtime !== declared ? runtime : ""}`
 }
 
+/// The live session's place as `placeOptions` draws one: the option it is,
+/// or — for a session made from lists, which is no posture and so none of
+/// them — one made from where `/api/terminal` says it runs (`composed`, or
+/// the worker's label), so the foot and the dialog still name it. `null`
+/// until the server has said.
+export function hereOption(postures, live) {
+  if (!live) return null
+  const value = livePlace(postures, live)
+  const found = placeOptions(postures).find(option => option.value === value)
+  if (found) return found
+  // `docker (luu-worker:dev)`, `host`, `direct (no container)`.
+  const [word, rest] = (live.runtime || "").split(" ")
+  const runtime = live.composed?.runtime || word || "host"
+  const image = live.composed?.image || (rest?.startsWith("(") && rest !== "(no" ? rest.slice(1, -1) : null)
+  const place = { runtime, image }
+  const name = live.name || "this session"
+  return {
+    value,
+    posture: live.name || "",
+    runtime: "",
+    where: runtime,
+    name,
+    label: runs(place),
+    title: `${name} · ${runs(place)}`,
+    disabled: false,
+    // Not one a picker offers: drawn as where the session is, never chosen.
+    made: true,
+  }
+}
+
 /// The mark a place wears, by the runtime it runs on: this machine for `host`
 /// and `direct`, the runtime's brand where there is one, and a box for a
 /// container runtime with none — `{ src, glyph }`, one of them set.

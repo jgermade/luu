@@ -12,7 +12,7 @@
   const { ui, openSettingsAt, openStarter, openHistory, checkModel,
           watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal,
           openPermissions } = await import("@web/lib/ui.js")
-  const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
+  const { terminal, followSession } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const { modelLabel } = await import("@web/lib/engines.js")
   const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
@@ -497,7 +497,8 @@
   $: changedHere = activeChanged(workspace.tabs, workspace.active, workspace.status)
 
   // Whether the live session has a container to open a shell in. Asked again
-  // when the session or its posture moves, and memoized on those, because
+  // when the session or its posture moves — and the shell opened again where
+  // the new one runs (`followSession`) — and memoized on those, because
   // jq79 wakes this line on a write to any field of `state`. Not until the
   // socket has said there is a server, and never in a replay: the static twin
   // answers `/api/terminal` with a 404 in the console.
@@ -506,7 +507,7 @@
     return (live, key) => {
       if (live && key !== last) {
         last = key
-        loadTerminal()
+        followSession()
       }
       return key
     }
