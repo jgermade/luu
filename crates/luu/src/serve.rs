@@ -5101,8 +5101,10 @@ struct RuntimesView {
     /// Where an image is built from source, and where a policy file is
     /// looked for.
     base: String,
-    /// Whether the base has a `Containerfile`, so an image can also be built
-    /// from source here, and not only from the release.
+    /// Whether the base is luu's own checkout, so an image can also be built
+    /// from source here, and not only from the release. A project's own
+    /// `Containerfile` is not luu's worker. See
+    /// [`crate::runtimes::is_luu_checkout`].
     from_source: bool,
     /// The release a build fetches luu from: this build's own version.
     release: &'static str,
@@ -5206,7 +5208,7 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         path: config_path().await.map(|path| path.display().to_string()),
         editable: refused.is_none(),
         refused,
-        from_source: base.join("Containerfile").is_file(),
+        from_source: crate::runtimes::is_luu_checkout(&base),
         release: env!("CARGO_PKG_VERSION"),
         base: base.display().to_string(),
         runtimes,

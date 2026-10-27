@@ -202,7 +202,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # has the images the policy files name — with install (podman and colima, by
 # Homebrew on macOS, as the person), start, and a build of an image that is
 # missing: from this version's release (seconds, `Containerfile.release`) or,
-# where the base has a `Containerfile`, from source (minutes); the
+# in luu's own checkout and nowhere else, from source (minutes); the
 # `[posture.*]` table, a new one naming a policy file out of the ones at the top
 # of the checkout; and `[terminal] host`. Writes are loopback-only, like Engines.
 # A session whose runtime is down starts it with the same lines *start it* runs,

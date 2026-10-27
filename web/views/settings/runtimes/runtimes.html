@@ -227,8 +227,8 @@
           <span :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" class="state down">not built</span>
           <span :if="i.worker" class="dim small">luu {{ i.worker }}<span :if="i.from"> · from {{ i.from }}</span></span>
           <!-- From the release by default: this version's Linux binary, no
-               compiler. From source only where the base has a Containerfile,
-               which is luu's own checkout. Offered again for an image that
+               compiler. From source only in luu's own checkout: a project's
+               own Containerfile is not luu's worker. Offered again for an image that
                is out of date. -->
           <button :if="(i.present === false || i.cure === 'release') && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
                   :title="`luu ${view.release}'s Linux binary, from its GitHub release`"

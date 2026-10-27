@@ -330,6 +330,15 @@ pub enum BuildFrom {
     Source,
 }
 
+/// Whether `base` is luu's own checkout, the one place a worker is built from
+/// source. A `Containerfile` alone is not enough: a person's project has its
+/// own, and building *that* under the worker's tag would put their image
+/// where luu's worker is expected. So the crate the worker is compiled from has
+/// to be there beside it.
+pub fn is_luu_checkout(base: &Path) -> bool {
+    base.join("Containerfile").is_file() && base.join("crates/agent-core/Cargo.toml").is_file()
+}
+
 /// The line that builds `image`, run in the base for a source build and in
 /// [`release_context`] for a release one.
 fn build_line(runtime: Runtime, image: &str, from: BuildFrom) -> Option<Vec<String>> {
@@ -435,10 +444,10 @@ impl Tasks {
         from: BuildFrom,
         base: &Path,
     ) -> Result<(), String> {
-        if from == BuildFrom::Source && !base.join("Containerfile").is_file() {
+        if from == BuildFrom::Source && !is_luu_checkout(base) {
             return Err(format!(
-                "there is no Containerfile in {}, which is what the image is built from \
-                 source with",
+                "{} is not luu's own checkout, so there is no source to build the worker \
+                 from: build it from the release",
                 base.display()
             ));
         }
@@ -764,14 +773,25 @@ mod tests {
     }
 
     #[test]
-    fn a_build_needs_a_containerfile_and_an_installed_runtime() {
+    fn a_source_build_needs_luu_s_own_checkout() {
         let tasks = Tasks::default();
         let dir = std::env::temp_dir().join(format!("luu-build-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a directory");
         let refused = tasks
             .build(Runtime::Docker, "luu-worker:dev", BuildFrom::Source, &dir)
             .unwrap_err();
-        assert!(refused.contains("no Containerfile"), "{refused}");
+        assert!(refused.contains("not luu's own checkout"), "{refused}");
+        // A project with a Containerfile of its own is still not luu's: its
+        // image must not be built under the worker's tag.
+        std::fs::write(dir.join("Containerfile"), "FROM scratch\n").unwrap();
+        assert!(!is_luu_checkout(&dir));
+        let refused = tasks
+            .build(Runtime::Docker, "luu-worker:dev", BuildFrom::Source, &dir)
+            .unwrap_err();
+        assert!(refused.contains("not luu's own checkout"), "{refused}");
+        // And this repository is.
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert!(is_luu_checkout(&checkout));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
