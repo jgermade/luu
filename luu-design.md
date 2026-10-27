@@ -2359,6 +2359,11 @@ know in advance is written in the table, and is kept exactly as before. An autom
 something else has taken by the time the engine starts is placed again, never "used as it is":
 luu's own port is not somebody else's server. See
 [`RECORD/2026-10-26.ports-luu-places.completed.md`](RECORD/2026-10-26.ports-luu-places.completed.md).
+**And the session follows it there**: `ensure` answers with the port the engine answers on,
+and `engines::Started` builds the session's backend again for it, so an automatic port is
+never the person's to deal with — there is no *start a new session* any more. The resolved
+engine of a profile keeps no `port`, so whatever asks where it listens asks the placement
+([`RECORD/2026-10-27.an-automatic-port-moves-under-the-session.completed.md`](RECORD/2026-10-27.an-automatic-port-moves-under-the-session.completed.md)).
 **It is a child of `luu serve`** and dies with it: stopped on SIGINT and SIGTERM, and
 `kill_on_drop` for every other way the handle goes. **luu's own copy is an official release by
 tag** — `b11236` for llama.cpp, `v0.34.4` for ollama, moved by `version` — downloaded into
@@ -2391,7 +2396,8 @@ warm-up and the first turn cannot restart it under each other. **An `ensure` say
 is in** — `stopping` (with `from`, the model the engine was running), `downloading`, `starting`,
 then `ready` or `failed` — on one clock for the whole switch, and the page reads it from
 `GET /api/engine`. Beside the picker: `starting qwen2.5-coder:14b 3s · qwen2.5-coder:7b stopped`,
-then `ready in 4s` for a few seconds, or `could not start` with the reason as its tooltip. What is
+then `ready in 4s` for a few seconds, or `could not start` with the reason as its tooltip; a
+click on it opens the engine's sheet in Settings → Engines on *Output*. What is
 happening and for how long comes first, because a chat column is narrow and the end is what gets
 cut. When the switch moved to *another* engine, the old one was stopped before the answer came
 back and the server has no `from` for it; the page remembers what it left. **A turn that waits

@@ -120,10 +120,13 @@
 
   <!-- What the switch is doing, beside the button that started it: the load
        a switch no longer waits for. A turn sent now waits for it on the
-       server; this is so the wait is not a mystery. See `watchEngine`. -->
-  <span :if="ui.engine" class="engine" :class="ui.engine.state"
-        :title="engineTitle"
-        aria-live="polite">
+       server; this is so the wait is not a mystery. See `watchEngine`. A
+       click opens what the engine printed: its sheet in Settings → Engines,
+       on Output. -->
+  <button :if="ui.engine" type="button" class="engine" :class="ui.engine.state"
+        :title="`${engineTitle} — its output in Settings → Engines`"
+        aria-live="polite"
+        @click="openSettingsAt('engines', { name: ui.engine.name, tab: 'output' })">
     <span class="dot"></span>
     <!-- What is happening and for how long first, and what it replaced last:
          a chat column is narrow, and the end is what gets cut. -->
@@ -134,7 +137,7 @@
     <span :if="ui.engine.state === 'failed'" class="engine-msg">could not start {{ short(ui.engine.model) || ui.engine.name }}</span>
     <span :if="ui.engine.state !== 'ready' && ui.engine.state !== 'failed'" class="secs">{{ ui.engine.secs }}s</span>
     <span :if="leaving && ui.engine.state === 'starting'" class="from">· {{ short(leaving) }} stopped</span>
-  </span>
+  </button>
 
   <div :if="open" class="backdrop" @click="open = false"></div>
   <div :if="open" class="menu" role="dialog" aria-label="Provider and model"
@@ -232,7 +235,14 @@
     white-space: nowrap;
     overflow: hidden;
     flex: 0 1 auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: inherit;
+    cursor: pointer;
   }
+  .engine:hover .engine-msg { text-decoration: underline; text-underline-offset: 2px; }
+  .engine:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 2px; border-radius: 3px; }
   .engine .engine-msg {
     min-width: 0;
     overflow: hidden;
@@ -245,7 +255,7 @@
   .engine.stopping .dot, .engine.downloading .dot, .engine.starting .dot { animation: pulse 1s ease-in-out infinite; }
   .engine.ready { color: var(--luu-bucket-history); }
   .engine.ready .dot { background: var(--luu-bucket-history); }
-  .engine.failed { color: var(--luu-bad); cursor: help; }
+  .engine.failed { color: var(--luu-bad); }
   .engine.failed .dot { background: var(--luu-bad); }
   .engine .from { color: var(--luu-fg-muted); }
   .engine .secs { color: var(--luu-fg-muted); font-variant-numeric: tabular-nums; }

@@ -370,12 +370,6 @@ pub fn port_of(name: &str, engine: &Engine) -> Option<u16> {
     engine.port.or_else(|| placed(name))
 }
 
-/// Whether `engine` is an automatic one this process placed at its current
-/// port, as opposed to one whose table names the port.
-fn is_placed(name: &str, engine: &Engine) -> bool {
-    engine.port.is_some() && placed(name) == engine.port
-}
-
 /// `url` sent to `port` instead, its scheme, host and path kept: a profile
 /// that names an engine sends wherever that engine listens, whatever port
 /// its own URL was written with. `None` for a URL that will not parse.
@@ -429,13 +423,15 @@ fn in_use(name: &str, engine: &Engine) -> Result<(), String> {
 fn listening(name: &str, engine: &Engine) -> Result<u16, String> {
     port_of(name, engine)
         .or_else(|| place(name, engine.kind, &[]))
-        .ok_or_else(|| {
-            let from = engine.kind.default_port();
-            format!(
-                "no free port for engine {name} from {from} to {}",
-                from + PORTS_TRIED - 1
-            )
-        })
+        .ok_or_else(|| no_free_port(name, engine.kind))
+}
+
+fn no_free_port(name: &str, kind: EngineKind) -> String {
+    let from = kind.default_port();
+    format!(
+        "no free port for engine {name} from {from} to {}",
+        from + PORTS_TRIED - 1
+    )
 }
 
 /// The file `-m` is given: a reference out of [`crate::models`], or a path.
@@ -496,6 +492,12 @@ pub fn for_run(resolved: &crate::provider::Resolved) -> Option<(String, Engine)>
     Some((name, engine))
 }
 
+/// Builds a destination's backend again, sent to another port: what
+/// [`Started`] follows an automatic engine with when luu had to place it
+/// again. See `crate::rebuild_for`.
+pub type Rebuild =
+    Box<dyn Fn(u16) -> Result<Arc<dyn agent_core::backend::Backend>, String> + Send + Sync>;
+
 /// A backend on an engine luu starts, which makes sure the engine is up — on
 /// the model asked for — before every call it sends.
 ///
@@ -503,10 +505,22 @@ pub fn for_run(resolved: &crate::provider::Resolved) -> Option<(String, Engine)>
 /// new destination straight away, [`Supervisor::warm`] loads it in the
 /// background, and a turn sent before it is done waits here rather than
 /// meeting a closed port. Once it answers, `ensure` is one health probe.
+///
+/// **And it goes where the engine went.** `ensure` answers with the port the
+/// engine listens on, and an automatic engine whose port something else took
+/// is placed again on a free one (see [`Supervisor::ensure`]); the backend is
+/// then built again for that port, so the session follows without being
+/// started anew. A turn already streaming keeps the backend it began on. See
+/// `RECORD/2026-10-27.an-automatic-port-moves-under-the-session.completed.md`.
 pub struct Started {
-    inner: Arc<dyn agent_core::backend::Backend>,
+    /// The backend, and the port it dials: `None` until an `ensure` has said.
+    inner: std::sync::Mutex<(Option<u16>, Arc<dyn agent_core::backend::Backend>)>,
+    rebuild: Rebuild,
+    /// The backend's own name, kept: [`agent_core::backend::Backend::name`]
+    /// lends it, and the backend it is read from may be replaced.
+    called: String,
     supervisor: Arc<Supervisor>,
-    name: String,
+    engine_name: String,
     engine: Engine,
 }
 
@@ -516,19 +530,81 @@ impl Started {
         supervisor: Arc<Supervisor>,
         name: String,
         engine: Engine,
+        rebuild: Rebuild,
     ) -> Self {
+        let dials = port_of(&name, &engine);
         Self {
-            inner,
+            called: inner.name().to_string(),
+            inner: std::sync::Mutex::new((dials, inner)),
+            rebuild,
             supervisor,
-            name,
+            engine_name: name,
             engine,
         }
     }
+
+    fn current(&self) -> Arc<dyn agent_core::backend::Backend> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .1
+            .clone()
+    }
+
+    /// The engine up, and the backend that dials the port it answers on —
+    /// built again if that is not the port it dialled.
+    async fn ready(&self) -> Result<Arc<dyn agent_core::backend::Backend>, String> {
+        let port = self.supervisor.ensure(&self.engine_name, &self.engine).await?;
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.0 != Some(port) {
+            let moved = inner.0.is_some();
+            *inner = (Some(port), (self.rebuild)(port)?);
+            if moved {
+                tracing::info!(target: "luu::engines", engine = self.engine_name.as_str(), port, "the session follows its engine to another port");
+            }
+        }
+        Ok(inner.1.clone())
+    }
+}
+
+/// `inner`'s answer as a stream that holds `inner` itself, so a turn already
+/// streaming keeps reading the backend it began on while [`Started`] replaces
+/// it. Read only while it is polled, and dropped with it: the request goes
+/// when the turn does.
+fn owned(
+    inner: Arc<dyn agent_core::backend::Backend>,
+    request: agent_core::backend::CompletionRequest,
+) -> agent_core::backend::ChunkStream<'static> {
+    use futures_util::{FutureExt, StreamExt};
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let reading = async move {
+        let mut chunks = inner.stream(request);
+        while let Some(chunk) = chunks.next().await {
+            if sender.send(chunk).is_err() {
+                break;
+            }
+        }
+    }
+    .boxed();
+    Box::pin(futures_util::stream::unfold(
+        (reading, receiver, false),
+        |(mut reading, mut receiver, mut read)| async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    chunk = receiver.recv() => {
+                        return chunk.map(|chunk| (chunk, (reading, receiver, read)));
+                    }
+                    () = &mut reading, if !read => read = true,
+                }
+            }
+        },
+    ))
 }
 
 impl agent_core::backend::Backend for Started {
     fn name(&self) -> &str {
-        self.inner.name()
+        &self.called
     }
 
     fn stream(
@@ -539,8 +615,8 @@ impl agent_core::backend::Backend for Started {
         use futures_util::StreamExt;
         Box::pin(
             futures_util::stream::once(async move {
-                match self.supervisor.ensure(&self.name, &self.engine).await {
-                    Ok(()) => self.inner.stream(request),
+                match self.ready().await {
+                    Ok(inner) => owned(inner, request),
                     Err(error) => Box::pin(futures_util::stream::iter([Err(
                         BackendError::Transport(error),
                     )])) as ChunkStream<'_>,
@@ -551,31 +627,26 @@ impl agent_core::backend::Backend for Started {
     }
 
     fn models(&self) -> agent_core::backend::BackendFuture<'_, Vec<String>> {
-        self.inner.models()
+        Box::pin(async move { self.current().models().await })
     }
 
     /// Asked of the engine once it is up — a window read off a server still
     /// loading is no window at all.
     fn window(&self) -> agent_core::backend::BackendFuture<'_, Option<u32>> {
         Box::pin(async move {
-            if self
-                .supervisor
-                .ensure(&self.name, &self.engine)
-                .await
-                .is_err()
-            {
-                return Ok(None);
+            match self.ready().await {
+                Ok(inner) => inner.window().await,
+                Err(_) => Ok(None),
             }
-            self.inner.window().await
         })
     }
 
     fn constrain_caveat(&self, constraint: &agent_core::backend::Constraint) -> Option<String> {
-        self.inner.constrain_caveat(constraint)
+        self.current().constrain_caveat(constraint)
     }
 
     fn sampling_caveat(&self, temperature: Option<f32>, seed: Option<u32>) -> Option<String> {
-        self.inner.sampling_caveat(temperature, seed)
+        self.current().sampling_caveat(temperature, seed)
     }
 }
 
@@ -947,12 +1018,17 @@ impl Supervisor {
     /// - luu's own copy is **downloaded** the first time it is needed;
     /// - an engine this server runs on **another model is restarted** on this
     ///   one — llama-server holds one model, and the session asked for this;
-    /// - a server something else runs on the port is used as it is: it is not
-    ///   luu's to restart.
+    /// - a server something else runs on a port **the table names** is used
+    ///   as it is: it is not luu's to restart;
+    /// - one on the port luu **placed** an automatic engine on means the port
+    ///   was taken since: the engine is placed again on a free one and
+    ///   started there, and the answer is that port, which [`Started`]
+    ///   follows. Nobody is asked to start a new session.
     ///
-    /// One at a time per engine: a second caller waits for the first and then
-    /// finds it answering. Its outcome is kept for [`Supervisor::readiness`].
-    pub async fn ensure(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<(), String> {
+    /// Answers with the port it answers on. One at a time per engine: a
+    /// second caller waits for the first and then finds it answering. Its
+    /// outcome is kept for [`Supervisor::readiness`].
+    pub async fn ensure(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<u16, String> {
         let (name, _held) = loop {
             let name = self.current(name);
             let gate = self
@@ -972,7 +1048,7 @@ impl Supervisor {
         let name = name.as_str();
         let outcome = self.ensure_now(name, engine).await;
         match &outcome {
-            Ok(()) => self.note(name, "ready", engine.model.clone(), None, None),
+            Ok(_) => self.note(name, "ready", engine.model.clone(), None, None),
             Err(error) => self.note(
                 name,
                 "failed",
@@ -1064,10 +1140,10 @@ impl Supervisor {
         );
     }
 
-    async fn ensure_now(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<(), String> {
+    async fn ensure_now(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<u16, String> {
         // Before anything is downloaded for it, as well as before it runs.
         in_use(name, engine)?;
-        let port = listening(name, engine)?;
+        let mut port = listening(name, engine)?;
         let ours = {
             let mut slots = self.slots.lock().await;
             let slot = slots.entry(name.to_string()).or_default();
@@ -1079,21 +1155,30 @@ impl Supervisor {
                 self.note(name, "stopping", engine.model.clone(), model, None);
                 self.stop(name).await;
             }
-            _ => {
+            // luu's own, on this model: answering is all that is left to ask.
+            // This arm was the next one until 2026-10-27, and an automatic
+            // engine luu itself ran was taken for somebody else's on every
+            // `ensure` after the one that started it.
+            Some(_) => {
                 if answering(engine.kind, port).await {
-                    // A fixed port that answers is used as it is: it is not
-                    // luu's to restart. A port luu *placed* this engine on is
-                    // luu's, and something else answering there means it was
-                    // taken since — so it is placed again, and the session,
-                    // whose backend dials the old port, is asked to start anew.
-                    if is_placed(name, engine) {
-                        unplace(name);
-                        return Err(format!(
-                            "port {port}, where luu placed engine {name}, answers and is not \
-                             luu's: start a new session to place it on a free one"
-                        ));
+                    return Ok(port);
+                }
+            }
+            None => {
+                if answering(engine.kind, port).await {
+                    // A port the table names that answers is used as it is:
+                    // it is not luu's to restart.
+                    if engine.port.is_some() {
+                        return Ok(port);
                     }
-                    return Ok(());
+                    // A port luu *placed* it on, answered by something that
+                    // is not luu's, was taken since: placed again, past it,
+                    // and started there.
+                    unplace(name);
+                    let taken = port;
+                    port = place(name, engine.kind, &[taken])
+                        .ok_or_else(|| no_free_port(name, engine.kind))?;
+                    tracing::info!(target: "luu::engines", engine = name, taken, port, "port taken since it was placed: placed again");
                 }
             }
         }
@@ -1107,7 +1192,7 @@ impl Supervisor {
         let began = Instant::now();
         loop {
             if answering(engine.kind, port).await {
-                return Ok(());
+                return Ok(port);
             }
             {
                 let mut slots = self.slots.lock().await;
@@ -1729,6 +1814,117 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A stand-in `ollama`: `serve` answers `/` on the port `OLLAMA_HOST`
+    /// names, as luu starts it. Written by a child, for
+    /// `RECORD/2026-10-23.text-file-busy.completed.md`'s reason.
+    fn stand_in_ollama(dir: &Path) -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        let bin = dir.join("ollama");
+        let wrote = std::process::Command::new("sh")
+            .args([
+                "-c",
+                r#"printf '#!/bin/sh\nexec python3 -m http.server --bind 127.0.0.1 "${OLLAMA_HOST##*:}"\n' > "$0" && chmod 755 "$0""#,
+            ])
+            .arg(&bin)
+            .status()
+            .unwrap();
+        assert!(wrote.success());
+        bin.display().to_string()
+    }
+
+    /// An automatic engine luu itself runs is luu's on every `ensure`, not
+    /// only the one that started it. Until 2026-10-27 the second found it
+    /// answering on the port luu placed it on and called it somebody else's.
+    #[tokio::test]
+    async fn an_automatic_engine_luu_runs_is_its_own_on_every_ensure() {
+        let dir = std::env::temp_dir().join(format!("luu-own-auto-{}", std::process::id()));
+        let engine = Engine {
+            kind: EngineKind::Ollama,
+            binary: Some(stand_in_ollama(&dir)),
+            ..Default::default()
+        };
+        let supervisor = Arc::new(Supervisor::default());
+        let first = supervisor.ensure("test-own-auto", &engine).await.unwrap();
+        for _ in 0..2 {
+            assert_eq!(supervisor.ensure("test-own-auto", &engine).await, Ok(first));
+        }
+        assert_eq!(placed("test-own-auto"), Some(first));
+        assert_eq!(
+            supervisor.readiness("test-own-auto").unwrap().state,
+            "ready"
+        );
+        supervisor.stop("test-own-auto").await;
+        unplace("test-own-auto");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Something that is not luu's takes the port luu placed an automatic
+    /// engine on: the engine is placed again and started there, and the
+    /// session's backend is built again for the new port. Nobody is asked to
+    /// start a new session.
+    #[tokio::test]
+    async fn a_taken_automatic_port_moves_the_engine_and_the_session_follows() {
+        use agent_core::backend::Backend;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = std::env::temp_dir().join(format!("luu-moved-{}", std::process::id()));
+        let engine = Engine {
+            kind: EngineKind::Ollama,
+            binary: Some(stand_in_ollama(&dir)),
+            ..Default::default()
+        };
+        // Placed, as a session's `resolve` places it, and then taken.
+        let taken = place("test-moved", EngineKind::Ollama, &[]).unwrap();
+        let squatter = tokio::net::TcpListener::bind(("127.0.0.1", taken))
+            .await
+            .unwrap();
+        let squatting = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = squatter.accept().await {
+                let mut buffer = [0u8; 1024];
+                let _ = stream.read(&mut buffer).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 9\r\n\r\nnot luu's")
+                    .await;
+            }
+        });
+
+        let rebuilt = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = Started::new(
+            Arc::new(agent_core::backend::mock::Mock::default()),
+            Arc::new(Supervisor::default()),
+            "test-moved".into(),
+            engine,
+            Box::new({
+                let rebuilt = rebuilt.clone();
+                move |port| {
+                    rebuilt.lock().unwrap().push(port);
+                    Ok(Arc::new(agent_core::backend::mock::Mock::default())
+                        as Arc<dyn agent_core::backend::Backend>)
+                }
+            }),
+        );
+        backend.window().await.unwrap();
+        let moved = placed("test-moved").expect("placed again");
+        assert_ne!(moved, taken);
+        assert_eq!(
+            *rebuilt.lock().unwrap(),
+            vec![moved],
+            "built once, for the new port"
+        );
+        // Asked again, it is where it is: nothing more is built.
+        backend.window().await.unwrap();
+        assert_eq!(rebuilt.lock().unwrap().len(), 1);
+        assert_eq!(
+            backend.supervisor.readiness("test-moved").unwrap().state,
+            "ready"
+        );
+
+        squatting.abort();
+        backend.supervisor.stop("test-moved").await;
+        unplace("test-moved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The names the two projects publish, checked against the release pages
     /// on 2026-09-28 — not derived from anything, so this is the test that says
     /// when one of them renames its archives.
@@ -1885,6 +2081,7 @@ mod tests {
             supervisor.clone(),
             "gone".into(),
             engine,
+            Box::new(|_| Err("not rebuilt here".into())),
         );
         let first = backend
             .stream(CompletionRequest {

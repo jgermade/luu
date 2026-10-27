@@ -1471,6 +1471,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         exposure,
     )?);
     let starts = crate::engines::for_run(&provider);
+    let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
 
     let app = App::create(StdioOptions {
@@ -1518,6 +1519,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
                 app.engines.clone(),
                 name.clone(),
                 engine.clone(),
+                rebuild,
             )),
             model: current.model.clone(),
             budget: current.budget,
@@ -6483,13 +6485,16 @@ async fn chat_engine(
     if asked.messages.is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "nothing was said").into_response();
     }
+    // Placed past every port a table names, and left automatic: `ensure`
+    // places it again if something that is not luu's has taken that port,
+    // and answers with the one it listens on.
     if engine.port.is_none() {
-        engine.port = place_engine(&name, &engine).await;
+        place_engine(&name, &engine).await;
     }
-    if let Err(error) = state.app.engines.ensure(&name, &engine).await {
-        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
-    }
-    let port = crate::engines::port_of(&name, &engine).unwrap_or(engine.kind.default_port());
+    let port = match state.app.engines.ensure(&name, &engine).await {
+        Ok(port) => port,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response(),
+    };
     let backend = crate::probe_backend(
         match ollama {
             true => crate::provider::BackendKind::Ollama,
@@ -8563,6 +8568,7 @@ async fn destination_for(
             app.engines.clone(),
             name.clone(),
             engine.clone(),
+            crate::rebuild_for(&resolved),
         )),
         None => backend,
     };

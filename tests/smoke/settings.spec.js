@@ -2081,6 +2081,19 @@ test("an engine's sheet moves it off a busy port, talks to it, and makes a sessi
     const settings = await (await fetch(`${BASE}/api/settings`)).json()
     expect(settings.profile).toBe("fake")
     expect(settings.model).toContain("small-Q4_K_M")
+
+    // The engine's state beside the chat's picker opens what it printed: its
+    // sheet in Settings → Engines, on Output. A failure is the state that
+    // stays there until the next switch, so it is the one set here.
+    await page.evaluate(async () => {
+      const { ui } = await import("./lib/ui.js")
+      ui.engine = { name: "fake", state: "failed", model: "", error: "it did not answer" }
+    })
+    await page.locator(".options button.engine", { hasText: "could not start" }).click()
+    const output = page.getByRole("dialog", { name: "fake", exact: true })
+    await expect(output.getByRole("tab", { name: /Output/ })).toHaveAttribute("aria-selected", "true")
+    await expect(output.locator("pre.log")).toContainText(`stand-in listening on ${to}`)
+    await expect(page.locator('.modal .rail button[aria-current="page"]')).toContainText("Engines")
   } finally {
     squatter.close()
   }

@@ -59,6 +59,10 @@ export const ui = $reactive({
   /// are kept and for how long — or `null`. A switch no longer waits for the
   /// model to load, so this is where the wait is seen instead. See `watchEngine`.
   engine: null,
+  /// An engine's sheet Settings → Engines opens on once it has loaded —
+  /// `{ name, tab }` — asked for from outside Settings: the engine's state
+  /// in the chat's foot opens its output. `null` once taken.
+  engineSheet: null,
   /// The model the last switch left, while its feedback is on screen.
   switchedFrom: null,
   /// Which turn the inspection modal shows, or `null` when it is closed.
@@ -77,8 +81,10 @@ export const ui = $reactive({
   answered: [],
 })
 
-export function openSettingsAt(section) {
-  ui.section = ["models", "appearance", "policies"].includes(section) ? section : "general"
+/// `sheet` is an engine's — `{ name, tab }` — for `engines`.
+export function openSettingsAt(section, sheet = null) {
+  ui.section = ["models", "appearance", "engines", "policies"].includes(section) ? section : "general"
+  ui.engineSheet = section === "engines" ? sheet : null
   return openSettings()
 }
 

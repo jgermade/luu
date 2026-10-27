@@ -1726,21 +1726,36 @@ struct ModelArgs<'a> {
 /// — what `serve` does per session, done once for `chat` and `stdio`. `None`
 /// where the profile names none. The returned handle is the server's life:
 /// dropping it stops what it started, and a server something else already runs
-/// on that port is used and left alone. See
+/// on that port is used and left alone. An automatic engine whose port was
+/// taken between placing it and starting it is started on another, and the
+/// destination is built again for it. See
 /// `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
 async fn engine_for(
-    resolved: &provider::Resolved,
-) -> Result<Option<std::sync::Arc<engines::Supervisor>>> {
-    let Some((name, engine)) = engines::for_run(resolved) else {
-        return Ok(None);
+    backend: Box<dyn Backend>,
+    mut resolved: provider::Resolved,
+) -> Result<(
+    Option<std::sync::Arc<engines::Supervisor>>,
+    Box<dyn Backend>,
+    provider::Resolved,
+)> {
+    let Some((name, engine)) = engines::for_run(&resolved) else {
+        return Ok((None, backend, resolved));
     };
     let supervisor = std::sync::Arc::new(engines::Supervisor::default());
     eprintln!("engine: {name} ({})", engine.kind.as_str());
-    supervisor
+    let port = supervisor
         .ensure(&name, &engine)
         .await
         .map_err(|error| anyhow::anyhow!(error))?;
-    Ok(Some(supervisor))
+    let moved = engines::at_port(&resolved.url, port).filter(|url| *url != resolved.url);
+    let backend = match moved {
+        Some(url) => {
+            resolved.url = url;
+            build_backend(&resolved, None, true)?
+        }
+        None => backend,
+    };
+    Ok((Some(supervisor), backend, resolved))
 }
 
 /// The window the server says it serves, where nothing declared one — asked
@@ -1906,6 +1921,21 @@ pub(crate) fn probe_backend(kind: BackendKind, url: &str, key: Option<String>) -
 /// and nothing printed to a terminal nobody is watching.
 pub(crate) fn backend_for(resolved: &provider::Resolved) -> Result<Box<dyn Backend>> {
     build_backend(resolved, None, false)
+}
+
+/// `resolved`'s backend built again on another port, the rest of its URL
+/// kept: how [`engines::Started`] follows an automatic engine luu placed
+/// again.
+pub(crate) fn rebuild_for(resolved: &provider::Resolved) -> engines::Rebuild {
+    let resolved = resolved.clone();
+    Box::new(move |port| {
+        let mut resolved = resolved.clone();
+        resolved.url = engines::at_port(&resolved.url, port)
+            .ok_or_else(|| format!("`{}` will not take a port", resolved.url))?;
+        backend_for(&resolved)
+            .map(std::sync::Arc::from)
+            .map_err(|error| format!("{error:#}"))
+    })
 }
 
 /// The mock ignores the model name; passing the Ollama default through would
@@ -2829,7 +2859,7 @@ pub async fn run() -> Result<()> {
             holding: false,
         })?;
         // Held for as long as the protocol runs, and stopped with it.
-        let _engine = engine_for(&resolved).await?;
+        let (_engine, backend, resolved) = engine_for(backend, resolved).await?;
         let resolved = with_server_window(resolved, backend.as_ref()).await;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
@@ -2968,7 +2998,7 @@ pub async fn run() -> Result<()> {
         holding: false,
     })?;
     // Held until the run ends: dropping it stops the server it started.
-    let _engine = engine_for(&resolved).await?;
+    let (_engine, backend, resolved) = engine_for(backend, resolved).await?;
     let resolved = with_server_window(resolved, backend.as_ref()).await;
     let model = resolved.model.clone();
     let context_limit = resolved.context_limit;

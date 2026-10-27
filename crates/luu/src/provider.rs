@@ -1649,7 +1649,7 @@ pub fn resolve(
 
     // Only while the URL is still the profile's own: a flag that sent this
     // run elsewhere is not a reason to start the profile's server.
-    let mut engine =
+    let engine =
         match flag_url.is_none() && flags.backend.is_none_or(|b| Some(b) == profile.backend) {
             true => profile
                 .engine
@@ -1663,14 +1663,17 @@ pub fn resolve(
     // used to be written into both, and the profile's copy went stale the
     // first time the engine moved. See
     // `RECORD/2026-10-26.ports-luu-places.completed.md`.
+    //
+    // An automatic engine's table keeps no `port`: where it listens is asked
+    // of the placement each time, because luu places it again when something
+    // else takes its port, and the session follows (`engines::Started`).
     let mut url = url;
-    if let Some((engine_name, table)) = &mut engine {
+    if let Some((engine_name, table)) = &engine {
         let fixed: Vec<u16> = config.engines.values().filter_map(|e| e.port).collect();
         let port = table
             .port
             .or_else(|| crate::engines::place(engine_name, table.kind, &fixed));
         if let Some(port) = port {
-            table.port = Some(port);
             url = match profile.url.as_deref() {
                 Some(own) => {
                     crate::engines::at_port(own, port).unwrap_or_else(|| table.kind.url(port))
@@ -1983,10 +1986,9 @@ mod tests {
         let port = crate::engines::placed("test-auto-resolve").expect("placed");
         assert_ne!(port, 8123, "not where a table says another listens");
         assert_eq!(placed.url, format!("http://127.0.0.1:{port}/v1"));
-        assert_eq!(
-            placed.engine.as_ref().map(|(_, e)| e.port),
-            Some(Some(port))
-        );
+        // The table stays automatic: where it listens is the placement's,
+        // which may move.
+        assert_eq!(placed.engine.as_ref().map(|(_, e)| e.port), Some(None));
         assert_eq!(resolved(text, named("placed")).url, placed.url, "it stays");
         crate::engines::unplace("test-auto-resolve");
     }
