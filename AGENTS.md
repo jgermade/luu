@@ -690,7 +690,9 @@ shellcheck -s sh pages/setup.sh
 ```
 
 See
-[`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md).
+[`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md)
+and, for how the landing looks,
+[`RECORD/2026-10-27.a-landing-that-looks-like-an-agent.completed.md`](RECORD/2026-10-27.a-landing-that-looks-like-an-agent.completed.md).
 
 **Do not edit the UI's `dist`-like output, because there isn't one.** `web/`
 is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into

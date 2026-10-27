@@ -3,441 +3,1727 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>luu — a local-first AI agent</title>
-<meta name="description" content="luu is a local-first AI agent in Rust, built for 7B–32B models with 8K–32K of context. It decides what earns its place in the prompt, runs only what you approved, and installs with one line on Linux and macOS.">
-<meta property="og:title" content="luu — a local-first AI agent">
-<meta property="og:description" content="Built for the context window you actually have. One line to install on Linux and macOS.">
+<title>luu — the local-first AI agent</title>
+<meta name="description" content="luu is an open-source AI agent in Rust for 7B–32B models with 8K–32K of context. It chooses what earns a place in the prompt, asks before it acts, and lets the kernel hold every command it runs. One line to install on Linux and macOS.">
+<meta property="og:title" content="luu — the local-first AI agent">
+<meta property="og:description" content="An AI agent built for the context window you actually have. Plans you approve, commands the kernel holds, any model you can reach.">
 <meta property="og:url" content="https://jgermade.github.io/luu/">
 <meta property="og:type" content="website">
-<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#07090c">
+<meta name="color-scheme" content="dark light">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%2312161c' rx='112'/%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round' stroke-width='40'%3E%3Cpath stroke='%23f5a524' d='M116 150v210'/%3E%3Cpath stroke='%23f2f4f7' d='M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215'/%3E%3C/g%3E%3Ccircle cx='356' cy='296' r='13' fill='%23f5a524'/%3E%3C/svg%3E">
+<script>
+  // The theme, before anything paints: auto, light or dark, kept under the
+  // key the web UI keeps its own under, so the demo beside this page opens in
+  // the same one. `data-theme` is always the resolved one; `data-pick` is what
+  // was chosen. Without a script the page is dark.
+  (() => {
+    const root = document.documentElement
+    const system = matchMedia("(prefers-color-scheme: dark)")
+    let pick = "auto"
+    try { pick = localStorage.getItem("luu.theme") || "auto" } catch {}
+    if (!["auto", "light", "dark"].includes(pick)) pick = "auto"
+    const apply = () => {
+      const dark = root.dataset.pick === "auto" ? system.matches : root.dataset.pick === "dark"
+      root.dataset.theme = dark ? "dark" : "light"
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#07090c" : "#f7f8fa")
+    }
+    root.dataset.pick = pick
+    apply()
+    system.addEventListener?.("change", apply)
+    window.luuTheme = which => {
+      root.dataset.pick = which
+      try { localStorage.setItem("luu.theme", which) } catch {}
+      apply()
+    }
+  })()
+</script>
 <!-- Everything inline and nothing fetched from another host: the page is
      served from GitHub Pages beside the demo, and CI fails a site that
      references a CDN or a font host. Mobile first — the base rules are the
-     phone, and each `min-width` query adds to them. -->
+     phone, and each `min-width` query adds to them. Each section says its one
+     thing in a drawing and a line, not a paragraph. -->
 <style>
 :root {
-  --bg: #f4f5f8;
-  --surface: #ffffff;
-  --sunken: #eaedf2;
-  --border: #d5d9e0;
-  --fg: #1a1d23;
-  --muted: #5b6472;
-  --accent: #2f5bbd;
-  --accent-soft: #e6ebf7;
-  --amber: #b9770e;
-  /* The install card is a dark island on either page, like luu's own heads. */
-  --term-bg: #12161c;
-  --term-surface: #1b2129;
-  --term-border: #2a313b;
-  --term-fg: #f2f4f7;
-  --term-muted: #9aa4b2;
-  --term-amber: #f5a524;
-  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --radius: 12px;
+  --bg: #07090c;
+  --bg-raised: #0b0e13;
+  --surface: #10141a;
+  --surface-2: #151a22;
+  --border: #1d242e;
+  --border-strong: #2a3340;
+  --fg: #eef1f5;
+  --muted: #9aa4b2;
+  --dim: #677182;
+  --amber: #f5a524;
+  --amber-ink: #f5a524;
+  --amber-soft: rgba(245, 165, 36, 0.12);
+  --amber-line: rgba(245, 165, 36, 0.45);
+  --ok: #3fb950;
+  --ok-ink: #3fb950;
+  --ok-soft: rgba(63, 185, 80, 0.1);
+  --ok-line: rgba(63, 185, 80, 0.45);
+  --no: #f85149;
+  --no-ink: #ff9c95;
+  --folder: #e2b33f;
+  /* the buckets of a prompt, the same everywhere they are drawn */
+  --b-system: #7aa2f7;
+  --b-tools: #b392f0;
+  --b-map: #4fd1c5;
+  --b-code: #f5a524;
+  --b-history: #f778ba;
+  --b-summaries: #8fcf6a;
+  --grid: rgba(255, 255, 255, 0.045);
+  --glow: rgba(245, 165, 36, 0.16);
+  --veil: rgba(7, 9, 12, 0.72);
+  --shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8);
+  /* terminals stay dark islands in either theme */
+  --ink: #05070a;
+  --ink-line: #262e3a;
+  --ink-fg: #eef1f5;
+  --ink-muted: #a3adbb;
+  --ink-dim: #6b7585;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --radius: 16px;
   --gutter: 16px;
+  color-scheme: dark;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1116;
-    --surface: #161b22;
-    --sunken: #0a0d11;
-    --border: #2a313b;
-    --fg: #e6e9ee;
-    --muted: #9aa4b2;
-    --accent: #7aa2f7;
-    --accent-soft: #1d2433;
-    --amber: #f5a524;
-    --term-bg: #0a0d11;
-    --term-surface: #131820;
-  }
+:root[data-theme="light"] {
+  --bg: #f7f8fa;
+  --bg-raised: #eff1f5;
+  --surface: #ffffff;
+  --surface-2: #f2f4f7;
+  --border: #e3e6eb;
+  --border-strong: #cdd3dc;
+  --fg: #12151a;
+  --muted: #4c5564;
+  --dim: #7b8494;
+  --amber-ink: #a8560a;
+  --amber-soft: rgba(245, 165, 36, 0.16);
+  --amber-line: rgba(217, 119, 6, 0.5);
+  --ok: #1f9d3a;
+  --ok-ink: #1a7f37;
+  --ok-soft: rgba(31, 157, 58, 0.08);
+  --ok-line: rgba(31, 157, 58, 0.45);
+  --no: #d1242f;
+  --no-ink: #b42318;
+  --folder: #d9a521;
+  --b-system: #3b6fd8;
+  --b-tools: #8a5cd6;
+  --b-map: #0f8f8f;
+  --b-code: #e0920c;
+  --b-history: #d6457f;
+  --b-summaries: #4f8a2b;
+  --grid: rgba(15, 23, 42, 0.06);
+  --glow: rgba(245, 165, 36, 0.22);
+  --veil: rgba(247, 248, 250, 0.8);
+  --shadow: 0 30px 70px -24px rgba(15, 23, 42, 0.35);
+  color-scheme: light;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 16px/1.55 var(--sans);
+  font: 16px/1.6 var(--sans);
+  overflow-x: hidden;
   overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
 }
-a { color: var(--accent); text-underline-offset: 2px; }
-a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: inherit; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 6px; }
 code, pre { font-family: var(--mono); font-size: 0.875em; }
-:not(pre) > code {
-  background: var(--sunken);
-  border-radius: 4px;
-  padding: 0.1em 0.35em;
-}
-h1, h2, h3 { line-height: 1.2; margin: 0; }
+h1, h2, h3 { line-height: 1.1; margin: 0; letter-spacing: -0.025em; }
 p { margin: 0; }
+svg.i { width: 1em; height: 1em; fill: currentColor; flex: none; }
 
-.wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 var(--gutter); }
-section { padding: 40px 0; }
-section + section { border-top: 1px solid var(--border); }
-.eyebrow {
-  color: var(--amber);
-  font: 600 0.75rem/1 var(--mono);
-  letter-spacing: 0.08em;
+.wrap { width: 100%; max-width: 1180px; margin: 0 auto; padding: 0 var(--gutter); }
+section { padding: 72px 0; position: relative; }
+.kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--amber-ink);
+  font: 500 0.75rem/1 var(--mono);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
 }
-h2 { font-size: 1.5rem; margin-bottom: 12px; }
-.lead { color: var(--muted); max-width: 62ch; }
+.kicker::before { content: "//"; color: var(--dim); }
+h2 { font-size: 2rem; font-weight: 700; }
+h2 .dim { color: var(--dim); }
+.lead { color: var(--muted); font-size: 1.0625rem; max-width: 56ch; margin-top: 14px; }
+.head { margin-bottom: 36px; }
+.center { text-align: center; }
+.center .lead { margin-left: auto; margin-right: auto; }
 
-/* ---- head ---------------------------------------------------------------- */
-header { padding: 16px 0; }
-header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.brand { display: flex; align-items: center; gap: 10px; color: var(--fg); text-decoration: none; font-weight: 700; font-size: 1.125rem; }
-.brand svg { width: 32px; height: 32px; flex: none; }
-nav { display: flex; gap: 4px; }
-nav a {
+/* ---- buttons -------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font: 600 0.9375rem var(--sans);
+  text-decoration: none;
+  border: 1px solid var(--border-strong);
+  color: var(--fg);
+  background: var(--surface);
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn:hover { background: var(--surface-2); border-color: var(--dim); }
+.btn.primary { background: var(--amber); border-color: var(--amber); color: #120c02; }
+.btn.primary:hover { background: #ffb63d; }
+.btn .arrow { transition: transform 0.15s; }
+.btn:hover .arrow { transform: translateX(3px); }
+
+/* ---- head ----------------------------------------------------------------- */
+header.top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--veil);
+  backdrop-filter: saturate(140%) blur(12px);
+  -webkit-backdrop-filter: saturate(140%) blur(12px);
+  border-bottom: 1px solid transparent;
+}
+header.top.scrolled { border-bottom-color: var(--border); }
+header.top .wrap { display: flex; align-items: center; gap: 8px; height: 60px; }
+/* the mark says luu, so nothing beside it does */
+.brand { display: flex; border-radius: 9px; margin-right: auto; }
+.brand svg { width: 36px; height: 36px; }
+nav.main { display: flex; align-items: center; gap: 2px; }
+nav.main a {
   color: var(--muted);
   text-decoration: none;
   font-size: 0.9375rem;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 0 10px;
   min-height: 40px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
+  gap: 6px;
 }
-nav a:hover { color: var(--fg); background: var(--sunken); }
-nav .wide { display: none; }
+nav.main a:hover { color: var(--fg); background: var(--surface); }
+nav.main .wide { display: none; }
+nav.main .gh svg { width: 18px; height: 18px; }
+nav.main .gh span { display: none; }
 
-/* ---- hero ---------------------------------------------------------------- */
-.hero { padding: 24px 0 40px; }
-.hero h1 { font-size: 2rem; letter-spacing: -0.02em; margin-bottom: 16px; }
-.hero h1 em { font-style: normal; color: var(--amber); }
-.hero .lead { font-size: 1.0625rem; margin-bottom: 28px; }
-
-/* ---- the install card ---------------------------------------------------- */
-.install {
-  background: var(--term-bg);
-  color: var(--term-fg);
-  border: 1px solid var(--term-border);
-  border-radius: var(--radius);
-  padding: 16px;
-  min-width: 0;
+/* auto, light, dark: three buttons, the chosen one pressed */
+.theme { display: flex; padding: 3px; gap: 2px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); }
+.theme button {
+  width: 30px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
 }
-.install h2 { font-size: 1rem; margin-bottom: 4px; }
-.install :not(pre) > code { background: var(--term-surface); color: var(--term-fg); }
-.install .note { color: var(--term-muted); font-size: 0.875rem; margin-bottom: 14px; }
-.cmds { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
-.cmd { min-width: 0; }
-.cmd .label { display: block; color: var(--term-muted); font-size: 0.8125rem; margin-bottom: 6px; }
-.cmd .row {
+.theme button:hover { color: var(--fg); }
+.theme button[aria-checked="true"] { background: var(--surface-2); color: var(--fg); box-shadow: 0 0 0 1px var(--border-strong) inset; }
+.theme svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- hero ----------------------------------------------------------------- */
+.hero { padding: 40px 0 64px; overflow: hidden; isolation: isolate; text-align: center; }
+/* a faint grid that fades out from the top, and the amber glow of the mark */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(to right, var(--grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 55% at 50% 0%, #000 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse 80% 55% at 50% 0%, #000 30%, transparent 75%);
+}
+.hero::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 1100px;
+  height: 700px;
+  left: 50%;
+  top: 280px;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, var(--glow), transparent);
+  pointer-events: none;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  text-decoration: none;
+  margin-bottom: 24px;
+}
+.badge b {
+  font: 600 0.6875rem/1 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #120c02;
+  background: var(--amber);
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+.badge:hover { color: var(--fg); border-color: var(--dim); }
+.hero h1 {
+  font-size: 2.5rem;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  line-height: 1.02;
+  margin: 0 auto 20px;
+  max-width: 15ch;
+}
+.hero h1 em {
+  font-style: normal;
+  background: linear-gradient(100deg, #ffc955 0%, var(--amber) 45%, #ff8a3d 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero .lead { font-size: 1.125rem; margin: 0 auto 28px; max-width: 44ch; }
+.hero .lead strong { color: var(--fg); font-weight: 600; }
+.ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 20px; }
+
+/* ---- the one line --------------------------------------------------------- */
+.oneline {
   display: flex;
   align-items: stretch;
-  background: var(--term-surface);
-  border: 1px solid var(--term-border);
-  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
   min-width: 0;
+  max-width: 560px;
+  text-align: left;
+  box-shadow: 0 0 0 4px var(--amber-soft);
 }
+.hero .oneline { margin: 0 auto; }
 /* Wrapped, not scrolled: the end of the line — `| sh` — is the part that
    makes it a command, and a phone would hide it. */
-.cmd pre {
+.oneline pre {
   margin: 0;
-  padding: 12px;
+  padding: 13px 14px;
   flex: 1;
   min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--term-fg);
+  color: var(--fg);
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
-.cmd pre::before { content: "$ "; color: var(--term-amber); }
-.cmd.primary .row { border-color: var(--term-amber); }
+.oneline pre::before { content: "$ "; color: var(--amber-ink); user-select: none; }
+.oneline .nb { white-space: nowrap; }
 .copy {
   flex: none;
-  min-width: 64px;
+  width: 48px;
+  display: grid;
+  place-items: center;
   border: 0;
-  border-left: 1px solid var(--term-border);
-  border-radius: 0 8px 8px 0;
+  border-left: 1px solid var(--border-strong);
+  border-radius: 0 12px 12px 0;
   background: transparent;
-  color: var(--term-muted);
-  font: 600 0.8125rem var(--sans);
+  color: var(--muted);
   cursor: pointer;
-  padding: 0 12px;
+  padding: 0;
 }
-.copy:hover { color: var(--term-fg); background: var(--term-border); }
-.copy.done { color: var(--term-amber); }
-.platforms { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; padding: 0; list-style: none; }
-.platforms li {
-  font-size: 0.75rem;
-  color: var(--term-muted);
-  border: 1px solid var(--term-border);
-  border-radius: 999px;
-  padding: 3px 10px;
-}
-.install .foot { color: var(--term-muted); font-size: 0.8125rem; margin-top: 14px; }
-.install .foot a { color: var(--term-fg); }
+.copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.copy .yes, .copy.done .no { display: none; }
+.copy.done .yes { display: block; }
+.copy:hover { color: var(--fg); background: var(--surface-2); }
+.copy.done { color: var(--ok-ink); }
+.fine { color: var(--dim); font-size: 0.8125rem; margin-top: 10px; }
+.fine a { color: var(--muted); text-underline-offset: 2px; }
 
-/* ---- features ------------------------------------------------------------ */
-.grid { display: grid; gap: 12px; margin-top: 24px; }
-.card {
+/* ---- fig. 1: luu serve, drawn ---------------------------------------------- */
+/* The web UI's own colours, from web/theme/default/{tokens,luu}.css: the bars
+   are dark in both tones, the tree and the chat are their own greys, and the
+   editor keeps Monokai. Below 720px it is the chat alone, as the UI is on a
+   narrow window; up to 1024px the inspector and the chat. */
+.shot { margin: 56px 0 0; text-align: left; }
+.app {
+  --a-bar: #191919;
+  --a-bar-fg: #e6e6e6;
+  --a-bar-dim: #9e9e9e;
+  --a-bar-line: #2e2e2e;
+  --a-accent-bar: #7aa2f7;
+  --a-tree: #161616;
+  --a-card: #1d1d1d;
+  --a-line: #2c2c2c;
+  --a-fg: #e6e6e6;
+  --a-muted: #9e9e9e;
+  --a-subtle: #6e6e6e;
+  --a-ok: #9ece6a;
+  --a-chat: #1c1c1c;
+  --a-chat-fg: #ececec;
+  --a-chat-dim: #b4bcc8;
+  --a-chat-accent: #9cb8ff;
+  --a-chat-ok: #b2dc84;
+  --a-chat-warn: #f2c27a;
+  --a-chat-bad: #ff9aa8;
+  --a-chat-line: #3c3c3c;
+  --a-raised: #0e0e0e;
+  --a-field: #262626;
+  --a-gate: #1a1712;
+  --a-gate-line: #e0af68;
+  --a-approve: #7aa2f7;
+  --a-on-approve: #111111;
+  --a-decline: #e0af68;
+  --a-on-decline: #111111;
+  --a-pill: #2a2a2a;
+  --k-system: #7aa2f7;
+  --k-tools: #2ac3de;
+  --k-map: #1a8fa8;
+  --k-summaries: #5c7f45;
+  --k-history: #9ece6a;
+  --k-code: #bb9af7;
+  --k-prompt: #e0af68;
+  --k-free: #3a3a3a;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 560px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  background: var(--a-bar);
+  font: 12.5px/1.45 var(--sans);
+  color: var(--a-fg);
+}
+:root[data-theme="light"] .app {
+  --a-tree: #ededed;
+  --a-card: #ffffff;
+  --a-line: #c8c8c8;
+  --a-fg: #1a1d23;
+  --a-muted: #5b6472;
+  --a-subtle: #8a92a0;
+  --a-ok: #4a7a1c;
+  --a-chat: #dddddd;
+  --a-chat-fg: #111317;
+  --a-chat-dim: #3a414c;
+  --a-chat-accent: #0035b2;
+  --a-chat-ok: #244c00;
+  --a-chat-warn: #613e00;
+  --a-chat-bad: #8f0018;
+  --a-chat-line: #a8a8a8;
+  --a-raised: #ececec;
+  --a-field: #f4f4f4;
+  --a-gate: #fdf7e9;
+  --a-gate-line: #b07a1e;
+  --a-approve: #1d3d82;
+  --a-on-approve: #ffffff;
+  --a-decline: #613e00;
+  --a-on-decline: #ffffff;
+  --a-pill: #e2e2e2;
+  --k-system: #2f5bbd;
+  --k-tools: #0b7185;
+  --k-map: #075a6b;
+  --k-summaries: #33561a;
+  --k-history: #4a7a1c;
+  --k-code: #6f3fb5;
+  --k-prompt: #8a5d12;
+  --k-free: #c3c9d3;
+}
+.app .col { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 38px minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.app .chat { grid-template-rows: 38px minmax(0, 1fr) auto auto; }
+.app .insp, .app .content { display: none; }
+.app .chead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--a-bar);
+  color: var(--a-bar-fg);
+  border-bottom: 1px solid var(--a-bar-line);
+  min-width: 0;
+  white-space: nowrap;
+}
+.app .cfoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  background: var(--a-bar);
+  color: var(--a-bar-dim);
+  border-top: 1px solid var(--a-bar-line);
+  font-size: 11.5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.app svg.ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.app .logo { width: 22px; height: 22px; flex: none; }
+.app .tabs { display: flex; gap: 2px; margin-left: auto; align-self: stretch; }
+.app .tabs span { display: flex; align-items: center; padding: 0 8px; color: var(--a-bar-dim); border-bottom: 2px solid transparent; }
+.app .tabs .on { color: var(--a-bar-fg); border-bottom-color: var(--a-accent-bar); }
+
+/* the inspector, on its Debug tab */
+.app .tree { background: var(--a-tree); padding: 10px; display: grid; gap: 8px; align-content: start; overflow: hidden; }
+.app .card { background: var(--a-card); border: 1px solid var(--a-line); border-radius: 10px; padding: 10px 12px; }
+.app .card-h { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 6px; }
+.app .card-h svg { width: 11px; height: 11px; color: var(--a-muted); }
+.app .kv { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--a-muted); margin-top: 4px; }
+.app .kv b { color: var(--a-fg); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.app .kv > span { flex: none; }
+.app .tag { border: 1px solid var(--a-line); border-radius: 6px; padding: 1px 7px; color: var(--a-fg); }
+.app .big { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 2px 0 6px; }
+.app .big b { font-size: 13.5px; font-weight: 600; }
+.app .big span { color: var(--a-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.app .ubar { display: flex; gap: 2px; height: 5px; border-radius: 3px; background: var(--k-free); overflow: hidden; margin-bottom: 8px; }
+.app .ubar i { display: block; height: 100%; transition: width 0.6s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.app .rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.app .rows li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto 46px; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
+.app .rows .n { color: var(--a-muted); text-align: right; }
+.app .rows .p { text-align: right; }
+.app .sw { width: 9px; height: 9px; border-radius: 2px; }
+.app .system { background: var(--k-system); }
+.app .tools { background: var(--k-tools); }
+.app .map { background: var(--k-map); }
+.app .summaries { background: var(--k-summaries); }
+.app .history { background: var(--k-history); }
+.app .code { background: var(--k-code); }
+.app .prompt { background: var(--k-prompt); }
+.app .new { background: var(--k-free); }
+.app .note { color: var(--a-muted); font-size: 11.5px; }
+.app .ok { color: var(--a-ok); }
+.app .cfoot .ok { color: #9ece6a; }
+
+/* the content column: a file, as the editor draws it */
+.app .ftab { display: flex; align-items: center; gap: 6px; align-self: stretch; padding: 0 4px; color: var(--a-bar-fg); border-bottom: 2px solid var(--a-accent-bar); }
+.app .ftab.ghost { color: var(--a-bar-dim); font-style: italic; border-bottom-color: transparent; }
+.app .ftab svg { width: 13px; height: 13px; color: #ff9e64; }
+.app .editor { background: #111111; overflow: hidden; padding: 10px 0; font: 11.5px/1.75 var(--mono); color: #f8f8f2; }
+.app .editor div { display: grid; grid-template-columns: 42px minmax(0, 1fr); white-space: pre; transition: background 1.2s; }
+.app .editor div::before { content: attr(data-n); color: #90908a; text-align: right; padding-right: 14px; }
+.app .editor .flash { background: rgba(166, 226, 46, 0.14); transition: none; }
+.app .kw { color: #f92672; }
+.app .ty { color: #66d9ef; font-style: italic; }
+.app .fn { color: #a6e22e; }
+.app .st { color: #e6db74; }
+.app .cm { color: #75715e; }
+.app .nu { color: #ae81ff; }
+.app .label { letter-spacing: 0.08em; font-size: 10.5px; }
+.app .pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #3a3a3a; border-radius: 6px; padding: 1px 8px; color: var(--a-bar-fg); }
+.app .push { margin-left: auto; }
+
+/* the chat */
+.app .chat .chead b { font-weight: 600; }
+.app .jobsel { color: var(--a-bar-dim); display: inline-flex; align-items: center; gap: 4px; }
+.app .jobsel svg { width: 11px; height: 11px; }
+.app .icons { display: flex; gap: 10px; margin-left: auto; color: var(--a-bar-dim); }
+.app .stream {
+  background: var(--a-chat);
+  color: var(--a-chat-fg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow: hidden;
+  min-height: 0;
+}
+.app [hidden] { display: none !important; }
+.app .msg-user { color: var(--a-chat-accent); border-left: 2px solid var(--a-chat-accent); padding-left: 8px; font-size: 13px; }
+.app .codeblk { border: 1px solid var(--a-chat-line); border-radius: 6px; overflow: hidden; background: var(--a-raised); }
+.app .codeblk .h { display: flex; justify-content: space-between; padding: 3px 9px; font: 11px var(--mono); color: var(--a-chat-dim); border-bottom: 1px solid var(--a-chat-line); }
+.app .codeblk pre { margin: 0; padding: 7px 9px; font: 11px/1.5 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--a-chat-fg); }
+.app .meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--a-chat-dim); font-variant-numeric: tabular-nums; margin-top: 5px; }
+.app .fold { background: var(--a-raised); border-left: 3px solid var(--k-history); border-radius: 4px; padding: 8px 10px; }
+.app .fold .h { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.app .fold u { text-decoration-color: var(--a-chat-dim); text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.app .fold .h span { color: var(--a-chat-dim); font-size: 11.5px; white-space: nowrap; }
+.app .fold pre { margin: 7px 0 0; padding: 6px 8px; border: 1px solid var(--a-chat-line); border-radius: 4px; font: 10.5px/1.5 var(--mono); color: var(--a-chat-dim); white-space: pre-wrap; }
+.app .call {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--a-chat-line);
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: var(--a-raised);
+  font: 11.5px var(--mono);
+  min-width: 0;
+  white-space: nowrap;
+}
+.app .call .tw { color: var(--a-chat-dim); }
+.app .call .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--a-chat-ok); flex: none; }
+.app .call.no .dot { background: var(--a-chat-bad); }
+.app .call .name { color: var(--a-chat-accent); }
+.app .call .subject { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.app .call .sub { color: var(--a-chat-dim); }
+.app .call .status { margin-left: auto; color: var(--a-chat-ok); font-family: var(--sans); }
+.app .call.no .status { color: var(--a-chat-bad); }
+.app .call.run .status { color: var(--a-chat-dim); }
+.app .call .ms { color: var(--a-chat-dim); font-family: var(--sans); min-width: 34px; text-align: right; }
+.app .answer { font-size: 13px; }
+.app .answer code { font: 12px var(--mono); }
+.app .gate {
+  margin-top: auto;
+  border: 1px solid var(--a-gate-line);
+  background: var(--a-gate);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  transition: opacity 0.25s, transform 0.25s;
+}
+.app .gate .t { font-size: 10px; letter-spacing: 0.08em; color: var(--a-chat-dim); }
+.app .gate .o { font-weight: 600; margin: 2px 0 4px; }
+.app .gate ul { margin: 0 0 6px; padding-left: 18px; }
+.app .gate p { color: var(--a-chat-fg); }
+.app .gate .floor { color: var(--a-chat-dim); border-top: 1px solid var(--a-chat-line); margin-top: 6px; padding-top: 6px; font-size: 11.5px; }
+.app .gate .amend { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--a-chat-dim); }
+.app .gate .amend span:first-child { border: 1px solid var(--a-chat-line); border-radius: 5px; padding: 2px 8px; background: var(--a-field); min-width: 90px; }
+.app .gate .amend u { text-underline-offset: 2px; }
+.app .gate .go { display: flex; gap: 8px; margin-top: 8px; }
+.app .gate .go span { font-weight: 600; border-radius: 6px; padding: 4px 14px; transition: transform 0.12s, box-shadow 0.2s; }
+.app .gate .approve { background: var(--a-approve); color: var(--a-on-approve); }
+.app .gate .approve.press { transform: scale(0.93); box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.35); }
+.app .gate .decline { background: var(--a-decline); color: var(--a-on-decline); }
+.app .composer { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--a-chat); border-top: 1px solid var(--a-chat-line); }
+.app .composer > svg { color: var(--a-chat-dim); }
+.app .field { flex: 1; min-width: 0; border: 1px solid var(--a-chat-line); background: var(--a-field); border-radius: 7px; padding: 6px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--a-chat-fg); }
+.app .field .ph { color: var(--a-chat-dim); }
+.app .field.off { opacity: 0.6; }
+.app .caret::after { content: ""; display: inline-block; width: 1.5px; height: 14px; background: var(--a-chat-fg); vertical-align: -3px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.app .send { background: var(--a-approve); color: var(--a-on-approve); border-radius: 7px; padding: 5px 12px; font-weight: 600; opacity: 0.75; }
+.app .dd { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #3a3a3a; border-radius: 6px; padding: 2px 8px; color: var(--a-bar-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.app .dd svg { width: 10px; height: 10px; }
+.app .dd .m { color: var(--a-bar-dim); }
+.app .meter { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; border: 1px solid #3a3a3a; border-radius: 6px; padding: 2px 8px; color: var(--a-bar-fg); font-variant-numeric: tabular-nums; }
+.app .meter i { display: block; width: 54px; height: 6px; border-radius: 3px; background: #3a3a3a; overflow: hidden; }
+.app .meter i b { display: block; height: 100%; background: #2ac3de; transition: width 0.6s; }
+.app .dd.model { display: none; }
+figcaption { color: var(--dim); font: 0.75rem/1.5 var(--mono); margin-top: 14px; text-align: center; }
+
+/* ---- runs on -------------------------------------------------------------- */
+.runs { padding: 36px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg-raised); }
+.runs .label { text-align: center; color: var(--dim); font: 500 0.75rem/1.4 var(--mono); letter-spacing: 0.04em; margin-bottom: 22px; }
+.logos { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 8px; }
+.logos li { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 0.875rem; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; transition: color 0.2s; }
+.logos li:hover { color: var(--fg); }
+.logos svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
+
+/* ---- the drawings --------------------------------------------------------- */
+/* Every illustration is an inline SVG drawn with the page's tokens, so it
+   follows the theme. Its text is the mono face, sized in its own units on
+   the <svg>, and a text's own font-size attribute wins over that. */
+.ill { display: block; width: 100%; height: auto; margin: 0 auto; overflow: visible; font-size: 12px; }
+.ill text { font-family: var(--mono); fill: var(--muted); font-variant-ligatures: none; }
+.ill .sans { font-family: var(--sans); }
+.ill .b { font-weight: 700; }
+.ill .t-fg { fill: var(--fg); }
+.ill .t-dim { fill: var(--dim); }
+.ill .t-amber { fill: var(--amber-ink); }
+.ill .t-ok { fill: var(--ok-ink); }
+.ill .t-no { fill: var(--no-ink); }
+.ill .t-violet { fill: var(--b-tools); }
+.ill .t-blue { fill: var(--b-system); }
+.ill .t-dark { fill: #120c02; }
+.ill .t-ink { fill: var(--ink-fg); }
+.ill .t-ink-m { fill: var(--ink-muted); }
+.ill .t-ink-d { fill: var(--ink-dim); }
+.ill .t-ink-ok { fill: #3fb950; }
+.ill .t-ink-amber { fill: #f5a524; }
+.ill .t-big { font-family: var(--sans); font-weight: 700; letter-spacing: -0.03em; }
+.ill .panel { fill: var(--bg-raised); stroke: var(--border-strong); }
+.ill .box { fill: var(--surface-2); stroke: var(--border-strong); }
+.ill .card { fill: var(--surface); stroke: var(--border-strong); }
+.ill .ink { fill: var(--ink); stroke: var(--ink-line); }
+.ill .ink-line { stroke: var(--ink-line); }
+.ill .ink-dot { fill: var(--ink-line); }
+.ill .line { stroke: var(--border-strong); fill: none; }
+.ill .bar-g { fill: var(--border-strong); }
+.ill .dim-f { fill: var(--dim); }
+.ill .amber-f { fill: var(--amber); }
+.ill .ok-f { fill: var(--ok); }
+.ill .no-f { fill: var(--no); }
+.ill .folder { fill: var(--folder); }
+.ill .file { fill: var(--surface); stroke: var(--dim); }
+.ill .file.rs { stroke: #ff9e64; }
+.ill .file.toml { stroke: var(--b-tools); }
+.ill .sel { fill: rgba(122, 162, 247, 0.16); }
+.ill .chev { fill: none; stroke: var(--dim); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.ill .mark { fill: currentColor; color: var(--fg); }
+.ill .flow { fill: none; stroke-width: 1.6; stroke-dasharray: 4 6; animation: flow 1.4s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -20; } }
+.ill .pill-ok { fill: var(--ok-soft); stroke: var(--ok-line); }
+.ill .pill-no { fill: var(--surface); stroke: var(--no); }
+.ill .pill-violet { fill: var(--surface); stroke: var(--b-tools); }
+.ill .pill-blue { fill: rgba(122, 162, 247, 0.12); stroke: var(--b-system); }
+.ill .lk { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; }
+
+/* ---- how a job runs: four scenes ------------------------------------------ */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.step {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px;
+  padding: 14px 14px 18px;
   min-width: 0;
 }
-.card h3 { font-size: 1rem; margin-bottom: 8px; }
-.card p { color: var(--muted); font-size: 0.9375rem; }
+.step .scene { margin-bottom: 14px; max-width: 300px; }
+.step .n { font: 600 0.6875rem/1 var(--mono); color: var(--amber-ink); }
+.step h3 { font-size: 1.0625rem; margin: 6px 0 2px; }
+.step p { color: var(--dim); font: 0.75rem/1.4 var(--mono); }
+.scene .lens { animation: scan 6s ease-in-out infinite; }
+.scene .lens circle { fill: rgba(122, 162, 247, 0.08); stroke: var(--fg); stroke-width: 3; }
+.scene .lens path { stroke: var(--fg); stroke-width: 5; stroke-linecap: round; }
+.scene .lens .glint { stroke: var(--fg); stroke-width: 1.5; opacity: 0.5; fill: none; }
+@keyframes scan { 0%, 100% { transform: translate(0, 0); } 45%, 55% { transform: translate(-30px, 64px); } }
+.scene .gate-bg { fill: var(--amber-soft); stroke: var(--amber-line); }
+.scene .sep { stroke: var(--amber-line); }
+.scene .btn-acc { fill: var(--b-system); }
+.scene .btn-warn { fill: var(--amber); }
+.scene .press { transform-box: fill-box; transform-origin: center; animation: press 3.2s ease-in-out infinite; }
+@keyframes press { 0%, 66%, 100% { transform: none; } 74% { transform: scale(0.9); } }
+.scene .ripple { fill: none; stroke: var(--b-system); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: ripple 3.2s ease-out infinite; opacity: 0; }
+@keyframes ripple { 0%, 72% { opacity: 0; transform: scale(0.4); } 76% { opacity: 0.9; } 100% { opacity: 0; transform: scale(1.6); } }
+.scene .cursor { fill: var(--fg); stroke: var(--bg); stroke-width: 1.2; stroke-linejoin: round; }
+.scene .cur { fill: var(--amber); animation: blink 1s steps(1) infinite; }
+.scene .bubble { fill: var(--surface-2); stroke: var(--border-strong); }
+.scene .ubar { fill: var(--b-system); opacity: 0.7; }
+.scene .abar { fill: var(--dim); opacity: 0.55; }
+.scene .brace { fill: none; stroke: var(--dim); stroke-width: 1.4; }
+.scene .arrows path { fill: none; stroke: var(--amber); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; animation: chev 1.6s ease-in-out infinite; }
+.scene .arrows path:nth-child(2) { animation-delay: 0.2s; }
+.scene .arrows path:nth-child(3) { animation-delay: 0.4s; }
+@keyframes chev { 0%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+.scene .folded { fill: var(--surface-2); stroke: var(--border-strong); }
+.scene .folded-bar { fill: var(--b-summaries); }
 
-/* ---- quick start and options --------------------------------------------- */
-/* Edge to edge on a phone, so the longest line fits without a scroll; a
-   card from 640px up. */
-.block {
-  background: var(--term-bg);
-  color: var(--term-fg);
-  border-radius: 0;
-  padding: 14px var(--gutter);
-  margin: 20px calc(-1 * var(--gutter)) 0;
-  overflow-x: auto;
-  line-height: 1.7;
-  font-size: 0.8125rem;
-}
-.block .c { color: var(--term-muted); }
-.block .p { color: var(--term-amber); user-select: none; }
-dl.opts { margin: 20px 0 0; display: grid; gap: 14px; }
-dl.opts div { min-width: 0; }
-dl.opts dt code { font-weight: 600; }
-dl.opts dd { margin: 4px 0 0; color: var(--muted); font-size: 0.9375rem; }
-
-/* ---- demo and foot ------------------------------------------------------- */
-.demo {
-  display: block;
-  background: var(--accent-soft);
+/* ---- context: a bento of what the window holds ----------------------------- */
+.bento { display: grid; gap: 12px; }
+.tile {
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
-  color: var(--fg);
-  text-decoration: none;
-  margin-top: 20px;
+  padding: 18px 12px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
-.demo strong { color: var(--accent); display: block; font-size: 1.0625rem; margin-bottom: 4px; }
-.demo span { color: var(--muted); font-size: 0.9375rem; }
-.demo:hover strong { text-decoration: underline; }
-footer { border-top: 1px solid var(--border); padding: 24px 0 40px; color: var(--muted); font-size: 0.875rem; }
-footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; }
-footer a { color: var(--muted); }
+.tile h3 { font-size: 1.125rem; padding: 0 4px; }
+.tile .ill { max-width: 560px; flex: 1; }
+.tile .src { font: 0.6875rem/1.5 var(--mono); color: var(--dim); text-align: center; }
+.tile .src a { color: var(--muted); text-underline-offset: 2px; }
+.ctx .blk { stroke-width: 1; }
+.ctx .blk.system { fill: color-mix(in srgb, var(--b-system) 16%, transparent); stroke: color-mix(in srgb, var(--b-system) 65%, transparent); }
+.ctx .blk.tools { fill: color-mix(in srgb, var(--b-tools) 16%, transparent); stroke: color-mix(in srgb, var(--b-tools) 60%, transparent); }
+.ctx .blk.map { fill: color-mix(in srgb, var(--b-map) 16%, transparent); stroke: color-mix(in srgb, var(--b-map) 60%, transparent); }
+.ctx .blk.summaries { fill: color-mix(in srgb, var(--b-summaries) 16%, transparent); stroke: color-mix(in srgb, var(--b-summaries) 60%, transparent); }
+.ctx .blk.history { fill: color-mix(in srgb, var(--b-history) 14%, transparent); stroke: color-mix(in srgb, var(--b-history) 55%, transparent); }
+.ctx .blk.code { fill: color-mix(in srgb, var(--b-code) 18%, transparent); stroke: color-mix(in srgb, var(--b-code) 75%, transparent); }
+.ctx .bracket { fill: none; stroke: var(--b-system); stroke-width: 1.5; }
+.ctx .lock { fill: none; stroke: var(--b-system); stroke-width: 1.5; stroke-linecap: round; }
+.ctx .new { fill: none; stroke: var(--amber); stroke-width: 1.6; }
+.chart .gl { stroke: var(--border); }
+.chart .gl.base { stroke: var(--border-strong); }
+.chart .mark-v { stroke: var(--dim); stroke-dasharray: 2 3; }
+.chart .mean { stroke-dasharray: 4 4; stroke-width: 1; }
+.chart .mean.a { stroke: var(--dim); }
+.chart .mean.b { stroke: var(--ok); }
+.chart .l-turn { fill: none; stroke: var(--dim); stroke-width: 2; stroke-linejoin: round; }
+.chart .l-block { fill: none; stroke: var(--ok); stroke-width: 2.4; stroke-linejoin: round; }
+.chart .l-shared { fill: none; stroke: var(--muted); stroke-width: 2.4; stroke-linejoin: round; }
+.chart .draw { stroke-dasharray: 900; stroke-dashoffset: 0; }
+.js .rv:not(.in) .chart .draw { stroke-dashoffset: 900; }
+.js .rv.in .chart .draw { animation: draw 1.8s cubic-bezier(0.3, 0.6, 0.2, 1) both; }
+@keyframes draw { from { stroke-dashoffset: 900; } }
+.chart .pt-b { fill: var(--ok); }
+.chart .pt-a { fill: var(--dim); }
+.turns .frame { fill: var(--amber-soft); stroke: var(--amber-line); }
+.turns .ub { fill: color-mix(in srgb, var(--b-system) 30%, var(--surface)); stroke: color-mix(in srgb, var(--b-system) 60%, transparent); }
+.turns .ab { fill: var(--surface-2); stroke: var(--border-strong); }
+.turns .ab.last { stroke: var(--b-history); }
+.turns .gone { fill: none; stroke: var(--dim); stroke-dasharray: 3 3; }
+.turns .gauge { fill: var(--surface-2); }
+.turns .gauge-f { fill: var(--b-history); opacity: 0.8; }
+.turns .exit { fill: none; stroke: var(--dim); stroke-width: 1.4; stroke-dasharray: 3 4; }
+.turns .flag { fill: var(--amber); }
+.pick .cell { fill: var(--border-strong); }
+.pick .cell.lit { fill: var(--amber); filter: drop-shadow(0 0 6px rgba(245, 165, 36, 0.6)); }
+.pick .slot { fill: var(--amber-soft); stroke: var(--amber-line); }
+.pick .frag { fill: color-mix(in srgb, var(--b-code) 22%, var(--surface)); stroke: color-mix(in srgb, var(--b-code) 70%, transparent); }
+.pick .free { fill: none; stroke: var(--border-strong); stroke-dasharray: 3 3; }
+.pick .flow { stroke: var(--amber); }
 
-/* ---- larger screens: each query only adds -------------------------------- */
+/* ---- safety and local: one drawing each ----------------------------------- */
+.split { display: grid; gap: 32px; align-items: center; }
+.figure { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 18px 8px; min-width: 0; }
+.figure .ill { max-width: 560px; }
+.rings .r1 { fill: var(--amber-soft); fill-opacity: 0.3; stroke: var(--amber-line); stroke-width: 1.5; }
+.rings .r2 { fill: none; stroke: var(--dim); stroke-dasharray: 5 5; }
+.rings .r3 { fill: color-mix(in srgb, var(--b-tools) 6%, transparent); stroke: color-mix(in srgb, var(--b-tools) 60%, transparent); stroke-width: 1.5; }
+.rings .yes { fill: none; stroke: var(--ok); stroke-width: 2; }
+.rings .nope { fill: none; stroke: var(--no); stroke-width: 2; stroke-dasharray: 4 4; }
+.rings .stop { fill: var(--surface); stroke: var(--no); stroke-width: 2; }
+.rings .stop-x { stroke: var(--no); stroke-width: 2; stroke-linecap: round; }
+.rings .spark { fill: var(--amber); }
+.rings .key { fill: none; stroke: var(--amber-ink); stroke-width: 1.5; stroke-linecap: round; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 24px 0 0; }
+.pills li { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 12px; font-size: 0.8125rem; color: var(--muted); background: var(--surface); }
+.pills li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.local .machine { fill: var(--ok-soft); stroke: var(--ok-line); stroke-width: 1.5; }
+.local .bar { stroke: var(--ok-line); }
+.local .halo { fill: none; stroke: var(--amber-line); }
+.local .flow { stroke: var(--ok); }
+.local .cloud { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.5; }
+.local .remote { fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-dasharray: 5 5; }
+.local .gate { fill: var(--surface); stroke: var(--amber); stroke-width: 1.5; }
+
+/* ---- surfaces ------------------------------------------------------------- */
+.surfaces { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.surface {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px 12px;
+  min-width: 0;
+  text-decoration: none;
+  transition: border-color 0.2s, transform 0.2s;
+}
+a.surface:hover { border-color: var(--dim); transform: translateY(-2px); }
+.surface .ico { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--amber-ink); }
+.surface .ico svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.surface h3 { font-size: 1rem; letter-spacing: -0.01em; }
+.surface code { color: var(--dim); font-size: 0.75rem; }
+
+/* ---- install -------------------------------------------------------------- */
+.cta-card {
+  position: relative;
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  padding: 32px 18px;
+  background:
+    radial-gradient(ellipse 70% 90% at 50% 0%, var(--glow), transparent 70%),
+    var(--bg-raised);
+  overflow: hidden;
+}
+.cta-card .oneline { margin-top: 24px; }
+.platforms { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0 0; padding: 0; list-style: none; }
+.platforms li { font: 0.75rem/1 var(--mono); color: var(--muted); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 10px; }
+.first-run {
+  margin: 28px 0 0;
+  padding: 14px;
+  background: var(--ink);
+  border: 1px solid var(--ink-line);
+  border-radius: 12px;
+  font-size: 0.75rem;
+  line-height: 1.75;
+  color: var(--ink-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.first-run .c { color: var(--ink-dim); }
+.first-run .p { color: var(--amber); user-select: none; }
+details.opts { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px; }
+details.opts summary { cursor: pointer; color: var(--muted); font-size: 0.9375rem; list-style: none; display: flex; align-items: center; gap: 8px; min-height: 32px; }
+details.opts summary::-webkit-details-marker { display: none; }
+details.opts summary::before { content: "+"; font-family: var(--mono); color: var(--amber-ink); width: 14px; }
+details.opts[open] summary::before { content: "−"; }
+details.opts summary:hover { color: var(--fg); }
+details.opts .note { color: var(--muted); font-size: 0.875rem; margin: 10px 0 16px; }
+details.opts :not(pre) > code { background: var(--surface-2); border-radius: 4px; padding: 0.1em 0.35em; color: var(--fg); }
+dl.optlist { margin: 0; display: grid; gap: 14px; }
+dl.optlist div { min-width: 0; }
+dl.optlist dt code { font-weight: 600; }
+dl.optlist dd { margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
+
+/* ---- foot ----------------------------------------------------------------- */
+footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--dim); font-size: 0.875rem; }
+footer .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
+footer .brand svg { width: 28px; height: 28px; }
+footer nav { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+footer a { color: var(--muted); text-decoration: none; }
+footer a:hover { color: var(--fg); }
+footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
+
+/* ---- reveal on scroll, only where the script ran ---------------------------- */
+.js .rv { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.6s ease; }
+.js .rv.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .js .rv { opacity: 1; transform: none; transition: none; }
+  .app .ubar i, .app .meter i b, .app .editor div { transition: none; }
+  .ill *, .app .caret::after { animation: none !important; }
+  .js .rv:not(.in) .chart .draw { stroke-dashoffset: 0; }
+}
+
+/* ---- larger screens: each query only adds ---------------------------------- */
 @media (min-width: 560px) {
-  nav .wide { display: inline-flex; }
+  nav.main .wide { display: inline-flex; }
+  .logos { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .surfaces { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .app .dd.model { display: inline-flex; }
 }
-@media (min-width: 640px) {
-  :root { --gutter: 24px; }
-  section { padding: 56px 0; }
-  .hero { padding: 40px 0 56px; }
-  .hero h1 { font-size: 2.75rem; }
-  .install { padding: 24px; }
-  .block { font-size: 0.875rem; padding: 18px 20px; margin: 20px 0 0; border-radius: var(--radius); }
-  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-  dl.opts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 32px; }
-  h2 { font-size: 1.75rem; }
+@media (min-width: 720px) {
+  :root { --gutter: 28px; }
+  section { padding: 104px 0; }
+  .hero { padding: 64px 0 88px; }
+  .hero h1 { font-size: 3.75rem; }
+  h2 { font-size: 2.75rem; }
+  .head { margin-bottom: 48px; }
+  nav.main .gh span { display: inline; }
+  .step { padding: 18px 18px 22px; }
+  .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tile { padding: 22px 18px; }
+  .figure { padding: 28px; }
+  .cta-card { padding: 56px; }
+  .first-run { font-size: 0.8125rem; padding: 18px; }
+  dl.optlist { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 32px; }
+  .logos { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .app { grid-template-columns: 250px minmax(0, 1fr); height: 580px; }
+  .app .insp { display: grid; }
+  .app .chat { border-left: 1px solid var(--a-bar-line); }
 }
-@media (min-width: 960px) {
-  .hero .wrap { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 48px; align-items: center; }
-  .hero h1 { font-size: 3.25rem; }
-  .hero .lead { margin-bottom: 0; }
-  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 1024px) {
+  .hero h1 { font-size: 4.5rem; }
+  .app { grid-template-columns: 264px minmax(0, 1fr) 380px; height: 600px; }
+  .app .content { display: grid; border-left: 1px solid var(--a-bar-line); }
+  .steps { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+  /* the arrow from one scene to the next */
+  .step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    right: -13px;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-top: 2px solid var(--amber-line);
+    border-right: 2px solid var(--amber-line);
+    transform: translateY(-50%) rotate(45deg);
+  }
+  .bento { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .bento .t3 { grid-column: span 3; }
+  .bento .t2 { grid-column: span 2; }
+  .split { grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 64px; }
+  .split.flip { grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); }
+  .split.flip > :first-child { order: 2; }
+  .cta-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; }
+  .cta-card .first-run { margin: 0; align-self: start; }
+  .cta-card details.opts { grid-column: 1 / -1; }
 }
 </style>
 </head>
 <body>
 
-<header>
+<!-- The mark, the UI's icons, and the marks of the engines and providers
+     from web/brands (Simple Icons, CC0, and the projects' own marks; see its
+     README) — drawn monochrome. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="luu" viewBox="0 0 512 512"><rect width="512" height="512" fill="#12161c" rx="112"/><g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="40"><path stroke="#f5a524" d="M116 150v210"/><path stroke="#f2f4f7" d="M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215"/></g><circle cx="356" cy="296" r="13" fill="#f5a524"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7 10 3 2.5L7 15M12.5 15H17"/></symbol>
+    <symbol id="i-host" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="11" rx="1.5"/><path d="M8.5 19.5h7M12 16v3.5"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.5-8.3 8.3a5 5 0 0 1-7-7l8.3-8.3a3.3 3.3 0 0 1 4.7 4.7l-8.4 8.3a1.7 1.7 0 0 1-2.3-2.3l7.7-7.7"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 20z"/><path d="M14 3.5V8h4"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
+    <symbol id="b-ollama" viewBox="0 0 17 25"><path fill-rule="evenodd" clip-rule="evenodd" d="M4.40517 0.102088C4.62117 0.198678 4.81617 0.357766 4.99317 0.56799C5.28817 0.915712 5.53718 1.41342 5.72718 2.00318C5.91818 2.59635 6.04218 3.25316 6.08918 3.91224C6.71878 3.5075 7.41754 3.26103 8.13818 3.18953L8.18918 3.18498C9.05919 3.10544 9.91919 3.28384 10.6692 3.72361C10.7702 3.78384 10.8692 3.84861 10.9662 3.91679C11.0162 3.27021 11.1382 2.62817 11.3262 2.04863C11.5162 1.45773 11.7652 0.961166 12.0592 0.612308C12.2235 0.410338 12.4245 0.251368 12.6482 0.146406C12.9052 0.032771 13.1782 0.0123167 13.4442 0.098679C13.8452 0.228223 14.1892 0.516855 14.4602 0.936167C14.7082 1.3191 14.8942 1.81 15.0212 2.39863C15.2512 3.45998 15.2912 4.85655 15.1362 6.54061L15.1892 6.58607L15.2152 6.60766C15.9722 7.26219 16.4992 8.19513 16.7782 9.27807C17.2133 10.9678 16.9943 12.8632 16.2442 13.9235L16.2262 13.9473L16.2282 13.9507C16.6453 14.8166 16.8983 15.7314 16.9523 16.678L16.9543 16.7121C17.0183 17.9223 16.7542 19.1404 16.1402 20.337L16.1332 20.3484L16.1432 20.3756C16.6152 21.6904 16.7632 23.0142 16.5812 24.3369L16.5752 24.3813C16.547 24.5744 16.4525 24.7472 16.3125 24.8612C16.1725 24.9753 15.9983 25.0219 15.8282 24.9903C15.744 24.9753 15.6632 24.9417 15.5904 24.8912C15.5177 24.8408 15.4544 24.7744 15.4042 24.696C15.3541 24.6178 15.318 24.529 15.2981 24.4347C15.2782 24.3406 15.2748 24.2428 15.2882 24.1472C15.4552 22.9733 15.2982 21.7961 14.8082 20.5984C14.7625 20.4871 14.7422 20.3645 14.7492 20.242C14.7562 20.1194 14.7902 20.0009 14.8482 19.8972L14.8522 19.8904C15.4562 18.8404 15.7062 17.8109 15.6522 16.7996C15.6062 15.9143 15.3272 15.045 14.8522 14.2166C14.7598 14.0556 14.7269 13.8597 14.7606 13.6713C14.7943 13.4829 14.8918 13.3171 15.0322 13.2098L15.0412 13.203C15.2842 13.0223 15.5082 12.561 15.6212 11.9303C15.7459 11.1846 15.7133 10.4159 15.5262 9.68716C15.3212 8.89171 14.9462 8.22809 14.4212 7.77468C13.8262 7.25878 13.0382 7.00992 12.0412 7.08151C11.9108 7.09115 11.7809 7.05613 11.6682 6.98097C11.5556 6.90581 11.4653 6.79399 11.4092 6.65993C11.0952 5.90426 10.6372 5.36336 10.0662 5.02814C9.51799 4.71723 8.90425 4.58657 8.29418 4.65087C7.04918 4.76337 5.95118 5.56108 5.62418 6.56675C5.57792 6.70829 5.4947 6.8304 5.38568 6.91672C5.27666 7.00301 5.14703 7.04942 5.01417 7.0497C3.94717 7.05197 3.12117 7.33606 2.51717 7.84855C1.99517 8.29172 1.63916 8.91103 1.45116 9.65307C1.28104 10.3515 1.25774 11.0857 1.38316 11.7962C1.49516 12.4303 1.71416 12.9553 1.96517 13.2382L1.97317 13.2462C2.18517 13.4814 2.23017 13.8485 2.08217 14.1382C1.72216 14.845 1.45316 15.8984 1.40916 16.9109C1.35916 18.0677 1.59516 19.0722 2.12817 19.7927L2.14417 19.8143C2.22461 19.9208 2.27633 20.0514 2.29319 20.1905C2.31003 20.3295 2.29127 20.4711 2.23917 20.5984C1.66316 22.0029 1.48616 23.1574 1.67716 24.0665C1.71148 24.2556 1.67954 24.4524 1.58812 24.6149C1.4967 24.7776 1.35302 24.8933 1.18766 24.9374C1.0223 24.9817 0.848322 24.9506 0.702741 24.8512C0.557141 24.7517 0.451463 24.5917 0.408163 24.4051C0.165162 23.2483 0.330162 21.9233 0.881162 20.4302L0.895162 20.3904L0.887162 20.3768C0.616341 19.9222 0.414243 19.4195 0.289162 18.8893L0.284162 18.8677C0.132362 18.2062 0.0726416 17.5218 0.107162 16.8393C0.151162 15.8052 0.385163 14.7462 0.729162 13.8962L0.741162 13.8666L0.739162 13.8644C0.446163 13.3894 0.229162 12.7814 0.109162 12.1087L0.104162 12.0814C-0.0611788 11.1431 -0.0293187 10.1737 0.197162 9.25194C0.459163 8.21218 0.974162 7.31901 1.73316 6.67356C1.79316 6.62243 1.85616 6.57129 1.91916 6.52357C1.76016 4.827 1.80016 3.42134 2.03117 2.35317C2.15817 1.76455 2.34517 1.27365 2.59317 0.890713C2.86317 0.472537 3.20717 0.183905 3.60817 0.0532252C3.87417 -0.0331371 4.14817 -0.0126829 4.40517 0.102088ZM8.52118 10.4315C9.45719 10.4315 10.3212 10.7871 10.9672 11.403C11.5972 12.0019 11.9722 12.8064 11.9722 13.6076C11.9722 14.6166 11.5662 15.403 10.8392 15.9052C10.2192 16.3314 9.38819 16.5382 8.43618 16.5382C7.42718 16.5382 6.56518 16.2439 5.94318 15.7041C5.32618 15.17 4.98017 14.42 4.98017 13.6076C4.98017 12.8042 5.37818 11.9973 6.03618 11.3962C6.70418 10.786 7.58618 10.4315 8.52118 10.4315ZM8.52118 11.4496C7.82742 11.4428 7.15204 11.7031 6.60518 12.1883C6.14418 12.6087 5.88318 13.1371 5.88318 13.6087C5.88318 14.095 6.09318 14.5507 6.49318 14.8973C6.94818 15.2916 7.61718 15.52 8.43618 15.52C9.23519 15.52 9.90919 15.353 10.3682 15.0359C10.8312 14.7178 11.0682 14.2564 11.0682 13.6076C11.0682 13.1269 10.8222 12.5962 10.3852 12.1803C9.90119 11.7201 9.24519 11.4496 8.52118 11.4496ZM9.18319 12.8246L9.18719 12.8292C9.30719 13.0007 9.28219 13.2496 9.13119 13.386L8.83919 13.6473V14.1541C8.83865 14.267 8.79877 14.375 8.72829 14.4544C8.6578 14.5339 8.56246 14.5783 8.46318 14.578C8.3639 14.5783 8.26856 14.5339 8.19808 14.4544C8.12758 14.375 8.0877 14.267 8.08718 14.1541V13.6314L7.81618 13.3837C7.78042 13.3511 7.7507 13.3109 7.72872 13.2652C7.70674 13.2195 7.69294 13.1694 7.6881 13.1176C7.68326 13.0658 7.6875 13.0135 7.70056 12.9636C7.71362 12.9137 7.73524 12.8672 7.76418 12.8269C7.8232 12.7452 7.9082 12.6934 8.0007 12.6825C8.09318 12.6717 8.18572 12.7027 8.25818 12.7689L8.47318 12.9644L8.69318 12.7667C8.76538 12.7018 8.85702 12.6716 8.94854 12.6825C9.04009 12.6933 9.12427 12.7443 9.18319 12.8246ZM4.14317 10.644C4.62117 10.644 5.01017 11.0871 5.01017 11.6337C5.01043 11.8957 4.91917 12.1471 4.75641 12.3327C4.59365 12.5183 4.37273 12.6229 4.14217 12.6235C3.91195 12.6226 3.69143 12.518 3.52893 12.3327C3.36641 12.1474 3.27517 11.8965 3.27517 11.6349C3.27463 11.3729 3.36565 11.1213 3.52821 10.9355C3.69079 10.7497 3.91261 10.6449 4.14317 10.644ZM12.8492 10.644C13.3292 10.644 13.7172 11.0871 13.7172 11.6337C13.7175 11.8957 13.6262 12.1471 13.4634 12.3327C13.3007 12.5183 13.0798 12.6229 12.8492 12.6235C12.619 12.6226 12.3985 12.518 12.236 12.3327C12.0734 12.1474 11.9822 11.8965 11.9822 11.6349C11.9817 11.3729 12.0727 11.1213 12.2352 10.9355C12.3978 10.7497 12.6186 10.6449 12.8492 10.644ZM3.94017 1.47705L3.93717 1.47932C3.82131 1.53657 3.72239 1.63046 3.65217 1.74977L3.64717 1.75659C3.50917 1.97136 3.38917 2.28727 3.29917 2.70203C3.12917 3.48839 3.08317 4.55541 3.17517 5.86335C3.60517 5.7179 4.07417 5.62699 4.57917 5.59404L4.58917 5.5929L4.60817 5.55426C4.65417 5.46108 4.70317 5.37131 4.75617 5.28268C4.87917 4.40655 4.77817 3.35998 4.50317 2.50545C4.36917 2.09182 4.20617 1.76682 4.05017 1.5816C4.01797 1.5431 3.98207 1.5088 3.94317 1.47932L3.94017 1.47705ZM13.1142 1.52251L13.1122 1.52364C13.0733 1.55312 13.0374 1.58741 13.0052 1.62591C12.8492 1.81114 12.6852 2.13727 12.5522 2.5509C12.2622 3.45316 12.1652 4.56905 12.3222 5.47358L12.3802 5.58381L12.3882 5.59972H12.4182C12.9145 5.59988 13.4082 5.68101 13.8842 5.84062C13.9702 4.56337 13.9222 3.51907 13.7562 2.74749C13.6662 2.33272 13.5462 2.01682 13.4072 1.80205L13.4032 1.79523C13.3331 1.67548 13.2342 1.58121 13.1182 1.52364L13.1142 1.52251Z" fill="currentColor"/></symbol>
+    <symbol id="b-llamacpp" viewBox="0 0 600 600"><path d="M600 392L504.249 558L504.137 557.929C487.252 584.069 458.193 600 426.864 600H120L240 392H600Z" fill="currentColor"/><path d="M240 392H0L199.602 46.0254C216.032 17.5463 246.411 3.25756e-05 279.29 0H466.154L240 392Z" fill="currentColor"/></symbol>
+    <symbol id="b-mlx" viewBox="64 64 384 384"><path d="M72 108H153L292 255L153 402H72L213 255Z" fill="currentColor"/><path d="M355 108H440L315 233L275 190Z" fill="currentColor"/><path d="M312 276L440 402H355L275 313Z" fill="currentColor"/></symbol>
+    <symbol id="b-vllm" viewBox="0 0 24 24"><path d="m23.6 0-8.721 4.59L9.829 24h7.41zM9.83 24V5.142H.4Z"/></symbol>
+    <symbol id="b-lmstudio" viewBox="0 0 24 24"><path d="M14.025 0c3.492 0 5.237 0 6.571.68a6.24 6.24 0 0 1 2.725 2.724C24 4.738 24 6.484 24 9.975v4.05c0 3.492 0 5.237-.68 6.571a6.24 6.24 0 0 1-2.724 2.725c-1.334.679-3.08.679-6.571.679h-4.05c-3.492 0-5.237 0-6.571-.68A6.24 6.24 0 0 1 .68 20.597C0 19.262 0 17.516 0 14.025v-4.05c0-3.492 0-5.237.68-6.571A6.23 6.23 0 0 1 3.404.68C4.738 0 6.484 0 9.975 0zM7.688 16.313a1.313 1.313 0 0 0 0 2.625h11.625a1.313 1.313 0 0 0 0-2.625zm-3-3.75a1.313 1.313 0 0 0 0 2.624h11.625a1.313 1.313 0 0 0 0-2.624zm3-3.75a1.313 1.313 0 0 0 0 2.624h11.625a1.313 1.313 0 0 0 0-2.624zm-3-3.75a1.313 1.313 0 0 0 0 2.625h11.625a1.313 1.313 0 0 0 0-2.625z"/></symbol>
+    <symbol id="b-anthropic" viewBox="0 0 24 24"><path d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z"/></symbol>
+    <symbol id="b-deepseek" viewBox="0 0 24 24"><path d="M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45"/></symbol>
+    <symbol id="b-qwen" viewBox="0 0 24 24"><path d="M23.919 14.545 20.817 9.17l1.47-2.544a.56.56 0 0 0 0-.566l-1.633-2.83a.57.57 0 0 0-.49-.283h-6.207L12.487.402a.57.57 0 0 0-.49-.284H8.732a.56.56 0 0 0-.49.284L5.139 5.775h-2.94a.56.56 0 0 0-.49.284L.077 8.887a.56.56 0 0 0 0 .567L3.18 14.83l-1.47 2.545a.56.56 0 0 0 0 .566l1.634 2.83a.57.57 0 0 0 .49.283h6.205l1.47 2.545a.57.57 0 0 0 .49.284h3.266a.57.57 0 0 0 .49-.284l3.104-5.375h2.94a.57.57 0 0 0 .49-.283l1.634-2.828a.55.55 0 0 0-.004-.568M8.733.686l1.634 2.828-1.634 2.828H21.8L20.164 9.17H7.425L5.63 6.06Zm1.306 19.801-6.205-.002 1.634-2.83h3.265L2.201 6.344h3.267q3.182 5.517 6.367 11.032zm10.124-5.66L18.53 12l-6.532 11.315-1.634-2.83c2.129-3.673 4.25-7.351 6.373-11.028h3.592l3.102 5.374z"/></symbol>
+    <symbol id="b-gemma" viewBox="0 0 32 32"><path d="M15.9999 31.7947C15.9857 29.718 15.5506 27.665 14.7201 25.76C13.1243 21.9243 10.0757 18.8758 6.24001 17.28C4.33424 16.4493 2.28041 16.0141 0.20292 16C0.135302 16.0005 0.0676607 16.0004 0 16C0.0676621 15.9996 0.135303 15.9996 0.20292 16C2.27652 15.9871 4.32798 15.566 6.24001 14.76C8.13414 13.9422 9.85745 12.7753 11.32 11.3201C12.7715 9.86274 13.9262 8.13746 14.7201 6.23997C15.5506 4.335 15.9857 2.28203 15.9999 0.205388C15.9995 0.136948 15.9995 0.0684839 16 0C16.0004 0.068485 16.0004 0.13695 15.9999 0.205388C16.013 2.27819 16.4343 4.32882 17.2403 6.23997C18.058 8.13418 19.2248 9.85754 20.68 11.3201C22.1425 12.7753 23.8658 13.9422 25.7599 14.76C27.672 15.566 29.7235 15.9871 31.7971 16C31.8647 15.9996 31.9323 15.9996 32 16C31.9323 16.0004 31.8647 16.0005 31.7971 16C29.7196 16.0141 27.6657 16.4493 25.7599 17.28C23.8625 18.0738 22.1373 19.2285 20.68 20.68C19.2248 22.1425 18.058 23.8658 17.2403 25.76C16.4343 27.6712 16.013 29.7219 15.9999 31.7947C16.0004 31.8631 16.0004 31.9315 15.9999 32C15.9995 31.9316 15.9995 31.8631 15.9999 31.7947Z" fill="currentColor"/><path d="M16 0.205078C16.0131 2.27788 16.4342 4.32908 17.2402 6.24023C18.0578 8.13435 19.2246 9.85785 20.6797 11.3203C22.1421 12.7755 23.8657 13.942 25.7598 14.7598C27.6717 15.5657 29.7233 15.9871 31.7969 16C29.7194 16.0141 27.6655 16.4496 25.7598 17.2803L25.4062 17.4326C23.6479 18.2189 22.0459 19.3189 20.6797 20.6797C19.2246 22.1421 18.0578 23.8656 17.2402 25.7598C16.435 27.6689 16.014 29.7175 16 31.7881C15.9849 29.7137 15.5493 27.6627 14.7197 25.7598C13.1738 22.0442 10.265 19.0668 6.59766 17.4336L6.24023 17.2803C4.33452 16.4496 2.28055 16.0141 0.203125 16C2.14709 15.9879 4.07148 15.6167 5.87988 14.9062L6.24023 14.7598C8.13426 13.942 9.85788 12.7754 11.3203 11.3203C12.6811 9.95407 13.7811 8.35212 14.5674 6.59375L14.7197 6.24023C15.5502 4.33526 15.9858 2.28172 16 0.205078Z" fill="currentColor"/><path d="M3 20C3 19.4477 3.44772 19 4 19C4.55228 19 5 19.4477 5 20V27H12C12.5523 27 13 27.4477 13 28C13 28.5523 12.5523 29 12 29H3V20Z" fill="currentColor"/><path d="M29 12C29 12.5523 28.5523 13 28 13C27.4477 13 27 12.5523 27 12L27 5L20 5C19.4477 5 19 4.55229 19 4C19 3.44772 19.4477 3 20 3L29 3L29 12Z" fill="currentColor"/><path d="M12 3C12.5523 3 13 3.44772 13 4C13 4.55228 12.5523 5 12 5H5V12C5 12.5523 4.55229 13 4 13C3.44771 13 3 12.5523 3 12V3H12Z" fill="currentColor"/><path d="M20 29C19.4477 29 19 28.5523 19 28C19 27.4477 19.4477 27 20 27L27 27L27 20C27 19.4477 27.4477 19 28 19C28.5523 19 29 19.4477 29 20L29 29L20 29Z" fill="currentColor"/></symbol>
+    <symbol id="b-mistral" viewBox="0 0 24 24"><path d="M17.143 3.429v3.428h-3.429v3.429h-3.428V6.857H6.857V3.43H3.43v13.714H0v3.428h10.286v-3.428H6.857v-3.429h3.429v3.429h3.429v-3.429h3.428v3.429h-3.428v3.428H24v-3.428h-3.43V3.429z"/></symbol>
+    <symbol id="b-kimi" viewBox="0 0 24 24"><path d="M21.765.351C22.998.351 24 1.353 24 2.586S22.998 4.82 21.765 4.82h-1.974c-.15 0-.26-.12-.26-.26V2.586A2.237 2.237 0 0 1 21.765.35M9.41 13.388l8.447-8.377c.16-.16.07-.471-.14-.471h-4.55s-.1.02-.14.06l-9.099 9.029c-.14.14-.35.02-.35-.21V4.81c0-.15-.1-.27-.221-.27H.22c-.12 0-.22.12-.22.27v18.57c0 .15.1.27.22.27h3.137c.12 0 .22-.12.22-.27v-3.79c0-.08.03-.16.08-.21l2.826-2.796c.07-.07.16-.08.241-.03l7.546 5.551a8.9 8.9 0 0 0 4.018 1.493c.12.01.23-.11.23-.27V19.76c0-.14-.08-.25-.19-.26a5.8 5.8 0 0 1-2.355-.942l-6.533-4.73c-.14-.09-.15-.32-.03-.441"/></symbol>
+    <symbol id="b-zai" viewBox="0 0 24 24"><path d="M12.606 1.806l-1.677 2.388c-0.258 0.374-0.697 0.606-1.161 0.606h-9.162V1.794C0.594 1.806 12.606 1.806 12.606 1.806zM24 1.806L9.6 22.206 0 22.206 14.4 1.806zM11.394 22.206l1.69-2.4c0.258-0.374 0.697-0.606 1.161-0.606h9.149v3.006H11.394z"/></symbol>
+    <symbol id="i-github" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></symbol>
+    <marker id="m-ok" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#3fb950"/></marker>
+    <marker id="m-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#f5a524"/></marker>
+    <marker id="m-dim" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#677182"/></marker>
+    <marker id="m-no" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#f85149"/></marker>
+  </defs>
+</svg>
+
+<header class="top">
   <div class="wrap">
-    <a class="brand" href="./" aria-label="luu, home">
-      <svg viewBox="0 0 512 512" aria-hidden="true">
-        <rect width="512" height="512" fill="#12161c" rx="112"/>
-        <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="40">
-          <path stroke="#f5a524" d="M116 150v210"/>
-          <path stroke="#f2f4f7" d="M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215"/>
-        </g>
-        <circle cx="356" cy="296" r="13" fill="#f5a524"/>
-      </svg>
-      luu
-    </a>
-    <nav aria-label="Main">
-      <a class="wide" href="#start">Quick start</a>
+    <a class="brand" href="./" aria-label="luu, home"><svg aria-hidden="true"><use href="#luu"/></svg></a>
+    <nav class="main" aria-label="Main">
+      <a class="wide" href="#how">How it works</a>
+      <a class="wide" href="#install">Install</a>
       <a href="./demo/">Demo</a>
-      <a href="https://github.com/jgermade/luu">GitHub</a>
+      <a class="gh" href="https://github.com/jgermade/luu" aria-label="luu on GitHub"><svg class="i" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
     </nav>
+    <div class="theme" role="radiogroup" aria-label="Theme">
+      <button type="button" role="radio" data-pick="auto" aria-checked="false" aria-label="Auto: follow the system" title="Auto"><svg aria-hidden="true"><use href="#i-auto"/></svg></button>
+      <button type="button" role="radio" data-pick="light" aria-checked="false" aria-label="Light" title="Light"><svg aria-hidden="true"><use href="#i-sun"/></svg></button>
+      <button type="button" role="radio" data-pick="dark" aria-checked="false" aria-label="Dark" title="Dark"><svg aria-hidden="true"><use href="#i-moon"/></svg></button>
+    </div>
   </div>
 </header>
 
 <main>
   <section class="hero">
     <div class="wrap">
-      <div>
-        <p class="eyebrow">Local-first AI agent · Rust</p>
-        <h1>Built for the context window you <em>actually have</em>.</h1>
-        <p class="lead">luu orchestrates calls to models made for local inference — 7B–32B, with
-          8K–32K of context — and its whole job is deciding what earns a place in the prompt.
-          It reaches a remote model when you name one, never as a fallback.</p>
+      <a class="badge" href="https://github.com/jgermade/luu"><b>Open source</b> A local-first AI agent, in Rust</a>
+      <h1>The agent built for the context window you <em>actually have</em>.</h1>
+      <p class="lead">Real coding work on <strong>7B–32B local models</strong>. It picks what earns a place in
+        the prompt, asks before it acts, and the kernel holds every command.</p>
+
+      <div class="oneline">
+        <pre>curl -fsSL https://jgermade.github.io/<wbr>luu/setup.sh <span class="nb">| sh</span></pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+      </div>
+      <p class="fine">Linux and macOS · no root · <a href="./setup.sh">read it before you pipe it</a></p>
+
+      <div class="ctas">
+        <a class="btn primary" href="./demo/">Open the demo <span class="arrow">→</span></a>
+        <a class="btn" href="https://github.com/jgermade/luu"><svg class="i" aria-hidden="true"><use href="#i-github"/></svg> Star on GitHub</a>
       </div>
 
-      <div class="install" id="install">
-        <h2>Install with one line</h2>
-        <p class="note">Linux and macOS. No root: one binary in <code>~/.local/bin</code>.
-          The script asks what to do — install, or update, reinstall and uninstall when it
-          finds luu already there.</p>
-        <ul class="cmds">
-          <li class="cmd primary">
-            <span class="label">Install, update, reinstall or uninstall</span>
-            <div class="row"><pre>curl -fsSL https://jgermade.github.io/luu/setup.sh | sh</pre><button class="copy" type="button">Copy</button></div>
-          </li>
-        </ul>
-        <ul class="platforms" aria-label="Prebuilt for">
-          <li>Linux x86_64</li>
-          <li>Linux arm64</li>
-          <li>macOS Apple Silicon</li>
-          <li>macOS Intel</li>
-        </ul>
-        <p class="foot">Read it before you pipe it: <a href="./setup.sh">setup.sh</a>.
-          Downloads are checked against the release's sha256.</p>
+      <!-- fig. 1: `luu serve` as it looks, drawn in HTML. The markup is the
+           job's last frame — what shows with no script or with reduced
+           motion; the script plays the job from the prompt and loops. -->
+      <figure class="shot" id="session">
+        <div class="app" aria-hidden="true">
+          <div class="col insp">
+            <div class="chead">
+              <svg class="logo"><use href="#luu"/></svg>
+              <span class="tabs"><span>Files</span><span>Git</span><span class="on">Debug</span></span>
+            </div>
+            <div class="tree">
+              <div class="card">
+                <div class="card-h">Turn <svg class="ic"><use href="#i-down"/></svg></div>
+                <div class="kv"><b><svg class="ic"><use href="#i-clock"/></svg><span class="tag">live</span></b><span>the newest turn</span></div>
+                <div class="kv"><b><svg class="ic"><use href="#i-chip"/></svg>qwen2.5-coder:14b</b><span>workstation</span></div>
+              </div>
+              <div class="card">
+                <div class="card-h">Context <svg class="ic"><use href="#i-down"/></svg></div>
+                <div class="big"><b data-pct>27% used</b><span data-sent>4,432 / 16,384</span></div>
+                <div class="ubar" data-ubar><i class="system" style="width:2.51%"></i><i class="tools" style="width:7.2%"></i><i class="map" style="width:6.25%"></i><i class="summaries" style="width:0.39%"></i><i class="history" style="width:10.66%"></i><i class="code" style="width:0%"></i><i class="prompt" style="width:0.04%"></i></div>
+                <ul class="rows" data-rows>
+                  <li><i class="sw system"></i>system<span class="n">412</span><span class="p">9.3%</span></li>
+                  <li><i class="sw tools"></i>tools<span class="n">1,180</span><span class="p">26.6%</span></li>
+                  <li><i class="sw map"></i>map<span class="n">1,024</span><span class="p">23.1%</span></li>
+                  <li><i class="sw summaries"></i>summaries<span class="n">64</span><span class="p">1.4%</span></li>
+                  <li><i class="sw history"></i>history<span class="n">1,746</span><span class="p">39.4%</span></li>
+                  <li><i class="sw code"></i>code<span class="n">0</span><span class="p">0%</span></li>
+                  <li><i class="sw prompt"></i>prompt<span class="n">6</span><span class="p">0.1%</span></li>
+                </ul>
+              </div>
+              <div class="card" data-reuse>
+                <div class="card-h">Prefix reuse <svg class="ic"><use href="#i-down"/></svg></div>
+                <div class="big"><b data-reuse-pct>91% reused</b><span data-reuse-n>4,012 / 4,432</span></div>
+                <div class="ubar"><i class="history" data-shared style="width:90.5%"></i><i class="new" style="flex:1"></i></div>
+                <ul class="rows">
+                  <li><i class="sw history"></i>shared<span class="n" data-sn>4,012</span><span class="p" data-sp>90.5%</span></li>
+                  <li><i class="sw new"></i>new<span class="n" data-nn>420</span><span class="p" data-np>9.5%</span></li>
+                </ul>
+                <p class="note" data-first hidden>First turn of the session — no previous prompt to measure against, which is not the same as no reuse.</p>
+              </div>
+            </div>
+            <div class="cfoot"><svg class="ic"><use href="#i-folder"/></svg>api<span class="push ok">ready</span><svg class="ic"><use href="#i-gear"/></svg></div>
+          </div>
+
+          <div class="col content">
+            <div class="chead"><span class="ftab"><svg class="ic"><use href="#i-file"/></svg>auth.rs</span><span class="ftab ghost">login.rs</span></div>
+            <div class="editor" data-editor>
+              <div data-n="1"><span><span class="kw">use</span> argon2::{<span class="ty">Argon2</span>, <span class="ty">PasswordHash</span>, <span class="ty">PasswordVerifier</span>};</span></div>
+              <div data-n="2"> </div>
+              <div data-n="3"><span><span class="kw">use</span> <span class="kw">crate</span>::error::<span class="ty">AuthError</span>;</span></div>
+              <div data-n="4"> </div>
+              <div data-n="5"><span class="cm">/// Checks a login against the stored hash.</span></div>
+              <div data-n="6"><span><span class="kw">pub fn</span> <span class="fn">verify</span>(password: &amp;<span class="ty">str</span>, stored: &amp;<span class="ty">str</span>) -&gt; <span class="ty">Result</span>&lt;(), <span class="ty">AuthError</span>&gt; {</span></div>
+              <div data-n="7" data-add><span>    <span class="kw">if</span> password.<span class="fn">is_empty</span>() {</span></div>
+              <div data-n="8" data-add><span>        <span class="kw">return</span> <span class="ty">Err</span>(<span class="ty">AuthError</span>::<span class="ty">EmptyPassword</span>);</span></div>
+              <div data-n="9" data-add><span>    }</span></div>
+              <div data-n="10"><span>    <span class="kw">let</span> hash = <span class="ty">PasswordHash</span>::<span class="fn">new</span>(stored)?;</span></div>
+              <div data-n="11"><span>    <span class="ty">Argon2</span>::<span class="fn">default</span>()</span></div>
+              <div data-n="12"><span>        .<span class="fn">verify_password</span>(password.<span class="fn">as_bytes</span>(), &amp;hash)</span></div>
+              <div data-n="13"><span>        .<span class="fn">map_err</span>(|_| <span class="ty">AuthError</span>::<span class="ty">Mismatch</span>)</span></div>
+              <div data-n="14"><span>}</span></div>
+              <div data-n="15"> </div>
+              <div data-n="16"><span><span class="cm">/// Hashes a new password with a fresh salt.</span></span></div>
+              <div data-n="17"><span><span class="kw">pub fn</span> <span class="fn">hash</span>(password: &amp;<span class="ty">str</span>) -&gt; <span class="ty">Result</span>&lt;<span class="ty">String</span>, <span class="ty">AuthError</span>&gt; {</span></div>
+              <div data-n="18"><span>    <span class="kw">let</span> salt = <span class="ty">SaltString</span>::<span class="fn">generate</span>(&amp;<span class="kw">mut</span> <span class="ty">OsRng</span>);</span></div>
+              <div data-n="19"><span>    <span class="ty">Ok</span>(<span class="ty">Argon2</span>::<span class="fn">default</span>().<span class="fn">hash_password</span>(password.<span class="fn">as_bytes</span>(), &amp;salt)?.<span class="fn">to_string</span>())</span></div>
+              <div data-n="20"><span>}</span></div>
+              <div data-n="21"> </div>
+              <div data-n="22"><span><span class="kw">#[cfg(test)]</span></span></div>
+              <div data-n="23"><span><span class="kw">mod</span> tests {</span></div>
+              <div data-n="24"><span>    <span class="kw">use super</span>::*;</span></div>
+              <div data-n="25"> </div>
+              <div data-n="26"><span>    <span class="kw">#[test]</span></span></div>
+              <div data-n="27"><span>    <span class="kw">fn</span> <span class="fn">empty_is_refused</span>() {</span></div>
+              <div data-n="28"><span>        <span class="fn">assert!</span>(<span class="fn">verify</span>(<span class="st">""</span>, <span class="st">"$argon2id$v=19$…"</span>).<span class="fn">is_err</span>());</span></div>
+              <div data-n="29"><span>    }</span></div>
+              <div data-n="30"><span>}</span></div>
+            </div>
+            <div class="cfoot"><span class="label">RUNTIME</span><span class="pill"><svg class="ic"><use href="#i-host"/></svg>host</span><svg class="ic push"><use href="#i-term"/></svg></div>
+          </div>
+
+          <div class="col chat">
+            <div class="chead">
+              <b>Live session</b>
+              <span class="jobsel" data-jobsel>plan <svg class="ic"><use href="#i-down"/></svg></span>
+              <span class="icons"><svg class="ic"><use href="#i-plus"/></svg><svg class="ic"><use href="#i-clock"/></svg><svg class="ic"><use href="#i-shield"/></svg><svg class="ic"><use href="#i-copy"/></svg><svg class="ic"><use href="#i-panel"/></svg></span>
+            </div>
+            <div class="stream" data-stream>
+              <div class="msg-user" data-s="m1" hidden>login() lets an empty password through. Fix it, then run the tests.</div>
+              <div data-s="p1" hidden>
+                <div class="codeblk"><div class="h">plan<svg class="ic"><use href="#i-copy"/></svg></div><pre>{"objective": "reject an empty password before hashing", "steps": ["read src/auth.rs", …</pre></div>
+                <div class="meta"><span>34 tok/s</span><span>→ 0 ← 21</span><span>◷ 36 ms → 653 ms</span></div>
+              </div>
+              <div class="fold" data-s="fold">
+                <div class="h"><u>draft 1 · login() lets an empty password through. Fix it, then run the tests.</u><span>closed by approving its plan</span></div>
+                <pre>[draft closed] read 2 files; 1 turn folded, its text not kept</pre>
+              </div>
+              <div class="msg-user" data-s="m2">go on</div>
+              <div class="call" data-s="c1"><span class="tw">›</span><i class="dot"></i><span class="name">read_file</span><span class="subject">src/auth.rs</span><span class="sub">lines 1–30</span><span class="status">done</span><span class="ms">0 ms</span></div>
+              <div class="call" data-s="c2"><span class="tw">›</span><i class="dot"></i><span class="name">edit_file</span><span class="subject">src/auth.rs</span><span class="status">done</span><span class="ms">1 ms</span></div>
+              <div class="call" data-s="c3"><span class="tw">›</span><i class="dot"></i><span class="name">run_command</span><span class="subject">cargo test login</span><span class="status">done</span><span class="ms">3.8 s</span></div>
+              <div class="answer" data-s="ans">
+                <p><code>verify()</code> now returns <code>EmptyPassword</code> before it hashes, and the three login tests pass.</p>
+                <div class="meta"><span>31 tok/s</span><span>→ 4,432 ← 26</span><span>◷ 210 ms → 1.1 s</span></div>
+              </div>
+              <div class="gate" data-s="gate" hidden>
+                <div class="t">PROPOSED PLAN</div>
+                <div class="o">reject an empty password before hashing</div>
+                <ul><li>read src/auth.rs</li><li>add the check</li><li>run the login tests</li></ul>
+                <p>reads: src/auth.rs, tests/login.rs</p>
+                <p>commands: cargo</p>
+                <p class="floor">unapproved, a turn reads . · runs cargo · git — and writes only to .tmp</p>
+                <div class="amend"><span>a path, command…</span><u>add read</u><u>add write</u><u>add command</u></div>
+                <div class="go"><span class="approve" data-approve>Approve</span><span class="decline">Decline</span></div>
+              </div>
+            </div>
+            <div class="composer"><svg class="ic"><use href="#i-clip"/></svg><span class="field" data-field><span data-typed></span><span class="ph" data-ph>Ask something...</span></span><span class="send">Send</span></div>
+            <div class="cfoot"><span class="dd">Manual <svg class="ic"><use href="#i-down"/></svg></span><span class="dd model">workstation <span class="m">·</span> qwen2.5-coder:14b <svg class="ic"><use href="#i-down"/></svg></span><span class="meter"><i><b data-meter style="width:27%"></b></i><span data-meter-t>4.4K / 16K</span></span></div>
+          </div>
+        </div>
+        <figcaption>fig. 1 — <code>luu serve</code>, drawn: one job from prompt to fold, the Debug inspector following it. Illustrated, not recorded.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="runs" aria-label="Engines and providers">
+    <div class="wrap">
+      <p class="label">Runs on the models you can reach</p>
+      <ul class="logos">
+        <li><svg aria-hidden="true"><use href="#b-ollama"/></svg>Ollama</li>
+        <li><svg aria-hidden="true"><use href="#b-llamacpp"/></svg>llama.cpp</li>
+        <li><svg aria-hidden="true"><use href="#b-mlx"/></svg>MLX</li>
+        <li><svg aria-hidden="true"><use href="#b-vllm"/></svg>vLLM</li>
+        <li><svg aria-hidden="true"><use href="#b-lmstudio"/></svg>LM Studio</li>
+        <li><svg aria-hidden="true"><use href="#b-qwen"/></svg>Qwen</li>
+        <li><svg aria-hidden="true"><use href="#b-gemma"/></svg>Gemma</li>
+        <li><svg aria-hidden="true"><use href="#b-mistral"/></svg>Mistral</li>
+        <li><svg aria-hidden="true"><use href="#b-deepseek"/></svg>DeepSeek</li>
+        <li><svg aria-hidden="true"><use href="#b-kimi"/></svg>Kimi</li>
+        <li><svg aria-hidden="true"><use href="#b-zai"/></svg>GLM</li>
+        <li><svg aria-hidden="true"><use href="#b-anthropic"/></svg>Anthropic</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <div class="head center rv">
+        <p class="kicker">How a job runs</p>
+        <h2>It asks. You approve. <span class="dim">Then it works.</span></h2>
+      </div>
+      <ol class="steps">
+        <li class="step rv">
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="panel" x="10" y="8" width="220" height="144" rx="10"/>
+            <text class="t-dim" x="22" y="26" font-size="7.5" letter-spacing="1.2">FILES</text>
+            <g transform="translate(160 15)" class="t-ok" style="color:var(--ok-ink)"><rect class="pill-ok" width="60" height="16" rx="8"/><g class="lk" transform="translate(6 3.5)"><rect x="0" y="4" width="7" height="5.5" rx="1"/><path d="M1.6 4V2.8a1.9 1.9 0 0 1 3.8 0V4"/></g><text class="t-ok" x="17" y="11.5" font-size="7.5">read-only</text></g>
+            <path class="chev" d="M20 40l3 3 3-3"/><path class="folder" d="M30 37h4.5l1.5 1.6h5.5v7.4H30z"/><text class="t-fg" x="46" y="45" font-size="9">src</text>
+            <rect class="sel" x="14" y="49" width="212" height="15" rx="4"/>
+            <path class="file rs" d="M42 51.5h5l2 2v7h-7z"/><text class="t-blue" x="54" y="60.5" font-size="9">auth.rs</text>
+            <path class="file rs" d="M42 67.5h5l2 2v7h-7z"/><text x="54" y="76.5" font-size="9">error.rs</text>
+            <path class="file rs" d="M42 83.5h5l2 2v7h-7z"/><text x="54" y="92.5" font-size="9">lib.rs</text>
+            <path class="chev" d="M21 101l3 3-3 3"/><path class="folder" d="M30 100h4.5l1.5 1.6h5.5v7.4H30z"/><text class="t-fg" x="46" y="108" font-size="9">tests</text>
+            <path class="file rs" d="M42 115.5h5l2 2v7h-7z"/><text x="54" y="124.5" font-size="9">login.rs</text>
+            <path class="file toml" d="M30 131.5h5l2 2v7h-7z"/><text x="42" y="140.5" font-size="9">Cargo.toml</text>
+            <g transform="translate(160 40)"><rect class="pill-blue" width="56" height="15" rx="4"/><text class="t-blue" x="28" y="10.5" font-size="7.5" text-anchor="middle">read_file</text></g>
+            <g class="lens"><circle cx="150" cy="78" r="17"/><path class="glint" d="M140 72a11 11 0 0 1 8-6"/><path d="M162.5 90.5l13 13"/></g>
+          </svg>
+          <span class="n">01</span>
+          <h3>Explore</h3>
+          <p>a draft reads, on the floor</p>
+        </li>
+        <li class="step rv">
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="gate-bg" x="14" y="6" width="212" height="148" rx="10"/>
+            <text class="t-dim" x="26" y="23" font-size="7" letter-spacing="1.2">PROPOSED PLAN</text>
+            <text class="t-fg sans b" x="26" y="38" font-size="10">reject an empty password</text>
+            <circle class="dim-f" cx="30" cy="51" r="1.6"/><text class="t-fg" x="36" y="54" font-size="8.5">read src/auth.rs</text>
+            <circle class="dim-f" cx="30" cy="63" r="1.6"/><text class="t-fg" x="36" y="66" font-size="8.5">add the check</text>
+            <circle class="dim-f" cx="30" cy="75" r="1.6"/><text class="t-fg" x="36" y="78" font-size="8.5">run the login tests</text>
+            <text x="26" y="95" font-size="8">reads: src/auth.rs</text>
+            <text x="26" y="107" font-size="8">commands: cargo</text>
+            <line class="sep" x1="26" y1="115" x2="214" y2="115"/>
+            <circle class="ripple" cx="74" cy="138" r="14"/>
+            <g class="press"><rect class="btn-acc" x="26" y="124" width="60" height="20" rx="5"/><text class="t-dark sans b" x="56" y="137.5" font-size="8.5" text-anchor="middle" style="fill:#fff">Approve</text></g>
+            <rect class="btn-warn" x="92" y="124" width="58" height="20" rx="5"/><text class="t-dark sans b" x="121" y="137.5" font-size="8.5" text-anchor="middle">Decline</text>
+            <path class="cursor" d="M78 137v17l4.5-4.5 3.8 7.6 3.2-1.6-3.8-7.4h6.4z"/>
+          </svg>
+          <span class="n">02</span>
+          <h3>Plan</h3>
+          <p>held until you approve</p>
+        </li>
+        <li class="step rv">
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="ink" x="12" y="18" width="216" height="124" rx="9"/>
+            <line class="ink-line" x1="12" y1="34" x2="228" y2="34"/>
+            <circle class="ink-dot" cx="24" cy="26" r="2.5"/><circle class="ink-dot" cx="32" cy="26" r="2.5"/><circle class="ink-dot" cx="40" cy="26" r="2.5"/>
+            <text class="t-ink-amber" x="22" y="50" font-size="8">$</text><text class="t-ink" x="31" y="50" font-size="8">cargo test login</text>
+            <text class="t-ink-d" x="22" y="63" font-size="8">   Compiling api v0.3.1</text>
+            <text class="t-ink-m" x="22" y="76" font-size="8">running 3 tests</text>
+            <text class="t-ink-m" x="22" y="89" font-size="8">test login::empty_is_refused ... <tspan class="t-ink-ok">ok</tspan></text>
+            <text class="t-ink-m" x="22" y="102" font-size="8">test login::wrong_password ... <tspan class="t-ink-ok">ok</tspan></text>
+            <text class="t-ink-m" x="22" y="115" font-size="8">test login::right_password ... <tspan class="t-ink-ok">ok</tspan></text>
+            <text class="t-ink-ok" x="22" y="130" font-size="8">test result: ok. 3 passed</text>
+                        <g transform="translate(114 9)"><rect class="pill-violet" width="116" height="18" rx="9"/><path d="M12 4.5 7 6.5v3.6c0 3 2 5 5 6.3 3-1.3 5-3.3 5-6.3V6.5z" fill="none" stroke="var(--b-tools)" stroke-width="1.3"/><text class="t-violet" x="22" y="12.5" font-size="7.5">landlock + seccomp</text></g>
+            <g transform="translate(18 134)"><rect class="pill-no" width="124" height="18" rx="9"/><text class="t-no" x="62" y="12.5" font-size="7.5" text-anchor="middle">✗ curl — not in the plan</text></g>
+          </svg>
+          <span class="n">03</span>
+          <h3>Act</h3>
+          <p>the plan is the sandbox</p>
+        </li>
+        <li class="step rv">
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="bubble" x="10" y="12" width="96" height="24" rx="5"/><rect class="ubar" x="10" y="12" width="2.5" height="24"/><rect class="ubar" x="18" y="19" width="56" height="4" rx="2"/><rect class="ubar" x="18" y="27" width="38" height="4" rx="2"/>
+            <rect class="bubble" x="10" y="42" width="96" height="30" rx="5"/><rect class="abar" x="18" y="49" width="70" height="4" rx="2"/><rect class="abar" x="18" y="57" width="52" height="4" rx="2"/><rect class="pill-blue" x="74" y="56" width="24" height="10" rx="3"/><text class="t-blue" x="86" y="63.5" font-size="6" text-anchor="middle">plan</text>
+            <rect class="bubble" x="10" y="78" width="96" height="22" rx="5"/><text class="t-blue" x="17" y="92" font-size="7">› read_file</text>
+            <rect class="bubble" x="10" y="106" width="96" height="40" rx="5"/><rect class="abar" x="18" y="113" width="74" height="4" rx="2"/><rect class="abar" x="18" y="121" width="62" height="4" rx="2"/><rect class="abar" x="18" y="129" width="70" height="4" rx="2"/><rect class="abar" x="18" y="137" width="30" height="4" rx="2"/>
+            <text class="t-dim" x="112" y="27" font-size="7">22</text><text class="t-dim" x="112" y="60" font-size="7">640</text><text class="t-dim" x="112" y="92" font-size="7">1.1K</text><text class="t-dim" x="112" y="129" font-size="7">180</text>
+            <path class="brace" d="M132 12q5 0 5 6v52q0 9 6 9-6 0-6 9v52q0 6-5 6"/>
+            <g class="arrows"><path d="M150 72l7 7-7 7"/><path d="M160 72l7 7-7 7"/><path d="M170 72l7 7-7 7"/></g>
+            <rect class="folded" x="186" y="54" width="48" height="50" rx="5"/><rect class="folded-bar" x="186" y="54" width="3" height="50"/>
+            <text class="t-fg sans b" x="194" y="69" font-size="8">draft 1</text>
+            <text class="t-dim" x="194" y="81" font-size="6.5">folded</text>
+            <text class="t-amber" x="194" y="95" font-size="7.5">140 tok</text>
+            <text class="t-dim" x="210" y="124" font-size="7.5" text-anchor="middle">1.9K → 140</text>
+          </svg>
+          <span class="n">04</span>
+          <h3>Fold</h3>
+          <p>into a summary</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="context">
+    <div class="wrap">
+      <div class="head center rv">
+        <p class="kicker">Context is the product</p>
+        <h2>Every token earns its place.</h2>
+        <p class="lead">Chosen against a budget, then rendered — so every token sent is attributable, and
+          its worth is measured.</p>
+      </div>
+      <div class="bento">
+        <article class="tile t3 rv">
+          <h3>What changes least goes first</h3>
+          <svg class="ill ctx" viewBox="0 0 460 244" role="img" aria-label="The prompt, top to bottom: system text, tool definitions and the repository map, the cached prefix; folded jobs; turns verbatim, appended; selected code and the new prompt, fused last.">
+            <defs><linearGradient id="g-volatile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7aa2f7"/><stop offset="0.6" stop-color="#f778ba"/><stop offset="1" stop-color="#f5a524"/></linearGradient></defs>
+            <text class="t-dim" x="22" y="10" font-size="10" text-anchor="middle">stable</text>
+            <rect x="20.5" y="18" width="3" height="200" rx="1.5" fill="url(#g-volatile)"/>
+            <text class="t-dim" x="22" y="236" font-size="10" text-anchor="middle">fresh</text>
+            <rect class="blk system" x="48" y="16" width="150" height="28" rx="6"/><text class="t-fg" x="60" y="34">system</text><text class="t-dim" x="188" y="34" font-size="10" text-anchor="end">412</text>
+            <rect class="blk tools" x="48" y="50" width="270" height="28" rx="6"/><text class="t-fg" x="60" y="68">tool definitions</text><text class="t-dim" x="308" y="68" font-size="10" text-anchor="end">1,180</text>
+            <rect class="blk map" x="48" y="84" width="240" height="28" rx="6"/><text class="t-fg" x="60" y="102">repository map</text><text class="t-dim" x="278" y="102" font-size="10" text-anchor="end">1,024</text>
+            <path class="bracket" d="M330 16h8v96h-8"/>
+            <g class="lock" transform="translate(346 30)"><rect x="0" y="6" width="12" height="9" rx="2"/><path d="M3 6V4a3 3 0 0 1 6 0v2"/></g>
+            <text class="t-blue" x="346" y="62" font-size="11">cached prefix</text>
+            <text class="t-dim" x="346" y="77" font-size="10">byte-identical</text>
+            <text class="t-dim" x="346" y="91" font-size="10">every call</text>
+            <rect class="blk summaries" x="48" y="122" width="150" height="26" rx="6"/><text class="t-fg" x="60" y="139">folded jobs</text><text class="t-dim" x="188" y="139" font-size="10" text-anchor="end">64</text>
+            <rect class="blk history" x="48" y="154" width="250" height="26" rx="6"/><text x="60" y="171">turns, verbatim</text><text class="t-dim" x="288" y="171" font-size="10" text-anchor="end">1,746</text>
+            <text class="t-dim" x="310" y="171" font-size="10">appended, never rewritten</text>
+            <rect class="blk code" x="48" y="188" width="230" height="34" rx="8"/><text class="t-fg" x="60" y="209">code + your prompt</text><text class="t-dim" x="268" y="209" font-size="10" text-anchor="end">606</text>
+            <path class="new" d="M440 205H286" marker-end="url(#m-amber)"/>
+            <text class="t-amber" x="362" y="197" font-size="10.5" text-anchor="middle">fused, as late as possible</text>
+          </svg>
+        </article>
+        <article class="tile t2 rv">
+          <h3>Prefix reuse, measured</h3>
+          <svg class="ill chart" viewBox="0 0 300 214" role="img" aria-label="Prefix reuse per turn over twenty turns in a 512-token window. Both policies climb from 30% to 88% until the window fills at turn 10. Evicting one turn at a time then stays at 3 to 4%; evicting in blocks drops every four or five turns and spends the turns between at 78 to 87%. Means 33% and 67%.">
+            <line class="l-block" x1="34" y1="10" x2="50" y2="10"/><text class="t-fg" x="55" y="13.5" font-size="9">in blocks · mean 67%</text>
+            <line class="l-turn" x1="176" y1="10" x2="192" y2="10"/><text x="197" y="13.5" font-size="9">one turn · 33%</text>
+            <line class="gl" x1="34" y1="30" x2="286" y2="30"/><line class="gl" x1="34" y1="65" x2="286" y2="65"/><line class="gl" x1="34" y1="100" x2="286" y2="100"/><line class="gl" x1="34" y1="135" x2="286" y2="135"/><line class="gl base" x1="34" y1="170" x2="286" y2="170"/>
+            <text class="t-dim" x="28" y="33" font-size="8" text-anchor="end">100%</text><text class="t-dim" x="28" y="68" font-size="8" text-anchor="end">75</text><text class="t-dim" x="28" y="103" font-size="8" text-anchor="end">50</text><text class="t-dim" x="28" y="138" font-size="8" text-anchor="end">25</text><text class="t-dim" x="28" y="173" font-size="8" text-anchor="end">0</text>
+            <line class="mark-v" x1="146" y1="30" x2="146" y2="170"/><text class="t-dim" x="150" y="40" font-size="8">window full</text>
+            <line class="mean a" x1="34" y1="123.8" x2="286" y2="123.8"/><line class="mean b" x1="34" y1="76.2" x2="286" y2="76.2"/>
+            <polyline class="l-turn draw" points="132,46.8 146,165.8 160,165.8 174,165.8 188,164.4 202,164.4 216,164.4 230,164.4 244,164.4 258,164.4 272,164.4 286,164.4"/>
+            <polyline class="l-block draw" points="132,46.8 146,161.6 160,55.2 174,52.4 188,48.2 202,157.4 216,60.8 258,48.2 272,160.2 286,55.2"/>
+            <polyline class="l-shared draw" points="34,128 132,46.8"/>
+            <circle class="pt-b" cx="160" cy="55.2" r="2.4"/><circle class="pt-b" cx="216" cy="60.8" r="2.4"/><circle class="pt-b" cx="286" cy="55.2" r="2.4"/>
+            <text class="t-dim" x="34" y="186" font-size="8" text-anchor="middle">2</text><text class="t-dim" x="76" y="186" font-size="8" text-anchor="middle">5</text><text class="t-dim" x="146" y="186" font-size="8" text-anchor="middle">10</text><text class="t-dim" x="216" y="186" font-size="8" text-anchor="middle">15</text><text class="t-dim" x="286" y="186" font-size="8" text-anchor="middle">20</text>
+            <text class="t-dim" x="160" y="202" font-size="8.5" text-anchor="middle">turn, in a 512-token window</text>
+          </svg>
+          <p class="src">from <a href="https://github.com/jgermade/luu/blob/main/RECORD/2026-08-27.prefix-reuse-and-block-eviction.completed.md">the record's table</a>; its ranges drawn straight</p>
+        </article>
+        <article class="tile t2 rv">
+          <h3>The turn is the unit</h3>
+          <svg class="ill turns" viewBox="0 0 320 184" role="img" aria-label="Eight turns. The oldest three left the window whole and stay out, behind a floor that only moves forward; a tombstone says which left and what they were worth.">
+            <rect class="frame" x="106" y="26" width="208" height="102" rx="10"/>
+            <text class="t-amber" x="114" y="19" font-size="10.5">the window</text>
+            <rect class="gone" x="8" y="38" width="28" height="12" rx="3"/><rect class="gone" x="8" y="54" width="28" height="44" rx="4"/>
+            <rect class="gone" x="40" y="38" width="28" height="12" rx="3"/><rect class="gone" x="40" y="54" width="28" height="44" rx="4"/>
+            <rect class="gone" x="72" y="38" width="28" height="12" rx="3"/><rect class="gone" x="72" y="54" width="28" height="44" rx="4"/>
+            <text class="t-dim" x="22" y="114" font-size="9" text-anchor="middle">t1</text><text class="t-dim" x="54" y="114" font-size="9" text-anchor="middle">t2</text><text class="t-dim" x="86" y="114" font-size="9" text-anchor="middle">t3</text>
+            <rect class="ub" x="114" y="38" width="32" height="12" rx="3"/><rect class="ab" x="114" y="54" width="32" height="44" rx="4"/>
+            <rect class="ub" x="153" y="38" width="32" height="12" rx="3"/><rect class="ab" x="153" y="54" width="32" height="34" rx="4"/>
+            <rect class="ub" x="192" y="38" width="32" height="12" rx="3"/><rect class="ab" x="192" y="54" width="32" height="44" rx="4"/>
+            <rect class="ub" x="231" y="38" width="32" height="12" rx="3"/><rect class="ab" x="231" y="54" width="32" height="28" rx="4"/>
+            <rect class="ub" x="270" y="38" width="32" height="12" rx="3"/><rect class="ab last" x="270" y="54" width="32" height="44" rx="4"/>
+            <text class="t-fg" x="130" y="114" font-size="9" text-anchor="middle">t4</text><text class="t-fg" x="169" y="114" font-size="9" text-anchor="middle">t5</text><text class="t-fg" x="208" y="114" font-size="9" text-anchor="middle">t6</text><text class="t-fg" x="247" y="114" font-size="9" text-anchor="middle">t7</text><text class="t-fg" x="286" y="114" font-size="9" text-anchor="middle">t8</text>
+            <rect class="gauge" x="106" y="138" width="208" height="6" rx="3"/><rect class="gauge-f" x="106" y="138" width="138" height="6" rx="3"/>
+            <text class="t-dim" x="314" y="158" font-size="9" text-anchor="end">history · its budget</text>
+            <path class="flag" d="M106 124l-5 8h10z"/><text class="t-amber" x="106" y="158" font-size="9">floor</text>
+            <rect class="ink" x="2" y="128" width="96" height="44" rx="6"/>
+            <text class="t-ink" x="9" y="144" font-size="9">== evicted</text>
+            <text class="t-ink-m" x="9" y="157" font-size="8">turns 1–3 · 1.4K</text>
+            <text class="t-ink-d" x="9" y="168" font-size="8">policy block</text>
+          </svg>
+        </article>
+        <article class="tile t3 rv">
+          <h3>Only the code it points at</h3>
+          <svg class="ill pick" viewBox="0 0 460 228" role="img" aria-label="A question about Landlock, fork and exec; of the parsed repository three definitions score and go into the prompt: linux.rs, mod.rs and runtime.rs, 837 of 1024 tokens.">
+            <rect class="box" x="4" y="6" width="286" height="32" rx="10"/>
+            <path class="box" d="M28 38l-6 10 14-10" stroke-linejoin="round"/>
+            <text class="t-fg" x="16" y="26" font-size="9.5">which file applies Landlock between fork and exec?</text>
+            <path class="flow" d="M134 81C220 81 240 90 300 90"/>
+            <path class="flow" d="M62 109C200 109 230 112 300 112"/>
+            <path class="flow" d="M158 137C230 137 250 134 300 134"/>
+            <g>
+              <rect class="cell" x="20" y="70" width="18" height="22" rx="3"/><rect class="cell" x="44" y="70" width="18" height="22" rx="3"/><rect class="cell" x="68" y="70" width="18" height="22" rx="3"/><rect class="cell" x="92" y="70" width="18" height="22" rx="3"/><rect class="cell lit" x="116" y="70" width="18" height="22" rx="3"/><rect class="cell" x="140" y="70" width="18" height="22" rx="3"/><rect class="cell" x="164" y="70" width="18" height="22" rx="3"/>
+              <rect class="cell" x="20" y="98" width="18" height="22" rx="3"/><rect class="cell lit" x="44" y="98" width="18" height="22" rx="3"/><rect class="cell" x="68" y="98" width="18" height="22" rx="3"/><rect class="cell" x="92" y="98" width="18" height="22" rx="3"/><rect class="cell" x="116" y="98" width="18" height="22" rx="3"/><rect class="cell" x="140" y="98" width="18" height="22" rx="3"/><rect class="cell" x="164" y="98" width="18" height="22" rx="3"/>
+              <rect class="cell" x="20" y="126" width="18" height="22" rx="3"/><rect class="cell" x="44" y="126" width="18" height="22" rx="3"/><rect class="cell" x="68" y="126" width="18" height="22" rx="3"/><rect class="cell" x="92" y="126" width="18" height="22" rx="3"/><rect class="cell" x="116" y="126" width="18" height="22" rx="3"/><rect class="cell lit" x="140" y="126" width="18" height="22" rx="3"/><rect class="cell" x="164" y="126" width="18" height="22" rx="3"/>
+              <rect class="cell" x="20" y="154" width="18" height="22" rx="3"/><rect class="cell" x="44" y="154" width="18" height="22" rx="3"/><rect class="cell" x="68" y="154" width="18" height="22" rx="3"/><rect class="cell" x="92" y="154" width="18" height="22" rx="3"/><rect class="cell" x="116" y="154" width="18" height="22" rx="3"/><rect class="cell" x="140" y="154" width="18" height="22" rx="3"/><rect class="cell" x="164" y="154" width="18" height="22" rx="3"/>
+            </g>
+            <text class="t-dark sans b" x="125" y="84" font-size="6.5" text-anchor="middle">4.8</text>
+            <text class="t-dark sans b" x="53" y="112" font-size="6.5" text-anchor="middle">4.8</text>
+            <text class="t-dark sans b" x="149" y="140" font-size="6.5" text-anchor="middle">2.0</text>
+            <text class="t-dim" x="101" y="198" font-size="10" text-anchor="middle">the repository, parsed</text>
+            <rect class="slot" x="296" y="66" width="160" height="124" rx="10"/>
+            <text class="t-amber" x="376" y="58" text-anchor="middle" font-size="11">the prompt</text>
+            <rect class="frag" x="304" y="80" width="144" height="20" rx="4"/><text class="t-fg" x="311" y="93.5" font-size="8.5">linux.rs:1-25</text><text class="t-amber" x="442" y="93.5" font-size="8.5" text-anchor="end">265</text>
+            <rect class="frag" x="304" y="102" width="144" height="20" rx="4"/><text class="t-fg" x="311" y="115.5" font-size="8.5">mod.rs:1-25</text><text class="t-amber" x="442" y="115.5" font-size="8.5" text-anchor="end">309</text>
+            <rect class="frag" x="304" y="124" width="144" height="20" rx="4"/><text class="t-fg" x="311" y="137.5" font-size="8.5">runtime.rs:495-517</text><text class="t-amber" x="442" y="137.5" font-size="8.5" text-anchor="end">263</text>
+            <rect class="free" x="304" y="148" width="144" height="34" rx="4"/><text class="t-dim" x="376" y="169" font-size="9" text-anchor="middle">187 free</text>
+            <text class="t-fg" x="376" y="210" text-anchor="middle" font-size="11">837 / 1024 tokens</text>
+          </svg>
+        </article>
       </div>
     </div>
   </section>
 
-  <section id="why">
-    <div class="wrap">
-      <p class="eyebrow">What it does</p>
-      <h2>Context is the product</h2>
-      <p class="lead">A small model with a small window does well when what reaches it is chosen,
-        not accumulated. Everything else in luu exists to make that choice visible and safe.</p>
-      <div class="grid">
-        <article class="card">
-          <h3>Decide, then render</h3>
-          <p>The prompt is chosen against a token budget, bucket by bucket, and rendered from that
-            choice — so every token sent is attributable. History gives way in whole turns, and a
-            finished task folds into a summary.</p>
-        </article>
-        <article class="card">
-          <h3>A prefix the cache can keep</h3>
-          <p>System text and tool definitions stay byte-identical across calls, which is what a
-            local server's prompt cache reuses. How much of it survived is reported every turn.</p>
-        </article>
-        <article class="card">
-          <h3>Plans you approve</h3>
-          <p>A prompt becomes a plan that says what it will read, write and run — and is held until
-            you approve it. The approved plan is the sandbox for its task, not a comment.</p>
-        </article>
-        <article class="card">
-          <h3>The kernel holds the child</h3>
-          <p>The model never executes anything. Commands run under Landlock and seccomp on Linux,
-            rlimits everywhere, or inside a container — and every verdict says what enforced it.</p>
-        </article>
-        <article class="card">
-          <h3>Any model you can reach</h3>
-          <p>Ollama, anything OpenAI-compatible (llama-server, vLLM, LM Studio) and anything
-            Anthropic-compatible. luu can also start llama-server, mlx-serve or Ollama for you.</p>
-        </article>
-        <article class="card">
-          <h3>Sessions you can replay</h3>
-          <p>Sessions live in SQLite and survive a restart. Every run can be recorded and replayed in
-            the web UI, which is how two context strategies get compared rather than recalled.</p>
-        </article>
+  <section id="safety">
+    <div class="wrap split">
+      <div class="rv">
+        <p class="kicker">Safe by construction</p>
+        <h2>The model never runs anything.</h2>
+        <p class="lead">It asks. luu checks the plan, and the kernel holds what runs.</p>
+        <ul class="pills">
+          <li>an allowlist, not a deny list</li>
+          <li>Landlock + seccomp</li>
+          <li>a container, if you want one</li>
+          <li>signed approvals</li>
+        </ul>
+      </div>
+      <div class="figure rv">
+        <svg class="ill rings" viewBox="0 0 460 360" role="img" aria-label="The model asks for two tools. Reading /etc/passwd is refused at luu's check of the plan. cargo test passes the check and runs inside Landlock and seccomp, optionally in a container, and exits 0; a socket it opens is refused by the kernel.">
+            <rect class="r1" x="128" y="8" width="326" height="344" rx="28"/>
+            <text class="t-amber" x="146" y="32" font-size="12.5">luu checks the plan</text>
+            <g class="key" transform="translate(336 21)"><circle cx="4.5" cy="7" r="3.5"/><path d="M8 7h9M14 7v3M17 7v2"/></g>
+            <text class="t-dim" x="440" y="32" font-size="10" text-anchor="end">signed</text>
+            <rect class="r2" x="148" y="46" width="286" height="286" rx="24"/>
+            <text class="t-dim" x="166" y="70" font-size="12">container · optional</text>
+            <rect class="r3" x="168" y="84" width="246" height="228" rx="20"/>
+            <text class="t-violet" x="186" y="108" font-size="12">landlock + seccomp</text>
+            <text class="t-dim" x="186" y="126" font-size="9.5">rw ./  ·  ro ~/.cargo  ·  cpu 300 s</text>
+            <rect class="ink" x="196" y="146" width="196" height="96" rx="12"/>
+            <text class="t-ink-amber" x="210" y="172" font-size="13">›</text><text class="t-ink" x="222" y="172" font-size="12">cargo test login</text>
+            <text class="t-ink-ok" x="210" y="196" font-size="10">test result: ok. 3 passed</text>
+            <text class="t-ink-m" x="210" y="218" font-size="10">exit 0 · 3.8 s</text>
+            <path class="nope" d="M300 242V290"/>
+            <circle class="stop" cx="300" cy="300" r="9"/><path class="stop-x" d="M296.5 296.5l7 7M303.5 296.5l-7 7"/>
+            <text class="t-no" x="314" y="290" font-size="10">socket() → EPERM</text>
+            <rect class="box" x="6" y="168" width="88" height="80" rx="16"/>
+            <path class="spark" d="M50 178l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+            <text class="t-fg" x="50" y="232" text-anchor="middle" font-size="12.5">model</text>
+            <path class="yes flow" d="M94 208H192" marker-end="url(#m-ok)"/>
+            <path class="nope" d="M64 168C64 128 90 112 118 112"/>
+            <circle class="stop" cx="128" cy="112" r="10"/><path class="stop-x" d="M124 108l8 8M132 108l-8 8"/>
+            <text class="t-no" x="4" y="84" font-size="12.5">read /etc/passwd</text>
+            <text class="t-dim" x="4" y="100" font-size="10">no rule grants it</text>
+        </svg>
       </div>
     </div>
   </section>
 
-  <section id="start">
+  <section id="local">
+    <div class="wrap split flip">
+      <div class="rv">
+        <p class="kicker">Local first</p>
+        <h2>Your machine by default. <span class="dim">Remote only when named.</span></h2>
+        <p class="lead">luu downloads, checks and starts the engine, loads the model, and stops it when nothing
+          uses it.</p>
+      </div>
+      <div class="figure rv">
+        <svg class="ill local" viewBox="0 0 460 340" role="img" aria-label="On this machine, luu starts llama-server, mlx-serve or Ollama, each on its own port with its model, from a release checked against its sha256. A remote API is reached only through a profile that says remote = true.">
+          <rect class="machine" x="6" y="18" width="282" height="316" rx="18"/>
+          <line class="bar" x1="6" y1="42" x2="288" y2="42"/>
+          <circle class="ok-f" cx="20" cy="30" r="3.5"/>
+          <text class="t-ok" x="30" y="34" font-size="11">this machine</text>
+          <rect class="halo" x="110" y="58" width="72" height="72" rx="20"/>
+          <use href="#luu" x="118" y="66" width="56" height="56"/>
+          <g transform="translate(192 64)"><rect class="pill-ok" width="88" height="18" rx="9"/><text class="t-ok" x="44" y="12.5" font-size="8.5" text-anchor="middle">sha256 ✓</text></g>
+          <text class="t-dim" x="236" y="96" font-size="8.5" text-anchor="middle">from the release</text>
+          <path class="flow" d="M146 130C146 166 52 164 52 200"/>
+          <path class="flow" d="M146 130V200"/>
+          <path class="flow" d="M146 130C146 166 240 164 240 200"/>
+          <rect class="box" x="20" y="200" width="64" height="64" rx="14"/><use class="mark" href="#b-llamacpp" x="37" y="217" width="30" height="30"/>
+          <rect class="box" x="114" y="200" width="64" height="64" rx="14"/><use class="mark" href="#b-mlx" x="131" y="217" width="30" height="30"/>
+          <rect class="box" x="208" y="200" width="64" height="64" rx="14"/><use class="mark" href="#b-ollama" x="225" y="217" width="30" height="30"/>
+          <text class="t-fg" x="52" y="282" text-anchor="middle" font-size="10.5">llama-server</text>
+          <text class="t-fg" x="146" y="282" text-anchor="middle" font-size="10.5">mlx-serve</text>
+          <text class="t-fg" x="240" y="282" text-anchor="middle" font-size="10.5">ollama</text>
+          <text class="t-dim" x="52" y="297" text-anchor="middle" font-size="9.5">:8080</text>
+          <text class="t-dim" x="146" y="297" text-anchor="middle" font-size="9.5">:8081</text>
+          <text class="t-dim" x="240" y="297" text-anchor="middle" font-size="9.5">:11434</text>
+          <text class="t-dim" x="52" y="316" text-anchor="middle" font-size="8.5">qwen-coder 14B</text>
+          <text class="t-dim" x="146" y="316" text-anchor="middle" font-size="8.5">gemma 12B</text>
+          <text class="t-dim" x="240" y="316" text-anchor="middle" font-size="8.5">llama3.1 8B</text>
+          <path class="remote" d="M182 110C250 110 284 170 340 178"/>
+          <rect class="gate" x="226" y="128" width="110" height="26" rx="13"/>
+          <text class="t-amber" x="281" y="145" text-anchor="middle" font-size="11">remote = true</text>
+          <path class="cloud" d="M342 204h86a26 26 0 0 0 0-52 34 34 0 0 0-64-12 24 24 0 0 0-22 64z"/>
+          <use class="mark" href="#b-anthropic" x="352" y="164" width="22" height="22"/>
+          <use class="mark" href="#b-deepseek" x="380" y="164" width="22" height="22"/>
+          <use class="mark" href="#b-kimi" x="408" y="164" width="22" height="22"/>
+          <text class="t-dim" x="392" y="226" text-anchor="middle" font-size="11">remote APIs</text>
+          <text class="t-dim" x="392" y="242" text-anchor="middle" font-size="10">never a fallback</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <section id="surfaces">
     <div class="wrap">
-      <p class="eyebrow">Quick start</p>
-      <h2>First run</h2>
-      <p class="lead">The first run asks where to keep its state — <code>~/.luu</code> or
-        <code>~/.config/luu</code> — and <code>LUU_HOME</code> answers it without asking.</p>
+      <div class="head center rv">
+        <p class="kicker">Where you work</p>
+        <h2>One engine, four ways in.</h2>
+      </div>
+      <div class="surfaces">
+        <div class="surface rv">
+          <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 17 6-5-6-5M12 19h8"/></svg></div>
+          <h3>Terminal</h3>
+          <code>luu chat</code>
+        </div>
+        <a class="surface rv" href="./demo/">
+          <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg></div>
+          <h3>Web UI →</h3>
+          <code>luu serve</code>
+        </a>
+        <div class="surface rv">
+          <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3 8 12l9 9M17 3l4 2v14l-4 2M8 12 4 9l-1 1v4l1 1 4-3"/></svg></div>
+          <h3>VS Code</h3>
+          <code>chat participant</code>
+        </div>
+        <div class="surface rv">
+          <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v4l-2 2 2 2v4a2 2 0 0 0 2 2h2M16 4h2a2 2 0 0 1 2 2v4l2 2-2 2v4a2 2 0 0 1-2 2h-2"/></svg></div>
+          <h3>Protocol</h3>
+          <code>luu stdio</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <div class="cta-card rv">
+        <div>
+          <p class="kicker">Install</p>
+          <h2>One line. No root.</h2>
+          <p class="lead">One binary in <code>~/.local/bin</code>, checked against the release's sha256.</p>
+          <div class="oneline">
+            <pre>curl -fsSL https://jgermade.github.io/<wbr>luu/setup.sh <span class="nb">| sh</span></pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+          </div>
+          <ul class="platforms" aria-label="Prebuilt for">
+            <li>Linux x86_64</li>
+            <li>Linux arm64</li>
+            <li>macOS Apple Silicon</li>
+            <li>macOS Intel</li>
+          </ul>
+        </div>
 <!-- Broken by hand to fit a phone: one flag a line reads the same at any width. -->
-<pre class="block"><span class="c"># one turn on the mock backend,</span>
-<span class="c"># no model needed</span>
+<pre class="first-run"><span class="c"># the mock backend: no model needed</span>
 <span class="p">$ </span>luu chat "hola"
 
 <span class="c"># against a local Ollama</span>
 <span class="p">$ </span>luu chat "hola" --backend ollama \
-  --model qwen2.5-coder:7b \
-  --context-limit 8192
-
-<span class="c"># llama-server, vLLM or LM Studio</span>
-<span class="p">$ </span>luu chat "hola" --backend openai \
-  --openai-url http://localhost:8080/v1 \
-  --model qwen2.5-coder-7b
+    --model qwen2.5-coder:7b \
+    --context-limit 8192
 
 <span class="c"># the web UI, on 127.0.0.1:7878</span>
 <span class="p">$ </span>luu serve</pre>
-      <a class="demo" href="./demo/">
-        <strong>See it without installing anything →</strong>
-        <span>The web UI replaying recorded sessions: the gate, the budget panel, and eviction under two policies.</span>
-      </a>
-    </div>
-  </section>
-
-  <section id="setup">
-    <div class="wrap">
-      <p class="eyebrow">setup.sh</p>
-      <h2>Installer options</h2>
-      <p class="lead">Pass them after <code>sh -s --</code>, for example
-        <code>sh -s -- install --dir ~/bin</code>. The script never edits a shell profile: when the
-        directory is not on your <code>PATH</code>, it prints the line to add.</p>
-      <dl class="opts">
-        <div><dt><code>install</code> · <code>reinstall</code> · <code>uninstall</code></dt>
-          <dd>With no command, the script asks which to do, offering <code>reinstall</code> and
-            <code>uninstall</code> only when luu is already there. <code>install</code> does nothing
-            when that version is already there. <code>reinstall</code> always downloads again.</dd></div>
-        <div><dt><code>--dir DIR</code></dt>
-          <dd>Where the binary goes. Default <code>~/.local/bin</code>, or
-            <code>LUU_INSTALL_DIR</code>.</dd></div>
-        <div><dt><code>--version TAG</code></dt>
-          <dd>A release such as <code>v0.1.1</code>. Default the latest, or
-            <code>LUU_VERSION</code>.</dd></div>
-        <div><dt><code>--purge</code></dt>
-          <dd>With <code>uninstall</code>: also delete sessions, keys, <code>config.toml</code>,
-            engines and models. Asks first.</dd></div>
-        <div><dt><code>-y</code>, <code>--yes</code></dt>
-          <dd>Do not ask before deleting — needed for <code>--purge</code> when there is no
-            terminal.</dd></div>
-        <div><dt><code>LUU_DOWNLOAD_URL</code></dt>
-          <dd>A directory with <code>luu-&lt;target&gt;.tar.gz</code> and <code>SHA256SUMS</code>,
-            used instead of GitHub: a mirror, or <code>file://</code> for your own build.</dd></div>
-      </dl>
+        <details class="opts">
+          <summary>Installer options</summary>
+          <p class="note">With no command the script asks what to do. Pass one after <code>sh -s --</code>, for
+            example <code>sh -s -- install --dir ~/bin</code>. It never edits a shell profile: when the directory
+            is not on your <code>PATH</code>, it prints the line to add.</p>
+          <dl class="optlist">
+            <div><dt><code>install</code> · <code>reinstall</code> · <code>uninstall</code></dt>
+              <dd>Asked for when none is given, offering <code>reinstall</code> and <code>uninstall</code> only
+                when luu is already there. <code>install</code> does nothing when that version is already there;
+                <code>reinstall</code> always downloads again.</dd></div>
+            <div><dt><code>--dir DIR</code></dt>
+              <dd>Where the binary goes. Default <code>~/.local/bin</code>, or <code>LUU_INSTALL_DIR</code>.</dd></div>
+            <div><dt><code>--version TAG</code></dt>
+              <dd>A release such as <code>v0.1.1</code>. Default the latest, or <code>LUU_VERSION</code>.</dd></div>
+            <div><dt><code>--purge</code></dt>
+              <dd>With <code>uninstall</code>: also delete sessions, keys, <code>config.toml</code>, engines and
+                models. Asks first.</dd></div>
+            <div><dt><code>-y</code>, <code>--yes</code></dt>
+              <dd>Do not ask before deleting — needed for <code>--purge</code> when there is no terminal.</dd></div>
+            <div><dt><code>LUU_DOWNLOAD_URL</code></dt>
+              <dd>A directory with <code>luu-&lt;target&gt;.tar.gz</code> and <code>SHA256SUMS</code>, used instead
+                of GitHub: a mirror, or <code>file://</code> for your own build.</dd></div>
+          </dl>
+        </details>
+      </div>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <span>luu</span>
-    <a href="https://github.com/jgermade/luu">Source</a>
-    <a href="https://github.com/jgermade/luu/releases">Releases</a>
-    <a href="https://github.com/jgermade/luu/blob/main/luu-design.md">Design</a>
-    <a href="./demo/">Demo</a>
+    <a class="brand" href="./" aria-label="luu, home"><svg aria-hidden="true"><use href="#luu"/></svg></a>
+    <nav aria-label="Footer">
+      <a href="https://github.com/jgermade/luu">Source</a>
+      <a href="https://github.com/jgermade/luu/releases">Releases</a>
+      <a href="https://github.com/jgermade/luu/blob/main/luu-design.md">Design</a>
+      <a href="https://github.com/jgermade/luu/tree/main/RECORD">Record</a>
+      <a href="./demo/">Demo</a>
+    </nav>
+    <p class="line">Provider and model marks belong to their owners and only say what luu can talk to.</p>
   </div>
 </footer>
 
 <script>
+  document.documentElement.classList.add("js")
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches
+
+  // The theme switch: the pressed one is what was picked, auto included.
+  const picks = [...document.querySelectorAll(".theme [data-pick]")]
+  const pressed = () => picks.forEach(b => b.setAttribute("aria-checked", String(b.dataset.pick === document.documentElement.dataset.pick)))
+  picks.forEach(b => b.addEventListener("click", () => { window.luuTheme(b.dataset.pick); pressed() }))
+  pressed()
+
   // Copy a command. The clipboard API needs a secure context, which Pages is;
   // the selection fallback covers a page opened from disk.
   for (const button of document.querySelectorAll(".copy")) {
-    button.setAttribute("aria-label", "Copy command")
     button.addEventListener("click", async () => {
-      const text = button.parentElement.querySelector("pre").textContent
+      const pre = button.parentElement.querySelector("pre")
       try {
-        await navigator.clipboard.writeText(text)
+        await navigator.clipboard.writeText(pre.textContent)
       } catch {
         const range = document.createRange()
-        range.selectNodeContents(button.parentElement.querySelector("pre"))
+        range.selectNodeContents(pre)
         const selection = getSelection()
         selection.removeAllRanges()
         selection.addRange(range)
         document.execCommand("copy")
       }
-      button.textContent = "Copied"
       button.classList.add("done")
-      setTimeout(() => { button.textContent = "Copy"; button.classList.remove("done") }, 1600)
+      button.setAttribute("aria-label", "Copied")
+      setTimeout(() => { button.classList.remove("done"); button.setAttribute("aria-label", "Copy command") }, 1600)
     })
+  }
+
+  const header = document.querySelector("header.top")
+  const onScroll = () => header.classList.toggle("scrolled", scrollY > 8)
+  addEventListener("scroll", onScroll, { passive: true })
+  onScroll()
+
+  // Sections rise in once, as they reach the viewport.
+  const reveal = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      entry.target.classList.add("in")
+      reveal.unobserve(entry.target)
+    }
+  }, { rootMargin: "0px 0px -8% 0px" })
+  document.querySelectorAll(".rv").forEach(el => reveal.observe(el))
+
+  // fig. 1, played. Each frame is the Context card after a call — system,
+  // tools, map, summaries, history, code, prompt, in tokens of a 16K window —
+  // and the share of that prompt the previous one already held, as a prefix.
+  // The first call has nothing to measure against, and says so, as the
+  // inspector does.
+  const app = document.querySelector("#session .app")
+  if (app && !still) {
+    const WINDOW = 16384
+    const frames = {
+      empty: { b: [0, 0, 0, 0, 0, 0, 0], shared: null },
+      first: { b: [412, 1180, 1024, 0, 0, 0, 22], shared: null },
+      goOn: { b: [412, 1180, 1024, 64, 0, 0, 6], shared: 2616 },
+      read: { b: [412, 1180, 1024, 64, 1146, 0, 6], shared: 2686 },
+      edit: { b: [412, 1180, 1024, 64, 1326, 0, 6], shared: 3832 },
+      test: { b: [412, 1180, 1024, 64, 1746, 0, 6], shared: 4012 },
+    }
+    const $ = sel => app.querySelector(sel)
+    const steps = Object.fromEntries([...app.querySelectorAll("[data-s]")].map(el => [el.dataset.s, el]))
+    const rows = [...app.querySelectorAll("[data-rows] li")]
+    const segs = [...app.querySelectorAll("[data-ubar] i")]
+    const added = [...app.querySelectorAll("[data-add]")]
+    const typed = $("[data-typed]")
+    const field = $("[data-field]")
+    const placeholder = $("[data-ph]")
+    const approve = $("[data-approve]")
+    const jobsel = $("[data-jobsel]")
+    const num = n => n.toLocaleString("en-US")
+    const pct = (n, of) => (of ? Math.round(n / of * 1000) / 10 : 0) + "%"
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+    const frame = ({ b, shared }) => {
+      const total = b.reduce((a, n) => a + n, 0)
+      b.forEach((n, i) => {
+        segs[i].style.width = (n / WINDOW * 100) + "%"
+        rows[i].querySelector(".n").textContent = num(n)
+        rows[i].querySelector(".p").textContent = pct(n, total)
+      })
+      $("[data-pct]").textContent = Math.round(total / WINDOW * 100) + "% used"
+      $("[data-sent]").textContent = `${num(total)} / ${num(WINDOW)}`
+      $("[data-meter]").style.width = (total / WINDOW * 100) + "%"
+      $("[data-meter-t]").textContent = `${(total / 1000).toFixed(1)}K / 16K`
+      const first = shared === null
+      $("[data-first]").hidden = !first
+      for (const el of app.querySelectorAll("[data-reuse] .big, [data-reuse] .ubar, [data-reuse] .rows")) el.hidden = first
+      if (!first) {
+        $("[data-reuse-pct]").textContent = Math.round(shared / total * 100) + "% reused"
+        $("[data-reuse-n]").textContent = `${num(shared)} / ${num(total)}`
+        $("[data-shared]").style.width = (shared / total * 100) + "%"
+        $("[data-sn]").textContent = num(shared)
+        $("[data-sp]").textContent = pct(shared, total)
+        $("[data-nn]").textContent = num(total - shared)
+        $("[data-np]").textContent = pct(total - shared, total)
+      }
+    }
+    const show = (...names) => names.forEach(n => { steps[n].hidden = false })
+    const hide = (...names) => names.forEach(n => { steps[n].hidden = true })
+
+    let visible = false
+    new IntersectionObserver(([entry]) => { visible = entry.isIntersecting }).observe(app)
+    const whenVisible = async () => { while (!visible || document.hidden) await sleep(250) }
+
+    const type = async text => {
+      placeholder.hidden = true
+      field.classList.add("caret")
+      for (let i = 1; i <= text.length; i++) {
+        typed.textContent = text.slice(0, i)
+        await sleep(18 + Math.random() * 28)
+      }
+      await sleep(350)
+      field.classList.remove("caret")
+      typed.textContent = ""
+      placeholder.hidden = false
+    }
+    const call = async (name, ms) => {
+      const el = steps[name]
+      const status = el.querySelector(".status")
+      const time = el.querySelector(".ms")
+      const done = [status.textContent, time.textContent]
+      el.classList.add("run")
+      status.textContent = "running"
+      time.textContent = ""
+      show(name)
+      await sleep(ms)
+      el.classList.remove("run")
+      ;[status.textContent, time.textContent] = done
+    }
+
+    const play = async () => {
+      for (;;) {
+        hide(...Object.keys(steps))
+        added.forEach(line => { line.hidden = true })
+        jobsel.hidden = true
+        frame(frames.empty)
+        await whenVisible()
+        await sleep(600)
+
+        await type(steps.m1.textContent)
+        show("m1")
+        frame(frames.first)
+        await sleep(900)
+        show("p1")
+        await sleep(700)
+        show("gate")
+        field.classList.add("off")
+        placeholder.textContent = "Approve or reject the proposed job first"
+        await sleep(2400)
+        await whenVisible()
+        approve.classList.add("press")
+        await sleep(220)
+        approve.classList.remove("press")
+        await sleep(250)
+        hide("gate", "m1", "p1")
+        show("fold")
+        jobsel.hidden = false
+        field.classList.remove("off")
+        placeholder.textContent = "Ask something..."
+        await sleep(1100)
+
+        await type(steps.m2.textContent)
+        show("m2")
+        frame(frames.goOn)
+        await sleep(700)
+        await call("c1", 500)
+        frame(frames.read)
+        await sleep(500)
+        await call("c2", 600)
+        added.forEach(line => { line.hidden = false; line.classList.add("flash") })
+        frame(frames.edit)
+        await sleep(80)
+        added.forEach(line => line.classList.remove("flash"))
+        await sleep(600)
+        await call("c3", 1500)
+        frame(frames.test)
+        await sleep(500)
+        show("ans")
+        await sleep(8000)
+      }
+    }
+    play()
   }
 </script>
 </body>

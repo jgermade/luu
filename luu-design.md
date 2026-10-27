@@ -1674,7 +1674,7 @@ Server stack: `axum` + `tokio`.
 ### UI stack
 
 **[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.** Vendored at
-`web/vendor/jq79.js`, version 0.7.5, with its source map beside it, which binds attributes one
+`web/vendor/jq79.js`, version 0.7.6, with its source map beside it, which binds attributes one
 at a time (`:title="x"`); `:attrs` went in 0.7. See
 [`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
 **0.7.4 keeps a keyed `:each` row that is handed a new object**, re-running its bindings rather
@@ -1686,6 +1686,9 @@ listeners and observers with. luu's lists also keep the objects of rows that did
 with `import.meta.resolve`, the way a `.js` one already was; `fetch` never reads one. That was a
 line luu patched into the vendored file, and the vendored copy is now jq79's own, byte for byte.
 See [`RECORD/2026-10-21.jq79-0.7.5.completed.md`](RECORD/2026-10-21.jq79-0.7.5.completed.md).
+**0.7.6 downloads a component's source once** and builds every instance from that text, and its
+`$mounted()` waits for the nested components that have not painted yet. Neither changed what the
+suites see. See [`RECORD/2026-10-27.jq79-0.7.6.completed.md`](RECORD/2026-10-27.jq79-0.7.6.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
 frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
@@ -2834,8 +2837,12 @@ directory, and only then renamed over the old one. `uninstall` keeps the state
 directory; `--purge` deletes it after asking, and without a terminal the answer is
 no. The landing page shows the one line and nothing else, because the script now
 says the rest. The script and the landing that shows it are `pages/`, the root of
-GitHub Pages; the replay of recorded sessions is under `demo/`. See
-[`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md).
+GitHub Pages; the replay of recorded sessions is under `demo/`. The landing says each thing in an
+inline SVG drawing and a line rather than a paragraph, opens on `luu serve` drawn in HTML playing one
+job (illustrated, and captioned so), and has auto, light and dark themes kept under the web UI's own
+`luu.theme`. See
+[`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md)
+and [`RECORD/2026-10-27.a-landing-that-looks-like-an-agent.completed.md`](RECORD/2026-10-27.a-landing-that-looks-like-an-agent.completed.md).
 
 ## Naming
 
