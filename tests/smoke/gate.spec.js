@@ -647,7 +647,7 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // this machine, which a `host` runtime wears.
   // The tree's own shapes are the theme's, in `theme/default/files.svg`, not
   // the page's.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(34)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(35)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip, as a modal. The live session cannot be

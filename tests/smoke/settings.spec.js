@@ -96,6 +96,13 @@ test.beforeAll(async () => {
   // wherever the suite runs and can be made the default.
   writeFileSync(join(brewBin, "nerdctl"), '#!/bin/sh\ncase "$1" in info) exit 0;; *) exit 1;; esac\n')
   chmodSync(join(brewBin, "nerdctl"), 0o755)
+  // And a `colima` that answers and stops, so a runtime the page can stop is
+  // on every machine the suite runs on: `colima nerdctl -- info` is its probe.
+  writeFileSync(
+    join(brewBin, "colima"),
+    '#!/bin/sh\ncase "$1 $3" in "nerdctl info") exit 0;; "stop "*) echo "stopping colima (stand-in)"; exit 0;; *) exit 1;; esac\n',
+  )
+  chmodSync(join(brewBin, "colima"), 0o755)
   // And no podman but the one it installs. The Runtimes test needs a machine
   // without one, and luu finds runtimes on PATH alone, so every directory
   // holding a real one is replaced, in its place, by a folder of links to
@@ -1537,9 +1544,14 @@ test("runtimes, postures and the host shell are configured from Settings", async
   const card = runtime => pane.locator(".runtime", { has: page.locator("header strong", { hasText: new RegExp(`^${runtime}$`) }) })
   await expect(card("docker").locator(".state.default")).toHaveText("default")
   await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(0)
+  // The default wears two checks where the others have the button; a check
+  // is green while its runtime answers.
+  await expect(card("docker").locator('.actions .mark use[href="#i-check-double"]')).toHaveCount(1)
   await expect(card("nerdctl").locator(".state").first()).toHaveText("answering")
+  await expect(card("nerdctl").locator(".actions svg.ic.up use[href='#i-check']")).toHaveCount(1)
   await card("nerdctl").locator(".actions").getByRole("button", { name: "Make default" }).click()
   await expect(card("nerdctl").locator(".state.default")).toHaveText("default")
+  await expect(card("nerdctl").locator(".actions .mark svg.ic.up use[href='#i-check-double']")).toHaveCount(1)
   await expect(card("docker").locator(".state.default")).toHaveCount(0)
   await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(1)
   expect(config()).toContain("[runtimes]")
@@ -1563,6 +1575,17 @@ test("runtimes, postures and the host shell are configured from Settings", async
   expect(back.status).toBe(200)
   expect((await back.json()).default_runtime).toBe("docker")
   expect(config()).not.toContain("[runtimes]")
+
+  // Stopped from its card, where it says how — Colima's own `colima stop`, a
+  // task like a start, its output kept while it runs or if it fails. Nerdctl's
+  // containerd is a system service: no button.
+  await expect(card("nerdctl").getByRole("button", { name: "Stop" })).toHaveCount(0)
+  await expect(card("colima").locator(".state").first()).toHaveText("answering")
+  await card("colima").getByRole("button", { name: "Stop" }).click()
+  await expect.poll(async () => {
+    const tasks = await (await fetch(`${BASE}/api/runtimes/tasks`)).json()
+    return tasks.find(t => t.kind === "stop" && t.runtime === "colima")?.state
+  }).toBe("done")
 
   // A posture, named by a policy file out of the list — this checkout's.
   await pane.locator('button.add:has-text("+ posture")').click()

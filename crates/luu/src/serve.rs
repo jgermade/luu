@@ -1740,6 +1740,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/runtimes/{runtime}/build", post(build_image))
         .route("/api/runtimes/{runtime}/install", post(install_runtime))
         .route("/api/runtimes/{runtime}/start", post(start_runtime))
+        .route("/api/runtimes/{runtime}/stop", post(stop_runtime))
         // Moves the live session to another posture, between jobs. See
         // [`put_session_posture`].
         .route(
@@ -5458,6 +5459,39 @@ async fn start_runtime(
     };
     let base = state.app.agency().await.sandbox.base().to_path_buf();
     match state.app.tasks.wake(runtime, &base) {
+        Ok(()) => Json(state.app.tasks.list()).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+/// Stops a runtime, where `crate::runtimes::stop_steps` has a line for it —
+/// and not the one the live session runs its commands in, which would leave
+/// it with nowhere to run them: move the session first.
+async fn stop_runtime(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(runtime): Path<String>,
+    Json(_): Json<serde_json::Value>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let runtime = match contained(&runtime) {
+        Ok(runtime) => runtime,
+        Err(refused) => return *refused,
+    };
+    let agency = state.app.agency().await;
+    // `docker (luu-worker:dev)`: the word before the image.
+    let live = agency.posture(None).runtime;
+    if live.split(' ').next() == Some(runtime.as_str()) {
+        return (
+            StatusCode::CONFLICT,
+            format!("the live session runs its commands on {runtime}: move it elsewhere first"),
+        )
+            .into_response();
+    }
+    let base = agency.sandbox.base().to_path_buf();
+    match state.app.tasks.halt(runtime, &base) {
         Ok(()) => Json(state.app.tasks.list()).into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }

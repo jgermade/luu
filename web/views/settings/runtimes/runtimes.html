@@ -4,8 +4,9 @@
   // shell on the host. A runtime is usable when it is installed, answers, has
   // the image, and a posture uses it — this section shows all four and changes
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
-  const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell, saveDefaultRuntime } =
+  const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, savePostures, saveHostShell, saveDefaultRuntime } =
     await import("@web/lib/runtimes.js")
+  const { terminal } = await import("@web/lib/terminal.js")
   const Button = await import("@web/theme/default/components/button.html")
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
@@ -87,6 +88,10 @@
   const build = (runtime, image) => task(`build:${runtime}:${image}`, () => buildImage(runtime, image))
   const install = runtime => task(`install:${runtime}`, () => installRuntime(runtime))
   const start = runtime => task(`start:${runtime}`, () => startRuntime(runtime))
+  const stop = runtime => task(`stop:${runtime}`, () => stopRuntime(runtime))
+  // The runtime the live session runs its commands on, which is not stopped
+  // from here: `docker (luu-worker:dev)`, the word before the image.
+  $: liveRuntime = (terminal.info?.posture?.runtime || "").split(" ")[0]
   const taskOf = (kind, runtime, image = null) =>
     (view?.tasks || []).find(t => t.kind === kind && t.runtime === runtime && (t.image ?? null) === image)
   const buildOf = (runtime, image) => taskOf("build", runtime, image)
@@ -207,12 +212,26 @@
                   @click="start(r.runtime)">
             <svg class="ic"><use href="#i-play"/></svg>
           </Button>
+          <Button :if="r.answers && r.stoppable" square variant="ghost" size="sm"
+                  :title="liveRuntime === r.runtime ? 'The live session runs here: move it elsewhere to stop this' : 'Stop it'"
+                  label="Stop"
+                  :disabled="!view?.editable || !!busy || liveRuntime === r.runtime || taskOf('stop', r.runtime)?.state === 'running'"
+                  @click="stop(r.runtime)">
+            <svg class="ic"><use href="#i-stop"/></svg>
+          </Button>
+          <!-- Running is a green check; the default is two. The default's is
+               where it is, not a button: there is nothing to make it. -->
+          <span :if="r.path && defaultRuntime === r.runtime" class="mark" role="img"
+                :aria-label="r.answers ? 'The default, running' : 'The default, not running'"
+                :title="r.answers ? 'The default, and running: new sessions run their image here first' : 'The default: new sessions run their image here first — not running now'">
+            <svg class="ic" :class.up="r.answers"><use href="#i-check-double"/></svg>
+          </span>
           <Button :if="defaultRuntime !== r.runtime" square variant="ghost" size="sm"
-                  :title="r.path ? 'Make it the default: new sessions run their image here first' : 'Install it to make it the default'"
+                  :title="!r.path ? 'Install it to make it the default' : r.answers ? 'Running · make it the default: new sessions run their image here first' : 'Make it the default: new sessions run their image here first'"
                   label="Make default"
                   :disabled="!view?.editable || !!busy || !r.path"
                   @click="makeDefault(r.runtime)">
-            <svg class="ic"><use href="#i-check"/></svg>
+            <svg class="ic" :class.up="r.answers"><use href="#i-check"/></svg>
           </Button>
         </span>
       </header>
@@ -225,6 +244,7 @@
       <p :if="r.answers === false" class="warn small">{{ r.detail }}</p>
       <div :if="showing(taskOf('install', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
       <div :if="showing(taskOf('start', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
+      <div :if="showing(taskOf('stop', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("stop", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
       <p :if="r.path && r.gap" class="dim small">{{ r.gap }}</p>
       <ul :if="r.answers" class="images">
         <li :each="i in r.images" :key="i.image">
@@ -327,6 +347,18 @@
   .runtime .grow { flex: 1; }
   .actions { display: inline-flex; align-items: center; gap: .15rem; }
   .actions .ic { width: 15px; height: 15px; }
+  /* Running: green, on the check that makes it the default and on the two
+     that say it is. */
+  .actions .ic.up { color: var(--luu-ok); }
+  /* Where a square ghost button would be, so the actions line up. */
+  .actions .mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--luu-control-sm, 28px);
+    height: var(--luu-control-sm, 28px);
+    color: var(--luu-fg-muted);
+  }
   .runtime p { margin: .35rem 0 0; }
   .state {
     font-size: 11px;

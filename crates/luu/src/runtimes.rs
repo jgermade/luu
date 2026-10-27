@@ -45,6 +45,9 @@ pub struct RuntimeView {
     /// Whether the page may start it: installed, not answering, and a line
     /// to start it with.
     pub startable: bool,
+    /// Whether the page may stop it: answering, and a line to stop it with —
+    /// [`stop_steps`], the other half of [`start_steps`].
+    pub stoppable: bool,
 }
 
 // ---- installing and starting --------------------------------------------------
@@ -104,6 +107,26 @@ pub fn start_steps(runtime: Runtime) -> Option<Vec<Vec<String>>> {
     }
 }
 
+/// How the page stops a runtime that answers: what [`start_steps`] started,
+/// by each one's own word — the app with its VM, the machine, the service.
+/// `None` where nothing here starts it either: nerdctl's containerd is a
+/// system service, and Docker off a Mac is a daemon root runs.
+pub fn stop_steps(runtime: Runtime) -> Option<Vec<Vec<String>>> {
+    let line = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    match runtime {
+        // The app quits and takes its VM with it, as its own menu's *Quit*.
+        Runtime::Docker if cfg!(target_os = "macos") => {
+            Some(vec![line(&["osascript", "-e", "quit app \"Docker\""])])
+        }
+        Runtime::Podman if cfg!(target_os = "macos") => {
+            Some(vec![line(&["podman", "machine", "stop"])])
+        }
+        Runtime::Colima => Some(vec![line(&["colima", "stop"])]),
+        Runtime::Container => Some(vec![line(&["container", "system", "stop"])]),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageView {
     pub image: String,
@@ -137,6 +160,7 @@ async fn probe(runtime: Runtime, images: Vec<String>) -> RuntimeView {
         }),
         install_refused: install_steps(runtime).err(),
         startable: false,
+        stoppable: false,
         images: images
             .iter()
             .map(|image| ImageView {
@@ -152,7 +176,10 @@ async fn probe(runtime: Runtime, images: Vec<String>) -> RuntimeView {
         return view;
     };
     match run(&argv).await {
-        Ok(_) => view.answers = Some(true),
+        Ok(_) => {
+            view.answers = Some(true);
+            view.stoppable = stop_steps(runtime).is_some();
+        }
         Err(said) => {
             view.answers = Some(false);
             view.detail = Some(match runtime {
@@ -310,6 +337,13 @@ impl Tasks {
         let steps = start_steps(runtime)
             .ok_or_else(|| format!("`{runtime}` is not started from this page: it takes root"))?;
         self.start("start", runtime, None, steps, base)
+    }
+
+    /// Stops its daemon, VM or service, where [`stop_steps`] has a line.
+    pub fn halt(&self, runtime: Runtime, base: &Path) -> Result<(), String> {
+        let steps = stop_steps(runtime)
+            .ok_or_else(|| format!("`{runtime}` is not stopped from this page"))?;
+        self.start("stop", runtime, None, steps, base)
     }
 
     /// Runs `steps` one after another, stopping at the first that fails,
@@ -524,8 +558,15 @@ mod tests {
                 Err(why) => assert!(!why.is_empty()),
             }
         }
-        // nerdctl's containerd is a system service; nothing starts it here.
+        // nerdctl's containerd is a system service; nothing starts it here,
+        // and nothing stops it.
         assert!(start_steps(Runtime::Nerdctl).is_none());
+        assert!(stop_steps(Runtime::Nerdctl).is_none());
+        assert_eq!(stop_steps(Runtime::Colima).unwrap()[0], ["colima", "stop"]);
+        assert_eq!(
+            stop_steps(Runtime::Container).unwrap()[0],
+            ["container", "system", "stop"]
+        );
         assert_eq!(
             start_steps(Runtime::Colima).unwrap()[0],
             ["colima", "start", "--runtime", "containerd"]

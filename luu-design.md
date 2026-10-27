@@ -1038,7 +1038,9 @@ access = "execute"
   account; or the folder and the image's tools, no network a list does not allow (see
   [`RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md`](RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md));
   and where it sends, in the chat dropup's two
-  columns (`provider-models.html`, one component for both). `POST /api/sessions` with `lists`
+  columns (`provider-models.html`, one component for both; in Settings → Models
+  the head's mark and name are the button that edits the provider, a pencil
+  right after the name). `POST /api/sessions` with `lists`
   and no posture is `Policies::compose`, named by its lists and recorded with
   `record::Composed` — the runtime and image it was asked with (`record::FORMAT` 24) — so a
   resume from the history asks for the same again; with a posture or an environment it is as
@@ -1051,8 +1053,13 @@ access = "execute"
   from its card (`PUT /api/runtimes/default`, a container runtime only, Docker
   as no table), is where a session made from lists runs its image first in the
   new session's *Runtime* — the others are offered after it. A card's actions
-  are icons, as an engine's: install, start, make default
-  ([`RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`](RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md)). See
+  are icons, as an engine's: install, start, stop, make default
+  ([`RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`](RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md)).
+  The check says both things at once: green while the runtime answers, and
+  doubled on the default. A runtime stops where it starts from the page —
+  the app, the machine, `colima stop`, `container system stop` — and never the
+  one the live session runs on
+  ([`RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md`](RECORD/2026-10-27.a-runtime-stops-from-its-card.completed.md)). See
   [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md). `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).

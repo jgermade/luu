@@ -210,8 +210,9 @@
       <div class="browse" :if="state.providers">
         <ProviderModels :provider="state.providers.default || ''"
                         :model="state.providers.providers?.[state.providers.default]?.model || ''"
-                        :disabled="!editable" typable :toggles="editable"
+                        :disabled="!editable" typable :toggles="editable" edits
                         @focus="focused = $event.detail" @choose="chooseDefault($event.detail)"
+                        @edit="openForm($event.detail)"
                         @transport="setTransport($event.detail)">
           <template :slot.head>
             <span :if="said" class="said">{{ said }}</span>
@@ -220,10 +221,6 @@
             <span :if="here?.remote" class="tag warn" title="Declared as off this machine">remote</span>
             <span :if="overridden(focused)" class="tag warn"
                   title="A model's own `tool-calls` differs from the profile's: a run with -m resolves that model's entry over this. Open the provider to see which.">per-model tools</span>
-            <Button :if="here" square variant="ghost" size="sm" :title="`Edit ${focused}`" :label="`Edit ${focused}`"
-                    :disabled="!editable" @click="openForm(focused)">
-              <svg class="ic"><use href="#i-edit"/></svg>
-            </Button>
           </template>
         </ProviderModels>
       </div>

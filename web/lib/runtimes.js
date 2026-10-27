@@ -28,6 +28,9 @@ export const installRuntime = runtime =>
   call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/install`, {})
 export const startRuntime = runtime =>
   call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/start`, {})
+/// Refused for the runtime the live session runs its commands on.
+export const stopRuntime = runtime =>
+  call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/stop`, {})
 export const saveHostShell = host => call("PUT", "./api/terminal", { host })
 /// `[runtimes] default`: the container runtime a new session's image runs on
 /// first. Answers with the whole view, like the writes above.
