@@ -864,6 +864,39 @@ async fn a_folder_is_its_index() {
     assert_eq!(none.status(), 404);
 }
 
+/// The page's files carry their hash as an `ETag` and are revalidated every
+/// time, so a reload is a bodyless 304 for what did not change and never a
+/// stale copy. See `RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`.
+#[tokio::test]
+async fn a_file_of_the_page_is_revalidated_by_its_hash() {
+    let address = server().await;
+    let http = reqwest::Client::new();
+    let url = format!("http://{address}/components/dropup.html");
+    let first = http.get(&url).send().await.expect("the request");
+    assert_eq!(first.status(), 200);
+    assert_eq!(first.headers()["cache-control"], "no-cache");
+    let tag = first.headers()["etag"].to_str().unwrap().to_string();
+    assert!(tag.starts_with('"') && tag.len() == 66, "{tag}");
+
+    let again = http
+        .get(&url)
+        .header("if-none-match", &tag)
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(again.status(), 304);
+    assert_eq!(again.headers()["etag"], tag.as_str());
+    assert!(again.bytes().await.unwrap().is_empty());
+
+    let other = http
+        .get(&url)
+        .header("if-none-match", "\"something else\"")
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(other.status(), 200);
+}
+
 /// The tree renames a file, says where it went, refuses a name that is
 /// taken without touching either file, and takes no rename from a page that
 /// reached this machine by another name — a rebinding site is same-origin

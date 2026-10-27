@@ -136,6 +136,9 @@ export async function attach(host) {
     term = new Terminal({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12,
+      // A little air between the lines: at 1 a prompt of two lines and the
+      // output under it run together.
+      lineHeight: 1.25,
       cursorBlink: true,
       theme: theme(host),
     })

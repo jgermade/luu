@@ -1611,6 +1611,11 @@ The rest follows from that:
 - **Dev loop**: `jq79 dev` hot-reloads components with no bundler. Serve the directory from disk in
   debug builds (`#[cfg(debug_assertions)]`) and from `rust-embed` in release — the dev server applies
   no transforms, so both paths serve the same bytes. No Vite proxy to configure.
+- **Caching**: each file goes out with its sha256 as `ETag` and `no-cache`, so a reload is a
+  bodyless 304 for what did not change and never a stale page after an upgrade; and the page
+  keeps each component's text for the visit (`lib/components-once.js`, before jq79), since
+  jq79 fetches a component every time a setup imports it. See
+  [`RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`](RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md).
 - **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
   keeps existing DOM when the transcript is appended to.
 - **Tool calls in the transcript**: an assistant reply is drawn as prose and tool calls, not as

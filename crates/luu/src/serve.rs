@@ -1674,7 +1674,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .layer(middleware::from_fn_with_state(auth.clone(), require_token));
 
     let router = guarded
-        .route("/", get(|| serve_asset("index.html")))
+        .route(
+            "/",
+            get(|headers: axum::http::HeaderMap| async move {
+                serve_asset("index.html", &headers).await
+            }),
+        )
         // Monaco, when this machine has it. Ungated for the same reason the
         // embedded UI is: it is a third-party editor, the same bytes in every
         // copy, and a `<script>` tag cannot carry an `Authorization` header.
@@ -1684,7 +1689,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // This server's own page, under a host's prefix: every request it
         // makes is relative, so served here its API is the host's.
         .route("/h/{name}", get(host_page_bare))
-        .route("/h/{name}/", get(|| serve_asset("index.html")))
+        .route(
+            "/h/{name}/",
+            get(|headers: axum::http::HeaderMap| async move {
+                serve_asset("index.html", &headers).await
+            }),
+        )
         .route("/h/{name}/{*path}", get(host_page))
         .route("/{*path}", get(asset_handler))
         .with_state(AppRouterState {
@@ -1735,8 +1745,8 @@ struct AppRouterState {
     origin: Option<String>,
 }
 
-async fn asset_handler(uri: Uri) -> Response {
-    serve_asset(uri.path().trim_start_matches('/')).await
+async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
+    serve_asset(uri.path().trim_start_matches('/'), &headers).await
 }
 
 /// One embedded file, or a folder's `index.html`.
@@ -1745,15 +1755,51 @@ async fn asset_handler(uri: Uri) -> Response {
 /// that is where its page's relative URLs resolve from. Without the slash it
 /// redirects there, relatively, so the same answer holds under a host's prefix.
 /// See `RECORD/2026-10-21.a-design-system-of-components.completed.md`.
-async fn serve_asset(path: &str) -> Response {
+///
+/// **Revalidated, never stale**: each file carries its sha256 as its `ETag`
+/// and `no-cache`, so a reload asks and gets a bodyless 304 for what did not
+/// change, and a new binary's page is never an old one out of the browser's
+/// cache. They went out with neither until 2026-10-27, and a reload fetched
+/// every one of them whole. See
+/// `RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`.
+async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
     let file = match path.is_empty() || path.ends_with('/') {
         true => format!("{path}index.html"),
         false => path.to_owned(),
     };
     match Ui::get(&file) {
         Some(found) => {
+            let tag = format!(
+                "\"{}\"",
+                found
+                    .metadata
+                    .sha256_hash()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            );
+            let unchanged = headers
+                .get(header::IF_NONE_MATCH)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|asked| {
+                    asked
+                        .split(',')
+                        .any(|one| one.trim().trim_start_matches("W/") == tag)
+                });
+            let kept = [
+                (header::ETAG, tag),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ];
+            if unchanged {
+                return (StatusCode::NOT_MODIFIED, kept).into_response();
+            }
             let mime = mime_guess::from_path(&file).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], found.data).into_response()
+            (
+                [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                kept,
+                found.data,
+            )
+                .into_response()
         }
         None if Ui::get(&format!("{path}/index.html")).is_some() => {
             let folder = path.rsplit('/').next().unwrap_or(path);
@@ -5654,14 +5700,17 @@ async fn host_page_bare(Path(name): Path<String>) -> Response {
 }
 
 /// This server's own page and its assets, under a host's prefix.
-async fn host_page(Path((_, path)): Path<(String, String)>) -> Response {
+async fn host_page(
+    Path((_, path)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     if let Some(rest) = path.strip_prefix("vendor/monaco/") {
         return installed_asset(monaco_root(), "monaco", rest).await;
     }
     if let Some(rest) = path.strip_prefix("vendor/xterm/") {
         return installed_asset(xterm_root(), "xterm.js", rest).await;
     }
-    serve_asset(&path).await
+    serve_asset(&path, &headers).await
 }
 
 // ---- engines ---------------------------------------------------------------
