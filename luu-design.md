@@ -2402,7 +2402,17 @@ the old one. **An ollama engine nothing has started lists ollama's store on this
 ollama's own names, instead of asking a port nothing answers on. **Uninstall
 asks, then removes the engine** (`POST /api/engines/{name}/uninstall`, luu's own copy only):
 stopped, its copy deleted unless another table runs it, and `[engine.<name>]` taken out of the
-file with the providers that start it. **The form is an installer** in a wide `SubModal` of
+file with the providers that start it. **An engine is renamed from its form** — the one way out
+of a name for an engine on a binary the machine had, which is never removed: `POST
+/api/engines/{name}/rename` with `{ to }` writes `[engine.<to>]` and repoints every profile's
+`engine` in one write (the loader refuses a file where a profile names a missing table,
+whichever of two writes went first), and the providers keep their own names. What luu runs
+moves with it and does not restart — `Supervisor::rename` carries the slot, its readiness, its
+`ensure` gate and the placed port — and the old name keeps reaching it for the live session,
+which resolved its engine by that name, until a table has that name again; refused while it
+starts. See
+[`RECORD/2026-10-27.an-engine-is-renamed.completed.md`](RECORD/2026-10-27.an-engine-is-renamed.completed.md).
+**The form is an installer** in a wide `SubModal` of
 `InputContainer`s: the kind as cards (with whether this machine has a release of it,
 `cannot_install`), where the binary comes from, the name and port filled in, *Advanced* for the
 arguments; *Install* downloads luu's copy there and closes when it is on disk — unpacked without

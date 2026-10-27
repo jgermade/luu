@@ -10,11 +10,16 @@
   // nothing names is a server no session will ever ask for; and *Install*, on
   // luu's own copy, downloads it here and closes when it is on disk.
   //
+  // The name is the table's key, and an edit may change it: *Save* renames
+  // first — the table and the providers that start it, in one write on the
+  // server — then writes the table under the new one. See
+  // `RECORD/2026-10-27.an-engine-is-renamed.completed.md`.
+  //
   // A path must end in the kind's own binary name, which the server checks
   // again: see `accepts_from_page` in `crate::engines`. `found` — `{ kind,
   // path, name }`, a binary the machine has that no table runs yet: the form
   // opens on it, under the name its card showed.
-  const { saveEngines, installEngine, loadEngines, profileFor, defaultPort, freePort, tableOf } =
+  const { saveEngines, installEngine, renameEngine, loadEngines, profileFor, defaultPort, freePort, tableOf } =
     await import("@web/lib/engines.js")
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
   const SubModal = await import("@web/theme/default/components/sub-modal.html")
@@ -90,6 +95,9 @@
   // engine in it, and the engine being added is not a clash with itself while
   // its provider is written or its copy downloads.
   let wrote = ""
+  // What a rename from this form has made of `editing`, once it has: a
+  // second *Save*, after the table's write failed, renames from there.
+  let renamed = ""
   let error = ""
   // The download *Install* started, as the server reports it.
   let download = null
@@ -149,12 +157,14 @@
   $: haveCopy = copies.includes(variant.trim() ? `${version.trim() || pinned}-${variant.trim()}` : (version.trim() || pinned))
   $: trimmed = name.trim()
   $: badName = !!trimmed && !/^[A-Za-z0-9_-]+$/.test(trimmed)
-  $: clash = !editing && !!trimmed && trimmed !== wrote && !!view?.engines?.[trimmed]
+  $: clash = !!trimmed && trimmed !== editing && trimmed !== wrote && trimmed !== renamed
+    && !!view?.engines?.[trimmed]
+  $: renaming = !!editing && !!trimmed && trimmed !== (renamed || editing)
   $: badPath = source === "path" && !!path.trim() && path.trim().split("/").pop() !== bin
   $: portNumber = Number(port.trim() || defaultPort(kind))
   $: badPort = !auto && (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535)
   $: portTaken = !auto && !!port.trim() && Object.entries(view?.engines || {})
-    .some(([n, e]) => n !== (editing || wrote) && e.port === portNumber)
+    .some(([n, e]) => n !== (renamed || editing || wrote) && e.port === portNumber)
   $: installs = source === "managed" && !haveCopy
   $: canSave = !!trimmed && !badName && !clash && !badPath && !badPort && !portTaken && !saving && !download
     && !(source === "path" && !path.trim()) && !(source === "found" && !foundPath)
@@ -207,8 +217,20 @@
     if (!canSave) return
     saving = true
     error = ""
+    let base = view
+    if (renaming) {
+      const moved = await renameEngine(renamed || editing, trimmed)
+      if (!moved.ok) {
+        saving = false
+        error = moved.error
+        return
+      }
+      renamed = trimmed
+      base = moved.view
+      saved?.(moved.view)
+    }
     const engines = Object.fromEntries(
-      Object.entries(view?.engines || {}).map(([n, e]) => [n, tableOf(e)]))
+      Object.entries(base?.engines || {}).map(([n, e]) => [n, tableOf(e)]))
     engines[trimmed] = table()
     const written = await saveEngines(engines)
     if (!written.ok) {
@@ -349,8 +371,9 @@
     <section class="step">
       <h4><span class="n">3</span> Where it listens</h4>
       <div class="row">
-        <InputContainer label="Name" :model="name" :disabled="!!editing" placeholder="llama"
-                        :error="badName ? 'letters, digits, - and _' : clash ? 'already an engine of that name' : ''" />
+        <InputContainer label="Name" :model="name" placeholder="llama"
+                        :error="badName ? 'letters, digits, - and _' : clash ? 'already an engine of that name' : ''"
+                        :description="renaming && current?.providers?.length ? `${current.providers.join(', ')} will start it as ${trimmed}` : ''" />
         <!-- The port, and inside its box whether luu chooses it. -->
         <div class="port-field">
           <InputContainer label="Port" :model="auto ? '' : port" :disabled="auto"

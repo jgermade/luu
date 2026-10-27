@@ -1836,6 +1836,22 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
     `${readFileSync(join(home, "config.toml"), "utf8").trimEnd()}\n\n[engine.own]\nkind = "llama"\nbinary = "managed"\nport = 8099\n`)
   const own = page.locator(".engines-pane section.engine", { has: page.locator("header strong", { hasText: /^own$/ }) })
   await expect(own.locator(".origin")).toHaveText("luu:", { timeout: 10_000 })
+  // Renamed from its form, since it is never removed: the table and the
+  // provider that starts it in one write, the provider under its own name.
+  // See `RECORD/2026-10-27.an-engine-is-renamed.completed.md`.
+  await used.getByRole("button", { name: "Edit" }).click()
+  const edit = page.getByRole("dialog", { name: `Engine ${name}` })
+  await edit.getByLabel("Name", { exact: true }).fill("mine")
+  await expect(edit).toContainText(`${name} will start it as mine`)
+  await edit.getByRole("button", { name: "Save" }).click()
+  await expect(edit).toHaveCount(0)
+  await expect(used.locator("header strong")).toHaveText("mine")
+  onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain("[engine.mine]")
+  expect(onDisk).not.toContain(`[engine.${name}]`)
+  expect(onDisk.slice(onDisk.indexOf(`[provider.${name}]`)).split("\n\n")[0]).toContain('engine = "mine"')
+  expect(onDisk.match(/enabled = false/g)).toHaveLength(1)
+
   // Asked first, with what goes; then the copy, the table and the card.
   await own.getByRole("button", { name: "Uninstall" }).click()
   const asking = page.getByRole("dialog", { name: "Uninstall own" })

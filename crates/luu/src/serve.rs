@@ -1658,6 +1658,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines/install", post(install_engine))
         .route("/api/engines/port", get(free_engine_port))
         .route("/api/engines/{name}/uninstall", post(uninstall_engine))
+        .route("/api/engines/{name}/rename", post(rename_engine))
         .route("/api/engines/{name}/chat", post(chat_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
@@ -5958,7 +5959,9 @@ struct LiveEngine {
 async fn live_engine(State(state): State<AppRouterState>) -> Response {
     let sending = state.app.destination().await;
     Json(sending.engine.as_ref().map(|(name, _)| LiveEngine {
-        name: name.clone(),
+        // By the name it has now, which a rename since the session began
+        // moved.
+        name: state.app.engines.current(name),
         readiness: state.app.engines.readiness(name),
     }))
     .into_response()
@@ -5995,16 +5998,8 @@ async fn put_engines(
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     };
     for (name, engine) in &asked.engines {
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("`{name}` is not an engine name: letters, digits, `-` and `_`"),
-            )
-                .into_response();
+        if let Err(refused) = engine_name(name) {
+            return *refused;
         }
         // The page may name only the kind's own binary; a path the file
         // already had is kept as it was, whoever wrote it.
@@ -6036,11 +6031,118 @@ async fn put_engines(
         })
         .cloned()
         .collect();
+    let named: Vec<String> = asked.engines.keys().cloned().collect();
     if let Err(error) = write_config(current.with_engines(asked.engines), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
+    state.app.engines.forget_renamed(&named);
     for name in removed {
         state.app.engines.stop(&name).await;
+    }
+    engines_answer(&state).await
+}
+
+/// What `[engine.<name>]` may be called: it is a TOML key, a path segment in
+/// `/api/engines/{name}/…`, and a word in a log line.
+fn engine_name(name: &str) -> Result<(), Box<Response>> {
+    match !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        true => Ok(()),
+        false => Err(Box::new(
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("`{name}` is not an engine name: letters, digits, `-` and `_`"),
+            )
+                .into_response(),
+        )),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RenameAsk {
+    to: String,
+}
+
+/// `[engine.<name>]` becomes `[engine.<to>]`, and every profile whose `engine`
+/// named it names `to` — one write, because the loader refuses a file where a
+/// profile names a table that is not there, whichever half went first. The
+/// providers keep their own names: a profile is renamed in Models. What luu
+/// runs for it moves with the name and does not restart; see
+/// [`crate::engines::Supervisor::rename`] and
+/// `RECORD/2026-10-27.an-engine-is-renamed.completed.md`.
+async fn rename_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Json(asked): Json<RenameAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let to = asked.to.trim().to_string();
+    if let Err(refused) = engine_name(&to) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let mut engines = current.engines().clone();
+    let Some(table) = engines.remove(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    if to == name {
+        return engines_answer(&state).await;
+    }
+    if engines.contains_key(&to) {
+        return (
+            StatusCode::CONFLICT,
+            format!("there is an [engine.{to}] already"),
+        )
+            .into_response();
+    }
+    engines.insert(to.clone(), table);
+    let providers = current
+        .profiles()
+        .iter()
+        .map(|(provider, profile)| {
+            let mut profile = profile.clone();
+            if profile.engine.as_deref() == Some(name.as_str()) {
+                profile.engine = Some(to.clone());
+            }
+            (provider.clone(), profile)
+        })
+        .collect();
+    // Before the file: a refusal here — it is starting — leaves both as
+    // they were.
+    if let Err(error) = state.app.engines.rename(&name, &to).await {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    let default = current.default_name().map(str::to_string);
+    if let Err(error) = write_config(
+        current.from_parts(default, providers).with_engines(engines),
+        path,
+    )
+    .await
+    {
+        // Back as it was, since the file is.
+        let _ = state.app.engines.rename(&to, &name).await;
+        state.app.engines.forget_renamed([&to]);
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     engines_answer(&state).await
 }
