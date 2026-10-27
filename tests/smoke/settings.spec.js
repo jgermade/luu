@@ -1967,6 +1967,13 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   await mm.click()
   await expect(pane.locator(".model", { hasText: "MiniMax-M2" }).locator(".brand"))
     .toHaveAttribute("style", /brands\/minimax\.svg/)
+  // Gemma's own mark, not Google's, ollama's prefix or not.
+  const gemma = await page.evaluate(async () => {
+    const { brandSrc, modelBrand } = await import("./lib/brands.js")
+    return [brandSrc(modelBrand("gemma3:12b")), brandSrc(modelBrand("ollama:gemma4:26b-mlx"))]
+  })
+  expect(gemma).toEqual(["./brands/gemma.svg", "./brands/gemma.svg"])
+  expect((await fetch(`${BASE}/brands/gemma.svg`)).status).toBe(200)
 
   // A pack instead: found where luu imports them, chosen, and written.
   await page.click('.modal .rail button:has-text("Appearance")')

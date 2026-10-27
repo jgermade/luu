@@ -28,6 +28,10 @@ Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`,
 `zdotai` → `zai` (Z.ai, which makes GLM). `alibabacloud` is Alibaba Cloud's,
 worn by its hosts and by Alibaba's Wan until a pack has a mark of Wan's own.
 
+`gemma.svg` is Gemma's mark, a four-pointed star in a frame of corners, as
+luu's maintainer supplied it on 2026-10-27; a model of the Gemma family wears
+it rather than Google's.
+
 Three are the projects' own rather than Simple Icons', for the engines luu
 starts: `ollama.svg` is `docs/ollama-logo.svg` from
 [ollama/ollama](https://github.com/ollama/ollama), `llamacpp.svg` is
