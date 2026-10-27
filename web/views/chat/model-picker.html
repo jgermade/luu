@@ -261,6 +261,8 @@
     box-shadow: 0 8px 24px rgb(0 0 0 / .25);
     display: flex;
     flex-direction: column;
+    /* Its columns' grounds stop at its corners (`app.css`). */
+    overflow: hidden;
   }
   /* One height whatever it holds — loading, a list, a reason, nothing —
      because a menu that opens upward moves its top edge with any change. */

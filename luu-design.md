@@ -1988,7 +1988,10 @@ that says what it means, because a status bar has room for one word and not for
 the explanation. **The two feet with choices in them** — the editor's and the
 chat's — are a step lighter than the bars (`--luu-foot`), and a dropup's menu
 lighter again (`--luu-menu`), with its face bordered in the strong line, so the
-buttons read on the foot and the menu on the page.
+buttons read on the foot and the menu on the page. The model menu's columns are
+laid as Settings → Models lays them: the providers, the head and the foot a step
+darker (`--luu-menu-side`) than the models, and the provider in focus on the
+models' own ground.
 
 **And so do the three resend rules.** `POST /api/sessions` takes `repeat`,
 `prune` and `results` beside the three above — `always`/`once`, `never`/`behind`,
