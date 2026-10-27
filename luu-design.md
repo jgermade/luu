@@ -2837,9 +2837,10 @@ directory, and only then renamed over the old one. `uninstall` keeps the state
 directory; `--purge` deletes it after asking, and without a terminal the answer is
 no. The landing page shows the one line and nothing else, because the script now
 says the rest. The script and the landing that shows it are `pages/`, the root of
-GitHub Pages; the replay of recorded sessions is under `demo/`. The landing is dark, and says each
-thing in an inline SVG drawing and a line rather than a paragraph, with a played-out job (illustrated,
-and captioned so) where a library's page would put its API. See
+GitHub Pages; the replay of recorded sessions is under `demo/`. The landing says each thing in an
+inline SVG drawing and a line rather than a paragraph, opens on `luu serve` drawn in HTML playing one
+job (illustrated, and captioned so), and has auto, light and dark themes kept under the web UI's own
+`luu.theme`. See
 [`RECORD/2026-10-23.an-installer-and-a-landing.completed.md`](RECORD/2026-10-23.an-installer-and-a-landing.completed.md)
 and [`RECORD/2026-10-27.a-landing-that-looks-like-an-agent.completed.md`](RECORD/2026-10-27.a-landing-that-looks-like-an-agent.completed.md).
 

@@ -10,13 +10,38 @@
 <meta property="og:url" content="https://jgermade.github.io/luu/">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#07090c">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%2312161c' rx='112'/%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round' stroke-width='40'%3E%3Cpath stroke='%23f5a524' d='M116 150v210'/%3E%3Cpath stroke='%23f2f4f7' d='M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215'/%3E%3C/g%3E%3Ccircle cx='356' cy='296' r='13' fill='%23f5a524'/%3E%3C/svg%3E">
+<script>
+  // The theme, before anything paints: auto, light or dark, kept under the
+  // key the web UI keeps its own under, so the demo beside this page opens in
+  // the same one. `data-theme` is always the resolved one; `data-pick` is what
+  // was chosen. Without a script the page is dark.
+  (() => {
+    const root = document.documentElement
+    const system = matchMedia("(prefers-color-scheme: dark)")
+    let pick = "auto"
+    try { pick = localStorage.getItem("luu.theme") || "auto" } catch {}
+    if (!["auto", "light", "dark"].includes(pick)) pick = "auto"
+    const apply = () => {
+      const dark = root.dataset.pick === "auto" ? system.matches : root.dataset.pick === "dark"
+      root.dataset.theme = dark ? "dark" : "light"
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#07090c" : "#f7f8fa")
+    }
+    root.dataset.pick = pick
+    apply()
+    system.addEventListener?.("change", apply)
+    window.luuTheme = which => {
+      root.dataset.pick = which
+      try { localStorage.setItem("luu.theme", which) } catch {}
+      apply()
+    }
+  })()
+</script>
 <!-- Everything inline and nothing fetched from another host: the page is
      served from GitHub Pages beside the demo, and CI fails a site that
      references a CDN or a font host. Mobile first — the base rules are the
-     phone, and each `min-width` query adds to them. Dark only, like luu's own
-     heads and every terminal it is installed from. Each section says its one
+     phone, and each `min-width` query adds to them. Each section says its one
      thing in a drawing and a line, not a paragraph. -->
 <style>
 :root {
@@ -30,21 +55,70 @@
   --muted: #9aa4b2;
   --dim: #677182;
   --amber: #f5a524;
+  --amber-ink: #f5a524;
   --amber-soft: rgba(245, 165, 36, 0.12);
   --amber-line: rgba(245, 165, 36, 0.45);
   --ok: #3fb950;
+  --ok-ink: #3fb950;
+  --ok-soft: rgba(63, 185, 80, 0.1);
+  --ok-line: rgba(63, 185, 80, 0.45);
   --no: #f85149;
+  --no-ink: #ff9c95;
+  --folder: #e2b33f;
   /* the buckets of a prompt, the same everywhere they are drawn */
   --b-system: #7aa2f7;
   --b-tools: #b392f0;
   --b-map: #4fd1c5;
   --b-code: #f5a524;
   --b-history: #f778ba;
+  --b-summaries: #8fcf6a;
+  --grid: rgba(255, 255, 255, 0.045);
+  --glow: rgba(245, 165, 36, 0.16);
+  --veil: rgba(7, 9, 12, 0.72);
+  --shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8);
+  /* terminals stay dark islands in either theme */
+  --ink: #05070a;
+  --ink-line: #262e3a;
+  --ink-fg: #eef1f5;
+  --ink-muted: #a3adbb;
+  --ink-dim: #6b7585;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --radius: 16px;
   --gutter: 16px;
   color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #f7f8fa;
+  --bg-raised: #eff1f5;
+  --surface: #ffffff;
+  --surface-2: #f2f4f7;
+  --border: #e3e6eb;
+  --border-strong: #cdd3dc;
+  --fg: #12151a;
+  --muted: #4c5564;
+  --dim: #7b8494;
+  --amber-ink: #a8560a;
+  --amber-soft: rgba(245, 165, 36, 0.16);
+  --amber-line: rgba(217, 119, 6, 0.5);
+  --ok: #1f9d3a;
+  --ok-ink: #1a7f37;
+  --ok-soft: rgba(31, 157, 58, 0.08);
+  --ok-line: rgba(31, 157, 58, 0.45);
+  --no: #d1242f;
+  --no-ink: #b42318;
+  --folder: #d9a521;
+  --b-system: #3b6fd8;
+  --b-tools: #8a5cd6;
+  --b-map: #0f8f8f;
+  --b-code: #e0920c;
+  --b-history: #d6457f;
+  --b-summaries: #4f8a2b;
+  --grid: rgba(15, 23, 42, 0.06);
+  --glow: rgba(245, 165, 36, 0.22);
+  --veil: rgba(247, 248, 250, 0.8);
+  --shadow: 0 30px 70px -24px rgba(15, 23, 42, 0.35);
+  color-scheme: light;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -66,13 +140,13 @@ h1, h2, h3 { line-height: 1.1; margin: 0; letter-spacing: -0.025em; }
 p { margin: 0; }
 svg.i { width: 1em; height: 1em; fill: currentColor; flex: none; }
 
-.wrap { width: 100%; max-width: 1160px; margin: 0 auto; padding: 0 var(--gutter); }
+.wrap { width: 100%; max-width: 1180px; margin: 0 auto; padding: 0 var(--gutter); }
 section { padding: 72px 0; position: relative; }
 .kicker {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: var(--amber);
+  color: var(--amber-ink);
   font: 500 0.75rem/1 var(--mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -113,15 +187,15 @@ header.top {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: rgba(7, 9, 12, 0.72);
+  background: var(--veil);
   backdrop-filter: saturate(140%) blur(12px);
   -webkit-backdrop-filter: saturate(140%) blur(12px);
   border-bottom: 1px solid transparent;
 }
 header.top.scrolled { border-bottom-color: var(--border); }
-header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 60px; }
+header.top .wrap { display: flex; align-items: center; gap: 8px; height: 60px; }
 /* the mark says luu, so nothing beside it does */
-.brand { display: flex; border-radius: 9px; }
+.brand { display: flex; border-radius: 9px; margin-right: auto; }
 .brand svg { width: 36px; height: 36px; }
 nav.main { display: flex; align-items: center; gap: 2px; }
 nav.main a {
@@ -140,8 +214,26 @@ nav.main .wide { display: none; }
 nav.main .gh svg { width: 18px; height: 18px; }
 nav.main .gh span { display: none; }
 
+/* auto, light, dark: three buttons, the chosen one pressed */
+.theme { display: flex; padding: 3px; gap: 2px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); }
+.theme button {
+  width: 30px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
+}
+.theme button:hover { color: var(--fg); }
+.theme button[aria-checked="true"] { background: var(--surface-2); color: var(--fg); box-shadow: 0 0 0 1px var(--border-strong) inset; }
+.theme svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
 /* ---- hero ----------------------------------------------------------------- */
-.hero { padding: 40px 0 72px; overflow: hidden; isolation: isolate; }
+.hero { padding: 40px 0 64px; overflow: hidden; isolation: isolate; text-align: center; }
 /* a faint grid that fades out from the top, and the amber glow of the mark */
 .hero::before {
   content: "";
@@ -149,21 +241,22 @@ nav.main .gh span { display: none; }
   inset: 0;
   z-index: -1;
   background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+    linear-gradient(to right, var(--grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
   background-size: 44px 44px;
-  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 75%);
-  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 55% at 50% 0%, #000 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse 80% 55% at 50% 0%, #000 30%, transparent 75%);
 }
 .hero::after {
   content: "";
   position: absolute;
   z-index: -1;
-  width: 900px;
-  height: 600px;
-  right: -300px;
-  top: 80px;
-  background: radial-gradient(closest-side, rgba(245, 165, 36, 0.16), transparent);
+  width: 1100px;
+  height: 700px;
+  left: 50%;
+  top: 280px;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, var(--glow), transparent);
   pointer-events: none;
 }
 .badge {
@@ -173,7 +266,7 @@ nav.main .gh span { display: none; }
   padding: 5px 12px 5px 6px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
-  background: rgba(16, 20, 26, 0.8);
+  background: var(--surface);
   color: var(--muted);
   font-size: 0.8125rem;
   text-decoration: none;
@@ -194,30 +287,33 @@ nav.main .gh span { display: none; }
   font-weight: 750;
   letter-spacing: -0.04em;
   line-height: 1.02;
-  margin-bottom: 20px;
+  margin: 0 auto 20px;
+  max-width: 15ch;
 }
 .hero h1 em {
   font-style: normal;
-  background: linear-gradient(100deg, #ffd27a 0%, var(--amber) 45%, #ff8a3d 100%);
+  background: linear-gradient(100deg, #ffc955 0%, var(--amber) 45%, #ff8a3d 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
-.hero .lead { font-size: 1.125rem; margin: 0 0 28px; }
+.hero .lead { font-size: 1.125rem; margin: 0 auto 28px; max-width: 44ch; }
 .hero .lead strong { color: var(--fg); font-weight: 600; }
-.ctas { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 20px; }
 
 /* ---- the one line --------------------------------------------------------- */
 .oneline {
   display: flex;
   align-items: stretch;
-  background: var(--bg-raised);
+  background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   min-width: 0;
   max-width: 560px;
-  box-shadow: 0 0 0 4px rgba(245, 165, 36, 0.05);
+  text-align: left;
+  box-shadow: 0 0 0 4px var(--amber-soft);
 }
+.hero .oneline { margin: 0 auto; }
 /* Wrapped, not scrolled: the end of the line — `| sh` — is the part that
    makes it a command, and a phone would hide it. */
 .oneline pre {
@@ -231,7 +327,7 @@ nav.main .gh span { display: none; }
   font-size: 0.875rem;
   line-height: 1.5;
 }
-.oneline pre::before { content: "$ "; color: var(--amber); user-select: none; }
+.oneline pre::before { content: "$ "; color: var(--amber-ink); user-select: none; }
 .oneline .nb { white-space: nowrap; }
 .copy {
   flex: none;
@@ -249,143 +345,270 @@ nav.main .gh span { display: none; }
 .copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .copy .yes, .copy.done .no { display: none; }
 .copy.done .yes { display: block; }
-.copy:hover { color: var(--fg); background: var(--surface); }
-.copy.done { color: var(--ok); }
+.copy:hover { color: var(--fg); background: var(--surface-2); }
+.copy.done { color: var(--ok-ink); }
 .fine { color: var(--dim); font-size: 0.8125rem; margin-top: 10px; }
 .fine a { color: var(--muted); text-underline-offset: 2px; }
 
-/* ---- fig. 1: a job, as luu runs it ---------------------------------------- */
-.session { margin: 48px 0 0; min-width: 0; }
-.win {
-  background: linear-gradient(180deg, #0e1218, #0a0d11);
+/* ---- fig. 1: luu serve, drawn ---------------------------------------------- */
+/* The web UI's own colours, from web/theme/default/{tokens,luu}.css: the bars
+   are dark in both tones, the tree and the chat are their own greys, and the
+   editor keeps Monokai. Below 720px it is the chat alone, as the UI is on a
+   narrow window; up to 1024px the inspector and the chat. */
+.shot { margin: 56px 0 0; text-align: left; }
+.app {
+  --a-bar: #191919;
+  --a-bar-fg: #e6e6e6;
+  --a-bar-dim: #9e9e9e;
+  --a-bar-line: #2e2e2e;
+  --a-accent-bar: #7aa2f7;
+  --a-tree: #161616;
+  --a-card: #1d1d1d;
+  --a-line: #2c2c2c;
+  --a-fg: #e6e6e6;
+  --a-muted: #9e9e9e;
+  --a-subtle: #6e6e6e;
+  --a-ok: #9ece6a;
+  --a-chat: #1c1c1c;
+  --a-chat-fg: #ececec;
+  --a-chat-dim: #b4bcc8;
+  --a-chat-accent: #9cb8ff;
+  --a-chat-ok: #b2dc84;
+  --a-chat-warn: #f2c27a;
+  --a-chat-bad: #ff9aa8;
+  --a-chat-line: #3c3c3c;
+  --a-raised: #0e0e0e;
+  --a-field: #262626;
+  --a-gate: #1a1712;
+  --a-gate-line: #e0af68;
+  --a-approve: #7aa2f7;
+  --a-on-approve: #111111;
+  --a-decline: #e0af68;
+  --a-on-decline: #111111;
+  --a-pill: #2a2a2a;
+  --k-system: #7aa2f7;
+  --k-tools: #2ac3de;
+  --k-map: #1a8fa8;
+  --k-summaries: #5c7f45;
+  --k-history: #9ece6a;
+  --k-code: #bb9af7;
+  --k-prompt: #e0af68;
+  --k-free: #3a3a3a;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 560px;
   border: 1px solid var(--border-strong);
-  border-radius: 16px;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
-  font-size: 0.8125rem;
+  box-shadow: var(--shadow);
+  background: var(--a-bar);
+  font: 12.5px/1.45 var(--sans);
+  color: var(--a-fg);
 }
-.win-head {
+:root[data-theme="light"] .app {
+  --a-tree: #ededed;
+  --a-card: #ffffff;
+  --a-line: #c8c8c8;
+  --a-fg: #1a1d23;
+  --a-muted: #5b6472;
+  --a-subtle: #8a92a0;
+  --a-ok: #4a7a1c;
+  --a-chat: #dddddd;
+  --a-chat-fg: #111317;
+  --a-chat-dim: #3a414c;
+  --a-chat-accent: #0035b2;
+  --a-chat-ok: #244c00;
+  --a-chat-warn: #613e00;
+  --a-chat-bad: #8f0018;
+  --a-chat-line: #a8a8a8;
+  --a-raised: #ececec;
+  --a-field: #f4f4f4;
+  --a-gate: #fdf7e9;
+  --a-gate-line: #b07a1e;
+  --a-approve: #1d3d82;
+  --a-on-approve: #ffffff;
+  --a-decline: #613e00;
+  --a-on-decline: #ffffff;
+  --a-pill: #e2e2e2;
+  --k-system: #2f5bbd;
+  --k-tools: #0b7185;
+  --k-map: #075a6b;
+  --k-summaries: #33561a;
+  --k-history: #4a7a1c;
+  --k-code: #6f3fb5;
+  --k-prompt: #8a5d12;
+  --k-free: #c3c9d3;
+}
+.app .col { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 38px minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.app .chat { grid-template-rows: 38px minmax(0, 1fr) auto auto; }
+.app .insp, .app .content { display: none; }
+.app .chead {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.015);
+  padding: 0 12px;
+  background: var(--a-bar);
+  color: var(--a-bar-fg);
+  border-bottom: 1px solid var(--a-bar-line);
   min-width: 0;
-}
-.dots { display: flex; gap: 6px; flex: none; }
-.dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
-.win-title { font-family: var(--mono); color: var(--muted); font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.win-head .chips { margin-left: auto; display: flex; gap: 6px; flex: none; }
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: 500 0.6875rem/1 var(--mono);
-  color: var(--muted);
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  padding: 4px 8px;
   white-space: nowrap;
 }
-.chip svg { width: 11px; height: 11px; fill: currentColor; }
-.chip.local::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
-.chip.model { display: none; }
-
-.stream { list-style: none; margin: 0; padding: 16px 14px 8px; display: grid; gap: 10px; }
-.s { min-width: 0; transition: opacity 0.35s ease, transform 0.35s ease; }
-.anim .s:not(.on) { opacity: 0; transform: translateY(6px); }
-.who { display: block; font: 600 0.6875rem/1 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
-.s-user p {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 10px 10px 10px 3px;
-  padding: 9px 12px;
-  color: var(--fg);
-  font-size: 0.875rem;
-}
-.caret::after { content: "▍"; color: var(--amber); animation: blink 1s steps(1) infinite; margin-left: 1px; }
-@keyframes blink { 50% { opacity: 0; } }
-.call {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 10px;
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  padding: 0 2px;
-}
-.call code { font-size: inherit; color: var(--fg); overflow-wrap: anywhere; }
-.call code .t { color: var(--b-system); }
-.call .v { color: var(--dim); }
-.call .v.ok::before { content: "✓ "; color: var(--ok); }
-.call .v.no { color: #ff9c95; }
-.call .v.no::before { content: "✗ "; color: var(--no); }
-.tag {
-  font: 600 0.625rem/1 var(--mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border-radius: 4px;
-  padding: 3px 5px;
-  color: var(--b-system);
-  background: rgba(122, 162, 247, 0.12);
-}
-.plan {
-  border: 1px solid var(--amber-line);
-  background: linear-gradient(180deg, rgba(245, 165, 36, 0.07), rgba(245, 165, 36, 0.02));
-  border-radius: 12px;
-  padding: 12px;
-  transition: border-color 0.3s, background 0.3s;
-}
-.plan-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
-.plan-head b { font: 600 0.6875rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber); }
-.plan-head span { font-size: 0.6875rem; color: var(--muted); font-family: var(--mono); }
-.plan .obj { color: var(--fg); margin-bottom: 8px; font-size: 0.8125rem; }
-.plan .obj code { color: var(--amber); }
-.plan dl { margin: 0 0 10px; display: grid; gap: 3px; font-family: var(--mono); font-size: 0.75rem; }
-.plan dl div { display: flex; gap: 10px; min-width: 0; }
-.plan dt { color: var(--dim); width: 40px; flex: none; }
-.plan dd { margin: 0; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
-.plan-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.plan-actions span {
-  font: 600 0.75rem/1 var(--sans);
-  border-radius: 7px;
-  padding: 7px 12px;
-  border: 1px solid var(--border-strong);
-  color: var(--muted);
-  transition: transform 0.12s, box-shadow 0.2s;
-}
-.plan-actions .approve { background: var(--amber); color: #120c02; border-color: var(--amber); }
-.plan-actions .approve.press { transform: scale(0.94); box-shadow: 0 0 0 4px rgba(245, 165, 36, 0.25); }
-.plan.approved { border-color: rgba(63, 185, 80, 0.5); background: linear-gradient(180deg, rgba(63, 185, 80, 0.07), rgba(63, 185, 80, 0.015)); }
-.plan.approved .plan-head b { color: var(--ok); }
-.fold {
+.app .cfoot {
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: var(--dim);
-  font: 500 0.6875rem/1.4 var(--mono);
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  background: var(--a-bar);
+  color: var(--a-bar-dim);
+  border-top: 1px solid var(--a-bar-line);
+  font-size: 11.5px;
+  min-width: 0;
+  white-space: nowrap;
 }
-.fold::before, .fold::after { content: ""; flex: 1; height: 1px; background: var(--border-strong); }
-.fold b { color: var(--muted); font-weight: 500; }
-.s-answer p { color: var(--fg); font-size: 0.875rem; border-left: 2px solid var(--amber); padding: 2px 0 2px 12px; }
-.s-answer code { color: var(--amber); }
+.app svg.ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.app .logo { width: 22px; height: 22px; flex: none; }
+.app .tabs { display: flex; gap: 2px; margin-left: auto; align-self: stretch; }
+.app .tabs span { display: flex; align-items: center; padding: 0 8px; color: var(--a-bar-dim); border-bottom: 2px solid transparent; }
+.app .tabs .on { color: var(--a-bar-fg); border-bottom-color: var(--a-accent-bar); }
 
-.win-foot { border-top: 1px solid var(--border); padding: 12px 14px 14px; background: rgba(255, 255, 255, 0.012); }
-.win-foot .meta { display: flex; justify-content: space-between; gap: 10px; font: 500 0.6875rem/1 var(--mono); color: var(--dim); margin-bottom: 8px; }
-.win-foot .meta b { color: var(--fg); font-weight: 600; }
-.win-foot .meta .reuse b { color: var(--ok); }
-figcaption { color: var(--dim); font: 0.75rem/1.5 var(--mono); margin-top: 12px; text-align: center; }
+/* the inspector, on its Debug tab */
+.app .tree { background: var(--a-tree); padding: 10px; display: grid; gap: 8px; align-content: start; overflow: hidden; }
+.app .card { background: var(--a-card); border: 1px solid var(--a-line); border-radius: 10px; padding: 10px 12px; }
+.app .card-h { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 6px; }
+.app .card-h svg { width: 11px; height: 11px; color: var(--a-muted); }
+.app .kv { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--a-muted); margin-top: 4px; }
+.app .kv b { color: var(--a-fg); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.app .kv > span { flex: none; }
+.app .tag { border: 1px solid var(--a-line); border-radius: 6px; padding: 1px 7px; color: var(--a-fg); }
+.app .big { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 2px 0 6px; }
+.app .big b { font-size: 13.5px; font-weight: 600; }
+.app .big span { color: var(--a-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.app .ubar { display: flex; gap: 2px; height: 5px; border-radius: 3px; background: var(--k-free); overflow: hidden; margin-bottom: 8px; }
+.app .ubar i { display: block; height: 100%; transition: width 0.6s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.app .rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.app .rows li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto 46px; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
+.app .rows .n { color: var(--a-muted); text-align: right; }
+.app .rows .p { text-align: right; }
+.app .sw { width: 9px; height: 9px; border-radius: 2px; }
+.app .system { background: var(--k-system); }
+.app .tools { background: var(--k-tools); }
+.app .map { background: var(--k-map); }
+.app .summaries { background: var(--k-summaries); }
+.app .history { background: var(--k-history); }
+.app .code { background: var(--k-code); }
+.app .prompt { background: var(--k-prompt); }
+.app .new { background: var(--k-free); }
+.app .note { color: var(--a-muted); font-size: 11.5px; }
+.app .ok { color: var(--a-ok); }
+.app .cfoot .ok { color: #9ece6a; }
 
-/* the budget bar: a share of the window per bucket, the reserve hatched */
-.bar { display: flex; height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; gap: 2px; }
-.bar i { display: block; height: 100%; width: var(--w, 0%); transition: width 0.6s cubic-bezier(0.2, 0.7, 0.2, 1); }
-.bar .system { background: var(--b-system); }
-.bar .tools { background: var(--b-tools); }
-.bar .map { background: var(--b-map); }
-.bar .code { background: var(--b-code); }
-.bar .history { background: var(--b-history); }
-.bar .reserve { background: repeating-linear-gradient(135deg, var(--border-strong) 0 3px, transparent 3px 6px); margin-left: auto; }
+/* the content column: a file, as the editor draws it */
+.app .ftab { display: flex; align-items: center; gap: 6px; align-self: stretch; padding: 0 4px; color: var(--a-bar-fg); border-bottom: 2px solid var(--a-accent-bar); }
+.app .ftab.ghost { color: var(--a-bar-dim); font-style: italic; border-bottom-color: transparent; }
+.app .ftab svg { width: 13px; height: 13px; color: #ff9e64; }
+.app .editor { background: #111111; overflow: hidden; padding: 10px 0; font: 11.5px/1.75 var(--mono); color: #f8f8f2; }
+.app .editor div { display: grid; grid-template-columns: 42px minmax(0, 1fr); white-space: pre; transition: background 1.2s; }
+.app .editor div::before { content: attr(data-n); color: #90908a; text-align: right; padding-right: 14px; }
+.app .editor .flash { background: rgba(166, 226, 46, 0.14); transition: none; }
+.app .kw { color: #f92672; }
+.app .ty { color: #66d9ef; font-style: italic; }
+.app .fn { color: #a6e22e; }
+.app .st { color: #e6db74; }
+.app .cm { color: #75715e; }
+.app .nu { color: #ae81ff; }
+.app .label { letter-spacing: 0.08em; font-size: 10.5px; }
+.app .pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #3a3a3a; border-radius: 6px; padding: 1px 8px; color: var(--a-bar-fg); }
+.app .push { margin-left: auto; }
+
+/* the chat */
+.app .chat .chead b { font-weight: 600; }
+.app .jobsel { color: var(--a-bar-dim); display: inline-flex; align-items: center; gap: 4px; }
+.app .jobsel svg { width: 11px; height: 11px; }
+.app .icons { display: flex; gap: 10px; margin-left: auto; color: var(--a-bar-dim); }
+.app .stream {
+  background: var(--a-chat);
+  color: var(--a-chat-fg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow: hidden;
+  min-height: 0;
+}
+.app [hidden] { display: none !important; }
+.app .msg-user { color: var(--a-chat-accent); border-left: 2px solid var(--a-chat-accent); padding-left: 8px; font-size: 13px; }
+.app .codeblk { border: 1px solid var(--a-chat-line); border-radius: 6px; overflow: hidden; background: var(--a-raised); }
+.app .codeblk .h { display: flex; justify-content: space-between; padding: 3px 9px; font: 11px var(--mono); color: var(--a-chat-dim); border-bottom: 1px solid var(--a-chat-line); }
+.app .codeblk pre { margin: 0; padding: 7px 9px; font: 11px/1.5 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--a-chat-fg); }
+.app .meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--a-chat-dim); font-variant-numeric: tabular-nums; margin-top: 5px; }
+.app .fold { background: var(--a-raised); border-left: 3px solid var(--k-history); border-radius: 4px; padding: 8px 10px; }
+.app .fold .h { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.app .fold u { text-decoration-color: var(--a-chat-dim); text-underline-offset: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.app .fold .h span { color: var(--a-chat-dim); font-size: 11.5px; white-space: nowrap; }
+.app .fold pre { margin: 7px 0 0; padding: 6px 8px; border: 1px solid var(--a-chat-line); border-radius: 4px; font: 10.5px/1.5 var(--mono); color: var(--a-chat-dim); white-space: pre-wrap; }
+.app .call {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--a-chat-line);
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: var(--a-raised);
+  font: 11.5px var(--mono);
+  min-width: 0;
+  white-space: nowrap;
+}
+.app .call .tw { color: var(--a-chat-dim); }
+.app .call .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--a-chat-ok); flex: none; }
+.app .call.no .dot { background: var(--a-chat-bad); }
+.app .call .name { color: var(--a-chat-accent); }
+.app .call .subject { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.app .call .sub { color: var(--a-chat-dim); }
+.app .call .status { margin-left: auto; color: var(--a-chat-ok); font-family: var(--sans); }
+.app .call.no .status { color: var(--a-chat-bad); }
+.app .call.run .status { color: var(--a-chat-dim); }
+.app .call .ms { color: var(--a-chat-dim); font-family: var(--sans); min-width: 34px; text-align: right; }
+.app .answer { font-size: 13px; }
+.app .answer code { font: 12px var(--mono); }
+.app .gate {
+  margin-top: auto;
+  border: 1px solid var(--a-gate-line);
+  background: var(--a-gate);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  transition: opacity 0.25s, transform 0.25s;
+}
+.app .gate .t { font-size: 10px; letter-spacing: 0.08em; color: var(--a-chat-dim); }
+.app .gate .o { font-weight: 600; margin: 2px 0 4px; }
+.app .gate ul { margin: 0 0 6px; padding-left: 18px; }
+.app .gate p { color: var(--a-chat-fg); }
+.app .gate .floor { color: var(--a-chat-dim); border-top: 1px solid var(--a-chat-line); margin-top: 6px; padding-top: 6px; font-size: 11.5px; }
+.app .gate .amend { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--a-chat-dim); }
+.app .gate .amend span:first-child { border: 1px solid var(--a-chat-line); border-radius: 5px; padding: 2px 8px; background: var(--a-field); min-width: 90px; }
+.app .gate .amend u { text-underline-offset: 2px; }
+.app .gate .go { display: flex; gap: 8px; margin-top: 8px; }
+.app .gate .go span { font-weight: 600; border-radius: 6px; padding: 4px 14px; transition: transform 0.12s, box-shadow 0.2s; }
+.app .gate .approve { background: var(--a-approve); color: var(--a-on-approve); }
+.app .gate .approve.press { transform: scale(0.93); box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.35); }
+.app .gate .decline { background: var(--a-decline); color: var(--a-on-decline); }
+.app .composer { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--a-chat); border-top: 1px solid var(--a-chat-line); }
+.app .composer > svg { color: var(--a-chat-dim); }
+.app .field { flex: 1; min-width: 0; border: 1px solid var(--a-chat-line); background: var(--a-field); border-radius: 7px; padding: 6px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--a-chat-fg); }
+.app .field .ph { color: var(--a-chat-dim); }
+.app .field.off { opacity: 0.6; }
+.app .caret::after { content: ""; display: inline-block; width: 1.5px; height: 14px; background: var(--a-chat-fg); vertical-align: -3px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.app .send { background: var(--a-approve); color: var(--a-on-approve); border-radius: 7px; padding: 5px 12px; font-weight: 600; opacity: 0.75; }
+.app .dd { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #3a3a3a; border-radius: 6px; padding: 2px 8px; color: var(--a-bar-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.app .dd svg { width: 10px; height: 10px; }
+.app .dd .m { color: var(--a-bar-dim); }
+.app .meter { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; border: 1px solid #3a3a3a; border-radius: 6px; padding: 2px 8px; color: var(--a-bar-fg); font-variant-numeric: tabular-nums; }
+.app .meter i { display: block; width: 54px; height: 6px; border-radius: 3px; background: #3a3a3a; overflow: hidden; }
+.app .meter i b { display: block; height: 100%; background: #2ac3de; transition: width 0.6s; }
+.app .dd.model { display: none; }
+figcaption { color: var(--dim); font: 0.75rem/1.5 var(--mono); margin-top: 14px; text-align: center; }
 
 /* ---- runs on -------------------------------------------------------------- */
 .runs { padding: 36px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg-raised); }
@@ -396,66 +619,93 @@ figcaption { color: var(--dim); font: 0.75rem/1.5 var(--mono); margin-top: 12px;
 .logos svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
 
 /* ---- the drawings --------------------------------------------------------- */
-/* Every illustration is an inline SVG drawn with the page's own tokens, so it
-   follows them; its text is the mono face at a size set in its own units. */
+/* Every illustration is an inline SVG drawn with the page's tokens, so it
+   follows the theme. Its text is the mono face, sized in its own units on
+   the <svg>, and a text's own font-size attribute wins over that. */
 .ill { display: block; width: 100%; height: auto; margin: 0 auto; overflow: visible; font-size: 12px; }
 .ill text { font-family: var(--mono); fill: var(--muted); font-variant-ligatures: none; }
+.ill .sans { font-family: var(--sans); }
+.ill .b { font-weight: 700; }
 .ill .t-fg { fill: var(--fg); }
 .ill .t-dim { fill: var(--dim); }
-.ill .t-amber { fill: var(--amber); }
-.ill .t-ok { fill: var(--ok); }
-.ill .t-no { fill: #ff9c95; }
+.ill .t-amber { fill: var(--amber-ink); }
+.ill .t-ok { fill: var(--ok-ink); }
+.ill .t-no { fill: var(--no-ink); }
 .ill .t-violet { fill: var(--b-tools); }
-.ill .t-big { font-family: var(--sans); font-weight: 700; font-size: 30px; letter-spacing: -0.03em; }
-.ill .t-btn { font-family: var(--sans); font-weight: 700; fill: #120c02; }
-.ill .panel { fill: var(--bg-raised); stroke: var(--border); }
+.ill .t-blue { fill: var(--b-system); }
+.ill .t-dark { fill: #120c02; }
+.ill .t-ink { fill: var(--ink-fg); }
+.ill .t-ink-m { fill: var(--ink-muted); }
+.ill .t-ink-d { fill: var(--ink-dim); }
+.ill .t-ink-ok { fill: #3fb950; }
+.ill .t-ink-amber { fill: #f5a524; }
+.ill .t-big { font-family: var(--sans); font-weight: 700; letter-spacing: -0.03em; }
+.ill .panel { fill: var(--bg-raised); stroke: var(--border-strong); }
 .ill .box { fill: var(--surface-2); stroke: var(--border-strong); }
-.ill .ink { fill: #05070a; stroke: var(--border-strong); }
+.ill .card { fill: var(--surface); stroke: var(--border-strong); }
+.ill .ink { fill: var(--ink); stroke: var(--ink-line); }
+.ill .ink-line { stroke: var(--ink-line); }
+.ill .ink-dot { fill: var(--ink-line); }
+.ill .line { stroke: var(--border-strong); fill: none; }
 .ill .bar-g { fill: var(--border-strong); }
 .ill .dim-f { fill: var(--dim); }
+.ill .amber-f { fill: var(--amber); }
+.ill .ok-f { fill: var(--ok); }
+.ill .no-f { fill: var(--no); }
+.ill .folder { fill: var(--folder); }
+.ill .file { fill: var(--surface); stroke: var(--dim); }
+.ill .file.rs { stroke: #ff9e64; }
+.ill .file.toml { stroke: var(--b-tools); }
+.ill .sel { fill: rgba(122, 162, 247, 0.16); }
+.ill .chev { fill: none; stroke: var(--dim); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .ill .mark { fill: currentColor; color: var(--fg); }
 .ill .flow { fill: none; stroke-width: 1.6; stroke-dasharray: 4 6; animation: flow 1.4s linear infinite; }
 @keyframes flow { to { stroke-dashoffset: -20; } }
+.ill .pill-ok { fill: var(--ok-soft); stroke: var(--ok-line); }
+.ill .pill-no { fill: var(--surface); stroke: var(--no); }
+.ill .pill-violet { fill: var(--surface); stroke: var(--b-tools); }
+.ill .pill-blue { fill: rgba(122, 162, 247, 0.12); stroke: var(--b-system); }
+.ill .lk { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; }
 
 /* ---- how a job runs: four scenes ------------------------------------------ */
-.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .step {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 14px 16px;
+  padding: 14px 14px 18px;
   min-width: 0;
 }
-.step .scene { margin-bottom: 12px; max-width: 240px; }
-.step .n { font: 600 0.6875rem/1 var(--mono); color: var(--amber); }
+.step .scene { margin-bottom: 14px; max-width: 300px; }
+.step .n { font: 600 0.6875rem/1 var(--mono); color: var(--amber-ink); }
 .step h3 { font-size: 1.0625rem; margin: 6px 0 2px; }
 .step p { color: var(--dim); font: 0.75rem/1.4 var(--mono); }
-
-.scene .bar-g.on, .scene .fi.on { fill: var(--b-system); }
-.scene .fi { fill: var(--dim); }
-.scene .hit { fill: rgba(122, 162, 247, 0.1); }
-.scene .lens { animation: scan 5s ease-in-out infinite; }
-.scene .lens circle { fill: rgba(122, 162, 247, 0.07); stroke: var(--fg); stroke-width: 3; }
+.scene .lens { animation: scan 6s ease-in-out infinite; }
+.scene .lens circle { fill: rgba(122, 162, 247, 0.08); stroke: var(--fg); stroke-width: 3; }
 .scene .lens path { stroke: var(--fg); stroke-width: 5; stroke-linecap: round; }
-@keyframes scan { 0%, 100% { transform: translate(0, -22px); } 50% { transform: translate(-12px, 20px); } }
-.scene .plan-card { fill: rgba(245, 165, 36, 0.06); stroke: var(--amber-line); }
-.scene .tg-r { fill: var(--b-system); }
-.scene .tg-w { fill: var(--b-history); }
-.scene .tg-x { fill: var(--b-map); }
-.scene .press { transform-box: fill-box; transform-origin: center; animation: press 3s ease-in-out infinite; }
-.scene .press rect { fill: var(--amber); }
-@keyframes press { 0%, 70%, 100% { transform: none; } 78% { transform: scale(0.9); } }
-.scene .cursor { fill: var(--fg); stroke: #05070a; stroke-width: 1.2; stroke-linejoin: round; }
-.scene .shield { fill: rgba(179, 146, 240, 0.06); stroke: rgba(179, 146, 240, 0.45); stroke-width: 1.5; }
-.scene .strike { stroke: var(--dim); stroke-width: 1.2; }
+.scene .lens .glint { stroke: var(--fg); stroke-width: 1.5; opacity: 0.5; fill: none; }
+@keyframes scan { 0%, 100% { transform: translate(0, 0); } 45%, 55% { transform: translate(-30px, 64px); } }
+.scene .gate-bg { fill: var(--amber-soft); stroke: var(--amber-line); }
+.scene .sep { stroke: var(--amber-line); }
+.scene .btn-acc { fill: var(--b-system); }
+.scene .btn-warn { fill: var(--amber); }
+.scene .press { transform-box: fill-box; transform-origin: center; animation: press 3.2s ease-in-out infinite; }
+@keyframes press { 0%, 66%, 100% { transform: none; } 74% { transform: scale(0.9); } }
+.scene .ripple { fill: none; stroke: var(--b-system); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: ripple 3.2s ease-out infinite; opacity: 0; }
+@keyframes ripple { 0%, 72% { opacity: 0; transform: scale(0.4); } 76% { opacity: 0.9; } 100% { opacity: 0; transform: scale(1.6); } }
+.scene .cursor { fill: var(--fg); stroke: var(--bg); stroke-width: 1.2; stroke-linejoin: round; }
 .scene .cur { fill: var(--amber); animation: blink 1s steps(1) infinite; }
-.scene .turn { fill: var(--b-history); }
-.scene .sum { fill: var(--amber); }
-.scene .chev { fill: none; stroke: var(--amber); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; animation: chev 1.6s ease-in-out infinite; }
-.scene .chev.c2 { animation-delay: 0.2s; }
-.scene .chev.c3 { animation-delay: 0.4s; }
+.scene .bubble { fill: var(--surface-2); stroke: var(--border-strong); }
+.scene .ubar { fill: var(--b-system); opacity: 0.7; }
+.scene .abar { fill: var(--dim); opacity: 0.55; }
+.scene .brace { fill: none; stroke: var(--dim); stroke-width: 1.4; }
+.scene .arrows path { fill: none; stroke: var(--amber); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; animation: chev 1.6s ease-in-out infinite; }
+.scene .arrows path:nth-child(2) { animation-delay: 0.2s; }
+.scene .arrows path:nth-child(3) { animation-delay: 0.4s; }
 @keyframes chev { 0%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+.scene .folded { fill: var(--surface-2); stroke: var(--border-strong); }
+.scene .folded-bar { fill: var(--b-summaries); }
 
 /* ---- context: a bento of what the window holds ----------------------------- */
 .bento { display: grid; gap: 12px; }
@@ -463,66 +713,80 @@ figcaption { color: var(--dim); font: 0.75rem/1.5 var(--mono); margin-top: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px 14px;
+  padding: 18px 12px;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
-.tile h3 { font-size: 1.125rem; }
-.tile .ill { max-width: 460px; flex: 1; }
+.tile h3 { font-size: 1.125rem; padding: 0 4px; }
+.tile .ill { max-width: 560px; flex: 1; }
 .tile .src { font: 0.6875rem/1.5 var(--mono); color: var(--dim); text-align: center; }
 .tile .src a { color: var(--muted); text-underline-offset: 2px; }
 .ctx .blk { stroke-width: 1; }
-.ctx .blk.system { fill: rgba(122, 162, 247, 0.16); stroke: rgba(122, 162, 247, 0.6); }
-.ctx .blk.tools { fill: rgba(179, 146, 240, 0.16); stroke: rgba(179, 146, 240, 0.55); }
-.ctx .blk.history { fill: rgba(247, 120, 186, 0.14); stroke: rgba(247, 120, 186, 0.5); }
-.ctx .blk.history.old { fill: rgba(247, 120, 186, 0.07); stroke: rgba(247, 120, 186, 0.3); }
-.ctx .blk.code { fill: rgba(245, 165, 36, 0.16); stroke: rgba(245, 165, 36, 0.7); }
+.ctx .blk.system { fill: color-mix(in srgb, var(--b-system) 16%, transparent); stroke: color-mix(in srgb, var(--b-system) 65%, transparent); }
+.ctx .blk.tools { fill: color-mix(in srgb, var(--b-tools) 16%, transparent); stroke: color-mix(in srgb, var(--b-tools) 60%, transparent); }
+.ctx .blk.map { fill: color-mix(in srgb, var(--b-map) 16%, transparent); stroke: color-mix(in srgb, var(--b-map) 60%, transparent); }
+.ctx .blk.summaries { fill: color-mix(in srgb, var(--b-summaries) 16%, transparent); stroke: color-mix(in srgb, var(--b-summaries) 60%, transparent); }
+.ctx .blk.history { fill: color-mix(in srgb, var(--b-history) 14%, transparent); stroke: color-mix(in srgb, var(--b-history) 55%, transparent); }
+.ctx .blk.code { fill: color-mix(in srgb, var(--b-code) 18%, transparent); stroke: color-mix(in srgb, var(--b-code) 75%, transparent); }
+.ctx .bracket { fill: none; stroke: var(--b-system); stroke-width: 1.5; }
 .ctx .lock { fill: none; stroke: var(--b-system); stroke-width: 1.5; stroke-linecap: round; }
 .ctx .new { fill: none; stroke: var(--amber); stroke-width: 1.6; }
-.reuse .base { stroke: var(--border-strong); }
-.reuse .b1 { fill: var(--border-strong); }
-.reuse .b2 { fill: url(#g-ok); }
-.reuse .grow { transform-box: fill-box; transform-origin: bottom; }
-.js .rv.in .reuse .grow { animation: grow 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-@keyframes grow { from { transform: scaleY(0); } }
-.turns .t { fill: var(--surface-2); stroke: var(--border-strong); }
-.turns .t.last { stroke: var(--b-history); }
-.turns .t.out { fill: none; stroke: var(--dim); stroke-dasharray: 3 3; }
-.turns .frame { fill: rgba(245, 165, 36, 0.04); stroke: var(--amber-line); }
-.turns .gone { stroke: var(--dim); stroke-width: 1.2; }
+.chart .gl { stroke: var(--border); }
+.chart .gl.base { stroke: var(--border-strong); }
+.chart .mark-v { stroke: var(--dim); stroke-dasharray: 2 3; }
+.chart .mean { stroke-dasharray: 4 4; stroke-width: 1; }
+.chart .mean.a { stroke: var(--dim); }
+.chart .mean.b { stroke: var(--ok); }
+.chart .l-turn { fill: none; stroke: var(--dim); stroke-width: 2; stroke-linejoin: round; }
+.chart .l-block { fill: none; stroke: var(--ok); stroke-width: 2.4; stroke-linejoin: round; }
+.chart .l-shared { fill: none; stroke: var(--muted); stroke-width: 2.4; stroke-linejoin: round; }
+.chart .draw { stroke-dasharray: 900; stroke-dashoffset: 0; }
+.js .rv:not(.in) .chart .draw { stroke-dashoffset: 900; }
+.js .rv.in .chart .draw { animation: draw 1.8s cubic-bezier(0.3, 0.6, 0.2, 1) both; }
+@keyframes draw { from { stroke-dashoffset: 900; } }
+.chart .pt-b { fill: var(--ok); }
+.chart .pt-a { fill: var(--dim); }
+.turns .frame { fill: var(--amber-soft); stroke: var(--amber-line); }
+.turns .ub { fill: color-mix(in srgb, var(--b-system) 30%, var(--surface)); stroke: color-mix(in srgb, var(--b-system) 60%, transparent); }
+.turns .ab { fill: var(--surface-2); stroke: var(--border-strong); }
+.turns .ab.last { stroke: var(--b-history); }
+.turns .gone { fill: none; stroke: var(--dim); stroke-dasharray: 3 3; }
+.turns .gauge { fill: var(--surface-2); }
+.turns .gauge-f { fill: var(--b-history); opacity: 0.8; }
 .turns .exit { fill: none; stroke: var(--dim); stroke-width: 1.4; stroke-dasharray: 3 4; }
+.turns .flag { fill: var(--amber); }
 .pick .cell { fill: var(--border-strong); }
-.pick .cell.lit { fill: var(--amber); filter: drop-shadow(0 0 6px rgba(245, 165, 36, 0.7)); }
-.pick .slot { fill: rgba(245, 165, 36, 0.04); stroke: var(--amber-line); }
-.pick .frag { fill: rgba(245, 165, 36, 0.75); }
+.pick .cell.lit { fill: var(--amber); filter: drop-shadow(0 0 6px rgba(245, 165, 36, 0.6)); }
+.pick .slot { fill: var(--amber-soft); stroke: var(--amber-line); }
+.pick .frag { fill: color-mix(in srgb, var(--b-code) 22%, var(--surface)); stroke: color-mix(in srgb, var(--b-code) 70%, transparent); }
 .pick .free { fill: none; stroke: var(--border-strong); stroke-dasharray: 3 3; }
 .pick .flow { stroke: var(--amber); }
 
 /* ---- safety and local: one drawing each ----------------------------------- */
 .split { display: grid; gap: 32px; align-items: center; }
 .figure { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 18px 8px; min-width: 0; }
-.figure .ill { max-width: 520px; }
-.rings .r1 { fill: rgba(245, 165, 36, 0.035); stroke: var(--amber-line); stroke-width: 1.5; }
+.figure .ill { max-width: 560px; }
+.rings .r1 { fill: var(--amber-soft); fill-opacity: 0.3; stroke: var(--amber-line); stroke-width: 1.5; }
 .rings .r2 { fill: none; stroke: var(--dim); stroke-dasharray: 5 5; }
-.rings .r3 { fill: rgba(179, 146, 240, 0.05); stroke: rgba(179, 146, 240, 0.55); stroke-width: 1.5; }
+.rings .r3 { fill: color-mix(in srgb, var(--b-tools) 6%, transparent); stroke: color-mix(in srgb, var(--b-tools) 60%, transparent); stroke-width: 1.5; }
 .rings .yes { fill: none; stroke: var(--ok); stroke-width: 2; }
-.rings .yes.flow { stroke-width: 2; }
 .rings .nope { fill: none; stroke: var(--no); stroke-width: 2; stroke-dasharray: 4 4; }
-.rings .stop { fill: var(--bg); stroke: var(--no); stroke-width: 2; }
+.rings .stop { fill: var(--surface); stroke: var(--no); stroke-width: 2; }
 .rings .stop-x { stroke: var(--no); stroke-width: 2; stroke-linecap: round; }
 .rings .spark { fill: var(--amber); }
+.rings .key { fill: none; stroke: var(--amber-ink); stroke-width: 1.5; stroke-linecap: round; }
 .pills { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 24px 0 0; }
 .pills li { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 12px; font-size: 0.8125rem; color: var(--muted); background: var(--surface); }
 .pills li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
-.local .machine { fill: rgba(63, 185, 80, 0.035); stroke: rgba(63, 185, 80, 0.45); stroke-width: 1.5; }
-.local .ok-dot { fill: var(--ok); }
+.local .machine { fill: var(--ok-soft); stroke: var(--ok-line); stroke-width: 1.5; }
+.local .bar { stroke: var(--ok-line); }
 .local .halo { fill: none; stroke: var(--amber-line); }
 .local .flow { stroke: var(--ok); }
 .local .cloud { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.5; }
 .local .remote { fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-dasharray: 5 5; }
-.local .gate { fill: var(--bg); stroke: var(--amber); stroke-width: 1.5; }
+.local .gate { fill: var(--surface); stroke: var(--amber); stroke-width: 1.5; }
 
 /* ---- surfaces ------------------------------------------------------------- */
 .surfaces { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -541,7 +805,7 @@ figcaption { color: var(--dim); font: 0.75rem/1.5 var(--mono); margin-top: 12px;
   transition: border-color 0.2s, transform 0.2s;
 }
 a.surface:hover { border-color: var(--dim); transform: translateY(-2px); }
-.surface .ico { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--amber); }
+.surface .ico { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--amber-ink); }
 .surface .ico svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .surface h3 { font-size: 1rem; letter-spacing: -0.01em; }
 .surface code { color: var(--dim); font-size: 0.75rem; }
@@ -553,7 +817,7 @@ a.surface:hover { border-color: var(--dim); transform: translateY(-2px); }
   border-radius: 20px;
   padding: 32px 18px;
   background:
-    radial-gradient(ellipse 70% 90% at 50% 0%, rgba(245, 165, 36, 0.12), transparent 70%),
+    radial-gradient(ellipse 70% 90% at 50% 0%, var(--glow), transparent 70%),
     var(--bg-raised);
   overflow: hidden;
 }
@@ -563,21 +827,21 @@ a.surface:hover { border-color: var(--dim); transform: translateY(-2px); }
 .first-run {
   margin: 28px 0 0;
   padding: 14px;
-  background: #05070a;
-  border: 1px solid var(--border);
+  background: var(--ink);
+  border: 1px solid var(--ink-line);
   border-radius: 12px;
   font-size: 0.75rem;
   line-height: 1.75;
-  color: var(--fg);
+  color: var(--ink-fg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.first-run .c { color: var(--dim); }
+.first-run .c { color: var(--ink-dim); }
 .first-run .p { color: var(--amber); user-select: none; }
 details.opts { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px; }
 details.opts summary { cursor: pointer; color: var(--muted); font-size: 0.9375rem; list-style: none; display: flex; align-items: center; gap: 8px; min-height: 32px; }
 details.opts summary::-webkit-details-marker { display: none; }
-details.opts summary::before { content: "+"; font-family: var(--mono); color: var(--amber); width: 14px; }
+details.opts summary::before { content: "+"; font-family: var(--mono); color: var(--amber-ink); width: 14px; }
 details.opts[open] summary::before { content: "−"; }
 details.opts summary:hover { color: var(--fg); }
 details.opts .note { color: var(--muted); font-size: 0.875rem; margin: 10px 0 16px; }
@@ -590,7 +854,6 @@ dl.optlist dd { margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
 /* ---- foot ----------------------------------------------------------------- */
 footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--dim); font-size: 0.875rem; }
 footer .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
-footer .brand { margin-right: auto; }
 footer .brand svg { width: 28px; height: 28px; }
 footer nav { display: flex; flex-wrap: wrap; gap: 8px 20px; }
 footer a { color: var(--muted); text-decoration: none; }
@@ -602,42 +865,43 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
 .js .rv.in { opacity: 1; transform: none; }
 @media (prefers-reduced-motion: reduce) {
   .js .rv { opacity: 1; transform: none; transition: none; }
-  .s, .bar i { transition: none; }
-  .caret::after, .ill *, .scene * { animation: none !important; }
+  .app .ubar i, .app .meter i b, .app .editor div { transition: none; }
+  .ill *, .app .caret::after { animation: none !important; }
+  .js .rv:not(.in) .chart .draw { stroke-dashoffset: 0; }
 }
 
 /* ---- larger screens: each query only adds ---------------------------------- */
 @media (min-width: 560px) {
   nav.main .wide { display: inline-flex; }
-  .chip.model { display: inline-flex; }
   .logos { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .surfaces { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .app .dd.model { display: inline-flex; }
 }
 @media (min-width: 720px) {
   :root { --gutter: 28px; }
   section { padding: 104px 0; }
-  .hero { padding: 64px 0 96px; }
+  .hero { padding: 64px 0 88px; }
   .hero h1 { font-size: 3.75rem; }
   h2 { font-size: 2.75rem; }
   .head { margin-bottom: 48px; }
   nav.main .gh span { display: inline; }
-  .step { padding: 18px 18px 20px; }
+  .step { padding: 18px 18px 22px; }
   .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .tile { padding: 24px; }
+  .tile { padding: 22px 18px; }
   .figure { padding: 28px; }
   .cta-card { padding: 56px; }
-  .win { font-size: 0.875rem; }
-  .stream { padding: 20px 20px 10px; }
-  .win-foot { padding: 14px 20px 16px; }
   .first-run { font-size: 0.8125rem; padding: 18px; }
   dl.optlist { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 32px; }
   .logos { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .app { grid-template-columns: 250px minmax(0, 1fr); height: 580px; }
+  .app .insp { display: grid; }
+  .app .chat { border-left: 1px solid var(--a-bar-line); }
 }
 @media (min-width: 1024px) {
-  .hero .wrap { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 56px; align-items: center; }
-  .hero h1 { font-size: 4.25rem; }
-  .hero .oneline pre { font-size: 0.8125rem; }
-  .session { margin: 0; }
+  .hero h1 { font-size: 4.5rem; }
+  .app { grid-template-columns: 264px minmax(0, 1fr) 380px; height: 600px; }
+  .app .content { display: grid; border-left: 1px solid var(--a-bar-line); }
   .steps { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
   /* the arrow from one scene to the next */
   .step:not(:last-child)::after {
@@ -651,8 +915,9 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
     border-right: 2px solid var(--amber-line);
     transform: translateY(-50%) rotate(45deg);
   }
-  .bento { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .bento .wide { grid-column: span 2; }
+  .bento { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .bento .t3 { grid-column: span 3; }
+  .bento .t2 { grid-column: span 2; }
   .split { grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 64px; }
   .split.flip { grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); }
   .split.flip > :first-child { order: 2; }
@@ -664,12 +929,28 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
 </head>
 <body>
 
-<!-- The mark, and the marks of the engines and providers from web/brands
-     (Simple Icons, CC0, and the projects' own marks; see its README) —
-     drawn monochrome. -->
+<!-- The mark, the UI's icons, and the marks of the engines and providers
+     from web/brands (Simple Icons, CC0, and the projects' own marks; see its
+     README) — drawn monochrome. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="luu" viewBox="0 0 512 512"><rect width="512" height="512" fill="#12161c" rx="112"/><g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="40"><path stroke="#f5a524" d="M116 150v210"/><path stroke="#f2f4f7" d="M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215"/></g><circle cx="356" cy="296" r="13" fill="#f5a524"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7 10 3 2.5L7 15M12.5 15H17"/></symbol>
+    <symbol id="i-host" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="11" rx="1.5"/><path d="M8.5 19.5h7M12 16v3.5"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.5-8.3 8.3a5 5 0 0 1-7-7l8.3-8.3a3.3 3.3 0 0 1 4.7 4.7l-8.4 8.3a1.7 1.7 0 0 1-2.3-2.3l7.7-7.7"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 20z"/><path d="M14 3.5V8h4"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
     <symbol id="b-ollama" viewBox="0 0 17 25"><path fill-rule="evenodd" clip-rule="evenodd" d="M4.40517 0.102088C4.62117 0.198678 4.81617 0.357766 4.99317 0.56799C5.28817 0.915712 5.53718 1.41342 5.72718 2.00318C5.91818 2.59635 6.04218 3.25316 6.08918 3.91224C6.71878 3.5075 7.41754 3.26103 8.13818 3.18953L8.18918 3.18498C9.05919 3.10544 9.91919 3.28384 10.6692 3.72361C10.7702 3.78384 10.8692 3.84861 10.9662 3.91679C11.0162 3.27021 11.1382 2.62817 11.3262 2.04863C11.5162 1.45773 11.7652 0.961166 12.0592 0.612308C12.2235 0.410338 12.4245 0.251368 12.6482 0.146406C12.9052 0.032771 13.1782 0.0123167 13.4442 0.098679C13.8452 0.228223 14.1892 0.516855 14.4602 0.936167C14.7082 1.3191 14.8942 1.81 15.0212 2.39863C15.2512 3.45998 15.2912 4.85655 15.1362 6.54061L15.1892 6.58607L15.2152 6.60766C15.9722 7.26219 16.4992 8.19513 16.7782 9.27807C17.2133 10.9678 16.9943 12.8632 16.2442 13.9235L16.2262 13.9473L16.2282 13.9507C16.6453 14.8166 16.8983 15.7314 16.9523 16.678L16.9543 16.7121C17.0183 17.9223 16.7542 19.1404 16.1402 20.337L16.1332 20.3484L16.1432 20.3756C16.6152 21.6904 16.7632 23.0142 16.5812 24.3369L16.5752 24.3813C16.547 24.5744 16.4525 24.7472 16.3125 24.8612C16.1725 24.9753 15.9983 25.0219 15.8282 24.9903C15.744 24.9753 15.6632 24.9417 15.5904 24.8912C15.5177 24.8408 15.4544 24.7744 15.4042 24.696C15.3541 24.6178 15.318 24.529 15.2981 24.4347C15.2782 24.3406 15.2748 24.2428 15.2882 24.1472C15.4552 22.9733 15.2982 21.7961 14.8082 20.5984C14.7625 20.4871 14.7422 20.3645 14.7492 20.242C14.7562 20.1194 14.7902 20.0009 14.8482 19.8972L14.8522 19.8904C15.4562 18.8404 15.7062 17.8109 15.6522 16.7996C15.6062 15.9143 15.3272 15.045 14.8522 14.2166C14.7598 14.0556 14.7269 13.8597 14.7606 13.6713C14.7943 13.4829 14.8918 13.3171 15.0322 13.2098L15.0412 13.203C15.2842 13.0223 15.5082 12.561 15.6212 11.9303C15.7459 11.1846 15.7133 10.4159 15.5262 9.68716C15.3212 8.89171 14.9462 8.22809 14.4212 7.77468C13.8262 7.25878 13.0382 7.00992 12.0412 7.08151C11.9108 7.09115 11.7809 7.05613 11.6682 6.98097C11.5556 6.90581 11.4653 6.79399 11.4092 6.65993C11.0952 5.90426 10.6372 5.36336 10.0662 5.02814C9.51799 4.71723 8.90425 4.58657 8.29418 4.65087C7.04918 4.76337 5.95118 5.56108 5.62418 6.56675C5.57792 6.70829 5.4947 6.8304 5.38568 6.91672C5.27666 7.00301 5.14703 7.04942 5.01417 7.0497C3.94717 7.05197 3.12117 7.33606 2.51717 7.84855C1.99517 8.29172 1.63916 8.91103 1.45116 9.65307C1.28104 10.3515 1.25774 11.0857 1.38316 11.7962C1.49516 12.4303 1.71416 12.9553 1.96517 13.2382L1.97317 13.2462C2.18517 13.4814 2.23017 13.8485 2.08217 14.1382C1.72216 14.845 1.45316 15.8984 1.40916 16.9109C1.35916 18.0677 1.59516 19.0722 2.12817 19.7927L2.14417 19.8143C2.22461 19.9208 2.27633 20.0514 2.29319 20.1905C2.31003 20.3295 2.29127 20.4711 2.23917 20.5984C1.66316 22.0029 1.48616 23.1574 1.67716 24.0665C1.71148 24.2556 1.67954 24.4524 1.58812 24.6149C1.4967 24.7776 1.35302 24.8933 1.18766 24.9374C1.0223 24.9817 0.848322 24.9506 0.702741 24.8512C0.557141 24.7517 0.451463 24.5917 0.408163 24.4051C0.165162 23.2483 0.330162 21.9233 0.881162 20.4302L0.895162 20.3904L0.887162 20.3768C0.616341 19.9222 0.414243 19.4195 0.289162 18.8893L0.284162 18.8677C0.132362 18.2062 0.0726416 17.5218 0.107162 16.8393C0.151162 15.8052 0.385163 14.7462 0.729162 13.8962L0.741162 13.8666L0.739162 13.8644C0.446163 13.3894 0.229162 12.7814 0.109162 12.1087L0.104162 12.0814C-0.0611788 11.1431 -0.0293187 10.1737 0.197162 9.25194C0.459163 8.21218 0.974162 7.31901 1.73316 6.67356C1.79316 6.62243 1.85616 6.57129 1.91916 6.52357C1.76016 4.827 1.80016 3.42134 2.03117 2.35317C2.15817 1.76455 2.34517 1.27365 2.59317 0.890713C2.86317 0.472537 3.20717 0.183905 3.60817 0.0532252C3.87417 -0.0331371 4.14817 -0.0126829 4.40517 0.102088ZM8.52118 10.4315C9.45719 10.4315 10.3212 10.7871 10.9672 11.403C11.5972 12.0019 11.9722 12.8064 11.9722 13.6076C11.9722 14.6166 11.5662 15.403 10.8392 15.9052C10.2192 16.3314 9.38819 16.5382 8.43618 16.5382C7.42718 16.5382 6.56518 16.2439 5.94318 15.7041C5.32618 15.17 4.98017 14.42 4.98017 13.6076C4.98017 12.8042 5.37818 11.9973 6.03618 11.3962C6.70418 10.786 7.58618 10.4315 8.52118 10.4315ZM8.52118 11.4496C7.82742 11.4428 7.15204 11.7031 6.60518 12.1883C6.14418 12.6087 5.88318 13.1371 5.88318 13.6087C5.88318 14.095 6.09318 14.5507 6.49318 14.8973C6.94818 15.2916 7.61718 15.52 8.43618 15.52C9.23519 15.52 9.90919 15.353 10.3682 15.0359C10.8312 14.7178 11.0682 14.2564 11.0682 13.6076C11.0682 13.1269 10.8222 12.5962 10.3852 12.1803C9.90119 11.7201 9.24519 11.4496 8.52118 11.4496ZM9.18319 12.8246L9.18719 12.8292C9.30719 13.0007 9.28219 13.2496 9.13119 13.386L8.83919 13.6473V14.1541C8.83865 14.267 8.79877 14.375 8.72829 14.4544C8.6578 14.5339 8.56246 14.5783 8.46318 14.578C8.3639 14.5783 8.26856 14.5339 8.19808 14.4544C8.12758 14.375 8.0877 14.267 8.08718 14.1541V13.6314L7.81618 13.3837C7.78042 13.3511 7.7507 13.3109 7.72872 13.2652C7.70674 13.2195 7.69294 13.1694 7.6881 13.1176C7.68326 13.0658 7.6875 13.0135 7.70056 12.9636C7.71362 12.9137 7.73524 12.8672 7.76418 12.8269C7.8232 12.7452 7.9082 12.6934 8.0007 12.6825C8.09318 12.6717 8.18572 12.7027 8.25818 12.7689L8.47318 12.9644L8.69318 12.7667C8.76538 12.7018 8.85702 12.6716 8.94854 12.6825C9.04009 12.6933 9.12427 12.7443 9.18319 12.8246ZM4.14317 10.644C4.62117 10.644 5.01017 11.0871 5.01017 11.6337C5.01043 11.8957 4.91917 12.1471 4.75641 12.3327C4.59365 12.5183 4.37273 12.6229 4.14217 12.6235C3.91195 12.6226 3.69143 12.518 3.52893 12.3327C3.36641 12.1474 3.27517 11.8965 3.27517 11.6349C3.27463 11.3729 3.36565 11.1213 3.52821 10.9355C3.69079 10.7497 3.91261 10.6449 4.14317 10.644ZM12.8492 10.644C13.3292 10.644 13.7172 11.0871 13.7172 11.6337C13.7175 11.8957 13.6262 12.1471 13.4634 12.3327C13.3007 12.5183 13.0798 12.6229 12.8492 12.6235C12.619 12.6226 12.3985 12.518 12.236 12.3327C12.0734 12.1474 11.9822 11.8965 11.9822 11.6349C11.9817 11.3729 12.0727 11.1213 12.2352 10.9355C12.3978 10.7497 12.6186 10.6449 12.8492 10.644ZM3.94017 1.47705L3.93717 1.47932C3.82131 1.53657 3.72239 1.63046 3.65217 1.74977L3.64717 1.75659C3.50917 1.97136 3.38917 2.28727 3.29917 2.70203C3.12917 3.48839 3.08317 4.55541 3.17517 5.86335C3.60517 5.7179 4.07417 5.62699 4.57917 5.59404L4.58917 5.5929L4.60817 5.55426C4.65417 5.46108 4.70317 5.37131 4.75617 5.28268C4.87917 4.40655 4.77817 3.35998 4.50317 2.50545C4.36917 2.09182 4.20617 1.76682 4.05017 1.5816C4.01797 1.5431 3.98207 1.5088 3.94317 1.47932L3.94017 1.47705ZM13.1142 1.52251L13.1122 1.52364C13.0733 1.55312 13.0374 1.58741 13.0052 1.62591C12.8492 1.81114 12.6852 2.13727 12.5522 2.5509C12.2622 3.45316 12.1652 4.56905 12.3222 5.47358L12.3802 5.58381L12.3882 5.59972H12.4182C12.9145 5.59988 13.4082 5.68101 13.8842 5.84062C13.9702 4.56337 13.9222 3.51907 13.7562 2.74749C13.6662 2.33272 13.5462 2.01682 13.4072 1.80205L13.4032 1.79523C13.3331 1.67548 13.2342 1.58121 13.1182 1.52364L13.1142 1.52251Z" fill="currentColor"/></symbol>
     <symbol id="b-llamacpp" viewBox="0 0 600 600"><path d="M600 392L504.249 558L504.137 557.929C487.252 584.069 458.193 600 426.864 600H120L240 392H600Z" fill="currentColor"/><path d="M240 392H0L199.602 46.0254C216.032 17.5463 246.411 3.25756e-05 279.29 0H466.154L240 392Z" fill="currentColor"/></symbol>
     <symbol id="b-mlx" viewBox="64 64 384 384"><path d="M72 108H153L292 255L153 402H72L213 255Z" fill="currentColor"/><path d="M355 108H440L315 233L275 190Z" fill="currentColor"/><path d="M312 276L440 402H355L275 313Z" fill="currentColor"/></symbol>
@@ -683,11 +964,10 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
     <symbol id="b-kimi" viewBox="0 0 24 24"><path d="M21.765.351C22.998.351 24 1.353 24 2.586S22.998 4.82 21.765 4.82h-1.974c-.15 0-.26-.12-.26-.26V2.586A2.237 2.237 0 0 1 21.765.35M9.41 13.388l8.447-8.377c.16-.16.07-.471-.14-.471h-4.55s-.1.02-.14.06l-9.099 9.029c-.14.14-.35.02-.35-.21V4.81c0-.15-.1-.27-.221-.27H.22c-.12 0-.22.12-.22.27v18.57c0 .15.1.27.22.27h3.137c.12 0 .22-.12.22-.27v-3.79c0-.08.03-.16.08-.21l2.826-2.796c.07-.07.16-.08.241-.03l7.546 5.551a8.9 8.9 0 0 0 4.018 1.493c.12.01.23-.11.23-.27V19.76c0-.14-.08-.25-.19-.26a5.8 5.8 0 0 1-2.355-.942l-6.533-4.73c-.14-.09-.15-.32-.03-.441"/></symbol>
     <symbol id="b-zai" viewBox="0 0 24 24"><path d="M12.606 1.806l-1.677 2.388c-0.258 0.374-0.697 0.606-1.161 0.606h-9.162V1.794C0.594 1.806 12.606 1.806 12.606 1.806zM24 1.806L9.6 22.206 0 22.206 14.4 1.806zM11.394 22.206l1.69-2.4c0.258-0.374 0.697-0.606 1.161-0.606h9.149v3.006H11.394z"/></symbol>
     <symbol id="i-github" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></symbol>
-    <linearGradient id="g-ok" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7ee787"/><stop offset="1" stop-color="#3fb950"/></linearGradient>
-    <linearGradient id="g-volatile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7aa2f7"/><stop offset="0.55" stop-color="#f778ba"/><stop offset="1" stop-color="#f5a524"/></linearGradient>
     <marker id="m-ok" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#3fb950"/></marker>
     <marker id="m-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#f5a524"/></marker>
     <marker id="m-dim" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#677182"/></marker>
+    <marker id="m-no" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#f85149"/></marker>
   </defs>
 </svg>
 
@@ -700,83 +980,153 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
       <a href="./demo/">Demo</a>
       <a class="gh" href="https://github.com/jgermade/luu" aria-label="luu on GitHub"><svg class="i" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
     </nav>
+    <div class="theme" role="radiogroup" aria-label="Theme">
+      <button type="button" role="radio" data-pick="auto" aria-checked="false" aria-label="Auto: follow the system" title="Auto"><svg aria-hidden="true"><use href="#i-auto"/></svg></button>
+      <button type="button" role="radio" data-pick="light" aria-checked="false" aria-label="Light" title="Light"><svg aria-hidden="true"><use href="#i-sun"/></svg></button>
+      <button type="button" role="radio" data-pick="dark" aria-checked="false" aria-label="Dark" title="Dark"><svg aria-hidden="true"><use href="#i-moon"/></svg></button>
+    </div>
   </div>
 </header>
 
 <main>
   <section class="hero">
     <div class="wrap">
-      <div>
-        <a class="badge" href="https://github.com/jgermade/luu"><b>Open source</b> A local-first AI agent, in Rust</a>
-        <h1>The agent built for the context window you <em>actually have</em>.</h1>
-        <p class="lead">Real coding work on <strong>7B–32B local models</strong>. It picks what earns a place in
-          the prompt, asks before it acts, and the kernel holds every command.</p>
+      <a class="badge" href="https://github.com/jgermade/luu"><b>Open source</b> A local-first AI agent, in Rust</a>
+      <h1>The agent built for the context window you <em>actually have</em>.</h1>
+      <p class="lead">Real coding work on <strong>7B–32B local models</strong>. It picks what earns a place in
+        the prompt, asks before it acts, and the kernel holds every command.</p>
 
-        <div class="oneline">
-          <pre>curl -fsSL https://jgermade.github.io/<wbr>luu/setup.sh <span class="nb">| sh</span></pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
-        </div>
-        <p class="fine">Linux and macOS · no root · <a href="./setup.sh">read it before you pipe it</a></p>
+      <div class="oneline">
+        <pre>curl -fsSL https://jgermade.github.io/<wbr>luu/setup.sh <span class="nb">| sh</span></pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+      </div>
+      <p class="fine">Linux and macOS · no root · <a href="./setup.sh">read it before you pipe it</a></p>
 
-        <div class="ctas">
-          <a class="btn primary" href="./demo/">Watch it work <span class="arrow">→</span></a>
-          <a class="btn" href="https://github.com/jgermade/luu"><svg class="i" aria-hidden="true"><use href="#i-github"/></svg> Star on GitHub</a>
-        </div>
+      <div class="ctas">
+        <a class="btn primary" href="./demo/">Open the demo <span class="arrow">→</span></a>
+        <a class="btn" href="https://github.com/jgermade/luu"><svg class="i" aria-hidden="true"><use href="#i-github"/></svg> Star on GitHub</a>
       </div>
 
-      <!-- fig. 1. Without the script every step is shown, which is also where
-           the animation ends; with it, the steps play in order and loop. -->
-      <figure class="session" id="session">
-        <div class="win">
-          <div class="win-head">
-            <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span class="win-title">~/api — luu</span>
-            <span class="chips">
-              <span class="chip model"><svg aria-hidden="true"><use href="#b-qwen"/></svg>qwen2.5-coder:14b</span>
-              <span class="chip local">this machine</span>
-            </span>
-          </div>
-          <ol class="stream">
-            <li class="s s-user">
-              <span class="who">you</span>
-              <p data-type>login() lets an empty password through. Fix it, then run the tests.</p>
-            </li>
-            <li class="s">
-              <div class="call"><span class="tag">draft</span><code><span class="t">read_file</span> src/auth.rs</code><span class="v ok">reads only</span></div>
-            </li>
-            <li class="s">
-              <div class="plan" data-plan>
-                <div class="plan-head"><b>plan</b><span data-plan-state>held until you approve</span></div>
-                <p class="obj">Reject an empty password in <code>verify()</code>, before it hashes</p>
-                <dl>
-                  <div><dt>read</dt><dd>src/auth.rs · tests/login.rs</dd></div>
-                  <div><dt>write</dt><dd>src/auth.rs</dd></div>
-                  <div><dt>run</dt><dd>cargo test login</dd></div>
-                </dl>
-                <div class="plan-actions"><span>Amend</span><span class="approve" data-approve>Approve</span></div>
-              </div>
-            </li>
-            <li class="s"><div class="fold">draft folded · <b>1.9K → 140 tokens</b></div></li>
-            <li class="s">
-              <div class="call"><code><span class="t">edit_file</span> src/auth.rs</code><span class="v ok">in the plan</span></div>
-            </li>
-            <li class="s">
-              <div class="call"><code><span class="t">run_command</span> curl docs.rs/argon2</code><span class="v no">denied · not in the plan</span></div>
-            </li>
-            <li class="s">
-              <div class="call"><code><span class="t">run_command</span> cargo test login</code><span class="v ok">landlock + seccomp · 3 passed</span></div>
-            </li>
-            <li class="s s-answer">
-              <p><code>verify()</code> now returns <code>EmptyPassword</code> before it hashes. 3 of 3 login tests pass.</p>
-            </li>
-          </ol>
-          <div class="win-foot">
-            <div class="meta"><span>window <b data-used>6.4K</b> / 16K</span><span class="reuse">prefix <b data-reuse>97%</b> reused</span></div>
-            <div class="bar" data-bar>
-              <i class="system" style="--w:6%"></i><i class="tools" style="--w:4%"></i><i class="map" style="--w:6%"></i><i class="code" style="--w:11%"></i><i class="history" style="--w:12%"></i><i class="reserve" style="--w:12%"></i>
+      <!-- fig. 1: `luu serve` as it looks, drawn in HTML. The markup is the
+           job's last frame — what shows with no script or with reduced
+           motion; the script plays the job from the prompt and loops. -->
+      <figure class="shot" id="session">
+        <div class="app" aria-hidden="true">
+          <div class="col insp">
+            <div class="chead">
+              <svg class="logo"><use href="#luu"/></svg>
+              <span class="tabs"><span>Files</span><span>Git</span><span class="on">Debug</span></span>
             </div>
+            <div class="tree">
+              <div class="card">
+                <div class="card-h">Turn <svg class="ic"><use href="#i-down"/></svg></div>
+                <div class="kv"><b><svg class="ic"><use href="#i-clock"/></svg><span class="tag">live</span></b><span>the newest turn</span></div>
+                <div class="kv"><b><svg class="ic"><use href="#i-chip"/></svg>qwen2.5-coder:14b</b><span>workstation</span></div>
+              </div>
+              <div class="card">
+                <div class="card-h">Context <svg class="ic"><use href="#i-down"/></svg></div>
+                <div class="big"><b data-pct>27% used</b><span data-sent>4,432 / 16,384</span></div>
+                <div class="ubar" data-ubar><i class="system" style="width:2.51%"></i><i class="tools" style="width:7.2%"></i><i class="map" style="width:6.25%"></i><i class="summaries" style="width:0.39%"></i><i class="history" style="width:10.66%"></i><i class="code" style="width:0%"></i><i class="prompt" style="width:0.04%"></i></div>
+                <ul class="rows" data-rows>
+                  <li><i class="sw system"></i>system<span class="n">412</span><span class="p">9.3%</span></li>
+                  <li><i class="sw tools"></i>tools<span class="n">1,180</span><span class="p">26.6%</span></li>
+                  <li><i class="sw map"></i>map<span class="n">1,024</span><span class="p">23.1%</span></li>
+                  <li><i class="sw summaries"></i>summaries<span class="n">64</span><span class="p">1.4%</span></li>
+                  <li><i class="sw history"></i>history<span class="n">1,746</span><span class="p">39.4%</span></li>
+                  <li><i class="sw code"></i>code<span class="n">0</span><span class="p">0%</span></li>
+                  <li><i class="sw prompt"></i>prompt<span class="n">6</span><span class="p">0.1%</span></li>
+                </ul>
+              </div>
+              <div class="card" data-reuse>
+                <div class="card-h">Prefix reuse <svg class="ic"><use href="#i-down"/></svg></div>
+                <div class="big"><b data-reuse-pct>91% reused</b><span data-reuse-n>4,012 / 4,432</span></div>
+                <div class="ubar"><i class="history" data-shared style="width:90.5%"></i><i class="new" style="flex:1"></i></div>
+                <ul class="rows">
+                  <li><i class="sw history"></i>shared<span class="n" data-sn>4,012</span><span class="p" data-sp>90.5%</span></li>
+                  <li><i class="sw new"></i>new<span class="n" data-nn>420</span><span class="p" data-np>9.5%</span></li>
+                </ul>
+                <p class="note" data-first hidden>First turn of the session — no previous prompt to measure against, which is not the same as no reuse.</p>
+              </div>
+            </div>
+            <div class="cfoot"><svg class="ic"><use href="#i-folder"/></svg>api<span class="push ok">ready</span><svg class="ic"><use href="#i-gear"/></svg></div>
+          </div>
+
+          <div class="col content">
+            <div class="chead"><span class="ftab"><svg class="ic"><use href="#i-file"/></svg>auth.rs</span><span class="ftab ghost">login.rs</span></div>
+            <div class="editor" data-editor>
+              <div data-n="1"><span><span class="kw">use</span> argon2::{<span class="ty">Argon2</span>, <span class="ty">PasswordHash</span>, <span class="ty">PasswordVerifier</span>};</span></div>
+              <div data-n="2"> </div>
+              <div data-n="3"><span><span class="kw">use</span> <span class="kw">crate</span>::error::<span class="ty">AuthError</span>;</span></div>
+              <div data-n="4"> </div>
+              <div data-n="5"><span class="cm">/// Checks a login against the stored hash.</span></div>
+              <div data-n="6"><span><span class="kw">pub fn</span> <span class="fn">verify</span>(password: &amp;<span class="ty">str</span>, stored: &amp;<span class="ty">str</span>) -&gt; <span class="ty">Result</span>&lt;(), <span class="ty">AuthError</span>&gt; {</span></div>
+              <div data-n="7" data-add><span>    <span class="kw">if</span> password.<span class="fn">is_empty</span>() {</span></div>
+              <div data-n="8" data-add><span>        <span class="kw">return</span> <span class="ty">Err</span>(<span class="ty">AuthError</span>::<span class="ty">EmptyPassword</span>);</span></div>
+              <div data-n="9" data-add><span>    }</span></div>
+              <div data-n="10"><span>    <span class="kw">let</span> hash = <span class="ty">PasswordHash</span>::<span class="fn">new</span>(stored)?;</span></div>
+              <div data-n="11"><span>    <span class="ty">Argon2</span>::<span class="fn">default</span>()</span></div>
+              <div data-n="12"><span>        .<span class="fn">verify_password</span>(password.<span class="fn">as_bytes</span>(), &amp;hash)</span></div>
+              <div data-n="13"><span>        .<span class="fn">map_err</span>(|_| <span class="ty">AuthError</span>::<span class="ty">Mismatch</span>)</span></div>
+              <div data-n="14"><span>}</span></div>
+              <div data-n="15"> </div>
+              <div data-n="16"><span><span class="cm">/// Hashes a new password with a fresh salt.</span></span></div>
+              <div data-n="17"><span><span class="kw">pub fn</span> <span class="fn">hash</span>(password: &amp;<span class="ty">str</span>) -&gt; <span class="ty">Result</span>&lt;<span class="ty">String</span>, <span class="ty">AuthError</span>&gt; {</span></div>
+              <div data-n="18"><span>    <span class="kw">let</span> salt = <span class="ty">SaltString</span>::<span class="fn">generate</span>(&amp;<span class="kw">mut</span> <span class="ty">OsRng</span>);</span></div>
+              <div data-n="19"><span>    <span class="ty">Ok</span>(<span class="ty">Argon2</span>::<span class="fn">default</span>().<span class="fn">hash_password</span>(password.<span class="fn">as_bytes</span>(), &amp;salt)?.<span class="fn">to_string</span>())</span></div>
+              <div data-n="20"><span>}</span></div>
+              <div data-n="21"> </div>
+              <div data-n="22"><span><span class="kw">#[cfg(test)]</span></span></div>
+              <div data-n="23"><span><span class="kw">mod</span> tests {</span></div>
+              <div data-n="24"><span>    <span class="kw">use super</span>::*;</span></div>
+              <div data-n="25"> </div>
+              <div data-n="26"><span>    <span class="kw">#[test]</span></span></div>
+              <div data-n="27"><span>    <span class="kw">fn</span> <span class="fn">empty_is_refused</span>() {</span></div>
+              <div data-n="28"><span>        <span class="fn">assert!</span>(<span class="fn">verify</span>(<span class="st">""</span>, <span class="st">"$argon2id$v=19$…"</span>).<span class="fn">is_err</span>());</span></div>
+              <div data-n="29"><span>    }</span></div>
+              <div data-n="30"><span>}</span></div>
+            </div>
+            <div class="cfoot"><span class="label">RUNTIME</span><span class="pill"><svg class="ic"><use href="#i-host"/></svg>host</span><svg class="ic push"><use href="#i-term"/></svg></div>
+          </div>
+
+          <div class="col chat">
+            <div class="chead">
+              <b>Live session</b>
+              <span class="jobsel" data-jobsel>plan <svg class="ic"><use href="#i-down"/></svg></span>
+              <span class="icons"><svg class="ic"><use href="#i-plus"/></svg><svg class="ic"><use href="#i-clock"/></svg><svg class="ic"><use href="#i-shield"/></svg><svg class="ic"><use href="#i-copy"/></svg><svg class="ic"><use href="#i-panel"/></svg></span>
+            </div>
+            <div class="stream" data-stream>
+              <div class="msg-user" data-s="m1" hidden>login() lets an empty password through. Fix it, then run the tests.</div>
+              <div data-s="p1" hidden>
+                <div class="codeblk"><div class="h">plan<svg class="ic"><use href="#i-copy"/></svg></div><pre>{"objective": "reject an empty password before hashing", "steps": ["read src/auth.rs", …</pre></div>
+                <div class="meta"><span>34 tok/s</span><span>→ 0 ← 21</span><span>◷ 36 ms → 653 ms</span></div>
+              </div>
+              <div class="fold" data-s="fold">
+                <div class="h"><u>draft 1 · login() lets an empty password through. Fix it, then run the tests.</u><span>closed by approving its plan</span></div>
+                <pre>[draft closed] read 2 files; 1 turn folded, its text not kept</pre>
+              </div>
+              <div class="msg-user" data-s="m2">go on</div>
+              <div class="call" data-s="c1"><span class="tw">›</span><i class="dot"></i><span class="name">read_file</span><span class="subject">src/auth.rs</span><span class="sub">lines 1–30</span><span class="status">done</span><span class="ms">0 ms</span></div>
+              <div class="call" data-s="c2"><span class="tw">›</span><i class="dot"></i><span class="name">edit_file</span><span class="subject">src/auth.rs</span><span class="status">done</span><span class="ms">1 ms</span></div>
+              <div class="call" data-s="c3"><span class="tw">›</span><i class="dot"></i><span class="name">run_command</span><span class="subject">cargo test login</span><span class="status">done</span><span class="ms">3.8 s</span></div>
+              <div class="answer" data-s="ans">
+                <p><code>verify()</code> now returns <code>EmptyPassword</code> before it hashes, and the three login tests pass.</p>
+                <div class="meta"><span>31 tok/s</span><span>→ 4,432 ← 26</span><span>◷ 210 ms → 1.1 s</span></div>
+              </div>
+              <div class="gate" data-s="gate" hidden>
+                <div class="t">PROPOSED PLAN</div>
+                <div class="o">reject an empty password before hashing</div>
+                <ul><li>read src/auth.rs</li><li>add the check</li><li>run the login tests</li></ul>
+                <p>reads: src/auth.rs, tests/login.rs</p>
+                <p>commands: cargo</p>
+                <p class="floor">unapproved, a turn reads . · runs cargo · git — and writes only to .tmp</p>
+                <div class="amend"><span>a path, command…</span><u>add read</u><u>add write</u><u>add command</u></div>
+                <div class="go"><span class="approve" data-approve>Approve</span><span class="decline">Decline</span></div>
+              </div>
+            </div>
+            <div class="composer"><svg class="ic"><use href="#i-clip"/></svg><span class="field" data-field><span data-typed></span><span class="ph" data-ph>Ask something...</span></span><span class="send">Send</span></div>
+            <div class="cfoot"><span class="dd">Manual <svg class="ic"><use href="#i-down"/></svg></span><span class="dd model">workstation <span class="m">·</span> qwen2.5-coder:14b <svg class="ic"><use href="#i-down"/></svg></span><span class="meter"><i><b data-meter style="width:27%"></b></i><span data-meter-t>4.4K / 16K</span></span></div>
           </div>
         </div>
-        <figcaption>fig. 1 — one job, from prompt to fold. Illustrated; the gate, the fold and the verdicts are luu's.</figcaption>
+        <figcaption>fig. 1 — <code>luu serve</code>, drawn: one job from prompt to fold, the Debug inspector following it. Illustrated, not recorded.</figcaption>
       </figure>
     </div>
   </section>
@@ -809,57 +1159,78 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
       </div>
       <ol class="steps">
         <li class="step rv">
-          <svg class="ill scene" viewBox="0 0 200 132" aria-hidden="true">
-            <rect class="panel" x="16" y="10" width="168" height="112" rx="10"/>
-            <rect class="fi" x="30" y="26" width="8" height="8" rx="2"/><rect class="bar-g" x="44" y="27" width="70" height="6" rx="3"/>
-            <rect class="fi" x="38" y="44" width="8" height="8" rx="2"/><rect class="bar-g" x="52" y="45" width="52" height="6" rx="3"/>
-            <rect class="hit" x="24" y="58" width="152" height="18" rx="5"/>
-            <rect class="fi on" x="38" y="63" width="8" height="8" rx="2"/><rect class="bar-g on" x="52" y="64" width="62" height="6" rx="3"/>
-            <rect class="fi" x="38" y="82" width="8" height="8" rx="2"/><rect class="bar-g" x="52" y="83" width="44" height="6" rx="3"/>
-            <rect class="fi" x="30" y="100" width="8" height="8" rx="2"/><rect class="bar-g" x="44" y="101" width="58" height="6" rx="3"/>
-            <g class="lens"><circle cx="136" cy="64" r="20"/><path d="M150 78 166 94"/></g>
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="panel" x="10" y="8" width="220" height="144" rx="10"/>
+            <text class="t-dim" x="22" y="26" font-size="7.5" letter-spacing="1.2">FILES</text>
+            <g transform="translate(160 15)" class="t-ok" style="color:var(--ok-ink)"><rect class="pill-ok" width="60" height="16" rx="8"/><g class="lk" transform="translate(6 3.5)"><rect x="0" y="4" width="7" height="5.5" rx="1"/><path d="M1.6 4V2.8a1.9 1.9 0 0 1 3.8 0V4"/></g><text class="t-ok" x="17" y="11.5" font-size="7.5">read-only</text></g>
+            <path class="chev" d="M20 40l3 3 3-3"/><path class="folder" d="M30 37h4.5l1.5 1.6h5.5v7.4H30z"/><text class="t-fg" x="46" y="45" font-size="9">src</text>
+            <rect class="sel" x="14" y="49" width="212" height="15" rx="4"/>
+            <path class="file rs" d="M42 51.5h5l2 2v7h-7z"/><text class="t-blue" x="54" y="60.5" font-size="9">auth.rs</text>
+            <path class="file rs" d="M42 67.5h5l2 2v7h-7z"/><text x="54" y="76.5" font-size="9">error.rs</text>
+            <path class="file rs" d="M42 83.5h5l2 2v7h-7z"/><text x="54" y="92.5" font-size="9">lib.rs</text>
+            <path class="chev" d="M21 101l3 3-3 3"/><path class="folder" d="M30 100h4.5l1.5 1.6h5.5v7.4H30z"/><text class="t-fg" x="46" y="108" font-size="9">tests</text>
+            <path class="file rs" d="M42 115.5h5l2 2v7h-7z"/><text x="54" y="124.5" font-size="9">login.rs</text>
+            <path class="file toml" d="M30 131.5h5l2 2v7h-7z"/><text x="42" y="140.5" font-size="9">Cargo.toml</text>
+            <g transform="translate(160 40)"><rect class="pill-blue" width="56" height="15" rx="4"/><text class="t-blue" x="28" y="10.5" font-size="7.5" text-anchor="middle">read_file</text></g>
+            <g class="lens"><circle cx="150" cy="78" r="17"/><path class="glint" d="M140 72a11 11 0 0 1 8-6"/><path d="M162.5 90.5l13 13"/></g>
           </svg>
           <span class="n">01</span>
           <h3>Explore</h3>
-          <p>read-only</p>
+          <p>a draft reads, on the floor</p>
         </li>
         <li class="step rv">
-          <svg class="ill scene" viewBox="0 0 200 132" aria-hidden="true">
-            <rect class="plan-card" x="30" y="10" width="140" height="112" rx="10"/>
-            <text class="t-amber" x="44" y="31" font-size="10" letter-spacing="0.8">PLAN</text>
-            <rect class="tg-r" x="44" y="42" width="18" height="8" rx="2"/><rect class="bar-g" x="68" y="43" width="72" height="6" rx="3"/>
-            <rect class="tg-w" x="44" y="58" width="18" height="8" rx="2"/><rect class="bar-g" x="68" y="59" width="48" height="6" rx="3"/>
-            <rect class="tg-x" x="44" y="74" width="18" height="8" rx="2"/><rect class="bar-g" x="68" y="75" width="60" height="6" rx="3"/>
-            <g class="press"><rect x="104" y="94" width="54" height="18" rx="5"/><text class="t-btn" x="131" y="106.5" text-anchor="middle" font-size="9">Approve</text></g>
-            <path class="cursor" d="M146 104v17l4.5-4.5 3.8 7.6 3.2-1.6-3.8-7.4h6.4z"/>
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="gate-bg" x="14" y="6" width="212" height="148" rx="10"/>
+            <text class="t-dim" x="26" y="23" font-size="7" letter-spacing="1.2">PROPOSED PLAN</text>
+            <text class="t-fg sans b" x="26" y="38" font-size="10">reject an empty password</text>
+            <circle class="dim-f" cx="30" cy="51" r="1.6"/><text class="t-fg" x="36" y="54" font-size="8.5">read src/auth.rs</text>
+            <circle class="dim-f" cx="30" cy="63" r="1.6"/><text class="t-fg" x="36" y="66" font-size="8.5">add the check</text>
+            <circle class="dim-f" cx="30" cy="75" r="1.6"/><text class="t-fg" x="36" y="78" font-size="8.5">run the login tests</text>
+            <text x="26" y="95" font-size="8">reads: src/auth.rs</text>
+            <text x="26" y="107" font-size="8">commands: cargo</text>
+            <line class="sep" x1="26" y1="115" x2="214" y2="115"/>
+            <circle class="ripple" cx="74" cy="138" r="14"/>
+            <g class="press"><rect class="btn-acc" x="26" y="124" width="60" height="20" rx="5"/><text class="t-dark sans b" x="56" y="137.5" font-size="8.5" text-anchor="middle" style="fill:#fff">Approve</text></g>
+            <rect class="btn-warn" x="92" y="124" width="58" height="20" rx="5"/><text class="t-dark sans b" x="121" y="137.5" font-size="8.5" text-anchor="middle">Decline</text>
+            <path class="cursor" d="M78 137v17l4.5-4.5 3.8 7.6 3.2-1.6-3.8-7.4h6.4z"/>
           </svg>
           <span class="n">02</span>
           <h3>Plan</h3>
-          <p>you approve</p>
+          <p>held until you approve</p>
         </li>
         <li class="step rv">
-          <svg class="ill scene" viewBox="0 0 200 132" aria-hidden="true">
-            <path class="shield" d="M100 4 170 24v40c0 34-28 56-70 66-42-10-70-32-70-66V24z"/>
-            <rect class="ink" x="42" y="30" width="116" height="76" rx="8"/>
-            <circle class="dim-f" cx="54" cy="41" r="2.5"/><circle class="dim-f" cx="62" cy="41" r="2.5"/><circle class="dim-f" cx="70" cy="41" r="2.5"/>
-            <text class="t-amber" x="52" y="64" font-size="10">›</text><text class="t-fg" x="61" y="64" font-size="10">cargo test</text><text class="t-ok" x="148" y="64" font-size="11" text-anchor="end">✓</text>
-            <text class="t-amber" x="52" y="81" font-size="10">›</text><text class="t-dim" x="61" y="81" font-size="10">curl …</text><line class="strike" x1="60" y1="77.5" x2="98" y2="77.5"/><text class="t-no" x="148" y="81" font-size="11" text-anchor="end">✗</text>
-            <text class="t-amber" x="52" y="98" font-size="10">›</text><rect class="cur" x="61" y="90" width="5" height="9"/>
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="ink" x="12" y="18" width="216" height="124" rx="9"/>
+            <line class="ink-line" x1="12" y1="34" x2="228" y2="34"/>
+            <circle class="ink-dot" cx="24" cy="26" r="2.5"/><circle class="ink-dot" cx="32" cy="26" r="2.5"/><circle class="ink-dot" cx="40" cy="26" r="2.5"/>
+            <text class="t-ink-amber" x="22" y="50" font-size="8">$</text><text class="t-ink" x="31" y="50" font-size="8">cargo test login</text>
+            <text class="t-ink-d" x="22" y="63" font-size="8">   Compiling api v0.3.1</text>
+            <text class="t-ink-m" x="22" y="76" font-size="8">running 3 tests</text>
+            <text class="t-ink-m" x="22" y="89" font-size="8">test login::empty_is_refused ... <tspan class="t-ink-ok">ok</tspan></text>
+            <text class="t-ink-m" x="22" y="102" font-size="8">test login::wrong_password ... <tspan class="t-ink-ok">ok</tspan></text>
+            <text class="t-ink-m" x="22" y="115" font-size="8">test login::right_password ... <tspan class="t-ink-ok">ok</tspan></text>
+            <text class="t-ink-ok" x="22" y="130" font-size="8">test result: ok. 3 passed</text>
+                        <g transform="translate(114 9)"><rect class="pill-violet" width="116" height="18" rx="9"/><path d="M12 4.5 7 6.5v3.6c0 3 2 5 5 6.3 3-1.3 5-3.3 5-6.3V6.5z" fill="none" stroke="var(--b-tools)" stroke-width="1.3"/><text class="t-violet" x="22" y="12.5" font-size="7.5">landlock + seccomp</text></g>
+            <g transform="translate(18 134)"><rect class="pill-no" width="124" height="18" rx="9"/><text class="t-no" x="62" y="12.5" font-size="7.5" text-anchor="middle">✗ curl — not in the plan</text></g>
           </svg>
           <span class="n">03</span>
           <h3>Act</h3>
-          <p>in the sandbox</p>
+          <p>the plan is the sandbox</p>
         </li>
         <li class="step rv">
-          <svg class="ill scene" viewBox="0 0 200 132" aria-hidden="true">
-            <rect class="turn" x="18" y="22" width="70" height="14" rx="4" opacity="0.35"/>
-            <rect class="turn" x="18" y="42" width="56" height="14" rx="4" opacity="0.5"/>
-            <rect class="turn" x="18" y="62" width="76" height="14" rx="4" opacity="0.65"/>
-            <rect class="turn" x="18" y="82" width="62" height="14" rx="4" opacity="0.8"/>
-            <rect class="turn" x="18" y="102" width="48" height="14" rx="4"/>
-            <path class="chev" d="M104 54l10 14-10 14"/><path class="chev c2" d="M116 54l10 14-10 14"/><path class="chev c3" d="M128 54l10 14-10 14"/>
-            <rect class="sum" x="148" y="61" width="36" height="14" rx="4"/>
-            <text class="t-dim" x="166" y="95" font-size="10" text-anchor="middle">140 tok</text>
+          <svg class="ill scene" viewBox="0 0 240 160" aria-hidden="true">
+            <rect class="bubble" x="10" y="12" width="96" height="24" rx="5"/><rect class="ubar" x="10" y="12" width="2.5" height="24"/><rect class="ubar" x="18" y="19" width="56" height="4" rx="2"/><rect class="ubar" x="18" y="27" width="38" height="4" rx="2"/>
+            <rect class="bubble" x="10" y="42" width="96" height="30" rx="5"/><rect class="abar" x="18" y="49" width="70" height="4" rx="2"/><rect class="abar" x="18" y="57" width="52" height="4" rx="2"/><rect class="pill-blue" x="74" y="56" width="24" height="10" rx="3"/><text class="t-blue" x="86" y="63.5" font-size="6" text-anchor="middle">plan</text>
+            <rect class="bubble" x="10" y="78" width="96" height="22" rx="5"/><text class="t-blue" x="17" y="92" font-size="7">› read_file</text>
+            <rect class="bubble" x="10" y="106" width="96" height="40" rx="5"/><rect class="abar" x="18" y="113" width="74" height="4" rx="2"/><rect class="abar" x="18" y="121" width="62" height="4" rx="2"/><rect class="abar" x="18" y="129" width="70" height="4" rx="2"/><rect class="abar" x="18" y="137" width="30" height="4" rx="2"/>
+            <text class="t-dim" x="112" y="27" font-size="7">22</text><text class="t-dim" x="112" y="60" font-size="7">640</text><text class="t-dim" x="112" y="92" font-size="7">1.1K</text><text class="t-dim" x="112" y="129" font-size="7">180</text>
+            <path class="brace" d="M132 12q5 0 5 6v52q0 9 6 9-6 0-6 9v52q0 6-5 6"/>
+            <g class="arrows"><path d="M150 72l7 7-7 7"/><path d="M160 72l7 7-7 7"/><path d="M170 72l7 7-7 7"/></g>
+            <rect class="folded" x="186" y="54" width="48" height="50" rx="5"/><rect class="folded-bar" x="186" y="54" width="3" height="50"/>
+            <text class="t-fg sans b" x="194" y="69" font-size="8">draft 1</text>
+            <text class="t-dim" x="194" y="81" font-size="6.5">folded</text>
+            <text class="t-amber" x="194" y="95" font-size="7.5">140 tok</text>
+            <text class="t-dim" x="210" y="124" font-size="7.5" text-anchor="middle">1.9K → 140</text>
           </svg>
           <span class="n">04</span>
           <h3>Fold</h3>
@@ -878,79 +1249,97 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
           its worth is measured.</p>
       </div>
       <div class="bento">
-        <article class="tile wide rv">
+        <article class="tile t3 rv">
           <h3>What changes least goes first</h3>
-          <svg class="ill ctx" viewBox="0 0 420 214" role="img" aria-label="The prompt, top to bottom: system and tools, the cached prefix; folded summaries; recent turns; selected code and the new prompt, fused last.">
-            <rect x="34" y="16" width="3" height="182" rx="1.5" fill="url(#g-volatile)"/>
-            <text class="t-dim" x="0" y="11" font-size="11">stable</text>
-            <text class="t-dim" x="0" y="213" font-size="11">fresh</text>
-            <rect class="blk system" x="60" y="16" width="300" height="40" rx="8"/>
-            <text class="t-fg" x="74" y="34" font-size="13">system + tools</text>
-            <text class="t-dim" x="74" y="49" font-size="11">the cached prefix</text>
-            <g class="lock" transform="translate(334 28)"><rect x="0" y="6" width="12" height="9" rx="2"/><path d="M3 6V4a3 3 0 0 1 6 0v2"/></g>
-            <rect class="blk tools" x="60" y="64" width="150" height="26" rx="6"/>
-            <text class="t-fg" x="72" y="81.5">summaries</text>
-            <rect class="blk history old" x="60" y="98" width="230" height="26" rx="6"/>
-            <text x="72" y="115.5">turns, verbatim</text>
-            <rect class="blk history" x="60" y="132" width="214" height="26" rx="6"/>
-            <text x="72" y="149.5">appended, never rewritten</text>
-            <rect class="blk code" x="60" y="166" width="262" height="34" rx="8"/>
-            <text class="t-fg" x="72" y="187.5" font-size="13">code + your prompt</text>
-            <path class="new" d="M416 183H330" marker-end="url(#m-amber)"/>
-            <text class="t-amber" x="372" y="173" font-size="11" text-anchor="middle">fused last</text>
+          <svg class="ill ctx" viewBox="0 0 460 244" role="img" aria-label="The prompt, top to bottom: system text, tool definitions and the repository map, the cached prefix; folded jobs; turns verbatim, appended; selected code and the new prompt, fused last.">
+            <defs><linearGradient id="g-volatile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7aa2f7"/><stop offset="0.6" stop-color="#f778ba"/><stop offset="1" stop-color="#f5a524"/></linearGradient></defs>
+            <text class="t-dim" x="22" y="10" font-size="10" text-anchor="middle">stable</text>
+            <rect x="20.5" y="18" width="3" height="200" rx="1.5" fill="url(#g-volatile)"/>
+            <text class="t-dim" x="22" y="236" font-size="10" text-anchor="middle">fresh</text>
+            <rect class="blk system" x="48" y="16" width="150" height="28" rx="6"/><text class="t-fg" x="60" y="34">system</text><text class="t-dim" x="188" y="34" font-size="10" text-anchor="end">412</text>
+            <rect class="blk tools" x="48" y="50" width="270" height="28" rx="6"/><text class="t-fg" x="60" y="68">tool definitions</text><text class="t-dim" x="308" y="68" font-size="10" text-anchor="end">1,180</text>
+            <rect class="blk map" x="48" y="84" width="240" height="28" rx="6"/><text class="t-fg" x="60" y="102">repository map</text><text class="t-dim" x="278" y="102" font-size="10" text-anchor="end">1,024</text>
+            <path class="bracket" d="M330 16h8v96h-8"/>
+            <g class="lock" transform="translate(346 30)"><rect x="0" y="6" width="12" height="9" rx="2"/><path d="M3 6V4a3 3 0 0 1 6 0v2"/></g>
+            <text class="t-blue" x="346" y="62" font-size="11">cached prefix</text>
+            <text class="t-dim" x="346" y="77" font-size="10">byte-identical</text>
+            <text class="t-dim" x="346" y="91" font-size="10">every call</text>
+            <rect class="blk summaries" x="48" y="122" width="150" height="26" rx="6"/><text class="t-fg" x="60" y="139">folded jobs</text><text class="t-dim" x="188" y="139" font-size="10" text-anchor="end">64</text>
+            <rect class="blk history" x="48" y="154" width="250" height="26" rx="6"/><text x="60" y="171">turns, verbatim</text><text class="t-dim" x="288" y="171" font-size="10" text-anchor="end">1,746</text>
+            <text class="t-dim" x="310" y="171" font-size="10">appended, never rewritten</text>
+            <rect class="blk code" x="48" y="188" width="230" height="34" rx="8"/><text class="t-fg" x="60" y="209">code + your prompt</text><text class="t-dim" x="268" y="209" font-size="10" text-anchor="end">606</text>
+            <path class="new" d="M440 205H286" marker-end="url(#m-amber)"/>
+            <text class="t-amber" x="362" y="197" font-size="10.5" text-anchor="middle">fused, as late as possible</text>
           </svg>
         </article>
-        <article class="tile rv">
+        <article class="tile t2 rv">
           <h3>Prefix reuse, measured</h3>
-          <svg class="ill reuse" viewBox="0 28 260 168" role="img" aria-label="Mean prefix reuse over the same twenty turns: 33% evicting one turn at a time, 67% evicting in blocks.">
-            <line class="base" x1="16" y1="164" x2="244" y2="164"/>
-            <rect class="b1 grow" x="40" y="121" width="72" height="43" rx="6"/>
-            <rect class="b2 grow" x="148" y="77" width="72" height="87" rx="6"/>
-            <text class="t-big" x="76" y="110" text-anchor="middle" fill="#9aa4b2">33%</text>
-            <text class="t-big t-ok" x="184" y="66" text-anchor="middle">67%</text>
-            <text x="76" y="186" text-anchor="middle">turn by turn</text>
-            <text class="t-fg" x="184" y="186" text-anchor="middle">in blocks</text>
+          <svg class="ill chart" viewBox="0 0 300 214" role="img" aria-label="Prefix reuse per turn over twenty turns in a 512-token window. Both policies climb from 30% to 88% until the window fills at turn 10. Evicting one turn at a time then stays at 3 to 4%; evicting in blocks drops every four or five turns and spends the turns between at 78 to 87%. Means 33% and 67%.">
+            <line class="l-block" x1="34" y1="10" x2="50" y2="10"/><text class="t-fg" x="55" y="13.5" font-size="9">in blocks · mean 67%</text>
+            <line class="l-turn" x1="176" y1="10" x2="192" y2="10"/><text x="197" y="13.5" font-size="9">one turn · 33%</text>
+            <line class="gl" x1="34" y1="30" x2="286" y2="30"/><line class="gl" x1="34" y1="65" x2="286" y2="65"/><line class="gl" x1="34" y1="100" x2="286" y2="100"/><line class="gl" x1="34" y1="135" x2="286" y2="135"/><line class="gl base" x1="34" y1="170" x2="286" y2="170"/>
+            <text class="t-dim" x="28" y="33" font-size="8" text-anchor="end">100%</text><text class="t-dim" x="28" y="68" font-size="8" text-anchor="end">75</text><text class="t-dim" x="28" y="103" font-size="8" text-anchor="end">50</text><text class="t-dim" x="28" y="138" font-size="8" text-anchor="end">25</text><text class="t-dim" x="28" y="173" font-size="8" text-anchor="end">0</text>
+            <line class="mark-v" x1="146" y1="30" x2="146" y2="170"/><text class="t-dim" x="150" y="40" font-size="8">window full</text>
+            <line class="mean a" x1="34" y1="123.8" x2="286" y2="123.8"/><line class="mean b" x1="34" y1="76.2" x2="286" y2="76.2"/>
+            <polyline class="l-turn draw" points="132,46.8 146,165.8 160,165.8 174,165.8 188,164.4 202,164.4 216,164.4 230,164.4 244,164.4 258,164.4 272,164.4 286,164.4"/>
+            <polyline class="l-block draw" points="132,46.8 146,161.6 160,55.2 174,52.4 188,48.2 202,157.4 216,60.8 258,48.2 272,160.2 286,55.2"/>
+            <polyline class="l-shared draw" points="34,128 132,46.8"/>
+            <circle class="pt-b" cx="160" cy="55.2" r="2.4"/><circle class="pt-b" cx="216" cy="60.8" r="2.4"/><circle class="pt-b" cx="286" cy="55.2" r="2.4"/>
+            <text class="t-dim" x="34" y="186" font-size="8" text-anchor="middle">2</text><text class="t-dim" x="76" y="186" font-size="8" text-anchor="middle">5</text><text class="t-dim" x="146" y="186" font-size="8" text-anchor="middle">10</text><text class="t-dim" x="216" y="186" font-size="8" text-anchor="middle">15</text><text class="t-dim" x="286" y="186" font-size="8" text-anchor="middle">20</text>
+            <text class="t-dim" x="160" y="202" font-size="8.5" text-anchor="middle">turn, in a 512-token window</text>
           </svg>
-          <p class="src">same 20 turns — <a href="https://github.com/jgermade/luu/blob/main/RECORD/2026-08-27.prefix-reuse-and-block-eviction.completed.md">the record</a></p>
+          <p class="src">from <a href="https://github.com/jgermade/luu/blob/main/RECORD/2026-08-27.prefix-reuse-and-block-eviction.completed.md">the record's table</a>; its ranges drawn straight</p>
         </article>
-        <article class="tile rv">
+        <article class="tile t2 rv">
           <h3>The turn is the unit</h3>
-          <svg class="ill turns" viewBox="0 0 300 150" role="img" aria-label="Eight turns; the oldest three leave the window whole and stay out, the newest five stay.">
-            <rect class="frame" x="102" y="34" width="192" height="62" rx="10"/>
-            <text class="t-amber" x="110" y="25">the window</text>
-            <rect class="t out" x="6" y="49" width="28" height="32" rx="6"/><rect class="t out" x="38" y="49" width="28" height="32" rx="6"/><rect class="t out" x="70" y="49" width="28" height="32" rx="6"/>
-            <text class="t-dim" x="20" y="69" font-size="11" text-anchor="middle">t1</text><text class="t-dim" x="52" y="69" font-size="11" text-anchor="middle">t2</text><text class="t-dim" x="84" y="69" font-size="11" text-anchor="middle">t3</text>
-            <line class="gone" x1="10" y1="65" x2="94" y2="65"/>
-            <rect class="t" x="110" y="49" width="30" height="32" rx="6"/><rect class="t" x="146" y="49" width="30" height="32" rx="6"/><rect class="t" x="182" y="49" width="30" height="32" rx="6"/><rect class="t" x="218" y="49" width="30" height="32" rx="6"/><rect class="t last" x="254" y="49" width="30" height="32" rx="6"/>
-            <text class="t-fg" x="125" y="69" font-size="11" text-anchor="middle">t4</text><text class="t-fg" x="161" y="69" font-size="11" text-anchor="middle">t5</text><text class="t-fg" x="197" y="69" font-size="11" text-anchor="middle">t6</text><text class="t-fg" x="233" y="69" font-size="11" text-anchor="middle">t7</text><text class="t-fg" x="269" y="69" font-size="11" text-anchor="middle">t8</text>
-            <path class="exit" d="M52 90v20" marker-end="url(#m-dim)"/>
-            <text class="t-dim" x="52" y="128" font-size="11" text-anchor="middle">== evicted</text>
-            <text class="t-dim" x="52" y="143" font-size="11" text-anchor="middle">whole, for good</text>
+          <svg class="ill turns" viewBox="0 0 320 184" role="img" aria-label="Eight turns. The oldest three left the window whole and stay out, behind a floor that only moves forward; a tombstone says which left and what they were worth.">
+            <rect class="frame" x="106" y="26" width="208" height="102" rx="10"/>
+            <text class="t-amber" x="114" y="19" font-size="10.5">the window</text>
+            <rect class="gone" x="8" y="38" width="28" height="12" rx="3"/><rect class="gone" x="8" y="54" width="28" height="44" rx="4"/>
+            <rect class="gone" x="40" y="38" width="28" height="12" rx="3"/><rect class="gone" x="40" y="54" width="28" height="44" rx="4"/>
+            <rect class="gone" x="72" y="38" width="28" height="12" rx="3"/><rect class="gone" x="72" y="54" width="28" height="44" rx="4"/>
+            <text class="t-dim" x="22" y="114" font-size="9" text-anchor="middle">t1</text><text class="t-dim" x="54" y="114" font-size="9" text-anchor="middle">t2</text><text class="t-dim" x="86" y="114" font-size="9" text-anchor="middle">t3</text>
+            <rect class="ub" x="114" y="38" width="32" height="12" rx="3"/><rect class="ab" x="114" y="54" width="32" height="44" rx="4"/>
+            <rect class="ub" x="153" y="38" width="32" height="12" rx="3"/><rect class="ab" x="153" y="54" width="32" height="34" rx="4"/>
+            <rect class="ub" x="192" y="38" width="32" height="12" rx="3"/><rect class="ab" x="192" y="54" width="32" height="44" rx="4"/>
+            <rect class="ub" x="231" y="38" width="32" height="12" rx="3"/><rect class="ab" x="231" y="54" width="32" height="28" rx="4"/>
+            <rect class="ub" x="270" y="38" width="32" height="12" rx="3"/><rect class="ab last" x="270" y="54" width="32" height="44" rx="4"/>
+            <text class="t-fg" x="130" y="114" font-size="9" text-anchor="middle">t4</text><text class="t-fg" x="169" y="114" font-size="9" text-anchor="middle">t5</text><text class="t-fg" x="208" y="114" font-size="9" text-anchor="middle">t6</text><text class="t-fg" x="247" y="114" font-size="9" text-anchor="middle">t7</text><text class="t-fg" x="286" y="114" font-size="9" text-anchor="middle">t8</text>
+            <rect class="gauge" x="106" y="138" width="208" height="6" rx="3"/><rect class="gauge-f" x="106" y="138" width="138" height="6" rx="3"/>
+            <text class="t-dim" x="314" y="158" font-size="9" text-anchor="end">history · its budget</text>
+            <path class="flag" d="M106 124l-5 8h10z"/><text class="t-amber" x="106" y="158" font-size="9">floor</text>
+            <rect class="ink" x="2" y="128" width="96" height="44" rx="6"/>
+            <text class="t-ink" x="9" y="144" font-size="9">== evicted</text>
+            <text class="t-ink-m" x="9" y="157" font-size="8">turns 1–3 · 1.4K</text>
+            <text class="t-ink-d" x="9" y="168" font-size="8">policy block</text>
           </svg>
         </article>
-        <article class="tile wide rv">
+        <article class="tile t3 rv">
           <h3>Only the code it points at</h3>
-          <svg class="ill pick" viewBox="0 0 420 200" role="img" aria-label="A question names landlock, fork and exec; of the parsed repository three definitions light up and go into the prompt: 837 of 1024 tokens.">
-            <rect class="box" x="4" y="6" width="190" height="36" rx="10"/>
-            <path class="box" d="M28 42l-6 10 14-10" stroke-linejoin="round"/>
-            <text class="t-fg" x="16" y="29">landlock · fork · exec?</text>
-            <path class="flow" d="M134 81C210 81 230 92 290 92"/>
-            <path class="flow" d="M62 109C200 109 220 110 290 110"/>
-            <path class="flow" d="M158 137C220 137 240 128 290 128"/>
+          <svg class="ill pick" viewBox="0 0 460 228" role="img" aria-label="A question about Landlock, fork and exec; of the parsed repository three definitions score and go into the prompt: linux.rs, mod.rs and runtime.rs, 837 of 1024 tokens.">
+            <rect class="box" x="4" y="6" width="286" height="32" rx="10"/>
+            <path class="box" d="M28 38l-6 10 14-10" stroke-linejoin="round"/>
+            <text class="t-fg" x="16" y="26" font-size="9.5">which file applies Landlock between fork and exec?</text>
+            <path class="flow" d="M134 81C220 81 240 90 300 90"/>
+            <path class="flow" d="M62 109C200 109 230 112 300 112"/>
+            <path class="flow" d="M158 137C230 137 250 134 300 134"/>
             <g>
               <rect class="cell" x="20" y="70" width="18" height="22" rx="3"/><rect class="cell" x="44" y="70" width="18" height="22" rx="3"/><rect class="cell" x="68" y="70" width="18" height="22" rx="3"/><rect class="cell" x="92" y="70" width="18" height="22" rx="3"/><rect class="cell lit" x="116" y="70" width="18" height="22" rx="3"/><rect class="cell" x="140" y="70" width="18" height="22" rx="3"/><rect class="cell" x="164" y="70" width="18" height="22" rx="3"/>
               <rect class="cell" x="20" y="98" width="18" height="22" rx="3"/><rect class="cell lit" x="44" y="98" width="18" height="22" rx="3"/><rect class="cell" x="68" y="98" width="18" height="22" rx="3"/><rect class="cell" x="92" y="98" width="18" height="22" rx="3"/><rect class="cell" x="116" y="98" width="18" height="22" rx="3"/><rect class="cell" x="140" y="98" width="18" height="22" rx="3"/><rect class="cell" x="164" y="98" width="18" height="22" rx="3"/>
               <rect class="cell" x="20" y="126" width="18" height="22" rx="3"/><rect class="cell" x="44" y="126" width="18" height="22" rx="3"/><rect class="cell" x="68" y="126" width="18" height="22" rx="3"/><rect class="cell" x="92" y="126" width="18" height="22" rx="3"/><rect class="cell" x="116" y="126" width="18" height="22" rx="3"/><rect class="cell lit" x="140" y="126" width="18" height="22" rx="3"/><rect class="cell" x="164" y="126" width="18" height="22" rx="3"/>
               <rect class="cell" x="20" y="154" width="18" height="22" rx="3"/><rect class="cell" x="44" y="154" width="18" height="22" rx="3"/><rect class="cell" x="68" y="154" width="18" height="22" rx="3"/><rect class="cell" x="92" y="154" width="18" height="22" rx="3"/><rect class="cell" x="116" y="154" width="18" height="22" rx="3"/><rect class="cell" x="140" y="154" width="18" height="22" rx="3"/><rect class="cell" x="164" y="154" width="18" height="22" rx="3"/>
             </g>
-            <text class="t-dim" x="101" y="197" font-size="11" text-anchor="middle">the repository, parsed</text>
-            <rect class="slot" x="290" y="70" width="124" height="106" rx="10"/>
-            <text class="t-amber" x="352" y="61" text-anchor="middle">the prompt</text>
-            <rect class="frag" x="302" y="84" width="96" height="14" rx="3"/>
-            <rect class="frag" x="302" y="103" width="88" height="14" rx="3"/>
-            <rect class="frag" x="302" y="122" width="80" height="14" rx="3"/>
-            <rect class="free" x="302" y="142" width="100" height="22" rx="3"/>
-            <text class="t-fg" x="352" y="197" text-anchor="middle">837 / 1024 tokens</text>
+            <text class="t-dark sans b" x="125" y="84" font-size="6.5" text-anchor="middle">4.8</text>
+            <text class="t-dark sans b" x="53" y="112" font-size="6.5" text-anchor="middle">4.8</text>
+            <text class="t-dark sans b" x="149" y="140" font-size="6.5" text-anchor="middle">2.0</text>
+            <text class="t-dim" x="101" y="198" font-size="10" text-anchor="middle">the repository, parsed</text>
+            <rect class="slot" x="296" y="66" width="160" height="124" rx="10"/>
+            <text class="t-amber" x="376" y="58" text-anchor="middle" font-size="11">the prompt</text>
+            <rect class="frag" x="304" y="80" width="144" height="20" rx="4"/><text class="t-fg" x="311" y="93.5" font-size="8.5">linux.rs:1-25</text><text class="t-amber" x="442" y="93.5" font-size="8.5" text-anchor="end">265</text>
+            <rect class="frag" x="304" y="102" width="144" height="20" rx="4"/><text class="t-fg" x="311" y="115.5" font-size="8.5">mod.rs:1-25</text><text class="t-amber" x="442" y="115.5" font-size="8.5" text-anchor="end">309</text>
+            <rect class="frag" x="304" y="124" width="144" height="20" rx="4"/><text class="t-fg" x="311" y="137.5" font-size="8.5">runtime.rs:495-517</text><text class="t-amber" x="442" y="137.5" font-size="8.5" text-anchor="end">263</text>
+            <rect class="free" x="304" y="148" width="144" height="34" rx="4"/><text class="t-dim" x="376" y="169" font-size="9" text-anchor="middle">187 free</text>
+            <text class="t-fg" x="376" y="210" text-anchor="middle" font-size="11">837 / 1024 tokens</text>
           </svg>
         </article>
       </div>
@@ -971,25 +1360,31 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
         </ul>
       </div>
       <div class="figure rv">
-        <svg class="ill rings" viewBox="0 0 440 330" role="img" aria-label="The model asks for two tools. Reading /etc/passwd is refused at luu's check of the plan. cargo test passes the check and runs inside Landlock and seccomp, optionally inside a container, and exits 0.">
-          <rect class="r1" x="122" y="8" width="312" height="314" rx="26"/>
-          <text class="t-amber" x="140" y="32" font-size="13">luu checks the plan</text>
-          <rect class="r2" x="142" y="44" width="272" height="258" rx="22"/>
-          <text class="t-dim" x="160" y="68" font-size="13">container · optional</text>
-          <rect class="r3" x="162" y="80" width="232" height="202" rx="18"/>
-          <text class="t-violet" x="180" y="104" font-size="13">landlock + seccomp</text>
-          <rect class="ink" x="192" y="150" width="172" height="76" rx="12"/>
-          <text class="t-amber" x="208" y="181" font-size="15">›</text>
-          <text class="t-fg" x="222" y="181" font-size="14">cargo test</text>
-          <text class="t-ok" x="208" y="207" font-size="13">✓ exit 0</text>
-          <rect class="box" x="6" y="150" width="84" height="76" rx="16"/>
-          <path class="spark" d="M48 160l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
-          <text class="t-fg" x="48" y="211" text-anchor="middle" font-size="13">model</text>
-          <path class="yes flow" d="M90 196H186" marker-end="url(#m-ok)"/>
-          <path class="nope" d="M60 150C60 112 84 100 112 100"/>
-          <circle class="stop" cx="122" cy="100" r="10"/>
-          <path class="stop-x" d="M118 96l8 8M126 96l-8 8"/>
-          <text class="t-no" x="6" y="82" font-size="13">read /etc/passwd</text>
+        <svg class="ill rings" viewBox="0 0 460 360" role="img" aria-label="The model asks for two tools. Reading /etc/passwd is refused at luu's check of the plan. cargo test passes the check and runs inside Landlock and seccomp, optionally in a container, and exits 0; a socket it opens is refused by the kernel.">
+            <rect class="r1" x="128" y="8" width="326" height="344" rx="28"/>
+            <text class="t-amber" x="146" y="32" font-size="12.5">luu checks the plan</text>
+            <g class="key" transform="translate(336 21)"><circle cx="4.5" cy="7" r="3.5"/><path d="M8 7h9M14 7v3M17 7v2"/></g>
+            <text class="t-dim" x="440" y="32" font-size="10" text-anchor="end">signed</text>
+            <rect class="r2" x="148" y="46" width="286" height="286" rx="24"/>
+            <text class="t-dim" x="166" y="70" font-size="12">container · optional</text>
+            <rect class="r3" x="168" y="84" width="246" height="228" rx="20"/>
+            <text class="t-violet" x="186" y="108" font-size="12">landlock + seccomp</text>
+            <text class="t-dim" x="186" y="126" font-size="9.5">rw ./  ·  ro ~/.cargo  ·  cpu 300 s</text>
+            <rect class="ink" x="196" y="146" width="196" height="96" rx="12"/>
+            <text class="t-ink-amber" x="210" y="172" font-size="13">›</text><text class="t-ink" x="222" y="172" font-size="12">cargo test login</text>
+            <text class="t-ink-ok" x="210" y="196" font-size="10">test result: ok. 3 passed</text>
+            <text class="t-ink-m" x="210" y="218" font-size="10">exit 0 · 3.8 s</text>
+            <path class="nope" d="M300 242V290"/>
+            <circle class="stop" cx="300" cy="300" r="9"/><path class="stop-x" d="M296.5 296.5l7 7M303.5 296.5l-7 7"/>
+            <text class="t-no" x="314" y="290" font-size="10">socket() → EPERM</text>
+            <rect class="box" x="6" y="168" width="88" height="80" rx="16"/>
+            <path class="spark" d="M50 178l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+            <text class="t-fg" x="50" y="232" text-anchor="middle" font-size="12.5">model</text>
+            <path class="yes flow" d="M94 208H192" marker-end="url(#m-ok)"/>
+            <path class="nope" d="M64 168C64 128 90 112 118 112"/>
+            <circle class="stop" cx="128" cy="112" r="10"/><path class="stop-x" d="M124 108l8 8M132 108l-8 8"/>
+            <text class="t-no" x="4" y="84" font-size="12.5">read /etc/passwd</text>
+            <text class="t-dim" x="4" y="100" font-size="10">no rule grants it</text>
         </svg>
       </div>
     </div>
@@ -1004,29 +1399,39 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
           uses it.</p>
       </div>
       <div class="figure rv">
-        <svg class="ill local" viewBox="0 0 440 300" role="img" aria-label="On this machine, luu starts llama-server, mlx-serve or Ollama. A remote API is reached only through a profile that says remote = true.">
-          <rect class="machine" x="6" y="30" width="262" height="262" rx="20"/>
-          <circle class="ok-dot" cx="22" cy="16" r="4"/>
-          <text class="t-ok" x="32" y="20.5" font-size="13">this machine</text>
-          <rect class="halo" x="103" y="52" width="72" height="72" rx="20"/>
-          <use href="#luu" x="111" y="60" width="56" height="56"/>
-          <path class="flow" d="M139 124C139 160 54 160 54 196"/>
-          <path class="flow" d="M139 124V196"/>
-          <path class="flow" d="M139 124C139 160 224 160 224 196"/>
-          <rect class="box" x="26" y="196" width="56" height="56" rx="14"/><use class="mark" href="#b-llamacpp" x="41" y="211" width="26" height="26"/>
-          <rect class="box" x="111" y="196" width="56" height="56" rx="14"/><use class="mark" href="#b-mlx" x="126" y="211" width="26" height="26"/>
-          <rect class="box" x="196" y="196" width="56" height="56" rx="14"/><use class="mark" href="#b-ollama" x="211" y="211" width="26" height="26"/>
-          <text x="54" y="274" text-anchor="middle" font-size="11">llama-server</text>
-          <text x="139" y="274" text-anchor="middle" font-size="11">mlx-serve</text>
-          <text x="224" y="274" text-anchor="middle" font-size="11">ollama</text>
-          <path class="remote" d="M175 88C240 88 262 138 318 142"/>
-          <rect class="gate" x="214" y="98" width="110" height="26" rx="13"/>
-          <text class="t-amber" x="269" y="115.5" text-anchor="middle">remote = true</text>
-          <path class="cloud" d="M326 184h84a24 24 0 0 0 0-48 32 32 0 0 0-60-12 22 22 0 0 0-24 60z"/>
-          <use class="mark" href="#b-anthropic" x="334" y="141" width="26" height="26"/>
-          <use class="mark" href="#b-deepseek" x="370" y="141" width="26" height="26"/>
-          <text class="t-dim" x="366" y="208" text-anchor="middle">remote APIs</text>
-          <text class="t-dim" x="366" y="224" text-anchor="middle">never a fallback</text>
+        <svg class="ill local" viewBox="0 0 460 340" role="img" aria-label="On this machine, luu starts llama-server, mlx-serve or Ollama, each on its own port with its model, from a release checked against its sha256. A remote API is reached only through a profile that says remote = true.">
+          <rect class="machine" x="6" y="18" width="282" height="316" rx="18"/>
+          <line class="bar" x1="6" y1="42" x2="288" y2="42"/>
+          <circle class="ok-f" cx="20" cy="30" r="3.5"/>
+          <text class="t-ok" x="30" y="34" font-size="11">this machine</text>
+          <rect class="halo" x="110" y="58" width="72" height="72" rx="20"/>
+          <use href="#luu" x="118" y="66" width="56" height="56"/>
+          <g transform="translate(192 64)"><rect class="pill-ok" width="88" height="18" rx="9"/><text class="t-ok" x="44" y="12.5" font-size="8.5" text-anchor="middle">sha256 ✓</text></g>
+          <text class="t-dim" x="236" y="96" font-size="8.5" text-anchor="middle">from the release</text>
+          <path class="flow" d="M146 130C146 166 52 164 52 200"/>
+          <path class="flow" d="M146 130V200"/>
+          <path class="flow" d="M146 130C146 166 240 164 240 200"/>
+          <rect class="box" x="20" y="200" width="64" height="64" rx="14"/><use class="mark" href="#b-llamacpp" x="37" y="217" width="30" height="30"/>
+          <rect class="box" x="114" y="200" width="64" height="64" rx="14"/><use class="mark" href="#b-mlx" x="131" y="217" width="30" height="30"/>
+          <rect class="box" x="208" y="200" width="64" height="64" rx="14"/><use class="mark" href="#b-ollama" x="225" y="217" width="30" height="30"/>
+          <text class="t-fg" x="52" y="282" text-anchor="middle" font-size="10.5">llama-server</text>
+          <text class="t-fg" x="146" y="282" text-anchor="middle" font-size="10.5">mlx-serve</text>
+          <text class="t-fg" x="240" y="282" text-anchor="middle" font-size="10.5">ollama</text>
+          <text class="t-dim" x="52" y="297" text-anchor="middle" font-size="9.5">:8080</text>
+          <text class="t-dim" x="146" y="297" text-anchor="middle" font-size="9.5">:8081</text>
+          <text class="t-dim" x="240" y="297" text-anchor="middle" font-size="9.5">:11434</text>
+          <text class="t-dim" x="52" y="316" text-anchor="middle" font-size="8.5">qwen-coder 14B</text>
+          <text class="t-dim" x="146" y="316" text-anchor="middle" font-size="8.5">gemma 12B</text>
+          <text class="t-dim" x="240" y="316" text-anchor="middle" font-size="8.5">llama3.1 8B</text>
+          <path class="remote" d="M182 110C250 110 284 170 340 178"/>
+          <rect class="gate" x="226" y="128" width="110" height="26" rx="13"/>
+          <text class="t-amber" x="281" y="145" text-anchor="middle" font-size="11">remote = true</text>
+          <path class="cloud" d="M342 204h86a26 26 0 0 0 0-52 34 34 0 0 0-64-12 24 24 0 0 0-22 64z"/>
+          <use class="mark" href="#b-anthropic" x="352" y="164" width="22" height="22"/>
+          <use class="mark" href="#b-deepseek" x="380" y="164" width="22" height="22"/>
+          <use class="mark" href="#b-kimi" x="408" y="164" width="22" height="22"/>
+          <text class="t-dim" x="392" y="226" text-anchor="middle" font-size="11">remote APIs</text>
+          <text class="t-dim" x="392" y="242" text-anchor="middle" font-size="10">never a fallback</text>
         </svg>
       </div>
     </div>
@@ -1138,6 +1543,12 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
   document.documentElement.classList.add("js")
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches
 
+  // The theme switch: the pressed one is what was picked, auto included.
+  const picks = [...document.querySelectorAll(".theme [data-pick]")]
+  const pressed = () => picks.forEach(b => b.setAttribute("aria-checked", String(b.dataset.pick === document.documentElement.dataset.pick)))
+  picks.forEach(b => b.addEventListener("click", () => { window.luuTheme(b.dataset.pick); pressed() }))
+  pressed()
+
   // Copy a command. The clipboard API needs a secure context, which Pages is;
   // the selection fallback covers a page opened from disk.
   for (const button of document.querySelectorAll(".copy")) {
@@ -1174,87 +1585,142 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
   }, { rootMargin: "0px 0px -8% 0px" })
   document.querySelectorAll(".rv").forEach(el => reveal.observe(el))
 
-  // fig. 1, played. The markup is the last frame, so with no script, or with
-  // reduced motion, that is what shows. Each frame is the budget after a step:
-  // system, tools, map, code, history — in tokens, of a 16K window — and the
-  // prefix reuse of that call. The fold is where reuse drops, by design.
-  const session = document.getElementById("session")
-  if (session && !still) {
+  // fig. 1, played. Each frame is the Context card after a call — system,
+  // tools, map, summaries, history, code, prompt, in tokens of a 16K window —
+  // and the share of that prompt the previous one already held, as a prefix.
+  // The first call has nothing to measure against, and says so, as the
+  // inspector does.
+  const app = document.querySelector("#session .app")
+  if (app && !still) {
     const WINDOW = 16384
-    const RESERVE = 2048
-    const frames = [
-      { b: [900, 650, 1000, 0, 0], reuse: "—" },
-      { b: [900, 650, 1000, 0, 60], reuse: "—" },
-      { b: [900, 650, 1000, 1600, 420], reuse: "91%" },
-      { b: [900, 650, 1000, 1600, 1900], reuse: "94%" },
-      { b: [900, 650, 1000, 700, 140], reuse: "38%" },
-      { b: [900, 650, 1000, 1800, 520], reuse: "93%" },
-      { b: [900, 650, 1000, 1800, 780], reuse: "96%" },
-      { b: [900, 650, 1000, 1800, 1500], reuse: "97%" },
-      { b: [900, 650, 1000, 1800, 1950], reuse: "97%" },
-    ]
-    const steps = [...session.querySelectorAll(".s")]
-    const bars = [...session.querySelectorAll("[data-bar] i")]
-    const used = session.querySelector("[data-used]")
-    const reuse = session.querySelector("[data-reuse]")
-    const typed = session.querySelector("[data-type]")
-    const text = typed.textContent
-    const plan = session.querySelector("[data-plan]")
-    const planState = session.querySelector("[data-plan-state]")
-    const approve = session.querySelector("[data-approve]")
-    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-    const k = n => (n / 1000).toFixed(1) + "K"
-
-    const frame = i => {
-      const { b, reuse: r } = frames[i]
-      b.forEach((tokens, j) => bars[j].style.setProperty("--w", (tokens / WINDOW * 100).toFixed(2) + "%"))
-      bars[5].style.setProperty("--w", (RESERVE / WINDOW * 100).toFixed(2) + "%")
-      used.textContent = k(b.reduce((a, n) => a + n, 0))
-      reuse.textContent = r
+    const frames = {
+      empty: { b: [0, 0, 0, 0, 0, 0, 0], shared: null },
+      first: { b: [412, 1180, 1024, 0, 0, 0, 22], shared: null },
+      goOn: { b: [412, 1180, 1024, 64, 0, 0, 6], shared: 2616 },
+      read: { b: [412, 1180, 1024, 64, 1146, 0, 6], shared: 2686 },
+      edit: { b: [412, 1180, 1024, 64, 1326, 0, 6], shared: 3832 },
+      test: { b: [412, 1180, 1024, 64, 1746, 0, 6], shared: 4012 },
     }
+    const $ = sel => app.querySelector(sel)
+    const steps = Object.fromEntries([...app.querySelectorAll("[data-s]")].map(el => [el.dataset.s, el]))
+    const rows = [...app.querySelectorAll("[data-rows] li")]
+    const segs = [...app.querySelectorAll("[data-ubar] i")]
+    const added = [...app.querySelectorAll("[data-add]")]
+    const typed = $("[data-typed]")
+    const field = $("[data-field]")
+    const placeholder = $("[data-ph]")
+    const approve = $("[data-approve]")
+    const jobsel = $("[data-jobsel]")
+    const num = n => n.toLocaleString("en-US")
+    const pct = (n, of) => (of ? Math.round(n / of * 1000) / 10 : 0) + "%"
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+    const frame = ({ b, shared }) => {
+      const total = b.reduce((a, n) => a + n, 0)
+      b.forEach((n, i) => {
+        segs[i].style.width = (n / WINDOW * 100) + "%"
+        rows[i].querySelector(".n").textContent = num(n)
+        rows[i].querySelector(".p").textContent = pct(n, total)
+      })
+      $("[data-pct]").textContent = Math.round(total / WINDOW * 100) + "% used"
+      $("[data-sent]").textContent = `${num(total)} / ${num(WINDOW)}`
+      $("[data-meter]").style.width = (total / WINDOW * 100) + "%"
+      $("[data-meter-t]").textContent = `${(total / 1000).toFixed(1)}K / 16K`
+      const first = shared === null
+      $("[data-first]").hidden = !first
+      for (const el of app.querySelectorAll("[data-reuse] .big, [data-reuse] .ubar, [data-reuse] .rows")) el.hidden = first
+      if (!first) {
+        $("[data-reuse-pct]").textContent = Math.round(shared / total * 100) + "% reused"
+        $("[data-reuse-n]").textContent = `${num(shared)} / ${num(total)}`
+        $("[data-shared]").style.width = (shared / total * 100) + "%"
+        $("[data-sn]").textContent = num(shared)
+        $("[data-sp]").textContent = pct(shared, total)
+        $("[data-nn]").textContent = num(total - shared)
+        $("[data-np]").textContent = pct(total - shared, total)
+      }
+    }
+    const show = (...names) => names.forEach(n => { steps[n].hidden = false })
+    const hide = (...names) => names.forEach(n => { steps[n].hidden = true })
 
     let visible = false
-    new IntersectionObserver(([entry]) => { visible = entry.isIntersecting }).observe(session)
+    new IntersectionObserver(([entry]) => { visible = entry.isIntersecting }).observe(app)
     const whenVisible = async () => { while (!visible || document.hidden) await sleep(250) }
 
-    const play = async () => {
-      session.classList.add("anim")
-      for (;;) {
-        steps.forEach(s => s.classList.remove("on"))
-        plan.classList.remove("approved")
-        planState.textContent = "held until you approve"
-        typed.textContent = ""
-        frame(0)
-        await whenVisible()
-        await sleep(500)
+    const type = async text => {
+      placeholder.hidden = true
+      field.classList.add("caret")
+      for (let i = 1; i <= text.length; i++) {
+        typed.textContent = text.slice(0, i)
+        await sleep(18 + Math.random() * 28)
+      }
+      await sleep(350)
+      field.classList.remove("caret")
+      typed.textContent = ""
+      placeholder.hidden = false
+    }
+    const call = async (name, ms) => {
+      const el = steps[name]
+      const status = el.querySelector(".status")
+      const time = el.querySelector(".ms")
+      const done = [status.textContent, time.textContent]
+      el.classList.add("run")
+      status.textContent = "running"
+      time.textContent = ""
+      show(name)
+      await sleep(ms)
+      el.classList.remove("run")
+      ;[status.textContent, time.textContent] = done
+    }
 
-        steps[0].classList.add("on")
-        typed.classList.add("caret")
-        for (let i = 1; i <= text.length; i++) {
-          typed.textContent = text.slice(0, i)
-          await sleep(22 + Math.random() * 30)
-        }
-        typed.classList.remove("caret")
-        frame(1)
+    const play = async () => {
+      for (;;) {
+        hide(...Object.keys(steps))
+        added.forEach(line => { line.hidden = true })
+        jobsel.hidden = true
+        frame(frames.empty)
+        await whenVisible()
         await sleep(600)
 
-        for (let i = 1; i < steps.length; i++) {
-          await whenVisible()
-          steps[i].classList.add("on")
-          frame(i + 1)
-          if (steps[i].contains(plan)) {
-            await sleep(1600)
-            approve.classList.add("press")
-            await sleep(220)
-            approve.classList.remove("press")
-            plan.classList.add("approved")
-            planState.textContent = "approved · this is the sandbox now"
-            await sleep(900)
-          } else {
-            await sleep(i === steps.length - 1 ? 600 : 1000)
-          }
-        }
-        await sleep(7000)
+        await type(steps.m1.textContent)
+        show("m1")
+        frame(frames.first)
+        await sleep(900)
+        show("p1")
+        await sleep(700)
+        show("gate")
+        field.classList.add("off")
+        placeholder.textContent = "Approve or reject the proposed job first"
+        await sleep(2400)
+        await whenVisible()
+        approve.classList.add("press")
+        await sleep(220)
+        approve.classList.remove("press")
+        await sleep(250)
+        hide("gate", "m1", "p1")
+        show("fold")
+        jobsel.hidden = false
+        field.classList.remove("off")
+        placeholder.textContent = "Ask something..."
+        await sleep(1100)
+
+        await type(steps.m2.textContent)
+        show("m2")
+        frame(frames.goOn)
+        await sleep(700)
+        await call("c1", 500)
+        frame(frames.read)
+        await sleep(500)
+        await call("c2", 600)
+        added.forEach(line => { line.hidden = false; line.classList.add("flash") })
+        frame(frames.edit)
+        await sleep(80)
+        added.forEach(line => line.classList.remove("flash"))
+        await sleep(600)
+        await call("c3", 1500)
+        frame(frames.test)
+        await sleep(500)
+        show("ans")
+        await sleep(8000)
       }
     }
     play()
