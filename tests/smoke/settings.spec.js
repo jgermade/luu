@@ -792,6 +792,19 @@ test("the models are grouped by their tools and written as exceptions", async ({
     await row("old:3b").locator("input.win").fill("4096")
     await expect(add).toBeEnabled()
 
+    // How many tool calls a turn makes before it asks: one model's own, over
+    // the provider's, over General's — each placeholder the next one up.
+    const steps = row("coder:7b").locator("input.steps")
+    await expect(steps).toHaveAttribute("placeholder", "8")
+    await steps.fill("0")
+    await expect(add).toBeDisabled()
+    await steps.fill("40")
+    await expect(add).toBeEnabled()
+    await form.getByRole("tab", { name: "Connection" }).click()
+    await form.getByRole("textbox", { name: "Tool calls per turn" }).fill("20")
+    await form.getByRole("tab", { name: /Models/ }).click()
+    await expect(row("old:3b").locator("input.steps")).toHaveAttribute("placeholder", "20")
+
     await form.locator(".leave label").click()
     await expect(row("old:3b")).toContainText("left out")
     await add.click()
@@ -804,7 +817,8 @@ test("the models are grouped by their tools and written as exceptions", async ({
     expect(table).toContain('[provider.grouped.models."old:3b"]')
     expect(table).toContain("context-limit = 4096")
     expect(table).toContain("enabled = false")
-    expect(table).not.toContain('models."coder:7b"')
+    expect(table).toContain("max-tool-steps = 20")
+    expect(table).toContain('[provider.grouped.models."coder:7b"]\nmax-tool-steps = 40')
     expect(table).not.toContain("models.mystery")
 
     // Left out of the pickers, and still in the form.

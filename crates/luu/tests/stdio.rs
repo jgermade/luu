@@ -53,6 +53,9 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
         },
         counter_warning: None,
         approvers: Default::default(),
+        // As the agency above says: a test never reads the `config.toml` of
+        // whoever runs it.
+        max_tool_steps: Some(4),
         backend,
         model: "mock".to_string(),
         record: None,

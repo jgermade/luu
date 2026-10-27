@@ -124,6 +124,12 @@ pub struct Profile {
     /// URL and not in a flag somebody retypes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u32>,
+    /// How many tool calls one turn on this provider may make before it asks
+    /// whether it may go on: over the file's own `max-tool-steps`, under a
+    /// model's. See
+    /// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_steps: Option<u32>,
     /// A path, never the key itself. A key in a config file is a key in every
     /// backup, every screen share and every `cat` in a bug report.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,6 +236,9 @@ pub struct ModelEntry {
     /// tools, or chosen there, so a run resolves it without asking anyone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<ToolCalls>,
+    /// One model's `max-tool-steps`, over its provider's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_steps: Option<u32>,
     /// `false` leaves the model out of the pickers. Naming it with `-m` still
     /// reaches it: typing a model is choosing it.
     #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
@@ -252,6 +261,7 @@ impl Default for ModelEntry {
         Self {
             context_limit: None,
             tool_calls: None,
+            max_tool_steps: None,
             enabled: true,
             thinking: None,
             effort: None,
@@ -400,6 +410,17 @@ pub enum EngineKind {
 struct File {
     #[serde(skip_serializing_if = "Option::is_none")]
     default: Option<String>,
+    /// How many tool calls one turn may make before it asks whether it may go
+    /// on, where neither its model nor its provider says: Settings → General.
+    /// Beside `default` because it is the same kind of answer — what holds
+    /// where a provider says nothing. Absent is
+    /// [`agent_core::agent::DEFAULT_MAX_STEPS`].
+    #[serde(
+        default,
+        rename = "max-tool-steps",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_tool_steps: Option<u32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     provider: BTreeMap<String, Profile>,
     /// `[posture.<name>]`: what a session is allowed to do, by the name of the
@@ -774,6 +795,8 @@ pub struct Posture {
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     default: Option<String>,
+    /// The file's own `max-tool-steps`: Settings → General's.
+    max_tool_steps: Option<u32>,
     /// The default, when it points off this machine without `remote = true`:
     /// kept in the file and **not used** until the host is typed back. See
     /// [`Config::held`].
@@ -900,6 +923,7 @@ impl Config {
         })?;
         let mut config = Self {
             default: file.default,
+            max_tool_steps: file.max_tool_steps,
             held: None,
             providers: file.provider,
             postures: file.posture,
@@ -1166,6 +1190,7 @@ impl Config {
     pub fn render(&self) -> Result<String, ConfigError> {
         toml::to_string_pretty(&File {
             default: self.default.clone(),
+            max_tool_steps: self.max_tool_steps,
             provider: self.providers.clone(),
             // Carried through the editor untouched. The providers table is the
             // only thing the page writes, and a writer that dropped the
@@ -1248,6 +1273,7 @@ impl Config {
     ) -> Self {
         Self {
             default,
+            max_tool_steps: self.max_tool_steps,
             // Worked out again from what this becomes: [`Config::write`]
             // parses its own text, and a reader loads the file.
             held: None,
@@ -1376,6 +1402,35 @@ impl Config {
         self.ui.as_ref()
     }
 
+    /// The file as Settings → General hands back its `max-tool-steps`: `None`
+    /// is [`agent_core::agent::DEFAULT_MAX_STEPS`] again, written as no key.
+    pub fn with_max_tool_steps(&self, steps: Option<u32>) -> Self {
+        Self {
+            max_tool_steps: steps.filter(|steps| *steps > 0),
+            ..self.clone()
+        }
+    }
+
+    /// The file's own `max-tool-steps`, where it says one.
+    pub fn general_max_tool_steps(&self) -> Option<u32> {
+        self.max_tool_steps
+    }
+
+    /// How many tool calls one turn on `model` of `profile` may make before it
+    /// asks: the model's `max-tool-steps`, its provider's, the file's own —
+    /// `None` where none says, which is
+    /// [`agent_core::agent::DEFAULT_MAX_STEPS`]. Asked at each turn, so a
+    /// change in Settings reaches the next one.
+    pub fn max_tool_steps(&self, profile: Option<&str>, model: &str) -> Option<u32> {
+        let profile = profile.and_then(|name| self.providers.get(name));
+        profile
+            .and_then(|profile| profile.models.get(model))
+            .and_then(|entry| entry.max_tool_steps)
+            .or_else(|| profile.and_then(|profile| profile.max_tool_steps))
+            .or(self.max_tool_steps)
+            .filter(|steps| *steps > 0)
+    }
+
     /// The container runtime an image runs on where nothing names one.
     pub fn default_runtime(&self) -> agent_core::worker::Runtime {
         self.runtimes
@@ -1486,6 +1541,11 @@ pub struct Resolved {
     pub engine: Option<(String, Engine)>,
     /// How tool calls travel to and from this destination.
     pub tool_calls: ToolCalls,
+    /// `max-tool-steps`: the model's, the profile's, the file's own — `None`
+    /// where none says. `luu chat` reads it once; `serve` and `stdio` ask
+    /// [`Config::max_tool_steps`] at each turn instead, so Settings reaches the
+    /// next one.
+    pub max_tool_steps: Option<u32>,
     /// `thinking`, `effort` and `max-tokens`: the model's over the profile's.
     /// Empty on every backend but `anthropic`, where the file refuses them.
     pub messages: MessagesKeys,
@@ -1512,6 +1572,7 @@ impl Resolved {
             destination_from: DestinationFrom::Default,
             engine: None,
             tool_calls: ToolCalls::Fenced,
+            max_tool_steps: None,
             messages: MessagesKeys::default(),
             named: false,
         }
@@ -1709,6 +1770,11 @@ pub fn resolve(
             .or(entry.tool_calls)
             .or(profile.tool_calls)
             .unwrap_or(kind.default_tool_calls()),
+        max_tool_steps: entry
+            .max_tool_steps
+            .or(profile.max_tool_steps)
+            .or(config.max_tool_steps)
+            .filter(|steps| *steps > 0),
         messages,
         profile: name,
         // A flag beats the file here exactly as it does field by field above,
@@ -1806,6 +1872,47 @@ mod tests {
         assert!(!off.sessions().auto_name);
         assert!(off.render().unwrap().contains("auto-name = false"));
         assert!(Config::from_toml("[sessions]\nautoname = false\n", "c").is_err());
+    }
+
+    /// `max-tool-steps`: the model's over its provider's over the file's own,
+    /// and `None` — the default — where none says. Written by Settings →
+    /// General as a key beside `default`, and gone again when cleared.
+    #[test]
+    fn a_turn_s_tool_limit_is_the_model_s_then_the_provider_s_then_the_file_s() {
+        let text = r#"
+            max-tool-steps = 12
+            [provider.big]
+            backend = "openai"
+            url = "http://127.0.0.1:8080/v1"
+            max-tool-steps = 30
+            [provider.big.models."deep"]
+            max-tool-steps = 60
+            [provider.plain]
+            backend = "openai"
+            url = "http://127.0.0.1:8081/v1"
+            "#;
+        let file = config(text).expect("it loads");
+        assert_eq!(file.max_tool_steps(Some("big"), "deep"), Some(60));
+        assert_eq!(file.max_tool_steps(Some("big"), "other"), Some(30));
+        assert_eq!(file.max_tool_steps(Some("plain"), "any"), Some(12));
+        assert_eq!(file.max_tool_steps(None, "mock"), Some(12));
+        assert_eq!(file.general_max_tool_steps(), Some(12));
+        let picked = resolved(
+            text,
+            Flags {
+                provider: Some("big"),
+                model: Some("deep"),
+                ..Flags::default()
+            },
+        );
+        assert_eq!(picked.max_tool_steps, Some(60));
+
+        let cleared = file.with_max_tool_steps(None);
+        assert_eq!(cleared.max_tool_steps(Some("plain"), "any"), None);
+        let rendered = cleared.with_max_tool_steps(Some(20)).render().unwrap();
+        assert!(rendered.starts_with("max-tool-steps = 20"), "{rendered}");
+        assert!(!cleared.render().unwrap().contains("max-tool-steps = 12"));
+        assert!(config("max-tool-step = 3\n").is_err());
     }
 
     /// `[runtimes] default`: Docker until the file names another, kept

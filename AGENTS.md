@@ -428,8 +428,10 @@ build-breaker) and `processes` (`RLIMIT_NPROC`, which the kernel counts per uid
 rather than per process tree) are off until someone types a number. They are
 POSIX, not Linux, so they sit above the `linux.rs`/`fallback.rs` split and are
 the first thing that has ever held a child on macOS — where the verdict now
-reads `rlimits (…)` with the same `missing` instead of "in-process check only". `--max-tool-steps` caps the tool calls one turn may make and
-`--no-tools` runs without them. `luu tools` prints what all of that resolved to,
+reads `rlimits (…)` with the same `missing` instead of "in-process check only". `--max-tool-steps` caps the tool calls one turn may make — over
+`max-tool-steps` in `config.toml`, per model, per provider and the file's own;
+in `serve` a turn at the cap asks whether to go on — and `--no-tools` runs
+without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
 
 **Level 3 exists, in its development posture.** `[worker] runtime` decides where

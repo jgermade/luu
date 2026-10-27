@@ -85,6 +85,19 @@ struct Session {
     /// nothing else is. See
     /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     held: Option<Held>,
+    /// A turn that made every tool call its budget allows, waiting on a person
+    /// to say whether it may go on. At most one, for `held`'s reason. See
+    /// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+    limit_held: Option<HeldLimit>,
+}
+
+/// A turn waiting at its tool budget on a person's answer, named by the call
+/// that found it spent.
+struct HeldLimit {
+    turn: TurnId,
+    step: u32,
+    index: u32,
+    answer: tokio::sync::oneshot::Sender<agent_core::protocol::Extension>,
 }
 
 /// One call waiting on a person's answer.
@@ -112,6 +125,62 @@ struct Watching {
     events: mpsc::Sender<TurnEvent>,
     /// What a session grant is resolved against.
     base: PathBuf,
+}
+
+/// The same person, at a turn's tool budget: publishes
+/// [`ServerMessage::LimitReached`] and waits for [`ClientMessage::ExtendLimit`].
+/// A sender dropped without an answer — the session replaced under it — is
+/// *stop*, the end the turn would have had with nobody to ask. *No limit for
+/// the session* is remembered here, before the turn goes on.
+impl agent_core::agent::Extender for Watching {
+    fn extend<'a>(
+        &'a self,
+        step: u32,
+        index: u32,
+        used: u32,
+        more: u32,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = agent_core::protocol::Extension> + Send + 'a>,
+    > {
+        use agent_core::protocol::Extension;
+        Box::pin(async move {
+            let (answer, answered) = tokio::sync::oneshot::channel();
+            // Held before it is announced, for `ask`'s reason.
+            {
+                let mut session = self.app.session.lock().await;
+                session.limit_held = Some(HeldLimit {
+                    turn: self.turn,
+                    step,
+                    index,
+                    answer,
+                });
+            }
+            let _ = self
+                .events
+                .send(TurnEvent::LimitReached {
+                    step,
+                    index,
+                    used,
+                    more,
+                })
+                .await;
+            let answer = answered.await.unwrap_or(Extension::Stop);
+            {
+                let mut session = self.app.session.lock().await;
+                if session.limit_held.as_ref().is_some_and(|held| {
+                    held.turn == self.turn && held.step == step && held.index == index
+                }) {
+                    session.limit_held = None;
+                }
+            }
+            if answer == Extension::Session {
+                self.app
+                    .tools_unlimited
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            answer
+        })
+    }
 }
 
 impl agent_core::agent::Asker for Watching {
@@ -374,6 +443,12 @@ struct App {
     /// What a person allowed for the live session's drafts, until taken back.
     /// Emptied by a new session, refilled from the stream by a resume.
     grants: crate::grants::Answered,
+    /// `--max-tool-steps`, when it was given. See [`tool_budget`].
+    tool_steps: Option<u32>,
+    /// A person answered *no limit for the session* at a turn's tool budget:
+    /// its turns make every call the model asks for. Cleared by a new session,
+    /// refilled from the stream by a resume, as `grants` is.
+    tools_unlimited: std::sync::atomic::AtomicBool,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
@@ -783,6 +858,9 @@ pub struct StdioOptions {
     pub constrain: Option<crate::ConstrainKind>,
     /// Where sessions are cached between restarts.
     pub store: Option<PathBuf>,
+    /// `--max-tool-steps`, when it was given: over every `max-tool-steps`
+    /// in config.toml. `None` reads the file at each turn.
+    pub max_tool_steps: Option<u32>,
 }
 
 /// The brand marks as this server draws them: what `[ui] brand-icons` says,
@@ -890,6 +968,7 @@ impl App {
             constrain,
             store,
             approvers,
+            max_tool_steps,
         } = options;
         let started_at = now_ms();
 
@@ -1082,6 +1161,7 @@ impl App {
                 pending: None,
                 narrowed: None,
                 held: None,
+                limit_held: None,
             }),
             events: broadcast::channel(1024).0,
             recorder,
@@ -1092,6 +1172,8 @@ impl App {
             postures: std::sync::RwLock::new(postures),
             environments: std::sync::RwLock::new(environments),
             grants: Default::default(),
+            tool_steps: max_tool_steps,
+            tools_unlimited: Default::default(),
             postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
@@ -1359,6 +1441,9 @@ pub struct ServeOptions {
     /// memory for the life of the process, which is what `serve` did before the
     /// store existed.
     pub store: Option<PathBuf>,
+    /// `--max-tool-steps`, when it was given: over every `max-tool-steps`
+    /// in config.toml. `None` reads the file at each turn.
+    pub max_tool_steps: Option<u32>,
 }
 
 /// A server that has its port and has not started answering yet.
@@ -1461,6 +1546,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         store,
         approvers,
         icons,
+        max_tool_steps,
     } = options;
     // Before anything else, and before the listener exists: a port that would
     // publish task approval to the network is not a port this binds and then
@@ -1500,6 +1586,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         constrain,
         store,
         approvers,
+        max_tool_steps,
     })
     .await?;
 
@@ -1558,6 +1645,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/settings", get(get_settings))
         .route("/api/settings.json", get(get_settings))
         .route("/api/providers", get(get_providers).put(put_providers))
+        .route("/api/tool-steps", axum::routing::put(put_tool_steps))
         .route("/api/policies", get(get_policies).put(put_policies))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/probe", post(probe_provider))
@@ -2471,6 +2559,40 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
                 }
             }
         }
+        // Whether a turn at its tool budget may go on. Applied only to the
+        // call that is waiting, so an answer that raced the turn's end is
+        // refused rather than carried to the next one.
+        ClientMessage::ExtendLimit {
+            turn,
+            step,
+            index,
+            answer,
+        } => {
+            let index = index.unwrap_or(1);
+            let held = {
+                let mut session = app.session.lock().await;
+                match &session.limit_held {
+                    Some(held) if held.turn == turn && held.step == step && held.index == index => {
+                        session.limit_held.take()
+                    }
+                    _ => None,
+                }
+            };
+            match held {
+                Some(held) => {
+                    let _ = held.answer.send(answer);
+                }
+                None => {
+                    refuse(
+                        app,
+                        "extend_limit",
+                        Refusal::Call,
+                        format!("no turn waits at its tool limit at turn {turn}, step {step}"),
+                    )
+                    .await;
+                }
+            }
+        }
         // A yes or a no for the session taken back: the next call it covered
         // is asked again. Taking back what is not in force changes nothing
         // and says nothing.
@@ -2795,6 +2917,7 @@ async fn request_plan(app: Arc<App>) {
             session.current = None;
             session.cancel = None;
             session.held = None;
+            session.limit_held = None;
         }
 
         // Cancelled or broken: there is no proposal, and inventing one would
@@ -3803,6 +3926,16 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         _ => None,
     };
 
+    // How many tool calls it may make before it asks: none to count where a
+    // person said *no limit for the session*.
+    let budget = match app
+        .tools_unlimited
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        true => u32::MAX,
+        false => tool_budget(&app, &sending).await,
+    };
+
     // What a session nobody named is named from, once this turn is over —
     // see [`name_session`]. Kept before the task takes the prompt.
     let named_from = prompt.clone();
@@ -3882,12 +4015,15 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             request,
             agency.executor(),
             sandbox.as_ref(),
-            agency.limits,
+            agency.limits.with_max_steps(budget),
             app.schema_retry.as_ref(),
             wider.as_ref().map(|ceiling| agent_core::agent::Ask {
                 ceiling,
                 person: &watching,
             }),
+            // Any turn may ask at its tool budget: going on is not an
+            // authority a plan grants, only time and the window it spends.
+            Some(&watching),
             tx,
             cancel_rx,
         )
@@ -3929,6 +4065,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             session.current = None;
             session.cancel = None;
             session.held = None;
+            session.limit_held = None;
 
             // After the turn is in the history, so the close sees this turn's
             // steps — the ones that just ran the command it closes on. Before
@@ -6703,6 +6840,16 @@ struct ProvidersView {
     /// is in it. Read from disk here rather than kept in `config.toml`, where
     /// even two ends of a key would be two ends of a key in every backup.
     keys: std::collections::BTreeMap<String, crate::secret::Preview>,
+    /// The file's own `max-tool-steps`: Settings → General's, what a provider
+    /// and a model that say none get. `None` is the default below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tool_steps: Option<u32>,
+    /// What none of the file's three says is.
+    default_max_tool_steps: u32,
+    /// `--max-tool-steps`, when this server was started with it: over the
+    /// file's three, which the page then says do nothing until it is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_steps_flag: Option<u32>,
 }
 
 async fn providers_view(
@@ -6791,7 +6938,48 @@ async fn providers_view(
             }
         },
         keys,
+        max_tool_steps: config.general_max_tool_steps(),
+        default_max_tool_steps: agent_core::agent::DEFAULT_MAX_STEPS,
+        tool_steps_flag: state.app.tool_steps,
     })
+}
+
+#[derive(serde::Deserialize)]
+struct ToolStepsAsk {
+    /// `None`, or 0, is the default again: no key in the file.
+    steps: Option<u32>,
+}
+
+/// Writes the file's own `max-tool-steps` — Settings → General's — and answers
+/// with the providers' view, which carries it. Read at each turn, so the next
+/// one counts by it. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+async fn put_tool_steps(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<ToolStepsAsk>,
+) -> Response {
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "the tool limit is read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    if let Err(error) = write_config(current.with_max_tool_steps(asked.steps), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    get_providers(State(state)).await
 }
 
 async fn get_providers(State(state): State<AppRouterState>) -> Response {
@@ -8327,6 +8515,26 @@ async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRu
     .await
 }
 
+/// How many tool calls a turn on `destination` may make before it asks
+/// whether it may go on: `--max-tool-steps` where it was given, else the
+/// model's `max-tool-steps`, its provider's, the file's own (Settings →
+/// General), else [`agent_core::agent::DEFAULT_MAX_STEPS`]. The file is read
+/// at each turn, so what Settings writes reaches the next one without a new
+/// session. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+async fn tool_budget(app: &App, destination: &Destination) -> u32 {
+    if let Some(steps) = app.tool_steps {
+        return steps.max(1);
+    }
+    load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| {
+            config.max_tool_steps(destination.settings.profile.as_deref(), &destination.model)
+        })
+        .unwrap_or(agent_core::agent::DEFAULT_MAX_STEPS)
+}
+
 /// Every place a session made from lists may run, as [`Where`]s: this
 /// machine, and each image [`images_named`] finds on every container runtime
 /// — the default one first (`[runtimes] default`, Docker where the file says
@@ -8705,11 +8913,14 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         previous.shutdown().await;
     }
     *app.posture.lock().await = posture_name.clone();
-    // A new session starts with nothing allowed by anybody.
+    // A new session starts with nothing allowed by anybody, and its turns
+    // counted again.
     app.grants
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clear();
+    app.tools_unlimited
+        .store(false, std::sync::atomic::Ordering::SeqCst);
 
     let started_at = now_ms();
     let new_id = session_id(started_at);
@@ -9142,6 +9353,11 @@ async fn resume_session(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) =
         crate::grants::Answers::in_force(&loaded_view.grants);
+    // And whether a person lifted its tool limit.
+    app.tools_unlimited.store(
+        loaded_view.tools_unlimited,
+        std::sync::atomic::Ordering::SeqCst,
+    );
 
     *app.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store
@@ -9638,6 +9854,7 @@ mod tests {
                 pending: None,
                 narrowed: None,
                 held: None,
+                limit_held: None,
             }),
             events: broadcast::channel(1024).0,
             recorder: None,
@@ -9651,6 +9868,8 @@ mod tests {
             postures: Default::default(),
             environments: Default::default(),
             grants: Default::default(),
+            tool_steps: None,
+            tools_unlimited: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),

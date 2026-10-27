@@ -554,7 +554,10 @@ impl Started {
     /// The engine up, and the backend that dials the port it answers on —
     /// built again if that is not the port it dialled.
     async fn ready(&self) -> Result<Arc<dyn agent_core::backend::Backend>, String> {
-        let port = self.supervisor.ensure(&self.engine_name, &self.engine).await?;
+        let port = self
+            .supervisor
+            .ensure(&self.engine_name, &self.engine)
+            .await?;
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.0 != Some(port) {
             let moved = inner.0.is_some();

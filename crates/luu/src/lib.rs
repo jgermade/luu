@@ -1179,9 +1179,12 @@ pub(crate) struct SandboxArgs {
     #[arg(long = "sandbox-enforcement", value_enum)]
     enforcement: Option<EnforcementKind>,
 
-    /// Tool calls one turn may make before it has to answer.
-    #[arg(long, default_value_t = DEFAULT_MAX_STEPS)]
-    max_tool_steps: u32,
+    /// Tool calls one turn may make before it has to answer — or, in `serve`,
+    /// before it asks whether it may go on. Over every `max-tool-steps` in
+    /// config.toml: the model's, then its provider's, then the file's own,
+    /// and 8 where none says.
+    #[arg(long)]
+    max_tool_steps: Option<u32>,
 
     /// Run without tools. The prefix loses the definitions block, so this is
     /// not the same prompt with the tools ignored — it is a different one.
@@ -1508,7 +1511,7 @@ impl SandboxArgs {
             }),
             std::sync::Arc::new(sandbox),
             agent_core::agent::Limits::default()
-                .with_max_steps(self.max_tool_steps)
+                .with_max_steps(self.max_tool_steps.unwrap_or(DEFAULT_MAX_STEPS))
                 .with_tool_timeout(std::time::Duration::from_millis(worker_config.timeout_ms)),
             worker,
         )
@@ -2802,6 +2805,7 @@ pub async fn run() -> Result<()> {
             exposure,
             origin,
             approvers,
+            max_tool_steps: sandbox_args.max_tool_steps,
         })
         .await;
     }
@@ -2922,6 +2926,7 @@ pub async fn run() -> Result<()> {
             select_weights: weights_of(select_docs, select_graph),
             constrain,
             approvers,
+            max_tool_steps: sandbox_args.max_tool_steps,
         })
         .await;
     }
@@ -3000,6 +3005,15 @@ pub async fn run() -> Result<()> {
     // Held until the run ends: dropping it stops the server it started.
     let (_engine, backend, resolved) = engine_for(backend, resolved).await?;
     let resolved = with_server_window(resolved, backend.as_ref()).await;
+    // The file's `max-tool-steps`, where the flag did not say.
+    let agency = match (sandbox_args.max_tool_steps, resolved.max_tool_steps) {
+        (None, Some(steps)) => {
+            let mut agency = agency;
+            agency.limits = agency.limits.with_max_steps(steps);
+            agency
+        }
+        _ => agency,
+    };
     let model = resolved.model.clone();
     let context_limit = resolved.context_limit;
     let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
@@ -3601,6 +3615,9 @@ pub async fn run() -> Result<()> {
                         // `chat` passes no asker, so the loop never holds a
                         // call here.
                         TurnEvent::CallHeld { .. } => {}
+                        // Nor an extender: nothing reaches its tool limit
+                        // asking.
+                        TurnEvent::LimitReached { .. } | TurnEvent::LimitExtended { .. } => {}
                         // Loud, the way a known-incompatible backend's caveat
                         // is at startup — on stderr rather than into the
                         // transcript `out` carries, so a run compared against
@@ -3626,6 +3643,8 @@ pub async fn run() -> Result<()> {
             schema_retry.as_ref(),
             // `chat` has no floor and no gate: the policy file is its
             // standing approval, so there is nothing a person could add.
+            None,
+            // And nobody to ask at the tool limit: the turn ends on it.
             None,
             tx,
             cancel,

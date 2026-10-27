@@ -583,7 +583,19 @@ The model never executes anything directly — it only emits a structured reques
   Capped at `--max-tool-steps` (8), which counts **executed calls** — a reply
   that carries three spends three of them — and exhausting it ends the turn with
   `EndReason::ToolLimit` rather than presenting an investigation cut short as a
-  conclusion.
+  conclusion. **In `serve` the cap is a question, not an end** (protocol 12,
+  `record::FORMAT` 25): when the model's reply asks for a call past it, the turn
+  waits on a person — `limit_reached`, answered by `extend_limit` with *more*
+  (another budget's worth), *no limit for the session* (kept through a resume)
+  or *stop*, which is the `tool_limit` every turn had. It is asked only when a
+  call past the budget is asked for, never because the budget ran out at a reply
+  the model may yet answer. **Auto answers *more* itself**, so a turn in Auto has
+  no limit and Manual asks again. **The number is the model's `max-tool-steps`,
+  then its provider's, then the file's own (Settings → General), then 8**; read
+  at each turn, so Settings reaches the next one; `--max-tool-steps` holds over
+  all three. `luu stdio` asks as `serve` does, on its own channel; `luu chat`
+  has nobody to ask, and ends on it as before. See
+  [`RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`](RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md).
 - **The steps are messages, and they alternate**: a turn renders as `user(prompt)`,
   then `assistant(call) · user(result)` per step, then `assistant(answer)` — where
   a step that carried more than one call is its reply once and one result after

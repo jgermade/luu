@@ -3,7 +3,7 @@
   // for factory scripts only.
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approvePlan, declinePlan, requestPlan, closeJob, reopenJob, revokeGrant,
-          renameSession,
+          renameSession, extendLimit,
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
   const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
@@ -370,6 +370,23 @@
   // prompt sent now is the answer *more changes*.
   $: proposed = state.pending
   $: answeredFor = maybeAnswer(proposed)
+
+  // **Auto answers the tool limit too, with *more*.** The same decision as the
+  // gate's — made once, by a person, instead of per question — so a turn in
+  // Auto has no limit: each time its budget is spent the page asks for
+  // another. Back in Manual, the next question is the person's. Once per
+  // question, for `maybeAnswer`'s reason. See
+  // `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+  const extendedFor = new Set()
+  const maybeExtend = limit => {
+    if (!limit || prefs.confirm !== "auto" || state.replay) return ""
+    const key = `${limit.turn}:${limit.step}:${limit.index}`
+    if (extendedFor.has(key)) return ""
+    extendedFor.add(key)
+    extendLimit("more")
+    return key
+  }
+  $: limitAnsweredFor = maybeExtend(state.limit, prefs.confirm)
   // The job turns land in: the last one not closed. It is a draft until a plan
   // is approved, which is the alternation on the screen.
   $: live = (state.jobs || state.tasks).filter(j => j.state === "open").slice(-1)[0] || null
@@ -447,7 +464,8 @@
     // nothing on screen moving. A call held for a person is not this: it is
     // waiting on them, and says so on its own card.
     const last = parts[parts.length - 1]
-    const reading = live && last?.kind === "tool" && !!last.call?.verdict && !last.call.held
+    // Nor is a turn at its tool budget: it waits on the question under it.
+    const reading = live && last?.kind === "tool" && !!last.call?.verdict && !last.call.held && !state.limit
       ? last.name || "the call"
       : ""
     return { parts, live, reading, timing: timing(message, tools) }
@@ -974,6 +992,22 @@
             <div :if="entry.reading" class="waiting" aria-live="polite">
               <span class="dot"></span>
               <span>the model is reading what {{ entry.reading }} returned…</span>
+            </div>
+
+            <!-- The turn made every tool call its budget allows and the model
+                 asked for another: it waits here rather than ending. *More* is
+                 another budget's worth; *no limit* lasts the session. In Auto
+                 the page answers *more* itself. -->
+            <div :if="entry.live && state.limit" class="limit-ask" role="group" aria-label="Tool limit">
+              <p class="why">
+                <strong>{{ state.limit.used }} tool calls</strong>, this turn's limit, and the
+                model asked for another. Go on?
+              </p>
+              <div class="answers">
+                <button type="button" class="primary" @click="extendLimit('more')">Continue · {{ state.limit.more }} more</button>
+                <button type="button" @click="extendLimit('session')">No limit this session</button>
+                <button type="button" @click="extendLimit('stop')">Stop here</button>
+              </div>
             </div>
 
             <!-- The turn's facts, and the way into everything behind them: the
@@ -1776,6 +1810,28 @@
   .meta:hover .sym.out, .meta:focus-visible .sym.out { color: #145bff; }
   .meta:hover .sym.in, .meta:focus-visible .sym.in { color: #337a00; }
   .waiting { display: flex; align-items: center; gap: .45rem; font-size: 12px; color: var(--luu-fg-muted); }
+  /* The tool limit's question, as a held call's is asked: a card under the
+     turn's last call, its answers as that card's are drawn. */
+  .limit-ask {
+    margin: .4rem 0;
+    padding: .5rem .6rem;
+    border: 1px solid var(--luu-warn, #b7791f);
+    border-radius: 6px;
+    background: var(--luu-warn-soft, #fdf7e9);
+    font-size: 12.5px;
+  }
+  .limit-ask .why { margin: 0; }
+  .limit-ask .answers { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .45rem; }
+  .limit-ask .answers button {
+    padding: .25rem .7rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 5px;
+    background: var(--luu-bg);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .limit-ask .answers button.primary { background: var(--luu-accent); border-color: var(--luu-accent); color: #fff; }
   .waiting .dot {
     width: 7px; height: 7px; border-radius: 50%; flex: none;
     background: var(--luu-accent); animation: waiting 1s ease-in-out infinite;
