@@ -220,19 +220,26 @@
       <ul :if="r.answers" class="images">
         <li :each="i in r.images" :key="i.image">
           <code>{{ i.image }}</code>
-          <span :if="i.present" class="state up">built</span>
+          <!-- `built` is *this luu's worker*, not *a tag by that name*: the
+               worker in it was asked which luu it is. -->
+          <span :if="i.present && !i.stale" class="state up">built</span>
+          <span :if="i.present && i.stale" class="state down">out of date</span>
           <span :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" class="state down">not built</span>
+          <span :if="i.worker" class="dim small">luu {{ i.worker }}<span :if="i.from"> · from {{ i.from }}</span></span>
           <!-- From the release by default: this version's Linux binary, no
                compiler. From source only where the base has a Containerfile,
-               which is luu's own checkout. -->
-          <button :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
+               which is luu's own checkout. Offered again for an image that
+               is out of date. -->
+          <button :if="(i.present === false || i.cure === 'release') && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
                   :title="`luu ${view.release}'s Linux binary, from its GitHub release`"
-                  :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image)">build</button>
+                  :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image)">{{ i.stale ? "rebuild" : "build" }}</button>
           <button :if="view.from_source && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link dim"
                   title="Compiles this checkout inside the image: minutes, and what a change to the worker needs"
                   :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image, 'source')">from source</button>
           <span :if="buildOf(r.runtime, i.image)?.state === 'running'" class="state">building…</span>
           <span :if="buildOf(r.runtime, i.image)?.state === 'failed'" class="state down">the last build failed</span>
+          <span :if="i.stale" class="why warn small">{{ i.stale }}<span :if="i.cure === 'source'">: the release is this same version, so only a build from source can make it this one{{ view.from_source ? "" : ", from luu's own checkout" }}</span></span>
+          <span :if="i.unasked" class="why dim small">Its worker could not be asked: {{ i.unasked }}</span>
           <div :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre></Scrollable></div>
         </li>
         <li :if="!r.images.length" class="dim small">No policy file here names an image.</li>
@@ -351,6 +358,8 @@
     font-size: 12px;
     padding: .25rem 0;
   }
+  /* Why an image is out of date, or could not be asked: a line of its own. */
+  .images .why { flex-basis: 100%; }
   /* The well holds the place in the row; the `pre` in it scrolls. */
   .log-well { flex-basis: 100%; margin: .3rem 0 0; }
   .log {

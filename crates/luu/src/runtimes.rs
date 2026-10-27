@@ -13,9 +13,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_core::worker::Runtime;
+use agent_core::worker::{Hello, Response, Runtime};
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
+
+/// The label luu puts on what it builds, saying from what: `release` or
+/// `source`. Only an image that says `release` is rebuilt by itself. See
+/// `RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md`.
+const FROM_LABEL: &str = "luu.from";
 
 /// How long a probe may take before it is an answer of its own. Docker
 /// Desktop's VM takes a while to wake; a runtime that is still silent after
@@ -122,6 +127,21 @@ pub struct ImageView {
     pub image: String,
     /// `None` where it could not be asked: not installed, or not answering.
     pub present: Option<bool>,
+    /// How luu built it, by its `luu.from` label: `release` or `source`.
+    /// `None` for an image luu did not label — by hand, or before it did.
+    pub from: Option<String>,
+    /// Which luu its worker said it is, `0.1.4 (3f2a9c1b)`, where it was
+    /// asked.
+    pub worker: Option<String>,
+    /// How that is not this luu, where it is not: [`Hello::differs`].
+    pub stale: Option<String>,
+    /// Which build would make it this luu's worker, where it is not: the
+    /// release when the version is what moved, and only source when it is
+    /// this same version from other sources — a rebuild from the release
+    /// would bring the same release back.
+    pub cure: Option<BuildFrom>,
+    /// Why its worker could not be asked, where it could not.
+    pub unasked: Option<String>,
 }
 
 /// Every container runtime as far as it can be seen **without asking it**:
@@ -159,6 +179,11 @@ fn seen(runtime: Runtime, images: &[String]) -> RuntimeView {
             .map(|image| ImageView {
                 image: image.clone(),
                 present: None,
+                from: None,
+                worker: None,
+                stale: None,
+                cure: None,
+                unasked: None,
             })
             .collect(),
     }
@@ -184,30 +209,105 @@ pub async fn probe(runtime: Runtime, images: &[String]) -> RuntimeView {
         }
     }
     for image in &mut view.images {
-        if let Some(argv) = runtime.image_argv(&image.image) {
-            image.present = Some(run(&argv).await.is_ok());
+        let Some(argv) = runtime.image_argv(&image.image) else {
+            continue;
+        };
+        let Ok(inspected) = run(&argv).await else {
+            image.present = Some(false);
+            continue;
+        };
+        image.present = Some(true);
+        image.from = label(&inspected, FROM_LABEL);
+        // `built` means *this luu's worker*, not *a tag by that name*: the
+        // worker in it is asked, and says.
+        match hello_of(runtime, &image.image).await {
+            Ok(hello) => {
+                image.worker = Some(hello.identity());
+                image.stale = hello.differs();
+                image.cure = image.stale.as_ref().map(|_| {
+                    match hello.version == env!("CARGO_PKG_VERSION") {
+                        true => BuildFrom::Source,
+                        false => BuildFrom::Release,
+                    }
+                });
+            }
+            Err(why) => image.unasked = Some(why),
         }
     }
     view
 }
 
-/// Runs one line under [`PROBE`], answering with its first line of complaint
-/// when it fails.
-async fn run(argv: &[String]) -> Result<(), String> {
+/// How long the worker in an image may take to say its hello: a container
+/// start, which on a VM is a second or more.
+const HELLO: Duration = Duration::from_secs(20);
+
+/// What the worker in `image` says it is, from a container started with
+/// nothing to do: the first line it writes is its hello, and then its input
+/// is closed and it exits.
+pub async fn hello_of(runtime: Runtime, image: &str) -> Result<Hello, String> {
+    let argv = runtime
+        .hello_argv(image)
+        .ok_or_else(|| format!("`{runtime}` runs no images"))?;
+    let said = run_for(&argv, HELLO).await?;
+    let line = said
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .ok_or("its worker said nothing")?;
+    match serde_json::from_str::<Response>(line) {
+        Ok(Response::Hello(hello)) => Ok(hello),
+        Ok(other) => Err(format!(
+            "its worker answered something else first: {other:?}"
+        )),
+        Err(error) => Err(format!("its worker's first line is not a hello: {error}")),
+    }
+}
+
+/// How luu built `image`, by its `luu.from` label, or `None` where it did not
+/// label it or the image is not there.
+pub async fn built_from(runtime: Runtime, image: &str) -> Option<String> {
+    let argv = runtime.image_argv(image)?;
+    label(&run(&argv).await.ok()?, FROM_LABEL)
+}
+
+/// A label's value out of `image inspect`'s JSON, wherever the runtime put
+/// it: Docker under `Config.Labels`, Podman there and at the top, and the
+/// others in their own shapes. Looked for by key rather than by path, since
+/// the five do not agree on the path.
+fn label(inspected: &str, key: &str) -> Option<String> {
+    fn find(value: &serde_json::Value, key: &str) -> Option<String> {
+        match value {
+            serde_json::Value::Object(map) => map
+                .get(key)
+                .and_then(|found| found.as_str().map(str::to_string))
+                .or_else(|| map.values().find_map(|value| find(value, key))),
+            serde_json::Value::Array(items) => items.iter().find_map(|value| find(value, key)),
+            _ => None,
+        }
+    }
+    find(&serde_json::from_str(inspected).ok()?, key)
+}
+
+/// Runs one line under [`PROBE`]: what it printed, or its first line of
+/// complaint when it fails.
+async fn run(argv: &[String]) -> Result<String, String> {
+    run_for(argv, PROBE).await
+}
+
+async fn run_for(argv: &[String], clock: Duration) -> Result<String, String> {
     let mut command = tokio::process::Command::new(&argv[0]);
     command
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let output = match tokio::time::timeout(PROBE, command.output()).await {
-        Err(_) => return Err(format!("did not answer in {}s", PROBE.as_secs())),
+    let output = match tokio::time::timeout(clock, command.output()).await {
+        Err(_) => return Err(format!("did not answer in {}s", clock.as_secs())),
         Ok(Err(error)) => return Err(error.to_string()),
         Ok(Ok(output)) => output,
     };
     match output.status.success() {
-        true => Ok(()),
+        true => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
         false => Err(String::from_utf8_lossy(&output.stderr)
             .lines()
             .map(str::trim)
@@ -220,7 +320,7 @@ async fn run(argv: &[String]) -> Result<(), String> {
 // ---- tasks ------------------------------------------------------------------
 
 /// Where an image's luu comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuildFrom {
     /// This version's release, for Linux: no compiler, no checkout.
@@ -234,13 +334,39 @@ pub enum BuildFrom {
 /// [`release_context`] for a release one.
 fn build_line(runtime: Runtime, image: &str, from: BuildFrom) -> Option<Vec<String>> {
     match from {
-        BuildFrom::Source => runtime.build_argv(image, "Containerfile", ".", &[]),
+        BuildFrom::Source => {
+            runtime.build_argv(image, "Containerfile", ".", &[], &[(FROM_LABEL, "source")])
+        }
         BuildFrom::Release => runtime.build_argv(
             image,
             "Containerfile.release",
             ".",
             &[("LUU_VERSION", env!("CARGO_PKG_VERSION"))],
+            &[(FROM_LABEL, "release")],
         ),
+    }
+}
+
+/// How long a rebuild from the release may take when a session waits on it:
+/// a download of the binary and, the first time, the base image.
+const REBUILDING: Duration = Duration::from_secs(600);
+
+/// Rebuilds `image` from this version's release, for a session that is
+/// waiting on it: the same line *build* runs in Settings, every line it
+/// prints to `say`. See
+/// `RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md`.
+pub async fn rebuild(runtime: Runtime, image: &str, say: impl Fn(String)) -> Result<(), String> {
+    let argv = build_line(runtime, image, BuildFrom::Release)
+        .ok_or_else(|| format!("`{runtime}` builds no images"))?;
+    let dir = release_context()?;
+    say(format!("$ {}", argv.join(" ")));
+    match tokio::time::timeout(REBUILDING, run_step(&argv, &dir, &say)).await {
+        Err(_) => Err(format!(
+            "the build took longer than {}s",
+            REBUILDING.as_secs()
+        )),
+        Ok(Err(status)) => Err(format!("the build failed: {status}")),
+        Ok(Ok(_)) => Ok(()),
     }
 }
 
@@ -500,7 +626,7 @@ pub async fn wake(runtime: Runtime, say: impl Fn(String)) -> Result<(), String> 
     let deadline = tokio::time::Instant::now() + WAKING;
     loop {
         match run(&probe).await {
-            Ok(()) => return Ok(()),
+            Ok(_) => return Ok(()),
             Err(said) if tokio::time::Instant::now() >= deadline => {
                 return Err(format!(
                     "started, and still not answering after {}s: {said}",
@@ -693,6 +819,16 @@ mod tests {
     }
 
     #[test]
+    fn a_label_is_found_wherever_the_runtime_put_it() {
+        let docker = r#"[{"Id":"sha256:1","Config":{"Labels":{"luu.from":"release"}}}]"#;
+        let podman = r#"[{"Labels":{"luu.from":"source"},"Config":{"Labels":null}}]"#;
+        assert_eq!(label(docker, FROM_LABEL).as_deref(), Some("release"));
+        assert_eq!(label(podman, FROM_LABEL).as_deref(), Some("source"));
+        assert_eq!(label(r#"[{"Config":{"Labels":null}}]"#, FROM_LABEL), None);
+        assert_eq!(label("not json", FROM_LABEL), None);
+    }
+
+    #[test]
     fn a_release_build_carries_this_version_and_reads_no_checkout() {
         let line = build_line(Runtime::Docker, "luu-worker:dev", BuildFrom::Release).unwrap();
         let version = format!("LUU_VERSION={}", env!("CARGO_PKG_VERSION"));
@@ -702,7 +838,11 @@ mod tests {
             "{line:?}"
         );
         assert!(RELEASE_CONTAINERFILE.contains("ARG LUU_VERSION"));
+        // And each says what it was built from, which is what decides whether
+        // luu may rebuild it by itself.
+        assert!(line.contains(&"luu.from=release".to_string()), "{line:?}");
         let line = build_line(Runtime::Docker, "luu-worker:dev", BuildFrom::Source).unwrap();
         assert!(!line.iter().any(|word| word == "--build-arg"), "{line:?}");
+        assert!(line.contains(&"luu.from=source".to_string()), "{line:?}");
     }
 }

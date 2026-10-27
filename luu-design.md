@@ -910,6 +910,23 @@ access = "execute"
   and on Linux linked against a glibc that may be newer than the image's. A
   release whose worker protocol differs is refused at the handshake. See
   [`RECORD/2026-10-27.runtimes-without-the-wait.completed.md`](RECORD/2026-10-27.runtimes-without-the-wait.completed.md).
+- **An image knows which luu it carries, and is held to it.** `PROTOCOL` says
+  whether the two sides can parse each other; `agent_core::worker::BUILD` says
+  whether they are the same code — a hash `crates/agent-core/build.rs` takes over
+  agent-core's sources and the workspace's `Cargo.toml` and `Cargo.lock`, content
+  and not a commit, so two uncommitted states differ and a build from source
+  (which has no `.git`) computes it over the same files its `COPY` brought in.
+  The hello carries it (`build`, optional: no protocol bump), and
+  `Hello::differs` is the one rule — same version, same build — that `luu tools`
+  (a `stale` line), Settings (`built`, or `out of date` with the reason, asked by
+  starting the image's worker with nothing to do) and the session start all ask.
+  luu labels what it builds `luu.from=release|source`; at a session start an
+  image labelled `release` whose version is not this one is **rebuilt from this
+  version's release** and the worker started again (seconds), the protocol
+  refusal included, and everything else is said and kept: a source image is
+  minutes per agent-core edit, and a release of this same version would bring
+  the same release back. See
+  [`RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md`](RECORD/2026-10-27.an-image-that-knows-its-luu.completed.md).
 - **Nothing a session installs outlives its container.** `--rm` and a worker as
   PID 1 mean a posture move, a replaced worker and the end of a session each
   start again from the image; the worker is the person's uid, so `apt-get` has

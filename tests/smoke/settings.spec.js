@@ -1504,6 +1504,12 @@ test("runtimes, postures and the host shell are configured from Settings", async
   expect(seen.release).toMatch(/^\d+\.\d+\.\d+/)
   const one = await (await fetch(`${BASE}/api/runtimes/nerdctl`)).json()
   expect(one.runtime).toBe("nerdctl")
+  // Each image says which luu its worker is, where it could be asked, and
+  // nothing it could not know where it could not.
+  for (const image of one.images) {
+    expect(Object.keys(image)).toEqual(
+      expect.arrayContaining(["present", "from", "worker", "stale", "cure", "unasked"]))
+  }
   expect((await fetch(`${BASE}/api/runtimes/host`)).status).toBe(400)
 
   // A posture, named by a policy file out of the list — this checkout's.

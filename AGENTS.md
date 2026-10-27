@@ -207,6 +207,11 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # of the checkout; and `[terminal] host`. Writes are loopback-only, like Engines.
 # A session whose runtime is down starts it with the same lines *start it* runs,
 # and asks the worker again; nothing it installs in the container is kept.
+# `built` means *this luu's worker*: the image's worker is asked for its hello,
+# whose `build` is a hash of agent-core's sources, and one from another version
+# or other sources reads `out of date`. An image luu built from a release and
+# whose version moved is rebuilt from this version's release when a session
+# starts on it; any other stale image is said (stderr, the log, `luu tools`).
 #
 # Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed
