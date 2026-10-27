@@ -217,7 +217,13 @@ use crate::trace::TraceMessage;
 /// a posture or an environment of the file — with the runtime and image a
 /// resume makes it again on. Absent for every other posture, and in every
 /// stream before it.
-pub const FORMAT: u32 = 24;
+///
+/// **25 carries `limit_reached` and `limit_extended`**, new lines on the
+/// protocol channel — a turn that spent its tool budget asking a person
+/// rather than ending, and the budget their yes left — which a resume folds
+/// into *no limit* where the yes was for the session. Protocol 12. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+pub const FORMAT: u32 = 25;
 
 /// The posture a session ran under, as a recording names it.
 ///

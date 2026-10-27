@@ -124,6 +124,12 @@ pub struct Profile {
     /// URL and not in a flag somebody retypes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_limit: Option<u32>,
+    /// How many tool calls one turn on this provider may make before it asks
+    /// whether it may go on: over the file's own `max-tool-steps`, under a
+    /// model's. See
+    /// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_steps: Option<u32>,
     /// A path, never the key itself. A key in a config file is a key in every
     /// backup, every screen share and every `cat` in a bug report.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,6 +236,9 @@ pub struct ModelEntry {
     /// tools, or chosen there, so a run resolves it without asking anyone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<ToolCalls>,
+    /// One model's `max-tool-steps`, over its provider's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_steps: Option<u32>,
     /// `false` leaves the model out of the pickers. Naming it with `-m` still
     /// reaches it: typing a model is choosing it.
     #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
@@ -252,6 +261,7 @@ impl Default for ModelEntry {
         Self {
             context_limit: None,
             tool_calls: None,
+            max_tool_steps: None,
             enabled: true,
             thinking: None,
             effort: None,
@@ -400,6 +410,17 @@ pub enum EngineKind {
 struct File {
     #[serde(skip_serializing_if = "Option::is_none")]
     default: Option<String>,
+    /// How many tool calls one turn may make before it asks whether it may go
+    /// on, where neither its model nor its provider says: Settings → General.
+    /// Beside `default` because it is the same kind of answer — what holds
+    /// where a provider says nothing. Absent is
+    /// [`agent_core::agent::DEFAULT_MAX_STEPS`].
+    #[serde(
+        default,
+        rename = "max-tool-steps",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_tool_steps: Option<u32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     provider: BTreeMap<String, Profile>,
     /// `[posture.<name>]`: what a session is allowed to do, by the name of the
@@ -433,6 +454,10 @@ struct File {
     /// machine's account. See [`Terminal`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     terminal: Option<Terminal>,
+    /// `[runtimes]`: which container runtime an image runs on where nothing
+    /// names one. See [`Runtimes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtimes: Option<Runtimes>,
     /// `[sessions]`: what the server does with a session on its own. See
     /// [`Sessions`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -578,6 +603,21 @@ impl Default for Sessions {
     fn default() -> Self {
         Self { auto_name: true }
     }
+}
+
+/// `[runtimes]`. One setting so far.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Runtimes {
+    /// The container runtime a session starts in: the first session of
+    /// `luu serve`, and the new session's *Runtime* before anything else is
+    /// chosen — the others are offered after it. **Absent is this machine**:
+    /// no session starts in a container nobody chose. Chosen in Settings →
+    /// Runtimes. See
+    /// `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`
+    /// and `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<agent_core::worker::Runtime>,
 }
 
 /// `[terminal]`. One setting so far.
@@ -757,6 +797,8 @@ pub struct Posture {
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     default: Option<String>,
+    /// The file's own `max-tool-steps`: Settings → General's.
+    max_tool_steps: Option<u32>,
     /// The default, when it points off this machine without `remote = true`:
     /// kept in the file and **not used** until the host is typed back. See
     /// [`Config::held`].
@@ -766,6 +808,7 @@ pub struct Config {
     policies: crate::policies::Policies,
     ui: Option<Ui>,
     terminal: Option<Terminal>,
+    runtimes: Option<Runtimes>,
     sessions: Option<Sessions>,
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
@@ -882,6 +925,7 @@ impl Config {
         })?;
         let mut config = Self {
             default: file.default,
+            max_tool_steps: file.max_tool_steps,
             held: None,
             providers: file.provider,
             postures: file.posture,
@@ -893,6 +937,7 @@ impl Config {
             },
             ui: file.ui,
             terminal: file.terminal,
+            runtimes: file.runtimes,
             sessions: file.sessions,
             resend: file.resend,
             authority: file.authority,
@@ -1147,6 +1192,7 @@ impl Config {
     pub fn render(&self) -> Result<String, ConfigError> {
         toml::to_string_pretty(&File {
             default: self.default.clone(),
+            max_tool_steps: self.max_tool_steps,
             provider: self.providers.clone(),
             // Carried through the editor untouched. The providers table is the
             // only thing the page writes, and a writer that dropped the
@@ -1159,6 +1205,7 @@ impl Config {
             environment: self.policies.environments.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
+            runtimes: self.runtimes,
             sessions: self.sessions,
             resend: self.resend,
             authority: self.authority.clone(),
@@ -1185,6 +1232,11 @@ impl Config {
     pub fn write(&self, path: &Path) -> Result<(), ConfigError> {
         let text = self.render()?;
         Self::from_toml(&text, &path.display().to_string())?;
+        // One write at a time in this process: they share the temporary
+        // beside the file, and two at once had the first rename take the
+        // second's — which then failed, and the page said 422.
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
                 path: parent.display().to_string(),
@@ -1228,6 +1280,7 @@ impl Config {
     ) -> Self {
         Self {
             default,
+            max_tool_steps: self.max_tool_steps,
             // Worked out again from what this becomes: [`Config::write`]
             // parses its own text, and a reader loads the file.
             held: None,
@@ -1236,6 +1289,7 @@ impl Config {
             policies: self.policies.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
+            runtimes: self.runtimes,
             sessions: self.sessions,
             resend: self.resend,
             authority: self.authority.clone(),
@@ -1259,6 +1313,15 @@ impl Config {
     pub fn with_terminal(&self, terminal: Terminal) -> Self {
         Self {
             terminal: (terminal != Terminal::default()).then_some(terminal),
+            ..self.clone()
+        }
+    }
+
+    /// The file as Settings → Runtimes hands back the default runtime: `None`
+    /// is this machine again, written as no table.
+    pub fn with_runtimes(&self, runtimes: Runtimes) -> Self {
+        Self {
+            runtimes: (runtimes != Runtimes::default()).then_some(runtimes),
             ..self.clone()
         }
     }
@@ -1344,6 +1407,40 @@ impl Config {
     /// What the page should look like, as the file asks for it.
     pub fn ui(&self) -> Option<&Ui> {
         self.ui.as_ref()
+    }
+
+    /// The file as Settings → General hands back its `max-tool-steps`: `None`
+    /// is [`agent_core::agent::DEFAULT_MAX_STEPS`] again, written as no key.
+    pub fn with_max_tool_steps(&self, steps: Option<u32>) -> Self {
+        Self {
+            max_tool_steps: steps.filter(|steps| *steps > 0),
+            ..self.clone()
+        }
+    }
+
+    /// The file's own `max-tool-steps`, where it says one.
+    pub fn general_max_tool_steps(&self) -> Option<u32> {
+        self.max_tool_steps
+    }
+
+    /// How many tool calls one turn on `model` of `profile` may make before it
+    /// asks: the model's `max-tool-steps`, its provider's, the file's own —
+    /// `None` where none says, which is
+    /// [`agent_core::agent::DEFAULT_MAX_STEPS`]. Asked at each turn, so a
+    /// change in Settings reaches the next one.
+    pub fn max_tool_steps(&self, profile: Option<&str>, model: &str) -> Option<u32> {
+        let profile = profile.and_then(|name| self.providers.get(name));
+        profile
+            .and_then(|profile| profile.models.get(model))
+            .and_then(|entry| entry.max_tool_steps)
+            .or_else(|| profile.and_then(|profile| profile.max_tool_steps))
+            .or(self.max_tool_steps)
+            .filter(|steps| *steps > 0)
+    }
+
+    /// The container runtime a session starts in, or `None` for this machine.
+    pub fn default_runtime(&self) -> Option<agent_core::worker::Runtime> {
+        self.runtimes.and_then(|runtimes| runtimes.default)
     }
 
     /// Who the terminal may open a host shell for, defaulted where the file
@@ -1449,6 +1546,11 @@ pub struct Resolved {
     pub engine: Option<(String, Engine)>,
     /// How tool calls travel to and from this destination.
     pub tool_calls: ToolCalls,
+    /// `max-tool-steps`: the model's, the profile's, the file's own — `None`
+    /// where none says. `luu chat` reads it once; `serve` and `stdio` ask
+    /// [`Config::max_tool_steps`] at each turn instead, so Settings reaches the
+    /// next one.
+    pub max_tool_steps: Option<u32>,
     /// `thinking`, `effort` and `max-tokens`: the model's over the profile's.
     /// Empty on every backend but `anthropic`, where the file refuses them.
     pub messages: MessagesKeys,
@@ -1475,6 +1577,7 @@ impl Resolved {
             destination_from: DestinationFrom::Default,
             engine: None,
             tool_calls: ToolCalls::Fenced,
+            max_tool_steps: None,
             messages: MessagesKeys::default(),
             named: false,
         }
@@ -1612,7 +1715,7 @@ pub fn resolve(
 
     // Only while the URL is still the profile's own: a flag that sent this
     // run elsewhere is not a reason to start the profile's server.
-    let mut engine =
+    let engine =
         match flag_url.is_none() && flags.backend.is_none_or(|b| Some(b) == profile.backend) {
             true => profile
                 .engine
@@ -1626,14 +1729,17 @@ pub fn resolve(
     // used to be written into both, and the profile's copy went stale the
     // first time the engine moved. See
     // `RECORD/2026-10-26.ports-luu-places.completed.md`.
+    //
+    // An automatic engine's table keeps no `port`: where it listens is asked
+    // of the placement each time, because luu places it again when something
+    // else takes its port, and the session follows (`engines::Started`).
     let mut url = url;
-    if let Some((engine_name, table)) = &mut engine {
+    if let Some((engine_name, table)) = &engine {
         let fixed: Vec<u16> = config.engines.values().filter_map(|e| e.port).collect();
         let port = table
             .port
             .or_else(|| crate::engines::place(engine_name, table.kind, &fixed));
         if let Some(port) = port {
-            table.port = Some(port);
             url = match profile.url.as_deref() {
                 Some(own) => {
                     crate::engines::at_port(own, port).unwrap_or_else(|| table.kind.url(port))
@@ -1669,6 +1775,11 @@ pub fn resolve(
             .or(entry.tool_calls)
             .or(profile.tool_calls)
             .unwrap_or(kind.default_tool_calls()),
+        max_tool_steps: entry
+            .max_tool_steps
+            .or(profile.max_tool_steps)
+            .or(config.max_tool_steps)
+            .filter(|steps| *steps > 0),
         messages,
         profile: name,
         // A flag beats the file here exactly as it does field by field above,
@@ -1766,6 +1877,99 @@ mod tests {
         assert!(!off.sessions().auto_name);
         assert!(off.render().unwrap().contains("auto-name = false"));
         assert!(Config::from_toml("[sessions]\nautoname = false\n", "c").is_err());
+    }
+
+    /// Two writes at once both land. They shared one temporary name, so the
+    /// first rename took the second's file and the second failed — a 422 on
+    /// the page when one change was saved twice, on Enter and on `change`.
+    #[test]
+    fn writes_at_once_each_land() {
+        let dir = std::env::temp_dir().join(format!("luu-writes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        let base = config("").expect("an empty file loads");
+        let handles: Vec<_> = (1..=16)
+            .map(|steps| {
+                let (config, path) = (base.with_max_tool_steps(Some(steps)), path.clone());
+                std::thread::spawn(move || config.write(&path))
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().expect("each write lands");
+        }
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(config(&written).is_ok(), "{written}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `max-tool-steps`: the model's over its provider's over the file's own,
+    /// and `None` — the default — where none says. Written by Settings →
+    /// General as a key beside `default`, and gone again when cleared.
+    #[test]
+    fn a_turn_s_tool_limit_is_the_model_s_then_the_provider_s_then_the_file_s() {
+        let text = r#"
+            max-tool-steps = 12
+            [provider.big]
+            backend = "openai"
+            url = "http://127.0.0.1:8080/v1"
+            max-tool-steps = 30
+            [provider.big.models."deep"]
+            max-tool-steps = 60
+            [provider.plain]
+            backend = "openai"
+            url = "http://127.0.0.1:8081/v1"
+            "#;
+        let file = config(text).expect("it loads");
+        assert_eq!(file.max_tool_steps(Some("big"), "deep"), Some(60));
+        assert_eq!(file.max_tool_steps(Some("big"), "other"), Some(30));
+        assert_eq!(file.max_tool_steps(Some("plain"), "any"), Some(12));
+        assert_eq!(file.max_tool_steps(None, "mock"), Some(12));
+        assert_eq!(file.general_max_tool_steps(), Some(12));
+        let picked = resolved(
+            text,
+            Flags {
+                provider: Some("big"),
+                model: Some("deep"),
+                ..Flags::default()
+            },
+        );
+        assert_eq!(picked.max_tool_steps, Some(60));
+
+        let cleared = file.with_max_tool_steps(None);
+        assert_eq!(cleared.max_tool_steps(Some("plain"), "any"), None);
+        let rendered = cleared.with_max_tool_steps(Some(20)).render().unwrap();
+        assert!(rendered.starts_with("max-tool-steps = 20"), "{rendered}");
+        assert!(!cleared.render().unwrap().contains("max-tool-steps = 12"));
+        assert!(config("max-tool-step = 3\n").is_err());
+    }
+
+    /// `[runtimes] default`: this machine until the file names a container
+    /// runtime — Docker too, written out — kept through a write, and this
+    /// machine again written back as no table.
+    #[test]
+    fn a_session_starts_on_this_machine_until_the_file_names_a_runtime() {
+        use agent_core::worker::Runtime;
+        let none = config("").expect("an empty file loads");
+        assert_eq!(none.default_runtime(), None);
+        let docker = none.with_runtimes(Runtimes {
+            default: Some(Runtime::Docker),
+        });
+        assert!(docker.render().unwrap().contains("default = \"docker\""));
+        let podman = none.with_runtimes(Runtimes {
+            default: Some(Runtime::Podman),
+        });
+        assert_eq!(podman.default_runtime(), Some(Runtime::Podman));
+        let rendered = podman.render().expect("it renders");
+        assert!(
+            rendered.contains("[runtimes]\ndefault = \"podman\""),
+            "{rendered}"
+        );
+        let again = config(&rendered).expect("it loads again");
+        assert_eq!(again.default_runtime(), Some(Runtime::Podman));
+        let back = again.with_runtimes(Runtimes::default());
+        assert!(!back.render().unwrap().contains("[runtimes]"));
+        assert!(config("[runtimes]\ndefualt = \"podman\"\n").is_err());
+        assert!(config("[runtimes]\ndefault = \"vagrant\"\n").is_err());
     }
 
     #[test]
@@ -1922,10 +2126,9 @@ mod tests {
         let port = crate::engines::placed("test-auto-resolve").expect("placed");
         assert_ne!(port, 8123, "not where a table says another listens");
         assert_eq!(placed.url, format!("http://127.0.0.1:{port}/v1"));
-        assert_eq!(
-            placed.engine.as_ref().map(|(_, e)| e.port),
-            Some(Some(port))
-        );
+        // The table stays automatic: where it listens is the placement's,
+        // which may move.
+        assert_eq!(placed.engine.as_ref().map(|(_, e)| e.port), Some(None));
         assert_eq!(resolved(text, named("placed")).url, placed.url, "it stays");
         crate::engines::unplace("test-auto-resolve");
     }

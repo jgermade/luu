@@ -18,8 +18,8 @@ import { $reactive } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 11
-const FORMAT = 24
+const PROTOCOL = 12
+const FORMAT = 25
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -49,6 +49,11 @@ export const state = $reactive({
   // What a person answered for the session, in order: a yes (`allow`) or a
   // no, and whether it was taken back since — marked, never dropped.
   grants: [],             // [{ kind: "command" | "write", target, allow, turn, step, revoked }]
+  /// The running turn made every tool call its budget allows and the model
+  /// asked for another: `{ turn, step, index, used, more }` until a person
+  /// answers (`extendLimit`) or the turn ends. See
+  /// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+  limit: null,
   // The model calls after the first one of this turn — the tool round trips.
   // The budget describes the first call only, while the backend's usage is
   // summed over all of them, so the two are comparable only with these added in.
@@ -470,6 +475,7 @@ function onProtocol(message) {
 
     case "ended":
       flush()
+      state.limit = null
       replaceLast({ reason: message.reason, usage: message.usage, endedAt: Date.now() })
       keepTurn(message.turn ?? state.turn, { reason: message.reason, usage: message.usage })
       // The gap between this and what we counted is the chat template, applied
@@ -524,8 +530,21 @@ function onProtocol(message) {
     // `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     case "call_held":
       state.tools = state.tools.map(call => call.step === message.step && (call.index ?? 1) === (message.index ?? 1)
-        ? { ...call, held: { turn: message.turn, step: message.step, index: message.index ?? 1, refused: message.refused } }
+        ? { ...call, held: { turn: message.turn, step: message.step, index: message.index ?? 1, refused: message.refused, unheld: message.unheld ?? null } }
         : call)
+      break
+
+    // The turn spent its tool budget and the model asked for another call:
+    // it waits on a person — *more*, *no limit for the session*, or *stop*.
+    // The question is the turn's, drawn under its last call.
+    case "limit_reached":
+      state.limit = {
+        turn: message.turn, step: message.step, index: message.index ?? 1,
+        used: message.used, more: message.more,
+      }
+      break
+    case "limit_extended":
+      state.limit = null
       break
 
     // A yes or a no for the session, and one taken back: what the session's
@@ -573,6 +592,7 @@ function onProtocol(message) {
 
     case "failed":
       flush()
+      state.limit = null
       replaceLast({ endedAt: Date.now() })
       // A turn that failed is activity worth reading afterwards — often the
       // most worth reading — so it is kept like any other.
@@ -838,7 +858,7 @@ function fromStored(turn) {
     // A call a person is still being asked about carries the floor's rule as
     // `held`; the card wants the turn beside it to answer with.
     tools: (turn.tools || []).map(call => call.held
-      ? { ...call, held: { turn: turn.turn, step: call.step, index: call.index ?? 1, refused: call.held } }
+      ? { ...call, held: { turn: turn.turn, step: call.step, index: call.index ?? 1, refused: call.held, unheld: call.unheld ?? null } }
       : call),
     extraCalls: turn.extra_calls || [],
     prompt: turn.prompt_sent || "",
@@ -857,6 +877,7 @@ function reset() {
   state.selectedTurn = null
   state.jobs = []
   state.grants = []
+  state.limit = null
   state.tasks = []
   state.budget = null
   state.tools = []
@@ -1010,6 +1031,18 @@ export function answerCall(turn, step, index, allow, session = false) {
   const answer = { type: "answer_call", turn, step, allow, session }
   if (index > 1) answer.index = index
   socket.send(JSON.stringify(answer))
+}
+
+/// The answer to a turn waiting at its tool budget: `more` — another budget's
+/// worth — `session` — no limit for the rest of the session — or `stop`, the
+/// end it would have had with nobody to ask. Named by the call that found the
+/// budget spent, so an answer that raced the turn's end is refused.
+export function extendLimit(answer) {
+  const limit = state.limit
+  if (!limit || !socket || socket.readyState !== WebSocket.OPEN) return
+  const message = { type: "extend_limit", turn: limit.turn, step: limit.step, answer }
+  if (limit.index > 1) message.index = limit.index
+  socket.send(JSON.stringify(message))
 }
 
 /// Takes back a yes or a no given for the session: the next call it covered is
@@ -1278,6 +1311,28 @@ export async function saveProviders(body) {
   }
 }
 
+/// The file's own `max-tool-steps` — Settings → General's — or `null` for the
+/// default again. Answers with the providers' view, which carries it.
+export async function saveToolSteps(steps) {
+  state.providersError = null
+  try {
+    const res = await fetch("./api/tool-steps", {
+      method: "PUT",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ steps }),
+    })
+    if (!res.ok) {
+      state.providersError = (await res.text().catch(() => "")).trim() || `the write was refused (${res.status})`
+      return { ok: false }
+    }
+    state.providers = await res.json()
+    return { ok: true }
+  } catch (e) {
+    state.providersError = `${e}`
+    return { ok: false }
+  }
+}
+
 export async function refreshLiveSession() {
   try {
     const res = await fetch("./api/sessions/live", { headers: apiHeaders() })
@@ -1346,6 +1401,13 @@ export async function refreshLiveSession() {
     // existed. The API answers with it on the same request the transcript is
     // built from, and it used to be dropped on the floor here.
     state.history = (view.turns || []).map(fromStored)
+    // A turn still waiting at its tool budget, as the stream last left it: a
+    // reload draws the question again rather than a turn that looks stuck.
+    const waiting = (view.turns || []).findLast(t => t.limit && !t.reason && !t.error)
+    state.limit = waiting
+      ? { turn: waiting.turn, step: waiting.limit.step, index: waiting.limit.index ?? 1,
+          used: waiting.limit.used, more: waiting.limit.more }
+      : null
     // And *the newest turn* as the live one, which is what the page reads for
     // "how full is the window": the context indicator, its modal and the
     // inspector's live panel. Those fields are otherwise filled only by trace

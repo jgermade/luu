@@ -18,6 +18,8 @@
      only place an import map is honoured. -->
 <script type="importmap">{ "imports": { "@web/": "./" } }</script>
 <script type="module">
+  // Before jq79, which fetches a component each time a setup imports it.
+  import "./lib/components-once.js"
   import { C79 } from "./vendor/jq79.js"
   C79.fetch("./app.html").mount("#app")
 </script>

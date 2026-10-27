@@ -92,6 +92,17 @@ test.beforeAll(async () => {
       'chmod +x "$(dirname "$0")/$2"\n',
   )
   chmodSync(join(brewBin, "brew"), 0o755)
+  // And a `nerdctl` that answers, so one runtime besides Docker is installed
+  // wherever the suite runs and can be made the default.
+  writeFileSync(join(brewBin, "nerdctl"), '#!/bin/sh\ncase "$1" in info) exit 0;; *) exit 1;; esac\n')
+  chmodSync(join(brewBin, "nerdctl"), 0o755)
+  // And a `colima` that answers and stops, so a runtime the page can stop is
+  // on every machine the suite runs on: `colima nerdctl -- info` is its probe.
+  writeFileSync(
+    join(brewBin, "colima"),
+    '#!/bin/sh\ncase "$1 $3" in "nerdctl info") exit 0;; "stop "*) echo "stopping colima (stand-in)"; exit 0;; *) exit 1;; esac\n',
+  )
+  chmodSync(join(brewBin, "colima"), 0o755)
   // And no podman but the one it installs. The Runtimes test needs a machine
   // without one, and luu finds runtimes on PATH alone, so every directory
   // holding a real one is replaced, in its place, by a folder of links to
@@ -788,6 +799,19 @@ test("the models are grouped by their tools and written as exceptions", async ({
     await row("old:3b").locator("input.win").fill("4096")
     await expect(add).toBeEnabled()
 
+    // How many tool calls a turn makes before it asks: one model's own, over
+    // the provider's, over General's — each placeholder the next one up.
+    const steps = row("coder:7b").locator("input.steps")
+    await expect(steps).toHaveAttribute("placeholder", "8")
+    await steps.fill("0")
+    await expect(add).toBeDisabled()
+    await steps.fill("40")
+    await expect(add).toBeEnabled()
+    await form.getByRole("tab", { name: "Connection" }).click()
+    await form.getByRole("textbox", { name: "Tool calls per turn" }).fill("20")
+    await form.getByRole("tab", { name: /Models/ }).click()
+    await expect(row("old:3b").locator("input.steps")).toHaveAttribute("placeholder", "20")
+
     await form.locator(".leave label").click()
     await expect(row("old:3b")).toContainText("left out")
     await add.click()
@@ -800,7 +824,8 @@ test("the models are grouped by their tools and written as exceptions", async ({
     expect(table).toContain('[provider.grouped.models."old:3b"]')
     expect(table).toContain("context-limit = 4096")
     expect(table).toContain("enabled = false")
-    expect(table).not.toContain('models."coder:7b"')
+    expect(table).toContain("max-tool-steps = 20")
+    expect(table).toContain('[provider.grouped.models."coder:7b"]\nmax-tool-steps = 40')
     expect(table).not.toContain("models.mystery")
 
     // Left out of the pickers, and still in the form.
@@ -1489,13 +1514,97 @@ test("runtimes, postures and the host shell are configured from Settings", async
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
   await page.click('.inspector .col-foot button[title="Settings"]')
+  // Held while it asks: the placeholders wear each runtime's mark already.
+  // Once answered, the route lets every later ask through as it is.
+  let answer = () => {}
+  const asked = new Promise(done => { answer = done })
+  await page.route("**/api/runtimes", async route => { await asked; await route.continue() })
   await page.click('.modal .rail button:has-text("Runtimes")')
   const pane = page.locator(".runtimes-pane")
+  await expect(pane.locator(".runtime-skeleton header .brand")).toHaveCount(5)
+  await expect(pane.locator('.runtime-skeleton header use[href="#i-box"]')).toHaveCount(0)
+  answer()
   await expect(pane.locator(".runtime")).toHaveCount(5, { timeout: 15_000 })
   for (const runtime of ["docker", "podman", "nerdctl", "colima", "container"]) {
     await expect(pane.locator(".runtime header strong", { hasText: new RegExp(`^${runtime}$`) })).toHaveCount(1)
   }
+  // Each wears its mark: its own, and containerd's for nerdctl.
+  const header = runtime => pane.locator(".runtime header", { has: page.locator("strong", { hasText: new RegExp(`^${runtime}$`) }) })
+  for (const [runtime, mark] of [
+    ["docker", "docker"], ["podman", "podman"], ["nerdctl", "containerd"], ["colima", "colima"], ["container", "container"],
+  ]) {
+    await expect(header(runtime).locator(".brand")).toHaveAttribute("style", new RegExp(`brands/${mark}\\.svg`))
+  }
   const config = () => readFileSync(join(home, "config.toml"), "utf8")
+
+  // The section comes without a probe, and each runtime is asked on its own,
+  // so the slowest one holds up only its own card.
+  const seen = await (await fetch(`${BASE}/api/runtimes`)).json()
+  expect(seen.runtimes.map(r => r.answers)).toEqual([null, null, null, null, null])
+  expect(seen.release).toMatch(/^\d+\.\d+\.\d+/)
+  const one = await (await fetch(`${BASE}/api/runtimes/nerdctl`)).json()
+  expect(one.runtime).toBe("nerdctl")
+  // Each image says which luu its worker is, where it could be asked, and
+  // nothing it could not know where it could not.
+  for (const image of one.images) {
+    expect(Object.keys(image)).toEqual(
+      expect.arrayContaining(["present", "from", "worker", "stale", "cure", "unasked"]))
+  }
+  expect((await fetch(`${BASE}/api/runtimes/host`)).status).toBe(400)
+
+  // While the file names none, sessions start on this machine and no card
+  // says *default*; one that is installed is made the default from its own,
+  // by the check among its icon actions, and its two checks take it back.
+  // See `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
+  const card = runtime => pane.locator(".runtime", { has: page.locator("header strong", { hasText: new RegExp(`^${runtime}$`) }) })
+  await expect(pane.locator(".state.default")).toHaveCount(0)
+  await expect(pane).toContainText("Las sesiones empiezan en esta máquina")
+  await expect(card("docker").getByRole("button", { name: "Make default" })).toHaveCount(1)
+  // A check is green while its runtime answers.
+  await expect(card("nerdctl").locator(".state").first()).toHaveText("answering")
+  await expect(card("nerdctl").locator(".actions svg.ic.up use[href='#i-check']")).toHaveCount(1)
+  await card("nerdctl").locator(".actions").getByRole("button", { name: "Make default" }).click()
+  await expect(card("nerdctl").locator(".state.default")).toHaveText("default")
+  // The default wears two, green while it answers.
+  const twice = card("nerdctl").getByRole("button", { name: "Default: start on this machine again" })
+  await expect(twice.locator("svg.ic.up use[href='#i-check-double']")).toHaveCount(1)
+  expect(config()).toContain("[runtimes]")
+  expect(config()).toContain('default = "nerdctl"')
+  // And the new session's dialog is told, and offers an image on it first.
+  const lists = await (await fetch(`${BASE}/api/postures`)).json()
+  expect(lists.default_runtime).toBe("nerdctl")
+  const contained = lists.runtimes.filter(place => place.image)
+  if (contained.length) expect(contained[0].runtime).toBe("nerdctl")
+  // Docker is written out like any other; `direct` runs no image.
+  const put = runtime => fetch(`${BASE}/api/runtimes/default`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runtime }),
+  })
+  expect((await put("direct")).status).toBe(422)
+  const docker = await put("docker")
+  expect(docker.status).toBe(200)
+  expect((await docker.json()).default_runtime).toBe("docker")
+  expect(config()).toContain('default = "docker"')
+  await put("nerdctl")
+  await page.locator('.runtimes-pane a, .runtimes-pane button.link', { hasText: "check again" }).first().click()
+  // The two checks take it back: this machine, written as no table.
+  await expect(twice).toBeVisible()
+  await twice.click()
+  await expect(pane.locator(".state.default")).toHaveCount(0)
+  await expect.poll(config).not.toContain("[runtimes]")
+  expect((await (await fetch(`${BASE}/api/postures`)).json()).default_runtime).toBeUndefined()
+
+  // Stopped from its card, where it says how — Colima's own `colima stop`, a
+  // task like a start, its output kept while it runs or if it fails. Nerdctl's
+  // containerd is a system service: no button.
+  await expect(card("nerdctl").getByRole("button", { name: "Stop" })).toHaveCount(0)
+  await expect(card("colima").locator(".state").first()).toHaveText("answering")
+  await card("colima").getByRole("button", { name: "Stop" }).click()
+  await expect.poll(async () => {
+    const tasks = await (await fetch(`${BASE}/api/runtimes/tasks`)).json()
+    return tasks.find(t => t.kind === "stop" && t.runtime === "colima")?.state
+  }).toBe("done")
 
   // A posture, named by a policy file out of the list — this checkout's.
   await pane.locator('button.add:has-text("+ posture")').click()
@@ -1527,6 +1636,19 @@ test("runtimes, postures and the host shell are configured from Settings", async
   })
   expect(built.status).toBe(400)
   expect(await built.text()).toContain("no policy file here names")
+  // From source as well as from the release, and from nothing else.
+  const fromSource = await fetch(`${BASE}/api/runtimes/docker/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "somebody/else:latest", from: "source" }),
+  })
+  expect(fromSource.status).toBe(400)
+  const fromElsewhere = await fetch(`${BASE}/api/runtimes/docker/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "luu-worker:dev", from: "somewhere" }),
+  })
+  expect(fromElsewhere.status).toBe(422)
 
   // Installed from here, where Homebrew can: macOS only, and with the
   // stand-in above rather than the real thing.
@@ -1535,9 +1657,9 @@ test("runtimes, postures and the host shell are configured from Settings", async
     await expect(podman.locator(".hint code")).toContainText("brew-bin/brew install podman")
     // The three that need an administrator say so, with no button.
     const docker = pane.locator(".runtime", { has: page.locator("header strong", { hasText: /^container$/ }) })
-    await expect(docker.locator('button:has-text("install")')).toHaveCount(0)
+    await expect(docker.getByRole("button", { name: "Install" })).toHaveCount(0)
     await expect(docker).toContainText("not from here: its package needs an administrator")
-    await podman.locator('button:has-text("install")').click()
+    await podman.locator(".actions").getByRole("button", { name: "Install" }).click()
     // When the task ends the runtimes are asked again: installed, answering,
     // and with the image the policy files name not built yet.
     await expect(podman.locator(".state").first()).toHaveText("answering", { timeout: 15_000 })
@@ -1827,6 +1949,22 @@ test("engines the machine has are used and not used, and luu's own copy uninstal
   await expect(inModels).toHaveCount(0)
   await page.click('.modal .rail button:has-text("Engines")')
 
+  // Renamed from its form, since it is never removed: the table and the
+  // provider that starts it in one write, the provider under its own name.
+  // See `RECORD/2026-10-27.an-engine-is-renamed.completed.md`.
+  await used.getByRole("button", { name: "Edit" }).click()
+  const edit = page.getByRole("dialog", { name: `Engine ${name}` })
+  await edit.getByLabel("Name", { exact: true }).fill("mine")
+  await expect(edit).toContainText(`${name} will start it as mine`)
+  await edit.getByRole("button", { name: "Save" }).click()
+  await expect(edit).toHaveCount(0)
+  await expect(used.locator("header strong")).toHaveText("mine")
+  onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain("[engine.mine]")
+  expect(onDisk).not.toContain(`[engine.${name}]`)
+  expect(onDisk.slice(onDisk.indexOf(`[provider.${name}]`)).split("\n\n")[0]).toContain('engine = "mine"')
+  expect(onDisk.match(/enabled = false/g)).toHaveLength(1)
+
   // luu's own copy, laid out as a download leaves it, and named by a table.
   const copy = join(home, "engines", "llama", "b11236")
   mkdirSync(copy, { recursive: true })
@@ -1898,6 +2036,13 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   await mm.click()
   await expect(pane.locator(".model", { hasText: "MiniMax-M2" }).locator(".brand"))
     .toHaveAttribute("style", /brands\/minimax\.svg/)
+  // Gemma's own mark, not Google's, ollama's prefix or not.
+  const gemma = await page.evaluate(async () => {
+    const { brandSrc, modelBrand } = await import("./lib/brands.js")
+    return [brandSrc(modelBrand("gemma3:12b")), brandSrc(modelBrand("ollama:gemma4:26b-mlx"))]
+  })
+  expect(gemma).toEqual(["./brands/gemma.svg", "./brands/gemma.svg"])
+  expect((await fetch(`${BASE}/brands/gemma.svg`)).status).toBe(200)
 
   // A pack instead: found where luu imports them, chosen, and written.
   await page.click('.modal .rail button:has-text("Appearance")')
@@ -2012,6 +2157,19 @@ test("an engine's sheet moves it off a busy port, talks to it, and makes a sessi
     const settings = await (await fetch(`${BASE}/api/settings`)).json()
     expect(settings.profile).toBe("fake")
     expect(settings.model).toContain("small-Q4_K_M")
+
+    // The engine's state beside the chat's picker opens what it printed: its
+    // sheet in Settings → Engines, on Output. A failure is the state that
+    // stays there until the next switch, so it is the one set here.
+    await page.evaluate(async () => {
+      const { ui } = await import("./lib/ui.js")
+      ui.engine = { name: "fake", state: "failed", model: "", error: "it did not answer" }
+    })
+    await page.locator(".options button.engine", { hasText: "could not start" }).click()
+    const output = page.getByRole("dialog", { name: "fake", exact: true })
+    await expect(output.getByRole("tab", { name: /Output/ })).toHaveAttribute("aria-selected", "true")
+    await expect(output.locator("pre.log")).toContainText(`stand-in listening on ${to}`)
+    await expect(page.locator('.modal .rail button[aria-current="page"]')).toContainText("Engines")
   } finally {
     squatter.close()
   }

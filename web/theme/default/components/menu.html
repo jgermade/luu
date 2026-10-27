@@ -14,8 +14,9 @@
   //     { value: 'delete', label: 'Delete', danger: true },
   //   ]" @select="act($event.detail)" />
   //
-  // An item is a string, `'-'` for a separator, or `{ value, label, hint,
-  // disabled, danger }`. Choosing one emits `select` with its value and
+  // An item is a string, `'-'` for a separator, or `{ value, label, note,
+  // hint, disabled, danger }`: a `note` is a line under the label that says
+  // what the action does, a `hint` a shortcut at the right. Choosing one emits `select` with its value and
   // closes. The arrows, Home and End move inside it; ESC and a click outside
   // close it, which is the popover's own behaviour. `align` is `start` or
   // `end`, the trigger's edge the menu lines up with. The `trigger` slot
@@ -118,7 +119,10 @@
               :class.danger="entry.danger"
               :disabled="entry.disabled"
               @click="pick(entry)">
-        <span class="text">{{ entry.label }}</span>
+        <span class="body">
+          <span class="text">{{ entry.label }}</span>
+          <span :if="entry.note" class="note">{{ entry.note }}</span>
+        </span>
         <span :if="entry.hint" class="hint">{{ entry.hint }}</span>
       </button>
     </div>
@@ -215,6 +219,8 @@
   .list button:disabled { opacity: .45; cursor: default; }
   .list button.danger { color: var(--luu-bad); }
   .list button.danger:hover:not(:disabled), .list button.danger:focus-visible { background: var(--luu-bad-soft); }
+  .body { display: flex; flex-direction: column; min-width: 0; }
+  .note { color: var(--luu-fg-subtle); font-size: var(--luu-text-xs); line-height: var(--luu-leading-tight); }
   .hint { color: var(--luu-fg-subtle); font-size: var(--luu-text-xs); font-family: var(--luu-font-mono); }
   hr {
     height: 1px;

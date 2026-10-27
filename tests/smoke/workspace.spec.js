@@ -218,9 +218,34 @@ test("the tab shows a changed file's diff in a modal", async ({ page }) => {
   await terminal.click()
   await expect(terminal).toHaveClass(/\bon\b/)
   const panel = page.locator(".content .terminal")
-  // Open, on the host, and the picker in the foot says so by the runtime's name.
+  // Open, on the host, and the foot says so under *Runtime*, by the runtime's
+  // name and this machine's mark.
   await expect(foot.locator('.state.open[data-place="host"]')).toHaveCount(1, { timeout: 15_000 })
-  await expect(foot.locator(".dropup .face")).toHaveText("host")
+  await expect(foot.locator(".title")).toHaveText("Runtime")
+  await expect(foot.locator("button.place")).toHaveText("host")
+  await expect(foot.locator('button.place use[href="#i-machine"]')).toHaveCount(1)
+  // Its top edge is dragged taller, the height kept; a double click forgets it.
+  const section = page.locator(".content section.terminal")
+  const tall = (await section.boundingBox()).height
+  const edge = await section.locator(".resize-y").boundingBox()
+  await page.mouse.move(edge.x + 100, edge.y + 4)
+  await page.mouse.down()
+  await page.mouse.move(edge.x + 100, edge.y - 80, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(async () => (await section.boundingBox()).height).toBeGreaterThan(tall + 60)
+  expect(Number(await page.evaluate(() => localStorage.getItem("luu.height.terminal")))).toBeGreaterThan(tall + 60)
+  await section.locator(".resize-y").dblclick()
+  await expect.poll(async () => Math.round((await section.boundingBox()).height)).toBe(Math.round(tall))
+  expect(await page.evaluate(() => localStorage.getItem("luu.height.terminal"))).toBeNull()
+  // Its dialog names the place it runs now; with nowhere else to go, there is
+  // nothing to confirm and nothing to move.
+  await foot.locator("button.place").click()
+  const runtime = page.getByRole("dialog", { name: "Runtime" })
+  await expect(runtime.getByRole("radio", { name: /host.*now/ })).toHaveAttribute("aria-checked", "true")
+  await expect(runtime.getByRole("button", { name: "Move the session" })).toBeDisabled()
+  await expect(runtime.getByRole("checkbox")).toHaveCount(0)
+  await runtime.getByRole("button", { name: "Cancel" }).click()
+  await expect(runtime).toHaveCount(0)
   await panel.locator(".host").click()
   // Arithmetic, so what is matched is the shell's answer and not the echo.
   await page.keyboard.type("echo AT=$(pwd -P) N=$((40+2))\n")

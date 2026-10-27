@@ -154,8 +154,9 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # double click keeps it. Its foot is the file's icon and path, a diff button
 # (a modal) while git counts the file as changed, and at the far right a
 # terminal: a shell where the session's commands run (its container, or this
-# machine), in a panel under the editor whose picker moves the session to
-# another posture between jobs. A host shell is the whole account, so
+# machine), in a panel under the editor whose *Runtime* button opens a dialog
+# that moves the session to another posture between jobs, once a box saying
+# what stays behind is ticked. A host shell is the whole account, so
 # `[terminal] host` decides who gets one: `loopback` (the default), `always`
 # (whoever holds the token) or `never`.
 #
@@ -197,12 +198,21 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # *Auto*, on by default, is the port left out.
 #
 # Settings → Runtimes is where a session's commands may run: each container
-# runtime (docker, podman, nerdctl, colima, container) probed for whether it is
-# installed, answers, and has the images the policy files name — with install
-# (podman and colima, by Homebrew on macOS, as the person), start, and a build
-# of an image that is missing; the `[posture.*]` table, a new one naming a policy file
-# out of the ones at the top of the checkout; and `[terminal] host`. Writes are
-# loopback-only, like Engines.
+# runtime (docker, podman, nerdctl, colima, container) probed — each on its own,
+# its card filled when it answers — for whether it is installed, answers, and
+# has the images the policy files name — with install (podman and colima, by
+# Homebrew on macOS, as the person), start, and a build of an image that is
+# missing: from this version's release (seconds, `Containerfile.release`) or,
+# in luu's own checkout and nowhere else, from source (minutes); the
+# `[posture.*]` table, a new one naming a policy file out of the ones at the top
+# of the checkout; and `[terminal] host`. Writes are loopback-only, like Engines.
+# A session whose runtime is down starts it with the same lines *start it* runs,
+# and asks the worker again; nothing it installs in the container is kept.
+# `built` means *this luu's worker*: the image's worker is asked for its hello,
+# whose `build` is a hash of agent-core's sources, and one from another version
+# or other sources reads `out of date`. An image luu built from a release and
+# whose version moved is rebuilt from this version's release when a session
+# starts on it; any other stale image is said (stderr, the log, `luu tools`).
 #
 # Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed
@@ -213,7 +223,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
 #
-# Providers and models wear their brand's mark in the pickers: eighteen in
+# Providers, models and container runtimes wear their brand's mark: twenty-three in
 # `web/brands/` (Simple Icons, CC0 but for MiniMax's — see its README), or a pack — `[ui] brand-icons`, a folder of
 # `<slug>.svg`, chosen in Appearance → Brand marks, where `npm install
 # @lobehub/icons-static-svg` in `web/` is found by itself.
@@ -287,6 +297,9 @@ echo '{"type":"approve_plan","job":2,"files":["Cargo.toml"]}' \
 # `--worker direct` is the same seam with no container at all, which is how the
 # IPC gets tested where no runtime is installed.
 docker build -t luu-worker:dev -f Containerfile .
+# or the same image around the release's own Linux binary, with no compiler —
+# what Settings builds by default, and from any directory
+docker build -t luu-worker:dev -f Containerfile.release --build-arg LUU_VERSION=0.1.4 .
 cargo run --bin luu -- tools --sandbox luu.container.toml
 cargo run --bin luu -- chat "hola" --sandbox luu.container.toml
 cargo run --bin luu -- tools --worker direct          # the seam, no container
@@ -427,8 +440,10 @@ build-breaker) and `processes` (`RLIMIT_NPROC`, which the kernel counts per uid
 rather than per process tree) are off until someone types a number. They are
 POSIX, not Linux, so they sit above the `linux.rs`/`fallback.rs` split and are
 the first thing that has ever held a child on macOS — where the verdict now
-reads `rlimits (…)` with the same `missing` instead of "in-process check only". `--max-tool-steps` caps the tool calls one turn may make and
-`--no-tools` runs without them. `luu tools` prints what all of that resolved to,
+reads `rlimits (…)` with the same `missing` instead of "in-process check only". `--max-tool-steps` caps the tool calls one turn may make — over
+`max-tool-steps` in `config.toml`, per model, per provider and the file's own;
+in `serve` a turn at the cap asks whether to go on — and `--no-tools` runs
+without them. `luu tools` prints what all of that resolved to,
 implicit grants included.
 
 **Level 3 exists, in its development posture.** `[worker] runtime` decides where

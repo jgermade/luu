@@ -9,6 +9,7 @@
 ///
 /// The value is `posture|runtime`: the posture's name (`""` is the server's
 /// own) and the runtime where it is not the one that posture names.
+import { brandSrc, runtimeBrand } from "./brands.js"
 
 /// How a place reads: by where it runs, which is the question both pickers
 /// answer.
@@ -16,7 +17,7 @@ const runs = place => !place ? "?"
   : place.runtime === "direct" ? "direct (no container)"
   : place.image ? `${place.runtime} · ${place.image}` : place.runtime
 
-/// `[{ value, posture, runtime, name, label, title, disabled }]` out of what
+/// `[{ value, posture, runtime, where, name, label, title, disabled }]` out of what
 /// `/api/postures` answered. A runtime this machine does not have is in the
 /// list, disabled, saying so.
 export function placeOptions(postures) {
@@ -26,6 +27,8 @@ export function placeOptions(postures) {
       value: `${name}|${runtime}`,
       posture: name,
       runtime,
+      // The runtime it runs on, variant or not: what its mark is.
+      where: place?.runtime || "",
       name: label,
       label: runs(place),
       title: place?.missing
@@ -41,6 +44,56 @@ export function placeOptions(postures) {
     ...[...Object.keys(postures?.postures || {}), ...(postures?.environments || [])].flatMap(name =>
       variants(name, name, postures?.places?.[name])),
   ]
+}
+
+/// Which of `placeOptions` the live session is, from `/api/terminal`'s
+/// `posture` — `{ name, runtime }`, the runtime a word and maybe an image
+/// after it: its posture, and the runtime only where it is not the one that
+/// posture names.
+export function livePlace(postures, live) {
+  const name = live?.name || ""
+  const runtime = (live?.runtime || "").split(" ")[0]
+  const declared = (name ? postures?.places?.[name] : postures?.own)?.[0]?.runtime
+  return `${name}|${runtime && runtime !== declared ? runtime : ""}`
+}
+
+/// The live session's place as `placeOptions` draws one: the option it is,
+/// or — for a session made from lists, which is no posture and so none of
+/// them — one made from where `/api/terminal` says it runs (`composed`, or
+/// the worker's label), so the foot and the dialog still name it. `null`
+/// until the server has said.
+export function hereOption(postures, live) {
+  if (!live) return null
+  const value = livePlace(postures, live)
+  const found = placeOptions(postures).find(option => option.value === value)
+  if (found) return found
+  // `docker (luu-worker:dev)`, `host`, `direct (no container)`.
+  const [word, rest] = (live.runtime || "").split(" ")
+  const runtime = live.composed?.runtime || word || "host"
+  const image = live.composed?.image || (rest?.startsWith("(") && rest !== "(no" ? rest.slice(1, -1) : null)
+  const place = { runtime, image }
+  const name = live.name || "this session"
+  return {
+    value,
+    posture: live.name || "",
+    runtime: "",
+    where: runtime,
+    name,
+    label: runs(place),
+    title: `${name} · ${runs(place)}`,
+    disabled: false,
+    // Not one a picker offers: drawn as where the session is, never chosen.
+    made: true,
+  }
+}
+
+/// The mark a place wears, by the runtime it runs on: this machine for `host`
+/// and `direct`, the runtime's brand where there is one, and a box for a
+/// container runtime with none — `{ src, glyph }`, one of them set.
+export function placeMark(where) {
+  if (!where || where === "host" || where === "direct") return { src: null, glyph: "#i-machine" }
+  const src = brandSrc(runtimeBrand(where))
+  return { src, glyph: src ? null : "#i-box" }
 }
 
 /// `value` if it is still a place that can be chosen, else the server's own.

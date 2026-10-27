@@ -109,7 +109,28 @@ use crate::turn::{EndReason, TurnEvent};
 /// `session` and not `allow`, and [`ServerMessage::Forbidden`] saying what a
 /// session's drafts are now refused without asking. [`ServerMessage::Revoked`]
 /// takes back either. A new variant of a tagged enum, the rule 2 named.
-pub const VERSION: u32 = 11;
+///
+/// **12 is a turn that asks before it stops**: [`ServerMessage::LimitReached`]
+/// when a turn has made every tool call its budget allows and the model asks
+/// for another, [`ClientMessage::ExtendLimit`] for *more*, *no limit for the
+/// session* or *stop*, and [`ServerMessage::LimitExtended`] for the budget a
+/// yes left. New variants of both tagged enums, the rule 2 named. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+pub const VERSION: u32 = 12;
+
+/// What a person answered when a turn had made every tool call its budget
+/// allows and the model asked for another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Extension {
+    /// No more: the turn ends where it is, on `tool_limit`, as every turn
+    /// did before protocol 12.
+    Stop,
+    /// Another budget's worth of calls, for this turn.
+    More,
+    /// No limit, for this turn and every turn of the session after it.
+    Session,
+}
 
 /// How long a person's answer lasts — a yes, or since protocol 11 a no.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +306,16 @@ pub enum ClientMessage {
         /// once, which is what every answer before protocol 10 meant.
         #[serde(default)]
         session: bool,
+    },
+    /// The answer to a [`ServerMessage::LimitReached`]. `turn`, `step` and
+    /// `index` name the call that found the budget spent, so an answer that
+    /// raced the end of its turn is refused rather than applied to the next.
+    ExtendLimit {
+        turn: TurnId,
+        step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        answer: Extension,
     },
     /// Takes back what a person answered for the session, yes or no: the next
     /// call it covered is asked again.
@@ -573,6 +604,40 @@ pub enum ServerMessage {
         name: String,
         arguments: serde_json::Value,
         refused: String,
+        /// What will not hold the call if a person allows it: the kernel's
+        /// half — Landlock and seccomp — on a machine that has neither, where a
+        /// person's yes runs a command held by its resource limits only.
+        /// Additive: absent wherever the kernel holds it, and in every
+        /// recording made before it. See
+        /// `RECORD/2026-10-27.a-yes-runs-what-the-kernel-cannot-hold.completed.md`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unheld: Option<String>,
+    },
+    /// The turn has made `used` tool calls, every one its budget allows, and
+    /// the model's reply asks for call `index` of `step`: the turn waits on a
+    /// person rather than ending. `more` is how many calls *more* would allow.
+    /// Answered by [`ClientMessage::ExtendLimit`]; *stop* ends the turn on
+    /// `tool_limit`, and either other answer is [`Self::LimitExtended`].
+    LimitReached {
+        turn: TurnId,
+        step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        used: u32,
+        more: u32,
+    },
+    /// A person let the turn go on: `budget` is how many calls it may make in
+    /// all now, or `None` for no limit — which `session` says lasts every turn
+    /// of the session after this one too, a resume included.
+    LimitExtended {
+        turn: TurnId,
+        step: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<u32>,
+        #[serde(default)]
+        session: bool,
     },
     /// What it did. The verdict travels with the result because "the agent ran
     /// a command" and "the kernel held the command it ran" are different facts
@@ -678,6 +743,7 @@ impl ServerMessage {
                 index,
                 call,
                 refused,
+                unheld,
             } => Self::CallHeld {
                 turn,
                 step,
@@ -685,6 +751,31 @@ impl ServerMessage {
                 name: call.name,
                 arguments: call.arguments,
                 refused,
+                unheld,
+            },
+            TurnEvent::LimitReached {
+                step,
+                index,
+                used,
+                more,
+            } => Self::LimitReached {
+                turn,
+                step,
+                index: above_one(index),
+                used,
+                more,
+            },
+            TurnEvent::LimitExtended {
+                step,
+                index,
+                budget,
+                session,
+            } => Self::LimitExtended {
+                turn,
+                step,
+                index: above_one(index),
+                budget,
+                session,
             },
             TurnEvent::ToolResult { step, outcome } => {
                 let ToolStep {
@@ -724,6 +815,8 @@ impl ServerMessage {
             | Self::Failed { turn, .. }
             | Self::ToolCall { turn, .. }
             | Self::CallHeld { turn, .. }
+            | Self::LimitReached { turn, .. }
+            | Self::LimitExtended { turn, .. }
             | Self::ToolResult { turn, .. }
             | Self::Granted { turn, .. }
             | Self::Forbidden { turn, .. }

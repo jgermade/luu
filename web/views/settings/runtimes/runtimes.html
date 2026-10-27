@@ -4,32 +4,77 @@
   // shell on the host. A runtime is usable when it is installed, answers, has
   // the image, and a posture uses it — this section shows all four and changes
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
-  const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
+  const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, savePostures, saveHostShell, saveDefaultRuntime } =
     await import("@web/lib/runtimes.js")
+  const { terminal } = await import("@web/lib/terminal.js")
+  const Button = await import("@web/theme/default/components/button.html")
   const Scrollable = await import("@web/theme/default/components/scrollable.html")
   const PathText = await import("@web/components/path-text.html")
   const { state } = await import("@web/lib/store.js")
   const TextInput = await import("@web/theme/default/components/text-input.html")
   const Select = await import("@web/theme/default/components/select.html")
+  const BrandIcon = await import("@web/components/brand-icon.html")
+  const { brandSrc, runtimeBrand, loadBrands } = await import("@web/lib/brands.js")
+  loadBrands()
+  // A runtime's mark, or `null` for the two with none: they are drawn as a box.
+  const markOf = runtime => brandSrc(runtimeBrand(runtime))
 
   let view = null
   let error = ""
   let busy = ""
+  // The runtimes being asked right now, by name: each card is filled when its
+  // own runtime answers, not when the slowest one does.
+  let asking = {}
   // The posture being added: `{ name, policy }`, or `null`.
   let adding = null
 
+  // A write — a posture, the host shell, the default — answers with the
+  // section as `GET /api/runtimes` does, asking no runtime: what each card
+  // already knew of its runtime stays, rather than going back to unasked.
   const took = result => {
     if (result.ok) {
-      view = result.view
+      const before = Object.fromEntries((view?.runtimes || []).map(r => [r.runtime, r]))
+      view = {
+        ...result.view,
+        runtimes: (result.view.runtimes || []).map(r => {
+          const old = before[r.runtime]
+          return r.path && r.answers == null && old?.path === r.path && old.answers != null ? old : r
+        }),
+      }
       error = ""
     } else {
       error = result.error
     }
     return result.ok
   }
+  // The section comes without a probe — installed or not is `which`, and the
+  // postures need none — and then each installed runtime is asked on its own.
+  // A card that had an answer keeps it while it is asked again, so *check
+  // again* does not blank what it is about to confirm.
+  const refresh = async () => {
+    const before = Object.fromEntries((view?.runtimes || []).map(r => [r.runtime, r]))
+    const result = await loadRuntimes()
+    if (!result.ok) return took(result)
+    const installed = result.view.runtimes.filter(r => r.path)
+    result.view.runtimes = result.view.runtimes.map(r => {
+      const old = before[r.runtime]
+      return r.path && old?.path === r.path && old.answers != null ? old : r
+    })
+    took(result)
+    asking = Object.fromEntries(installed.map(r => [r.runtime, true]))
+    for (const { runtime } of installed) {
+      probeRuntime(runtime).then(answer => {
+        const { [runtime]: _, ...rest } = asking
+        asking = rest
+        if (!answer.ok) return (error = answer.error)
+        if (view) view = { ...view, runtimes: view.runtimes.map(r => r.runtime === runtime ? answer.view : r) }
+      })
+    }
+    return true
+  }
   const check = async () => {
     busy = "check"
-    const ok = took(await loadRuntimes())
+    const ok = await refresh()
     busy = ""
     if (ok && (view?.tasks || []).some(t => t.state === "running")) follow()
   }
@@ -51,7 +96,7 @@
       if (result.ok && view) view = { ...view, tasks: result.view }
       if (result.ok && result.view.some(b => b.state === "running")) return setTimeout(poll, 1500)
       polling = false
-      took(await loadRuntimes())
+      await refresh()
     }
     return () => {
       if (polling) return
@@ -78,9 +123,14 @@
     }
     busy = ""
   }
-  const build = (runtime, image) => task(`build:${runtime}:${image}`, () => buildImage(runtime, image))
+  const build = (runtime, image, from = "release") =>
+    task(`build:${runtime}:${image}`, () => buildImage(runtime, image, from))
   const install = runtime => task(`install:${runtime}`, () => installRuntime(runtime))
   const start = runtime => task(`start:${runtime}`, () => startRuntime(runtime))
+  const stop = runtime => task(`stop:${runtime}`, () => stopRuntime(runtime))
+  // The runtime the live session runs its commands on, which is not stopped
+  // from here: `docker (luu-worker:dev)`, the word before the image.
+  $: liveRuntime = (terminal.info?.posture?.runtime || "").split(" ")[0]
   const taskOf = (kind, runtime, image = null) =>
     (view?.tasks || []).find(t => t.kind === kind && t.runtime === runtime && (t.image ?? null) === image)
   const buildOf = (runtime, image) => taskOf("build", runtime, image)
@@ -115,13 +165,26 @@
     busy = ""
   }
 
+  // The runtime a new session's image runs on first; the others are offered
+  // after it. Docker where config.toml says none. See
+  // `RECORD/2026-10-27.runtimes-are-acted-on-and-one-is-the-default.completed.md`.
+  // `""` is this machine: no session starts in a container nobody chose.
+  $: defaultRuntime = view?.default_runtime || ""
+  const makeDefault = async runtime => {
+    busy = `default:${runtime}`
+    took(await saveDefaultRuntime(runtime))
+    busy = ""
+  }
+
   // Where a posture would run, in the words the terminal's picker uses.
   const runs = place => !place ? "?"
     : place.runtime === "direct" ? "direct (no container)"
     : place.image ? `${place.runtime} · ${place.image}` : place.runtime
   const answerWord = r => !r.path ? "not installed"
+    : r.answers == null && asking[r.runtime] ? "comprobando…"
     : r.answers ? "answering" : "installed, not answering"
   $: names = Object.keys(view?.postures || {})
+  $: anyAsking = Object.keys(asking).length > 0
   $: unused = (view?.policies || []).filter(p => !names.some(n => view.postures[n].policy === p.path))
 </script>
 
@@ -144,6 +207,8 @@
 
     <p class="dim small">
       Un runtime es utilizable cuando está instalado, responde a comprobaciones y cuenta con las imágenes declaradas en las políticas.
+      <span :if="view && !defaultRuntime">Las sesiones empiezan en <strong>esta máquina</strong>; marca un runtime como <em>default</em> para que empiecen en su contenedor, la primera de <code>luu serve</code> incluida.</span>
+      <span :if="defaultRuntime">Las sesiones empiezan en <strong>{{ defaultRuntime }}</strong>, el <em>default</em>, la primera de <code>luu serve</code> incluida; sus dos checks lo devuelven a esta máquina.</span>
       <span :if="view?.path">Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />.</span>
       <span :if="!view && !error" class="skeleton-pulse">Comprobando runtimes instalados…</span>
     </p>
@@ -153,6 +218,8 @@
     <div :if="!view && !error" class="runtime-placeholders">
       <div :each="name in ['docker', 'podman', 'nerdctl', 'colima', 'container']" :key="name" class="runtime-skeleton">
         <header>
+          <BrandIcon :if="markOf(name)" :src="markOf(name)" size="16px" />
+          <svg :if="!markOf(name)" class="ic"><use href="#i-box"/></svg>
           <strong>{{ name }}</strong>
           <span class="skeleton-badge skeleton-pulse">comprobando…</span>
         </header>
@@ -164,44 +231,98 @@
 
     <section :each="r in view?.runtimes || []" :key="r.runtime" class="runtime" :class.off="!r.path">
       <header>
+        <BrandIcon :if="markOf(r.runtime)" :src="markOf(r.runtime)" size="16px" />
+        <svg :if="!markOf(r.runtime)" class="ic"><use href="#i-box"/></svg>
         <strong>{{ r.runtime }}</strong>
-        <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
+        <span class="state" :class.up="r.answers" :class.down="r.answers === false"
+              :class.skeleton-pulse="asking[r.runtime] && r.answers == null">{{ answerWord(r) }}</span>
+        <span :if="defaultRuntime === r.runtime" class="state default"
+              title="Sessions start here: the first one of luu serve, and the new session's Runtime">default</span>
         <code :if="r.path" class="dim small">{{ r.path }}</code>
+        <span class="grow"></span>
+        <!-- What can be done to it, as Engines draws its own: installed from
+             here where Homebrew can do it with the person's own authority,
+             started where it says how, and made the default. -->
+        <span class="actions">
+          <Button :if="!r.path && r.install" square variant="ghost" size="sm"
+                  :title="`Install · ${r.install}`" label="Install"
+                  :disabled="!view?.editable || !!busy || taskOf('install', r.runtime)?.state === 'running'"
+                  @click="install(r.runtime)">
+            <svg class="ic"><use href="#i-download"/></svg>
+          </Button>
+          <Button :if="r.answers === false && r.startable" square variant="ghost" size="sm"
+                  title="Start it" label="Start"
+                  :disabled="!view?.editable || !!busy || taskOf('start', r.runtime)?.state === 'running'"
+                  @click="start(r.runtime)">
+            <svg class="ic"><use href="#i-play"/></svg>
+          </Button>
+          <Button :if="r.answers && r.stoppable" square variant="ghost" size="sm"
+                  :title="liveRuntime === r.runtime ? 'The live session runs here: move it elsewhere to stop this' : 'Stop it'"
+                  label="Stop"
+                  :disabled="!view?.editable || !!busy || liveRuntime === r.runtime || taskOf('stop', r.runtime)?.state === 'running'"
+                  @click="stop(r.runtime)">
+            <svg class="ic"><use href="#i-stop"/></svg>
+          </Button>
+          <!-- Running is a green check; the default is two, which take it
+               back: sessions start on this machine again. -->
+          <Button :if="defaultRuntime === r.runtime" square variant="ghost" size="sm"
+                  :title="r.answers ? 'The default, and running: sessions start here · click to start them on this machine again' : 'The default, not running now · click to start sessions on this machine again'"
+                  label="Default: start on this machine again"
+                  :disabled="!view?.editable || !!busy"
+                  @click="makeDefault('host')">
+            <svg class="ic" :class.up="r.answers"><use href="#i-check-double"/></svg>
+          </Button>
+          <Button :if="defaultRuntime !== r.runtime" square variant="ghost" size="sm"
+                  :title="!r.path ? 'Install it to make it the default' : r.answers ? 'Running · make it the default: sessions start here' : 'Make it the default: sessions start here'"
+                  label="Make default"
+                  :disabled="!view?.editable || !!busy || !r.path"
+                  @click="makeDefault(r.runtime)">
+            <svg class="ic" :class.up="r.answers"><use href="#i-check"/></svg>
+          </Button>
+        </span>
       </header>
-      <!-- Installed from here where Homebrew can do it with the person's own
-           authority; said, as a command, where it would take root. -->
+      <!-- Said, as a command, where it would take root. -->
       <p :if="!r.path" class="small hint">
-        <button :if="r.install && taskOf('install', r.runtime)?.state !== 'running'" type="button"
-                :disabled="!view?.editable || !!busy" @click="install(r.runtime)">install</button>
         <code :if="r.install">{{ r.install }}</code>
         <span :if="!r.install" class="dim">{{ (r.hint || "").replaceAll("`", "") }}</span>
         <span :if="!r.install && r.install_refused" class="dim"> — {{ r.install_refused }}</span>
       </p>
-      <p :if="r.answers === false" class="warn small">
-        {{ r.detail }}
-        <button :if="r.startable && taskOf('start', r.runtime)?.state !== 'running'" type="button" class="link"
-                :disabled="!view?.editable || !!busy" @click="start(r.runtime)">start it</button>
-      </p>
+      <p :if="r.answers === false" class="warn small">{{ r.detail }}</p>
       <div :if="showing(taskOf('install', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
       <div :if="showing(taskOf('start', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
+      <div :if="showing(taskOf('stop', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("stop", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
       <p :if="r.path && r.gap" class="dim small">{{ r.gap }}</p>
       <ul :if="r.answers" class="images">
         <li :each="i in r.images" :key="i.image">
           <code>{{ i.image }}</code>
-          <span :if="i.present" class="state up">built</span>
+          <!-- `built` is *this luu's worker*, not *a tag by that name*: the
+               worker in it was asked which luu it is. -->
+          <span :if="i.present && !i.stale" class="state up">built</span>
+          <span :if="i.present && i.stale" class="state down">out of date</span>
           <span :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" class="state down">not built</span>
-          <button :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
-                  :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image)">build</button>
+          <span :if="i.worker" class="dim small">luu {{ i.worker }}<span :if="i.from"> · from {{ i.from }}</span></span>
+          <!-- From the release by default: this version's Linux binary, no
+               compiler. From source only in luu's own checkout: a project's
+               own Containerfile is not luu's worker. Offered again for an image that
+               is out of date. -->
+          <button :if="(i.present === false || i.cure === 'release') && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
+                  :title="`luu ${view.release}'s Linux binary, from its GitHub release`"
+                  :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image)">{{ i.stale ? "rebuild" : "build" }}</button>
+          <button :if="view.from_source && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link dim"
+                  title="Compiles this checkout inside the image: minutes, and what a change to the worker needs"
+                  :disabled="!view?.editable || !!busy" @click="build(r.runtime, i.image, 'source')">from source</button>
           <span :if="buildOf(r.runtime, i.image)?.state === 'running'" class="state">building…</span>
           <span :if="buildOf(r.runtime, i.image)?.state === 'failed'" class="state down">the last build failed</span>
+          <span :if="i.stale" class="why warn small">{{ i.stale }}<span :if="i.cure === 'source'">: the release is this same version, so only a build from source can make it this one{{ view.from_source ? "" : ", from luu's own checkout" }}</span></span>
+          <span :if="i.unasked" class="why dim small">Its worker could not be asked: {{ i.unasked }}</span>
           <div :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre></Scrollable></div>
         </li>
         <li :if="!r.images.length" class="dim small">No policy file here names an image.</li>
       </ul>
     </section>
     <p class="dim small">
-      <button type="button" class="link" :disabled="!!busy || !view" @click="check()">check again</button>
-      <span :if="busy === 'check'"> · asking each runtime…</span>
+      <button type="button" class="link" :disabled="!!busy || !view || anyAsking" @click="check()">check again</button>
+      <span :if="busy === 'check' || anyAsking"> · asking each runtime…</span>
     </p>
   </section>
 
@@ -283,6 +404,12 @@
   .runtime.off { opacity: .7; }
   .runtime header { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
   .runtime header strong { font-size: 14px; font-weight: 600; color: var(--luu-fg); text-transform: capitalize; }
+  .runtime .grow { flex: 1; }
+  .actions { display: inline-flex; align-items: center; gap: .15rem; }
+  .actions .ic { width: 15px; height: 15px; }
+  /* Running: green, on the check that makes it the default and on the two
+     that say it is. */
+  .actions .ic.up { color: var(--luu-ok); }
   .runtime p { margin: .35rem 0 0; }
   .state {
     font-size: 11px;
@@ -303,6 +430,12 @@
     border-color: var(--luu-warn);
     background: var(--luu-warn-soft, rgba(138, 93, 18, .08));
   }
+  .state.default {
+    color: var(--luu-accent);
+    border-color: var(--luu-accent);
+    background: var(--luu-selected, rgba(47, 91, 189, .06));
+    font-weight: 500;
+  }
   .images { list-style: none; margin: .5rem 0 0; padding: 0; }
   .images li {
     display: flex;
@@ -312,6 +445,8 @@
     font-size: 12px;
     padding: .25rem 0;
   }
+  /* Why an image is out of date, or could not be asked: a line of its own. */
+  .images .why { flex-basis: 100%; }
   /* The well holds the place in the row; the `pre` in it scrolls. */
   .log-well { flex-basis: 100%; margin: .3rem 0 0; }
   .log {

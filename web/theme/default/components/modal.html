@@ -1,4 +1,4 @@
-<script :setup="{ open = false, title = '', width = '32rem', height = '', dismissible = true, head = 'auto' }">
+<script :setup="{ open = false, title = '', width = '32rem', height = '', dismissible = true, head = 'auto', align = 'center' }">
   // A view over the page that has to be answered or left before the page is
   // used again. The platform's `<dialog>`, opened with `showModal()`: ESC, the
   // focus held inside, the page behind made inert, and a backdrop.
@@ -21,6 +21,9 @@
   // the close button — for a question with no way back. `width` is a length,
   // capped at the window; `height` too, for a modal as tall as a page (Settings
   // is one), whose body takes the room between the head and the foot.
+  // `align="top"` hangs it from near the window's top instead of centring it,
+  // for one whose body grows as it is answered: centred, everything above
+  // what grew would move up under the pointer.
   //
   // **The head follows the size**: a large modal — 40rem and up, as drawn —
   // has a dark head, a bar like the page's own, and a small one has a head
@@ -94,6 +97,7 @@
 <dialog class="modal"
         :class.leaving="leaving"
         :class.tall="!!height"
+        :class.top="align === 'top'"
         :style="`width:min(${width}, calc(100vw - 2rem))` + (height ? `;height:min(${height}, calc(100dvh - 2rem))` : '')"
         :aria-label="title || null"
         @cancel="cancel($event)"
@@ -129,6 +133,11 @@
     font-size: var(--luu-text-md);
     line-height: var(--luu-leading);
     overflow: hidden;
+  }
+  /* Hung from near the top: it grows downward, and nothing above moves. */
+  .modal.top {
+    margin-top: min(10vh, 5rem);
+    max-height: calc(100dvh - min(10vh, 5rem) - 2rem);
   }
   .modal[open] { animation: arrive var(--luu-duration-slow) var(--luu-ease-out); }
   .modal.leaving { animation: leave var(--luu-duration) cubic-bezier(.4, 0, 1, 1) forwards; }

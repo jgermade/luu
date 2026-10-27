@@ -1,4 +1,4 @@
-<script :setup="{ provider = '', model = '', disabled = false, typable = false, toggles = false }">
+<script :setup="{ provider = '', model = '', disabled = false, typable = false, toggles = false, edits = false }">
   // Where a session sends, chosen in two columns: the providers in
   // `config.toml`, and the models of the one in focus — what *it* can serve,
   // asked of it when it is focused (`/models`). For a provider whose engine
@@ -20,8 +20,10 @@
   // **And a third, Settings → Models**, where a click on a model makes it the
   // default: it emits `focus` with the provider in focus, and the `head` slot
   // sits right of that provider's name over its models — where its own
-  // actions go. All three list the same providers: a provider whose engine is
-  // switched off in Engines is in none of them.
+  // actions go. `edits` makes its mark and its name one button, with a pencil
+  // right after the name, that emits `edit`. All three list the same
+  // providers: a provider whose engine is switched off in Engines is in none
+  // of them.
   const { state, providerModels, offeredProviders } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
   const { brandSrc, providerBrand, modelBrand, loadBrands } = await import("@web/lib/brands.js")
@@ -35,6 +37,10 @@
   const flag = v => v === "" || v === true || v === "true"
   $: isDisabled = flag(disabled)
   $: canType = flag(typable)
+  // Settings' own: the head's mark and name are one button with a pencil
+  // right after the name, and it emits `edit` with the provider in focus.
+  // The pickers leave it off — a session does not edit where it sends.
+  $: canEdit = flag(edits)
   // Where a model's transport may be flipped from its row: Settings → Models,
   // which writes the file, and only there — the pickers show it and leave it.
   $: canToggle = flag(toggles) && !flag(disabled)
@@ -150,8 +156,14 @@
 
   <div class="models">
     <div class="models-head dim small">
-      <BrandIcon :src="markOf(focus)" size="12px" />
-      <strong>{{ focus }}</strong>
+      <button :if="canEdit" type="button" class="head-edit" :title="`Edit ${focus}`" :aria-label="`Edit ${focus}`"
+              :disabled="isDisabled" @click="$emit('edit', focus)">
+        <BrandIcon :src="markOf(focus)" size="12px" />
+        <strong>{{ focus }}</strong>
+        <svg class="ic pencil" aria-hidden="true"><use href="#i-edit"/></svg>
+      </button>
+      <BrandIcon :if="!canEdit" :src="markOf(focus)" size="12px" />
+      <strong :if="!canEdit">{{ focus }}</strong>
       <span :if="profile.engine">· engine {{ profile.engine }}</span>
       <span :if="$slots.head" class="head-acts"><slot.head /></span>
     </div>
@@ -282,6 +294,29 @@
     border-bottom: 1px solid var(--luu-border);
   }
   .head-acts { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; }
+  /* The provider's mark, its name and a pencil: one button, edged only when
+     the pointer is on it, the way a ghost button is. */
+  .head-edit {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    min-width: 0;
+    margin: -.25rem -.5rem;
+    padding: .25rem .5rem;
+    border: 1px solid transparent;
+    border-radius: var(--luu-radius-md, 6px);
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .head-edit strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .head-edit .pencil { width: 13px; height: 13px; flex: none; color: var(--luu-fg-muted); }
+  .head-edit:hover:not(:disabled) { background: var(--luu-hover); border-color: var(--luu-border); }
+  .head-edit:hover:not(:disabled) .pencil { color: var(--luu-fg); }
+  .head-edit:focus-visible { outline: var(--luu-outline-width) solid var(--luu-outline-color); outline-offset: 2px; }
+  .head-edit:disabled { cursor: default; }
+  .head-edit:disabled .pencil { opacity: .4; }
   .model {
     display: flex;
     align-items: center;

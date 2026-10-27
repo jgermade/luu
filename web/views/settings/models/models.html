@@ -197,17 +197,6 @@
         <PathText :path="state.providers.path" :home="state.settings?.home" />
         <span :if="state.providers.running">· the live session is on <strong>{{ state.providers.running }}</strong></span>
       </p>
-      <!-- The file's default moved and the live session did not: the server says
-           why, and the one button is the one that moves it by choice. -->
-      <p :if="state.providers?.waiting" class="refused">
-        The default is <strong>{{ state.providers.default || "the mock" }}</strong> and the
-        live session stayed where it was: {{ state.providers.waiting }}.
-        <button type="button" class="link" :if="state.providers.default"
-                @click="openStarter(state.providers.default)">move it →</button>
-      </p>
-      <p :if="state.providers && !state.providers.editable" class="refused">
-        {{ state.providers.refused }}
-      </p>
       <p :if="state.providersError" class="error">{{ state.providersError }}</p>
 
       <p :if="defaultError" class="error">{{ defaultError }}</p>
@@ -221,8 +210,9 @@
       <div class="browse" :if="state.providers">
         <ProviderModels :provider="state.providers.default || ''"
                         :model="state.providers.providers?.[state.providers.default]?.model || ''"
-                        :disabled="!editable" typable :toggles="editable"
+                        :disabled="!editable" typable :toggles="editable" edits
                         @focus="focused = $event.detail" @choose="chooseDefault($event.detail)"
+                        @edit="openForm($event.detail)"
                         @transport="setTransport($event.detail)">
           <template :slot.head>
             <span :if="said" class="said">{{ said }}</span>
@@ -231,13 +221,21 @@
             <span :if="here?.remote" class="tag warn" title="Declared as off this machine">remote</span>
             <span :if="overridden(focused)" class="tag warn"
                   title="A model's own `tool-calls` differs from the profile's: a run with -m resolves that model's entry over this. Open the provider to see which.">per-model tools</span>
-            <Button :if="here" square variant="ghost" size="sm" :title="`Edit ${focused}`" :label="`Edit ${focused}`"
-                    :disabled="!editable" @click="openForm(focused)">
-              <svg class="ic"><use href="#i-edit"/></svg>
-            </Button>
           </template>
         </ProviderModels>
       </div>
+      <!-- Under the columns they are about. The file's default moved and the
+           live session did not: the server says why, and the one button is
+           the one that moves it by choice. -->
+      <p :if="state.providers?.waiting" class="refused">
+        The default is <strong>{{ state.providers.default || "the mock" }}</strong> and the
+        live session stayed where it was: {{ state.providers.waiting }}.
+        <button type="button" class="link" :if="state.providers.default"
+                @click="openStarter(state.providers.default)">move it →</button>
+      </p>
+      <p :if="state.providers && !state.providers.editable" class="refused">
+        {{ state.providers.refused }}
+      </p>
 
       <!-- The built-in mock last, under the providers: "no default" in the
            file is it, and it is not a profile, so it is not in the columns. -->

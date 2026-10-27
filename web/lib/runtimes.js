@@ -15,20 +15,33 @@ async function call(method, path, body) {
   return { ok: true, view: await res.json() }
 }
 
-/// Probes every container runtime, so it starts a process per installed one:
-/// asked when the section opens and on *check again*, never on a timer.
+/// The section without a probe: each runtime installed or not, the postures,
+/// the policy files and the host shell. It starts no process, so it answers at
+/// once; `probeRuntime` then asks each installed runtime on its own.
 export const loadRuntimes = () => call("GET", "./api/runtimes")
+/// One runtime, asked: whether it answers and which images its store has. A
+/// process or two, so it is asked when the section opens and on *check
+/// again*, never on a timer.
+export const probeRuntime = runtime => call("GET", `./api/runtimes/${encodeURIComponent(runtime)}`)
 /// The tasks alone — installs, starts, builds — which start nothing: what is
 /// polled while one runs.
 export const loadTasks = () => call("GET", "./api/runtimes/tasks")
-export const buildImage = (runtime, image) =>
-  call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/build`, { image })
+/// `from` is `release` (this version's Linux binary, seconds) or `source`
+/// (the base's `Containerfile`, which compiles luu inside the image).
+export const buildImage = (runtime, image, from = "release") =>
+  call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/build`, { image, from })
 // An empty JSON body, and it is load-bearing: see `start_engine`.
 export const installRuntime = runtime =>
   call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/install`, {})
 export const startRuntime = runtime =>
   call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/start`, {})
+/// Refused for the runtime the live session runs its commands on.
+export const stopRuntime = runtime =>
+  call("POST", `./api/runtimes/${encodeURIComponent(runtime)}/stop`, {})
 export const saveHostShell = host => call("PUT", "./api/terminal", { host })
+/// `[runtimes] default`: the container runtime a new session's image runs on
+/// first. Answers with the whole view, like the writes above.
+export const saveDefaultRuntime = runtime => call("PUT", "./api/runtimes/default", { runtime })
 
 /// The whole `[posture.*]` table, the way the page writes every table. The
 /// terminal's picker reads the postures too, so it is told.

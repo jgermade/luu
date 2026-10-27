@@ -127,11 +127,11 @@
         <pre :class="'b-' + g.bucket">{{ e.text }}</pre>
       </div>
     </div>
-    <!-- The same ways in, where a reader who got to the fade is looking. -->
-    <footer :if="g.big">
-      <button :if="!modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'all')">show all</button>
-      <button :if="!modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'scroll')">scroll</button>
-      <button :if="modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, null)">collapse</button>
+    <!-- The same ways in, centred over the fade where a reader who got to it
+         is looking, and gone once one is taken: *collapse* is the head's. -->
+    <footer :if="g.big && !modes[g.bucket]" class="over-fade">
+      <button type="button" class="pill" @click="mode(g.bucket, 'all')">show all</button>
+      <button type="button" class="pill" @click="mode(g.bucket, 'scroll')">scroll</button>
     </footer>
   </section>
 
@@ -161,10 +161,9 @@
         </div>
       </div>
     </div>
-    <footer :if="reply.big">
-      <button :if="!modes.answer" type="button" class="link" @click="mode('answer', 'all')">show all</button>
-      <button :if="!modes.answer" type="button" class="link" @click="mode('answer', 'scroll')">scroll</button>
-      <button :if="modes.answer" type="button" class="link" @click="mode('answer', null)">collapse</button>
+    <footer :if="reply.big && !modes.answer" class="over-fade">
+      <button type="button" class="pill" @click="mode('answer', 'all')">show all</button>
+      <button type="button" class="pill" @click="mode('answer', 'scroll')">scroll</button>
     </footer>
   </section>
 
@@ -202,8 +201,28 @@
     font-size: 12px;
   }
   .group header .link { font-size: 11px; }
-  .group footer { display: flex; justify-content: flex-end; gap: .45rem; padding: 0 .65rem .35rem; }
-  .group footer .link { font-size: 11px; }
+  /* Over the clipped body's last, faded lines rather than under them: pulled
+     up into the fade, centred, each way in a pill that reads on the text. */
+  .group footer.over-fade {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    gap: .45rem;
+    margin-top: -2.6rem;
+    padding: 0 .65rem .7rem;
+  }
+  .pill {
+    padding: .2rem .7rem;
+    border: 1px solid var(--luu-border-strong);
+    border-radius: var(--luu-radius-full, 999px);
+    background: var(--luu-surface);
+    box-shadow: var(--luu-shadow-sm);
+    color: var(--luu-fg);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .pill:hover { border-color: var(--luu-accent); color: var(--luu-accent); }
   .body { padding: .45rem .65rem; }
   /* Clipped: the first lines, fading out — no scroll bar until asked for.
      *Scroll* keeps the same box, so the lines being read stay where they

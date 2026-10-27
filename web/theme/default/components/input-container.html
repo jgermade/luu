@@ -36,6 +36,12 @@
   // tone — *this will not do what you think* — where `error` is *this is
   // wrong*. `list` is a `<datalist>`'s id, for suggestions a text field still
   // lets a person type past; `selectClass` names the `<select>` itself.
+  // The `lead` slot is drawn before the value, on its line — what the value
+  // is, as a mark:
+  //
+  //   <InputContainer label="Runtime" type="select" :options="runtimes" :model="runtime">
+  //     <template :slot.lead><svg class="ic"><use href="#i-box"/></svg></template>
+  //   </InputContainer>
 
   // A bare attribute (`<X disabled>`) arrives as "", and means on.
   const flag = v => v === "" || v === true || v === "true"
@@ -65,7 +71,8 @@
          :class.has-problem="!!error"
          :class.has-warning="!error && !!warning"
          :class.off="isDisabled"
-         :class.named="!!label">
+         :class.named="!!label"
+         :class.leading="!!$slots.lead">
     <span :if="label" class="name">
       {{ label }}<span :if="isRequired" class="mark" aria-hidden="true">*</span>
     </span>
@@ -97,6 +104,7 @@
               :value="item.value" :disabled="item.disabled"
               :title="item.title || null">{{ item.label }}</option>
     </select>
+    <span :if="$slots.lead" class="lead" aria-hidden="true"><slot.lead /></span>
     <svg :if="isSelect" class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5" /></svg>
   </label>
   <p :if="error" class="said problem" :id="said" role="alert">{{ error }}</p>
@@ -189,6 +197,18 @@
   input::placeholder { color: var(--luu-fg-subtle); }
   select { appearance: none; padding-right: calc(var(--luu-space-3) + 1.5rem); cursor: pointer; }
   option { background: var(--luu-surface); color: var(--luu-fg); }
+  /* On the value's line, at its start, the way the caret is at its end. */
+  .lead {
+    position: absolute;
+    left: var(--luu-space-3);
+    bottom: var(--luu-space-2);
+    display: flex;
+    align-items: center;
+    height: calc(var(--luu-text-md) * var(--luu-leading));
+    color: var(--luu-fg-muted);
+    pointer-events: none;
+  }
+  .leading input, .leading select { padding-left: calc(var(--luu-space-3) + 1.4rem); }
   .caret {
     position: absolute;
     right: var(--luu-space-3);

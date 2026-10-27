@@ -277,6 +277,9 @@ async fn server_storing_selecting(
         },
         counter_warning: None,
         approvers: Default::default(),
+        // As the agency above says: a test never reads the `config.toml` of
+        // whoever runs it.
+        max_tool_steps: Some(4),
         address: "127.0.0.1:0".parse().expect("a loopback address"),
         backend: Arc::new(Mock::replies(replies).delay(Duration::ZERO)),
         model: "mock".into(),
@@ -329,6 +332,9 @@ async fn server_over_tree(base: &std::path::Path, access: Access) -> String {
         },
         counter_warning: None,
         approvers: Default::default(),
+        // As the agency above says: a test never reads the `config.toml` of
+        // whoever runs it.
+        max_tool_steps: Some(4),
         address: "127.0.0.1:0".parse().expect("a loopback address"),
         backend: Arc::new(Mock::replies(vec![]).delay(Duration::ZERO)),
         model: "mock".into(),
@@ -491,6 +497,9 @@ async fn server_with_postures(
         postures,
         environments: Default::default(),
         postures_path: Some("config.toml".into()),
+        // As the agency above says: a test never reads the `config.toml` of
+        // whoever runs it.
+        max_tool_steps: Some(4),
     })
     .await
     .expect("binding the server");
@@ -862,6 +871,39 @@ async fn a_folder_is_its_index() {
         .await
         .expect("the request");
     assert_eq!(none.status(), 404);
+}
+
+/// The page's files carry their hash as an `ETag` and are revalidated every
+/// time, so a reload is a bodyless 304 for what did not change and never a
+/// stale copy. See `RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`.
+#[tokio::test]
+async fn a_file_of_the_page_is_revalidated_by_its_hash() {
+    let address = server().await;
+    let http = reqwest::Client::new();
+    let url = format!("http://{address}/components/dropup.html");
+    let first = http.get(&url).send().await.expect("the request");
+    assert_eq!(first.status(), 200);
+    assert_eq!(first.headers()["cache-control"], "no-cache");
+    let tag = first.headers()["etag"].to_str().unwrap().to_string();
+    assert!(tag.starts_with('"') && tag.len() == 66, "{tag}");
+
+    let again = http
+        .get(&url)
+        .header("if-none-match", &tag)
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(again.status(), 304);
+    assert_eq!(again.headers()["etag"], tag.as_str());
+    assert!(again.bytes().await.unwrap().is_empty());
+
+    let other = http
+        .get(&url)
+        .header("if-none-match", "\"something else\"")
+        .send()
+        .await
+        .expect("the request");
+    assert_eq!(other.status(), 200);
 }
 
 /// The tree renames a file, says where it went, refuses a name that is
@@ -4380,4 +4422,97 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A turn that made every tool call its budget allows asks before it ends:
+/// `limit_reached` on the call past it, and *more* lets the turn go on to its
+/// answer. *No limit for the session* lifts it for the turns after too, which
+/// ask nothing. See
+/// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
+#[tokio::test]
+async fn a_turn_at_its_tool_limit_asks_and_a_person_lets_it_go_on() {
+    let call = "Looking.\n```tool\n{\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}\n```"
+        .to_string();
+    // The budget is 4 (`server_with_postures`): the fifth call is the one past it.
+    let mut replies: Vec<String> = std::iter::repeat_n(call.clone(), 5).collect();
+    replies.push("Five listings.".into());
+    replies.extend(std::iter::repeat_n(call.clone(), 5));
+    replies.push("Lifted.".into());
+    replies.extend(std::iter::repeat_n(call.clone(), 6));
+    replies.push("Six, and nobody asked.".into());
+    let address = server_with(replies).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    // *More*: another four, and the answer.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "list it"}),
+    )
+    .await;
+    let (reached, _) = until(&mut socket, "limit_reached").await;
+    assert_eq!(reached["used"], 4);
+    assert_eq!(reached["more"], 4);
+    assert_eq!(reached["step"], 5);
+    // An answer for a call that is not waiting is refused, not applied.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "extend_limit", "turn": reached["turn"], "step": 99,
+                           "answer": "more"}),
+    )
+    .await;
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["request"], "extend_limit");
+    send(
+        &mut socket,
+        serde_json::json!({"type": "extend_limit", "turn": reached["turn"],
+                           "step": reached["step"], "answer": "more"}),
+    )
+    .await;
+    let (extended, _) = until(&mut socket, "limit_extended").await;
+    assert_eq!(extended["budget"], 8);
+    assert_eq!(extended["session"], false);
+    let (ended, _) = until(&mut socket, "ended").await;
+    assert_eq!(ended["reason"], "stop");
+
+    // *No limit for the session*: said once, and the next turn asks nothing.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "again"}),
+    )
+    .await;
+    let (reached, _) = until(&mut socket, "limit_reached").await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "extend_limit", "turn": reached["turn"],
+                           "step": reached["step"], "answer": "session"}),
+    )
+    .await;
+    let (extended, _) = until(&mut socket, "limit_extended").await;
+    assert!(extended["budget"].is_null());
+    assert_eq!(extended["session"], true);
+    let (ended, _) = until(&mut socket, "ended").await;
+    assert_eq!(ended["reason"], "stop");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "once more"}),
+    )
+    .await;
+    let mut calls = 0;
+    loop {
+        let message = next_message(&mut socket).await;
+        match message["type"].as_str().expect("a typed message") {
+            "tool_call" => calls += 1,
+            "limit_reached" => panic!("a session with no limit asked: {message}"),
+            "ended" => {
+                assert_eq!(message["reason"], "stop");
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(calls, 6);
 }
