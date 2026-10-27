@@ -1845,7 +1845,8 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   const file = join(home, "config.toml")
   writeFileSync(file, `${readFileSync(file, "utf8").trimEnd()}\n\n[provider.qwen-box]\nbackend = "ollama"\n` +
     `url = "http://127.0.0.1:9"\nmodel = "qwen2.5-coder:7b"\n\n[provider.ali]\nbackend = "openai"\n` +
-    `url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"\nmodel = "glm-5.2"\n`)
+    `url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"\nmodel = "glm-5.2"\n\n` +
+    `[provider.mm]\nbackend = "anthropic"\nurl = "https://api.minimax.io/anthropic"\nmodel = "MiniMax-M2"\n`)
   const mine = join(home, "brand-icons", "mine")
   mkdirSync(mine, { recursive: true })
   writeFileSync(join(mine, "qwen.svg"), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>')
@@ -1872,6 +1873,12 @@ test("providers and models wear their brand's mark, from the page's own or a pac
   await ali.click()
   await expect(pane.locator(".model", { hasText: "glm-5.2" }).locator(".brand"))
     .toHaveAttribute("style", /brands\/zai\.svg/)
+  // MiniMax's, by its host and by its model's name.
+  const mm = pane.locator(".prov", { has: page.locator('strong:text-is("mm")') })
+  await expect(mm.locator(".brand")).toHaveAttribute("style", /brands\/minimax\.svg/)
+  await mm.click()
+  await expect(pane.locator(".model", { hasText: "MiniMax-M2" }).locator(".brand"))
+    .toHaveAttribute("style", /brands\/minimax\.svg/)
 
   // A pack instead: found where luu imports them, chosen, and written.
   await page.click('.modal .rail button:has-text("Appearance")')

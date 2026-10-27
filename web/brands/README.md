@@ -7,10 +7,17 @@ for it, so a pack installed later answers the same names. See
 
 From [Simple Icons](https://simpleicons.org) 16.36.0, which publishes its
 collection under CC0 1.0. Each mark is the trademark of its owner, shown here
-only to say which provider or model a row is; where Simple Icons records a
-licence of its own for a mark, or the owner forbids this use, it is not here
-(MiniMax's carries a custom licence; Apple does not allow its logo to be used
-this way).
+only to say which provider or model a row is; where the owner forbids this use,
+it is not here (Apple does not allow its logo to be used this way).
+
+**`minimax.svg` is the one exception to CC0.** It is Simple Icons' MiniMax
+mark, which MiniMax gave Simple Icons explicit permission to include
+([simple-icons#13982](https://github.com/simple-icons/simple-icons/pull/13982#issuecomment-3531627803))
+while saying that this "does not constitute any waiver of MiniMax's rights" and
+that its intellectual property terms and brand usage policies "remain fully in
+effect". It is here under those terms, not under CC0, and only to say which
+provider or model a row is. A pack that has its own `minimax.svg` is drawn
+instead, as for every slug.
 
 Renamed on the way in: `googlegemini` → `gemini`, `mistralai` → `mistral`,
 `zdotai` → `zai` (Z.ai, which makes GLM). `alibabacloud` is Alibaba Cloud's,

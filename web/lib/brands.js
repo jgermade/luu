@@ -9,7 +9,7 @@ import { apiHeaders } from "./store.js"
 /// The page's own, by slug: the files in `web/brands/`.
 const BUILTIN = new Set([
   "alibabacloud", "anthropic", "claude", "deepseek", "gemini", "google", "huggingface", "kimi",
-  "llamacpp", "lmstudio", "meta", "mistral", "mlx", "ollama", "qwen", "vllm", "zai",
+  "llamacpp", "lmstudio", "meta", "minimax", "mistral", "mlx", "ollama", "qwen", "vllm", "zai",
 ])
 export const builtinCount = BUILTIN.size
 
