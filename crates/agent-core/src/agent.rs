@@ -64,7 +64,8 @@ pub enum Answer {
 ///
 /// `ask` resolves when they have. What carries the question there — a socket,
 /// a pipe, a test's script — is the caller's business, the way where a tool
-/// runs is [`Executor`]'s.
+/// runs is [`Executor`]'s. `unheld` is what will not hold the call if they say
+/// yes — see [`unheld`] — for the question to say before they answer.
 pub trait Asker: Send + Sync {
     fn ask<'a>(
         &'a self,
@@ -72,7 +73,23 @@ pub trait Asker: Send + Sync {
         index: u32,
         call: &'a ToolCall,
         refused: &'a str,
+        unheld: Option<&'a str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>>;
+}
+
+/// What will not hold `call` under `sandbox`: for a command, the part of the
+/// kernel this machine lacks — Landlock and seccomp, off Linux — where the
+/// sandbox runs it anyway (`best-effort`). `None` for a call the kernel holds,
+/// and for every in-process tool, which our own check holds.
+pub fn unheld(call: &ToolCall, sandbox: &Sandbox) -> Option<String> {
+    if call.name != "run_command" {
+        return None;
+    }
+    let program = call.arguments.get("argv")?.as_array()?.first()?.as_str()?;
+    match sandbox.prepare_command(program).ok()?.verdict.enforced_by {
+        crate::sandbox::Applied::Partial { missing, .. } => Some(missing),
+        _ => None,
+    }
 }
 
 /// What a call the turn's sandbox refused may still become.
@@ -461,8 +478,9 @@ pub async fn run_agent_turn(
             }
             if let (Some(ask), Escalation::Ask(wider)) = (ask, &escalation) {
                 let mut cancelled = cancel.clone();
+                let gap = unheld(&call, wider);
                 let answer = tokio::select! {
-                    answer = ask.person.ask(step, index, &call, &result.verdict.rule) => Some(answer),
+                    answer = ask.person.ask(step, index, &call, &result.verdict.rule, gap.as_deref()) => Some(answer),
                     _ = cancelled.wait_for(|cancelled| *cancelled) => None,
                 };
                 match answer {
@@ -1316,6 +1334,7 @@ mod tests {
             _index: u32,
             call: &'a ToolCall,
             refused: &'a str,
+            _unheld: Option<&'a str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {
             self.asked
                 .lock()
@@ -1336,6 +1355,7 @@ mod tests {
             _index: u32,
             _call: &'a ToolCall,
             _refused: &'a str,
+            _unheld: Option<&'a str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send + 'a>> {
             Box::pin(std::future::pending())
         }

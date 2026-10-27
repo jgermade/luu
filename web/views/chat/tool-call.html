@@ -106,6 +106,10 @@
     <p :if="asksCommand" class="why">The draft may not run <code>{{ args.argv?.[0] }}</code>
       — the shell list leaves it to you. Allow it?
       <span class="dim">It runs with what the session may write and reach.</span></p>
+    <!-- Where this machine's kernel cannot hold a command, said before the
+         click: a yes runs it as you, held by its resource limits only. -->
+    <p :if="held.unheld" class="unheld">Nothing on this machine holds it ({{ held.unheld }}):
+      allowed, it runs as you, held only by its resource limits.</p>
     <div :if="asksCommand" class="out"><Scrollable :x="true" frame="well" background="var(--luu-bg, #f4f5f8)"><pre>{{ subject }}</pre></Scrollable></div>
     <div :if="writes !== null" class="out"><Scrollable :y="true" frame="well" background="var(--luu-bg, #f4f5f8)" max="16rem"><pre>{{ writes }}</pre></Scrollable></div>
     <div :if="replaces" class="label">replaces</div>
@@ -191,6 +195,14 @@
   .status.ask { color: var(--luu-warn, #b7791f); font-weight: 600; }
   .question { padding: .1rem .6rem .55rem; border-top: 1px solid var(--luu-border, #c8c8c8); }
   .why { margin: .4rem 0 .2rem; overflow-wrap: anywhere; }
+  .unheld {
+    margin: .3rem 0 .2rem;
+    padding: .3rem .5rem;
+    border-radius: 5px;
+    background: var(--luu-warn-soft, #fdf7e9);
+    color: var(--luu-warn, #8a5d12);
+    overflow-wrap: anywhere;
+  }
   .answers { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .5rem; }
   .answers .session { margin-left: .4rem; }
   .answers button {

@@ -151,6 +151,17 @@ test("a command left to a person is asked, allowed or denied for the session, an
   await expect(card.locator(".why")).toContainText("may not run git")
   await expect(card.locator(".question pre")).toHaveText("git --version")
   await expect(card.locator(".answers button")).toHaveText(["Allow", "Deny"])
+  // Linux holds it, so nothing is said; where the kernel cannot — macOS —
+  // the question says so before the click, as the server words it there.
+  await expect(card.locator(".unheld")).toHaveCount(0)
+  await page.evaluate(async () => {
+    const { state } = await import("./lib/store.js")
+    state.tools = state.tools.map(call => call.held
+      ? { ...call, held: { ...call.held, unheld: "landlock and seccomp are Linux-only, and this is macos" } }
+      : call)
+  })
+  await expect(card.locator(".unheld")).toContainText("this is macos")
+  await expect(card.locator(".unheld")).toContainText("held only by its resource limits")
   const forTheSession = card.getByRole("checkbox", { name: "Apply to session" })
   await expect(forTheSession).not.toBeChecked()
   await card.getByText("Apply to session").click()

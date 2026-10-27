@@ -524,7 +524,7 @@ function onProtocol(message) {
     // `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
     case "call_held":
       state.tools = state.tools.map(call => call.step === message.step && (call.index ?? 1) === (message.index ?? 1)
-        ? { ...call, held: { turn: message.turn, step: message.step, index: message.index ?? 1, refused: message.refused } }
+        ? { ...call, held: { turn: message.turn, step: message.step, index: message.index ?? 1, refused: message.refused, unheld: message.unheld ?? null } }
         : call)
       break
 
@@ -838,7 +838,7 @@ function fromStored(turn) {
     // A call a person is still being asked about carries the floor's rule as
     // `held`; the card wants the turn beside it to answer with.
     tools: (turn.tools || []).map(call => call.held
-      ? { ...call, held: { turn: turn.turn, step: call.step, index: call.index ?? 1, refused: call.held } }
+      ? { ...call, held: { turn: turn.turn, step: call.step, index: call.index ?? 1, refused: call.held, unheld: call.unheld ?? null } }
       : call),
     extraCalls: turn.extra_calls || [],
     prompt: turn.prompt_sent || "",

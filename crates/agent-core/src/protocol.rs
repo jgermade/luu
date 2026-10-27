@@ -573,6 +573,14 @@ pub enum ServerMessage {
         name: String,
         arguments: serde_json::Value,
         refused: String,
+        /// What will not hold the call if a person allows it: the kernel's
+        /// half — Landlock and seccomp — on a machine that has neither, where a
+        /// person's yes runs a command held by its resource limits only.
+        /// Additive: absent wherever the kernel holds it, and in every
+        /// recording made before it. See
+        /// `RECORD/2026-10-27.a-yes-runs-what-the-kernel-cannot-hold.completed.md`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unheld: Option<String>,
     },
     /// What it did. The verdict travels with the result because "the agent ran
     /// a command" and "the kernel held the command it ran" are different facts
@@ -678,6 +686,7 @@ impl ServerMessage {
                 index,
                 call,
                 refused,
+                unheld,
             } => Self::CallHeld {
                 turn,
                 step,
@@ -685,6 +694,7 @@ impl ServerMessage {
                 name: call.name,
                 arguments: call.arguments,
                 refused,
+                unheld,
             },
             TurnEvent::ToolResult { step, outcome } => {
                 let ToolStep {

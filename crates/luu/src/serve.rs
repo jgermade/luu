@@ -121,6 +121,7 @@ impl agent_core::agent::Asker for Watching {
         index: u32,
         call: &'a agent_core::tools::ToolCall,
         refused: &'a str,
+        unheld: Option<&'a str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = agent_core::agent::Answer> + Send + 'a>>
     {
         Box::pin(async move {
@@ -143,6 +144,7 @@ impl agent_core::agent::Asker for Watching {
                     index,
                     call: call.clone(),
                     refused: refused.to_string(),
+                    unheld: unheld.map(str::to_string),
                 })
                 .await;
             let answer = answered.await.unwrap_or(agent_core::agent::Answer::Deny);

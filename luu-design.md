@@ -189,6 +189,14 @@ be signed. At the gate, a plan on a session built from lists may get whatever th
 since approving it is that person's yes, for the job; a policy file stays the outer bound. `protocol::VERSION`
 11, `record::FORMAT` 23. See
 [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+**A person's yes runs what the kernel here cannot hold** (since 2026-10-27): off Linux there is
+no Landlock and no seccomp, and under `enforcement = "kernel"` every command a draft makes was
+refused — after the yes as before it. The ceiling now gives the yes `best-effort` where the
+kernel cannot hold the command, so it runs held by its resource limits only, and asks about a
+listed command the kernel refused too; `call_held` carries `unheld` — what will not hold it —
+and the card says so before the click, and the verdict names the gap after. What nobody
+answered is refused as before: the default still denies rather than run a child unheld. See
+[`RECORD/2026-10-27.a-yes-runs-what-the-kernel-cannot-hold.completed.md`](RECORD/2026-10-27.a-yes-runs-what-the-kernel-cannot-hold.completed.md).
 
 **What was granted and refused is read in one place, so the lists can start lax and be
 narrowed.** *Permissions*, a dialog from the shield in the chat's head. **Activity** is every

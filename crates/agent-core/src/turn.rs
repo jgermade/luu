@@ -89,6 +89,9 @@ pub enum TurnEvent {
         index: u32,
         call: crate::tools::ToolCall,
         refused: String,
+        /// What would not hold the call a yes runs — the kernel's half, on a
+        /// machine that has none — so the question says it before the click.
+        unheld: Option<String>,
     },
     /// What it did, including the verdict and who enforced it. The call's
     /// `index` rides on the [`ToolStep`].

@@ -98,6 +98,10 @@ pub struct ToolCallView {
     /// waiting on nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// With `held`: what will not hold the call if it is allowed. See
+    /// [`crate::protocol::ServerMessage::CallHeld`]'s `unheld`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unheld: Option<String>,
     /// Where in the turn's reply this call's step ended: the length of the
     /// text streamed before the call, in UTF-16 units — what a page indexes a
     /// string by — so the reply can be cut into what each round trip said.
@@ -1264,6 +1268,7 @@ impl SessionView {
                         asked: None,
                         grant: None,
                         held: None,
+                        unheld: None,
                         at: Some(view.text.encode_utf16().count()),
                     });
                 }
@@ -1276,6 +1281,7 @@ impl SessionView {
                 step,
                 index,
                 refused,
+                unheld,
                 ..
             } => {
                 if let Some(view) = self.turn_mut(*turn)
@@ -1284,6 +1290,7 @@ impl SessionView {
                     })
                 {
                     call.held = Some(refused.clone());
+                    call.unheld = unheld.clone();
                 }
             }
             ServerMessage::ToolResult {
@@ -1314,6 +1321,7 @@ impl SessionView {
                     call.asked = *asked;
                     call.grant = *grant;
                     call.held = None;
+                    call.unheld = None;
                 }
             }
             // What a person answered for the session, as the stream last left
