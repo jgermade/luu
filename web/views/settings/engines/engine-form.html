@@ -361,7 +361,7 @@
         </div>
       </div>
       <Checkbox :if="!editing" :model="withProvider" @change="withProvider = $event.detail">
-        also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
+        <span>also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it</span>
       </Checkbox>
     </section>
 

@@ -129,8 +129,9 @@ cargo run --bin luu -- chat "read AGENTS.md" -p workstation --tool-calls native
 # The profile `default` names must carry `remote = true` when its URL is not
 # this machine — a LAN box included — or that default is *held*: the file loads,
 # nothing is sent there, a run with no `-p` refuses, `serve` stays on the mock,
-# and Settings → Models asks for the host to be typed back. With no `-p`, nobody
-# typed the destination. Naming it is typing it, so every other profile is free
+# and Settings → Models asks for it to be confirmed, in a modal naming the host,
+# when a click makes it the default. With no `-p`, nobody typed the
+# destination. Naming it is typing it, so every other profile is free
 # of the word.
 cargo run --bin luu -- serve                          # the debug UI on 127.0.0.1:7878
 # sessions are cached in the state directory's sessions.db by default, so a

@@ -1858,17 +1858,20 @@ sends, and a `default` provider outlives the session and the gate, which makes
 it a larger authority than approving one job. Off loopback the section renders
 disabled and says why.
 
-**The browser never decides whether a URL is off the machine.** It writes what it
-was given; the loader — the same one every run reads the file with — **holds** a
-default that leaves the machine without `remote = true`, and `GET /api/providers`
-names the profile and the host (`held`). The page then asks, over the columns,
-for that host to be *typed*, and writes the declaration. So the rule has one
-implementation, and the word is produced by a person answering the machine's
-objection rather than by a checkbox the program pre-ticked. **The default and
-the consent are two facts written by two gestures**: a click on a model chooses
-the default, at once and with nothing opened, and the typed host consents to
-sending there untyped. See
-[`RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`](RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md). A key typed into the form is written to a
+**The browser never decides whether a URL is off the machine.** The loader — the same one
+every run reads the file with — **holds** a default that leaves the machine without `remote =
+true`, and `GET /api/providers` names the profile and the host (`held`); `GET
+/api/providers/where` answers the same question for a profile before anything is written.
+**Consent is asked when a provider becomes the default**: a click on a model of a provider off
+this machine that has not said `remote = true` opens a confirmation naming the host — *every run
+that names no provider sends its prompts there* — and *Make it the default* writes the default
+and `remote = true` in one write, while *Cancel* writes nothing. A held default — written by hand,
+or chosen before this asked — has a *Confirm…* that opens the same modal. **The default and the
+consent are two facts**, given by one person at one moment, and a provider is never consented to
+before somebody wants it as the default. It used to be the host typed back, over the columns,
+after the default had been written. See
+[`RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`](RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md)
+and [`RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`](RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md). A key typed into the form is written to a
 file before `config.toml` is, and the file holds a path, for the reason the
 provider section gives.
 
@@ -2224,7 +2227,7 @@ is the only shape where nothing was typed, so it is the only one that must have
 been written down. A `config.toml` whose default points off the machine without
 saying so **loads with that default held**: nothing is sent there, a run with no
 `-p` refuses at the moment it would have sent, `serve` starts on the mock, and
-the page asks for the host. It used to fail to load, which took every other
+the page asks for it to be confirmed, in a modal naming the host. It used to fail to load, which took every other
 table down with it — the page that could have fixed it included. A `remote =
 true` on a default that is this machine is dropped by the loader and left out
 of the next write: no consent is given or taken by it, so that one migrates by

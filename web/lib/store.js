@@ -1436,6 +1436,19 @@ export async function newSession(choice) {
   }
 }
 
+/// Whether a destination is this machine, as the server's loader decides it:
+/// `{ host, this_machine }`, for `backend` and the URL as typed (the
+/// backend's own where none is). `null` when it cannot be asked.
+export async function providerWhere(backend, url) {
+  try {
+    const query = new URLSearchParams({ ...(backend ? { backend } : {}), ...(url ? { url } : {}) })
+    const res = await fetch(`./api/providers/where?${query}`, { headers: apiHeaders() })
+    return res.ok ? await res.json() : null
+  } catch {
+    return null
+  }
+}
+
 /// What one provider will answer for, and which model to start on there.
 ///
 /// A provider that is not running answers with an empty list and a reason —

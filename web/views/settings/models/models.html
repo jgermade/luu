@@ -9,10 +9,10 @@
   // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`,
   // `RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md` and
   // `RECORD/2026-10-26.models-a-click-is-the-default.completed.md`.
-  const { state, saveProviders, loadProviders, refreshSettings } = await import("@web/lib/store.js")
+  const { state, saveProviders, loadProviders, refreshSettings, providerWhere } = await import("@web/lib/store.js")
   const PathText = await import("@web/components/path-text.html")
   const Button = await import("@web/theme/default/components/button.html")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const SubModal = await import("@web/theme/default/components/sub-modal.html")
   const { openStarter } = await import("@web/lib/ui.js")
   const ProviderForm = await import("./provider-form.html")
   const ProviderModels = await import("@web/views/chat/provider-models.html")
@@ -36,35 +36,39 @@
 
   // The default is the one thing changed from the list, because it is the one
   // thing changed often, and it is written at once: a provider and its model
-  // from a click on the model, or the mock from its row. Nothing opens: a
-  // default off this machine is written **held** — chosen, and not sent to —
-  // and the line over the columns asks for its host, which is the consent a
-  // click cannot give. See
-  // `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`.
+  // from a click on the model, or the mock from its row. `remote` is the
+  // consent a provider off this machine needs to be it, written in the same
+  // write once the confirmation below has been answered. See
+  // `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md` and
+  // `RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`.
   let defaultError = null
-  const makeDefault = async (name, model = "") => {
+  const makeDefault = async (name, model = "", remote = false) => {
     defaultError = null
     const providers = { ...(state.providers?.providers || {}) }
-    if (name && model) providers[name] = { ...providers[name], model }
+    if (name && (model || remote)) {
+      providers[name] = { ...providers[name], ...(model ? { model } : {}), ...(remote ? { remote: true } : {}) }
+    }
     const result = await saveProviders({ default: name || null, providers })
     await refreshSettings()
     if (!result?.ok) defaultError = state.providersError || "the write was refused"
   }
 
-  // The held default's host, typed back: `remote = true` on its profile, and
-  // the default is a destination from then on.
-  let typedHost = ""
-  $: held = state.providers?.held || null
-  const declare = async () => {
-    if (!held || typedHost.trim() !== held.host) return
-    defaultError = null
-    const providers = { ...(state.providers?.providers || {}) }
-    providers[held.profile] = { ...providers[held.profile], remote: true }
-    const result = await saveProviders({ default: held.profile, providers })
-    await refreshSettings()
-    if (result?.ok) typedHost = ""
-    else defaultError = state.providersError || "the write was refused"
+  // **Asked when it becomes the default, not before.** A provider off this
+  // machine that has not said `remote = true` is luu's default only once a
+  // person confirms it, in a modal that names the host: every run that names
+  // no provider would send there. Cancel writes nothing. Whether a URL is
+  // this machine is the server's to say (`/api/providers/where`), never
+  // worked out here. `confirming` is `{ provider, model, host }` while it is
+  // open.
+  let confirming = null
+  const confirmDefault = async () => {
+    const { provider, model } = confirming
+    confirming = null
+    await makeDefault(provider, model, true)
   }
+  // A default the file already holds — added before this asked, or written
+  // by hand — is confirmed with the same modal.
+  $: held = state.providers?.held || null
   // Why the live session is on the mock, when nobody chose it: the file
   // names no provider at all, or names some and makes none the default. A
   // held default says so on its own line.
@@ -84,9 +88,13 @@
   // it, which the chat's picker and *New session* already do. A provider
   // that lists nothing offers *its own model*, which moves the default and
   // leaves the profile's model as it is.
-  const chooseDefault = ({ provider, model }) => {
+  const chooseDefault = async ({ provider, model }) => {
     const p = state.providers?.providers?.[provider]
-    if (state.providers?.default === provider && (!model || p?.model === model)) return
+    if (state.providers?.default === provider && (!model || p?.model === model) && !held) return
+    if (p && !p.remote && p.backend !== "mock") {
+      const where = await providerWhere(p.backend || "ollama", p.url || "")
+      if (where && !where.this_machine) return void (confirming = { provider, model, host: where.host })
+    }
     makeDefault(provider, model)
   }
   // How each model travels is the columns' to say, one icon per model, in
@@ -168,22 +176,18 @@
     </div>
 
     <!-- A default chosen and not yet consented to: it points off this machine
-         and its profile does not say `remote = true`. Nothing goes there —
-         this server stays on the mock and a run with no -p refuses — until
-         the host is typed back. -->
+         and its profile does not say `remote = true` — a provider added before
+         its form had the box, or one written by hand. Nothing goes there
+         until it is ticked, here or in its form. -->
     <div :if="held" class="first-run held">
-      <strong>{{ held.profile }} is the default, and sends off this machine.</strong>
+      <strong>{{ held.profile }} is the default, and is not this machine.</strong>
       <p>
-        Every run that names no provider would send to <strong>{{ held.host }}</strong>,
-        so nothing goes there until you type that host back. Until then this
-        server stays on the mock, and <code>luu chat</code> with no
-        <code>-p</code> refuses.
+        Nothing is sent to <strong>{{ held.host }}</strong> as the default until
+        that is confirmed: until then this server stays on the mock.
       </p>
       <div class="confirm">
-        <TextInput :model="typedHost" :placeholder="held.host" :label="`Type ${held.host} to confirm`"
-                   @enter="declare()" />
-        <Button variant="primary" size="sm" :disabled="!editable || typedHost.trim() !== held.host"
-                @click="declare()">Confirm</Button>
+        <Button size="sm" :disabled="!editable"
+                @click="confirming = { provider: held.profile, model: '', host: held.host }">Confirm…</Button>
       </div>
     </div>
 
@@ -267,6 +271,25 @@
 <ProviderForm :if="form" :taken="profileNames" :editing="form.editing"
               :saved="saved" :close="() => { form = null }" />
 
+<!-- A provider off this machine becoming the default: said, and asked. -->
+<SubModal :open="!!confirming" :title="confirming ? `Make ${confirming.provider} the default` : ''"
+          width="34rem" @close="confirming = null">
+  <div :if="confirming" class="asks">
+    <p>
+      <strong>{{ confirming.provider }}</strong> sends to
+      <strong>{{ confirming.host }}</strong>, which is not this machine.
+    </p>
+    <p>
+      As luu's default, every run that names no provider — a new session,
+      <code>luu chat</code> with no <code>-p</code> — sends its prompts there.
+    </p>
+  </div>
+  <template :slot.foot>
+    <span class="left"><Button variant="ghost" @click="confirming = null">Cancel</Button></span>
+    <Button variant="primary" @click="confirmDefault()">Make it the default</Button>
+  </template>
+</SubModal>
+
 <style scoped>
   .models-pane {
     display: flex;
@@ -285,6 +308,8 @@
   .browse .said { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .browse .ic { width: 14px; height: 14px; }
   .held .confirm { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; }
+  .asks p { margin: 0 0 .5rem; font-size: 12.5px; line-height: 1.5; }
+  .left { display: flex; gap: var(--luu-space-2); margin-right: auto; }
   /* The foot pads itself, beside a `.pane-main` that pads the content; the
      pane they sit in pads nothing — as in Engines. */
   .modal-foot { padding: .2rem 1.75rem 0; }

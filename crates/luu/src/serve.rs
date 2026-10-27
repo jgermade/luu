@@ -1557,6 +1557,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/policies", get(get_policies).put(put_policies))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/probe", post(probe_provider))
+        .route("/api/providers/where", get(provider_where))
         .route("/api/providers/{name}/models", get(get_provider_models))
         .route("/api/resend", get(get_resend).put(put_resend))
         .route("/api/authority", get(get_authority).put(put_authority))
@@ -6867,6 +6868,35 @@ struct Probed {
     /// The server's own refusal, which is the useful one: a 401 names the key,
     /// a connection error names the URL.
     error: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct WhereAsk {
+    #[serde(default)]
+    backend: Option<crate::provider::BackendKind>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+/// Whether a destination is this machine, by the loader's own rule: what
+/// Settings → Models asks before a provider becomes luu's default, to know
+/// whether to ask for `remote = true` first. The URL as typed, or the backend's own when
+/// none is. Reads nothing and reaches nothing — the rule has one
+/// implementation, `provider::is_this_machine`, and this is it asked from a
+/// page rather than a second copy of it in JavaScript. See
+/// `RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`.
+async fn provider_where(Query(ask): Query<WhereAsk>) -> Response {
+    let url = ask
+        .url
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .or_else(|| ask.backend?.default_url().map(str::to_string))
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "host": crate::provider::authority_of(&url),
+        "this_machine": url.is_empty() || crate::provider::is_this_machine(&url),
+    }))
+    .into_response()
 }
 
 async fn probe_provider(

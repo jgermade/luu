@@ -67,9 +67,10 @@
   const LEVELS = ["low", "medium", "high", "xhigh", "max"]
 
   // The profile as the file has it, for an edit. `remote`, `engine` and
-  // `key-file` are not fields here and are carried through: `remote` is only
-  // ever written after the host was typed, `engine` is Settings → Engines' to
-  // set, and the key's file is luu's to place.
+  // `key-file` are not fields here and are carried through: `remote` is
+  // written when a provider off this machine is confirmed as luu's default
+  // (Settings → Models asks), `engine` is Settings → Engines' to set, and the
+  // key's file is luu's to place.
   const was = editing ? state.providers?.providers?.[editing] || {} : {}
   const saved_entries = was.models || {}
 

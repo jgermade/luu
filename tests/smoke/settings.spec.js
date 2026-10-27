@@ -1077,13 +1077,14 @@ test("an engine is added with its provider, started, and stopped from Settings",
 })
 
 /**
- * A default and the consent to send there untyped are two facts. A click on a
- * model of a provider off this machine makes it the default, with nothing
- * opened, and the default is *held*: the live session stays on the mock until
- * the host is typed back over the columns, which writes `remote = true`. See
- * `RECORD/2026-10-26.a-default-is-chosen-and-held.completed.md`.
+ * A provider off this machine becomes the default only when a person says so,
+ * at the moment it does: a click on one of its models asks, in a modal naming
+ * the host, and the answer writes the default and `remote = true` together —
+ * or, cancelled, writes nothing. A default the file already holds (written by
+ * hand) is confirmed through the same modal. See
+ * `RECORD/2026-10-27.consent-when-it-becomes-the-default.completed.md`.
  */
-test("a remote default is chosen with a click and held until its host is typed", async ({ page }) => {
+test("a remote provider becomes the default through a confirmation", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
   page.on("console", message => {
@@ -1093,47 +1094,65 @@ test("a remote default is chosen with a click and held until its host is typed",
   const before = readFileSync(file, "utf8")
   writeFileSync(file, `${before.trimEnd()}\n\n[provider.faraway]\nbackend = "openai"\n` +
     `url = "https://models.example.invalid/v1"\nmodel = "far-1"\n`)
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const pane = page.locator(".modal .models-pane")
+    await pane.locator(".prov", { has: page.locator('strong:text-is("faraway")') }).click()
+    const ask = page.getByRole("dialog", { name: "Make faraway the default" })
 
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto(`${BASE}/index.html`)
-  await chooseFolder(page)
-  await page.click('.inspector .col-foot button[title="Settings"]')
-  await page.click('.modal .rail button:has-text("Models")')
-  const pane = page.locator(".modal .models-pane")
-  await pane.locator(".prov", { has: page.locator('strong:text-is("faraway")') }).click()
-  await pane.locator("button.model", { hasText: "far-1" }).click()
+    // Asked, naming the host; cancelled, nothing is written.
+    await pane.locator("button.model", { hasText: "far-1" }).click()
+    await expect(ask).toContainText("models.example.invalid")
+    await ask.getByRole("button", { name: "Cancel" }).click()
+    await expect(ask).toHaveCount(0)
+    expect(readFileSync(file, "utf8")).not.toContain('default = "faraway"')
 
-  // Written, and held: no form, the default chosen, the session on the mock.
-  await expect(page.getByRole("dialog", { name: "Provider faraway" })).toHaveCount(0)
-  const held = pane.locator(".first-run.held")
-  await expect(held).toContainText("faraway is the default")
-  await expect(held).toContainText("models.example.invalid")
-  expect(readFileSync(file, "utf8")).toContain('default = "faraway"')
-  expect(readFileSync(file, "utf8")).not.toContain("remote = true")
-  expect((await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
-  // The other banner is not shown as well: this one says why.
-  await expect(pane.locator(".first-run:not(.held)")).toHaveCount(0)
+    // Confirmed: the default and the consent in one write, nothing held, and
+    // the live session follows.
+    await pane.locator("button.model", { hasText: "far-1" }).click()
+    await ask.getByRole("button", { name: "Make it the default" }).click()
+    await expect(ask).toHaveCount(0)
+    await expect.poll(() => readFileSync(file, "utf8")).toContain('default = "faraway"')
+    expect(readFileSync(file, "utf8")).toContain("remote = true")
+    await expect(pane.locator(".first-run.held")).toHaveCount(0)
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBe("faraway")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
-  // Typed back: consent, in the file, and the hold is gone.
-  const confirm = held.getByRole("button", { name: "Confirm" })
-  await expect(confirm).toBeDisabled()
-  await held.locator("input").fill("models.example.invalid")
-  await confirm.click()
-  await expect(held).toHaveCount(0)
-  expect(readFileSync(file, "utf8")).toContain("remote = true")
-
-  // Back as it was for the tests after this one, the live session included.
-  const now = await (await fetch(`${BASE}/api/providers`)).json()
-  delete now.providers.faraway
-  const put = await fetch(`${BASE}/api/providers`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ default: null, providers: now.providers }),
-  })
-  expect(put.status).toBe(200)
-  await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
-  await page.locator(".modal-head button.close", { hasText: "close" }).click()
-
+    // Written by hand without the word: held, and confirmed the same way.
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: (await (await fetch(`${BASE}/api/providers`)).json()).providers }),
+    })
+    writeFileSync(file, `${before.trimEnd()}\n\n[provider.faraway]\nbackend = "openai"\n` +
+      `url = "https://models.example.invalid/v1"\nmodel = "far-1"\n`)
+    writeFileSync(file, `default = "faraway"\n${readFileSync(file, "utf8")}`)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Models")')
+    const held = pane.locator(".first-run.held")
+    await expect(held).toContainText("faraway is the default")
+    await expect(held).toContainText("models.example.invalid")
+    await expect(pane.locator(".first-run:not(.held)")).toHaveCount(0)
+    await held.getByRole("button", { name: "Confirm…" }).click()
+    await ask.getByRole("button", { name: "Make it the default" }).click()
+    await expect(held).toHaveCount(0)
+    await expect.poll(() => readFileSync(file, "utf8")).toContain("remote = true")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    // Back as it was for the tests after this one, the live session included.
+    const now = await (await fetch(`${BASE}/api/providers`)).json()
+    delete now.providers.faraway
+    await fetch(`${BASE}/api/providers`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default: null, providers: now.providers }),
+    })
+    await expect.poll(async () => (await (await fetch(`${BASE}/api/settings`)).json()).profile).toBeNull()
+  }
   expect(errors).toEqual([])
 })
 
