@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "luu.fullname" . }}
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+spec:
+  # One: `serve` runs one live session, and its state volume is ReadWriteOnce.
+  # Recreate, so an upgrade never has two pods on one volume.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "luu.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "luu.selector" . | nindent 8 }}
+      {{- if .Values.policy }}
+      annotations:
+        checksum/policy: {{ .Values.policy | sha256sum }}
+      {{- end }}
+    spec:
+      # The image's `luu` user, and the volumes made its own.
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: luu
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with include "luu.origin" . }}
+          env:
+            - name: LUU_ORIGIN
+              value: {{ . | quote }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 7878
+          # The container is the sandbox: nothing it does not need.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: http
+          volumeMounts:
+            - name: state
+              mountPath: /state
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.policy }}
+            - name: policy
+              mountPath: /etc/luu/luu.toml
+              subPath: luu.toml
+              readOnly: true
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.state.existingClaim | default (printf "%s-state" (include "luu.fullname" .)) }}
+        - name: work
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.work.existingClaim | default (printf "%s-work" (include "luu.fullname" .)) }}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.policy }}
+        - name: policy
+          configMap:
+            name: {{ include "luu.fullname" . }}-policy
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

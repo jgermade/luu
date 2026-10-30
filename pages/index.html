@@ -822,6 +822,31 @@ a.surface:hover { border-color: var(--dim); transform: translateY(-2px); }
   overflow: hidden;
 }
 .cta-card .oneline { margin-top: 24px; }
+/* The three ways in. Without the script every panel shows; with it, the
+   chosen one. */
+.ways { display: flex; flex-wrap: wrap; gap: 4px; margin: 20px 0 0; border-bottom: 1px solid var(--border); }
+.ways button, .getter button {
+  font: inherit; font-size: 0.9375rem; color: var(--muted); background: none; border: 0;
+  padding: 10px 12px; min-height: 44px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.ways button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--amber-ink); }
+.ways button:hover, .getter button:hover { color: var(--fg); }
+.js .way:not(.on) { display: none; }
+.way { padding-top: 4px; }
+.way + .way { margin-top: 28px; }
+.js .way + .way { margin-top: 0; }
+.way .lead { margin-top: 16px; }
+.way .note { color: var(--muted); font-size: 0.875rem; margin: 16px 0 0; }
+.way .note + .oneline { margin-top: 8px; }
+.way :not(pre) > code { background: var(--surface-2); border-radius: 4px; padding: 0.1em 0.35em; color: var(--fg); }
+.getter { display: inline-flex; gap: 2px; margin-top: 12px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px; }
+.getter button { font: 0.8125rem/1 var(--mono); min-height: 32px; padding: 6px 12px; border: 0; border-radius: 999px; margin: 0; }
+.getter button[aria-checked="true"] { color: var(--fg); background: var(--surface-2); }
+.getter + .oneline { margin-top: 12px; }
+.js .way .oneline[data-via]:not(.via) { display: none; }
+/* A command of several lines keeps its own breaks, and only the first gets a
+   prompt. */
+.oneline.block pre { white-space: pre-wrap; }
 .platforms { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0 0; padding: 0; list-style: none; }
 .platforms li { font: 0.75rem/1 var(--mono); color: var(--muted); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 10px; }
 .first-run {
@@ -1473,17 +1498,70 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
       <div class="cta-card rv">
         <div>
           <p class="kicker">Install</p>
-          <h2>One line. No root.</h2>
-          <p class="lead">One binary in <code>~/.local/bin</code>, checked against the release's sha256.</p>
-          <div class="oneline">
-            <pre>curl -fsSL https://jgermade.github.io/<wbr>luu/setup.sh <span class="nb">| sh</span></pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+          <h2>One line, a container, or a chart.</h2>
+          <!-- Three ways in, as tabs once the script has run; without it all
+               three are shown, one after the other. See
+               RECORD/2026-10-30.three-ways-in.WIP.md. -->
+          <div class="ways" role="tablist" aria-label="How to install">
+            <button type="button" role="tab" id="way-line" aria-controls="panel-line" aria-selected="true">One line</button>
+            <button type="button" role="tab" id="way-docker" aria-controls="panel-docker" aria-selected="false">Docker</button>
+            <button type="button" role="tab" id="way-k8s" aria-controls="panel-k8s" aria-selected="false">Kubernetes</button>
           </div>
-          <ul class="platforms" aria-label="Prebuilt for">
-            <li>Linux x86_64</li>
-            <li>Linux arm64</li>
-            <li>macOS Apple Silicon</li>
-            <li>macOS Intel</li>
-          </ul>
+
+          <div class="way" id="panel-line" role="tabpanel" aria-labelledby="way-line">
+            <p class="lead">One binary in <code>~/.local/bin</code>, checked against the release's sha256. No root.</p>
+            <div class="getter" role="radiogroup" aria-label="Download with">
+              <button type="button" role="radio" data-get="curl" aria-checked="true">curl</button>
+              <button type="button" role="radio" data-get="wget" aria-checked="false" title="For a machine with no curl, such as a minimal Debian">wget</button>
+            </div>
+            <div class="oneline" data-via="curl">
+              <pre>curl -fsSL https://jgermade.github.io/<wbr>luu/setup.sh <span class="nb">| sh</span></pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <div class="oneline" data-via="wget">
+              <pre>wget -qO- https://jgermade.github.io/<wbr>luu/setup.sh <span class="nb">| sh</span></pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <ul class="platforms" aria-label="Prebuilt for">
+              <li>Linux x86_64</li>
+              <li>Linux arm64</li>
+              <li>macOS Apple Silicon</li>
+              <li>macOS Intel</li>
+            </ul>
+          </div>
+
+          <div class="way" id="panel-docker" role="tabpanel" aria-labelledby="way-docker">
+            <p class="lead"><code>luu serve</code> in a container, its state and its work tree in volumes.
+              The image is <code>ghcr.io/jgermade/luu</code>, for amd64 and arm64.</p>
+            <div class="oneline block">
+              <pre>docker run -d --name luu --restart unless-stopped \
+  -v luu-state:/state -v luu-work:/work \
+  -p 7878:7878 ghcr.io/jgermade/luu</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <p class="note">The token, written on the first start:</p>
+            <div class="oneline">
+              <pre>docker exec luu cat /state/token</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <p class="note">Then open <code>http://localhost:7878/?token=…</code>.
+              <a href="https://github.com/jgermade/luu/blob/main/deploy/compose.yaml"><code>deploy/compose.yaml</code></a>
+              puts Caddy in front for TLS on a name of your own.</p>
+          </div>
+
+          <div class="way" id="panel-k8s" role="tabpanel" aria-labelledby="way-k8s">
+            <p class="lead">One pod, its volumes kept on uninstall, behind an Ingress of any class.
+              The chart is <code>oci://ghcr.io/jgermade/charts/luu</code>.</p>
+            <div class="oneline block">
+              <pre>helm install luu oci://ghcr.io/jgermade/charts/luu \
+  --set ingress.enabled=true \
+  --set ingress.host=luu.example.com \
+  --set ingress.tls.enabled=true</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <p class="note">The token:</p>
+            <div class="oneline">
+              <pre>kubectl exec deploy/luu -- cat /state/token</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <p class="note">Then open <code>https://luu.example.com/?token=…</code>. Without an Ingress,
+              <code>kubectl port-forward svc/luu 7878</code>. The policy it runs under is
+              <code>policy:</code> in its values.</p>
+          </div>
         </div>
 <!-- Broken by hand to fit a phone: one flag a line reads the same at any width. -->
 <pre class="first-run"><span class="c"># the mock backend: no model needed</span>
@@ -1569,6 +1647,33 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
       setTimeout(() => { button.classList.remove("done"); button.setAttribute("aria-label", "Copy command") }, 1600)
     })
   }
+
+  // The three ways in, as tabs; and curl or wget for the one line.
+  const ways = [...document.querySelectorAll(".ways [role=tab]")]
+  const show = tab => ways.forEach(t => {
+    const on = t === tab
+    t.setAttribute("aria-selected", String(on))
+    t.tabIndex = on ? 0 : -1
+    document.getElementById(t.getAttribute("aria-controls")).classList.toggle("on", on)
+  })
+  ways.forEach((tab, i) => {
+    tab.addEventListener("click", () => show(tab))
+    tab.addEventListener("keydown", event => {
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key]
+      if (!step) return
+      const next = ways[(i + step + ways.length) % ways.length]
+      show(next)
+      next.focus()
+    })
+  })
+  if (ways.length) show(ways[0])
+  const getters = [...document.querySelectorAll(".getter [data-get]")]
+  const via = get => {
+    getters.forEach(b => b.setAttribute("aria-checked", String(b.dataset.get === get)))
+    document.querySelectorAll(".oneline[data-via]").forEach(line => line.classList.toggle("via", line.dataset.via === get))
+  }
+  getters.forEach(b => b.addEventListener("click", () => via(b.dataset.get)))
+  if (getters.length) via("curl")
 
   const header = document.querySelector("header.top")
   const onScroll = () => header.classList.toggle("scrolled", scrollY > 8)

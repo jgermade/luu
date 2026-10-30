@@ -111,6 +111,65 @@ jobs:
             --generate-notes \
             dist/*.tar.gz dist/SHA256SUMS
 
+  # The images and the chart, from the release just published: both images
+  # take its Linux binaries rather than compiling them again, so they cannot
+  # come before it. See RECORD/2026-10-30.three-ways-in.WIP.md.
+  images:
+    needs: [version, publish]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: luu serve — ghcr.io/jgermade/luu
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Containerfile.release
+          platforms: linux/amd64,linux/arm64
+          build-args: LUU_VERSION=${{ env.VERSION }}
+          push: true
+          tags: |
+            ghcr.io/jgermade/luu:${{ env.VERSION }}
+            ghcr.io/jgermade/luu:latest
+
+      - name: the worker — ghcr.io/jgermade/luu-worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile.release
+          platforms: linux/amd64,linux/arm64
+          build-args: LUU_VERSION=${{ env.VERSION }}
+          push: true
+          tags: |
+            ghcr.io/jgermade/luu-worker:${{ env.VERSION }}
+            ghcr.io/jgermade/luu-worker:latest
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: The chart — oci://ghcr.io/jgermade/charts/luu
+        run: |
+          set -euo pipefail
+          helm package deploy/helm/luu --version "$VERSION" --app-version "$VERSION"
+          echo "${{ secrets.GITHUB_TOKEN }}" |
+            helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+          helm push "luu-$VERSION.tgz" oci://ghcr.io/jgermade/charts
+
   pages:
     needs: [version, build]
     if: ${{ !inputs.dry-run }}

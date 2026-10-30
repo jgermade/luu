@@ -1,0 +1,50 @@
+# `luu serve` in a container, from a release rather than from source: the image
+# published as `ghcr.io/jgermade/luu`. `deploy/Containerfile`'s final stage,
+# with the binary the release already built for Linux instead of a
+# `cargo build` inside the image — as `Containerfile.release` is the worker's.
+#
+#   docker build -t luu -f deploy/Containerfile.release \
+#     --build-arg LUU_VERSION=0.1.5 .
+#   docker run -d --name luu -p 7878:7878 \
+#     -v luu-state:/state -v luu-work:/work luu
+#   docker exec luu cat /state/token
+#
+# The download is checked against the release's own `SHA256SUMS`. The context
+# is the checkout, for `deploy/luu.toml` and `deploy/entrypoint.sh`; nothing of
+# the source is compiled. See RECORD/2026-10-30.three-ways-in.WIP.md.
+
+FROM rust:1-bookworm AS fetch
+ARG LUU_VERSION
+RUN set -eu; \
+    test -n "$LUU_VERSION" || { echo "LUU_VERSION is not set: --build-arg LUU_VERSION=<x.y.z>" >&2; exit 1; }; \
+    asset="luu-$(uname -m)-unknown-linux-gnu"; \
+    release="https://github.com/jgermade/luu/releases/download/v${LUU_VERSION}"; \
+    cd /tmp; \
+    curl -fsSLO "$release/$asset.tar.gz"; \
+    curl -fsSLO "$release/SHA256SUMS"; \
+    grep " $asset.tar.gz\$" SHA256SUMS | sha256sum -c -; \
+    tar -xzf "$asset.tar.gz"; \
+    install -m 0755 "$asset/luu" /luu
+
+# From here, `deploy/Containerfile`'s final stage, but for where the binary
+# comes from.
+FROM rust:1-bookworm
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --uid 10001 --create-home --home-dir /state --shell /bin/bash luu \
+ && mkdir -p /work /etc/luu \
+ && chown luu:luu /state /work
+COPY --from=fetch /luu /usr/local/bin/luu
+COPY deploy/luu.toml /etc/luu/luu.toml
+COPY deploy/entrypoint.sh /usr/local/bin/luu-entrypoint
+
+ENV LUU_HOME=/state \
+    HOME=/state \
+    CARGO_HOME=/state/cargo
+VOLUME ["/state", "/work"]
+WORKDIR /work
+USER luu
+EXPOSE 7878
+
+ENTRYPOINT ["luu-entrypoint"]

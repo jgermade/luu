@@ -1,0 +1,24 @@
+{{- range $volume := list "state" "work" }}
+{{- $spec := index $.Values.persistence $volume }}
+{{- if not $spec.existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "luu.fullname" $ }}-{{ $volume }}
+  labels:
+    {{- include "luu.labels" $ | nindent 4 }}
+  # Kept on uninstall: sessions, the token and the work tree are not the
+  # release's to delete.
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $spec.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $spec.size }}
+{{- end }}
+{{- end }}
