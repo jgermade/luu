@@ -1071,7 +1071,7 @@ access = "execute"
   under the lists as written. The live session keeps what it was built with.
   **The new session's dialog makes every session from a runtime and three lists** (since
   2026-10-23; there is no preset to start from): where it runs — this machine, or an image
-  `config.toml` declares, on any container runtime this machine has (`/api/postures'`
+  `config.toml` declares, on any container runtime this machine has (`/api/postures`'
   `runtimes`), so the dialog never names an image of its own. **Since 2026-10-30 an image
   is a table of its own**, `[image.<name>]` — its `ref` and the in-image paths the host must
   not resolve — written from Settings → Runtimes (`PUT /api/images`, a browser on this
