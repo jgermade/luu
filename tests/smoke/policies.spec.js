@@ -189,12 +189,17 @@ test("a session is made from a runtime and three lists, and comes back made from
   await expect(dialog).toHaveCount(0)
   expect((await settings()).lists.environment).toBe("empty")
 
-  // Picked from the history, the first is resumed made from its lists again.
+  // Picked from the history, the first is resumed made from its lists again —
+  // from the copy it carries, so `registries` edited since changes nothing
+  // about it (format 26). Before, the hash moved and the resume was a 409.
+  writeFileSync(join(home, "config.toml"), CONFIG.replace('allow = ["crates.io"]', 'allow = ["example.org"]'))
   await page.click('button[title="Earlier sessions"]')
   await dialog.locator("ul.sessions li:not(.on) .pick").first().click()
   await expect(dialog).toHaveCount(0)
   await expect.poll(async () => (await settings()).lists.shell.name).toBe("tools")
   expect((await settings()).lists.network.name).toBe("registries")
+  expect((await settings()).lists.network.allow).toEqual(["crates.io"])
+  writeFileSync(join(home, "config.toml"), CONFIG)
 
   // What the server refuses, and says why.
   const refused = async (body, text) => {

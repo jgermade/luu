@@ -1084,7 +1084,14 @@ access = "execute"
   right after the name). `POST /api/sessions` with `lists`
   and no posture is `Policies::compose`, named by its lists and recorded with
   `record::Composed` — the runtime and image it was asked with (`record::FORMAT` 24) — so a
-  resume from the history asks for the same again; with a posture or an environment it is as
+  resume from the history asks for the same again. **And it carries its lists**: since
+  2026-10-30 each is copied, as written, into the header beside its hash
+  (`record::Copied`, `record::FORMAT` 26), and a resume makes the session again from the copy
+  (`Policies::recompose`) rather than from `config.toml` by name — so a list edited, renamed
+  or deleted since changes nothing about a session that started on it, and no longer refuses
+  its resume. See
+  [`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md).
+  With a posture or an environment it is as
   before (`resolve_with` swaps an environment's lists; a posture's lists are its policy file).
   **Settings → Runtimes writes the postures table**, naming a policy file out of the
   ones at the top of the checkout and never one the page types, and the server

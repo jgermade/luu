@@ -8593,6 +8593,45 @@ async fn posture_for(
     finish(app, build, asked, policy, runtime).await
 }
 
+/// A stored session made from lists, made again from the lists it copied:
+/// on the runtime and image the body names, else the ones it ran on. `None`
+/// where there is nothing to make it from — a posture or an environment of
+/// the file, a stream from before format 26, a surface that cannot choose —
+/// and the caller resolves the body as before.
+async fn posture_from_copy(
+    app: &App,
+    stored: &record::Posture,
+    runtime: Option<&str>,
+    image: Option<&str>,
+) -> Option<Result<(Option<String>, Arc<Agency>), (StatusCode, String)>> {
+    let build = app.agency_for.as_ref()?;
+    let composed = stored.composed.as_deref()?;
+    let lists = stored
+        .lists
+        .as_ref()
+        .filter(|lists| lists.copied.is_some())?;
+    let (runtime, image) = match runtime {
+        Some(runtime) => (runtime, image),
+        None => (composed.runtime.as_str(), composed.image.as_deref()),
+    };
+    let place = match place_for(app, Some(runtime), image).await {
+        Ok(place) => place,
+        Err(refused) => return Some(Err(refused)),
+    };
+    let resolved = crate::policies::Policies::recompose(&place, lists)?;
+    let name = resolved.name.clone();
+    Some(
+        finish(
+            app,
+            build,
+            Some(&name),
+            Some(Chosen::Environment(Arc::new(resolved))),
+            None,
+        )
+        .await,
+    )
+}
+
 /// Where a session made from lists runs: `host` where nothing is said, a
 /// runtime with no container as it is, and a container runtime on an image a
 /// posture or an environment of this machine names — with that file's
@@ -9392,15 +9431,38 @@ async fn resume_session(
     // is swapped, so a runtime that is not installed refuses the resume rather
     // than ending the session that is running — the discipline
     // `create_session` keeps for the same reason.
-    let (posture_name, agency) = match posture_for(
-        app,
-        asked.posture.as_deref(),
-        asked.runtime.as_deref(),
-        asked.image.as_deref(),
-        asked.lists.as_ref(),
-    )
-    .await
-    {
+    //
+    // A session that copied its lists (format 26) is made again from the
+    // copy where the body names no posture and no lists — what the page says
+    // back for one — so a list edited or deleted in `config.toml` since does
+    // not stand between a person and their history. See
+    // `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+    let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
+        (None, None, Some(stored)) => {
+            posture_from_copy(
+                app,
+                stored,
+                asked.runtime.as_deref(),
+                asked.image.as_deref(),
+            )
+            .await
+        }
+        _ => None,
+    };
+    let resolved = match copied {
+        Some(resolved) => resolved,
+        None => {
+            posture_for(
+                app,
+                asked.posture.as_deref(),
+                asked.runtime.as_deref(),
+                asked.image.as_deref(),
+                asked.lists.as_ref(),
+            )
+            .await
+        }
+    };
+    let (posture_name, agency) = match resolved {
         Ok(resolved) => resolved,
         Err((status, message)) => return (status, message).into_response(),
     };

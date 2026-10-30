@@ -36,46 +36,13 @@
 
 use std::collections::BTreeMap;
 
-use agent_core::record::{Hashed, Lists};
+use agent_core::record::{Copied, Hashed, Lists};
 use agent_core::sandbox::{Enforcement, Limits, PathRule, SandboxPolicy};
 use agent_core::worker::{Runtime, WorkerConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// A shell or a network list: program names, or host patterns.
-///
-/// `*` is any program or any host. A network list may allow it — *any host*,
-/// which is what a policy file's `network = true` with no `egress` has always
-/// meant. A shell list may not: an allowlist that lets every program through is
-/// the failure a sandbox exists to avoid, and the way to say it is to write the
-/// programs. Neither may deny it: what a list does not name is asked, and a
-/// list that refused everything it does not name would be an allowlist with
-/// no one to ask.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Zones {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deny: Vec<String>,
-}
-
-/// A files list: trees with their access, relative to the working directory.
-///
-/// `deny` is read and refused for now. Landlock only grants, so a path denied
-/// inside a tree that is allowed cannot be held for a subprocess, and a
-/// sandbox that held it for luu's own file tools and not for `run_command`
-/// would be two sandboxes in one file, the weaker one where the danger is
-/// (`RECORD/2026-08-27.tools-and-sandbox.completed.md`). It is accepted when a
-/// later step can hold it — by luu per call, and in a container by a mount.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct FilesList {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow: Vec<PathRule>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deny: Vec<String>,
-}
+pub use agent_core::record::{FilesList, Zones};
 
 /// One list of each kind, where they run, and what holds them there.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -367,6 +334,35 @@ impl Policies {
     }
 }
 
+impl Policies {
+    /// A session made from lists, made again from the lists it copied when
+    /// it started — not from `config.toml`, whose lists may have been edited,
+    /// renamed or deleted since — on `place`, under the names it recorded.
+    /// `None` for lists recorded without their copy: a policy file's, or a
+    /// stream from before format 26, which are resumed by name as before.
+    pub fn recompose(place: &Place, lists: &Lists) -> Option<Resolved> {
+        let copied = lists.copied.as_deref()?;
+        let mut policies = Policies::default();
+        policies
+            .shell
+            .insert(lists.shell.name.clone(), copied.shell.clone());
+        policies
+            .network
+            .insert(lists.network.name.clone(), copied.network.clone());
+        policies
+            .files
+            .insert(lists.files.name.clone(), copied.files.clone());
+        policies
+            .compose(
+                place,
+                Some(&lists.shell.name),
+                Some(&lists.network.name),
+                Some(&lists.files.name),
+            )
+            .ok()
+    }
+}
+
 impl Resolved {
     /// Its shell list, as written.
     pub fn shell(&self) -> &Zones {
@@ -409,6 +405,14 @@ impl Resolved {
                     ..self.files.1.clone()
                 },
             ),
+            // As written, and not read back off the sandbox as the hashes
+            // are: what [`Policies::recompose`] is given, so the flags are
+            // laid over it again rather than baked into it.
+            copied: Some(Box::new(Copied {
+                shell: self.shell.1.clone(),
+                network: self.network.1.clone(),
+                files: self.files.1.clone(),
+            })),
         }
     }
 }
@@ -531,6 +535,8 @@ pub fn lists_of_file(label: &str, granted: &SandboxPolicy) -> Lists {
                 ..FilesList::default()
             },
         ),
+        // A policy file is resumed by its name until postures go.
+        copied: None,
     }
 }
 
@@ -947,6 +953,50 @@ mod tests {
                 .as_deref(),
             Some("there is no [shell.nope]")
         );
+    }
+
+    /// Since format 26: a session made from lists carries them, and is made
+    /// again from what it carries — the file's lists edited, renamed or gone.
+    #[test]
+    fn a_session_is_made_again_from_the_lists_it_copied() {
+        let policies = policies(CONTAINER);
+        let started = policies
+            .compose(&Place::host(), Some("rust"), None, Some("project"))
+            .expect("both are there");
+        let recorded = started.lists(&started.policy);
+        let copied = recorded
+            .copied
+            .as_deref()
+            .expect("a composed session copies");
+        assert_eq!(copied.shell, *started.shell());
+        assert_eq!(copied.network, Zones::default());
+
+        // Through JSON, as a resume reads it, and with nothing of the file.
+        let read: Lists =
+            serde_json::from_str(&serde_json::to_string(&recorded).unwrap()).expect("round-trips");
+        let again = Policies::recompose(&Place::host(), &read).expect("made from its copy");
+        assert_eq!(again.name, started.name);
+        assert_eq!(again.policy, started.policy);
+        assert!(again.composed);
+        assert!(
+            again.lists(&again.policy).same(&recorded),
+            "the same hashes, so a resume compares equal",
+        );
+
+        // Somewhere else, the same lists.
+        let contained = Place {
+            runtime: Runtime::Docker,
+            image: Some("luu-worker:dev".into()),
+            image_paths: Vec::new(),
+        };
+        let moved = Policies::recompose(&contained, &read).expect("made from its copy");
+        assert_eq!(moved.policy, started.policy);
+        assert_eq!(moved.worker.runtime, Runtime::Docker);
+
+        // A policy file's lists, and a stream from before 26, have no copy.
+        let file = lists_of_file("luu.toml", &started.policy);
+        assert!(file.copied.is_none());
+        assert!(Policies::recompose(&Place::host(), &file).is_none());
     }
 
     #[test]

@@ -223,7 +223,14 @@ use crate::trace::TraceMessage;
 /// rather than ending, and the budget their yes left — which a resume folds
 /// into *no limit* where the yes was for the session. Protocol 12. See
 /// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
-pub const FORMAT: u32 = 25;
+///
+/// **26: the lists are copied into the session.** `posture.lists.copied`
+/// carries each list as written beside its hash, and a resume of a session
+/// made from lists makes it again from the copy rather than from
+/// `config.toml` by name. Absent in every stream before it, and for a policy
+/// file's lists, which are resumed by name as they were. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+pub const FORMAT: u32 = 26;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -278,6 +285,57 @@ pub struct Lists {
     pub shell: Hashed,
     pub network: Hashed,
     pub files: Hashed,
+    /// The lists themselves, as written when the session started: what a
+    /// resume makes the session again from, so a list edited, renamed or
+    /// deleted in `config.toml` afterwards changes nothing about it. `None`
+    /// for a policy file's, which is resumed by its name, and in every stream
+    /// before format 26. Boxed for [`Posture::composed`]'s reason. See
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied: Option<Box<Copied>>,
+}
+
+/// One list of each axis, copied into the session that started on them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Copied {
+    pub shell: Zones,
+    pub network: Zones,
+    pub files: FilesList,
+}
+
+/// A shell or a network list: program names, or host patterns.
+///
+/// `*` is any program or any host. A network list may allow it — *any host*,
+/// which is what a policy file's `network = true` with no `egress` has always
+/// meant. A shell list may not: an allowlist that lets every program through is
+/// the failure a sandbox exists to avoid, and the way to say it is to write the
+/// programs. Neither may deny it: what a list does not name is asked, and a
+/// list that refused everything it does not name would be an allowlist with
+/// no one to ask.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Zones {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
+}
+
+/// A files list: trees with their access, relative to the working directory.
+///
+/// `deny` is read and refused for now. Landlock only grants, so a path denied
+/// inside a tree that is allowed cannot be held for a subprocess, and a
+/// sandbox that held it for luu's own file tools and not for `run_command`
+/// would be two sandboxes in one file, the weaker one where the danger is
+/// (`RECORD/2026-08-27.tools-and-sandbox.completed.md`). It is accepted when a
+/// later step can hold it — by luu per call, and in a container by a mount.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FilesList {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<crate::sandbox::PathRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
 }
 
 /// One list, by its name and the SHA-256 of its canonical contents.
@@ -581,6 +639,7 @@ mod tests {
             shell: hashed("rust", "aa"),
             network: hashed("off", "bb"),
             files: hashed("project", "cc"),
+            copied: None,
         };
         let listed = Posture {
             name: Some("container".into()),
