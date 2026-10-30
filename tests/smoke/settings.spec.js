@@ -1606,6 +1606,30 @@ test("runtimes, postures and the host shell are configured from Settings", async
     return tasks.find(t => t.kind === "stop" && t.runtime === "colima")?.state
   }).toBe("done")
 
+  // An image, typed: `[image.<name>]`, its ref and its in-image paths, offered
+  // by the new session's Runtime at once and buildable from its card.
+  await pane.locator('button.add:has-text("+ image")').click()
+  await pane.locator(".image-form .image-name").fill("probe")
+  await pane.locator(".image-form .image-ref").fill("luu-probe:dev")
+  await pane.locator(".image-form .image-paths").fill("/opt/tools execute")
+  await pane.locator('.image-form button:has-text("save")').click()
+  await expect(pane.locator(".images-table dt", { hasText: "probe" })).toHaveCount(1)
+  expect(config()).toContain("[image.probe]")
+  expect(config()).toContain('ref = "luu-probe:dev"')
+  expect(config()).toContain('path = "/opt/tools"')
+  const runtimes = (await (await fetch(`${BASE}/api/postures`)).json()).runtimes || []
+  expect(JSON.stringify(runtimes)).toContain("luu-probe:dev")
+  // A relative path is the loader's refusal, in its words; nothing written.
+  await pane.locator(".images-table .row", { hasText: "probe" }).locator('button:has-text("edit")').click()
+  await pane.locator(".image-form .image-paths").fill("tools execute")
+  await pane.locator('.image-form button:has-text("save")').click()
+  await expect(pane.locator(".error")).toContainText("is not absolute")
+  expect(config()).toContain('path = "/opt/tools"')
+  await pane.locator('.image-form button:has-text("cancel")').click()
+  await pane.locator(".images-table .row", { hasText: "probe" }).locator('button:has-text("remove")').click()
+  await expect(pane.locator(".images-table dt", { hasText: "probe" })).toHaveCount(0)
+  expect(config()).not.toContain("[image.probe]")
+
   // A posture, named by a policy file out of the list — this checkout's.
   await pane.locator('button.add:has-text("+ posture")').click()
   await pane.locator('.adding input[placeholder="name"]').fill("boxed")
@@ -1635,7 +1659,7 @@ test("runtimes, postures and the host shell are configured from Settings", async
     body: JSON.stringify({ image: "somebody/else:latest" }),
   })
   expect(built.status).toBe(400)
-  expect(await built.text()).toContain("no policy file here names")
+  expect(await built.text()).toContain("nor a policy file here names")
   // From source as well as from the release, and from nothing else.
   const fromSource = await fetch(`${BASE}/api/runtimes/docker/build`, {
     method: "POST",
@@ -1677,7 +1701,11 @@ test("runtimes, postures and the host shell are configured from Settings", async
   // The default is written as no table at all.
   await expect.poll(config).not.toContain("[terminal]")
 
-  expect(errors, "the page logged errors").toEqual([])
+  // The image refused above, and nothing else: a browser logs every response
+  // that is not a success.
+  expect(errors, "the page logged errors").toEqual([
+    "console: Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)",
+  ])
 })
 
 /**

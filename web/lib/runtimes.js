@@ -50,3 +50,13 @@ export async function savePostures(postures) {
   if (result.ok) await loadPostures()
   return result
 }
+
+/// The whole `[image.*]` table: a name, its `ref` and its in-image paths.
+/// What the new session's *Runtime* offers, so the postures it reads are
+/// asked for again. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+export async function saveImages(images) {
+  const result = await call("PUT", "./api/images", { images })
+  if (result.ok) await loadPostures()
+  return result
+}

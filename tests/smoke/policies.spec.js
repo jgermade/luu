@@ -212,7 +212,7 @@ test("a session is made from a runtime and three lists, and comes back made from
     expect(await answer.text()).toContain(text)
   }
   await refused({ lists: { network: "nope" } }, "there is no [network.nope]")
-  await refused({ runtime: "docker", lists: {} }, "no posture or environment in config.toml names one")
+  await refused({ runtime: "docker", lists: {} }, "no [image.*], posture or environment in config.toml names one")
   await refused({ runtime: "host", image: "luu-worker:dev", lists: {} }, "runs no container")
 
   // An environment takes another list of the file in place of its own.

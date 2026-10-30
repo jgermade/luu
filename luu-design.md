@@ -1070,9 +1070,15 @@ access = "execute"
   back; the environments are resolved again on every save, so the next session on one runs
   under the lists as written. The live session keeps what it was built with.
   **The new session's dialog makes every session from a runtime and three lists** (since
-  2026-10-23; there is no preset to start from): where it runs — this machine, or an image a
-  posture or an environment names, on any container runtime this machine has
-  (`/api/postures`' `runtimes`), so the page never names an image of its own; the shell,
+  2026-10-23; there is no preset to start from): where it runs — this machine, or an image
+  `config.toml` declares, on any container runtime this machine has (`/api/postures'`
+  `runtimes`), so the dialog never names an image of its own. **Since 2026-10-30 an image
+  is a table of its own**, `[image.<name>]` — its `ref` and the in-image paths the host must
+  not resolve — written from Settings → Runtimes (`PUT /api/images`, a browser on this
+  machine only) and offered first; an image a posture or an environment names is still
+  offered after them until postures go
+  ([`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md)
+  §2). The shell,
   network and files lists by name, an unchosen one the empty list (read the folder, ask the
   rest), what the last session used offered first — the runtime with what choosing it means
   beside it, as tall as the field's box: this machine as the person, its terminal the whole
@@ -1101,7 +1107,7 @@ access = "execute"
   written from its card (`PUT /api/runtimes/default`; `host`, written as no
   table, is this machine again), is where sessions start — the first one of
   `luu serve`, made through the same route as the dialog's from that runtime,
-  the first image a posture or an environment names and the empty lists, and
+  the first image `config.toml` declares and the empty lists, and
   the new session's *Runtime* before anything else is chosen. **Absent is this
   machine**, and no card says *default*: a session in a container nobody chose
   was a label promising what the server did not do. Where the default cannot

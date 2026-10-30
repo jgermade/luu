@@ -1811,6 +1811,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // images they have, and a build of one that is missing. See
         // `crate::runtimes`.
         .route("/api/runtimes", get(get_runtimes))
+        .route("/api/images", axum::routing::put(put_images))
         .route("/api/runtimes/tasks", get(get_tasks))
         .route("/api/runtimes/{runtime}", get(get_runtime))
         .route("/api/runtimes/{runtime}/build", post(build_image))
@@ -5383,6 +5384,8 @@ struct RuntimesView {
     postures: std::collections::BTreeMap<String, PostureRow>,
     /// The policy files a new posture may name.
     policies: Vec<PolicyRow>,
+    /// `[image.<name>]`, which Settings → Runtimes edits.
+    images: std::collections::BTreeMap<String, crate::provider::Image>,
     /// The posture the live session is on, which may not be removed.
     running: Option<String>,
     /// `[terminal] host`.
@@ -5443,18 +5446,33 @@ async fn postures_and_policies(
     .await
 }
 
-/// The images a runtime is asked about: the ones the postures and the policy
-/// files here name.
+/// The images a runtime is asked about: `config.toml`'s, and the ones the
+/// postures and the policy files here name.
 fn images_here(
+    declared: &std::collections::BTreeMap<String, crate::provider::Image>,
     postures: &std::collections::BTreeMap<String, PostureRow>,
     policies: &[PolicyRow],
 ) -> Vec<String> {
-    images_of(
+    let mut images = images_of(
         postures
             .values()
             .map(|row| &row.place)
             .chain(policies.iter().map(|row| &row.place)),
-    )
+    );
+    images.extend(declared.values().map(|image| image.reference.clone()));
+    images.sort();
+    images.dedup();
+    images
+}
+
+/// `[image.<name>]`, as the file is now: what Settings → Runtimes wrote a
+/// moment ago reaches the next question without a restart. A file that will
+/// not load names none.
+async fn declared_images() -> std::collections::BTreeMap<String, crate::provider::Image> {
+    load_config()
+        .await
+        .map(|(config, _)| config.images().clone())
+        .unwrap_or_default()
 }
 
 /// Settings → Runtimes without a probe: every process this starts is one the
@@ -5464,7 +5482,8 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
     let app = &state.app;
     let base = app.agency().await.sandbox.base().to_path_buf();
     let (postures, policies) = postures_and_policies(app, &base).await;
-    let runtimes = crate::runtimes::seen_all(&images_here(&postures, &policies));
+    let images = declared_images().await;
+    let runtimes = crate::runtimes::seen_all(&images_here(&images, &postures, &policies));
     let refused = engines_allowed(state, headers).err().map(|_| {
         "Runtimes are configured from a browser on this machine: a posture is what a session \
          may do, and a build is a process this machine runs."
@@ -5491,6 +5510,7 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         tasks: app.tasks.list(),
         postures,
         policies,
+        images,
         running: app.posture.lock().await.clone(),
         host_shell,
         default_runtime,
@@ -5516,7 +5536,7 @@ async fn get_runtime(State(state): State<AppRouterState>, Path(runtime): Path<St
     let app = &state.app;
     let base = app.agency().await.sandbox.base().to_path_buf();
     let (postures, policies) = postures_and_policies(app, &base).await;
-    let images = images_here(&postures, &policies);
+    let images = images_here(&declared_images().await, &postures, &policies);
     Json(crate::runtimes::probe(runtime, &images).await).into_response()
 }
 
@@ -5644,6 +5664,7 @@ async fn build_image(
     let app = &state.app;
     let base = app.agency().await.sandbox.base().to_path_buf();
     // Only an image some file here names.
+    let declared = declared_images().await;
     let named = {
         let base = base.clone();
         let postures = app.postures();
@@ -5669,11 +5690,15 @@ async fn build_image(
         })
         .await
     };
-    if !named.contains(&asked.image) {
+    let declared = declared
+        .values()
+        .any(|image| image.reference == asked.image);
+    if !declared && !named.contains(&asked.image) {
         return (
             StatusCode::BAD_REQUEST,
             format!(
-                "no policy file here names `{}` as its [worker] image, so it is not one this page builds",
+                "neither an [image.*] in config.toml nor a policy file here names `{}`, so it is \
+                 not one this page builds",
                 asked.image
             ),
         )
@@ -5683,6 +5708,54 @@ async fn build_image(
         Ok(()) => Json(app.tasks.list()).into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct ImagesAsk {
+    images: std::collections::BTreeMap<String, crate::provider::Image>,
+}
+
+/// Replaces `[image.*]`, whole: the page edits a copy and sends it back,
+/// checked by the loader that reads it. Asked of a browser on this machine,
+/// as a posture is — an image is what a container runtime here pulls and
+/// runs. The next session's *Runtime* offers what was written; a session
+/// already running keeps the image it runs on. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+async fn put_images(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<ImagesAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    if let Some(name) = asked.images.keys().find(|name| {
+        name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("`{name}` is not an image name: letters, digits, `-` and `_`"),
+        )
+            .into_response();
+    }
+    if let Err(error) = write_config(current.with_images(asked.images), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    runtimes_answer(&state, &headers).await
 }
 
 #[derive(serde::Deserialize)]
@@ -8675,24 +8748,28 @@ async fn place_for(
             StatusCode::BAD_REQUEST,
             match image {
                 Some(image) => format!(
-                    "no posture or environment in config.toml names the image `{image}`, \
-                     and a session runs only on an image this machine names"
+                    "no [image.*], posture or environment in config.toml names the image \
+                     `{image}`, and a session runs only on an image this machine names"
                 ),
                 None => format!(
-                    "`{runtime}` runs an image, and no posture or environment in config.toml \
-                     names one"
+                    "`{runtime}` runs an image, and no [image.*], posture or environment in \
+                     config.toml names one"
                 ),
             },
         )),
     }
 }
 
-/// The images this machine's postures and environments run in a container,
-/// each once, with the in-image paths of the first that names it. A posture's
-/// file that does not load names nothing here; choosing it says why.
+/// The images a session made from lists may run in, each once, with its
+/// in-image paths: `config.toml`'s `[image.<name>]` first, by name, and then
+/// any other image a posture or an environment still names — until postures
+/// go (`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2, step 4).
+/// A posture's file that does not load names nothing here; choosing it says
+/// why.
 async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRule>)> {
     let postures = app.postures();
     let environments = app.environments();
+    let declared = declared_images().await;
     blocking(move || {
         let from_files = postures.values().filter_map(|posture| {
             agent_core::worker::WorkerConfig::from_file(&posture.policy).ok()
@@ -8700,7 +8777,10 @@ async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRu
         let from_environments = environments
             .values()
             .map(|environment| environment.worker.clone());
-        let mut named: Vec<(String, Vec<agent_core::sandbox::PathRule>)> = Vec::new();
+        let mut named: Vec<(String, Vec<agent_core::sandbox::PathRule>)> = declared
+            .into_values()
+            .map(|image| (image.reference, image.paths))
+            .collect();
         for worker in from_files.chain(from_environments) {
             let Some(image) = worker.image.filter(|_| worker.runtime.is_contained()) else {
                 continue;

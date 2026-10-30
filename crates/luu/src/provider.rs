@@ -443,6 +443,12 @@ struct File {
     files: BTreeMap<String, crate::policies::FilesList>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     environment: BTreeMap<String, crate::policies::Environment>,
+    /// `[image.<name>]`: the images a session may run in, each with the trees
+    /// that exist only inside it. Where the new session's *Runtime* finds its
+    /// images, in place of the postures that used to name them. See [`Image`]
+    /// and `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    image: BTreeMap<String, Image>,
     /// `[ui]`: what the debug page looks like, as opposed to where a run
     /// sends. Here because it is the same kind of thing as the two above —
     /// something written on this machine — and because the one setting in it
@@ -777,6 +783,29 @@ pub struct AuthorityNote {
     pub position: Option<agent_core::sandbox::NotePosition>,
 }
 
+/// One image a session may run in: what a runtime pulls or builds, and the
+/// trees inside it that the host must not try to resolve — its toolchain, a
+/// policy file's `[[worker.paths]]`. Which container runtime runs it is the
+/// session's to choose, not the image's.
+///
+/// ```toml
+/// [image.luu-worker]
+/// ref = "luu-worker:dev"
+/// [[image.luu-worker.paths]]
+/// path = "/usr/local/cargo"
+/// access = "execute"
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Image {
+    /// What the runtime is given: `luu-worker:dev`, `ghcr.io/o/r:1`.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// In-image paths, absolute.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<agent_core::sandbox::PathRule>,
+}
+
 /// One named posture: a policy file, and nothing else.
 ///
 /// The file decides the sandbox **and** the seam — `commands`, `network`,
@@ -806,6 +835,7 @@ pub struct Config {
     providers: BTreeMap<String, Profile>,
     postures: BTreeMap<String, Posture>,
     policies: crate::policies::Policies,
+    images: BTreeMap<String, Image>,
     ui: Option<Ui>,
     terminal: Option<Terminal>,
     runtimes: Option<Runtimes>,
@@ -865,6 +895,12 @@ pub enum ConfigError {
     NoSuchPosture { path: String, name: String },
     #[error("{path}: {message}")]
     Policies { path: String, message: String },
+    #[error("{path}: [image.{name}]: {problem}")]
+    BadImage {
+        path: String,
+        name: String,
+        problem: String,
+    },
     #[error(
         "{path}: [provider.{profile}] names engine = \"{engine}\", and there is no [engine.{engine}]"
     )]
@@ -935,6 +971,7 @@ impl Config {
                 files: file.files,
                 environments: file.environment,
             },
+            images: file.image,
             ui: file.ui,
             terminal: file.terminal,
             runtimes: file.runtimes,
@@ -950,6 +987,7 @@ impl Config {
         config.check_messages(path)?;
         config.check_hosts(path)?;
         config.check_server(path)?;
+        config.check_images(path)?;
         config
             .policies
             .check(config.postures.keys())
@@ -1020,6 +1058,44 @@ impl Config {
                         problem,
                     });
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// An image has a reference a runtime can be given, its in-image paths
+    /// are absolute, and no two names give the same reference: a session
+    /// records the reference, and two tables for one would make which paths
+    /// it ran with depend on which was read first.
+    fn check_images(&self, path: &str) -> Result<(), ConfigError> {
+        let bad = |name: &str, problem: String| ConfigError::BadImage {
+            path: path.to_string(),
+            name: name.to_string(),
+            problem,
+        };
+        let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
+        for (name, image) in &self.images {
+            let reference = image.reference.as_str();
+            if reference.is_empty() || reference.chars().any(char::is_whitespace) {
+                return Err(bad(
+                    name,
+                    format!("ref = \"{reference}\" is not an image: one word, with no spaces"),
+                ));
+            }
+            if let Some(rule) = image.paths.iter().find(|rule| !rule.path.is_absolute()) {
+                return Err(bad(
+                    name,
+                    format!(
+                        "{} is not absolute: an image's paths are where its own trees are",
+                        rule.path.display()
+                    ),
+                ));
+            }
+            if let Some(other) = seen.insert(reference, name) {
+                return Err(bad(
+                    name,
+                    format!("[image.{other}] has ref = \"{reference}\" too: one name per image"),
+                ));
             }
         }
         Ok(())
@@ -1203,6 +1279,7 @@ impl Config {
             network: self.policies.network.clone(),
             files: self.policies.files.clone(),
             environment: self.policies.environments.clone(),
+            image: self.images.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             runtimes: self.runtimes,
@@ -1287,6 +1364,7 @@ impl Config {
             providers,
             postures: self.postures.clone(),
             policies: self.policies.clone(),
+            images: self.images.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             runtimes: self.runtimes,
@@ -1458,6 +1536,19 @@ impl Config {
     /// Every posture the file names.
     pub fn postures(&self) -> &BTreeMap<String, Posture> {
         &self.postures
+    }
+
+    /// Every image the file names, already checked.
+    pub fn images(&self) -> &BTreeMap<String, Image> {
+        &self.images
+    }
+
+    /// The file as Settings → Runtimes hands back the images, whole.
+    pub fn with_images(&self, images: BTreeMap<String, Image>) -> Self {
+        Self {
+            images,
+            ..self.clone()
+        }
     }
 
     /// Every list and environment the file names, already checked.
@@ -1970,6 +2061,36 @@ mod tests {
         assert!(!back.render().unwrap().contains("[runtimes]"));
         assert!(config("[runtimes]\ndefualt = \"podman\"\n").is_err());
         assert!(config("[runtimes]\ndefault = \"vagrant\"\n").is_err());
+    }
+
+    /// `[image.<name>]`: a reference and its in-image paths, written back as
+    /// read; refused with no reference, a relative path, or a reference two
+    /// names share.
+    #[test]
+    fn an_image_is_a_reference_and_its_own_trees() {
+        let text = "[image.worker]\nref = \"luu-worker:dev\"\n\n\
+                    [[image.worker.paths]]\npath = \"/usr/local/cargo\"\naccess = \"execute\"\n";
+        let loaded = config(text).expect("loads");
+        let image = &loaded.images()["worker"];
+        assert_eq!(image.reference, "luu-worker:dev");
+        assert_eq!(image.paths[0].path, Path::new("/usr/local/cargo"));
+        let again = config(&loaded.render().unwrap()).expect("what it writes loads");
+        assert_eq!(again.images(), loaded.images());
+
+        let refused = |text: &str| match config(text) {
+            Err(ConfigError::BadImage { problem, .. }) => problem,
+            other => panic!("refused, not {other:?}"),
+        };
+        assert!(refused("[image.a]\nref = \"\"\n").contains("not an image"));
+        assert!(refused("[image.a]\nref = \"x y\"\n").contains("not an image"));
+        assert!(
+            refused(
+                "[image.a]\nref = \"x\"\n[[image.a.paths]]\npath = \"rel\"\naccess = \"read\"\n"
+            )
+            .contains("not absolute")
+        );
+        assert!(refused("[image.a]\nref = \"x\"\n[image.b]\nref = \"x\"\n").contains("one name"));
+        assert!(config("[image.a]\nreference = \"x\"\n").is_err());
     }
 
     #[test]

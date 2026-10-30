@@ -4,7 +4,7 @@
   // shell on the host. A runtime is usable when it is installed, answers, has
   // the image, and a posture uses it — this section shows all four and changes
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
-  const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, savePostures, saveHostShell, saveDefaultRuntime } =
+  const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, savePostures, saveImages, saveHostShell, saveDefaultRuntime } =
     await import("@web/lib/runtimes.js")
   const { terminal } = await import("@web/lib/terminal.js")
   const Button = await import("@web/theme/default/components/button.html")
@@ -27,6 +27,10 @@
   let asking = {}
   // The posture being added: `{ name, policy }`, or `null`.
   let adding = null
+  // The image being added or edited: `{ was, name, ref, paths }`, `paths` as
+  // text, one `path access` a line; `was` is the name it had, `null` for a
+  // new one. `null` when no form is open.
+  let editing = null
 
   // A write — a posture, the host shell, the default — answers with the
   // section as `GET /api/runtimes` does, asking no runtime: what each card
@@ -154,6 +158,38 @@
     if (took(await savePostures({ ...postures(), [name]: { policy: adding.policy } }))) adding = null
     busy = ""
   }
+  // `[image.*]`: each a reference and its in-image paths, written whole.
+  // See `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+  $: imageNames = Object.keys(view?.images || {})
+  const pathsText = paths => (paths || []).map(p => `${p.path} ${p.access}`).join("\n")
+  const parsePaths = text => text.split("\n").map(line => line.trim()).filter(Boolean)
+    .map(line => {
+      const [path, access = "read"] = line.split(/\s+/)
+      return { path, access }
+    })
+  const editImage = name => {
+    const image = view.images[name]
+    editing = { was: name, name, ref: image.ref, paths: pathsText(image.paths) }
+  }
+  const saveImage = async () => {
+    const name = (editing?.name || "").trim()
+    const ref = (editing?.ref || "").trim()
+    if (!name || !ref) return
+    const images = { ...(view?.images || {}) }
+    if (editing.was) delete images[editing.was]
+    const paths = parsePaths(editing.paths || "")
+    images[name] = { ref, ...(paths.length ? { paths } : {}) }
+    busy = "image"
+    if (took(await saveImages(images))) editing = null
+    busy = ""
+  }
+  const removeImage = async name => {
+    const { [name]: _, ...rest } = view?.images || {}
+    busy = `image:${name}`
+    took(await saveImages(rest))
+    busy = ""
+  }
+
   const HOSTS = [
     { value: "loopback", label: "This machine", title: "A browser on this machine, when luu serve is bound on loopback" },
     { value: "always", label: "Anyone with the token", title: "Off loopback too, to whoever holds the token" },
@@ -317,12 +353,50 @@
           <span :if="i.unasked" class="why dim small">Its worker could not be asked: {{ i.unasked }}</span>
           <div :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre></Scrollable></div>
         </li>
-        <li :if="!r.images.length" class="dim small">No policy file here names an image.</li>
+        <li :if="!r.images.length" class="dim small">No image is declared yet: add one under Images.</li>
       </ul>
     </section>
     <p class="dim small">
       <button type="button" class="link" :disabled="!!busy || !view || anyAsking" @click="check()">check again</button>
       <span :if="busy === 'check' || anyAsking"> · asking each runtime…</span>
+    </p>
+  </section>
+
+  <section class="pane-group">
+    <h3>Images</h3>
+    <p class="dim small">
+      The images a new session may run in, on whichever runtime it is started on:
+      <code>[image.&lt;name&gt;]</code>, a <code>ref</code> and the trees inside it the
+      host must not look for (its toolchain), one <code>path access</code> a line.
+    </p>
+    <dl class="settings images-table">
+      <div :each="name in imageNames" :key="name" class="row">
+        <dt><strong>{{ name }}</strong></dt>
+        <dd>
+          <code>{{ view.images[name].ref }}</code>
+          <span :if="(view.images[name].paths || []).length" class="dim small">· {{ view.images[name].paths.map(p => p.path).join(", ") }}</span>
+          <button type="button" class="link" :disabled="!view?.editable || !!busy" @click="editImage(name)">edit</button>
+          <button type="button" class="link" :disabled="!view?.editable || !!busy" @click="removeImage(name)">remove</button>
+        </dd>
+      </div>
+      <div :if="view && !imageNames.length" class="row">
+        <dt><span class="dim">none</span></dt>
+        <dd><span class="dim small">the images postures name are still offered</span></dd>
+      </div>
+    </dl>
+    <div :if="editing" class="adding image-form">
+      <input type="text" class="image-name" placeholder="name" :value="editing.name"
+             @input="editing = { ...editing, name: $event.target.value }">
+      <input type="text" class="image-ref" placeholder="ref, e.g. luu-worker:dev" :value="editing.ref"
+             @input="editing = { ...editing, ref: $event.target.value }">
+      <textarea class="image-paths" rows="2" placeholder="/usr/local/cargo execute" :value="editing.paths"
+                @input="editing = { ...editing, paths: $event.target.value }"></textarea>
+      <button type="button" :disabled="!editing.name || !editing.ref || !!busy" @click="saveImage()">save</button>
+      <button type="button" class="link" @click="editing = null">cancel</button>
+    </div>
+    <p :if="!editing" class="small">
+      <button type="button" class="add" :disabled="!view?.editable"
+              @click="editing = { was: null, name: '', ref: '', paths: '' }">+ image</button>
     </p>
   </section>
 
@@ -464,6 +538,10 @@
   .postures dd { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
   .adding { display: flex; gap: .5rem; align-items: center; margin: .6rem 0; flex-wrap: wrap; }
   .adding input { width: 10rem; }
+  .images-table .row { display: contents; }
+  .images-table dd { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .image-form .image-ref { width: 16rem; }
+  .image-form .image-paths { flex-basis: 100%; font-family: var(--luu-mono, monospace); font-size: 12px; }
   .hosts {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
