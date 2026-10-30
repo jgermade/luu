@@ -1638,7 +1638,14 @@ fn where_of(label: String, config: WorkerConfig) -> serve::Where {
         runtime: config.runtime.as_str().to_string(),
         image: config.image.filter(|_| contained),
         missing,
-        gap: config.runtime.cannot().map(str::to_string),
+        // On this machine, what its kernel cannot hold a command to: a
+        // session moved here holds less than the lists say, and the picker
+        // says so before the move rather than at the first command.
+        gap: match config.runtime.is_contained() {
+            true => config.runtime.cannot().map(str::to_string),
+            false => agent_core::sandbox::host_gap()
+                .map(|missing| format!("this machine cannot hold its commands: {missing}")),
+        },
     }
 }
 

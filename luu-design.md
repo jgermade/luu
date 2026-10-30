@@ -1055,6 +1055,14 @@ access = "execute"
   while a turn runs, a proposal waits at the gate or an approved job is open, and
   otherwise swaps the agency, ends the old worker and writes a header line, so the
   fold's *last header wins* says from where on the session ran somewhere else.
+  **A session that carries its lists moves by runtime alone** (since 2026-10-30):
+  `PUT /api/session/runtime {runtime, image}` makes it again from its copy on the new place
+  (`Policies::recompose`), so its lists, grants and forbiddens go with it; it waits for a
+  turn and the gate, and **not** for an approved job, since the policy does not move with the
+  place. What can change is what holds the lists, and the picker says it before the move — a
+  place's `gap` is this machine's kernel gap on the host (`sandbox::host_gap`). A session on a
+  posture or the server's own file still moves by name. See
+  [`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md) §2.
   **Since 2026-10-22 a session may name an environment instead**: `[shell.<name>]`,
   `[network.<name>]` and `[files.<name>]` lists in two zones, `allow` and `deny` — what
   neither names is asked (**since 2026-10-23**; the loader refuses an `ask` zone) — and

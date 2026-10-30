@@ -201,6 +201,24 @@ test("a session is made from a runtime and three lists, and comes back made from
   expect((await settings()).lists.network.allow).toEqual(["crates.io"])
   writeFileSync(join(home, "config.toml"), CONFIG)
 
+  // Moved while it lives, by runtime alone: its lists go with it (format 26).
+  // `direct` is this machine without a container, which any machine has.
+  const moveTo = body => fetch(`${BASE}/api/session/runtime`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  const moved = await moveTo({ runtime: "direct" })
+  expect(moved.ok).toBe(true)
+  expect((await moved.json()).moved).toBe(true)
+  const movedThere = await settings()
+  expect(movedThere.lists.shell.name).toBe("tools")
+  expect(movedThere.lists.network.allow).toEqual(["crates.io"])
+  expect((await (await fetch(`${BASE}/api/terminal`)).json()).posture.runtime).toContain("direct")
+  // Where it already is, nothing moves.
+  expect((await (await moveTo({ runtime: "direct" })).json()).moved).toBe(false)
+  expect((await moveTo({ runtime: "host" })).ok).toBe(true)
+
   // What the server refuses, and says why.
   const refused = async (body, text) => {
     const answer = await fetch(`${BASE}/api/sessions`, {
@@ -226,6 +244,13 @@ test("a session is made from a runtime and three lists, and comes back made from
   expect(there.lists.environment).toBe("asking")
   expect(there.lists.composed ?? false).toBe(false)
   expect(there.lists.network.name).toBe("registries")
+
+  // A session on the server's own policy file carries no lists, and moves by
+  // a posture's name rather than by runtime.
+  expect((await fetch(`${BASE}/api/sessions`, { method: "POST" })).ok).toBe(true)
+  const unmovable = await moveTo({ runtime: "direct" })
+  expect(unmovable.status).toBe(409)
+  expect(await unmovable.text()).toContain("PUT /api/session/posture")
 
   expect(errors).toEqual([])
 })

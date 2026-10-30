@@ -1824,6 +1824,10 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             "/api/session/posture",
             axum::routing::put(put_session_posture),
         )
+        .route(
+            "/api/session/runtime",
+            axum::routing::put(put_session_runtime),
+        )
         // Model servers luu starts. Every write here is held to more than the
         // providers route: see [`engines_allowed`].
         .route("/api/models", get(get_models))
@@ -9376,6 +9380,21 @@ async fn put_session_posture(
         return Json(serde_json::json!({ "posture": posture, "moved": false })).into_response();
     }
 
+    settle_move(app, session, name, agency, posture).await
+}
+
+/// The rest of a live move, once what it moves to is built and the session's
+/// lock is held: the agency swapped, the old one ended, and a header line
+/// written so *last header wins* says from where on the session ran
+/// somewhere else. Shared by [`put_session_posture`] and
+/// [`put_session_runtime`].
+async fn settle_move(
+    app: &App,
+    session: tokio::sync::MutexGuard<'_, Session>,
+    name: Option<String>,
+    agency: Arc<Agency>,
+    posture: record::Posture,
+) -> Response {
     // Ended rather than dropped, for `Agency::shutdown`'s reason — and with it
     // the old container, and any terminal that was open in it.
     let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
@@ -9434,6 +9453,104 @@ async fn put_session_posture(
         "the live session now runs here",
     );
     Json(serde_json::json!({ "posture": posture, "moved": true })).into_response()
+}
+
+/// `PUT /api/session/runtime`.
+#[derive(serde::Deserialize)]
+struct MoveRuntime {
+    runtime: String,
+    #[serde(default)]
+    image: Option<String>,
+}
+
+/// Moves the live session to another runtime, and nothing else: its lists are
+/// the copy it carries (format 26), so where its commands run changes and what
+/// they may do does not. The grants and the forbiddens are the session's, and
+/// stay. See `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+///
+/// **It waits for a turn and for the gate**, because a command in flight has
+/// to finish somewhere, and a proposal waiting there was drawn where the
+/// session is now. **It does not wait for an approved job** — the refusal
+/// [`put_session_posture`] keeps — because that refusal is about a policy
+/// moving with the place, and here the policy does not move. What a move can
+/// change is what holds the lists, and the picker says so beforehand
+/// ([`Where::gap`]) rather than refusing.
+///
+/// A session with no copy — one on a posture or the server's own policy
+/// file, or resumed from before format 26 — is refused, naming the route that
+/// moves it.
+async fn put_session_runtime(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<MoveRuntime>,
+) -> Response {
+    let app = &state.app;
+    let Some(build) = &app.agency_for else {
+        return (
+            StatusCode::CONFLICT,
+            "this surface cannot move a session: over stdio the process is the session",
+        )
+            .into_response();
+    };
+    let session = app.session.lock().await;
+    if session.current.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            "a turn is running: the session moves between turns",
+        )
+            .into_response();
+    }
+    if session.pending.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            "a proposal is waiting at the gate: approve or decline it, and the session moves after",
+        )
+            .into_response();
+    }
+    let current = app.agency().await.posture(app.posture.lock().await.clone());
+    let Some(lists) = current
+        .lists
+        .as_ref()
+        .filter(|lists| lists.copied.is_some())
+    else {
+        return (
+            StatusCode::CONFLICT,
+            "this session runs under a policy file, not lists it carries: it moves by its \
+             posture's name (PUT /api/session/posture)",
+        )
+            .into_response();
+    };
+    let place = match place_for(app, Some(&asked.runtime), asked.image.as_deref()).await {
+        Ok(place) => place,
+        Err(refused) => return refused.into_response(),
+    };
+    let Some(resolved) = crate::policies::Policies::recompose(&place, lists) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the lists this session carries do not compose",
+        )
+            .into_response();
+    };
+    let name = resolved.name.clone();
+    let (name, agency) = match finish(
+        app,
+        build,
+        Some(&name),
+        Some(Chosen::Environment(Arc::new(resolved))),
+        None,
+    )
+    .await
+    {
+        Ok(built) => built,
+        Err(refused) => return refused.into_response(),
+    };
+    let posture = agency.posture(name.clone());
+    if current.same_place(&posture) && current.composed == posture.composed {
+        if !Arc::ptr_eq(&agency, &app.agency().await) {
+            agency.shutdown().await;
+        }
+        return Json(serde_json::json!({ "posture": posture, "moved": false })).into_response();
+    }
+    settle_move(app, session, name, agency, posture).await
 }
 
 /// Picks a stored session back up — optionally somewhere else.
