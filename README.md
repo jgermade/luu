@@ -130,7 +130,7 @@ is the design as it stands, [`RECORD/`](RECORD/) is how it got there, and
 [`ROADMAP/`](ROADMAP/) is what is planned and not yet true.
 
 ```sh
-make install   # dependencies: Rust, the VS Code extension, the UI's optional ones
+make install   # dependencies: Rust, and the UI's optional ones
 make test      # cargo test --workspace
 make up        # the web UI on 127.0.0.1:7878
 make lint      # what CI runs

@@ -423,7 +423,7 @@ struct App {
     ///
     /// A function rather than the flags themselves, so this file knows nothing
     /// about the command line and a test can hand it one. `None` where sessions
-    /// cannot choose a posture — over stdio, where the process is the session.
+    /// cannot choose a posture — an `App` a test builds by hand.
     agency_for: Option<AgencyFactory>,
     /// How to say where a posture would run without building it. `None`
     /// where `agency_for` is.
@@ -482,7 +482,7 @@ struct App {
     /// is: a constraint compiled per turn would cost the compile every turn
     /// for a value that is the same every time. `None` is unconstrained, the
     /// only case every recording made before `--constrain` reached `serve`
-    /// and `stdio` was measured under. See
+    /// was measured under. See
     /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     constraint: Option<Constraint>,
     /// The retry `Constraint::Schema` is honest for, spent once per turn on a
@@ -794,11 +794,11 @@ impl Settings {
     }
 }
 
-pub struct StdioOptions {
+pub struct AppOptions {
     pub backend: Arc<dyn Backend>,
     /// The destination as `crate::provider` resolved it — the profile, the URL
-    /// and whether it left this machine. `stdio` carries it for the same reason
-    /// `serve` does: both build the same `App`, and only one of them serves a
+    /// and whether it left this machine. `luu stdio`, retired on 2026-10-30,
+    /// carried it for the same reason `serve` does: both build the same `App`, and only one of them serves a
     /// page that reads it.
     pub provider: crate::provider::Resolved,
     /// The sentence a run prints when it has no tokenizer, so the page can say
@@ -813,8 +813,8 @@ pub struct StdioOptions {
     /// model and this is the only thing that answers how to build one.
     pub tokenizer: Option<PathBuf>,
     pub agency: Agency,
-    /// How to build the agency for a posture a session names. `None` over
-    /// stdio, where the process is the session and its policy file is a flag.
+    /// How to build the agency for a posture a session names. `None` in an
+    /// `App` a test builds by hand, where the process is the session.
     pub agency_for: Option<AgencyFactory>,
     /// How to say where a posture would run without building it, for the
     /// terminal's environment picker. `None` where `agency_for` is.
@@ -941,8 +941,8 @@ impl App {
         *icons = Arc::new(theme);
     }
 
-    async fn create(options: StdioOptions) -> Result<Arc<Self>> {
-        let StdioOptions {
+    async fn create(options: AppOptions) -> Result<Arc<Self>> {
+        let AppOptions {
             backend,
             provider,
             counter_warning,
@@ -1016,7 +1016,7 @@ impl App {
         // No CLI flag reaches this, on purpose — see
         // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md` §What
         // was rejected. Read fresh rather than threaded through
-        // `StdioOptions`, `machine_resend`'s own reason: a table the page
+        // `AppOptions`, `machine_resend`'s own reason: a table the page
         // writes has to reach the next session, and this server's first one
         // is no exception. Loaded before the recorder so the very first line
         // of a `--record` file already carries it.
@@ -1385,11 +1385,11 @@ pub struct ServeOptions {
     pub record: Option<PathBuf>,
     pub budget: Budget,
     pub counter: Arc<dyn TokenCounter>,
-    /// The `--tokenizer` path, if one was given. See [`StdioOptions::tokenizer`].
+    /// The `--tokenizer` path, if one was given. See [`AppOptions::tokenizer`].
     pub tokenizer: Option<PathBuf>,
     pub agency: Agency,
-    /// How to build the agency for a posture a session names. `None` over
-    /// stdio, where the process is the session and its policy file is a flag.
+    /// How to build the agency for a posture a session names. `None` in an
+    /// `App` a test builds by hand, where the process is the session.
     pub agency_for: Option<AgencyFactory>,
     /// How to say where a posture would run without building it, for the
     /// terminal's environment picker. `None` where `agency_for` is.
@@ -1404,8 +1404,7 @@ pub struct ServeOptions {
     /// state directory.
     pub postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` named, already loaded. Only the
-    /// browser surface has one: `stdio` gets an empty theme, because there
-    /// is no page there to draw it.
+    /// browser surface has one; an `App` with no page gets an empty theme.
     pub icons: Arc<crate::icons::Theme>,
     /// `[approvals]` from the same file the sandbox came from: who may approve,
     /// and whether anyone must sign to.
@@ -1537,7 +1536,7 @@ async fn start_on_default(state: &AppRouterState) {
         return;
     };
     let app = &state.app;
-    // Over stdio, or with no policy files to choose from, nothing is chosen.
+    // With no factory to describe them, or no policy files, nothing is chosen.
     let Some(describe) = &app.describe_for else {
         return;
     };
@@ -1624,7 +1623,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
 
-    let app = App::create(StdioOptions {
+    let app = App::create(AppOptions {
         backend,
         provider,
         counter_warning,
@@ -2695,115 +2694,6 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
         }
         ClientMessage::ReopenJob { job } => {
             reopen_job(app.clone(), job).await;
-        }
-    }
-}
-
-/// Runs the agent protocol over standard input and standard output.
-///
-/// NDJSON lines of [`ClientMessage`] are read from `stdin`, and NDJSON lines
-/// of [`ServerMessage`] are emitted to `stdout`. Logs and diagnostics are
-/// printed to `stderr` so they do not corrupt the protocol stream.
-pub async fn stdio(options: StdioOptions) -> Result<()> {
-    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
-    let stdout = tokio::io::stdout();
-    serve_stdio_stream(options, stdin, stdout).await
-}
-
-/// Serves the agent protocol over any asynchronous reader and writer.
-pub async fn serve_stdio_stream<R, W>(options: StdioOptions, input: R, output: W) -> Result<()>
-where
-    R: tokio::io::AsyncBufRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    let app = App::create(options).await?;
-    serve_stdio(app, input, output).await
-}
-
-/// Speaks the protocol over `input` and `output` for an existing [`App`].
-async fn serve_stdio<R, W>(app: Arc<App>, input: R, mut output: W) -> Result<()>
-where
-    R: tokio::io::AsyncBufRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-
-    let mut lines = input.lines();
-    let mut events = app.events.subscribe();
-
-    let hello = {
-        let sending = app.destination().await;
-        let session = app.session.lock().await;
-        ServerMessage::Hello {
-            protocol: protocol::VERSION,
-            backend: sending.backend.name().to_string(),
-            model: sending.model.clone(),
-            turn: session.current,
-            session: Some(app.session_id.lock().await.clone()),
-        }
-    };
-    let json = serde_json::to_string(&hello).context("serializing hello")?;
-    output
-        .write_all(json.as_bytes())
-        .await
-        .context("writing hello")?;
-    output.write_all(b"\n").await.context("writing newline")?;
-    output.flush().await.context("flushing hello")?;
-
-    loop {
-        tokio::select! {
-            event = events.recv() => match event {
-                Ok(Event::Protocol(message)) => {
-                    let Ok(json) = serde_json::to_string(&message) else { continue };
-                    if output.write_all(json.as_bytes()).await.is_err() {
-                        return Ok(());
-                    }
-                    if output.write_all(b"\n").await.is_err() {
-                        return Ok(());
-                    }
-                    if output.flush().await.is_err() {
-                        return Ok(());
-                    }
-                }
-                Ok(Event::Trace(_)) => continue,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return Ok(()),
-            },
-            incoming = lines.next_line() => {
-                match incoming {
-                    Ok(Some(line)) => {
-                        let text = line.trim();
-                        if text.is_empty() {
-                            continue;
-                        }
-                        let message = match serde_json::from_str::<ClientMessage>(text) {
-                            Ok(message) => message,
-                            Err(_) => continue,
-                        };
-                        // Checked when it comes and never required: the peer
-                        // here is the process that spawned this one, and a
-                        // subprocess bridge has no port for anyone else to
-                        // reach. A mismatch still ends the conversation, in the
-                        // one direction stdio has to say so.
-                        if let ClientMessage::Hello { protocol, format } = &message {
-                            if let Err(detail) = handshake(*protocol, *format) {
-                                let refusal = version_refusal(detail);
-                                if let Ok(json) = serde_json::to_string(&refusal) {
-                                    let _ = output.write_all(json.as_bytes()).await;
-                                    let _ = output.write_all(b"\n").await;
-                                    let _ = output.flush().await;
-                                }
-                                return Ok(());
-                            }
-                            continue;
-                        }
-                        handle_client_message(&app, message).await;
-                    }
-                    Ok(None) | Err(_) => {
-                        return Ok(());
-                    }
-                }
-            }
         }
     }
 }
@@ -4448,8 +4338,8 @@ struct PosturesView {
     own: Vec<Where>,
     /// The same for every posture, by name.
     places: std::collections::BTreeMap<String, Vec<Where>>,
-    /// Whether a session may choose one here at all. False over stdio, where
-    /// the process is the session.
+    /// Whether a session may choose one here at all. False in an `App` built
+    /// without an agency factory.
     choosable: bool,
     /// The posture the live session named, when it named one.
     running: Option<String>,
@@ -4636,7 +4526,7 @@ async fn get_workspace_git_diff(
 /// batch, `data:` a [`workspace::Changes`].
 ///
 /// **Server-sent events and not the socket**, because this is not the
-/// protocol: `/ws` carries the agent's messages, which stdio carries too, and
+/// protocol: `/ws` carries the agent's messages, and
 /// a file tree is something only the page has. And not polling, because the
 /// page would have to ask about every open directory and the open file on a
 /// timer, and still be up to a period late.
@@ -8495,7 +8385,7 @@ async fn posture_for(
             Some(name) => Err((
                 StatusCode::CONFLICT,
                 format!(
-                    "this surface cannot choose a posture, so `{name}` cannot be honoured here:                      over stdio the process is the session, and its policy file is a flag"
+                    "this surface cannot choose a posture, so `{name}` cannot be honoured here: this server was built without a way to make one"
                 ),
             )),
         };
@@ -9463,7 +9353,7 @@ async fn put_session_runtime(
     let Some(build) = &app.agency_for else {
         return (
             StatusCode::CONFLICT,
-            "this surface cannot move a session: over stdio the process is the session",
+            "this surface cannot move a session: it was built without a way to make one",
         )
             .into_response();
     };
@@ -10270,8 +10160,8 @@ mod tests {
             agency: RwLock::new(Arc::new(agency)),
             posture: Mutex::new(None),
             // These tests build an `App` directly, and none of them starts a
-            // session on a posture: a `None` here is the same answer stdio
-            // gets, and the route says so rather than pretending.
+            // session on a posture: a `None` here is the answer an `App` with
+            // no factory gets, and the route says so rather than pretending.
             agency_for: None,
             describe_for: None,
             postures: Default::default(),

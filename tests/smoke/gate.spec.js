@@ -1499,15 +1499,15 @@ test("a folder that only holds a folder is one row, and opening one keeps the sc
   await chooseFolder(page)
   await page.click('.inspector .tabs button:has-text("Files")')
   const tree = page.locator(".inspector .tree")
-  // `editors/` holds `vscode/` and nothing else, in this checkout.
-  const compact = tree.locator('li:has(.name:text-is("editors/vscode"))')
+  // `tests/` holds `smoke/` and nothing else, in this checkout.
+  const compact = tree.locator('li:has(.name:text-is("tests/smoke"))')
   await expect(compact).toHaveCount(1)
 
   await compact.locator(".row").click()
   await expect(tree.locator('.name:text-is("package.json")').first()).toBeVisible()
   await compact.locator(".twist").click()
-  await expect(tree.locator('.name:text-is("editors")')).toHaveCount(1)
-  await expect(tree.locator('.name:text-is("vscode")')).toHaveCount(1)
+  await expect(tree.locator('.name:text-is("tests")')).toHaveCount(1)
+  await expect(tree.locator('.name:text-is("smoke")')).toHaveCount(1)
 
   // Clicked from the page rather than by Playwright, which would scroll the
   // row into view first and hide the very thing being measured.

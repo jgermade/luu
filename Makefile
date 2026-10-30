@@ -4,14 +4,8 @@
 # and AGENTS.md stays the place that says *why* each of them is the command it
 # is. If a target ever needs a paragraph, the paragraph belongs there and the
 # target belongs here.
-#
-# The VS Code extension (editors/vscode) is TypeScript and is part of `install`
-# and `build` when npm is on the PATH, and skipped with a line saying so when it
-# is not — a Rust checkout that cannot build the editor surface is still a
-# working checkout.
 
 CARGO ?= cargo
-EXTENSION := editors/vscode
 # The debug UI's *optional* browser dependencies — today that is Monaco, which
 # the General settings offer only where it is installed, and xterm.js, which
 # draws the terminal panel. A checkout without npm gets a page that draws every
@@ -24,9 +18,9 @@ BIND ?= 127.0.0.1:7878
 .PHONY: help install test build up fmt lint smoke
 
 help:
-	@echo "make install   fetch dependencies: Rust, the VS Code extension, the UI's optional ones"
+	@echo "make install   fetch dependencies: Rust, and the UI's optional ones"
 	@echo "make test      cargo test --workspace, and the probes that need no model"
-	@echo "make build     release binary, and the extension if npm is here"
+	@echo "make build     the release binary"
 	@echo "make up        the debug UI and the agent protocol on $(BIND)"
 	@echo "make smoke     the page driven through the gate, against a live mock server"
 	@echo ""
@@ -35,12 +29,6 @@ help:
 
 install:
 	$(CARGO) fetch
-	@if command -v npm >/dev/null 2>&1; then \
-		echo "==> npm ci in $(EXTENSION)"; \
-		cd $(EXTENSION) && npm ci; \
-	else \
-		echo "==> no npm on PATH: skipping $(EXTENSION)"; \
-	fi
 	@if command -v npm >/dev/null 2>&1; then \
 		echo "==> npm install in $(WEBUI) (optional: Monaco, xterm.js)"; \
 		cd $(WEBUI) && npm install --no-audit --no-fund; \
@@ -55,12 +43,6 @@ test:
 
 build:
 	$(CARGO) build --release --workspace
-	@if command -v npm >/dev/null 2>&1; then \
-		echo "==> tsc in $(EXTENSION)"; \
-		cd $(EXTENSION) && npm run compile; \
-	else \
-		echo "==> no npm on PATH: skipping $(EXTENSION)"; \
-	fi
 
 # Loopback, and no token: `serve` refuses any other address without
 # --auth-token-file, because /ws carries job approval. Sessions are cached in

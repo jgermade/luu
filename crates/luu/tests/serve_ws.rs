@@ -736,6 +736,45 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
     assert_eq!(rounds[0]["answer"]["job"], 2);
 }
 
+/// A second prompt while a plan is on the table is **not** refused: it is the
+/// answer *more changes*, the same answer as decline — the plan comes off the
+/// table, nothing closes, and the prompt runs in the draft it is still in.
+/// Refusing it would be the old `pending` guard outliving the held prompt it
+/// existed to protect. Moved here from `tests/stdio.rs` when `luu stdio` was
+/// retired: see `RECORD/2026-10-30.no-editor-in-the-mvp.completed.md`.
+#[tokio::test]
+async fn a_prompt_while_a_plan_is_on_the_table_is_more_changes() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let _ = next_message(&mut socket).await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "first prompt"}),
+    )
+    .await;
+    until(&mut socket, "plan_proposed").await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "make it two flags"}),
+    )
+    .await;
+    let mut declined = false;
+    loop {
+        let message = next_message(&mut socket).await;
+        match message["type"].as_str().expect("a typed message") {
+            "refused" => panic!("a prompt is an answer, not a thing to refuse: {message}"),
+            "plan_declined" => declined = true,
+            "turn_started" if message["prompt"] == "make it two flags" => break,
+            _ => continue,
+        }
+    }
+    assert!(declined, "the plan on the table was answered");
+}
+
 /// The other door, and what a plan is asked *over*: the draft, not a held
 /// prompt. The planning instruction is fused into the call that asks for it and
 /// is paid for nowhere else.

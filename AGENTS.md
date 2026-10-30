@@ -237,7 +237,6 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # measurement that decided that. xterm.js draws the terminal panel, which
 # without it says how to install it.
 #
-cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
 
 # the gate, without a model: the planning call answers with a plan block, then
@@ -263,7 +262,6 @@ cargo run --bin luu -- chat "where is the seam's clock?" --select-tokens 512
 # job's* sandbox: an approved plan narrows what may be chosen exactly as it
 # narrows what may be opened, so a narrow plan is a narrow selection.
 cargo run --bin luu -- serve --context-limit 32768 --select-tokens 2048
-cargo run --bin luu -- stdio --select-tokens 2048
 # the coverage probe, which needs no model: 38 questions, one per file, scored
 # against scripts/tasks/map-order-probe.key
 cargo test -p luu --test select_probe -- --nocapture
@@ -988,11 +986,11 @@ implementation detail from close up:
   re-serializing a schema with different key order, or interpolating a timestamp
   into the system block silently destroys KV reuse — and nothing fails, it just
   gets slower. Treat the prefix as a wire format.
-- **One JSON message schema, several transports.** stdio, WebSocket and the record
-  format carry the same enums. A field that only makes sense to one client does not
-  belong in the protocol; debug traces go behind `--trace`, on their own channel, so
-  the protocol doesn't grow a debug half that stdio has to carry forever.
-- **`agent-core` knows nothing about the CLI, VSCode or the browser.** That is what
+- **One JSON message schema.** The WebSocket and the record format carry the same
+  enums. A field that only makes sense to one client does not belong in the
+  protocol; debug traces go behind `--trace`, on their own channel, so the protocol
+  doesn't grow a debug half every client has to carry forever.
+- **`agent-core` knows nothing about the CLI or the browser.** That is what
   makes container isolation a packaging question rather than a rewrite.
 - **Where a tool call runs is not the loop's business.** The loop asks an
   `Executor`, and there are two: `Tools`, which runs it here, and `Worker`, which

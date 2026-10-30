@@ -504,218 +504,6 @@ enum Command {
         constrain: Option<ConstrainKind>,
     },
 
-    /// Serve the agent protocol over stdin/stdout as NDJSON.
-    ///
-    /// The editor surface: an IDE (VSCode, Neovim, Emacs) or language server
-    /// spawns `luu stdio` as a subprocess and speaks the protocol directly over
-    /// standard input and output. The gate, tasks, tools, and store behave
-    /// identically to `luu serve` without needing a network port or authentication token.
-    Stdio {
-        #[command(flatten)]
-        sandbox_args: SandboxArgs,
-
-        /// Where sessions are cached between restarts, as SQLite. Defaults to
-        /// `sessions.db` in the state directory the first run chose
-        /// (`~/.luu` or `~/.config/luu`, or wherever `LUU_HOME` names);
-        /// `--no-store` keeps the session in memory,
-        /// which is what `serve` did before the store existed.
-        #[arg(long, value_name = "PATH")]
-        store: Option<std::path::PathBuf>,
-
-        /// Keep the session in memory only.
-        #[arg(long, conflicts_with = "store")]
-        no_store: bool,
-
-        /// A destination named in the state directory's `config.toml`, as
-        /// `[provider.<name>]`: the backend, the URL, the model and the key
-        /// written down once instead of retyped per run. The flags below
-        /// override it field by field. See
-        /// `RECORD/2026-09-07.naming-a-provider.completed.md`.
-        #[arg(long, short, value_name = "NAME")]
-        provider: Option<String>,
-
-        /// The profile's backend, or `mock` when nothing named one.
-        #[arg(long, value_enum)]
-        backend: Option<BackendKind>,
-
-        /// The profile's model, or `qwen2.5-coder:7b`. **One field of a
-        /// destination, not a destination**: `-m` over a profile that names a
-        /// local server asks *that server* for the model, and the answer is its
-        /// own 404 rather than a redirect.
-        #[arg(long, short)]
-        model: Option<String>,
-
-        /// The profile's URL under `--backend ollama`, or
-        /// `http://127.0.0.1:11434`.
-        #[arg(long)]
-        ollama_url: Option<String>,
-
-        /// Where the OpenAI-compatible server is. `llama-server`, vLLM, LM
-        /// Studio and the hosted endpoints all answer here — and none of them
-        /// takes the window on a request, so start the server with the window
-        /// this run budgets against. Defaults to the profile's URL, then to
-        /// `http://127.0.0.1:8080/v1`.
-        #[arg(long)]
-        openai_url: Option<String>,
-
-        /// Where the Anthropic-compatible server is — what its docs give as
-        /// `ANTHROPIC_BASE_URL`, without `/v1`: Anthropic's API, MiniMax,
-        /// DeepSeek, Moonshot, Z.ai, or a local server's `/v1/messages`.
-        /// Defaults to the profile's URL, then to `http://127.0.0.1:8080`.
-        #[arg(long)]
-        anthropic_url: Option<String>,
-
-        /// A file holding the key for `--backend openai` (a bearer token) or
-        /// `--backend anthropic` (`x-api-key`). Omitted means no key header
-        /// at all, which is what a local server wants.
-        #[arg(long, value_name = "PATH")]
-        api_key_file: Option<std::path::PathBuf>,
-
-        /// How tool calls travel: `fenced` (definitions in the system text, a
-        /// ```` ```tool ```` block back) or `native` (the server's `tools`
-        /// field and its own tool prompt). Over the profile's `tool-calls`.
-        #[arg(long, value_enum, value_name = "HOW")]
-        tool_calls: Option<provider::ToolCalls>,
-
-        #[arg(long, default_value_t = 25)]
-        mock_delay_ms: u64,
-
-        /// What the mock backend answers, one per model call, the last
-        /// repeating. The gate needs two to be seen working without a model:
-        /// the plan block the planning call returns, then the answer.
-        #[arg(long = "mock-reply", value_name = "TEXT")]
-        mock_replies: Vec<String>,
-
-        /// Wrap back to the first `--mock-reply` instead of repeating the
-        /// last one. What turns two replies — a call, then the reply that
-        /// reads its result — into a tool called every turn, for as long as
-        /// the script runs, instead of once at the start of the session.
-        #[arg(long)]
-        mock_cycle: bool,
-
-        /// Write every protocol and trace message to a replayable JSON-lines file.
-        #[arg(long)]
-        record: Option<std::path::PathBuf>,
-
-        /// The model's context window. 0 means unknown: no budget, no eviction.
-        #[arg(long, default_value_t = 0)]
-        context_limit: u32,
-
-        /// The model's `tokenizer.json`. Without it, tokens are counted
-        /// approximately and every number says so.
-        #[arg(long)]
-        tokenizer: Option<std::path::PathBuf>,
-
-        /// Tokens held back for the answer before history is considered.
-        #[arg(long, default_value_t = DEFAULT_RESERVE)]
-        reserve: u32,
-
-        /// How the history gives way when a turn no longer fits. `turn` drops
-        /// the minimum and rewrites the history on every call once the window
-        /// is full; `block` cuts down to --low-water and then holds still.
-        #[arg(long, value_enum, default_value_t = EvictionKind::Turn)]
-        evict: EvictionKind,
-
-        /// The fraction of the history budget `--evict block` cuts down to.
-        /// Ignored by `--evict turn`. A guess, and a flag so that it can stop
-        /// being one.
-        #[arg(long, default_value_t = 0.5)]
-        low_water: f32,
-
-        /// Render a span once, in the oldest turn of the window that carries
-        /// it, instead of in every turn that selected it. **On by default**
-        /// since 2026-09-19 — the flag is kept because a `[resend]` table that
-        /// says `always` is still a thing a run may want to override.
-        #[arg(long)]
-        repeat_once: bool,
-
-        /// Send a span again in every turn that selected it: the rule above,
-        /// off. The arm every recording made before 2026-09-19 was made under,
-        /// and the only way to ask for it from a command line now that it is
-        /// no longer what you get by saying nothing.
-        #[arg(long, conflicts_with = "repeat_once")]
-        no_repeat_once: bool,
-
-        /// Under pressure, let the oldest turns of the window give up their
-        /// spans and keep their exchange: the code becomes the line that cites
-        /// it, and a turn is evicted whole only when pruning the window is not
-        /// enough. Off, and it stayed off when rule A's default flipped: what
-        /// it buys is measured in tokens and what it costs is not measured at
-        /// all, which is item 5 of `ROADMAP/2026-09-17`.
-        #[arg(long)]
-        prune_behind: bool,
-
-        /// Let a turn behind the prune line give up its tool *output* too: the
-        /// call stays as the model wrote it and the result becomes the line
-        /// that cites it. Off, and inert without --prune-behind — nothing is
-        /// behind a line that never moves.
-        #[arg(long)]
-        prune_results: bool,
-
-        /// Pin the sampler's temperature. Unset leaves it to the server's own
-        /// default, which is not fixed across calls.
-        #[arg(long)]
-        temperature: Option<f32>,
-
-        /// Pin the sampler's seed. Unset leaves it to the server's own choice.
-        #[arg(long)]
-        seed: Option<u32>,
-
-        /// Tokens of repository outline to put in the prefix — definitions
-        /// with their signatures, bodies elided, from tree-sitter. 0 is off,
-        /// which is the default: a map that arrived switched on would change
-        /// every number in every recording made so far. `luu map` prints what
-        /// a budget resolves to.
-        #[arg(long, default_value_t = 0)]
-        map_tokens: u32,
-
-        /// Order the map by what the rest of the tree depends on, instead of
-        /// by path. Off, and the reason is a measurement rather than caution:
-        /// at 1024 tokens the alphabet holds five files and the ranking holds
-        /// two, because rank order puts the big central files first and the
-        /// fill rule stops at the first that does not fit. `luu map --explain`
-        /// prints the ranking either way. See
-        /// `RECORD/2026-09-02.ranking-the-map.completed.md`.
-        #[arg(long)]
-        map_rank: bool,
-
-        /// Order the map by direct weighted in-degree.
-        #[arg(long)]
-        map_in_degree: bool,
-
-        /// Pack the token budget non-greedily.
-        #[arg(long)]
-        map_non_greedy: bool,
-
-        /// Tokens of *selected fragments* to fuse into each prompt — the
-        /// definitions this turn's own text points at, chosen by
-        /// `agent_core::select` and read through the **live job's** sandbox, so
-        /// an approved plan narrows what may be chosen exactly as it narrows
-        /// what may be opened. 0 is off, which is the default and for the same
-        /// reason the map's is. Unlike the map it is not part of the cached
-        /// prefix. See `RECORD/2026-09-06.selection-at-the-gate.completed.md`.
-        #[arg(long, default_value_t = 0)]
-        select_tokens: u32,
-
-        /// Score a file by its own module doc as well as by what it defines.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        select_docs: bool,
-
-        /// Also score a file for being one hop from a file that matched. Off:
-        /// measured worse than without it. See
-        /// `RECORD/2026-09-05.choosing-fragments.completed.md`.
-        #[arg(long)]
-        select_graph: bool,
-
-        /// `schema` (`response_format`) or `grammar` (GBNF), for every turn of
-        /// the session. Off, so a run made without it stays comparable to
-        /// every recording on disk — same flag `chat` carries, see its own doc
-        /// for what the two arms cost. See
-        /// `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
-        #[arg(long, value_enum)]
-        constrain: Option<ConstrainKind>,
-    },
-
     /// Run a turn — or a scripted sequence of them — streaming to stdout.
     Chat {
         /// The prompt. Reads stdin when omitted, and ignored with --script.
@@ -1698,7 +1486,7 @@ pub enum ConstrainKind {
 }
 
 impl ConstrainKind {
-    // `pub`: `ServeOptions`/`StdioOptions` carry the raw flag and build it in
+    // `pub`: `ServeOptions`/`AppOptions` carry the raw flag and build it in
     // `App::create`, once, the same reason `chat` builds it once — see
     // `RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md`.
     pub fn build(self, tools: &Tools) -> anyhow::Result<Constraint> {
@@ -1744,7 +1532,7 @@ impl ConstrainKind {
 /// flip would make `always` unreachable from any command line for the first
 /// time, which is the arm every recording before 2026-09-19 was made under.
 ///
-/// Read by `chat` and `stdio` as well as by `serve`. It is a fact about this
+/// Read by `chat` as well as by `serve`. It is a fact about this
 /// machine, in the file that already holds this machine's default destination —
 /// not a session-start choice, which is the seam the record leaves open between
 /// the CLI and the page. See
@@ -1826,18 +1614,18 @@ struct ModelArgs<'a> {
     mock_cycle: bool,
     /// `serve`, which starts on the mock when the file's default is held
     /// rather than refusing to start: the page is where the host is typed.
-    /// `chat` and `stdio` refuse, at the moment they would have sent.
+    /// `chat` refuses, at the moment it would have sent.
     holding: bool,
 }
 
 /// The destination, resolved, announced, and built.
 ///
-/// One function for `serve`, `stdio` and `chat`, which is the point: three
-/// callers assembling a backend out of the same flags is how the three drift
+/// One function for `serve` and `chat`, which is the point: two callers
+/// assembling a backend out of the same flags is how the two drift
 /// apart, and the file they now all read can only move them together. It hands
 /// back the window as well, because a profile may have supplied it.
 /// The `[engine.*]` a profile names, started and answering before a run sends
-/// — what `serve` does per session, done once for `chat` and `stdio`. `None`
+/// — what `serve` does per session, done once for `chat`. `None`
 /// where the profile names none. The returned handle is the server's life:
 /// dropping it stops what it started, and a server something else already runs
 /// on that port is used and left alone. An automatic engine whose port was
@@ -2862,7 +2650,7 @@ pub async fn run() -> Result<()> {
             agency,
             // How a session's posture is built, as a function: the same
             // flags with one field replaced, so every other one means what it
-            // meant. Only `serve` gets it — over stdio the process is the
+            // meant. Only `serve` gets it — in `chat` the process is the
             // session, and its policy file is a flag.
             // Read once, here: what a session may choose should not change
             // under the surface that is offering it, which is the rule the
@@ -2922,127 +2710,6 @@ pub async fn run() -> Result<()> {
             auth_token_file,
             exposure,
             origin,
-            approvers,
-            max_tool_steps: sandbox_args.max_tool_steps,
-        })
-        .await;
-    }
-
-    if let Command::Stdio {
-        store,
-        no_store,
-        sandbox_args,
-        provider,
-        backend,
-        model,
-        ollama_url,
-        openai_url,
-        anthropic_url,
-        api_key_file,
-        tool_calls,
-        mock_delay_ms,
-        mock_replies,
-        mock_cycle,
-        record,
-        context_limit,
-        tokenizer,
-        reserve,
-        evict,
-        low_water,
-        repeat_once,
-        no_repeat_once,
-        prune_behind,
-        prune_results,
-        temperature,
-        seed,
-        map_tokens,
-        map_rank,
-        map_in_degree,
-        map_non_greedy,
-        select_tokens,
-        select_docs,
-        select_graph,
-        constrain,
-    } = command
-    {
-        let (backend, resolved) = destination(ModelArgs {
-            provider: provider.as_deref(),
-            backend,
-            model: model.as_deref(),
-            ollama_url: ollama_url.as_deref(),
-            openai_url: openai_url.as_deref(),
-            anthropic_url: anthropic_url.as_deref(),
-            api_key_file: api_key_file.as_deref(),
-            tool_calls,
-            context_limit,
-            mock_delay_ms,
-            mock_replies,
-            mock_cycle,
-            holding: false,
-        })?;
-        // Held for as long as the protocol runs, and stopped with it.
-        let (_engine, backend, resolved) = engine_for(backend, resolved).await?;
-        let resolved = with_server_window(resolved, backend.as_ref()).await;
-        let model = resolved.model.clone();
-        let context_limit = resolved.context_limit;
-        let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
-        if let Some(warning) = &warning {
-            eprintln!("warning: {warning}");
-        }
-        let approvers = sandbox_args.approvers()?;
-        let agency = sandbox_args.resolve().await?;
-        eprint!("{}", agency.describe());
-        let store = match (no_store, store) {
-            (true, _) => None,
-            (false, Some(path)) => Some(path),
-            (false, None) => {
-                let path = crate::store::default_path();
-                if path.is_none() {
-                    eprintln!(
-                        "warning: no state directory (neither LUU_HOME nor HOME is set), so no \
-                         default session store: this session stays in memory. \
-                         Pass --store <path> to keep it."
-                    );
-                }
-                path
-            }
-        };
-        return serve::stdio(serve::StdioOptions {
-            // No page over stdio, so no icons to serve one.
-            icons: std::sync::Arc::new(crate::icons::Theme::default()),
-            provider: resolved,
-            counter_warning: warning,
-            backend: backend.into(),
-            model,
-            record,
-            budget: budget_under(
-                Budget::new(context_limit, reserve, evict.policy(low_water)),
-                resend_rules(
-                    machine_resend(),
-                    repeat_asked(repeat_once, no_repeat_once),
-                    prune_behind,
-                    prune_results,
-                ),
-            ),
-            counter,
-            tokenizer,
-            agency,
-            // `None`: over stdio the process *is* the session, so its policy
-            // file is a flag and a session has nothing to choose.
-            agency_for: None,
-            describe_for: None,
-            postures: Default::default(),
-            environments: Default::default(),
-            postures_path: None,
-            temperature,
-            seed,
-            store,
-            map_tokens,
-            map_order: order_of(map_rank, map_in_degree),
-            map_fill: fill_of(map_non_greedy),
-            select_tokens,
-            select_weights: weights_of(select_docs, select_graph),
-            constrain,
             approvers,
             max_tool_steps: sandbox_args.max_tool_steps,
         })

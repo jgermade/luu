@@ -1261,7 +1261,7 @@ impl Config {
     /// The file this would be written to, without asking anything.
     ///
     /// **Never [`crate::config::dir`]**, for the reason that function gives
-    /// about `luu stdio`: it prompts when nothing has been chosen, and a prompt
+    /// about a process nobody is typing to: it prompts when nothing has been chosen, and a prompt
     /// inside a request handler is a hang with a socket attached. A machine that
     /// has not chosen a state directory has nowhere to put this, and says so.
     pub fn path_for_writing() -> Option<PathBuf> {
@@ -1653,7 +1653,7 @@ pub struct Resolved {
     /// How tool calls travel to and from this destination.
     pub tool_calls: ToolCalls,
     /// `max-tool-steps`: the model's, the profile's, the file's own — `None`
-    /// where none says. `luu chat` reads it once; `serve` and `stdio` ask
+    /// where none says. `luu chat` reads it once; `serve` asks
     /// [`Config::max_tool_steps`] at each turn instead, so Settings reaches the
     /// next one.
     pub max_tool_steps: Option<u32>,
