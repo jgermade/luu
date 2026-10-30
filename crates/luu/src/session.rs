@@ -287,6 +287,8 @@ impl Agency {
             enforcement: self.sandbox.enforcement().as_str().to_string(),
             network: self.sandbox.network(),
             lists: self.lists.clone(),
+            // Where it works: the sandbox's base, which is the session's folder.
+            folder: Some(self.sandbox.base().display().to_string()),
             // As asked, before the flags: a resume asks the same, and the
             // same flags are over it.
             composed: self

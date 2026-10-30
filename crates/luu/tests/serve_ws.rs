@@ -210,22 +210,27 @@ fn describe_factory() -> luu::serve::DescribeFactory {
 fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory {
     // The runtime is not honoured here: no test builds a worker, and what the
     // routes decide about a variant is decided before this is called.
-    Arc::new(move |chosen: Option<luu::serve::Chosen>, _runtime| {
-        let base = base.clone();
-        Box::pin(async move {
-            let policy = match chosen {
-                Some(luu::serve::Chosen::File(path)) => SandboxPolicy::from_file(&path)?,
-                Some(luu::serve::Chosen::Environment(environment)) => environment.policy.clone(),
-                None => SandboxPolicy::default(),
-            };
-            Ok(Agency::new(
-                Arc::new(Tools::standard()),
-                Arc::new(Sandbox::new(&policy, &base)?),
-                agent_core::agent::Limits::default().with_max_steps(4),
-                None,
-            ))
-        })
-    })
+    Arc::new(
+        move |chosen: Option<luu::serve::Chosen>, _runtime, folder| {
+            // A session's folder is its base, where it named one.
+            let base = folder.unwrap_or_else(|| base.clone());
+            Box::pin(async move {
+                let policy = match chosen {
+                    Some(luu::serve::Chosen::File(path)) => SandboxPolicy::from_file(&path)?,
+                    Some(luu::serve::Chosen::Environment(environment)) => {
+                        environment.policy.clone()
+                    }
+                    None => SandboxPolicy::default(),
+                };
+                Ok(Agency::new(
+                    Arc::new(Tools::standard()),
+                    Arc::new(Sandbox::new(&policy, &base)?),
+                    agent_core::agent::Limits::default().with_max_steps(4),
+                    None,
+                ))
+            })
+        },
+    )
 }
 
 /// A server that caches its fold into the store at `path`, so a second one
@@ -4714,4 +4719,126 @@ async fn one_session_too_many_puts_the_oldest_idle_one_to_sleep() {
     assert!(live(&ids[1]).await);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A session works in its own folder, under where `serve` was started: its
+/// tree is that folder's, a folder outside the root is refused, a second
+/// session in the same folder is told it shares it, a session moves its folder
+/// before its first turn and not after, and one put to sleep comes back in
+/// its folder. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+#[tokio::test]
+async fn a_session_works_in_its_own_folder() {
+    let root = std::env::temp_dir().join(format!("luu-folders-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sub")).expect("a scratch tree");
+    std::fs::write(root.join("sub/inside.txt"), "x\n").expect("a file");
+    std::fs::write(root.join("top.txt"), "x\n").expect("a file");
+    let root = root.canonicalize().expect("canonical");
+    let address = server_storing_selecting(
+        vec!["an answer".into()],
+        &root.join("sessions.db"),
+        0,
+        &root,
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let make = |body: Value| {
+        let client = client.clone();
+        let address = address.clone();
+        async move {
+            client
+                .post(format!("http://{address}/api/sessions"))
+                .json(&body)
+                .send()
+                .await
+                .expect("the request")
+        }
+    };
+
+    let made = make(serde_json::json!({ "folder": "sub" })).await;
+    assert_eq!(made.status(), reqwest::StatusCode::CREATED);
+    let first: Value = made.json().await.expect("json");
+    let first_id = first["id"].as_str().expect("an id").to_string();
+    let settings = get(&address, "/api/settings").await;
+    assert_eq!(settings["folder"], "sub");
+    assert_eq!(settings["root"], root.display().to_string().as_str());
+    let tree = get(&address, "/api/workspace/tree?path=").await;
+    let names: Vec<&str> = tree["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry["name"].as_str())
+        // A draft's scratch, which every session makes in its own folder.
+        .filter(|name| *name != ".tmp")
+        .collect();
+    assert_eq!(names, ["inside.txt"], "the session's tree is its folder");
+    // The picker browses the root, whatever folder the session is in.
+    let folders = get(&address, "/api/folders?path=").await;
+    assert!(
+        folders["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|entry| entry["name"] == "sub"),
+        "{folders}",
+    );
+
+    // Never above the root.
+    let outside = make(serde_json::json!({ "folder": ".." })).await;
+    assert_eq!(outside.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // A second one in the same folder is told.
+    assert_eq!(
+        make(serde_json::json!({ "folder": "sub" })).await.status(),
+        reqwest::StatusCode::CREATED
+    );
+    let shared = get(&address, "/api/settings").await;
+    assert!(
+        shared["shared_with"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id == first_id.as_str())),
+        "{shared}",
+    );
+
+    // Before its first turn a session moves its folder; it is the root now.
+    let moved = client
+        .put(format!("http://{address}/api/session/folder"))
+        .json(&serde_json::json!({ "folder": "" }))
+        .send()
+        .await
+        .expect("moving it");
+    assert_eq!(moved.status(), reqwest::StatusCode::OK);
+    assert_eq!(get(&address, "/api/settings").await["folder"], "");
+
+    // After its first turn it does not.
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/ws?session={first_id}"))
+            .await
+            .expect("a socket on the first session");
+    let _ = next_message(&mut socket).await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "hello"}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+    drop(socket);
+    let refused = client
+        .put(format!(
+            "http://{address}/api/session/folder?session={first_id}"
+        ))
+        .json(&serde_json::json!({ "folder": "" }))
+        .send()
+        .await
+        .expect("asking");
+    assert_eq!(refused.status(), reqwest::StatusCode::CONFLICT);
+
+    // Asleep and resumed, it is back in its folder.
+    let slept = delete(&address, &format!("/api/sessions/{first_id}/live")).await;
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
+    let resumed = post(&address, &format!("/api/sessions/{first_id}/resume")).await;
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK);
+    assert_eq!(get(&address, "/api/settings").await["folder"], "sub");
+
+    let _ = std::fs::remove_dir_all(&root);
 }

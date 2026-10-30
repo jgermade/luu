@@ -936,6 +936,11 @@ fn run_token(path: &std::path::Path, if_missing: bool) -> Result<()> {
 /// edit to the file — which is the direction that should be the harder one.
 #[derive(Clone, clap::Args)]
 pub(crate) struct SandboxArgs {
+    /// The folder a session works in, where `serve` built it for one: the
+    /// sandbox's base instead of the directory the command ran in. Never a
+    /// flag. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    #[arg(skip)]
+    pub(crate) folder: Option<std::path::PathBuf>,
     /// Sandbox policy (TOML). Defaults to ./luu.toml when it is there.
     #[arg(long, value_name = "FILE")]
     sandbox: Option<std::path::PathBuf>,
@@ -1213,7 +1218,10 @@ impl SandboxArgs {
     /// environment, with the flags over either, built into an agency that
     /// knows which lists it came from.
     async fn resolve_from(&self, environment: Option<&policies::Resolved>) -> Result<Agency> {
-        let base = std::env::current_dir().context("the working directory")?;
+        let base = match &self.folder {
+            Some(folder) => folder.clone(),
+            None => std::env::current_dir().context("the working directory")?,
+        };
 
         let (mut policy, worker_config, label) = match environment {
             Some(environment) => (
@@ -2681,8 +2689,10 @@ pub async fn run() -> Result<()> {
                 let args = sandbox_args.clone();
                 std::sync::Arc::new(
                     move |chosen: Option<serve::Chosen>,
-                          runtime: Option<agent_core::worker::Runtime>| {
-                        let args = args.clone();
+                          runtime: Option<agent_core::worker::Runtime>,
+                          folder: Option<std::path::PathBuf>| {
+                        let mut args = args.clone();
+                        args.folder = folder;
                         Box::pin(async move {
                             match chosen {
                                 None => args.resolve_posture(None, runtime).await,

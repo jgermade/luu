@@ -1098,11 +1098,13 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
 })
 
 /**
- * The folder the panels are rooted at, chosen under the one `luu serve` was
+ * The folder the session works in, chosen under the one `luu serve` was
  * started in. Nothing here widens anything — every path still resolves through
- * `Sandbox::check_path` against that base, and the root is a prefix the page
- * narrows what it *lists* by. See
- * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+ * `Sandbox::check_path`. Since 2026-10-30 the folder is the *session's*: a
+ * session with no turns yet moves into it and its sandbox's base is that
+ * folder, rather than the page narrowing what it lists. See
+ * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
+ * `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
  */
 test("the workspace can be narrowed to a subdirectory of where serve started", async ({ page }) => {
   const errors = []

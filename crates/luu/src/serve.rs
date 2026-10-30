@@ -456,6 +456,15 @@ struct LiveSession {
     /// lines queue here and go down at the same checkpoints the fold does, in
     /// the same order they were published.
     stream: Mutex<Vec<record::RecordLine>>,
+    /// Its repository map, built over its own folder when it was made: the
+    /// last block of its cached prefix, so never rebuilt while it lives in one
+    /// folder.
+    map_rendered: String,
+    /// The tree a selection is chosen from, tagged when it was made and
+    /// **re-stamped before every turn** — `rewalk_sources` re-parses only the
+    /// files whose mtime or length moved, because it is the parse rather than
+    /// the choosing that is expensive. Empty when selection is off.
+    walked: Mutex<Vec<agent_core::repo_map::Walked>>,
     /// When something last happened in it, in ms since the epoch: what
     /// sleeping it after `[sessions] idle-minutes` reads.
     last_active: std::sync::atomic::AtomicU64,
@@ -492,7 +501,7 @@ impl LiveSession {
         destination: Arc<Destination>,
         agency: Arc<Agency>,
         recorder: Option<Arc<Recorder>>,
-        map_rendered: &str,
+        (map_rendered, walked): (String, Vec<agent_core::repo_map::Walked>),
     ) -> Self {
         let started_at = now_ms();
         Self {
@@ -502,7 +511,7 @@ impl LiveSession {
                 cancel: None,
                 context: agency
                     .with_tools(AgentContext::new(SYSTEM), destination.tool_calls)
-                    .with_map(map_rendered),
+                    .with_map(&map_rendered),
                 prefix: PrefixTracker::default(),
                 pending: None,
                 narrowed: None,
@@ -524,6 +533,8 @@ impl LiveSession {
             session_started_at: Mutex::new(started_at),
             session_id: Mutex::new(session_id(started_at)),
             stream: Mutex::new(Vec::new()),
+            map_rendered,
+            walked: Mutex::new(walked),
             last_active: std::sync::atomic::AtomicU64::new(started_at),
             clients: Default::default(),
         }
@@ -630,12 +641,16 @@ struct App {
     /// reply that drifted rather than sent on every attempt. `None` when
     /// `--constrain schema` was not asked for.
     schema_retry: Option<SchemaRetry>,
-    map_rendered: String,
-    /// The tree a selection is chosen from, tagged at startup and **re-stamped
-    /// before every turn** — `rewalk_sources` re-parses only the files whose
-    /// mtime or length moved, because it is the parse rather than the choosing
-    /// that is expensive. Empty when selection is off.
-    walked: Mutex<Vec<agent_core::repo_map::Walked>>,
+    /// How a session's repository map is built, for every session and its
+    /// own folder: the budget, the order and the fill `serve` was started
+    /// with. See [`App::map_for`].
+    map_tokens: u32,
+    map_order: Order,
+    map_fill: agent_core::repo_map::Fill,
+    /// The directory `serve` was started in: what every session's folder is
+    /// chosen under, and what the page's paths are relative to. See
+    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    root: PathBuf,
     /// Tokens of selected fragments per turn. 0 is off.
     select_tokens: u32,
     /// Which signals score a file.
@@ -699,6 +714,9 @@ pub type AgencyFactory = Arc<
     dyn Fn(
             Option<Chosen>,
             Option<agent_core::worker::Runtime>,
+            // The session's folder: the sandbox's base. `None` is where
+            // `serve` was started.
+            Option<PathBuf>,
         ) -> futures_util::future::BoxFuture<'static, Result<Agency>>
         + Send
         + Sync,
@@ -825,6 +843,18 @@ pub struct Settings {
     /// sandbox, for the same reason `posture` is.
     #[serde(default)]
     base: String,
+    /// Where `serve` was started, as an absolute path: what every session's
+    /// folder is chosen under, and what the folder picker browses.
+    #[serde(default)]
+    root: String,
+    /// This session's folder, relative to `root`: `""` is the root itself.
+    /// See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    #[serde(default)]
+    folder: String,
+    /// The other live sessions working in the same folder, by id: two agents
+    /// writing one tree is allowed, and both are told.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    shared_with: Vec<String>,
     /// What this session is allowed to do, by the name it was chosen under and
     /// the three facts a reader compares two runs on. Filled at the route from
     /// the *live* agency rather than carried in the destination: a posture is
@@ -1210,6 +1240,9 @@ impl App {
             // running: a posture is the session's, and so is the sandbox whose
             // base the page roots its folder picker at.
             base: String::new(),
+            root: String::new(),
+            folder: String::new(),
+            shared_with: Vec::new(),
             posture: None,
             floor: None,
             lists: None,
@@ -1255,7 +1288,10 @@ impl App {
         Ok(Arc::new(App {
             tokenizer,
             approvers,
-            walked: Mutex::new(walked),
+            map_tokens,
+            map_order,
+            map_fill,
+            root: agency.sandbox.base().to_path_buf(),
             select_tokens,
             select_weights,
             agency_for,
@@ -1340,11 +1376,12 @@ impl App {
                     provider.tool_calls,
                     started_at,
                 )]),
+                map_rendered,
+                walked: Mutex::new(walked),
                 last_active: std::sync::atomic::AtomicU64::new(now_ms()),
                 clients: Default::default(),
             }))),
             current_changed: tokio::sync::watch::channel(String::new()).0,
-            map_rendered,
         }))
     }
 
@@ -1364,6 +1401,32 @@ impl App {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// A session's repository map and selection walk, over `agency`'s
+    /// sandbox — its folder — under the budget and the order `serve` was
+    /// started with. On the blocking pool: it walks and parses a tree.
+    async fn map_for(
+        &self,
+        agency: &Agency,
+        counter: Arc<dyn TokenCounter>,
+    ) -> (String, Vec<agent_core::repo_map::Walked>) {
+        let sandbox = agency.sandbox.clone();
+        let (tokens, order, fill, select) = (
+            self.map_tokens,
+            self.map_order,
+            self.map_fill,
+            self.select_tokens,
+        );
+        blocking(move || {
+            let map = RepoMap::build_with(sandbox.as_ref(), tokens, counter.as_ref(), order, fill);
+            let walked = match select > 0 {
+                true => agent_core::repo_map::walk_sources(sandbox.as_ref()),
+                false => Vec::new(),
+            };
+            (map.render(), walked)
+        })
+        .await
     }
 
     /// The live session used most recently: what a route or a socket that
@@ -1927,6 +1990,11 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/live", axum::routing::delete(end_live))
+        .route("/api/folders", get(get_folders))
+        .route(
+            "/api/session/folder",
+            axum::routing::put(put_session_folder),
+        )
         .route("/api/sessions/{id}/turns", get(get_turns))
         .route("/api/sessions/{id}/turns.json", get(get_turns))
         .route("/api/sessions/{id}/turns/{turn}", get(get_turn))
@@ -3966,7 +4034,7 @@ async fn begin_turn(
                 // call in a turn is: a `std::fs` call inline in an `async`
                 // block never yields, so the loop's deadline above it never
                 // fires.
-                let mut walked = app.walked.lock().await;
+                let mut walked = live.walked.lock().await;
                 let previous = std::mem::take(&mut *walked);
                 let agency = agency.sandbox.clone();
                 let rewalked = match tokio::task::spawn_blocking(move || {
@@ -4663,6 +4731,14 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     let agency = live.agency().await;
     settings.sandbox = agency.describe();
     settings.base = agency.sandbox.base().display().to_string();
+    settings.root = app.root.display().to_string();
+    settings.folder = folder_of(app, agency.sandbox.base());
+    let id = live.session_id.lock().await.clone();
+    for (other, one) in app.all_live() {
+        if other != id && one.agency().await.sandbox.base() == agency.sandbox.base() {
+            settings.shared_with.push(other);
+        }
+    }
     settings.posture = Some(agency.posture(name));
     settings.floor = Some(Floor::of(agency.floor(), !app.approvers.required));
     settings.lists = Some(agency.lists_view());
@@ -8143,7 +8219,13 @@ async fn follow_the_default(state: &AppRouterState, default: Option<&str>) {
     // will not start — leaves the session where it was, and the page reads
     // `waiting` rather than a refusal of a write that did succeed.
     let replaced = live.session_id.lock().await.clone();
-    let made = create_session(State(state.clone()), axum::body::Bytes::new()).await;
+    // In the folder it was in.
+    let body = serde_json::json!({ "folder": folder_of(app, live.agency().await.sandbox.base()) });
+    let made = create_session(
+        State(state.clone()),
+        axum::body::Bytes::from(body.to_string()),
+    )
+    .await;
     // A new session is made beside the others now, and this one — no turn,
     // nothing waiting — is the one it takes the place of, as it always was.
     if made.status().is_success() {
@@ -8642,6 +8724,11 @@ struct NewSession {
     /// its lists are its policy file.
     #[serde(default)]
     lists: Option<ListsChoice>,
+    /// The folder the session works in, relative to where `serve` was
+    /// started: its sandbox's base. Absent, or `""`, is that directory itself.
+    /// Never above it. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    #[serde(default)]
+    folder: Option<String>,
 }
 
 /// Which list of each axis, by name; an absent one is the environment's, or
@@ -8782,6 +8869,7 @@ async fn posture_for(
     runtime: Option<&str>,
     image: Option<&str>,
     lists: Option<&ListsChoice>,
+    folder: Option<&std::path::Path>,
 ) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
     let made = asked.is_none().then_some(lists).flatten();
     let lists = lists.filter(|lists| !lists.is_empty());
@@ -8837,6 +8925,7 @@ async fn posture_for(
             Some(&name),
             Some(Chosen::Environment(Arc::new(resolved))),
             None,
+            folder,
         )
         .await;
     }
@@ -8881,6 +8970,7 @@ async fn posture_for(
             asked,
             Some(Chosen::Environment(Arc::new(resolved))),
             runtime,
+            folder,
         )
         .await;
     }
@@ -8905,7 +8995,7 @@ async fn posture_for(
             }
         },
     };
-    finish(app, build, asked, policy, runtime).await
+    finish(app, build, asked, policy, runtime, folder).await
 }
 
 /// A stored session made from lists, made again from the lists it copied:
@@ -8918,6 +9008,7 @@ async fn posture_from_copy(
     stored: &record::Posture,
     runtime: Option<&str>,
     image: Option<&str>,
+    folder: Option<&std::path::Path>,
 ) -> Option<Result<(Option<String>, Arc<Agency>), (StatusCode, String)>> {
     let build = app.agency_for.as_ref()?;
     let composed = stored.composed.as_deref()?;
@@ -8942,6 +9033,7 @@ async fn posture_from_copy(
             Some(&name),
             Some(Chosen::Environment(Arc::new(resolved))),
             None,
+            folder,
         )
         .await,
     )
@@ -9110,6 +9202,7 @@ async fn finish(
     asked: Option<&str>,
     policy: Option<Chosen>,
     runtime: Option<&str>,
+    folder: Option<&std::path::Path>,
 ) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
     let runtime = match runtime {
         None => None,
@@ -9149,7 +9242,7 @@ async fn finish(
             Some(runtime)
         }
     };
-    let agency = build(policy, runtime)
+    let agency = build(policy, runtime, folder.map(std::path::Path::to_path_buf))
         .await
         .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error:#}")))?;
     Ok((asked.map(str::to_string), Arc::new(agency)))
@@ -9396,12 +9489,18 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // And the same rule for what it may do: built before anything is reset, so
     // a runtime that is not installed or an image that is not built refuses the
     // *new* session rather than ending the one that is running.
+    // The folder it works in, checked before anything is built.
+    let folder = match folder_under_root(app, asked.folder.as_deref()) {
+        Ok(folder) => folder,
+        Err((status, message)) => return (status, message).into_response(),
+    };
     let (posture_name, agency) = match posture_for(
         app,
         asked.posture.as_deref(),
         asked.runtime.as_deref(),
         asked.image.as_deref(),
         asked.lists.as_ref(),
+        folder.as_deref(),
     )
     .await
     {
@@ -9412,7 +9511,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         sending.clone(),
         agency.clone(),
         previous.recorder.clone(),
-        &app.map_rendered,
+        app.map_for(&agency, sending.counter.clone()).await,
     ));
     *live.destination.write().await = sending.clone();
     tracing::info!(
@@ -9499,7 +9598,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
             .agency()
             .await
             .with_tools(AgentContext::new(SYSTEM), sending.tool_calls)
-            .with_map(&app.map_rendered);
+            .with_map(&live.map_rendered);
         session.prefix = PrefixTracker::default();
         session.pending = None;
         session.narrowed = None;
@@ -9535,6 +9634,159 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     app.make_current(&summary.id, live.clone());
 
     (StatusCode::CREATED, Json(summary)).into_response()
+}
+
+/// A session's folder, out of what a request or a recording says: a
+/// directory under `serve`'s root, as an absolute path, or `None` for the
+/// root itself. Relative is taken from the root; absolute is checked to be
+/// under it. Never above it: a folder is a narrowing of where `serve` was
+/// started, the rule the page's picker has always held.
+fn folder_under_root(
+    app: &App,
+    asked: Option<&str>,
+) -> Result<Option<PathBuf>, (StatusCode, String)> {
+    let Some(asked) = asked
+        .map(str::trim)
+        .filter(|asked| !asked.is_empty() && *asked != ".")
+    else {
+        return Ok(None);
+    };
+    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
+    let joined = root.join(asked);
+    let folder = joined.canonicalize().map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("{asked}: not a folder here ({error})"),
+        )
+    })?;
+    if !folder.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, format!("{asked}: not a folder")));
+    }
+    if !folder.starts_with(&root) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{asked}: outside {}, where this server was started",
+                root.display()
+            ),
+        ));
+    }
+    Ok((folder != root).then_some(folder))
+}
+
+/// A folder as the page names it: relative to `serve`'s root, `""` for the
+/// root itself.
+fn folder_of(app: &App, base: &std::path::Path) -> String {
+    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
+    match base.strip_prefix(&root) {
+        Ok(under) => under.display().to_string(),
+        Err(_) => base.display().to_string(),
+    }
+}
+
+/// `GET /api/folders?path=`: what is in a directory under `serve`'s root, for
+/// the folder picker — which chooses a session's folder, so it browses the
+/// root and not the session's own sandbox, which would stop it at the folder
+/// it is in. Read-only, through a sandbox that reads the root and nothing
+/// else.
+async fn get_folders(
+    State(state): State<AppRouterState>,
+    Query(query): Query<WorkspaceQuery>,
+) -> Response {
+    let root = state.app.root.clone();
+    let policy = agent_core::sandbox::SandboxPolicy {
+        paths: vec![agent_core::sandbox::PathRule::new(
+            ".",
+            agent_core::sandbox::Access::Read,
+        )],
+        ..Default::default()
+    };
+    let sandbox = match agent_core::sandbox::Sandbox::new(&policy, &root) {
+        Ok(sandbox) => sandbox,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    match workspace::tree(&sandbox, &query.path).await {
+        Ok(tree) => Json(tree).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
+/// `PUT /api/session/folder`.
+#[derive(serde::Deserialize)]
+struct MoveFolder {
+    #[serde(default)]
+    folder: Option<String>,
+}
+
+/// Moves a session to another folder **before its first turn**: its agency
+/// made again over that tree — the same lists or posture, the same runtime —
+/// with its repository map and selection walk. After its first turn its
+/// history is about the tree it worked in, and another folder is another
+/// session. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+async fn put_session_folder(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<MoveFolder>,
+) -> Response {
+    let app = &state.app;
+    let live = app.addressed();
+    if app.agency_for.is_none() {
+        return (
+            StatusCode::CONFLICT,
+            "this surface cannot move a session: it was built without a way to make one",
+        )
+            .into_response();
+    }
+    let folder = match folder_under_root(app, asked.folder.as_deref()) {
+        Ok(folder) => folder,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+    let mut session = live.session.lock().await;
+    let leaving = live.agency().await;
+    let target = folder
+        .clone()
+        .unwrap_or_else(|| app.root.canonicalize().unwrap_or_else(|_| app.root.clone()));
+    let current = leaving.posture(live.posture.lock().await.clone());
+    // Where it already is is an answer, whatever it has done there.
+    if leaving.sandbox.base() == target {
+        return Json(serde_json::json!({ "posture": current, "moved": false })).into_response();
+    }
+    if session.current.is_some() || session.pending.is_some() || session.next_turn > 1 {
+        return (
+            StatusCode::CONFLICT,
+            "a session's folder is chosen before its first turn: start a new session to work there",
+        )
+            .into_response();
+    }
+    // The same lists where it carries them; else the posture by its name, or
+    // the server's own file where it has none.
+    let built = match posture_from_copy(app, &current, None, None, folder.as_deref()).await {
+        Some(built) => built,
+        None => {
+            posture_for(
+                app,
+                current.name.as_deref(),
+                None,
+                None,
+                None,
+                folder.as_deref(),
+            )
+            .await
+        }
+    };
+    let (name, agency) = match built {
+        Ok(built) => built,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+    let sending = live.destination().await;
+    let (map, walked) = app.map_for(&agency, sending.counter.clone()).await;
+    session.context = agency
+        .with_tools(AgentContext::new(SYSTEM), sending.tool_calls)
+        .with_map(&map);
+    *live.walked.lock().await = walked;
+    let posture = agency.posture(name.clone());
+    Json(settle_move(app, &live, session, name, agency, posture).await).into_response()
 }
 
 /// Whether one more session may be live: `[sessions] max-live`, counting the
@@ -9730,6 +9982,7 @@ async fn put_session_posture(
             .into_response();
     }
 
+    let current_folder = live.agency().await.sandbox.base().to_path_buf();
     let current = live
         .agency()
         .await
@@ -9744,6 +9997,9 @@ async fn put_session_posture(
         // Moved from the terminal: a preset as it is.
         None,
         None,
+        // In the folder it works in: a move changes where commands run, not
+        // which tree they run over.
+        Some(current_folder.as_path()),
     )
     .await
     {
@@ -9969,6 +10225,8 @@ async fn put_session_runtime(
         Some(&name),
         Some(Chosen::Environment(Arc::new(resolved))),
         None,
+        // The folder it works in, as it was: a runtime moves, the tree does not.
+        Some(leaving.sandbox.base()),
     )
     .await
     {
@@ -10085,6 +10343,19 @@ async fn resume_session(
     // back for one — so a list edited or deleted in `config.toml` since does
     // not stand between a person and their history. See
     // `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
+    // The folder it worked in, where it recorded one that is still a folder
+    // under this server's root; else the root, as before format 27.
+    let folder = loaded_view
+        .posture
+        .as_ref()
+        .and_then(|stored| stored.folder.as_deref())
+        .and_then(|stored| match folder_under_root(app, Some(stored)) {
+            Ok(folder) => folder,
+            Err((_, why)) => {
+                eprintln!("warning: session {id} resumes at the root: {why}");
+                None
+            }
+        });
     let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
         (None, None, Some(stored)) => {
             posture_from_copy(
@@ -10092,6 +10363,7 @@ async fn resume_session(
                 stored,
                 asked.runtime.as_deref(),
                 asked.image.as_deref(),
+                folder.as_deref(),
             )
             .await
         }
@@ -10106,6 +10378,7 @@ async fn resume_session(
                 asked.runtime.as_deref(),
                 asked.image.as_deref(),
                 asked.lists.as_ref(),
+                folder.as_deref(),
             )
             .await
         }
@@ -10160,6 +10433,9 @@ async fn resume_session(
     // block is the same for every posture — the definitions never move, because
     // they are the second half of the cached prefix — and asking for it inside
     // the lock would be an await holding a guard that cannot cross a thread.
+    // Its map, over the folder it is resumed in: the prefix its context is
+    // rebuilt with, and the one it lives under from here.
+    let built = app.map_for(&agency, sending.counter.clone()).await;
     let definitions = agency.definitions();
     let resumed = {
         let store = store_mutex.lock().await;
@@ -10167,7 +10443,7 @@ async fn resume_session(
             id,
             SYSTEM,
             definitions,
-            &app.map_rendered,
+            &built.0,
             sending.counter.as_ref(),
             // The posture this session is being resumed **under**, which is the
             // one settled above and not the one it ran under. A span the new
@@ -10200,7 +10476,7 @@ async fn resume_session(
         sending.clone(),
         agency.clone(),
         previous.recorder.clone(),
-        &app.map_rendered,
+        built,
     ));
     *live.destination.write().await = sending.clone();
     tracing::info!(
@@ -10698,12 +10974,16 @@ mod tests {
             None,
         );
         let agency_walk = agency.sandbox.clone();
+        let walked = match select_tokens {
+            0 => Vec::new(),
+            _ => agent_core::repo_map::walk_sources(agency_walk.as_ref()),
+        };
         Arc::new(App {
             approvers: Approvers::default(),
-            walked: Mutex::new(match select_tokens {
-                0 => Vec::new(),
-                _ => agent_core::repo_map::walk_sources(agency_walk.as_ref()),
-            }),
+            map_tokens: 0,
+            map_order: Order::default(),
+            map_fill: Default::default(),
+            root: base.clone(),
             select_tokens,
             select_weights: Default::default(),
             tokenizer: None,
@@ -10726,7 +11006,6 @@ mod tests {
             seed: None,
             constraint: None,
             schema_retry: None,
-            map_rendered: String::new(),
             // In memory, like everything else these handler tests touch: the
             // store's own behaviour is `tests/store_parity.rs`.
             store: None,
@@ -10758,6 +11037,9 @@ mod tests {
                         map_tokens: 0,
                         sandbox: String::new(),
                         base: String::new(),
+                        root: String::new(),
+                        folder: String::new(),
+                        shared_with: Vec::new(),
                         posture: None,
                         floor: None,
                         lists: None,
@@ -10793,6 +11075,8 @@ mod tests {
                 session_id: Mutex::new("session-test".into()),
                 session_started_at: Mutex::new(0),
                 stream: Mutex::new(Vec::new()),
+                map_rendered: String::new(),
+                walked: Mutex::new(walked),
                 last_active: std::sync::atomic::AtomicU64::new(now_ms()),
                 clients: Default::default(),
             }))),
@@ -10897,6 +11181,9 @@ mod tests {
                 map_tokens: 0,
                 sandbox: String::new(),
                 base: String::new(),
+                root: String::new(),
+                folder: String::new(),
+                shared_with: Vec::new(),
                 posture: None,
                 floor: None,
                 lists: None,
@@ -10922,6 +11209,7 @@ mod tests {
             network: false,
             lists: None,
             composed: None,
+            folder: None,
         };
         let mut view = SessionView::new("s", "mock", "mock");
         view.started_at = 1_700_000_000_000;
@@ -10989,6 +11277,7 @@ mod tests {
             network: false,
             lists: None,
             composed: None,
+            folder: None,
         };
         let host = record::Posture {
             name: None,
@@ -10997,6 +11286,7 @@ mod tests {
             network: false,
             lists: None,
             composed: None,
+            folder: None,
         };
 
         let mut view = SessionView::new("s", "mock", "mock");
@@ -11066,6 +11356,7 @@ mod tests {
                     network: false,
                     lists: None,
                     composed: None,
+                    folder: None,
                 },
             )
             .is_some(),
@@ -11093,6 +11384,7 @@ mod tests {
             network: false,
             lists: None,
             composed: None,
+            folder: None,
         };
         let sending = mock_destination("mock", "mock");
         let mut view = SessionView::new("s", "mock", "mock");
@@ -11184,6 +11476,7 @@ mod tests {
             network: false,
             lists: None,
             composed: None,
+            folder: None,
         };
         let sending = mock_destination("mock", "mock");
         let mut view = SessionView::new("s", "mock", "mock");
@@ -11726,7 +12019,7 @@ mod tests {
                                 \"commands\":[]}\n```";
         let app = app_selecting(&[ONE_FILE, "the answer"], 2048);
         let live = app.current();
-        let walked = app.walked.lock().await.clone();
+        let walked = live.walked.lock().await.clone();
         assert!(
             !walked.is_empty(),
             "the walk found nothing, so this test would pass by holding zero files",

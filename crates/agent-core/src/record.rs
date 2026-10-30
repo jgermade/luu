@@ -230,7 +230,12 @@ use crate::trace::TraceMessage;
 /// `config.toml` by name. Absent in every stream before it, and for a policy
 /// file's lists, which are resumed by name as they were. See
 /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
-pub const FORMAT: u32 = 26;
+///
+/// **27: the posture names its `folder`** — the session's folder, the base of
+/// its sandbox, as an absolute path — which a resume makes the session again
+/// in, and which `same_place` compares where both runs say. Absent before it.
+/// See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+pub const FORMAT: u32 = 27;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -268,6 +273,11 @@ pub struct Posture {
     /// what tipped it over clippy's `large_enum_variant`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composed: Option<Box<Composed>>,
+    /// The folder it worked in — its sandbox's base — as an absolute path.
+    /// `None` in a stream before format 27, where it was wherever `serve` was
+    /// started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 /// What a composed posture ran on, by the words a new session asks with: the
@@ -390,6 +400,12 @@ impl Posture {
             && self.network == other.network
             && match (&self.lists, &other.lists) {
                 (Some(mine), Some(theirs)) => mine.same(theirs),
+                _ => true,
+            }
+            // Since format 27, the folder too, where both runs said: the same
+            // lists over another tree reach other files.
+            && match (&self.folder, &other.folder) {
+                (Some(mine), Some(theirs)) => mine == theirs,
                 _ => true,
             }
     }
@@ -558,6 +574,7 @@ mod tests {
             network: false,
             lists: None,
             composed: None,
+            folder: None,
         };
         let json = serde_json::to_value(&plain).unwrap();
         assert!(json.get("composed").is_none());
@@ -594,6 +611,7 @@ mod tests {
             network: false,
             lists: None,
             composed: None,
+            folder: None,
         };
 
         assert!(
@@ -648,6 +666,7 @@ mod tests {
             network: false,
             lists: Some(lists.clone()),
             composed: None,
+            folder: None,
         };
 
         let renamed = Lists {

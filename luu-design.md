@@ -2730,8 +2730,18 @@ used idle one to sleep — checkpointed, its worker ended, out of the map, resum
 and is refused only when none may sleep. **`idle-minutes`** (30) sleeps an idle one on its own;
 the current one, one with a client, a turn or a proposal never sleeps. `DELETE
 /api/sessions/:id/live` sleeps one on request; a live session cannot be deleted, and archiving
-one sleeps it first. Engines stop only when no live session sends to them. `DELETE
-/api/sessions/:id` removes past sessions. The web UI header displays stored sessions in a switcher
+one sleeps it first. Engines stop only when no live session sends to them. **Each works in its own folder**,
+chosen under where `serve` was started (`folder` on `POST /api/sessions`, root-relative, never
+above the root): it is the base of its sandbox, so its tree, its git panel (status paths made
+the folder's with `git rev-parse --show-prefix`), its repository map and its selection walk are
+that folder's — roadmap row 49's *the folder chosen becomes the session's base rather than a
+filter*. `record::Posture` names it (`record::FORMAT` 27) and a resume makes the session again
+there; a runtime or posture move keeps it. `PUT /api/session/folder` moves a session **before
+its first turn** — after it, its history is about the tree it worked in, and another folder is
+another session. The folder picker browses the root (`GET /api/folders`), *Use this folder*
+moves a fresh session and is remembered for the next ones, and `/api/settings` says `root`,
+`folder` and the other live sessions `shared_with` it. `DELETE /api/sessions/:id` removes past
+sessions. The web UI header displays stored sessions in a switcher
 dropdown alongside a `+ New` button. See
 [`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md) and
 [`RECORD/2026-09-04.multi-session-in-serve.completed.md`](RECORD/2026-09-04.multi-session-in-serve.completed.md).

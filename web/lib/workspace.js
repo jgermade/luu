@@ -10,15 +10,26 @@
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
 import { $reactive } from "@web/vendor/jq79.js"
-import { apiHeaders } from "./store.js"
+import { apiHeaders, refreshSettings, state } from "./store.js"
 import { currentHost } from "./hosts.js"
 import { setPane } from "./prefs.js"
 
 export const workspace = $reactive({
-  /// The absolute path `luu serve` was started in, as the server reports it.
-  /// Display only — nothing is ever asked for by absolute path, because an
-  /// absolute path in a URL is an invitation to send a different one.
+  /// The absolute path of the session's folder — its sandbox's base — as the
+  /// server reports it. Display only — nothing is ever asked for by absolute
+  /// path, because an absolute path in a URL is an invitation to send a
+  /// different one.
   base: "",
+  /// Where `luu serve` was started, absolute: what a session's folder is
+  /// chosen under, and what the remembered folder is keyed by.
+  serveRoot: "",
+  /// The session's folder, relative to `serveRoot`: `""` is the root itself.
+  /// See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+  folder: "",
+  /// What the last folder choice could not do, said where it was made: a
+  /// session with turns stays in its folder, and the next one starts in the
+  /// chosen one.
+  notice: null,
   /// The chosen folder, relative to the base and `/`-separated. `""` is the
   /// base itself. **`null` means nobody has chosen yet**, which is what opens
   /// the picker over the whole window on a first visit — it is not the same
@@ -113,22 +124,95 @@ export function inside(path) {
   return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null
 }
 
-/// Reads the base off the settings the server already answers, and the root off
-/// what this browser remembered. Opens the picker when nothing was.
-export async function loadRoot(base) {
-  workspace.base = base || ""
+/// Reads the session's folder off the settings the server already answers.
+/// **The folder is the session's** since 2026-10-30: the panels show the whole
+/// of it (`root` is `""`), and what this browser remembers — keyed by where
+/// `serve` was started — is the folder a fresh session is moved into on a
+/// visit, and the one new sessions start in. Opens the picker when nothing was
+/// remembered and the session is at the root. See
+/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+export async function loadRoot(settings) {
+  following(settings)
   let remembered = null
   try {
-    remembered = localStorage.getItem(rootKey(workspace.base))
+    remembered = localStorage.getItem(rootKey(workspace.serveRoot))
   } catch {
     // A private window. The picker opens; the choice is simply not kept.
   }
   if (remembered === null) {
+    if (workspace.folder) return true
     workspace.picker = { open: true, forced: true, at: "" }
     return false
   }
-  workspace.root = remembered
+  // A session with nothing in it yet moves to the remembered folder; one with
+  // turns is refused by the server and stays where it is.
+  if (remembered !== workspace.folder) await moveFolder(remembered)
   return true
+}
+
+/// Takes the folder and the root out of the settings.
+function following(settings) {
+  workspace.serveRoot = settings?.root || settings?.base || ""
+  workspace.base = settings?.base || ""
+  workspace.folder = settings?.folder || ""
+  workspace.root = ""
+}
+
+/// The folder new sessions start in: what was last chosen here, else the
+/// folder of the session on screen.
+export function folderForNew() {
+  try {
+    const remembered = localStorage.getItem(rootKey(workspace.serveRoot))
+    if (remembered !== null) return remembered
+  } catch {
+    // Not kept: the one on screen.
+  }
+  return workspace.folder || ""
+}
+
+/// Moves the session on screen to `folder` (`PUT /api/session/folder`), which
+/// the server allows before its first turn. `true` when it moved or was
+/// already there; else `workspace.notice` says why.
+async function moveFolder(folder) {
+  try {
+    const res = await fetch("./api/session/folder", {
+      method: "PUT",
+      headers: { ...apiHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ folder }),
+    })
+    if (!res.ok) {
+      workspace.notice = (await res.text()) || `HTTP ${res.status}`
+      return false
+    }
+    workspace.notice = null
+    // Through the page's own settings, so what follows the session's folder
+    // sees the same one this just moved to.
+    await refreshSettings()
+    following(state.settings)
+    return true
+  } catch (e) {
+    workspace.notice = e.message
+    return false
+  }
+}
+
+/// The panels, over again on the session's folder: what a session switch and
+/// a folder move both need. Everything open was open relative to another
+/// folder, so none of it survives.
+export async function followFolder(settings) {
+  following(settings)
+  await startOver()
+}
+
+async function startOver() {
+  workspace.tabs = []
+  workspace.active = null
+  workspace.selected = null
+  workspace.content = null
+  workspace.open = {}
+  workspace.expanded = {}
+  await openDir("", true)
+  await loadStatus()
 }
 
 export function openPicker() {
@@ -139,6 +223,7 @@ export function openPicker() {
 }
 
 export function closePicker() {
+  workspace.notice = null
   // A first visit has nothing behind it to go back to, so the only way out of a
   // forced picker is choosing.
   if (workspace.picker.forced) return
@@ -150,25 +235,24 @@ export function browseTo(path) {
   openDir(path)
 }
 
-/// Takes the folder, and starts the panels over on it. Everything that was open
-/// was open relative to a different root, so none of it survives: a tab holding
-/// a file outside the new root would be a tab the tree cannot reach.
+/// Takes the folder: remembered for the sessions that start here, and the
+/// session on screen moved into it when it has no turns yet — then the panels
+/// start over on it. A session that has turns stays where it is, and the
+/// picker closes saying so: the next session starts in the folder chosen.
 export async function chooseRoot(path) {
-  workspace.root = path
   try {
-    localStorage.setItem(rootKey(workspace.base), path)
+    localStorage.setItem(rootKey(workspace.serveRoot), path)
   } catch {
     // Applied for this visit, and asked again next time.
   }
+  const moved = await moveFolder(path)
+  if (!moved) {
+    // Stays open, saying why, so the choice is not silently half-made.
+    workspace.notice = `${workspace.notice} — new sessions will start in ${path || "the root"}.`
+    return
+  }
   workspace.picker = { open: false, forced: false, at: "" }
-  workspace.tabs = []
-  workspace.active = null
-  workspace.selected = null
-  workspace.content = null
-  workspace.open = {}
-  workspace.expanded = {}
-  await openDir(path, true)
-  await loadStatus()
+  await startOver()
 }
 
 /// The icon id for one entry, by VSCode's own rules.
