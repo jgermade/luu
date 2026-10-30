@@ -147,7 +147,7 @@ impl agent_core::agent::Extender for Watching {
             let (answer, answered) = tokio::sync::oneshot::channel();
             // Held before it is announced, for `ask`'s reason.
             {
-                let mut session = self.app.session.lock().await;
+                let mut session = self.app.live.session.lock().await;
                 session.limit_held = Some(HeldLimit {
                     turn: self.turn,
                     step,
@@ -166,7 +166,7 @@ impl agent_core::agent::Extender for Watching {
                 .await;
             let answer = answered.await.unwrap_or(Extension::Stop);
             {
-                let mut session = self.app.session.lock().await;
+                let mut session = self.app.live.session.lock().await;
                 if session.limit_held.as_ref().is_some_and(|held| {
                     held.turn == self.turn && held.step == step && held.index == index
                 }) {
@@ -175,6 +175,7 @@ impl agent_core::agent::Extender for Watching {
             }
             if answer == Extension::Session {
                 self.app
+                    .live
                     .tools_unlimited
                     .store(true, std::sync::atomic::Ordering::SeqCst);
             }
@@ -198,7 +199,7 @@ impl agent_core::agent::Asker for Watching {
             // Held before it is announced, so an answer can never arrive
             // for a call the session does not know is waiting.
             {
-                let mut session = self.app.session.lock().await;
+                let mut session = self.app.live.session.lock().await;
                 session.held = Some(Held {
                     turn: self.turn,
                     step,
@@ -220,7 +221,7 @@ impl agent_core::agent::Asker for Watching {
             // Cleared here as well as by the answer, so a cancel that won the
             // race leaves nothing for a late answer to land on.
             {
-                let mut session = self.app.session.lock().await;
+                let mut session = self.app.live.session.lock().await;
                 if session.held.as_ref().is_some_and(|held| {
                     held.turn == self.turn && held.step == step && held.index == index
                 }) {
@@ -240,6 +241,7 @@ impl agent_core::agent::Asker for Watching {
             {
                 let added = self
                     .app
+                    .live
                     .grants
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -401,13 +403,13 @@ impl Destination {
     }
 }
 
-struct App {
+/// One live session's state: what `App` held for *the* session until
+/// 2026-10-30, moved here whole so that several can live side by side. Step 1
+/// keeps exactly one, in [`App::live`]; see
+/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+struct LiveSession {
     /// The live session's destination. See [`Destination`].
     destination: RwLock<Arc<Destination>>,
-    /// The tokenizer flag, kept because a destination built later needs the
-    /// same answer this one got: a counter is per *model*, so a switch that
-    /// left the old one in place would count the new model with it.
-    tokenizer: Option<PathBuf>,
     session: Mutex<Session>,
     events: broadcast::Sender<Event>,
     recorder: Option<Recorder>,
@@ -419,6 +421,49 @@ struct App {
     /// The posture the live session named, or `None` for the server's own
     /// policy file.
     posture: Mutex<Option<String>>,
+    /// What a person allowed for the live session's drafts, until taken back.
+    /// Emptied by a new session, refilled from the stream by a resume.
+    grants: crate::grants::Answered,
+    /// A person answered *no limit for the session* at a turn's tool budget:
+    /// its turns make every call the model asks for. Cleared by a new session,
+    /// refilled from the stream by a resume, as `grants` is.
+    tools_unlimited: std::sync::atomic::AtomicBool,
+    /// The read side, folded from the same events the sockets carry — so
+    /// `GET /api/...` can never disagree with what a client watched happen.
+    view: Mutex<SessionView>,
+    /// When the session now live started.
+    ///
+    ///
+    /// Every `at_ms` is relative to this, so a session's lines are timed from
+    /// its own beginning whether it was created here or resumed out of the
+    /// store — and not from the process's clock, which stopped being the same
+    /// number the moment `serve` learned to switch sessions: measuring from the
+    /// process would give a resumed session a first turn several days in.
+    session_started_at: Mutex<u64>,
+    /// What this session is called on disk. The live view is served as
+    /// [`LIVE_SESSION`] whatever it is called, because a client watching *the*
+    /// session should not have to learn its name first — but a store keyed on
+    /// "live" would overwrite the previous session on every restart, which is a
+    /// history that only ever holds one thing.
+    session_id: Mutex<String>,
+    /// The lines this session has produced and the store has not been given
+    /// yet, oldest first.
+    ///
+    /// The store keeps the stream as well as the fold — the fold is a cache and
+    /// this is the thing it is a cache of — but a write per token would be
+    /// quadratic in the length of a session for no reader's benefit. So the
+    /// lines queue here and go down at the same checkpoints the fold does, in
+    /// the same order they were published.
+    stream: Mutex<Vec<record::RecordLine>>,
+}
+
+/// What `serve` holds for the whole process — engines, the store, the
+/// configuration it read — and the live session, in [`App::live`].
+struct App {
+    /// The tokenizer flag, kept because a destination built later needs the
+    /// same answer this one got: a counter is per *model*, so a switch that
+    /// left the old one in place would count the new model with it.
+    tokenizer: Option<PathBuf>,
     /// How a session's posture is built: given a policy file, an agency.
     ///
     /// A function rather than the flags themselves, so this file knows nothing
@@ -440,15 +485,8 @@ struct App {
     /// one keeps the agency it was built with, as with a posture.
     environments:
         std::sync::RwLock<std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>>,
-    /// What a person allowed for the live session's drafts, until taken back.
-    /// Emptied by a new session, refilled from the stream by a resume.
-    grants: crate::grants::Answered,
     /// `--max-tool-steps`, when it was given. See [`tool_budget`].
     tool_steps: Option<u32>,
-    /// A person answered *no limit for the session* at a turn's tool budget:
-    /// its turns make every call the model asks for. Cleared by a new session,
-    /// refilled from the stream by a resume, as `grants` is.
-    tools_unlimited: std::sync::atomic::AtomicBool,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
@@ -489,24 +527,6 @@ struct App {
     /// reply that drifted rather than sent on every attempt. `None` when
     /// `--constrain schema` was not asked for.
     schema_retry: Option<SchemaRetry>,
-    /// The read side, folded from the same events the sockets carry — so
-    /// `GET /api/...` can never disagree with what a client watched happen.
-    view: Mutex<SessionView>,
-    /// When the session now live started.
-    ///
-    ///
-    /// Every `at_ms` is relative to this, so a session's lines are timed from
-    /// its own beginning whether it was created here or resumed out of the
-    /// store — and not from the process's clock, which stopped being the same
-    /// number the moment `serve` learned to switch sessions: measuring from the
-    /// process would give a resumed session a first turn several days in.
-    session_started_at: Mutex<u64>,
-    /// What this session is called on disk. The live view is served as
-    /// [`LIVE_SESSION`] whatever it is called, because a client watching *the*
-    /// session should not have to learn its name first — but a store keyed on
-    /// "live" would overwrite the previous session on every restart, which is a
-    /// history that only ever holds one thing.
-    session_id: Mutex<String>,
     map_rendered: String,
     /// The tree a selection is chosen from, tagged at startup and **re-stamped
     /// before every turn** — `rewalk_sources` re-parses only the files whose
@@ -520,19 +540,13 @@ struct App {
     /// Where the fold is cached between restarts. `None` leaves the session in
     /// memory, which is what every run did before this existed.
     store: Option<Mutex<SessionStore>>,
-    /// The lines this session has produced and the store has not been given
-    /// yet, oldest first.
-    ///
-    /// The store keeps the stream as well as the fold — the fold is a cache and
-    /// this is the thing it is a cache of — but a write per token would be
-    /// quadratic in the length of a session for no reader's benefit. So the
-    /// lines queue here and go down at the same checkpoints the fold does, in
-    /// the same order they were published.
-    stream: Mutex<Vec<record::RecordLine>>,
     /// Who may approve, and whether anyone must sign to. Empty and not
     /// required is the local operator with a keyboard, which is every session
     /// before `RECORD/2026-09-04.signed-approvals.completed.md`.
     approvers: Approvers,
+    /// The live session. One, for now: step 2 of
+    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` makes it a map.
+    live: LiveSession,
 }
 
 /// Given the policy file a session named — or `None` for the server's own — the
@@ -1133,47 +1147,16 @@ impl App {
             _ => (None, None),
         };
         Ok(Arc::new(App {
-            destination: RwLock::new(Arc::new(Destination {
-                backend,
-                model,
-                budget,
-                counter,
-                settings,
-                authority: authority.clone(),
-                // `serve` sets it, where there is a supervisor to start one:
-                // see [`Serving::run`]'s own warm-up.
-                engine: None,
-                tool_calls: provider.tool_calls,
-            })),
             tokenizer,
             approvers,
             walked: Mutex::new(walked),
             select_tokens,
             select_weights,
-            session: Mutex::new(Session {
-                next_turn: 1,
-                current: None,
-                cancel: None,
-                context: agency
-                    .with_tools(AgentContext::new(SYSTEM), provider.tool_calls)
-                    .with_map(&map_rendered),
-                prefix: PrefixTracker::default(),
-                pending: None,
-                narrowed: None,
-                held: None,
-                limit_held: None,
-            }),
-            events: broadcast::channel(1024).0,
-            recorder,
-            agency: RwLock::new(agency.clone()),
-            posture: Mutex::new(None),
             agency_for,
             describe_for,
             postures: std::sync::RwLock::new(postures),
             environments: std::sync::RwLock::new(environments),
-            grants: Default::default(),
             tool_steps: max_tool_steps,
-            tools_unlimited: Default::default(),
             postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
@@ -1185,41 +1168,74 @@ impl App {
             seed,
             constraint,
             schema_retry,
-            view: Mutex::new({
-                let mut view = SessionView::new(LIVE_SESSION, &backend_name, &model_name);
-                view.started_at = started_at;
-                // The same three fields the stream's first header carries, and
-                // set here for the same reason `started_at` is: the live view
-                // is not built by applying that line, so anything the fold
-                // would take out of it has to be put in by hand or the two
-                // disagree. `tests/store_parity.rs` is what notices.
-                view.posture = Some(agency.posture(None));
-                view.repeat = Some(budget.repeat);
-                view.prune = Some(budget.prune);
-                view.results = Some(budget.results);
-                view.tool_calls = provider
-                    .tool_calls
-                    .native()
-                    .then(|| provider.tool_calls.as_str().to_string());
-                view
-            }),
-            session_started_at: Mutex::new(started_at),
-            session_id: Mutex::new(session_id(started_at)),
-            map_rendered,
             store: sessions,
-            // The first line of a stream is what makes two runs comparable, so
-            // a session's own stream starts with one exactly as a `--record`
-            // file does.
-            stream: Mutex::new(vec![crate::session::header(
-                &backend_name,
-                &model_name,
-                budget,
-                counter_id,
-                Some(agency.posture(None)),
-                &authority,
-                provider.tool_calls,
-                started_at,
-            )]),
+            live: LiveSession {
+                destination: RwLock::new(Arc::new(Destination {
+                    backend,
+                    model,
+                    budget,
+                    counter,
+                    settings,
+                    authority: authority.clone(),
+                    // `serve` sets it, where there is a supervisor to start one:
+                    // see [`Serving::run`]'s own warm-up.
+                    engine: None,
+                    tool_calls: provider.tool_calls,
+                })),
+                session: Mutex::new(Session {
+                    next_turn: 1,
+                    current: None,
+                    cancel: None,
+                    context: agency
+                        .with_tools(AgentContext::new(SYSTEM), provider.tool_calls)
+                        .with_map(&map_rendered),
+                    prefix: PrefixTracker::default(),
+                    pending: None,
+                    narrowed: None,
+                    held: None,
+                    limit_held: None,
+                }),
+                events: broadcast::channel(1024).0,
+                recorder,
+                agency: RwLock::new(agency.clone()),
+                posture: Mutex::new(None),
+                grants: Default::default(),
+                tools_unlimited: Default::default(),
+                view: Mutex::new({
+                    let mut view = SessionView::new(LIVE_SESSION, &backend_name, &model_name);
+                    view.started_at = started_at;
+                    // The same three fields the stream's first header carries, and
+                    // set here for the same reason `started_at` is: the live view
+                    // is not built by applying that line, so anything the fold
+                    // would take out of it has to be put in by hand or the two
+                    // disagree. `tests/store_parity.rs` is what notices.
+                    view.posture = Some(agency.posture(None));
+                    view.repeat = Some(budget.repeat);
+                    view.prune = Some(budget.prune);
+                    view.results = Some(budget.results);
+                    view.tool_calls = provider
+                        .tool_calls
+                        .native()
+                        .then(|| provider.tool_calls.as_str().to_string());
+                    view
+                }),
+                session_started_at: Mutex::new(started_at),
+                session_id: Mutex::new(session_id(started_at)),
+                // The first line of a stream is what makes two runs comparable, so
+                // a session's own stream starts with one exactly as a `--record`
+                // file does.
+                stream: Mutex::new(vec![crate::session::header(
+                    &backend_name,
+                    &model_name,
+                    budget,
+                    counter_id,
+                    Some(agency.posture(None)),
+                    &authority,
+                    provider.tool_calls,
+                    started_at,
+                )]),
+            },
+            map_rendered,
         }))
     }
 
@@ -1229,7 +1245,7 @@ impl App {
     /// an `await` — which is most of what this file does — would be a deadlock
     /// against the one writer in `create_session`.
     async fn destination(&self) -> Arc<Destination> {
-        self.destination.read().await.clone()
+        self.live.destination.read().await.clone()
     }
 
     /// The postures as they are now. A clone, so no lock is held across
@@ -1256,7 +1272,7 @@ impl App {
     /// across an `await`, because the writer is `create_session` and the readers
     /// are every turn.
     async fn agency(&self) -> Arc<Agency> {
-        self.agency.read().await.clone()
+        self.live.agency.read().await.clone()
     }
 
     /// Publishes one event to every client and to the record, in that order.
@@ -1264,18 +1280,19 @@ impl App {
         if let Event::Protocol(message) = &event {
             log_event(message);
         }
-        if let Some(recorder) = &self.recorder {
+        if let Some(recorder) = &self.live.recorder {
             recorder.write(&event);
         }
         {
-            let at_ms = now_ms().saturating_sub(*self.session_started_at.lock().await);
-            let mut view = self.view.lock().await;
+            let at_ms = now_ms().saturating_sub(*self.live.session_started_at.lock().await);
+            let mut view = self.live.view.lock().await;
             match &event {
                 Event::Protocol(message) => view.apply_protocol(at_ms, message),
                 Event::Trace(message) => view.apply_trace(at_ms, message),
             }
             if self.store.is_some() {
-                self.stream
+                self.live
+                    .stream
                     .lock()
                     .await
                     .push(crate::session::line(&event, at_ms));
@@ -1291,7 +1308,7 @@ impl App {
         }
 
         // No subscribers is the ordinary state of a server nobody has opened yet.
-        let _ = self.events.send(event);
+        let _ = self.live.events.send(event);
     }
 
     /// Writes the fold as it stands. Failures are reported once and do not stop
@@ -1302,8 +1319,8 @@ impl App {
             return;
         };
         let stored = {
-            let session_id = self.session_id.lock().await.clone();
-            let view = self.view.lock().await;
+            let session_id = self.live.session_id.lock().await.clone();
+            let view = self.live.view.lock().await;
             let mut stored = view.clone();
             // The id is the session's *name* rather than part of the fold —
             // `SessionView::from_record` takes it as an argument for the same
@@ -1318,7 +1335,7 @@ impl App {
         // a cache of it, so a crash between the two must leave a store whose
         // fold lags its stream rather than one whose fold claims a line the
         // stream does not have.
-        let queued: Vec<record::RecordLine> = self.stream.lock().await.drain(..).collect();
+        let queued: Vec<record::RecordLine> = self.live.stream.lock().await.drain(..).collect();
         let id = stored.id.clone();
         let mut store = store.lock().await;
         if let Err(error) = store.append(&id, &queued) {
@@ -1661,7 +1678,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     // `RECORD/2026-10-26.ports-luu-places.completed.md`, *first use*.
     let named = provider_named;
     if let Some((name, engine)) = starts {
-        let mut destination = app.destination.write().await;
+        let mut destination = app.live.destination.write().await;
         let current = destination.as_ref();
         *destination = Arc::new(Destination {
             backend: Arc::new(crate::engines::Started::new(
@@ -2149,7 +2166,7 @@ async fn get_terminal(
     let shell = terminal_shell(&state, &headers).await;
     let xterm = xterm_root().join("xterm/lib/xterm.mjs").is_file()
         && xterm_root().join("addon-fit/lib/addon-fit.mjs").is_file();
-    let name = state.app.posture.lock().await.clone();
+    let name = state.app.live.posture.lock().await.clone();
     let agency = state.app.agency().await;
     let posture = agency.posture(name);
     Json(serde_json::json!({
@@ -2426,7 +2443,7 @@ async fn trace_socket(ws: WebSocketUpgrade, State(state): State<AppRouterState>)
 /// The trace channel is send-only: it explains the agent, it never drives it.
 async fn run_trace_socket(socket: WebSocket, app: Arc<App>) {
     let (mut sink, mut stream) = socket.split();
-    let mut events = app.events.subscribe();
+    let mut events = app.live.events.subscribe();
 
     loop {
         tokio::select! {
@@ -2450,7 +2467,7 @@ async fn run_trace_socket(socket: WebSocket, app: Arc<App>) {
 async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
     let AppRouterState { app, auth, .. } = state;
     let (mut sink, mut stream) = socket.split();
-    let mut events = app.events.subscribe();
+    let mut events = app.live.events.subscribe();
 
     // A port that asks for a bearer token is a port a network can reach, and
     // there the client says what it speaks before it is allowed to say anything
@@ -2463,13 +2480,13 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
 
     let hello = {
         let sending = app.destination().await;
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         ServerMessage::Hello {
             protocol: protocol::VERSION,
             backend: sending.backend.name().to_string(),
             model: sending.model.clone(),
             turn: session.current,
-            session: Some(app.session_id.lock().await.clone()),
+            session: Some(app.live.session_id.lock().await.clone()),
         }
     };
     let Ok(json) = serde_json::to_string(&hello) else {
@@ -2557,7 +2574,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             on_prompt(app.clone(), text).await;
         }
         ClientMessage::Cancel => {
-            let session = app.session.lock().await;
+            let session = app.live.session.lock().await;
             if let Some(cancel) = &session.cancel {
                 let _ = cancel.send(true);
             }
@@ -2605,7 +2622,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
             };
             let index = index.unwrap_or(1);
             let held = {
-                let mut session = app.session.lock().await;
+                let mut session = app.live.session.lock().await;
                 match &session.held {
                     Some(held) if held.turn == turn && held.step == step && held.index == index => {
                         session.held.take()
@@ -2646,7 +2663,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
         } => {
             let index = index.unwrap_or(1);
             let held = {
-                let mut session = app.session.lock().await;
+                let mut session = app.live.session.lock().await;
                 match &session.limit_held {
                     Some(held) if held.turn == turn && held.step == step && held.index == index => {
                         session.limit_held.take()
@@ -2674,6 +2691,7 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
         // and says nothing.
         ClientMessage::RevokeGrant { kind, target } => {
             let removed = app
+                .live
                 .grants
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -2778,7 +2796,7 @@ async fn on_prompt(app: Arc<App>, prompt: String) {
     // making somebody approve a plan before they may speak is the gate running
     // the conversation.
     let declined = {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         match session.pending.take() {
             Some(pending) => {
                 session
@@ -2820,7 +2838,7 @@ async fn request_plan(app: Arc<App>) {
     // plan before saying anything is asking the model to invent the objective,
     // which is the case the held prompt used to cover and nothing should now.
     {
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         if session.pending.is_some() {
             drop(session);
             refuse(
@@ -2848,7 +2866,7 @@ async fn request_plan(app: Arc<App>) {
     // The objective of the draft being compacted, which is what the plan is
     // called if the model does not name one of its own.
     let objective = {
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         session
             .context
             .current_job()
@@ -2880,7 +2898,7 @@ async fn request_plan(app: Arc<App>) {
         let _ = forwarder.await;
 
         {
-            let mut session = app.session.lock().await;
+            let mut session = app.live.session.lock().await;
             session.current = None;
             session.cancel = None;
             session.held = None;
@@ -2925,7 +2943,7 @@ async fn request_plan(app: Arc<App>) {
 /// `PlanSource` is where the difference is recorded.
 async fn offer(app: &Arc<App>, proposal: Proposal, source: PlanSource) {
     {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         // Nothing to offer inside. A suggestion that arrives after the draft
         // closed belongs to no draft, and a second one while a plan is already
         // up would replace a question a person is in the middle of answering.
@@ -2993,7 +3011,7 @@ async fn approve_plan(
     // draft does not add a job, so nothing between here and the push can move
     // it.
     let job = {
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         match session.pending.is_some() {
             true => session.context.next_job_id(),
             false => {
@@ -3030,7 +3048,7 @@ async fn approve_plan(
     // approval nobody can prove the authorship of is not an approval, and the
     // draft stays exactly as it was.
     let approved_by = {
-        let session = app.session_id.lock().await;
+        let session = app.live.session_id.lock().await;
         let approval = Approval {
             session: &session,
             job,
@@ -3059,7 +3077,7 @@ async fn approve_plan(
     };
 
     let approved = {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         // Nothing may be running: approving mid-turn would fold a draft out
         // from under a turn that is still writing into it.
         match session.current.is_none() && session.pending.is_some() {
@@ -3139,7 +3157,7 @@ async fn approve_plan(
     // still open.
     if let Some((draft, summary)) = approved.folded.clone() {
         let replaced = {
-            let session = app.session.lock().await;
+            let session = app.live.session.lock().await;
             session.context.replaced_by(draft)
         };
         app.publish(Event::Protocol(ServerMessage::JobClosed {
@@ -3189,7 +3207,7 @@ async fn approve_plan(
         }
     };
     {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         session.narrowed = narrowed.map(|sandbox| (job, sandbox));
     }
 
@@ -3352,7 +3370,7 @@ fn closing_condition(
 /// approved is the number this event exists to produce.
 async fn decline_plan(app: Arc<App>) {
     {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         let Some(pending) = session.pending.take() else {
             drop(session);
             refuse(
@@ -3375,7 +3393,7 @@ async fn decline_plan(app: Arc<App>) {
 /// Closes it: from here its turns are sent as their summary.
 async fn close_job(app: Arc<App>, job: JobId) {
     let summary = {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         // Not while a turn is in flight: it would fold the history under the
         // turn that is being answered against it.
         if let Some(running) = session.current {
@@ -3441,7 +3459,7 @@ async fn reopen_job(app: Arc<App>, job: JobId) {
     // order anywhere else either.
     let reopening = app.agency().await;
     {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         if let Some(running) = session.current {
             drop(session);
             refuse(
@@ -3566,7 +3584,7 @@ async fn begin_turn(
     // there is not.
     let agency = app.agency().await;
     let (turn, job, cancel_rx, selection, prompt_sent, tool_specs, reuse, code) = {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         if let Some(running) = session.current {
             drop(session);
             refuse(
@@ -3868,7 +3886,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     // changed, and every site that sets `narrowed = None` means it without
     // being touched. See `RECORD/2026-09-21.the-drafts-floor.completed.md`.
     let sandbox = {
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         match (session.context.live_task(), &session.narrowed) {
             (Some(live), Some((task, sandbox))) if live == *task => sandbox.clone(),
             _ => floor_holding(&session, &agency),
@@ -3886,7 +3904,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             Some(crate::grants::DraftCeiling::new(
                 &agency.sandbox,
                 agency.environment(),
-                app.grants.clone(),
+                app.live.grants.clone(),
                 Authority::Person(*draft),
             ))
         }
@@ -3896,6 +3914,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
     // How many tool calls it may make before it asks: none to count where a
     // person said *no limit for the session*.
     let budget = match app
+        .live
         .tools_unlimited
         .load(std::sync::atomic::Ordering::SeqCst)
     {
@@ -3931,7 +3950,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
                         if *step > 1 || *retry {
                             let text = rendered(messages);
                             let measured = {
-                                let mut session = app.session.lock().await;
+                                let mut session = app.live.session.lock().await;
                                 session.prefix.measure(turn, &text, counter.as_ref())
                             };
                             if let Some(TraceMessage::PrefixReuse {
@@ -4003,7 +4022,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         // draft when nothing is open — and the message that announces one has
         // to be able to tell the two apart.
         let opened_before = {
-            let session = app.session.lock().await;
+            let session = app.live.session.lock().await;
             session.context.current_job()
         };
         // Kept for the suggestion check below, which runs after the lock is
@@ -4013,7 +4032,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         let answered = outcome.text.clone();
 
         let closed = {
-            let mut session = app.session.lock().await;
+            let mut session = app.live.session.lock().await;
             // A cancelled turn keeps its partial answer: the user saw it, so
             // the model should too. A turn that produced nothing at all is not
             // remembered — an empty assistant message is not a thing that
@@ -4056,7 +4075,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
         // there is nothing to announce until one has landed, and a turn that
         // produced nothing at all never pushed and never opened one.
         let drafted = {
-            let session = app.session.lock().await;
+            let session = app.live.session.lock().await;
             match session.context.current_job() {
                 Some(job) if Some(job) != opened_before => session
                     .context
@@ -4187,9 +4206,9 @@ async fn name_session(
     window: Option<u32>,
     prompt: String,
 ) {
-    let id = app.session_id.lock().await.clone();
+    let id = app.live.session_id.lock().await.clone();
     {
-        let view = app.view.lock().await;
+        let view = app.live.view.lock().await;
         if view.turns.len() != 1 || !unnamed(&view.title, &id) {
             return;
         }
@@ -4243,11 +4262,11 @@ async fn name_session(
 
     // The session may have moved on while the model answered: another one
     // opened, or a name given by hand.
-    if *app.session_id.lock().await != id {
+    if *app.live.session_id.lock().await != id {
         return;
     }
     {
-        let mut view = app.view.lock().await;
+        let mut view = app.live.view.lock().await;
         if !unnamed(&view.title, &id) {
             return;
         }
@@ -4301,7 +4320,7 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     let mut settings = app.destination().await.settings.clone();
     // The sandbox is the *session's* now, so it is read here rather than
     // carried from the destination that was resolved when the process started.
-    let name = app.posture.lock().await.clone();
+    let name = app.live.posture.lock().await.clone();
     let agency = app.agency().await;
     settings.sandbox = agency.describe();
     settings.base = agency.sandbox.base().display().to_string();
@@ -4397,7 +4416,7 @@ fn workspace_error(error: workspace::Error) -> Response {
 /// a panel reading the old one would be showing a tree the running session
 /// cannot reach.
 async fn workspace_sandbox(state: &AppRouterState) -> Arc<agent_core::sandbox::Sandbox> {
-    state.app.agency.read().await.sandbox.clone()
+    state.app.live.agency.read().await.sandbox.clone()
 }
 
 async fn get_workspace_tree(
@@ -5227,7 +5246,7 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
         own,
         places,
         choosable: app.agency_for.is_some(),
-        running: app.posture.lock().await.clone(),
+        running: app.live.posture.lock().await.clone(),
         postures: app.postures(),
         environments: app.environments().keys().cloned().collect(),
         runtimes,
@@ -6954,7 +6973,7 @@ async fn providers_view(
         waiting: match follows && running.as_deref() != config.usable_default() {
             false => None,
             true => {
-                let session = state.app.session.lock().await;
+                let session = state.app.live.session.lock().await;
                 Some(
                     match session.current.is_some() || session.pending.is_some() {
                         true => "a turn is running; it moves to the default when you start a new \
@@ -7682,7 +7701,7 @@ fn learn_window(app: Arc<App>) {
                 {
                     break;
                 }
-                if !Arc::ptr_eq(&*app.destination.read().await, &asked) {
+                if !Arc::ptr_eq(&*app.live.destination.read().await, &asked) {
                     return;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -7693,7 +7712,7 @@ fn learn_window(app: Arc<App>) {
             _ => return,
         };
         let sending = {
-            let mut destination = app.destination.write().await;
+            let mut destination = app.live.destination.write().await;
             // Moved while the server was answering: the answer was about the
             // destination this session has left.
             if !Arc::ptr_eq(&destination, &asked) {
@@ -7710,10 +7729,13 @@ fn learn_window(app: Arc<App>) {
             model = sending.model.as_str(),
             "the server says its window",
         );
-        let posture = app.agency().await.posture(app.posture.lock().await.clone());
-        let started_at = app.view.lock().await.started_at;
+        let posture = app
+            .agency()
+            .await
+            .posture(app.live.posture.lock().await.clone());
+        let started_at = app.live.view.lock().await.started_at;
         if app.store.is_some() {
-            app.stream.lock().await.push(crate::session::header(
+            app.live.stream.lock().await.push(crate::session::header(
                 sending.backend.name(),
                 &sending.model,
                 sending.budget,
@@ -7749,7 +7771,7 @@ async fn follow_the_default(state: &AppRouterState, default: Option<&str>) {
         return;
     }
     {
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         if session.current.is_some() || session.pending.is_some() || session.next_turn > 1 {
             return;
         }
@@ -7969,13 +7991,16 @@ async fn put_resend(
 
     if budget != live.budget {
         let sending = Arc::new(live.resending(budget));
-        *app.destination.write().await = sending.clone();
+        *app.live.destination.write().await = sending.clone();
         // The line that says the rest of this stream was rendered under
         // something else. Built before the stream lock, because nothing in this
         // file holds two locks across an await.
-        let posture = app.agency().await.posture(app.posture.lock().await.clone());
+        let posture = app
+            .agency()
+            .await
+            .posture(app.live.posture.lock().await.clone());
         let header = {
-            let view = app.view.lock().await;
+            let view = app.live.view.lock().await;
             retarget_header(&view, &sending, sending.counter.id(), posture)
         };
         if let Some(header) = header {
@@ -7983,9 +8008,9 @@ async fn put_resend(
             // under new terms, not a new one. `create_session` clears the
             // stream because it is starting one.
             if app.store.is_some() {
-                app.stream.lock().await.push(header);
+                app.live.stream.lock().await.push(header);
             }
-            let mut view = app.view.lock().await;
+            let mut view = app.live.view.lock().await;
             view.repeat = Some(budget.repeat);
             view.prune = Some(budget.prune);
             view.results = Some(budget.results);
@@ -8099,17 +8124,20 @@ async fn put_authority(
     };
     if authority != live.authority {
         let sending = Arc::new(live.noting(authority));
-        *app.destination.write().await = sending.clone();
-        let posture = app.agency().await.posture(app.posture.lock().await.clone());
+        *app.live.destination.write().await = sending.clone();
+        let posture = app
+            .agency()
+            .await
+            .posture(app.live.posture.lock().await.clone());
         let header = {
-            let view = app.view.lock().await;
+            let view = app.live.view.lock().await;
             retarget_header(&view, &sending, sending.counter.id(), posture)
         };
         if let Some(header) = header {
             if app.store.is_some() {
-                app.stream.lock().await.push(header);
+                app.live.stream.lock().await.push(header);
             }
-            let mut view = app.view.lock().await;
+            let mut view = app.live.view.lock().await;
             view.authority_draft = sending.authority.draft_note();
             view.authority_plan = sending.authority.plan_note();
             view.tool_calls = sending
@@ -8128,7 +8156,7 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     // a moment after a turn ends, and a list asked for in that moment would
     // otherwise place a session just written to where it was before.
     let (mut live, last_turn) = {
-        let view = state.app.view.lock().await;
+        let view = state.app.live.view.lock().await;
         // A turn's time is counted from the session's start.
         let last = view
             .turns
@@ -8136,7 +8164,7 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
             .map(|turn| view.started_at + turn.started_at_ms);
         (view.summary(), last)
     };
-    let active_id = state.app.session_id.lock().await.clone();
+    let active_id = state.app.live.session_id.lock().await.clone();
     let mut stored = Vec::new();
     if let Some(store) = &state.app.store {
         match store.lock().await.list() {
@@ -8381,7 +8409,7 @@ async fn posture_for(
             ));
         }
         return match asked {
-            None => Ok((app.posture.lock().await.clone(), app.agency().await)),
+            None => Ok((app.live.posture.lock().await.clone(), app.agency().await)),
             Some(name) => Err((
                 StatusCode::CONFLICT,
                 format!(
@@ -8919,7 +8947,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     };
 
     {
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         if session.current.is_some() || session.pending.is_some() {
             return (StatusCode::CONFLICT, "a turn is currently running").into_response();
         }
@@ -8986,7 +9014,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         Ok(resolved) => resolved,
         Err((status, message)) => return (status, message).into_response(),
     };
-    *app.destination.write().await = sending.clone();
+    *app.live.destination.write().await = sending.clone();
     tracing::info!(
         target: "luu::session",
         profile = sending.settings.profile.as_deref(),
@@ -9009,24 +9037,26 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // may be a container, and `kill_on_drop` would get to it eventually. Skipped
     // when the resolver handed back the one already in place, which is what a
     // surface that cannot choose a posture always gets.
-    let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
+    let previous = std::mem::replace(&mut *app.live.agency.write().await, agency.clone());
     if !Arc::ptr_eq(&previous, &agency) {
         previous.shutdown().await;
     }
-    *app.posture.lock().await = posture_name.clone();
+    *app.live.posture.lock().await = posture_name.clone();
     // A new session starts with nothing allowed by anybody, and its turns
     // counted again.
-    app.grants
+    app.live
+        .grants
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clear();
-    app.tools_unlimited
+    app.live
+        .tools_unlimited
         .store(false, std::sync::atomic::Ordering::SeqCst);
 
     let started_at = now_ms();
     let new_id = session_id(started_at);
-    *app.session_id.lock().await = new_id.clone();
-    *app.session_started_at.lock().await = started_at;
+    *app.live.session_id.lock().await = new_id.clone();
+    *app.live.session_started_at.lock().await = started_at;
     // Built once and used twice — the stream's header and the live view — for
     // the reason `store_parity` exists: the view is not built by folding that
     // line, so the two are only equal while every field is put in both places.
@@ -9034,7 +9064,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // A new session is a new stream, and a stream starts with the header that
     // says what it is comparable with — which is why the destination is
     // swapped above this line and never below it.
-    *app.stream.lock().await = vec![crate::session::header(
+    *app.live.stream.lock().await = vec![crate::session::header(
         sending.backend.name(),
         &sending.model,
         sending.budget,
@@ -9048,7 +9078,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // one header at process start named the first session's model, posture and
     // rules for every session after it. See
     // `RECORD/2026-09-19.a-header-per-session.completed.md`.
-    if let Some(recorder) = &app.recorder {
+    if let Some(recorder) = &app.live.recorder {
         recorder.session(
             sending.backend.name(),
             &sending.model,
@@ -9062,7 +9092,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     }
 
     {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         session.next_turn = 1;
         session.current = None;
         session.cancel = None;
@@ -9078,7 +9108,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     }
 
     let summary = {
-        let mut view = app.view.lock().await;
+        let mut view = app.live.view.lock().await;
         *view = SessionView::new(LIVE_SESSION, sending.backend.name(), &sending.model);
         view.started_at = started_at;
         view.posture = Some(posture);
@@ -9138,7 +9168,7 @@ async fn put_session_posture(
     let app = &state.app;
     // Held for the whole move, so a turn cannot start between the check and
     // the swap. Nothing below takes it.
-    let session = app.session.lock().await;
+    let session = app.live.session.lock().await;
     if session.current.is_some() {
         return (
             StatusCode::CONFLICT,
@@ -9171,7 +9201,10 @@ async fn put_session_posture(
             .into_response();
     }
 
-    let current = app.agency().await.posture(app.posture.lock().await.clone());
+    let current = app
+        .agency()
+        .await
+        .posture(app.live.posture.lock().await.clone());
     // Built before anything is swapped, `create_session`'s discipline: a
     // runtime that is not installed refuses the move and leaves the session
     // where it was.
@@ -9213,16 +9246,16 @@ async fn settle_move(
 ) -> serde_json::Value {
     // Ended rather than dropped, for `Agency::shutdown`'s reason — and with it
     // the old container, and any terminal that was open in it.
-    let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
+    let previous = std::mem::replace(&mut *app.live.agency.write().await, agency.clone());
     if !Arc::ptr_eq(&previous, &agency) {
         previous.shutdown().await;
     }
-    *app.posture.lock().await = name.clone();
+    *app.live.posture.lock().await = name.clone();
     drop(session);
 
     let sending = app.destination().await;
-    let started_at = *app.session_started_at.lock().await;
-    app.stream.lock().await.push(crate::session::header(
+    let started_at = *app.live.session_started_at.lock().await;
+    app.live.stream.lock().await.push(crate::session::header(
         sending.backend.name(),
         &sending.model,
         sending.budget,
@@ -9232,7 +9265,7 @@ async fn settle_move(
         sending.tool_calls,
         started_at,
     ));
-    if let Some(recorder) = &app.recorder {
+    if let Some(recorder) = &app.live.recorder {
         recorder.session(
             sending.backend.name(),
             &sending.model,
@@ -9247,7 +9280,7 @@ async fn settle_move(
     {
         // What folding that line produces, field for field — the resume's
         // `moved` branch, for `store_parity`'s reason.
-        let mut view = app.view.lock().await;
+        let mut view = app.live.view.lock().await;
         view.posture = Some(posture.clone());
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
@@ -9357,7 +9390,7 @@ async fn put_session_runtime(
         )
             .into_response();
     };
-    let session = app.session.lock().await;
+    let session = app.live.session.lock().await;
     if session.current.is_some() {
         return (
             StatusCode::CONFLICT,
@@ -9374,7 +9407,7 @@ async fn put_session_runtime(
     }
     let leaving = app.agency().await;
     let left_behind = installed_in(&leaving);
-    let current = leaving.posture(app.posture.lock().await.clone());
+    let current = leaving.posture(app.live.posture.lock().await.clone());
     let Some(lists) = current
         .lists
         .as_ref()
@@ -9449,7 +9482,7 @@ async fn resume_session(
         Err((status, message)) => return (status, message).into_response(),
     };
     {
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         if session.current.is_some() || session.pending.is_some() {
             return (StatusCode::CONFLICT, "a turn is currently running").into_response();
         }
@@ -9623,7 +9656,7 @@ async fn resume_session(
     let resumed_context = agency.with_tools(resumed.context, sending.tool_calls);
 
     // After the fold is rebuilt and before anything runs on it.
-    *app.destination.write().await = sending.clone();
+    *app.live.destination.write().await = sending.clone();
     tracing::info!(
         target: "luu::session",
         profile = sending.settings.profile.as_deref(),
@@ -9641,27 +9674,28 @@ async fn resume_session(
     // The posture the session keeps, which is its own. A no-op when the body
     // named nothing — the resolver hands back the agency already in place, so
     // the pointers are equal and nothing is ended.
-    let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
+    let previous = std::mem::replace(&mut *app.live.agency.write().await, agency.clone());
     if !Arc::ptr_eq(&previous, &agency) {
         previous.shutdown().await;
     }
-    *app.posture.lock().await = posture_name;
+    *app.live.posture.lock().await = posture_name;
     // What a person answered for it and did not take back, as its stream
     // last left it.
-    *app.grants
+    *app.live
+        .grants
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) =
         crate::grants::Answers::in_force(&loaded_view.grants);
     // And whether a person lifted its tool limit.
-    app.tools_unlimited.store(
+    app.live.tools_unlimited.store(
         loaded_view.tools_unlimited,
         std::sync::atomic::Ordering::SeqCst,
     );
 
-    *app.session_id.lock().await = id.to_string();
+    *app.live.session_id.lock().await = id.to_string();
     // Its own clock, and its own stream: appends continue the one the store
     // already holds rather than starting a second one under the same name.
-    *app.session_started_at.lock().await = loaded_view.started_at;
+    *app.live.session_started_at.lock().await = loaded_view.started_at;
     // The one line this route writes. It says the rest of these turns were
     // produced somewhere else, and it is absent when they were not — built
     // before the stream lock, because nothing in this file holds two locks
@@ -9680,7 +9714,7 @@ async fn resume_session(
     // question: what changed since the line above, and what is the base for the
     // lines below — and both changed, because the session did. See
     // `RECORD/2026-09-19.a-header-per-session.completed.md`.
-    if let Some(recorder) = &app.recorder {
+    if let Some(recorder) = &app.live.recorder {
         recorder.session(
             sending.backend.name(),
             &sending.model,
@@ -9693,7 +9727,7 @@ async fn resume_session(
         );
     }
     {
-        let mut stream = app.stream.lock().await;
+        let mut stream = app.live.stream.lock().await;
         stream.clear();
         if let Some(header) = header {
             stream.push(header);
@@ -9701,7 +9735,7 @@ async fn resume_session(
     }
 
     {
-        let mut session = app.session.lock().await;
+        let mut session = app.live.session.lock().await;
         session.next_turn = (loaded_view.turns.len() as u64) + 1;
         session.current = None;
         session.cancel = None;
@@ -9744,7 +9778,7 @@ async fn resume_session(
     }
 
     let summary = {
-        let mut view = app.view.lock().await;
+        let mut view = app.live.view.lock().await;
         let mut live_view = loaded_view.clone();
         live_view.id = LIVE_SESSION.to_string();
         // The fold has one backend and one model, so after a switch it names
@@ -9833,7 +9867,7 @@ async fn rename_session(
 ) -> Response {
     let id = bare(&id);
     if let Some(archived) = asked.archived {
-        let active_id = state.app.session_id.lock().await.clone();
+        let active_id = state.app.live.session_id.lock().await.clone();
         if id == LIVE_SESSION || id == active_id {
             return (
                 StatusCode::BAD_REQUEST,
@@ -9867,9 +9901,9 @@ async fn rename_session(
     // store is a cache of — so it is renamed there and checkpointed, never
     // written straight into SQLite behind the view that would overwrite it on
     // the next token.
-    let active_id = state.app.session_id.lock().await.clone();
+    let active_id = state.app.live.session_id.lock().await.clone();
     if id == LIVE_SESSION || id == active_id {
-        state.app.view.lock().await.title = title.clone();
+        state.app.live.view.lock().await.title = title.clone();
         state.app.checkpoint().await;
         return Json(serde_json::json!({ "id": active_id, "title": title })).into_response();
     }
@@ -9892,7 +9926,7 @@ async fn delete_session_handler(
     Path(id): Path<String>,
 ) -> Response {
     let id = bare(&id);
-    let active_id = state.app.session_id.lock().await.clone();
+    let active_id = state.app.live.session_id.lock().await.clone();
     if id == LIVE_SESSION || id == active_id {
         return (StatusCode::BAD_REQUEST, "cannot delete active session").into_response();
     }
@@ -9916,9 +9950,9 @@ async fn delete_session_handler(
 /// fold never is.
 async fn view_for(state: &AppRouterState, id: &str) -> Option<SessionView> {
     let id = bare(id);
-    let active_id = state.app.session_id.lock().await.clone();
+    let active_id = state.app.live.session_id.lock().await.clone();
     {
-        let view = state.app.view.lock().await;
+        let view = state.app.live.view.lock().await;
         if id == view.id || id == active_id {
             return Some(view.clone());
         }
@@ -10102,63 +10136,7 @@ mod tests {
             }),
             select_tokens,
             select_weights: Default::default(),
-            destination: RwLock::new(Arc::new(Destination {
-                backend: Arc::new(
-                    Mock::replies(replies.iter().map(|r| (*r).to_string()).collect())
-                        .delay(std::time::Duration::ZERO),
-                ),
-                model: "mock".into(),
-                budget: Budget::new(0, 0, Eviction::Turn),
-                counter: Arc::new(ApproximateCounter),
-                settings: Settings {
-                    profile: None,
-                    backend: "mock".into(),
-                    destination: String::new(),
-                    remote: false,
-                    model: "mock".into(),
-                    window: None,
-                    window_from: crate::provider::WindowFrom::Unset,
-                    window_caveat: None,
-                    reserve: 0,
-                    repeat: agent_core::context::Repeat::Once,
-                    prune: agent_core::context::Prune::Never,
-                    results: agent_core::context::Results::Kept,
-                    counter: agent_core::context::Counter::Approximate,
-                    counter_warning: None,
-                    select_tokens,
-                    map_tokens: 0,
-                    sandbox: String::new(),
-                    base: String::new(),
-                    posture: None,
-                    floor: None,
-                    lists: None,
-                    home: String::new(),
-                    store: None,
-                    unconfigured: true,
-                    follows_default: true,
-                    tool_calls: crate::provider::ToolCalls::Fenced,
-                    authority: crate::provider::AuthorityNotes::default(),
-                },
-                authority: crate::provider::AuthorityNotes::default(),
-                engine: None,
-                tool_calls: crate::provider::ToolCalls::Fenced,
-            })),
             tokenizer: None,
-            session: Mutex::new(Session {
-                next_turn: 1,
-                current: None,
-                cancel: None,
-                context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
-                prefix: PrefixTracker::default(),
-                pending: None,
-                narrowed: None,
-                held: None,
-                limit_held: None,
-            }),
-            events: broadcast::channel(1024).0,
-            recorder: None,
-            agency: RwLock::new(Arc::new(agency)),
-            posture: Mutex::new(None),
             // These tests build an `App` directly, and none of them starts a
             // session on a posture: a `None` here is the answer an `App` with
             // no factory gets, and the route says so rather than pretending.
@@ -10166,9 +10144,7 @@ mod tests {
             describe_for: None,
             postures: Default::default(),
             environments: Default::default(),
-            grants: Default::default(),
             tool_steps: None,
-            tools_unlimited: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),
@@ -10180,14 +10156,74 @@ mod tests {
             seed: None,
             constraint: None,
             schema_retry: None,
-            view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
-            session_id: Mutex::new("session-test".into()),
             map_rendered: String::new(),
             // In memory, like everything else these handler tests touch: the
             // store's own behaviour is `tests/store_parity.rs`.
             store: None,
-            session_started_at: Mutex::new(0),
-            stream: Mutex::new(Vec::new()),
+            live: LiveSession {
+                destination: RwLock::new(Arc::new(Destination {
+                    backend: Arc::new(
+                        Mock::replies(replies.iter().map(|r| (*r).to_string()).collect())
+                            .delay(std::time::Duration::ZERO),
+                    ),
+                    model: "mock".into(),
+                    budget: Budget::new(0, 0, Eviction::Turn),
+                    counter: Arc::new(ApproximateCounter),
+                    settings: Settings {
+                        profile: None,
+                        backend: "mock".into(),
+                        destination: String::new(),
+                        remote: false,
+                        model: "mock".into(),
+                        window: None,
+                        window_from: crate::provider::WindowFrom::Unset,
+                        window_caveat: None,
+                        reserve: 0,
+                        repeat: agent_core::context::Repeat::Once,
+                        prune: agent_core::context::Prune::Never,
+                        results: agent_core::context::Results::Kept,
+                        counter: agent_core::context::Counter::Approximate,
+                        counter_warning: None,
+                        select_tokens,
+                        map_tokens: 0,
+                        sandbox: String::new(),
+                        base: String::new(),
+                        posture: None,
+                        floor: None,
+                        lists: None,
+                        home: String::new(),
+                        store: None,
+                        unconfigured: true,
+                        follows_default: true,
+                        tool_calls: crate::provider::ToolCalls::Fenced,
+                        authority: crate::provider::AuthorityNotes::default(),
+                    },
+                    authority: crate::provider::AuthorityNotes::default(),
+                    engine: None,
+                    tool_calls: crate::provider::ToolCalls::Fenced,
+                })),
+                session: Mutex::new(Session {
+                    next_turn: 1,
+                    current: None,
+                    cancel: None,
+                    context: AgentContext::new(SYSTEM).with_tools(agency.definitions()),
+                    prefix: PrefixTracker::default(),
+                    pending: None,
+                    narrowed: None,
+                    held: None,
+                    limit_held: None,
+                }),
+                events: broadcast::channel(1024).0,
+                recorder: None,
+                agency: RwLock::new(Arc::new(agency)),
+                posture: Mutex::new(None),
+                grants: Default::default(),
+                tools_unlimited: Default::default(),
+                view: Mutex::new(SessionView::new(LIVE_SESSION, "mock", "mock")),
+                session_id: Mutex::new("session-test".into()),
+                session_started_at: Mutex::new(0),
+                stream: Mutex::new(Vec::new()),
+            },
         })
     }
 
@@ -10219,7 +10255,7 @@ mod tests {
             tool_names: agent_core::tools::Tools::standard().names().collect(),
         });
 
-        let mut events = app.events.subscribe();
+        let mut events = app.live.events.subscribe();
         // `start_turn` spawns the turn and returns; it does not run it. The
         // turn itself finishes on its own task, so the assertion waits for
         // the state it left behind rather than for `start_turn` itself.
@@ -10766,7 +10802,7 @@ mod tests {
     /// The handlers spawn, so the assertions wait for the state they are about.
     async fn until(app: &Arc<App>, what: impl Fn(&Session) -> bool) -> bool {
         for _ in 0..200 {
-            if what(&*app.session.lock().await) {
+            if what(&*app.live.session.lock().await) {
                 return true;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -10804,7 +10840,7 @@ mod tests {
             "the prompt never ran",
         );
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         assert!(session.pending.is_none(), "nothing was proposed");
         let job = session.context.job(1).expect("a draft opened");
         assert!(job.is_draft(), "its objective is known and its plan is not");
@@ -10825,7 +10861,7 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         let pending = session.pending.as_ref().expect("a plan on the table");
         assert_eq!(pending.plan.files, ["Cargo.toml"]);
         assert_eq!(pending.source, PlanSource::Model);
@@ -10849,7 +10885,7 @@ mod tests {
         request_plan(app.clone()).await;
         assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         assert_eq!(
             session.context.turns().len(),
             1,
@@ -10869,7 +10905,7 @@ mod tests {
         approve(&app).await;
         assert!(until(&app, |s| s.context.jobs().len() == 2).await, "no job");
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         assert!(session.pending.is_none());
         let draft = session.context.job(1).unwrap();
         assert!(draft.is_closed(), "approving closed the draft");
@@ -10906,7 +10942,7 @@ mod tests {
 
         decline_plan(app.clone()).await;
         {
-            let session = app.session.lock().await;
+            let session = app.live.session.lock().await;
             assert!(session.pending.is_none());
             assert_eq!(session.context.jobs().len(), 1, "a refusal opens nothing");
             assert_eq!(
@@ -10919,7 +10955,7 @@ mod tests {
 
         on_prompt(app.clone(), "what about this".into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 2).await);
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         assert_eq!(
             session.context.turns()[1].job,
             1,
@@ -10938,7 +10974,7 @@ mod tests {
         on_prompt(app.clone(), "make it two flags".into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         assert!(session.pending.is_none(), "the plan came off the table");
         assert_eq!(
             session.context.rounds().len(),
@@ -10959,7 +10995,7 @@ mod tests {
         on_prompt(app.clone(), "now the tests".into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         assert_eq!(session.context.jobs().len(), 2, "no third job");
         assert!(session.pending.is_none(), "and no second gate");
         assert_eq!(
@@ -10981,7 +11017,7 @@ mod tests {
 
         close_job(app.clone(), 2).await;
         {
-            let session = app.session.lock().await;
+            let session = app.live.session.lock().await;
             let job = session.context.job(2).unwrap();
             assert_eq!(job.state, JobState::Closed);
             assert!(job.summary.as_ref().unwrap().text.contains("add a flag"));
@@ -10993,7 +11029,7 @@ mod tests {
         }
 
         reopen_job(app.clone(), 2).await;
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         assert_eq!(session.context.job(2).unwrap().state, JobState::Open);
         assert!(session.context.job(2).unwrap().summary.is_none());
     }
@@ -11059,7 +11095,7 @@ mod tests {
                 .collect()
         };
         assert!(
-            held(&*app.session.lock().await, 0).contains("pub fn find_the_beacon"),
+            held(&*app.live.session.lock().await, 0).contains("pub fn find_the_beacon"),
             "the first turn has to hold it, or the second turn proves nothing",
         );
 
@@ -11074,7 +11110,7 @@ mod tests {
         on_prompt(app.clone(), ASK.into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         let second = held(&session, 1);
         assert!(
             second.contains("pub fn find_the_beacon"),
@@ -11137,7 +11173,7 @@ mod tests {
         on_prompt(app.clone(), ASK.into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 2).await);
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         let code = &session.context.turns()[1].code_context;
         assert!(
             !code.is_empty(),
@@ -11164,14 +11200,14 @@ mod tests {
         on_prompt(app.clone(), "add a flag".into()).await;
         assert!(until(&app, |s| s.context.turns().len() == 1).await);
         assert!(
-            app.session.lock().await.pending.is_none(),
+            app.live.session.lock().await.pending.is_none(),
             "prose is not a suggestion: there is no plan block in it to put up",
         );
 
         request_plan(app.clone()).await;
         assert!(until(&app, |s| s.pending.is_some()).await, "no proposal");
 
-        let session = app.session.lock().await;
+        let session = app.live.session.lock().await;
         let pending = session.pending.as_ref().expect("a plan on the table");
         assert_eq!(
             pending.objective, "add a flag",
