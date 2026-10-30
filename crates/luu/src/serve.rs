@@ -9456,7 +9456,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // it goes on. Refused only when there is no room for one more. See
     // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
     if let Err(refused) = room_for_one(app).await {
-        return refused;
+        return *refused;
     }
     let previous = app.current();
     app.checkpoint(&previous).await;
@@ -9813,7 +9813,7 @@ async fn put_session_folder(
 /// may sleep is put to sleep to make some; refused only when none may, with
 /// the ids of the live ones. See
 /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §3.
-async fn room_for_one(app: &App) -> Result<(), Response> {
+async fn room_for_one(app: &App) -> Result<(), Box<Response>> {
     let max = load_config()
         .await
         .map(|(config, _)| config.sessions().max_live)
@@ -9834,16 +9834,18 @@ async fn room_for_one(app: &App) -> Result<(), Response> {
         sleepable.sort();
         let Some((_, oldest)) = sleepable.into_iter().next() else {
             let ids: Vec<String> = live.into_iter().map(|(id, _)| id).collect();
-            return Err((
-                StatusCode::CONFLICT,
-                format!(
-                    "{} sessions are live, which is [sessions] max-live, and every one is \
+            return Err(Box::new(
+                (
+                    StatusCode::CONFLICT,
+                    format!(
+                        "{} sessions are live, which is [sessions] max-live, and every one is \
                      busy or open somewhere: close one first ({})",
-                    ids.len(),
-                    ids.join(", ")
-                ),
-            )
-                .into_response());
+                        ids.len(),
+                        ids.join(", ")
+                    ),
+                )
+                    .into_response(),
+            ));
         };
         sleep_live(app, &oldest).await;
     }
@@ -10301,7 +10303,7 @@ async fn resume_session(
         return Json(summary).into_response();
     }
     if let Err(refused) = room_for_one(app).await {
-        return refused;
+        return *refused;
     }
     let previous = app.current();
 
