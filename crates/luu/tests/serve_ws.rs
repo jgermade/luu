@@ -2865,7 +2865,14 @@ async fn multi_session_lifecycle_and_switching() {
     let live_resumed = get(&address, "/api/sessions/live").await;
     assert_eq!(live_resumed["turns"].as_array().unwrap().len(), 2);
 
-    // Now session one is active, session two is inactive. Delete session two!
+    // Now session one is the current one, and session two is still live
+    // beside it — a resume no longer ends the session it moved away from
+    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`). So it is put to
+    // sleep before it can be deleted.
+    let still_live = delete(&address, &format!("/api/sessions/{session_two_id}")).await;
+    assert_eq!(still_live.status(), reqwest::StatusCode::BAD_REQUEST);
+    let slept = delete(&address, &format!("/api/sessions/{session_two_id}/live")).await;
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
     let del_res = delete(&address, &format!("/api/sessions/{session_two_id}")).await;
     assert_eq!(del_res.status(), reqwest::StatusCode::NO_CONTENT);
 
@@ -3484,6 +3491,17 @@ async fn a_resume_keeps_the_posture_a_sessions_jobs_were_approved_under() {
         settings["posture"]["network"], false,
         "the server is back on its own policy file: {settings}",
     );
+
+    // Still live beside the new one, it is not rebuilt anywhere: it keeps the
+    // posture its jobs were approved under, and the rule below is about a
+    // session that has to be made again. So it is put to sleep first
+    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    let slept = client
+        .delete(format!("http://{address}/api/sessions/{contained}/live"))
+        .send()
+        .await
+        .expect("putting it to sleep");
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
 
     // The one this row exists for. Before this it answered 200 and handed the
     // session's gate to a sandbox its jobs were never approved against.
@@ -4422,6 +4440,15 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     assert_eq!(third.status(), reqwest::StatusCode::CREATED);
 
     let id = created["id"].as_str().expect("the second session's id");
+    // Still live beside the third, a resume would only attach to it and write
+    // nothing; asleep, it is made again and re-bases the file, which is what
+    // this half is about (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    let slept = client
+        .delete(format!("http://{address}/api/sessions/{id}/live"))
+        .send()
+        .await
+        .expect("putting the second session to sleep");
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
     let resumed = client
         .post(format!("http://{address}/api/sessions/{id}/resume"))
         // Named here and not inherited: a resume resolves its own posture, and
@@ -4554,4 +4581,137 @@ async fn a_turn_at_its_tool_limit_asks_and_a_person_lets_it_go_on() {
         }
     }
     assert_eq!(calls, 6);
+}
+
+/// Two sessions live at once: a second one made beside the first does not end
+/// it — the first answers on its own socket, its turn runs while the second is
+/// the current one, and `?session=` reaches it over HTTP. A session that is not
+/// live is a 404 by either door. See
+/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+#[tokio::test]
+async fn two_sessions_live_side_by_side() {
+    let dir = std::env::temp_dir().join(format!("luu-side-by-side-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let address = server_storing(
+        vec!["first answer".into(), "second answer".into()],
+        &dir.join("sessions.db"),
+    )
+    .await;
+
+    let first = post(&address, "/api/sessions").await;
+    assert_eq!(first.status(), reqwest::StatusCode::CREATED);
+    let first: Value = first.json().await.expect("json");
+    let first_id = first["id"].as_str().expect("an id").to_string();
+
+    let second = post(&address, "/api/sessions").await;
+    assert_eq!(second.status(), reqwest::StatusCode::CREATED);
+    let second: Value = second.json().await.expect("json");
+    let second_id = second["id"].as_str().expect("an id").to_string();
+    assert_ne!(first_id, second_id);
+
+    // The first is still live: its socket opens, and a turn runs in it while
+    // the second is the current one.
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/ws?session={first_id}"))
+            .await
+            .expect("a socket on the first session");
+    let hello = next_message(&mut socket).await;
+    assert_eq!(hello["session"], first_id.as_str());
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "in the first one"}),
+    )
+    .await;
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(started["prompt"], "in the first one");
+    until(&mut socket, "ended").await;
+
+    // The turn is the first session's, not the current one's.
+    let first_view = get(&address, &format!("/api/sessions/{first_id}")).await;
+    assert_eq!(first_view["turns"].as_array().expect("turns").len(), 1);
+    let current = get(&address, "/api/sessions/live").await;
+    assert!(
+        current["turns"].as_array().expect("turns").is_empty(),
+        "the current session is the second, and it ran nothing",
+    );
+    // And the listing carries both, the first under its own id.
+    let listed = get(&address, "/api/sessions").await;
+    assert!(
+        listed
+            .as_array()
+            .expect("a listing")
+            .iter()
+            .any(|row| row["id"] == first_id.as_str() && row["turns"] == 1),
+        "{listed}",
+    );
+
+    // `?session=` on a route acts on that one.
+    let terminal = get(&address, &format!("/api/terminal?session={first_id}")).await;
+    assert!(terminal["posture"].is_object(), "{terminal}");
+    let missing = reqwest::get(format!("http://{address}/api/terminal?session=nope"))
+        .await
+        .expect("the request");
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+    let refused = tokio_tungstenite::connect_async(format!("ws://{address}/ws?session=nope")).await;
+    assert!(refused.is_err(), "a socket for a session that is not live");
+
+    // Put to sleep by a person's ask: refused only for the current one and a
+    // busy one. (A socket open on it keeps the idle timer off, not this.)
+    drop(socket);
+    let slept = delete(&address, &format!("/api/sessions/{first_id}/live")).await;
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
+    let gone =
+        tokio_tungstenite::connect_async(format!("ws://{address}/ws?session={first_id}")).await;
+    assert!(gone.is_err(), "asleep, it is not live");
+    // Opening it again resumes it, with its turn.
+    let resumed = post(&address, &format!("/api/sessions/{first_id}/resume")).await;
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK);
+    let again = get(&address, &format!("/api/sessions/{first_id}")).await;
+    assert_eq!(again["turns"].as_array().expect("turns").len(), 1);
+    // The current one cannot be put to sleep.
+    let current_sleep = delete(&address, &format!("/api/sessions/{first_id}/live")).await;
+    assert_eq!(current_sleep.status(), reqwest::StatusCode::CONFLICT);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `[sessions] max-live`, 4 where `config.toml` says nothing: one more session
+/// puts the least recently used idle one to sleep rather than being refused.
+#[tokio::test]
+async fn one_session_too_many_puts_the_oldest_idle_one_to_sleep() {
+    let dir = std::env::temp_dir().join(format!("luu-max-live-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let address = server_storing(vec![], &dir.join("sessions.db")).await;
+
+    let mut ids = Vec::new();
+    for _ in 0..4 {
+        let made = post(&address, "/api/sessions").await;
+        assert_eq!(made.status(), reqwest::StatusCode::CREATED);
+        let made: Value = made.json().await.expect("json");
+        ids.push(made["id"].as_str().expect("an id").to_string());
+        // Apart in time, so "least recently used" has one answer.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let live = |id: &str| {
+        let url = format!("ws://{address}/ws?session={id}");
+        async move { tokio_tungstenite::connect_async(url).await.is_ok() }
+    };
+    // The server's own first session was the oldest, and went to sleep to
+    // make room for the fourth; the four made here are live. Each check opens
+    // a socket, which counts as a use — in the order they were made, so the
+    // oldest stays the oldest.
+    for id in &ids {
+        assert!(live(id).await, "{id} is live");
+    }
+    // A fifth: the oldest of the four is put to sleep to make room.
+    assert_eq!(
+        post(&address, "/api/sessions").await.status(),
+        reqwest::StatusCode::CREATED
+    );
+    assert!(!live(&ids[0]).await, "the oldest idle one sleeps");
+    assert!(live(&ids[1]).await);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

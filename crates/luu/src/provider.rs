@@ -599,7 +599,7 @@ pub struct Ui {
     pub brand_icons: Option<PathBuf>,
 }
 
-/// `[sessions]`. One setting so far.
+/// `[sessions]`: what the server does with a session on its own.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Sessions {
@@ -609,11 +609,33 @@ pub struct Sessions {
     /// See `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
     #[serde(default = "enabled")]
     pub auto_name: bool,
+    /// How many sessions may be live at once, each with its agency, its
+    /// worker and its container. One more is refused, naming the ones that
+    /// are. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §3.
+    #[serde(default = "max_live")]
+    pub max_live: usize,
+    /// How long a live session nobody uses — no turn, no proposal waiting, no
+    /// client — stays live before it is put to sleep: checkpointed and its
+    /// worker ended, resumed when it is opened again. `0` never sleeps one.
+    #[serde(default = "idle_minutes")]
+    pub idle_minutes: u64,
+}
+
+fn max_live() -> usize {
+    4
+}
+
+fn idle_minutes() -> u64 {
+    30
 }
 
 impl Default for Sessions {
     fn default() -> Self {
-        Self { auto_name: true }
+        Self {
+            auto_name: true,
+            max_live: max_live(),
+            idle_minutes: idle_minutes(),
+        }
     }
 }
 

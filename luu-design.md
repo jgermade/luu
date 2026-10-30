@@ -1173,9 +1173,10 @@ access = "execute"
   thing that says where the rest of those turns ran. Before this the endpoint
   refused a *named* posture and inherited a different one silently. See
   [`RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`](RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md).
-- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
-  concurrent sessions — one live session per `serve` is still the shape, so one
-  container at a time is still the shape.
+- Still ahead: `--cap-drop=ALL` and a pids cgroup in place of `RLIMIT_NPROC`.
+  **Concurrent sessions are built** (since 2026-10-30): each live session has its
+  own agency, worker and container, so several containers run at once — see
+  *Resuming and sessions side by side* below.
 
 ## Editor integration — not in the MVP
 
@@ -1184,7 +1185,8 @@ the protocol over its stdin and stdout; it had stopped at protocol 7 while luu r
 was refused at the handshake, and it was `luu stdio`'s only consumer. Both are gone. An editor
 surface that comes back talks to `luu serve` over `/ws`, which needs no `Origin` and takes the
 token as a bearer header — or embeds the page in a webview. Its open questions are the server's:
-one live session per `serve` (concurrency), and which folder `serve` works in. See
+which live session it speaks for (`/ws?session=<id>`, since 2026-10-30), and which folder
+`serve` works in. See
 [`RECORD/2026-10-30.no-editor-in-the-mvp.completed.md`](RECORD/2026-10-30.no-editor-in-the-mvp.completed.md), and for how it was, [`RECORD/2026-09-04.protocol-over-stdio.completed.md`](RECORD/2026-09-04.protocol-over-stdio.completed.md)
 and [`RECORD/2026-09-04.vscode-extension.completed.md`](RECORD/2026-09-04.vscode-extension.completed.md).
 
@@ -2712,12 +2714,24 @@ and a stored session could not be replayed at all. A session stored before schem
 2 has none, and that is reported rather than repaired: folding a view back into a
 stream would invent line orders and timings the session never had.
 
-**Resuming and multi-session switching are supported.** `SessionStore::resume`
+**Resuming, and sessions side by side.** `SessionStore::resume`
 reconstructs the write-side `AgentContext` and turn counter from stored turns and
-jobs, validated in `store_parity.rs`. In `serve`, `POST /api/sessions` starts a
-clean session checkpointing the active one, `POST /api/sessions/:id/resume`
-restores a stored session into the live engine, and `DELETE /api/sessions/:id`
-removes past sessions. The web UI header displays stored sessions in a switcher
+jobs, validated in `store_parity.rs`. **Since 2026-10-30 several sessions are live at
+once** ([`RECORD/2026-10-30.sessions-side-by-side.WIP.md`](RECORD/2026-10-30.sessions-side-by-side.WIP.md)): `App` holds a map of `LiveSession`s — each its own destination,
+agency (worker, container), grants, fold, stream and event channel — and which one was
+used most recently. `POST /api/sessions` makes one **beside** the others, built on
+`LiveSession::blank`, and makes it current; `POST /api/sessions/:id/resume` makes a stored
+one live the same way, or, when it is already live, attaches to it as it is. Neither ends
+anything: a turn in one runs while another is on screen. **Addressed by `?session=<id>`** on
+`/ws` and on any route (a middleware puts it in a task-local, `App::addressed`); without it,
+a route acts on the current one and a socket follows the current one, saying `hello` again
+when it changes. **`[sessions] max-live`** (4) bounds them: one more puts the least recently
+used idle one to sleep — checkpointed, its worker ended, out of the map, resumed when opened —
+and is refused only when none may sleep. **`idle-minutes`** (30) sleeps an idle one on its own;
+the current one, one with a client, a turn or a proposal never sleeps. `DELETE
+/api/sessions/:id/live` sleeps one on request; a live session cannot be deleted, and archiving
+one sleeps it first. Engines stop only when no live session sends to them. `DELETE
+/api/sessions/:id` removes past sessions. The web UI header displays stored sessions in a switcher
 dropdown alongside a `+ New` button. See
 [`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md) and
 [`RECORD/2026-09-04.multi-session-in-serve.completed.md`](RECORD/2026-09-04.multi-session-in-serve.completed.md).
