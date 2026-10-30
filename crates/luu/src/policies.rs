@@ -371,7 +371,7 @@ impl Resolved {
     /// the posture built, and records the same hashes — a session recorded on
     /// the posture resumes on it. In memory only: nothing of it is written
     /// back to `config.toml`. See
-    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2, step 4.
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4.
     pub fn of_posture(name: &str, file: &std::path::Path) -> Result<Self, String> {
         let policy =
             SandboxPolicy::from_file(file).map_err(|error| format!("[posture.{name}]: {error}"))?;

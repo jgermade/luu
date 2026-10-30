@@ -110,7 +110,7 @@ export function stillThere(postures, value) {
 /// container runtime — `[{ value, runtime, image, where, label, title, gap,
 /// disabled }]`, the value `runtime|image`. The new session's *Runtime*, and
 /// since 2026-10-30 where the Runtime dialog moves a session that carries its
-/// lists; see `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+/// lists; see `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
 /// `gap` is what that place cannot hold: the container's network on Apple's
 /// `container`, or this machine's kernel.
 export function runtimeOptions(postures) {

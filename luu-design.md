@@ -1041,7 +1041,7 @@ access = "execute"
   `[posture.<name>]` still in `config.toml` is read as an environment of the same
   name (`policies::Resolved::of_posture` — its file's sandbox unchanged, three
   lists named after it), so a session recorded on one resumes on it. See
-  [`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md)
+  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
   step 4. What the rest of this entry says of a posture is how it worked, and how
   an environment by name still does:
 
@@ -1070,7 +1070,16 @@ access = "execute"
   place. What can change is what holds the lists, and the picker says it before the move — a
   place's `gap` is this machine's kernel gap on the host (`sandbox::host_gap`). A session on a
   posture or the server's own file still moves by name. See
-  [`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md) §2.
+  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §2.
+  **What a container gained goes with a move only when asked**: the sixth tool, `install`
+  (`{packages}`, apt only), runs in a container as its root from the host
+  (`<runtime> exec --user 0`), outside the worker's Landlock, held to the shell list as the
+  program `apt-get` — so a list that does not name it leaves it to a person. On this machine
+  it fails and asks nobody. The worker remembers what it installed for as long as its
+  container lives, `/api/terminal` says it, and the Runtime dialog's *Move and reinstall*
+  (`reinstall: true`) asks the next container for it before the move is answered — at once,
+  then one package at a time, the session staying where it moved and naming what is missing.
+  It costs every prompt ~280 bytes of tool block.
   **Since 2026-10-22 a session may name an environment instead**: `[shell.<name>]`,
   `[network.<name>]` and `[files.<name>]` lists in two zones, `allow` and `deny` — what
   neither names is asked (**since 2026-10-23**; the loader refuses an `ask` zone) — and
@@ -1093,7 +1102,7 @@ access = "execute"
   not resolve — written from Settings → Runtimes (`PUT /api/images`, a browser on this
   machine only) and offered first; an image a posture or an environment names is still
   offered after them until postures go
-  ([`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md)
+  ([`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
   §2). The shell,
   network and files lists by name, an unchosen one the empty list (read the folder, ask the
   rest), what the last session used offered first — the runtime with what choosing it means
@@ -1112,7 +1121,7 @@ access = "execute"
   (`Policies::recompose`) rather than from `config.toml` by name — so a list edited, renamed
   or deleted since changes nothing about a session that started on it, and no longer refuses
   its resume. See
-  [`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md).
+  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md).
   With a posture or an environment it is as
   before (`resolve_with` swaps an environment's lists; a posture's lists are its policy file).
   **Settings → Runtimes wrote the postures table** from 2026-10-01
@@ -1664,7 +1673,7 @@ unsigned approval names nothing at all. The verifying
 keys are named in **luu's own `config.toml`** — since 2026-10-30; a policy file's
 `[approvals]` is read only where `config.toml` has none, with a warning, because who
 may approve is the operator's to say and never a project's
-([`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md),
+([`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md),
 step 4):
 
 ```toml

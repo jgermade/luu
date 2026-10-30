@@ -1631,7 +1631,7 @@ test("runtimes, images and the host shell are configured from Settings", async (
   expect(config()).not.toContain("[image.probe]")
 
   // Postures are gone from here: nothing adds one, and the route that wrote
-  // them is not there (`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`).
+  // them is not there (`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`).
   await expect(pane.locator('button.add:has-text("+ posture")')).toHaveCount(0)
   const typed = await fetch(`${BASE}/api/postures`, {
     method: "PUT",

@@ -1549,7 +1549,7 @@ export async function providerModels(name, { facts = false } = {}) {
 /// **Since format 26 the lists are not said at all** where the session copied
 /// them: the server makes it again from its copy, so a list edited or
 /// deleted in Settings since does not stop it — only where it runs is said.
-/// See `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+/// See `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
 ///
 /// `null` for a session recorded before the posture was in the header, for one
 /// that ran on the server's own policy file, and whenever the view cannot be

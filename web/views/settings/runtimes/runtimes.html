@@ -3,7 +3,7 @@
   // machine, the images they run, and who gets a shell on the host. Postures
   // are gone from here since 2026-10-30: a session is made from a runtime, an
   // image and lists. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`
-  // and `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+  // and `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
   const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, saveImages, saveHostShell, saveDefaultRuntime } =
     await import("@web/lib/runtimes.js")
   const { terminal } = await import("@web/lib/terminal.js")
@@ -142,7 +142,7 @@
 
 
   // `[image.*]`: each a reference and its in-image paths, written whole.
-  // See `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+  // See `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
   $: imageNames = Object.keys(view?.images || {})
   const pathsText = paths => (paths || []).map(p => `${p.path} ${p.access}`).join("\n")
   const parsePaths = text => text.split("\n").map(line => line.trim()).filter(Boolean)

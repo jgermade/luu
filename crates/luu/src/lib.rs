@@ -1247,7 +1247,7 @@ impl SandboxArgs {
     /// only where that has none, said once as it is read: who may approve is
     /// the operator's, not a project's. A policy file without the block is not
     /// an error — it is a `luu.toml` from before signatures existed. See
-    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`, step 4.
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`, step 4.
     fn approvers(&self) -> Result<Approvers> {
         if let Ok((config, _)) = crate::provider::Config::load()
             && let Some(approvers) = config.approvals()
@@ -2739,7 +2739,7 @@ pub async fn run() -> Result<()> {
                     // Read as environments of the same name: nothing offers a
                     // posture any more, and a session recorded on one resumes
                     // on it. See
-                    // `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+                    // `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
                     {
                         for name in config.postures().keys() {
                             eprintln!(

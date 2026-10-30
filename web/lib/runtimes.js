@@ -46,7 +46,7 @@ export const saveDefaultRuntime = runtime => call("PUT", "./api/runtimes/default
 /// The whole `[image.*]` table: a name, its `ref` and its in-image paths.
 /// What the new session's *Runtime* offers, so the postures it reads are
 /// asked for again. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
 export async function saveImages(images) {
   const result = await call("PUT", "./api/images", { images })
   if (result.ok) await loadPostures()

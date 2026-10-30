@@ -215,6 +215,13 @@ test("a session is made from a runtime and three lists, and comes back made from
   expect(movedThere.lists.shell.name).toBe("tools")
   expect(movedThere.lists.network.allow).toEqual(["crates.io"])
   expect((await (await fetch(`${BASE}/api/terminal`)).json()).posture.runtime).toContain("direct")
+  // Nothing was installed (`install` runs only in a container), so a move
+  // that asks to reinstall has nothing to ask for and says nothing of it.
+  expect((await (await fetch(`${BASE}/api/terminal`)).json()).installed).toEqual([])
+  const again = await (await moveTo({ runtime: "host", reinstall: true })).json()
+  expect(again.moved).toBe(true)
+  expect(again.reinstall).toBeUndefined()
+  expect((await moveTo({ runtime: "direct" })).ok).toBe(true)
   // Where it already is, nothing moves.
   expect((await (await moveTo({ runtime: "direct" })).json()).moved).toBe(false)
   expect((await moveTo({ runtime: "host" })).ok).toBe(true)

@@ -505,6 +505,26 @@ impl WorkerSpec {
         })
     }
 
+    /// A program run as the container's root in the named container, outside
+    /// the worker's own Landlock — what `install` needs to write `/usr` and
+    /// `/var`, and the container is the boundary it is held to. `None` where
+    /// there is no container. `DEBIAN_FRONTEND` so `apt-get` asks nothing.
+    /// See `crate::tools::install`.
+    pub fn root_exec_argv(&self, name: &str, argv: &[String]) -> Option<Vec<String>> {
+        let mut line = self.exec_prefix()?;
+        match self.runtime {
+            Runtime::Container => line.extend(["--uid".to_string(), "0".to_string()]),
+            _ => line.extend(["--user".to_string(), "0".to_string()]),
+        }
+        line.extend([
+            "-e".to_string(),
+            "DEBIAN_FRONTEND=noninteractive".to_string(),
+            name.to_string(),
+        ]);
+        line.extend(argv.iter().cloned());
+        Some(line)
+    }
+
     /// The shell a terminal opens in the named container, and how it is
     /// ended, or `None` where there is no container to open one in.
     ///
@@ -838,6 +858,32 @@ mod tests {
         // No container, no terminal.
         assert!(spec(Runtime::Direct).exec_argv("n", "1").is_none());
         assert!(spec(Runtime::Host).exec_argv("n", "1").is_none());
+    }
+
+    /// `install`'s line: the container's root, `apt-get` asking nothing, in
+    /// the named container — and nothing where there is none.
+    #[test]
+    fn install_runs_as_the_container_s_root() {
+        let argv = ["apt-get".to_string(), "update".to_string()];
+        let line = spec(Runtime::Docker).root_exec_argv("c", &argv).unwrap();
+        assert_eq!(
+            line,
+            [
+                "docker",
+                "exec",
+                "--user",
+                "0",
+                "-e",
+                "DEBIAN_FRONTEND=noninteractive",
+                "c",
+                "apt-get",
+                "update"
+            ]
+        );
+        let apple = spec(Runtime::Container).root_exec_argv("c", &argv).unwrap();
+        assert_eq!(&apple[..4], &["container", "exec", "--uid", "0"]);
+        assert!(spec(Runtime::Direct).root_exec_argv("c", &argv).is_none());
+        assert!(spec(Runtime::Host).root_exec_argv("c", &argv).is_none());
     }
 
     #[test]

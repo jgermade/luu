@@ -26,6 +26,7 @@
   let open = true
   const leave = () => {
     open = false
+    terminal.moveNote = null
     const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
     setTimeout(() => close?.(), Number.isFinite(ms) ? ms : 0)
   }
@@ -35,7 +36,7 @@
   // Any other — a posture, the server's own file — moves between postures,
   // as before, and a session made from lists without a copy is drawn first,
   // as where it is. See
-  // `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+  // `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
   $: carries = carriesLists(terminal.info?.posture)
   $: now = hereOption(state.postures, terminal.info?.posture)
   $: nowValue = carries && now ? `${now.where}|${now.image || ""}` : null
@@ -48,10 +49,15 @@
   $: moving = !!chosen && chosen !== here
   const contained = place => !!place?.where && place.where !== "host" && place.where !== "direct"
 
+  // What `install` put where the session runs now, which a move leaves behind
+  // unless it is asked for again (*Move and reinstall*).
+  $: installed = terminal.info?.installed || []
+  $: canReinstall = carries && installed.length > 0 && contained(target)
   // What it leaves behind, about these two places, in the box's own words.
   $: behind = !moving ? ""
     : contained(now)
       ? `Its container goes with the move: what the model installed in ${now.label} — packages, tools, anything outside this folder — is gone, and is not in ${target.label}.`
+        + (installed.length ? ` It installed ${installed.join(", ")}${canReinstall ? ", which Move and reinstall asks for there again" : ""}.` : "")
       : `What the model installed on this machine is not in ${target.label}${contained(target) ? ", which starts from its image" : ""}.`
   // And the rest of what a move does, which needs no ticking.
   $: also = !moving ? ""
@@ -70,16 +76,17 @@
     understood = false
   }
 
-  const move = async () => {
+  const move = async (reinstall = false) => {
     if (!moving || !understood || terminal.moving) return
     const host = document.querySelector(".content .terminal .host")
     if (carries) {
-      await moveRuntime(target.runtime, target.image, host)
+      await moveRuntime(target.runtime, target.image, host, reinstall)
     } else {
       const [name, runtime] = target.value.split("|")
       await moveSession(name, runtime || null, host)
     }
-    if (!terminal.moveError) leave()
+    // A reinstall that left something out stays open to say what.
+    if (!terminal.moveError && !terminal.moveNote) leave()
   }
 </script>
 
@@ -112,9 +119,12 @@
     <p class="dim small">{{ also }}</p>
   </div>
   <p :if="terminal.moveError" class="error small">{{ terminal.moveError }}</p>
+  <p :if="terminal.moveNote" class="note small">{{ terminal.moveNote }}</p>
 
   <template :slot.foot>
     <Button variant="ghost" @click="leave()">Cancel</Button>
+    <Button :if="canReinstall" variant="ghost" :disabled="!moving || !understood || terminal.moving"
+            @click="move(true)">Move and reinstall</Button>
     <Button variant="primary" :disabled="!moving || !understood || terminal.moving" :loading="terminal.moving"
             @click="move()">{{ terminal.moving ? "Moving…" : "Move the session" }}</Button>
   </template>
@@ -168,4 +178,5 @@
   .dim { color: var(--luu-fg-muted); }
   .small { font-size: var(--luu-text-xs); }
   .error { margin: var(--luu-space-3) 0 0; color: var(--luu-bad); }
+  .note { margin: var(--luu-space-3) 0 0; color: var(--luu-warn); }
 </style>

@@ -446,13 +446,13 @@ struct File {
     /// `[image.<name>]`: the images a session may run in, each with the trees
     /// that exist only inside it. Where the new session's *Runtime* finds its
     /// images, in place of the postures that used to name them. See [`Image`]
-    /// and `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+    /// and `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     image: BTreeMap<String, Image>,
     /// `[approvals]`: who may approve a plan, and whether anyone must sign.
     /// Here and not in a project's policy file, which is read for it only
     /// where this has none. See
-    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`, step 4.
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`, step 4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     approvals: Option<agent_core::approval::Approvers>,
     /// `[ui]`: what the debug page looks like, as opposed to where a run

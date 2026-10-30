@@ -2151,12 +2151,16 @@ async fn get_terminal(
     let xterm = xterm_root().join("xterm/lib/xterm.mjs").is_file()
         && xterm_root().join("addon-fit/lib/addon-fit.mjs").is_file();
     let name = state.app.posture.lock().await.clone();
-    let posture = state.app.agency().await.posture(name);
+    let agency = state.app.agency().await;
+    let posture = agency.posture(name);
     Json(serde_json::json!({
         "available": shell.is_ok() && cfg!(unix),
         "place": shell.as_ref().ok().map(|shell| shell.place),
         "reason": shell.err(),
         "posture": posture,
+        // What `install` put in the container the session runs in now: what
+        // a move leaves behind, and *Move and reinstall* asks for again.
+        "installed": installed_in(&agency),
         "xterm": xterm,
     }))
     .into_response()
@@ -5720,7 +5724,7 @@ struct ImagesAsk {
 /// as a posture is — an image is what a container runtime here pulls and
 /// runs. The next session's *Runtime* offers what was written; a session
 /// already running keeps the image it runs on. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
 async fn put_images(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
@@ -7514,7 +7518,7 @@ async fn probe_provider(
 /// — so a session recorded on a posture resumes on it, while nothing offers a
 /// posture any more. A posture whose file does not load is left out and said
 /// once, in the log. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2, step 4.
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4.
 pub fn environments_of(
     config: &crate::provider::Config,
 ) -> std::collections::BTreeMap<String, Arc<crate::policies::Resolved>> {
@@ -8689,7 +8693,7 @@ async fn place_for(
 /// The images a session made from lists may run in, each once, with its
 /// in-image paths: `config.toml`'s `[image.<name>]` first, by name, and then
 /// any other image a posture or an environment still names — until postures
-/// go (`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2, step 4).
+/// go (`RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4).
 /// A posture's file that does not load names nothing here; choosing it says
 /// why.
 async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRule>)> {
@@ -9302,7 +9306,7 @@ async fn put_session_posture(
         return Json(serde_json::json!({ "posture": posture, "moved": false })).into_response();
     }
 
-    settle_move(app, session, name, agency, posture).await
+    Json(settle_move(app, session, name, agency, posture).await).into_response()
 }
 
 /// The rest of a live move, once what it moves to is built and the session's
@@ -9316,7 +9320,7 @@ async fn settle_move(
     name: Option<String>,
     agency: Arc<Agency>,
     posture: record::Posture,
-) -> Response {
+) -> serde_json::Value {
     // Ended rather than dropped, for `Agency::shutdown`'s reason — and with it
     // the old container, and any terminal that was open in it.
     let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
@@ -9374,7 +9378,7 @@ async fn settle_move(
         runtime = posture.runtime.as_str(),
         "the live session now runs here",
     );
-    Json(serde_json::json!({ "posture": posture, "moved": true })).into_response()
+    serde_json::json!({ "posture": posture, "moved": true })
 }
 
 /// `PUT /api/session/runtime`.
@@ -9383,12 +9387,62 @@ struct MoveRuntime {
     runtime: String,
     #[serde(default)]
     image: Option<String>,
+    /// *Move and reinstall*: what `install` put in the container the session
+    /// leaves is asked of the one it moves to, before the move is answered.
+    #[serde(default)]
+    reinstall: bool,
+}
+
+/// What `install` has put in the agency's container; nothing where there is
+/// no container.
+fn installed_in(agency: &Agency) -> Vec<String> {
+    agency
+        .worker
+        .as_ref()
+        .map(|worker| worker.installed())
+        .unwrap_or_default()
+}
+
+/// *Move and reinstall*, on the agency moved to: the packages asked for at
+/// once, and where that fails, one at a time, so what can be installed is and
+/// what cannot is named. The session stays where it moved either way: the
+/// person chose the place, and a missing package is said, not undone. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §3.
+async fn reinstall(agency: &Agency, packages: &[String]) -> serde_json::Value {
+    let Some(worker) = agency
+        .worker
+        .as_ref()
+        .filter(|worker| worker.is_contained())
+    else {
+        return serde_json::json!({
+            "installed": [],
+            "missing": packages,
+            "error": "the session moved to this machine, where install does not run",
+        });
+    };
+    if worker.install(packages).await.error.is_none() {
+        return serde_json::json!({ "installed": packages, "missing": [] });
+    }
+    let mut installed = Vec::new();
+    let mut missing = Vec::new();
+    let mut error = None;
+    for package in packages {
+        let outcome = worker.install(std::slice::from_ref(package)).await;
+        match outcome.error {
+            None => installed.push(package.clone()),
+            Some(why) => {
+                missing.push(package.clone());
+                error.get_or_insert(why);
+            }
+        }
+    }
+    serde_json::json!({ "installed": installed, "missing": missing, "error": error })
 }
 
 /// Moves the live session to another runtime, and nothing else: its lists are
 /// the copy it carries (format 26), so where its commands run changes and what
 /// they may do does not. The grants and the forbiddens are the session's, and
-/// stay. See `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+/// stay. See `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
 ///
 /// **It waits for a turn and for the gate**, because a command in flight has
 /// to finish somewhere, and a proposal waiting there was drawn where the
@@ -9428,7 +9482,9 @@ async fn put_session_runtime(
         )
             .into_response();
     }
-    let current = app.agency().await.posture(app.posture.lock().await.clone());
+    let leaving = app.agency().await;
+    let left_behind = installed_in(&leaving);
+    let current = leaving.posture(app.posture.lock().await.clone());
     let Some(lists) = current
         .lists
         .as_ref()
@@ -9472,7 +9528,17 @@ async fn put_session_runtime(
         }
         return Json(serde_json::json!({ "posture": posture, "moved": false })).into_response();
     }
-    settle_move(app, session, name, agency, posture).await
+    // Before the swap, with the session still held: no turn starts on a
+    // container that is still being filled.
+    let reinstalled = match asked.reinstall && !left_behind.is_empty() {
+        true => Some(reinstall(&agency, &left_behind).await),
+        false => None,
+    };
+    let mut moved = settle_move(app, session, name, agency, posture).await;
+    if let Some(reinstalled) = reinstalled {
+        moved["reinstall"] = reinstalled;
+    }
+    Json(moved).into_response()
 }
 
 /// Picks a stored session back up — optionally somewhere else.
@@ -9555,7 +9621,7 @@ async fn resume_session(
     // copy where the body names no posture and no lists — what the page says
     // back for one — so a list edited or deleted in `config.toml` since does
     // not stand between a person and their history. See
-    // `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+    // `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
     let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
         (None, None, Some(stored)) => {
             posture_from_copy(

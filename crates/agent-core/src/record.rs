@@ -229,7 +229,7 @@ use crate::trace::TraceMessage;
 /// made from lists makes it again from the copy rather than from
 /// `config.toml` by name. Absent in every stream before it, and for a policy
 /// file's lists, which are resumed by name as they were. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
 pub const FORMAT: u32 = 26;
 
 /// The posture a session ran under, as a recording names it.
@@ -290,7 +290,7 @@ pub struct Lists {
     /// deleted in `config.toml` afterwards changes nothing about it. `None`
     /// for a policy file's, which is resumed by its name, and in every stream
     /// before format 26. Boxed for [`Posture::composed`]'s reason. See
-    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copied: Option<Box<Copied>>,
 }

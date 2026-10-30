@@ -42,7 +42,7 @@ mod kernel;
 /// holds all of it: the gap a session on the host would have here, said
 /// before one is moved there. In a container the worker holds the command
 /// inside the container, so this is the host's question only. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
 pub fn host_gap() -> Option<String> {
     kernel::prepare(&[], false).missing
 }

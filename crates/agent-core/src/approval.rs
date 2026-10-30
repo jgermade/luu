@@ -210,7 +210,7 @@ pub struct ApproverKey {
 /// The `[approvals]` block: who may approve, and whether anyone must. In
 /// luu's own `config.toml` since 2026-10-30, and read from a policy file only
 /// where that has none: who may approve is not a project's to say. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`, step 4.
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`, step 4.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Approvers {

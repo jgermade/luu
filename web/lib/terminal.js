@@ -27,6 +27,8 @@ export const terminal = $reactive({
   /// move was refused.
   moving: false,
   moveError: null,
+  // What a move left out: packages *Move and reinstall* could not install.
+  moveNote: null,
   /// Whether the dialog that moves it is open: `views/editor/runtime-dialog.html`,
   /// opened from the foot and mounted at the page's root.
   choosing: false,
@@ -219,22 +221,32 @@ export function endTerminal() {
 /// Moves a live session that carries its lists to another runtime and image,
 /// its lists, grants and forbiddens as they are — `PUT /api/session/runtime`.
 /// The shell open now ends either way, for `moveSession`'s reason. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
-export async function moveRuntime(runtime, image, host) {
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
+///
+/// `reinstall` asks the new container for what `install` put in the old one
+/// (*Move and reinstall*). What could not be installed there is
+/// `terminal.moveNote`: the session stays where it moved, and the dialog says
+/// what is missing rather than closing.
+export async function moveRuntime(runtime, image, host, reinstall = false) {
   terminal.moving = true
   terminal.moveError = null
+  terminal.moveNote = null
   try {
     const answer = await fetch("./api/session/runtime", {
       method: "PUT",
       headers: { ...apiHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ runtime, image: image || null }),
+      body: JSON.stringify({ runtime, image: image || null, reinstall }),
     })
     if (!answer.ok) {
       terminal.moveError = (await answer.text()) || `HTTP ${answer.status}`
       await loadTerminal()
       return
     }
-    const { moved } = await answer.json()
+    const { moved, reinstall: again } = await answer.json()
+    if (again?.missing?.length) {
+      terminal.moveNote = `Moved. Not installed there: ${again.missing.join(", ")}`
+        + (again.error ? ` — ${again.error}` : "")
+    }
     if (moved) {
       endTerminal()
       await refreshSettings()

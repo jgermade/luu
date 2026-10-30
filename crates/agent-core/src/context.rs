@@ -4599,7 +4599,7 @@ mod tests {
         let names: Vec<&'static str> = tools.names().collect();
         assert_eq!(
             names.len(),
-            5,
+            6,
             "a tool joined the registry: say whether its output could be read again, \
              then move this number — {names:?}",
         );
@@ -4610,7 +4610,8 @@ mod tests {
                 "{name} describes something that is still there, so the model can look again",
             );
         }
-        for name in ["run_command", "write_file", "edit_file"] {
+        // `install` says what happened to a container, not what is in one.
+        for name in ["run_command", "write_file", "edit_file", "install"] {
             assert!(
                 !could_be_read_again(name),
                 "{name} is not a view of something still there",
