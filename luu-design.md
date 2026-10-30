@@ -2740,7 +2740,14 @@ there; a runtime or posture move keeps it. `PUT /api/session/folder` moves a ses
 its first turn** — after it, its history is about the tree it worked in, and another folder is
 another session. The folder picker browses the root (`GET /api/folders`), *Use this folder*
 moves a fresh session and is remembered for the next ones, and `/api/settings` says `root`,
-`folder` and the other live sessions `shared_with` it. `DELETE /api/sessions/:id` removes past
+`folder` and the other live sessions `shared_with` it. **The page shows them**: each row of
+`GET /api/sessions` that is live carries `live: { state, current }` — `running`, `gate`
+(a proposal, a refused call or a tool limit waits) or `idle` — and the history marks a live
+session not on screen with it, offers *Put to sleep* in place of *Delete*, and lists one that
+is running or waiting before its first turn ends (an empty idle one stays out, as before).
+While one not on screen runs or waits, the page asks for the list every 4 s; one that ends a
+turn or opens a gate there is a dot on the history button — amber for a gate — until it is
+opened. `DELETE /api/sessions/:id` removes past
 sessions. The web UI header displays stored sessions in a switcher
 dropdown alongside a `+ New` button. See
 [`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md) and

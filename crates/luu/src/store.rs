@@ -402,6 +402,7 @@ impl SessionStore {
                 record: row.get(6)?,
                 written_at: Some(row.get::<_, i64>(7)? as u64),
                 archived_at: row.get::<_, Option<i64>>(8)?.map(|at| at as u64),
+                live: None,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)

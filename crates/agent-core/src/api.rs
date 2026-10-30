@@ -630,6 +630,22 @@ pub struct SessionSummary {
     /// deleted — or `None` for one that is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<u64>,
+    /// Where it is live in `serve`, how it is: `None` for a session that is
+    /// only stored — never opened since a restart, or put to sleep. See
+    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<Liveness>,
+}
+
+/// How a live session is, for the list that offers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Liveness {
+    /// `running` (a turn is), `gate` (a proposal, a refused call or a tool
+    /// limit waits for a person) or `idle`.
+    pub state: String,
+    /// The one on screen: what a route or a socket that names none acts on.
+    #[serde(default)]
+    pub current: bool,
 }
 
 /// One answer a person gave for the session, as the session's list keeps it.
@@ -811,6 +827,7 @@ impl SessionView {
             record: self.record.clone(),
             written_at: None,
             archived_at: None,
+            live: None,
         }
     }
 

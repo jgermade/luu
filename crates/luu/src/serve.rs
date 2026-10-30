@@ -8612,13 +8612,29 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     // otherwise place a session just written to where it was before.
     async fn row_of(live: &LiveSession) -> (agent_core::api::SessionSummary, Option<u64>, String) {
         let id = live.session_id.lock().await.clone();
+        let state = {
+            let session = live.session.lock().await;
+            match (
+                session.current.is_some(),
+                session.pending.is_some() || session.held.is_some() || session.limit_held.is_some(),
+            ) {
+                (true, _) => "running",
+                (false, true) => "gate",
+                (false, false) => "idle",
+            }
+        };
         let view = live.view.lock().await;
         // A turn's time is counted from the session's start.
         let last = view
             .turns
             .last()
             .map(|turn| view.started_at + turn.started_at_ms);
-        (view.summary(), last, id)
+        let mut row = view.summary();
+        row.live = Some(agent_core::api::Liveness {
+            state: state.to_string(),
+            current: false,
+        });
+        (row, last, id)
     }
     let mut stored = Vec::new();
     if let Some(store) = &state.app.store {
@@ -8643,6 +8659,9 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
     let (mut first, last, current_id) = row_of(&current).await;
     first.written_at = written(&current_id, last, first.started_at);
+    if let Some(live) = first.live.as_mut() {
+        live.current = true;
+    }
     let mut sessions = vec![first];
     let mut live_ids = vec![current_id.clone()];
     for (id, live) in state.app.all_live() {

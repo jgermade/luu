@@ -339,6 +339,11 @@
   // its folder. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
   $: if (loaded && state.settings?.base && state.settings.base !== workspace.base) followFolder(state.settings)
 
+  // Live sessions not on screen that finished a turn or wait at their gate:
+  // a dot on the history button until one is opened, amber while one waits.
+  $: behind = Object.keys(state.attention || {}).length
+  $: waiting = Object.values(state.attention || {}).includes("gate")
+
   $: profileNames = Object.keys(state.providers?.providers || {})
   // Nowhere to send at all. The chat column says so in the column it is about,
   // rather than in a modal that opens over everything — and the one control it
@@ -874,8 +879,10 @@
       <div class="acts">
         <button type="button" title="New session — where it sends, and which model"
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
-        <button type="button" title="Earlier sessions"
-                @click="openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+        <button type="button" title="Earlier sessions" class="history"
+                :aria-label="behind ? `Earlier sessions — ${behind} want a look` : 'Earlier sessions'"
+                @click="openHistory()"><svg class="ic"><use href="#i-clock"/></svg><span
+                :if="behind" class="behind" :class.gate="waiting"></span></button>
         <button type="button" class="permissions" :disabled="!state.session"
                 title="Permissions — what this session may do, and what it did"
                 aria-label="Permissions"
