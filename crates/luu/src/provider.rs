@@ -449,6 +449,12 @@ struct File {
     /// and `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     image: BTreeMap<String, Image>,
+    /// `[approvals]`: who may approve a plan, and whether anyone must sign.
+    /// Here and not in a project's policy file, which is read for it only
+    /// where this has none. See
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`, step 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approvals: Option<agent_core::approval::Approvers>,
     /// `[ui]`: what the debug page looks like, as opposed to where a run
     /// sends. Here because it is the same kind of thing as the two above —
     /// something written on this machine — and because the one setting in it
@@ -836,6 +842,7 @@ pub struct Config {
     postures: BTreeMap<String, Posture>,
     policies: crate::policies::Policies,
     images: BTreeMap<String, Image>,
+    approvals: Option<agent_core::approval::Approvers>,
     ui: Option<Ui>,
     terminal: Option<Terminal>,
     runtimes: Option<Runtimes>,
@@ -972,6 +979,7 @@ impl Config {
                 environments: file.environment,
             },
             images: file.image,
+            approvals: file.approvals,
             ui: file.ui,
             terminal: file.terminal,
             runtimes: file.runtimes,
@@ -1280,6 +1288,7 @@ impl Config {
             files: self.policies.files.clone(),
             environment: self.policies.environments.clone(),
             image: self.images.clone(),
+            approvals: self.approvals.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             runtimes: self.runtimes,
@@ -1365,6 +1374,7 @@ impl Config {
             postures: self.postures.clone(),
             policies: self.policies.clone(),
             images: self.images.clone(),
+            approvals: self.approvals.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             runtimes: self.runtimes,
@@ -1536,6 +1546,11 @@ impl Config {
     /// Every posture the file names.
     pub fn postures(&self) -> &BTreeMap<String, Posture> {
         &self.postures
+    }
+
+    /// `[approvals]`, where the file has one.
+    pub fn approvals(&self) -> Option<&agent_core::approval::Approvers> {
+        self.approvals.as_ref()
     }
 
     /// Every image the file names, already checked.
@@ -2061,6 +2076,20 @@ mod tests {
         assert!(!back.render().unwrap().contains("[runtimes]"));
         assert!(config("[runtimes]\ndefualt = \"podman\"\n").is_err());
         assert!(config("[runtimes]\ndefault = \"vagrant\"\n").is_err());
+    }
+
+    /// `[approvals]` in luu's own file: read, and written back as read.
+    #[test]
+    fn approvals_are_the_operator_s_and_kept_through_a_write() {
+        assert!(config("").unwrap().approvals().is_none());
+        let text = "[approvals]\nrequired = true\n\n[[approvals.key]]\nname = \"j\"\npublic = \"ed25519:00\"\n";
+        let loaded = config(text).expect("loads");
+        let approvals = loaded.approvals().expect("there");
+        assert!(approvals.required);
+        assert_eq!(approvals.keys[0].name, "j");
+        let again = config(&loaded.render().unwrap()).expect("what it writes loads");
+        assert_eq!(again.approvals(), loaded.approvals());
+        assert!(config("[approvals]\nrequire = true\n").is_err());
     }
 
     /// `[image.<name>]`: a reference and its in-image paths, written back as

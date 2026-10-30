@@ -1,10 +1,10 @@
 <script :setup>
   // Where a session's commands may run: the container runtimes on this
-  // machine, the images they have, the postures that use them, and who gets a
-  // shell on the host. A runtime is usable when it is installed, answers, has
-  // the image, and a posture uses it — this section shows all four and changes
-  // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
-  const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, savePostures, saveImages, saveHostShell, saveDefaultRuntime } =
+  // machine, the images they run, and who gets a shell on the host. Postures
+  // are gone from here since 2026-10-30: a session is made from a runtime, an
+  // image and lists. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`
+  // and `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+  const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, saveImages, saveHostShell, saveDefaultRuntime } =
     await import("@web/lib/runtimes.js")
   const { terminal } = await import("@web/lib/terminal.js")
   const Button = await import("@web/theme/default/components/button.html")
@@ -25,14 +25,12 @@
   // The runtimes being asked right now, by name: each card is filled when its
   // own runtime answers, not when the slowest one does.
   let asking = {}
-  // The posture being added: `{ name, policy }`, or `null`.
-  let adding = null
   // The image being added or edited: `{ was, name, ref, paths }`, `paths` as
   // text, one `path access` a line; `was` is the name it had, `null` for a
   // new one. `null` when no form is open.
   let editing = null
 
-  // A write — a posture, the host shell, the default — answers with the
+  // A write — an image, the host shell, the default — answers with the
   // section as `GET /api/runtimes` does, asking no runtime: what each card
   // already knew of its runtime stays, rather than going back to unasked.
   const took = result => {
@@ -52,7 +50,7 @@
     return result.ok
   }
   // The section comes without a probe — installed or not is `which`, and the
-  // postures need none — and then each installed runtime is asked on its own.
+  // images need none — and then each installed runtime is asked on its own.
   // A card that had an answer keeps it while it is asked again, so *check
   // again* does not blank what it is about to confirm.
   const refresh = async () => {
@@ -142,22 +140,7 @@
   // because the row already shows what it changed.
   const showing = t => !!t && t.state !== "done"
 
-  const postures = () => Object.fromEntries(
-    Object.entries(view?.postures || {}).map(([name, row]) => [name, { policy: row.policy }]))
-  const remove = async name => {
-    const rest = postures()
-    delete rest[name]
-    busy = `remove:${name}`
-    took(await savePostures(rest))
-    busy = ""
-  }
-  const add = async () => {
-    const name = (adding?.name || "").trim()
-    if (!name || !adding?.policy) return
-    busy = "add"
-    if (took(await savePostures({ ...postures(), [name]: { policy: adding.policy } }))) adding = null
-    busy = ""
-  }
+
   // `[image.*]`: each a reference and its in-image paths, written whole.
   // See `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2.
   $: imageNames = Object.keys(view?.images || {})
@@ -212,16 +195,10 @@
     busy = ""
   }
 
-  // Where a posture would run, in the words the terminal's picker uses.
-  const runs = place => !place ? "?"
-    : place.runtime === "direct" ? "direct (no container)"
-    : place.image ? `${place.runtime} · ${place.image}` : place.runtime
   const answerWord = r => !r.path ? "not installed"
     : r.answers == null && asking[r.runtime] ? "comprobando…"
     : r.answers ? "answering" : "installed, not answering"
-  $: names = Object.keys(view?.postures || {})
   $: anyAsking = Object.keys(asking).length > 0
-  $: unused = (view?.policies || []).filter(p => !names.some(n => view.postures[n].policy === p.path))
 </script>
 
 <div class="runtimes-pane pane-main">
@@ -381,7 +358,7 @@
       </div>
       <div :if="view && !imageNames.length" class="row">
         <dt><span class="dim">none</span></dt>
-        <dd><span class="dim small">the images postures name are still offered</span></dd>
+        <dd><span class="dim small">the images a policy file or an old posture names are still offered</span></dd>
       </div>
     </dl>
     <div :if="editing" class="adding image-form">
@@ -397,51 +374,6 @@
     <p :if="!editing" class="small">
       <button type="button" class="add" :disabled="!view?.editable"
               @click="editing = { was: null, name: '', ref: '', paths: '' }">+ image</button>
-    </p>
-  </section>
-
-  <section class="pane-group">
-    <h3>Postures</h3>
-    <p class="dim small">
-      What a session may do and where it runs, by the policy file that decides
-      both. A new posture names one of the policy files in
-      <code>{{ view?.base || "este repositorio" }}</code>; any other path is written in config.toml by hand.
-    </p>
-    <dl class="settings postures">
-      <div class="row">
-        <dt><span class="dim">server default</span></dt>
-        <dd><span class="dim">the policy file <code>luu serve</code> was started with</span></dd>
-      </div>
-      <div :if="!view && !error" class="row skeleton-row">
-        <dt><span class="skeleton-bar" style="width: 5rem;"></span></dt>
-        <dd><span class="skeleton-bar" style="width: 14rem;"></span></dd>
-      </div>
-      <div :each="name in names" :key="name" class="row">
-        <dt><strong>{{ name }}</strong></dt>
-        <dd>
-          <code>{{ view.postures[name].policy }}</code>
-          · {{ runs(view.postures[name].place) }}
-          <span :if="view.postures[name].place?.missing" class="warn small">— {{ view.postures[name].place.missing }}</span>
-          <span :if="view.running === name" class="tag">the live session</span>
-          <button :if="view.running !== name" type="button" class="link"
-                  :disabled="!view?.editable || !!busy" @click="remove(name)">remove</button>
-        </dd>
-      </div>
-    </dl>
-    <div :if="adding" class="adding">
-      <input type="text" placeholder="name" :value="adding.name"
-             @input="adding = { ...adding, name: $event.target.value }">
-      <select :value="adding.policy" @change="adding = { ...adding, policy: $event.target.value }">
-        <option value="">a policy file…</option>
-        <option :each="p in view?.policies || []" :key="p.path" :value="p.path"
-                :selected="adding.policy === p.path">{{ p.path }} · {{ runs(p.place) }}</option>
-      </select>
-      <button type="button" :disabled="!adding.name || !adding.policy || !!busy" @click="add()">add</button>
-      <button type="button" class="link" @click="adding = null">cancel</button>
-    </div>
-    <p :if="!adding" class="small">
-      <button type="button" class="add" :disabled="!view?.editable || !(view?.policies || []).length"
-              @click="adding = { name: '', policy: unused[0]?.path || view.policies[0]?.path || '' }">+ posture</button>
     </p>
   </section>
 
@@ -534,8 +466,6 @@
   }
   /* Each row is a `div` holding its `dt` and `dd`, which HTML allows in a
      `dl`, so the pair spans the grid's two columns as one. */
-  .postures .row { display: contents; }
-  .postures dd { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
   .adding { display: flex; gap: .5rem; align-items: center; margin: .6rem 0; flex-wrap: wrap; }
   .adding input { width: 10rem; }
   .images-table .row { display: contents; }

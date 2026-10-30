@@ -1498,13 +1498,13 @@ test("the gate's mode is chosen from a dropup", async ({ page }) => {
 })
 
 /**
- * Settings → Runtimes: every container runtime probed, a posture added and
- * removed by naming a policy file out of the list, and the host shell's rule
+ * Settings → Runtimes: every container runtime probed, an image added,
+ * refused and removed, no posture to add any more, and the host shell's rule
  * written — all of it into this suite's own `config.toml`. And the one thing
  * this page may not do: build an image no file here names. See
  * `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
  */
-test("runtimes, postures and the host shell are configured from Settings", async ({ page }) => {
+test("runtimes, images and the host shell are configured from Settings", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
   page.on("console", message => {
@@ -1630,28 +1630,16 @@ test("runtimes, postures and the host shell are configured from Settings", async
   await expect(pane.locator(".images-table dt", { hasText: "probe" })).toHaveCount(0)
   expect(config()).not.toContain("[image.probe]")
 
-  // A posture, named by a policy file out of the list — this checkout's.
-  await pane.locator('button.add:has-text("+ posture")').click()
-  await pane.locator('.adding input[placeholder="name"]').fill("boxed")
-  await pane.locator(".adding select").selectOption("luu.container.toml")
-  await pane.locator('.adding button:has-text("add")').click()
-  await expect(pane.locator(".postures dt", { hasText: "boxed" })).toHaveCount(1)
-  expect(config()).toContain("[posture.boxed]")
-  expect(config()).toContain('policy = "luu.container.toml"')
-  // And offered at once, without a restart.
-  const offered = await (await fetch(`${BASE}/api/postures`)).json()
-  expect(Object.keys(offered.postures)).toContain("boxed")
-  await pane.locator(".postures .row", { hasText: "boxed" }).locator('button:has-text("remove")').click()
-  await expect(pane.locator(".postures dt", { hasText: "boxed" })).toHaveCount(0)
-  expect(config()).not.toContain("[posture.boxed]")
-
-  // A path out of the list is refused, from the route itself.
+  // Postures are gone from here: nothing adds one, and the route that wrote
+  // them is not there (`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`).
+  await expect(pane.locator('button.add:has-text("+ posture")')).toHaveCount(0)
   const typed = await fetch(`${BASE}/api/postures`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ postures: { wide: { policy: "/etc/anything.toml" } } }),
+    body: JSON.stringify({ postures: { wide: { policy: "luu.container.toml" } } }),
   })
-  expect(typed.status).toBe(422)
+  expect(typed.status).toBe(405)
+  expect(config()).not.toContain("[posture.")
   // And so is an image no policy file here names.
   const built = await fetch(`${BASE}/api/runtimes/docker/build`, {
     method: "POST",

@@ -364,6 +364,48 @@ impl Policies {
 }
 
 impl Resolved {
+    /// A `[posture.<name>]`, read as the environment it always was: its
+    /// policy file's `[sandbox]` with everything in `allow`, three lists named
+    /// after the posture, and its `[worker]` as where they run. The sandbox is
+    /// the file's own, unchanged, so a session built from this is the session
+    /// the posture built, and records the same hashes — a session recorded on
+    /// the posture resumes on it. In memory only: nothing of it is written
+    /// back to `config.toml`. See
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2, step 4.
+    pub fn of_posture(name: &str, file: &std::path::Path) -> Result<Self, String> {
+        let policy =
+            SandboxPolicy::from_file(file).map_err(|error| format!("[posture.{name}]: {error}"))?;
+        let worker =
+            WorkerConfig::from_file(file).map_err(|error| format!("[posture.{name}]: {error}"))?;
+        Ok(Self {
+            name: name.to_string(),
+            shell: (
+                name.to_string(),
+                Zones {
+                    allow: policy.commands.clone(),
+                    ..Zones::default()
+                },
+            ),
+            network: (
+                name.to_string(),
+                Zones {
+                    allow: network_allow(&policy),
+                    ..Zones::default()
+                },
+            ),
+            files: (
+                name.to_string(),
+                FilesList {
+                    allow: policy.paths.clone(),
+                    ..FilesList::default()
+                },
+            ),
+            policy,
+            worker,
+            composed: false,
+        })
+    }
+
     /// Its shell list, as written.
     pub fn shell(&self) -> &Zones {
         &self.shell.1
@@ -997,6 +1039,35 @@ mod tests {
         let file = lists_of_file("luu.toml", &started.policy);
         assert!(file.copied.is_none());
         assert!(Policies::recompose(&Place::host(), &file).is_none());
+    }
+
+    /// A posture read as an environment builds the posture's own sandbox and
+    /// records the hashes the posture always recorded, so a session made on
+    /// it resumes on it.
+    #[test]
+    fn a_posture_is_read_as_the_environment_it_always_was() {
+        let dir = std::env::temp_dir().join(format!("luu-posture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("wide.toml");
+        std::fs::write(
+            &file,
+            "[worker]\nruntime = \"docker\"\nimage = \"luu-worker:dev\"\n\n\
+             [sandbox]\ncommands = [\"git\", \"ls\"]\nnetwork = true\n\n\
+             [[sandbox.paths]]\npath = \".\"\naccess = \"read-write\"\n",
+        )
+        .unwrap();
+        let resolved = Resolved::of_posture("wide", &file).expect("reads");
+        let from_file = SandboxPolicy::from_file(&file).unwrap();
+        assert_eq!(resolved.policy, from_file);
+        assert_eq!(resolved.worker.runtime, Runtime::Docker);
+        assert_eq!(resolved.worker.image.as_deref(), Some("luu-worker:dev"));
+        assert!(!resolved.composed);
+        let lists = resolved.lists(&resolved.policy);
+        assert!(lists.same(&lists_of_file("wide.toml", &from_file)));
+        assert_eq!(lists.shell.name, "wide");
+        assert_eq!(resolved.network().allow, ["*"]);
+        assert!(Resolved::of_posture("gone", &dir.join("nope.toml")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

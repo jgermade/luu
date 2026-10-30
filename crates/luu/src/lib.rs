@@ -1022,6 +1022,7 @@ fn run_key(action: &KeyAction) -> Result<()> {
             let signer = Signer::generate()?;
             write_private(out, &signer.secret())?;
             eprintln!("wrote {} (mode 0600)", out.display());
+            eprintln!("add these lines to config.toml's [approvals]:");
             println!("[[approvals.key]]");
             println!("name = \"{name}\"");
             println!("public = \"{}\"", signer.public());
@@ -1241,17 +1242,32 @@ impl SandboxArgs {
             .unwrap_or_else(|| base.join("luu.toml")))
     }
 
-    /// `[approvals]`: who may approve, and whether anyone must sign to. A file
-    /// without the block is not an error — it is a `luu.toml` from before
-    /// signatures existed, and its approvals are the operator's own.
+    /// `[approvals]`: who may approve, and whether anyone must sign to — out of
+    /// luu's own `config.toml` since 2026-10-30, and out of the policy file
+    /// only where that has none, said once as it is read: who may approve is
+    /// the operator's, not a project's. A policy file without the block is not
+    /// an error — it is a `luu.toml` from before signatures existed. See
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`, step 4.
     fn approvers(&self) -> Result<Approvers> {
-        let path = self.policy_path()?;
-        match path.exists() {
-            true => {
-                Approvers::from_file(&path).with_context(|| format!("reading {}", path.display()))
-            }
-            false => Ok(Approvers::default()),
+        if let Ok((config, _)) = crate::provider::Config::load()
+            && let Some(approvers) = config.approvals()
+        {
+            return Ok(approvers.clone());
         }
+        let path = self.policy_path()?;
+        let from_file = match path.exists() {
+            true => Approvers::from_file(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+            false => Approvers::default(),
+        };
+        if from_file != Approvers::default() {
+            eprintln!(
+                "warning: [approvals] is read from {} because config.toml has none: it belongs \
+                 in config.toml, where a project cannot set it",
+                path.display()
+            );
+        }
+        Ok(from_file)
     }
 
     /// The `[worker]` block of a policy file, and the flags over it. A
@@ -2720,13 +2736,20 @@ pub async fn run() -> Result<()> {
         let (postures, environments, postures_path, ui, resend, server) =
             match crate::provider::Config::load() {
                 Ok((config, path)) => (
-                    config.postures().clone(),
-                    config
-                        .policies()
-                        .resolve_all()
-                        .into_iter()
-                        .map(|(name, resolved)| (name, std::sync::Arc::new(resolved)))
-                        .collect::<std::collections::BTreeMap<_, _>>(),
+                    // Read as environments of the same name: nothing offers a
+                    // posture any more, and a session recorded on one resumes
+                    // on it. See
+                    // `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`.
+                    {
+                        for name in config.postures().keys() {
+                            eprintln!(
+                                "warning: [posture.{name}] is read as an environment: postures \
+                                 are going, and a new session is made from a runtime and lists"
+                            );
+                        }
+                        std::collections::BTreeMap::<String, crate::provider::Posture>::new()
+                    },
+                    serve::environments_of(&config),
                     path.map(|path| path.display().to_string()),
                     config.ui().cloned(),
                     config.resend().unwrap_or_default(),
@@ -2792,7 +2815,7 @@ pub async fn run() -> Result<()> {
         eprint!("{}", agency.describe());
         if approvers.required {
             eprintln!(
-                "approvals — signed, {} key(s) named in the policy file",
+                "approvals — signed, {} key(s) named in [approvals]",
                 approvers.keys.len()
             );
         }

@@ -87,6 +87,10 @@ access = "read-write"
 # session with a person at the keyboard is what every measurement in this
 # repository was made under. See RECORD/2026-09-04.signed-approvals.completed.md.
 #
+# **In luu's own config.toml since 2026-10-30**, not here: who may approve is
+# the operator's to say, not a project's. A policy file's block is read only
+# where config.toml has none, with a warning.
+#
 #   [approvals]
 #   required = true
 #

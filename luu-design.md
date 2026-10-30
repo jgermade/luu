@@ -1032,10 +1032,18 @@ access = "execute"
   default seccomp profile. Until 2026-09-08 every contained run in this
   repository was Docker Desktop on macOS, by hand, once. See
   [`RECORD/2026-09-08.the-container-on-a-runner.completed.md`](RECORD/2026-09-08.the-container-on-a-runner.completed.md).
-- **A session picks its posture, and the container's lifetime is the session's.**
-  What is chosen is not a runtime but a *posture* — the policy file, which
-  decides the sandbox and the seam together, on purpose — named in the state
-  directory's `config.toml` beside the providers:
+- **A session is made from a runtime, an image and lists, and the container's
+  lifetime is the session's.** Until 2026-10-30 what was chosen was a *posture*
+  — the policy file, which decided the sandbox and the seam together, on purpose.
+  That purpose did not survive the lists: a posture moved what a session may do
+  with where it runs, so *Docker with no network* was a second file. **Postures
+  are gone from every surface**: nothing offers or writes one, and a
+  `[posture.<name>]` still in `config.toml` is read as an environment of the same
+  name (`policies::Resolved::of_posture` — its file's sandbox unchanged, three
+  lists named after it), so a session recorded on one resumes on it. See
+  [`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md)
+  step 4. What the rest of this entry says of a posture is how it worked, and how
+  an environment by name still does:
 
   ```toml
   [posture.container]
@@ -1107,10 +1115,10 @@ access = "execute"
   [`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md).
   With a posture or an environment it is as
   before (`resolve_with` swaps an environment's lists; a posture's lists are its policy file).
-  **Settings → Runtimes writes the postures table**, naming a policy file out of the
-  ones at the top of the checkout and never one the page types, and the server
-  replaces the postures it offers at once. Postures are no longer read only at
-  startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)).
+  **Settings → Runtimes wrote the postures table** from 2026-10-01
+  ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md))
+  until 2026-10-30, when the section and `PUT /api/postures` went; it writes the
+  images now.
   **And one container runtime may be the default**: `[runtimes] default`,
   written from its card (`PUT /api/runtimes/default`; `host`, written as no
   table, is this machine again), is where sessions start — the first one of
@@ -1653,7 +1661,11 @@ exists — it is the one thing the gate still names, and only because a signatur
 bound to no job could be replayed against any of them. The server refuses a
 signature that names an id other than the one it is about to open, and an
 unsigned approval names nothing at all. The verifying
-keys are named in `luu.toml`:
+keys are named in **luu's own `config.toml`** — since 2026-10-30; a policy file's
+`[approvals]` is read only where `config.toml` has none, with a warning, because who
+may approve is the operator's to say and never a project's
+([`RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`](RECORD/2026-10-30.a-session-carries-its-policies.WIP.md),
+step 4):
 
 ```toml
 [approvals]

@@ -1751,7 +1751,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             )),
         )
         .route("/api/brands/icon/{slug}", get(get_brand_icon))
-        .route("/api/postures", get(get_postures).put(put_postures))
+        .route("/api/postures", get(get_postures))
         .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions.json", get(list_sessions))
@@ -5385,13 +5385,11 @@ struct RuntimesView {
     /// not. `GET /api/runtimes/{runtime}` asks one.
     runtimes: Vec<crate::runtimes::RuntimeView>,
     tasks: Vec<crate::runtimes::TaskView>,
-    postures: std::collections::BTreeMap<String, PostureRow>,
-    /// The policy files a new posture may name.
+    /// The policy files at the top of the checkout, each with where it runs:
+    /// the images they name are built from here.
     policies: Vec<PolicyRow>,
     /// `[image.<name>]`, which Settings → Runtimes edits.
     images: std::collections::BTreeMap<String, crate::provider::Image>,
-    /// The posture the live session is on, which may not be removed.
-    running: Option<String>,
     /// `[terminal] host`.
     host_shell: &'static str,
     /// `[runtimes] default`: the container runtime a session starts in, or
@@ -5512,10 +5510,8 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         base: base.display().to_string(),
         runtimes,
         tasks: app.tasks.list(),
-        postures,
         policies,
         images,
-        running: app.posture.lock().await.clone(),
         host_shell,
         default_runtime,
     })
@@ -5759,101 +5755,6 @@ async fn put_images(
     if let Err(error) = write_config(current.with_images(asked.images), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
-    runtimes_answer(&state, &headers).await
-}
-
-#[derive(serde::Deserialize)]
-struct PosturesAsk {
-    postures: std::collections::BTreeMap<String, crate::provider::Posture>,
-}
-
-/// Replaces `[posture.*]`, and the postures this server offers with it.
-///
-/// A new posture names a policy file **out of the list** [`policy_files`]
-/// makes, never one the page types; a posture the file already had keeps
-/// whatever it names, whoever wrote it. The live session's posture may not be
-/// removed: it would be running under a name the file no longer has.
-///
-/// [`policy_files`]: crate::runtimes::policy_files
-async fn put_postures(
-    State(state): State<AppRouterState>,
-    headers: axum::http::HeaderMap,
-    Json(asked): Json<PosturesAsk>,
-) -> Response {
-    if let Err(refused) = engines_allowed(&state, &headers) {
-        return *refused;
-    }
-    let app = &state.app;
-    let Some(path) = config_path().await else {
-        return (
-            StatusCode::CONFLICT,
-            "this machine has no state directory yet, so there is nowhere to write config.toml",
-        )
-            .into_response();
-    };
-    let current = match load_config().await {
-        Ok((config, _)) => config,
-        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
-    };
-    let base = app.agency().await.sandbox.base().to_path_buf();
-    let offered: Vec<String> = {
-        let base = base.clone();
-        blocking(move || {
-            crate::runtimes::policy_files(&base)
-                .into_iter()
-                .map(|file| file.path)
-                .collect()
-        })
-        .await
-    };
-    for (name, posture) in &asked.postures {
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("`{name}` is not a posture name: letters, digits, `-` and `_`"),
-            )
-                .into_response();
-        }
-        let kept = current.postures().get(name) == Some(posture);
-        let listed = offered
-            .iter()
-            .any(|file| std::path::Path::new(file) == posture.policy);
-        if !kept && !listed {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!(
-                    "{} is not a policy file in {}: from this page a posture names one of those, \
-                     and any other path is written in config.toml by hand",
-                    posture.policy.display(),
-                    base.display()
-                ),
-            )
-                .into_response();
-        }
-    }
-    if let Some(running) = app.posture.lock().await.clone()
-        && !asked.postures.contains_key(&running)
-    {
-        return (
-            StatusCode::CONFLICT,
-            format!(
-                "the live session is on `{running}`: move it to another posture first, from the \
-                 terminal's picker"
-            ),
-        )
-            .into_response();
-    }
-    let postures = asked.postures.clone();
-    if let Err(error) = write_config(current.with_postures(asked.postures), path).await {
-        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
-    }
-    *app.postures
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = postures;
     runtimes_answer(&state, &headers).await
 }
 
@@ -7608,6 +7509,32 @@ async fn probe_provider(
     .into_response()
 }
 
+/// Every environment a session may name: `config.toml`'s, resolved, and
+/// each `[posture.<name>]` read as one ([`crate::policies::Resolved::of_posture`])
+/// — so a session recorded on a posture resumes on it, while nothing offers a
+/// posture any more. A posture whose file does not load is left out and said
+/// once, in the log. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md` §2, step 4.
+pub fn environments_of(
+    config: &crate::provider::Config,
+) -> std::collections::BTreeMap<String, Arc<crate::policies::Resolved>> {
+    let mut all: std::collections::BTreeMap<_, _> = config
+        .policies()
+        .resolve_all()
+        .into_iter()
+        .map(|(name, resolved)| (name, Arc::new(resolved)))
+        .collect();
+    for (name, posture) in config.postures() {
+        match crate::policies::Resolved::of_posture(name, &posture.policy) {
+            Ok(resolved) => {
+                all.insert(name.clone(), Arc::new(resolved));
+            }
+            Err(error) => tracing::warn!(target: "luu::session", "{error}"),
+        }
+    }
+    all
+}
+
 /// The lists and the environments that combine them, as `config.toml` has
 /// them: what Settings → Policies shows and edits. See
 /// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
@@ -7706,12 +7633,7 @@ async fn put_policies(
         .app
         .environments
         .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = config
-        .policies()
-        .resolve_all()
-        .into_iter()
-        .map(|(name, resolved)| (name, Arc::new(resolved)))
-        .collect();
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = environments_of(&config);
     Json(policies_view(&config, state.providers_editable)).into_response()
 }
 

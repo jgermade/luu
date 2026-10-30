@@ -198,8 +198,8 @@ impl Signer {
     }
 }
 
-/// One public key, as `luu.toml` names it.
-#[derive(Debug, Clone, Deserialize)]
+/// One public key, as `config.toml` names it.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApproverKey {
     pub name: String,
@@ -207,8 +207,11 @@ pub struct ApproverKey {
     pub public: String,
 }
 
-/// The `[approvals]` block: who may approve, and whether anyone must.
-#[derive(Debug, Clone, Default, Deserialize)]
+/// The `[approvals]` block: who may approve, and whether anyone must. In
+/// luu's own `config.toml` since 2026-10-30, and read from a policy file only
+/// where that has none: who may approve is not a project's to say. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.WIP.md`, step 4.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Approvers {
     /// Whether an *unsigned* approval is admitted. Off by default: a loopback
@@ -217,9 +220,9 @@ pub struct Approvers {
     ///
     /// It never decides whether a *wrong* signature is admitted. That one is
     /// always refused.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
-    #[serde(default, rename = "key")]
+    #[serde(default, rename = "key", skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<ApproverKey>,
 }
 
