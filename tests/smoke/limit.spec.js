@@ -175,6 +175,10 @@ test("a turn at its tool limit asks, and Auto goes on by itself", async ({ page 
   await field.press("Enter")
   await expect.poll(() => readFileSync(join(home, "config.toml"), "utf8")).toContain("max-tool-steps = 12")
   await expect(page.locator(".general-pane")).toContainText("--max-tool-steps 2")
+  // The page's own *saved*, not the file: the server writes the file before
+  // it answers, and an edit typed before the page has the answer is clobbered
+  // by it — or compared against the file as it was, and never sent.
+  await expect(page.locator(".general-pane")).toContainText("saved")
   await field.fill("")
   await field.press("Enter")
   await expect.poll(() => readFileSync(join(home, "config.toml"), "utf8")).not.toContain("max-tool-steps")
