@@ -38,6 +38,15 @@ pub use proxy::{EgressFilter, EgressProxy};
 #[cfg_attr(not(target_os = "linux"), path = "fallback.rs")]
 mod kernel;
 
+/// What this machine's kernel cannot hold a command to, or `None` where it
+/// holds all of it: the gap a session on the host would have here, said
+/// before one is moved there. In a container the worker holds the command
+/// inside the container, so this is the host's question only. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
+pub fn host_gap() -> Option<String> {
+    kernel::prepare(&[], false).missing
+}
+
 /// Read and execute, never write, granted **to a subprocess** whenever any
 /// command is allowed — a program cannot run without reading its own
 /// interpreter and libc.

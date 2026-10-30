@@ -1098,11 +1098,13 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
 })
 
 /**
- * The folder the panels are rooted at, chosen under the one `luu serve` was
+ * The folder the session works in, chosen under the one `luu serve` was
  * started in. Nothing here widens anything — every path still resolves through
- * `Sandbox::check_path` against that base, and the root is a prefix the page
- * narrows what it *lists* by. See
- * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+ * `Sandbox::check_path`. Since 2026-10-30 the folder is the *session's*: a
+ * session with no turns yet moves into it and its sandbox's base is that
+ * folder, rather than the page narrowing what it lists. See
+ * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
+ * `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
  */
 test("the workspace can be narrowed to a subdirectory of where serve started", async ({ page }) => {
   const errors = []
@@ -1499,15 +1501,15 @@ test("a folder that only holds a folder is one row, and opening one keeps the sc
   await chooseFolder(page)
   await page.click('.inspector .tabs button:has-text("Files")')
   const tree = page.locator(".inspector .tree")
-  // `editors/` holds `vscode/` and nothing else, in this checkout.
-  const compact = tree.locator('li:has(.name:text-is("editors/vscode"))')
+  // `tests/` holds `smoke/` and nothing else, in this checkout.
+  const compact = tree.locator('li:has(.name:text-is("tests/smoke"))')
   await expect(compact).toHaveCount(1)
 
   await compact.locator(".row").click()
   await expect(tree.locator('.name:text-is("package.json")').first()).toBeVisible()
   await compact.locator(".twist").click()
-  await expect(tree.locator('.name:text-is("editors")')).toHaveCount(1)
-  await expect(tree.locator('.name:text-is("vscode")')).toHaveCount(1)
+  await expect(tree.locator('.name:text-is("tests")')).toHaveCount(1)
+  await expect(tree.locator('.name:text-is("smoke")')).toHaveCount(1)
 
   // Clicked from the page rather than by Playwright, which would scroll the
   // row into view first and hide the very thing being measured.

@@ -443,6 +443,18 @@ struct File {
     files: BTreeMap<String, crate::policies::FilesList>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     environment: BTreeMap<String, crate::policies::Environment>,
+    /// `[image.<name>]`: the images a session may run in, each with the trees
+    /// that exist only inside it. Where the new session's *Runtime* finds its
+    /// images, in place of the postures that used to name them. See [`Image`]
+    /// and `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    image: BTreeMap<String, Image>,
+    /// `[approvals]`: who may approve a plan, and whether anyone must sign.
+    /// Here and not in a project's policy file, which is read for it only
+    /// where this has none. See
+    /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`, step 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approvals: Option<agent_core::approval::Approvers>,
     /// `[ui]`: what the debug page looks like, as opposed to where a run
     /// sends. Here because it is the same kind of thing as the two above —
     /// something written on this machine — and because the one setting in it
@@ -587,7 +599,7 @@ pub struct Ui {
     pub brand_icons: Option<PathBuf>,
 }
 
-/// `[sessions]`. One setting so far.
+/// `[sessions]`: what the server does with a session on its own.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Sessions {
@@ -597,11 +609,33 @@ pub struct Sessions {
     /// See `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
     #[serde(default = "enabled")]
     pub auto_name: bool,
+    /// How many sessions may be live at once, each with its agency, its
+    /// worker and its container. One more is refused, naming the ones that
+    /// are. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §3.
+    #[serde(default = "max_live")]
+    pub max_live: usize,
+    /// How long a live session nobody uses — no turn, no proposal waiting, no
+    /// client — stays live before it is put to sleep: checkpointed and its
+    /// worker ended, resumed when it is opened again. `0` never sleeps one.
+    #[serde(default = "idle_minutes")]
+    pub idle_minutes: u64,
+}
+
+fn max_live() -> usize {
+    4
+}
+
+fn idle_minutes() -> u64 {
+    30
 }
 
 impl Default for Sessions {
     fn default() -> Self {
-        Self { auto_name: true }
+        Self {
+            auto_name: true,
+            max_live: max_live(),
+            idle_minutes: idle_minutes(),
+        }
     }
 }
 
@@ -777,6 +811,29 @@ pub struct AuthorityNote {
     pub position: Option<agent_core::sandbox::NotePosition>,
 }
 
+/// One image a session may run in: what a runtime pulls or builds, and the
+/// trees inside it that the host must not try to resolve — its toolchain, a
+/// policy file's `[[worker.paths]]`. Which container runtime runs it is the
+/// session's to choose, not the image's.
+///
+/// ```toml
+/// [image.luu-worker]
+/// ref = "luu-worker:dev"
+/// [[image.luu-worker.paths]]
+/// path = "/usr/local/cargo"
+/// access = "execute"
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Image {
+    /// What the runtime is given: `luu-worker:dev`, `ghcr.io/o/r:1`.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// In-image paths, absolute.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<agent_core::sandbox::PathRule>,
+}
+
 /// One named posture: a policy file, and nothing else.
 ///
 /// The file decides the sandbox **and** the seam — `commands`, `network`,
@@ -806,6 +863,8 @@ pub struct Config {
     providers: BTreeMap<String, Profile>,
     postures: BTreeMap<String, Posture>,
     policies: crate::policies::Policies,
+    images: BTreeMap<String, Image>,
+    approvals: Option<agent_core::approval::Approvers>,
     ui: Option<Ui>,
     terminal: Option<Terminal>,
     runtimes: Option<Runtimes>,
@@ -865,6 +924,12 @@ pub enum ConfigError {
     NoSuchPosture { path: String, name: String },
     #[error("{path}: {message}")]
     Policies { path: String, message: String },
+    #[error("{path}: [image.{name}]: {problem}")]
+    BadImage {
+        path: String,
+        name: String,
+        problem: String,
+    },
     #[error(
         "{path}: [provider.{profile}] names engine = \"{engine}\", and there is no [engine.{engine}]"
     )]
@@ -935,6 +1000,8 @@ impl Config {
                 files: file.files,
                 environments: file.environment,
             },
+            images: file.image,
+            approvals: file.approvals,
             ui: file.ui,
             terminal: file.terminal,
             runtimes: file.runtimes,
@@ -950,6 +1017,7 @@ impl Config {
         config.check_messages(path)?;
         config.check_hosts(path)?;
         config.check_server(path)?;
+        config.check_images(path)?;
         config
             .policies
             .check(config.postures.keys())
@@ -1020,6 +1088,44 @@ impl Config {
                         problem,
                     });
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// An image has a reference a runtime can be given, its in-image paths
+    /// are absolute, and no two names give the same reference: a session
+    /// records the reference, and two tables for one would make which paths
+    /// it ran with depend on which was read first.
+    fn check_images(&self, path: &str) -> Result<(), ConfigError> {
+        let bad = |name: &str, problem: String| ConfigError::BadImage {
+            path: path.to_string(),
+            name: name.to_string(),
+            problem,
+        };
+        let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
+        for (name, image) in &self.images {
+            let reference = image.reference.as_str();
+            if reference.is_empty() || reference.chars().any(char::is_whitespace) {
+                return Err(bad(
+                    name,
+                    format!("ref = \"{reference}\" is not an image: one word, with no spaces"),
+                ));
+            }
+            if let Some(rule) = image.paths.iter().find(|rule| !rule.path.is_absolute()) {
+                return Err(bad(
+                    name,
+                    format!(
+                        "{} is not absolute: an image's paths are where its own trees are",
+                        rule.path.display()
+                    ),
+                ));
+            }
+            if let Some(other) = seen.insert(reference, name) {
+                return Err(bad(
+                    name,
+                    format!("[image.{other}] has ref = \"{reference}\" too: one name per image"),
+                ));
             }
         }
         Ok(())
@@ -1177,7 +1283,7 @@ impl Config {
     /// The file this would be written to, without asking anything.
     ///
     /// **Never [`crate::config::dir`]**, for the reason that function gives
-    /// about `luu stdio`: it prompts when nothing has been chosen, and a prompt
+    /// about a process nobody is typing to: it prompts when nothing has been chosen, and a prompt
     /// inside a request handler is a hang with a socket attached. A machine that
     /// has not chosen a state directory has nowhere to put this, and says so.
     pub fn path_for_writing() -> Option<PathBuf> {
@@ -1203,6 +1309,8 @@ impl Config {
             network: self.policies.network.clone(),
             files: self.policies.files.clone(),
             environment: self.policies.environments.clone(),
+            image: self.images.clone(),
+            approvals: self.approvals.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             runtimes: self.runtimes,
@@ -1287,6 +1395,8 @@ impl Config {
             providers,
             postures: self.postures.clone(),
             policies: self.policies.clone(),
+            images: self.images.clone(),
+            approvals: self.approvals.clone(),
             ui: self.ui.clone(),
             terminal: self.terminal,
             runtimes: self.runtimes,
@@ -1460,6 +1570,24 @@ impl Config {
         &self.postures
     }
 
+    /// `[approvals]`, where the file has one.
+    pub fn approvals(&self) -> Option<&agent_core::approval::Approvers> {
+        self.approvals.as_ref()
+    }
+
+    /// Every image the file names, already checked.
+    pub fn images(&self) -> &BTreeMap<String, Image> {
+        &self.images
+    }
+
+    /// The file as Settings → Runtimes hands back the images, whole.
+    pub fn with_images(&self, images: BTreeMap<String, Image>) -> Self {
+        Self {
+            images,
+            ..self.clone()
+        }
+    }
+
     /// Every list and environment the file names, already checked.
     pub fn policies(&self) -> &crate::policies::Policies {
         &self.policies
@@ -1547,7 +1675,7 @@ pub struct Resolved {
     /// How tool calls travel to and from this destination.
     pub tool_calls: ToolCalls,
     /// `max-tool-steps`: the model's, the profile's, the file's own — `None`
-    /// where none says. `luu chat` reads it once; `serve` and `stdio` ask
+    /// where none says. `luu chat` reads it once; `serve` asks
     /// [`Config::max_tool_steps`] at each turn instead, so Settings reaches the
     /// next one.
     pub max_tool_steps: Option<u32>,
@@ -1970,6 +2098,50 @@ mod tests {
         assert!(!back.render().unwrap().contains("[runtimes]"));
         assert!(config("[runtimes]\ndefualt = \"podman\"\n").is_err());
         assert!(config("[runtimes]\ndefault = \"vagrant\"\n").is_err());
+    }
+
+    /// `[approvals]` in luu's own file: read, and written back as read.
+    #[test]
+    fn approvals_are_the_operator_s_and_kept_through_a_write() {
+        assert!(config("").unwrap().approvals().is_none());
+        let text = "[approvals]\nrequired = true\n\n[[approvals.key]]\nname = \"j\"\npublic = \"ed25519:00\"\n";
+        let loaded = config(text).expect("loads");
+        let approvals = loaded.approvals().expect("there");
+        assert!(approvals.required);
+        assert_eq!(approvals.keys[0].name, "j");
+        let again = config(&loaded.render().unwrap()).expect("what it writes loads");
+        assert_eq!(again.approvals(), loaded.approvals());
+        assert!(config("[approvals]\nrequire = true\n").is_err());
+    }
+
+    /// `[image.<name>]`: a reference and its in-image paths, written back as
+    /// read; refused with no reference, a relative path, or a reference two
+    /// names share.
+    #[test]
+    fn an_image_is_a_reference_and_its_own_trees() {
+        let text = "[image.worker]\nref = \"luu-worker:dev\"\n\n\
+                    [[image.worker.paths]]\npath = \"/usr/local/cargo\"\naccess = \"execute\"\n";
+        let loaded = config(text).expect("loads");
+        let image = &loaded.images()["worker"];
+        assert_eq!(image.reference, "luu-worker:dev");
+        assert_eq!(image.paths[0].path, Path::new("/usr/local/cargo"));
+        let again = config(&loaded.render().unwrap()).expect("what it writes loads");
+        assert_eq!(again.images(), loaded.images());
+
+        let refused = |text: &str| match config(text) {
+            Err(ConfigError::BadImage { problem, .. }) => problem,
+            other => panic!("refused, not {other:?}"),
+        };
+        assert!(refused("[image.a]\nref = \"\"\n").contains("not an image"));
+        assert!(refused("[image.a]\nref = \"x y\"\n").contains("not an image"));
+        assert!(
+            refused(
+                "[image.a]\nref = \"x\"\n[[image.a.paths]]\npath = \"rel\"\naccess = \"read\"\n"
+            )
+            .contains("not absolute")
+        );
+        assert!(refused("[image.a]\nref = \"x\"\n[image.b]\nref = \"x\"\n").contains("one name"));
+        assert!(config("[image.a]\nreference = \"x\"\n").is_err());
     }
 
     #[test]

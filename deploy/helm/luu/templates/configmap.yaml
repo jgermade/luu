@@ -1,0 +1,11 @@
+{{- if .Values.policy }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "luu.fullname" . }}-policy
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+data:
+  luu.toml: |
+    {{- .Values.policy | nindent 4 }}
+{{- end }}

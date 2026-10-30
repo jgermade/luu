@@ -1,6 +1,6 @@
 // @ts-check
 /// Settings → Runtimes, as calls: the container runtimes probed, the images
-/// they have, a build of one that is missing, the postures, and the host
+/// they have, a build of one that is missing, the images, and the host
 /// shell's rule. Every write answers with the whole view again. See
 /// `crate::runtimes` and `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
 import { apiHeaders, loadPostures } from "./store.js"
@@ -43,10 +43,12 @@ export const saveHostShell = host => call("PUT", "./api/terminal", { host })
 /// first. Answers with the whole view, like the writes above.
 export const saveDefaultRuntime = runtime => call("PUT", "./api/runtimes/default", { runtime })
 
-/// The whole `[posture.*]` table, the way the page writes every table. The
-/// terminal's picker reads the postures too, so it is told.
-export async function savePostures(postures) {
-  const result = await call("PUT", "./api/postures", { postures })
+/// The whole `[image.*]` table: a name, its `ref` and its in-image paths.
+/// What the new session's *Runtime* offers, so the postures it reads are
+/// asked for again. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
+export async function saveImages(images) {
+  const result = await call("PUT", "./api/images", { images })
   if (result.ok) await loadPostures()
   return result
 }

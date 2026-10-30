@@ -4,6 +4,7 @@
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall
+#   wget -qO- https://jgermade.github.io/luu/setup.sh | sh    # where there is no curl
 #
 # With no command and a terminal to ask on, the first line asks what to do:
 # install, and — when it finds a binary already there — reinstall or uninstall.
@@ -18,13 +19,17 @@
 # Everything is a function and the last line calls `main`, so a download that
 # was cut short runs nothing. POSIX sh, because `| sh` is dash on Debian.
 #
-# See RECORD/2026-10-23.an-installer-and-a-landing.completed.md.
+# Downloads with curl, or with wget where there is no curl — a minimal Debian
+# ships wget alone. See RECORD/2026-10-23.an-installer-and-a-landing.completed.md
+# and RECORD/2026-10-30.three-ways-in.WIP.md.
 
 set -eu
 
 REPO="jgermade/luu"
 SETUP_URL="https://jgermade.github.io/luu/setup.sh"
 TMP=""
+# `curl` or `wget`: what downloads, and what the lines this prints say to run.
+GET=
 
 usage() {
 	cat <<EOF
@@ -32,6 +37,7 @@ luu setup: install, reinstall or uninstall luu on Linux and macOS.
 
 Usage:
   curl -fsSL $SETUP_URL | sh -s -- [command] [options]
+  wget -qO- $SETUP_URL | sh -s -- [command] [options]
   sh setup.sh [command] [options]
 
 Commands:
@@ -70,9 +76,49 @@ die() {
 }
 need() { command -v "$1" >/dev/null 2>&1; }
 
-# fetch URL FILE: false on any failure, a 404 included.
+# Which of curl and wget downloads: curl where there is one, nothing where
+# there is neither — uninstall needs no download.
+pick_getter() {
+	if need curl; then
+		GET=curl
+	elif need wget; then
+		GET=wget
+	fi
+}
+
+# The line that runs this script again, with what downloaded it.
+again() {
+	case "$GET" in
+	wget) printf 'wget -qO- %s | sh -s -- %s' "$SETUP_URL" "$*" ;;
+	*) printf 'curl -fsSL %s | sh -s -- %s' "$SETUP_URL" "$*" ;;
+	esac
+}
+
+# fetch URL FILE: false on any failure, a 404 included. wget is BusyBox's on
+# some systems, which has no --tries, so it is tried three times here.
 fetch() {
-	curl -fsSL --retry 3 --connect-timeout 20 -o "$2" "$1"
+	case "$GET" in
+	wget)
+		for _ in 1 2 3; do
+			wget -q -T 20 -O "$2" "$1" && return 0
+		done
+		rm -f "$2"
+		return 1
+		;;
+	*) curl -fsSL --retry 3 --connect-timeout 20 -o "$2" "$1" ;;
+	esac
+}
+
+# The URL a redirect ends at — what `latest` is answered with.
+redirected() {
+	case "$GET" in
+	wget)
+		# Every hop's headers, the first `Location` naming a tag is the answer.
+		wget -S --spider -T 20 -O /dev/null "$1" 2>&1 |
+			awk 'tolower($1) == "location:" && $2 ~ /\/releases\/tag\// { sub(/\r$/, "", $2); print $2; exit }'
+		;;
+	*) curl -fsSLI --retry 3 --connect-timeout 20 -o /dev/null -w '%{url_effective}' "$1" ;;
+	esac
 }
 
 # The release target this machine runs: the triple in the asset's name.
@@ -118,8 +164,7 @@ resolve_release() {
 	else
 		# The redirect GitHub answers `latest` with names the tag, and costs
 		# none of the API's rate limit.
-		latest=$(curl -fsSLI --retry 3 --connect-timeout 20 -o /dev/null -w '%{url_effective}' \
-			"https://github.com/$REPO/releases/latest") ||
+		latest=$(redirected "https://github.com/$REPO/releases/latest") ||
 			die "could not reach GitHub to find the latest release"
 		TAG=${latest##*/}
 		case "$TAG" in
@@ -195,13 +240,13 @@ path_hint() {
 
 already_installed() {
 	say "luu $1 is already installed at $DIR/luu."
-	say "To download it again: curl -fsSL $SETUP_URL | sh -s -- reinstall"
+	say "To download it again: $(again reinstall)"
 	path_hint
 }
 
 install_luu() {
 	force=$1
-	need curl || die "curl is needed to download luu"
+	[ -n "$GET" ] || die "curl or wget is needed to download luu"
 	need tar || die "tar is needed to unpack luu"
 	detect_target
 	resolve_release
@@ -369,7 +414,7 @@ uninstall_luu() {
 	if [ "$PURGE" = 0 ]; then
 		say "Kept luu's state (sessions, keys, config.toml, engines) in:"
 		printf '%s\n' "$dirs" | while IFS= read -r d; do say "  $d"; done
-		say "To delete it as well: curl -fsSL $SETUP_URL | sh -s -- uninstall --purge"
+		say "To delete it as well: $(again uninstall --purge)"
 		return
 	fi
 
@@ -395,6 +440,7 @@ uninstall_luu() {
 }
 
 main() {
+	pick_getter
 	COMMAND=install
 	EXPLICIT=0
 	DIR=${LUU_INSTALL_DIR:-}

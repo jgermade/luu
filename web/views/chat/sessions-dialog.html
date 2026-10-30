@@ -6,7 +6,7 @@
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`, and for what
   // each tab decides, `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`
   // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
-  const { state, resumeSession, deleteSession, archiveSession, refreshSessionsList, offeredProviders } = await import("@web/lib/store.js")
+  const { state, resumeSession, deleteSession, archiveSession, sleepSession, refreshSessionsList, offeredProviders } = await import("@web/lib/store.js")
   const {
     ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
     chooseRuntime, chooseList,
@@ -170,12 +170,25 @@
       : date.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
   }
   const isCurrent = s => s.id === state.currentSessionId
+  // Live beside the one on screen, with its own container: running, waiting
+  // at its gate, or idle. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+  const behind = s => !!s.live && !s.live.current && !isCurrent(s)
+  const liveWord = s => s.live.state === "running" ? "running"
+    : s.live.state === "gate" ? "waiting for you"
+    : state.attention?.[s.id] === "done" ? "finished"
+    : "live"
+  const sleep = async s => {
+    error = ""
+    if (!(await sleepSession(s.id))) error = state.error || "the session could not be put to sleep"
+  }
 
   // The order the server's `written_at` gives, and a session nothing was sent
   // in left out unless it is the one on screen — it holds nothing to open.
   // An archived one is in its own tab, newest put away first.
   $: listed = [...(state.sessions || [])]
-    .filter(s => !s.archived_at && (s.turns > 0 || isCurrent(s)))
+    // A live one that is running or waiting is listed even before its first
+    // turn ends; an empty idle one holds nothing to open, and sleeps on its own.
+    .filter(s => !s.archived_at && (s.turns > 0 || isCurrent(s) || (s.live && s.live.state !== "idle")))
     .sort((a, b) => (b.written_at ?? b.started_at ?? 0) - (a.written_at ?? a.started_at ?? 0))
   $: archived = [...(state.sessions || [])]
     .filter(s => s.archived_at)
@@ -300,7 +313,8 @@
         <button type="button" class="pick" :title="s.id" :disabled="!!switching" @click="pick(s)">
           <span class="name" :class.untitled="!named(s)">{{ nameOf(s) }}</span>
           <span class="facts dim">
-            {{ when(s) }} · {{ s.turns }} {{ s.turns === 1 ? "turn" : "turns" }}<span :if="isCurrent(s)"> · open</span><span :if="switching === s.id"> · opening…</span>
+            {{ when(s) }} · {{ s.turns }} {{ s.turns === 1 ? "turn" : "turns" }}<span :if="isCurrent(s)"> · open</span><span
+              :if="behind(s)" class="live-state" :class="s.live.state" :class.done="state.attention?.[s.id] === 'done'"> · {{ liveWord(s) }}</span><span :if="switching === s.id"> · opening…</span>
           </span>
         </button>
         <!-- Only where the server would take them: not the session on screen. -->
@@ -309,7 +323,14 @@
                   :aria-label="`Archive ${nameOf(s)}`" @click="archive(s, true)">
             <svg class="ic"><use href="#i-archive"/></svg>
           </button>
-          <button type="button" class="act delete" title="Delete this session and its stream"
+          <!-- Live beside the one on screen: put to sleep, not deleted — the
+               server deletes no live session. -->
+          <button :if="behind(s) &amp;&amp; s.live.state === 'idle'" type="button" class="act sleep"
+                  title="Put to sleep: its container ends, and it stays here to open again"
+                  :aria-label="`Put ${nameOf(s)} to sleep`" @click="sleep(s)">
+            <svg class="ic"><use href="#i-stop"/></svg>
+          </button>
+          <button :if="!behind(s)" type="button" class="act delete" title="Delete this session and its stream"
                   :aria-label="`Delete ${nameOf(s)}`" @click="confirming = s">
             <svg class="ic"><use href="#i-trash"/></svg>
           </button>
@@ -456,4 +477,8 @@
   /* Not opened from here: restored first. */
   .sessions.archived .pick { cursor: default; }
   .confirm { margin: 0 0 .5rem; overflow-wrap: anywhere; }
+  /* A live session beside the one on screen, and how it is. */
+  .live-state { color: var(--luu-accent); }
+  .live-state.gate { color: var(--luu-warn); font-weight: 500; }
+  .live-state.done { font-weight: 500; }
 </style>

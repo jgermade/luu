@@ -1,0 +1,11 @@
+apiVersion: v2
+name: luu
+description: luu serve — a local-first coding agent's web UI — as one pod with its state and its work tree on volumes. One identity, the token.
+type: application
+# Both set from the release at `helm package --version --app-version`; these
+# are what a chart built from a checkout says.
+version: 0.0.0
+appVersion: "0.0.0"
+home: https://jgermade.github.io/luu/
+sources:
+  - https://github.com/jgermade/luu

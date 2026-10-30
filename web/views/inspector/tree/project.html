@@ -34,7 +34,7 @@
   let host = currentHost
   // name|path → the directories in it, or { error }.
   let listings = {}
-  let at = workspace.picker.at || ""
+  let at = workspace.picker.at || workspace.folder || ""
   // `null` closed, `{}` adding, `{ name }` editing.
   let editingHost = null
   const label = name => name || "localhost"
@@ -45,16 +45,21 @@
   // Directories only: this chooses where the tree starts, and a file is not a
   // place a tree can start. Ignored ones are listed dimmed rather than hidden.
   $: folders = (listed?.entries || []).filter(row => row.dir)
-  $: base = reach[host]?.base || (host === currentHost ? workspace.base : "")
+  $: base = reach[host]?.base || (host === currentHost ? workspace.serveRoot || workspace.base : "")
   $: crumbs = [{ name: base.split("/").pop() || "the workspace", path: "" }]
     .concat(here ? here.split("/").map((name, i, all) => ({ name, path: all.slice(0, i + 1).join("/") })) : [])
   $: elsewhere = host !== currentHost
   $: summary = [label(host), here || "the whole workspace"].join("  ·  ")
 
+  // Folders under where that host's `serve` was started — `/api/folders`,
+  // which browses the root rather than the session's own folder. A host on a
+  // luu from before it answers 404 there, and its workspace tree is the same
+  // listing from its one base.
   const list = async (name, path) => {
     const key = `${name}|${path}`
     if (listings[key]) return
-    const asked = await askHost(name, `workspace/tree?path=${encodeURIComponent(path)}`)
+    let asked = await askHost(name, `folders?path=${encodeURIComponent(path)}`)
+    if (!asked.ok) asked = await askHost(name, `workspace/tree?path=${encodeURIComponent(path)}`)
     listings = { ...listings, [key]: asked.ok ? asked.view : { entries: [], error: asked.error } }
   }
 
@@ -66,7 +71,7 @@
     reach = {
       ...reach,
       [name]: asked.ok
-        ? { state: "ok", base: asked.view.base || "" }
+        ? { state: "ok", base: asked.view.root || asked.view.base || "" }
         : { state: "down", error: asked.error },
     }
     return asked.ok
@@ -84,7 +89,7 @@
     host = name
     if (name !== currentHost && reach[name]?.state !== "ok" && !(await probe(name))) return
     if (host !== name) return
-    at = name === currentHost ? workspace.root || "" : remembered(name, reach[name]?.base || "")
+    at = name === currentHost ? workspace.folder || "" : remembered(name, reach[name]?.base || "")
     await list(name, at)
   }
 
@@ -193,8 +198,9 @@
     <div class="modal-foot">
       <div class="modal-actions">
         <span class="chosen small dim" :title="summary">{{ summary }}</span>
+        <span :if="workspace.notice" class="notice small">{{ workspace.notice }}</span>
         <button type="button" class="save" :disabled="reach[host]?.state === 'down'"
-                title="Show this folder, and keep the session on screen"
+                title="Work in this folder: the session on screen moves there if it has no turns yet, and new sessions start there"
                 @click="useFolder()">Use this folder</button>
       </div>
     </div>
@@ -350,4 +356,6 @@
     .project { grid-template-columns: 1fr; height: auto; }
     .hosts .list, .folders { max-height: 12rem; }
   }
+  /* Why the folder did not move the session on screen, and what it will do. */
+  .notice { color: var(--luu-warn); max-width: 28rem; }
 </style>

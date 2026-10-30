@@ -33,7 +33,7 @@ export function placeOptions(postures) {
       label: runs(place),
       title: place?.missing
         ? `${label} — ${place.missing}`
-        : `${label} · ${place?.policy || ""}${place?.gap ? " · the container keeps its network" : ""}`,
+        : `${label} · ${place?.policy || ""}${place?.gap ? ` · ${place.gap}` : ""}`,
       disabled: !!place?.missing,
     }
   }
@@ -79,6 +79,7 @@ export function hereOption(postures, live) {
     runtime: "",
     where: runtime,
     name,
+    image,
     label: runs(place),
     title: `${name} · ${runs(place)}`,
     disabled: false,
@@ -105,17 +106,26 @@ export function stillThere(postures, value) {
 }
 
 /// Where a session made from lists may run, out of `/api/postures`'
-/// `runtimes`: this machine, and every image a posture or an environment
-/// names on every container runtime — `[{ value, runtime, image, label, title,
-/// disabled }]`, the value `runtime|image`. The new session's *Runtime*; see
-/// `RECORD/2026-10-22.policies-not-postures.WIP.md`, *every session from lists*.
+/// `runtimes`: this machine, and every image `config.toml` declares on every
+/// container runtime — `[{ value, runtime, image, where, label, title, gap,
+/// disabled }]`, the value `runtime|image`. The new session's *Runtime*, and
+/// since 2026-10-30 where the Runtime dialog moves a session that carries its
+/// lists; see `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
+/// `gap` is what that place cannot hold: the container's network on Apple's
+/// `container`, or this machine's kernel.
 export function runtimeOptions(postures) {
   return (postures?.runtimes || []).map(place => ({
     value: `${place.runtime}|${place.image || ""}`,
     runtime: place.runtime,
     image: place.image || null,
+    where: place.runtime,
     label: runs(place),
-    title: place.missing || (place.gap ? "the container keeps its network" : ""),
+    title: place.missing || place.gap || "",
+    gap: place.gap || null,
     disabled: !!place.missing,
   }))
 }
+
+/// Whether the live session carries its lists (format 26), and so moves by
+/// runtime and image rather than by a posture's name.
+export const carriesLists = live => !!live?.lists?.copied

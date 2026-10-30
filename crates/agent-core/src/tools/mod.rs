@@ -20,9 +20,11 @@ use crate::sandbox::{Access, Sandbox, Verdict};
 
 pub mod command;
 pub mod fs;
+pub mod install;
 
 pub use command::RunCommand;
 pub use fs::{EditFile, ListDir, ReadFile, WriteFile};
+pub use install::Install;
 
 /// Tool output is capped rather than pruned. Pruning old results out of the
 /// history is a later, measured change; a cap now is the part that is not a
@@ -312,6 +314,7 @@ impl Tools {
             Box::new(EditFile),
             Box::new(WriteFile),
             Box::new(RunCommand),
+            Box::new(Install),
         ])
     }
 

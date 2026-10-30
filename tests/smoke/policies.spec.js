@@ -189,12 +189,42 @@ test("a session is made from a runtime and three lists, and comes back made from
   await expect(dialog).toHaveCount(0)
   expect((await settings()).lists.environment).toBe("empty")
 
-  // Picked from the history, the first is resumed made from its lists again.
+  // Picked from the history, the first is resumed made from its lists again —
+  // from the copy it carries, so `registries` edited since changes nothing
+  // about it (format 26). Before, the hash moved and the resume was a 409.
+  writeFileSync(join(home, "config.toml"), CONFIG.replace('allow = ["crates.io"]', 'allow = ["example.org"]'))
   await page.click('button[title="Earlier sessions"]')
   await dialog.locator("ul.sessions li:not(.on) .pick").first().click()
   await expect(dialog).toHaveCount(0)
   await expect.poll(async () => (await settings()).lists.shell.name).toBe("tools")
   expect((await settings()).lists.network.name).toBe("registries")
+  expect((await settings()).lists.network.allow).toEqual(["crates.io"])
+  writeFileSync(join(home, "config.toml"), CONFIG)
+
+  // Moved while it lives, by runtime alone: its lists go with it (format 26).
+  // `direct` is this machine without a container, which any machine has.
+  const moveTo = body => fetch(`${BASE}/api/session/runtime`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  const moved = await moveTo({ runtime: "direct" })
+  expect(moved.ok).toBe(true)
+  expect((await moved.json()).moved).toBe(true)
+  const movedThere = await settings()
+  expect(movedThere.lists.shell.name).toBe("tools")
+  expect(movedThere.lists.network.allow).toEqual(["crates.io"])
+  expect((await (await fetch(`${BASE}/api/terminal`)).json()).posture.runtime).toContain("direct")
+  // Nothing was installed (`install` runs only in a container), so a move
+  // that asks to reinstall has nothing to ask for and says nothing of it.
+  expect((await (await fetch(`${BASE}/api/terminal`)).json()).installed).toEqual([])
+  const again = await (await moveTo({ runtime: "host", reinstall: true })).json()
+  expect(again.moved).toBe(true)
+  expect(again.reinstall).toBeUndefined()
+  expect((await moveTo({ runtime: "direct" })).ok).toBe(true)
+  // Where it already is, nothing moves.
+  expect((await (await moveTo({ runtime: "direct" })).json()).moved).toBe(false)
+  expect((await moveTo({ runtime: "host" })).ok).toBe(true)
 
   // What the server refuses, and says why.
   const refused = async (body, text) => {
@@ -207,7 +237,7 @@ test("a session is made from a runtime and three lists, and comes back made from
     expect(await answer.text()).toContain(text)
   }
   await refused({ lists: { network: "nope" } }, "there is no [network.nope]")
-  await refused({ runtime: "docker", lists: {} }, "no posture or environment in config.toml names one")
+  await refused({ runtime: "docker", lists: {} }, "no [image.*], posture or environment in config.toml names one")
   await refused({ runtime: "host", image: "luu-worker:dev", lists: {} }, "runs no container")
 
   // An environment takes another list of the file in place of its own.
@@ -221,6 +251,13 @@ test("a session is made from a runtime and three lists, and comes back made from
   expect(there.lists.environment).toBe("asking")
   expect(there.lists.composed ?? false).toBe(false)
   expect(there.lists.network.name).toBe("registries")
+
+  // A session on the server's own policy file carries no lists, and moves by
+  // a posture's name rather than by runtime.
+  expect((await fetch(`${BASE}/api/sessions`, { method: "POST" })).ok).toBe(true)
+  const unmovable = await moveTo({ runtime: "direct" })
+  expect(unmovable.status).toBe(409)
+  expect(await unmovable.text()).toContain("PUT /api/session/posture")
 
   expect(errors).toEqual([])
 })

@@ -7,7 +7,7 @@
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
   const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
-  const { workspace, loadRoot, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor } =
+  const { workspace, loadRoot, followFolder, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor } =
     await import("@web/lib/workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, checkModel,
           watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal,
@@ -306,6 +306,9 @@
   // twin of the read API with no `/api/settings` behind it, and a 404 there
   // would be a console error on every visit — over a question that cannot
   // apply, because a static site has no destination to configure.
+  // Whether the folder has been read once: the panels follow the session's
+  // folder only after that, so the first listing is the right one.
+  let loaded = false
   ;(async () => {
     for (let waited = 0; waited < 40 && !state.protocol && !state.replay; waited++) {
       await new Promise(resume => setTimeout(resume, 100))
@@ -317,7 +320,8 @@
     // Which folder, before the panels list anything: a tree that listed the
     // whole of what `serve` was started in and then moved would be two
     // listings for one visit.
-    await loadRoot(state.settings?.base)
+    await loadRoot(state.settings)
+    loaded = true
     // The tree and the open file follow the disk from here on, whoever writes
     // to it — the model, an editor, a build.
     watchWorkspace()
@@ -329,6 +333,16 @@
     // folder question would be two dialogs deep on a first visit, and the
     // folder one cannot be dismissed.
   })()
+
+  // The session on screen works in its own folder; when another one comes on
+  // screen — a new session, a resume, another tab's switch — the panels follow
+  // its folder. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+  $: if (loaded && state.settings?.base && state.settings.base !== workspace.base) followFolder(state.settings)
+
+  // Live sessions not on screen that finished a turn or wait at their gate:
+  // a dot on the history button until one is opened, amber while one waits.
+  $: behind = Object.keys(state.attention || {}).length
+  $: waiting = Object.values(state.attention || {}).includes("gate")
 
   $: profileNames = Object.keys(state.providers?.providers || {})
   // Nowhere to send at all. The chat column says so in the column it is about,
@@ -865,8 +879,10 @@
       <div class="acts">
         <button type="button" title="New session — where it sends, and which model"
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
-        <button type="button" title="Earlier sessions"
-                @click="openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+        <button type="button" title="Earlier sessions" class="history"
+                :aria-label="behind ? `Earlier sessions — ${behind} want a look` : 'Earlier sessions'"
+                @click="openHistory()"><svg class="ic"><use href="#i-clock"/></svg><span
+                :if="behind" class="behind" :class.gate="waiting"></span></button>
         <button type="button" class="permissions" :disabled="!state.session"
                 title="Permissions — what this session may do, and what it did"
                 aria-label="Permissions"

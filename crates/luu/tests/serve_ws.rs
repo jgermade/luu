@@ -210,22 +210,27 @@ fn describe_factory() -> luu::serve::DescribeFactory {
 fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory {
     // The runtime is not honoured here: no test builds a worker, and what the
     // routes decide about a variant is decided before this is called.
-    Arc::new(move |chosen: Option<luu::serve::Chosen>, _runtime| {
-        let base = base.clone();
-        Box::pin(async move {
-            let policy = match chosen {
-                Some(luu::serve::Chosen::File(path)) => SandboxPolicy::from_file(&path)?,
-                Some(luu::serve::Chosen::Environment(environment)) => environment.policy.clone(),
-                None => SandboxPolicy::default(),
-            };
-            Ok(Agency::new(
-                Arc::new(Tools::standard()),
-                Arc::new(Sandbox::new(&policy, &base)?),
-                agent_core::agent::Limits::default().with_max_steps(4),
-                None,
-            ))
-        })
-    })
+    Arc::new(
+        move |chosen: Option<luu::serve::Chosen>, _runtime, folder| {
+            // A session's folder is its base, where it named one.
+            let base = folder.unwrap_or_else(|| base.clone());
+            Box::pin(async move {
+                let policy = match chosen {
+                    Some(luu::serve::Chosen::File(path)) => SandboxPolicy::from_file(&path)?,
+                    Some(luu::serve::Chosen::Environment(environment)) => {
+                        environment.policy.clone()
+                    }
+                    None => SandboxPolicy::default(),
+                };
+                Ok(Agency::new(
+                    Arc::new(Tools::standard()),
+                    Arc::new(Sandbox::new(&policy, &base)?),
+                    agent_core::agent::Limits::default().with_max_steps(4),
+                    None,
+                ))
+            })
+        },
+    )
 }
 
 /// A server that caches its fold into the store at `path`, so a second one
@@ -734,6 +739,45 @@ async fn a_prompt_is_planned_approved_and_answered_over_the_socket() {
     assert_eq!(rounds.len(), 1);
     assert_eq!(rounds[0]["answer"]["answer"], "approved");
     assert_eq!(rounds[0]["answer"]["job"], 2);
+}
+
+/// A second prompt while a plan is on the table is **not** refused: it is the
+/// answer *more changes*, the same answer as decline — the plan comes off the
+/// table, nothing closes, and the prompt runs in the draft it is still in.
+/// Refusing it would be the old `pending` guard outliving the held prompt it
+/// existed to protect. Moved here from `tests/stdio.rs` when `luu stdio` was
+/// retired: see `RECORD/2026-10-30.no-editor-in-the-mvp.completed.md`.
+#[tokio::test]
+async fn a_prompt_while_a_plan_is_on_the_table_is_more_changes() {
+    let address = server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    let _ = next_message(&mut socket).await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "first prompt"}),
+    )
+    .await;
+    until(&mut socket, "plan_proposed").await;
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "make it two flags"}),
+    )
+    .await;
+    let mut declined = false;
+    loop {
+        let message = next_message(&mut socket).await;
+        match message["type"].as_str().expect("a typed message") {
+            "refused" => panic!("a prompt is an answer, not a thing to refuse: {message}"),
+            "plan_declined" => declined = true,
+            "turn_started" if message["prompt"] == "make it two flags" => break,
+            _ => continue,
+        }
+    }
+    assert!(declined, "the plan on the table was answered");
 }
 
 /// The other door, and what a plan is asked *over*: the draft, not a held
@@ -2826,7 +2870,14 @@ async fn multi_session_lifecycle_and_switching() {
     let live_resumed = get(&address, "/api/sessions/live").await;
     assert_eq!(live_resumed["turns"].as_array().unwrap().len(), 2);
 
-    // Now session one is active, session two is inactive. Delete session two!
+    // Now session one is the current one, and session two is still live
+    // beside it — a resume no longer ends the session it moved away from
+    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`). So it is put to
+    // sleep before it can be deleted.
+    let still_live = delete(&address, &format!("/api/sessions/{session_two_id}")).await;
+    assert_eq!(still_live.status(), reqwest::StatusCode::BAD_REQUEST);
+    let slept = delete(&address, &format!("/api/sessions/{session_two_id}/live")).await;
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
     let del_res = delete(&address, &format!("/api/sessions/{session_two_id}")).await;
     assert_eq!(del_res.status(), reqwest::StatusCode::NO_CONTENT);
 
@@ -3445,6 +3496,17 @@ async fn a_resume_keeps_the_posture_a_sessions_jobs_were_approved_under() {
         settings["posture"]["network"], false,
         "the server is back on its own policy file: {settings}",
     );
+
+    // Still live beside the new one, it is not rebuilt anywhere: it keeps the
+    // posture its jobs were approved under, and the rule below is about a
+    // session that has to be made again. So it is put to sleep first
+    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    let slept = client
+        .delete(format!("http://{address}/api/sessions/{contained}/live"))
+        .send()
+        .await
+        .expect("putting it to sleep");
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
 
     // The one this row exists for. Before this it answered 200 and handed the
     // session's gate to a sandbox its jobs were never approved against.
@@ -4383,6 +4445,15 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     assert_eq!(third.status(), reqwest::StatusCode::CREATED);
 
     let id = created["id"].as_str().expect("the second session's id");
+    // Still live beside the third, a resume would only attach to it and write
+    // nothing; asleep, it is made again and re-bases the file, which is what
+    // this half is about (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    let slept = client
+        .delete(format!("http://{address}/api/sessions/{id}/live"))
+        .send()
+        .await
+        .expect("putting the second session to sleep");
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
     let resumed = client
         .post(format!("http://{address}/api/sessions/{id}/resume"))
         // Named here and not inherited: a resume resolves its own posture, and
@@ -4515,4 +4586,259 @@ async fn a_turn_at_its_tool_limit_asks_and_a_person_lets_it_go_on() {
         }
     }
     assert_eq!(calls, 6);
+}
+
+/// Two sessions live at once: a second one made beside the first does not end
+/// it — the first answers on its own socket, its turn runs while the second is
+/// the current one, and `?session=` reaches it over HTTP. A session that is not
+/// live is a 404 by either door. See
+/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+#[tokio::test]
+async fn two_sessions_live_side_by_side() {
+    let dir = std::env::temp_dir().join(format!("luu-side-by-side-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let address = server_storing(
+        vec!["first answer".into(), "second answer".into()],
+        &dir.join("sessions.db"),
+    )
+    .await;
+
+    let first = post(&address, "/api/sessions").await;
+    assert_eq!(first.status(), reqwest::StatusCode::CREATED);
+    let first: Value = first.json().await.expect("json");
+    let first_id = first["id"].as_str().expect("an id").to_string();
+
+    let second = post(&address, "/api/sessions").await;
+    assert_eq!(second.status(), reqwest::StatusCode::CREATED);
+    let second: Value = second.json().await.expect("json");
+    let second_id = second["id"].as_str().expect("an id").to_string();
+    assert_ne!(first_id, second_id);
+
+    // The first is still live: its socket opens, and a turn runs in it while
+    // the second is the current one.
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/ws?session={first_id}"))
+            .await
+            .expect("a socket on the first session");
+    let hello = next_message(&mut socket).await;
+    assert_eq!(hello["session"], first_id.as_str());
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "in the first one"}),
+    )
+    .await;
+    let (started, _) = until(&mut socket, "turn_started").await;
+    assert_eq!(started["prompt"], "in the first one");
+    until(&mut socket, "ended").await;
+
+    // The turn is the first session's, not the current one's.
+    let first_view = get(&address, &format!("/api/sessions/{first_id}")).await;
+    assert_eq!(first_view["turns"].as_array().expect("turns").len(), 1);
+    let current = get(&address, "/api/sessions/live").await;
+    assert!(
+        current["turns"].as_array().expect("turns").is_empty(),
+        "the current session is the second, and it ran nothing",
+    );
+    // And the listing carries both, the first under its own id.
+    let listed = get(&address, "/api/sessions").await;
+    assert!(
+        listed
+            .as_array()
+            .expect("a listing")
+            .iter()
+            .any(|row| row["id"] == first_id.as_str() && row["turns"] == 1),
+        "{listed}",
+    );
+
+    // `?session=` on a route acts on that one.
+    let terminal = get(&address, &format!("/api/terminal?session={first_id}")).await;
+    assert!(terminal["posture"].is_object(), "{terminal}");
+    let missing = reqwest::get(format!("http://{address}/api/terminal?session=nope"))
+        .await
+        .expect("the request");
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+    let refused = tokio_tungstenite::connect_async(format!("ws://{address}/ws?session=nope")).await;
+    assert!(refused.is_err(), "a socket for a session that is not live");
+
+    // Put to sleep by a person's ask: refused only for the current one and a
+    // busy one. (A socket open on it keeps the idle timer off, not this.)
+    drop(socket);
+    let slept = delete(&address, &format!("/api/sessions/{first_id}/live")).await;
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
+    let gone =
+        tokio_tungstenite::connect_async(format!("ws://{address}/ws?session={first_id}")).await;
+    assert!(gone.is_err(), "asleep, it is not live");
+    // Opening it again resumes it, with its turn.
+    let resumed = post(&address, &format!("/api/sessions/{first_id}/resume")).await;
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK);
+    let again = get(&address, &format!("/api/sessions/{first_id}")).await;
+    assert_eq!(again["turns"].as_array().expect("turns").len(), 1);
+    // The current one cannot be put to sleep.
+    let current_sleep = delete(&address, &format!("/api/sessions/{first_id}/live")).await;
+    assert_eq!(current_sleep.status(), reqwest::StatusCode::CONFLICT);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `[sessions] max-live`, 4 where `config.toml` says nothing: one more session
+/// puts the least recently used idle one to sleep rather than being refused.
+#[tokio::test]
+async fn one_session_too_many_puts_the_oldest_idle_one_to_sleep() {
+    let dir = std::env::temp_dir().join(format!("luu-max-live-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let address = server_storing(vec![], &dir.join("sessions.db")).await;
+
+    let mut ids = Vec::new();
+    for _ in 0..4 {
+        let made = post(&address, "/api/sessions").await;
+        assert_eq!(made.status(), reqwest::StatusCode::CREATED);
+        let made: Value = made.json().await.expect("json");
+        ids.push(made["id"].as_str().expect("an id").to_string());
+        // Apart in time, so "least recently used" has one answer.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let live = |id: &str| {
+        let url = format!("ws://{address}/ws?session={id}");
+        async move { tokio_tungstenite::connect_async(url).await.is_ok() }
+    };
+    // The server's own first session was the oldest, and went to sleep to
+    // make room for the fourth; the four made here are live. Each check opens
+    // a socket, which counts as a use — in the order they were made, so the
+    // oldest stays the oldest.
+    for id in &ids {
+        assert!(live(id).await, "{id} is live");
+    }
+    // A fifth: the oldest of the four is put to sleep to make room.
+    assert_eq!(
+        post(&address, "/api/sessions").await.status(),
+        reqwest::StatusCode::CREATED
+    );
+    assert!(!live(&ids[0]).await, "the oldest idle one sleeps");
+    assert!(live(&ids[1]).await);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A session works in its own folder, under where `serve` was started: its
+/// tree is that folder's, a folder outside the root is refused, a second
+/// session in the same folder is told it shares it, a session moves its folder
+/// before its first turn and not after, and one put to sleep comes back in
+/// its folder. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+#[tokio::test]
+async fn a_session_works_in_its_own_folder() {
+    let root = std::env::temp_dir().join(format!("luu-folders-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sub")).expect("a scratch tree");
+    std::fs::write(root.join("sub/inside.txt"), "x\n").expect("a file");
+    std::fs::write(root.join("top.txt"), "x\n").expect("a file");
+    let root = root.canonicalize().expect("canonical");
+    let address = server_storing_selecting(
+        vec!["an answer".into()],
+        &root.join("sessions.db"),
+        0,
+        &root,
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let make = |body: Value| {
+        let client = client.clone();
+        let address = address.clone();
+        async move {
+            client
+                .post(format!("http://{address}/api/sessions"))
+                .json(&body)
+                .send()
+                .await
+                .expect("the request")
+        }
+    };
+
+    let made = make(serde_json::json!({ "folder": "sub" })).await;
+    assert_eq!(made.status(), reqwest::StatusCode::CREATED);
+    let first: Value = made.json().await.expect("json");
+    let first_id = first["id"].as_str().expect("an id").to_string();
+    let settings = get(&address, "/api/settings").await;
+    assert_eq!(settings["folder"], "sub");
+    assert_eq!(settings["root"], root.display().to_string().as_str());
+    let tree = get(&address, "/api/workspace/tree?path=").await;
+    let names: Vec<&str> = tree["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry["name"].as_str())
+        // A draft's scratch, which every session makes in its own folder.
+        .filter(|name| *name != ".tmp")
+        .collect();
+    assert_eq!(names, ["inside.txt"], "the session's tree is its folder");
+    // The picker browses the root, whatever folder the session is in.
+    let folders = get(&address, "/api/folders?path=").await;
+    assert!(
+        folders["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|entry| entry["name"] == "sub"),
+        "{folders}",
+    );
+
+    // Never above the root.
+    let outside = make(serde_json::json!({ "folder": ".." })).await;
+    assert_eq!(outside.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // A second one in the same folder is told.
+    assert_eq!(
+        make(serde_json::json!({ "folder": "sub" })).await.status(),
+        reqwest::StatusCode::CREATED
+    );
+    let shared = get(&address, "/api/settings").await;
+    assert!(
+        shared["shared_with"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id == first_id.as_str())),
+        "{shared}",
+    );
+
+    // Before its first turn a session moves its folder; it is the root now.
+    let moved = client
+        .put(format!("http://{address}/api/session/folder"))
+        .json(&serde_json::json!({ "folder": "" }))
+        .send()
+        .await
+        .expect("moving it");
+    assert_eq!(moved.status(), reqwest::StatusCode::OK);
+    assert_eq!(get(&address, "/api/settings").await["folder"], "");
+
+    // After its first turn it does not.
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/ws?session={first_id}"))
+            .await
+            .expect("a socket on the first session");
+    let _ = next_message(&mut socket).await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "hello"}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+    drop(socket);
+    let refused = client
+        .put(format!(
+            "http://{address}/api/session/folder?session={first_id}"
+        ))
+        .json(&serde_json::json!({ "folder": "" }))
+        .send()
+        .await
+        .expect("asking");
+    assert_eq!(refused.status(), reqwest::StatusCode::CONFLICT);
+
+    // Asleep and resumed, it is back in its folder.
+    let slept = delete(&address, &format!("/api/sessions/{first_id}/live")).await;
+    assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
+    let resumed = post(&address, &format!("/api/sessions/{first_id}/resume")).await;
+    assert_eq!(resumed.status(), reqwest::StatusCode::OK);
+    assert_eq!(get(&address, "/api/settings").await["folder"], "sub");
+
+    let _ = std::fs::remove_dir_all(&root);
 }

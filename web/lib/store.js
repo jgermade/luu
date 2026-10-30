@@ -19,7 +19,7 @@ import { $reactive } from "@web/vendor/jq79.js"
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 12
-const FORMAT = 25
+const FORMAT = 27
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -125,7 +125,11 @@ export const state = $reactive({
   replay: false,
   fixtures: [],           // replay mode only: [{ name, file, about }]
   fixture: "",            // the one being replayed
-  sessions: [],           // live server sessions list: [{ id, title, turns, ... }]
+  sessions: [],           // live server sessions list: [{ id, title, turns, live?, ... }]
+  // Live sessions not on screen that want a look, by id: `"gate"` while one
+  // waits for a person, `"done"` once a turn ended there, until it is opened.
+  // See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §6.
+  attention: {},
   currentSessionId: "live",
 })
 
@@ -1458,8 +1462,73 @@ export async function refreshSessionsList() {
     const res = await fetch("./api/sessions", { headers: apiHeaders() })
     if (!res.ok) return
     state.sessions = await res.json()
+    noticeBehind(state.sessions)
+    watchBehind()
   } catch {
     // Ignore fetch failure
+  }
+}
+
+/// How each live session not on screen was at the last listing, by id.
+let lastBehind = {}
+
+/// What changed in the live sessions not on screen since the last listing: a
+/// turn that ended there, or a gate that opened, is put in `state.attention`
+/// until that session is opened.
+function noticeBehind(rows) {
+  const now = {}
+  const attention = { ...state.attention }
+  for (const row of rows || []) {
+    if (!row.live || row.live.current) continue
+    now[row.id] = row.live.state
+    if (row.live.state === "gate") attention[row.id] = "gate"
+    else if (lastBehind[row.id] === "running" && row.live.state === "idle") attention[row.id] = "done"
+    else if (attention[row.id] === "gate") delete attention[row.id]
+  }
+  for (const id of Object.keys(attention)) {
+    if (!(id in now)) delete attention[id]
+  }
+  lastBehind = now
+  state.attention = attention
+}
+
+/// Asks again every few seconds while a session not on screen is running or
+/// waiting, and stops asking when none is: the list is the only place those
+/// sessions are heard from, since the page's socket is the one on screen's.
+let behindTimer = null
+function watchBehind() {
+  const busy = (state.sessions || []).some(row =>
+    row.live && !row.live.current && (row.live.state === "running" || row.live.state === "gate"))
+  if (busy && !behindTimer) {
+    behindTimer = setInterval(() => {
+      if (state.replay) return
+      refreshSessionsList()
+    }, 4000)
+  } else if (!busy && behindTimer) {
+    clearInterval(behindTimer)
+    behindTimer = null
+  }
+}
+
+/// Puts a live session that is not on screen to sleep: its container ended,
+/// kept in the history, resumed when it is opened again.
+export async function sleepSession(id) {
+  try {
+    const res = await fetch(`./api/sessions/${encodeURIComponent(id)}/live`, {
+      method: "DELETE",
+      headers: apiHeaders(),
+    })
+    if (!res.ok) {
+      state.error = `Could not put the session to sleep: ${await res.text()}`
+      return false
+    }
+    const { [id]: _, ...rest } = state.attention
+    state.attention = rest
+    await refreshSessionsList()
+    return true
+  } catch (e) {
+    state.error = `Could not put the session to sleep: ${e}`
+    return false
   }
 }
 
@@ -1472,7 +1541,7 @@ export async function refreshSessionsList() {
 /// machine.
 export async function newSession(choice) {
   const asked =
-    choice && (choice.provider || choice.model || choice.posture || choice.runtime || choice.lists) ? choice : null
+    choice && (choice.provider || choice.model || choice.posture || choice.runtime || choice.lists || choice.folder) ? choice : null
   try {
     const res = await fetch("./api/sessions", {
       method: "POST",
@@ -1546,6 +1615,11 @@ export async function providerModels(name, { facts = false } = {}) {
 /// its runtime and image and its lists by name, the empty ones left out as
 /// they were when it started (`record::Composed`).
 ///
+/// **Since format 26 the lists are not said at all** where the session copied
+/// them: the server makes it again from its copy, so a list edited or
+/// deleted in Settings since does not stop it — only where it runs is said.
+/// See `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
+///
 /// `null` for a session recorded before the posture was in the header, for one
 /// that ran on the server's own policy file, and whenever the view cannot be
 /// read — all three mean *say nothing*, which is what every resume did before.
@@ -1559,7 +1633,8 @@ async function storedPosture(id) {
         .map(kind => [kind, posture.lists?.[kind]?.name])
         .filter(([, name]) => name && name !== EMPTY))
       const { runtime, image } = posture.composed
-      return { runtime, ...(image ? { image } : {}), lists }
+      const place = { runtime, ...(image ? { image } : {}) }
+      return posture.lists?.copied ? place : { ...place, lists }
     }
     return posture?.name ? { posture: posture.name } : null
   } catch {
@@ -1599,6 +1674,9 @@ export async function resumeSession(id, choice) {
       state.error = `Could not resume session: ${err}`
       return false
     }
+    // Looked at now: whatever it was waiting with is on screen.
+    const { [id]: _, ...rest } = state.attention
+    state.attention = rest
     state.currentSessionId = "live"
     await refreshSessionsList()
     // The turns come back from the server rather than from what this client

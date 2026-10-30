@@ -33,6 +33,9 @@ curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall
 
 # remove the binary and the state directory too (asks first)
 curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall --purge
+
+# a machine with no curl, such as a minimal Debian: the same script, with wget
+wget -qO- https://jgermade.github.io/luu/setup.sh | sh
 ```
 
 | Option | |
@@ -56,6 +59,36 @@ From source, on anything without a prebuilt binary:
 ```sh
 cargo install --locked --git https://github.com/jgermade/luu luu
 ```
+
+### In a container
+
+`luu serve`, with its state and its work tree in volumes, published for amd64
+and arm64 from each release (`deploy/Containerfile.release`):
+
+```sh
+docker run -d --name luu --restart unless-stopped \
+  -v luu-state:/state -v luu-work:/work -p 7878:7878 ghcr.io/jgermade/luu
+docker exec luu cat /state/token    # then http://localhost:7878/?token=…
+```
+
+[`deploy/compose.yaml`](deploy/compose.yaml) puts Caddy in front for TLS on a
+name of your own. The worker image a session runs its commands in is published
+beside it as `ghcr.io/jgermade/luu-worker`.
+
+### On Kubernetes
+
+One pod, its two volumes kept on uninstall, behind an Ingress of any class —
+[`deploy/helm/luu`](deploy/helm/luu), published as an OCI chart:
+
+```sh
+helm install luu oci://ghcr.io/jgermade/charts/luu \
+  --set ingress.enabled=true --set ingress.host=luu.example.com --set ingress.tls.enabled=true
+kubectl exec deploy/luu -- cat /state/token
+```
+
+One identity, the token; several are
+[`a-public-luu`](RECORD/2026-10-07.a-public-luu.WIP.md)'s later steps. See
+[`three-ways-in`](RECORD/2026-10-30.three-ways-in.WIP.md).
 
 ## First run
 
@@ -97,7 +130,7 @@ is the design as it stands, [`RECORD/`](RECORD/) is how it got there, and
 [`ROADMAP/`](ROADMAP/) is what is planned and not yet true.
 
 ```sh
-make install   # dependencies: Rust, the VS Code extension, the UI's optional ones
+make install   # dependencies: Rust, and the UI's optional ones
 make test      # cargo test --workspace
 make up        # the web UI on 127.0.0.1:7878
 make lint      # what CI runs

@@ -133,7 +133,7 @@ pub fn dir() -> Option<PathBuf> {
 /// The first-run question.
 ///
 /// **Only on a terminal.** A prompt nobody can answer is a hang, and a hang in
-/// `luu stdio` is a parent process waiting forever on a pipe — so a
+/// a process spawned by another is a parent waiting forever on a pipe — so a
 /// non-interactive run takes the XDG path, says so, and names the flag that
 /// would have said otherwise. The machines that cannot answer are the scripted
 /// ones, and that is the convention a script expects.

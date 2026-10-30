@@ -1232,14 +1232,15 @@ impl Supervisor {
         }
     }
 
-    /// Stops every engine this server started except `keep` — what happens
-    /// when a session moves to a destination that does not need them, so an
+    /// Stops every engine this server started except those in `keep` — what
+    /// happens when a session moves to a destination that does not need them
+    /// and no other live session does either, so an
     /// engine nobody sends to does not hold its model in memory until `serve`
     /// exits. A server luu did not start is never touched.
-    pub async fn stop_others(&self, keep: Option<&str>) {
+    pub async fn stop_others(&self, keep: &[String]) {
         let mut slots = self.slots.lock().await;
         for (name, slot) in slots.iter_mut() {
-            if Some(name.as_str()) == keep {
+            if keep.contains(name) {
                 continue;
             }
             if let Some(mut running) = slot.running.take() {

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
-use crate::sandbox::{Authority, PathRule, Sandbox, SandboxPolicy, Verdict};
+use crate::sandbox::{Applied, Authority, PathRule, Sandbox, SandboxPolicy, Verdict};
 use crate::tools::{ToolCall, ToolFuture, ToolOutcome, Tools};
 
 pub mod runtime;
@@ -307,6 +307,11 @@ pub struct Worker {
     /// while the worker is dead and waiting for the next call to restart it.
     /// See `RECORD/2026-10-01.a-terminal-in-the-container.completed.md`.
     container: std::sync::Mutex<Option<String>>,
+    /// What `install` put in this worker's container, in the order it was
+    /// asked for: what *Move and reinstall* asks the next container for.
+    /// Emptied whenever the container changes — a worker started again is a
+    /// container started again, from its image. See `crate::tools::install`.
+    installed: std::sync::Mutex<Vec<String>>,
 }
 
 impl std::fmt::Debug for Worker {
@@ -357,6 +362,7 @@ impl Worker {
             restarts: std::sync::atomic::AtomicU32::new(0),
             pipe: Mutex::new(Some(pipe)),
             container,
+            installed: Default::default(),
         })
     }
 
@@ -470,6 +476,121 @@ impl Worker {
             .container
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = container;
+        // Another container, or none: nothing installed in the last one is in it.
+        self.installed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+
+    /// What `install` has put in this worker's container, oldest first.
+    pub fn installed(&self) -> Vec<String> {
+        self.installed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Installs `packages` in this worker's container, as its root:
+    /// `apt-get update`, then `apt-get install`. Held to nothing but the
+    /// container — the caller has already decided it may run, which for a
+    /// tool call is the shell list ([`crate::tools::install::allowed`]) and
+    /// for *Move and reinstall* is the person who clicked it. What succeeds
+    /// is remembered for the next container. See `crate::tools::install`.
+    pub async fn install(&self, packages: &[String]) -> ToolOutcome {
+        use crate::tools::install::APT;
+        let verdict = Verdict::allow(format!("`{APT}` as the container's root"), Applied::Process);
+        let Some(name) = self
+            .container
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        else {
+            return ToolOutcome::failed(
+                verdict,
+                "install: the worker's container is not running; it starts again on the next \
+                 tool call",
+            );
+        };
+        let timeout = std::time::Duration::from_millis(crate::tools::command::MAX_TIMEOUT_MS);
+        let started = std::time::Instant::now();
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let mut install = vec![
+            APT.to_string(),
+            "install".to_string(),
+            "-y".to_string(),
+            "--no-install-recommends".to_string(),
+        ];
+        install.extend(packages.iter().cloned());
+        let update = vec![APT.to_string(), "update".to_string(), "-qq".to_string()];
+        for argv in [update, install] {
+            let Some(line) = self.spec.root_exec_argv(&name, &argv) else {
+                return ToolOutcome::failed(verdict, "install: this runtime cannot exec");
+            };
+            let mut command = tokio::process::Command::new(&line[0]);
+            command
+                .args(&line[1..])
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
+            let output = match tokio::time::timeout(timeout, command.output()).await {
+                Ok(Ok(output)) => output,
+                Ok(Err(error)) => {
+                    return ToolOutcome::failed(verdict, format!("{}: {error}", line[0]));
+                }
+                Err(_) => {
+                    return ToolOutcome::failed(
+                        verdict,
+                        format!("{APT} killed after {} ms", timeout.as_millis()),
+                    );
+                }
+            };
+            stdout.push_str(&String::from_utf8_lossy(&output.stdout));
+            stderr.push_str(&String::from_utf8_lossy(&output.stderr));
+            if !output.status.success() {
+                let result = crate::tools::CommandResult {
+                    exit_code: output.status.code(),
+                    signal: None,
+                    stdout: crate::tools::clamp(stdout.clone()).0,
+                    stderr: crate::tools::clamp(stderr.clone()).0,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                };
+                let text = format!("--- stdout\n{stdout}\n--- stderr\n{stderr}");
+                let mut outcome = ToolOutcome::from_command(verdict, text, result);
+                outcome.error = Some(format!(
+                    "{APT} {} exited with {}",
+                    argv[1],
+                    output
+                        .status
+                        .code()
+                        .map_or("a signal".to_string(), |c| c.to_string())
+                ));
+                return outcome;
+            }
+        }
+        {
+            let mut installed = self
+                .installed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for package in packages {
+                if !installed.contains(package) {
+                    installed.push(package.clone());
+                }
+            }
+        }
+        let result = crate::tools::CommandResult {
+            exit_code: Some(0),
+            signal: None,
+            stdout: crate::tools::clamp(stdout.clone()).0,
+            stderr: crate::tools::clamp(stderr).0,
+            duration_ms: started.elapsed().as_millis() as u64,
+        };
+        ToolOutcome::from_command(
+            verdict,
+            format!("installed: {}\n", packages.join(" ")),
+            result,
+        )
     }
 
     /// The lines that open and end a shell in this worker's container, or why
@@ -515,6 +636,21 @@ impl Worker {
 impl Executor for Worker {
     fn call<'a>(&'a self, call: &'a ToolCall, sandbox: &'a Sandbox) -> ToolFuture<'a> {
         Box::pin(async move {
+            // `install` in a container runs beside the worker, not in it: as
+            // the container's root, which the worker is not. Held to the shell
+            // list first, as `apt-get`. See `crate::tools::install`.
+            if call.name == "install" && self.is_contained() {
+                let packages = match crate::tools::install::packages_of(&call.arguments) {
+                    Ok(packages) => packages,
+                    Err(why) => {
+                        return ToolOutcome::failed(Verdict::deny(format!("install: {why}")), why);
+                    }
+                };
+                if let Err(verdict) = crate::tools::install::allowed(sandbox) {
+                    return ToolOutcome::denied(verdict);
+                }
+                return self.install(&packages).await;
+            }
             let request = Request::Call {
                 call: call.clone(),
                 sandbox: WireSandbox::of(sandbox, &self.image_paths),

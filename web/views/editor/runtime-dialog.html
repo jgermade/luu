@@ -11,13 +11,13 @@
   // is: what the model installed where the session runs now does not come
   // along, and a container the session leaves goes with everything in it. The
   // box says that about the two places chosen, and *Move* waits for it.
-  const { terminal, moveSession } = await import("@web/lib/terminal.js")
+  const { terminal, moveSession, moveRuntime } = await import("@web/lib/terminal.js")
   const { state } = await import("@web/lib/store.js")
   const Modal = await import("@web/theme/default/components/modal.html")
   const Button = await import("@web/theme/default/components/button.html")
   const Checkbox = await import("@web/theme/default/components/checkbox.html")
   const BrandIcon = await import("@web/components/brand-icon.html")
-  const { placeOptions, livePlace, hereOption, placeMark } = await import("@web/lib/places.js")
+  const { placeOptions, livePlace, hereOption, placeMark, runtimeOptions, carriesLists } = await import("@web/lib/places.js")
   const { loadBrands } = await import("@web/lib/brands.js")
   loadBrands()
 
@@ -26,25 +26,38 @@
   let open = true
   const leave = () => {
     open = false
+    terminal.moveNote = null
     const ms = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--luu-duration"))
     setTimeout(() => close?.(), Number.isFinite(ms) ? ms : 0)
   }
 
-  // A session made from lists is none of the places offered: it is drawn
-  // first, as where the session is, and moving goes to one of the others.
+  // A session that carries its lists (format 26) moves by runtime and image,
+  // its lists going with it: the places are the new session's *Runtime*'s.
+  // Any other — a posture, the server's own file — moves between postures,
+  // as before, and a session made from lists without a copy is drawn first,
+  // as where it is. See
+  // `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
+  $: carries = carriesLists(terminal.info?.posture)
   $: now = hereOption(state.postures, terminal.info?.posture)
-  $: places = now?.made ? [now, ...placeOptions(state.postures)] : placeOptions(state.postures)
-  $: here = now?.value ?? livePlace(state.postures, terminal.info?.posture)
+  $: nowValue = carries && now ? `${now.where}|${now.image || ""}` : null
+  $: places = carries ? runtimeOptions(state.postures)
+    : now?.made ? [now, ...placeOptions(state.postures)] : placeOptions(state.postures)
+  $: here = nowValue ?? now?.value ?? livePlace(state.postures, terminal.info?.posture)
   let chosen = ""
   let understood = false
   $: target = places.find(p => p.value === (chosen || here))
   $: moving = !!chosen && chosen !== here
   const contained = place => !!place?.where && place.where !== "host" && place.where !== "direct"
 
+  // What `install` put where the session runs now, which a move leaves behind
+  // unless it is asked for again (*Move and reinstall*).
+  $: installed = terminal.info?.installed || []
+  $: canReinstall = carries && installed.length > 0 && contained(target)
   // What it leaves behind, about these two places, in the box's own words.
   $: behind = !moving ? ""
     : contained(now)
       ? `Its container goes with the move: what the model installed in ${now.label} — packages, tools, anything outside this folder — is gone, and is not in ${target.label}.`
+        + (installed.length ? ` It installed ${installed.join(", ")}${canReinstall ? ", which Move and reinstall asks for there again" : ""}.` : "")
       : `What the model installed on this machine is not in ${target.label}${contained(target) ? ", which starts from its image" : ""}.`
   // And the rest of what a move does, which needs no ticking.
   $: also = !moving ? ""
@@ -53,7 +66,9 @@
         contained(target)
           ? "In the container only this folder is there, at its own path, with the image's tools and no network a list does not allow."
           : "On this machine it runs as you: your tools and your files, and its terminal is your whole account.",
-      ].join(" ")
+        carries ? "Its lists, and what you allowed or refused for the session, go with it." : "",
+        target?.gap ? `There it holds less than its lists say: ${target.gap}.` : "",
+      ].filter(Boolean).join(" ")
 
   const pick = place => {
     if (place.disabled || terminal.moving) return
@@ -61,11 +76,17 @@
     understood = false
   }
 
-  const move = async () => {
+  const move = async (reinstall = false) => {
     if (!moving || !understood || terminal.moving) return
-    const [name, runtime] = target.value.split("|")
-    await moveSession(name, runtime || null, document.querySelector(".content .terminal .host"))
-    if (!terminal.moveError) leave()
+    const host = document.querySelector(".content .terminal .host")
+    if (carries) {
+      await moveRuntime(target.runtime, target.image, host, reinstall)
+    } else {
+      const [name, runtime] = target.value.split("|")
+      await moveSession(name, runtime || null, host)
+    }
+    // A reinstall that left something out stays open to say what.
+    if (!terminal.moveError && !terminal.moveNote) leave()
   }
 </script>
 
@@ -98,9 +119,12 @@
     <p class="dim small">{{ also }}</p>
   </div>
   <p :if="terminal.moveError" class="error small">{{ terminal.moveError }}</p>
+  <p :if="terminal.moveNote" class="note small">{{ terminal.moveNote }}</p>
 
   <template :slot.foot>
     <Button variant="ghost" @click="leave()">Cancel</Button>
+    <Button :if="canReinstall" variant="ghost" :disabled="!moving || !understood || terminal.moving"
+            @click="move(true)">Move and reinstall</Button>
     <Button variant="primary" :disabled="!moving || !understood || terminal.moving" :loading="terminal.moving"
             @click="move()">{{ terminal.moving ? "Moving…" : "Move the session" }}</Button>
   </template>
@@ -154,4 +178,5 @@
   .dim { color: var(--luu-fg-muted); }
   .small { font-size: var(--luu-text-xs); }
   .error { margin: var(--luu-space-3) 0 0; color: var(--luu-bad); }
+  .note { margin: var(--luu-space-3) 0 0; color: var(--luu-warn); }
 </style>

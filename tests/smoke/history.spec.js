@@ -220,3 +220,57 @@ test("an earlier session is archived, restored, and deleted after a confirmation
 
   expect(errors).toEqual([])
 })
+
+/**
+ * Sessions side by side: a session left for another stays live with its own
+ * container, and the history says so — and offers to put it to sleep rather
+ * than delete it, which the server refuses for a live one. Asleep, it is an
+ * ordinary earlier session; opened, it is live again. See
+ * `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §6.
+ */
+test("a session left for another stays live, and is put to sleep from the history", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const done = page.locator(".transcript article.assistant button.meta")
+  const say = async text => {
+    const before = await done.count()
+    await page.locator(".composer input").fill(text)
+    await page.click('.composer button[type="submit"]')
+    await expect(done).toHaveCount(before + 1)
+  }
+  const dialog = page.getByRole("dialog", { name: "Sessions" })
+
+  // One with a turn, then another beside it.
+  await say("the one left behind")
+  await page.click('button[title^="New session"]')
+  await dialog.locator('button:has-text("Start session")').click()
+  await expect(dialog).toHaveCount(0)
+
+  // The first is live, beside the one on screen, and says so.
+  const listed = await (await fetch(`${BASE}/api/sessions`)).json()
+  // The tests above leave the server's first session with turns of its own,
+  // so the one left behind is found by being live, not on screen, and written in.
+  const behind = listed.find(s => s.live && !s.live.current && s.turns > 0)
+  expect(behind, JSON.stringify(listed)).toBeTruthy()
+  expect(behind.live.state).toBe("idle")
+  await page.click('button[title="Earlier sessions"]')
+  const row = dialog.locator("ul.sessions li", { has: page.locator(`.pick[title="${behind.id}"]`) })
+  await expect(row.locator(".live-state")).toHaveText(/live/)
+  // Put to sleep, not deleted: the server deletes no live session.
+  await expect(row.getByRole("button", { name: /^Delete / })).toHaveCount(0)
+  await row.getByRole("button", { name: /^Put .* to sleep$/ }).click()
+  await expect(row.locator(".live-state")).toHaveCount(0)
+  await expect(row.getByRole("button", { name: /^Delete / })).toHaveCount(1)
+  const after = await (await fetch(`${BASE}/api/sessions`)).json()
+  expect(after.find(s => s.id === behind.id).live).toBeUndefined()
+
+  // Opened again, it is the one on screen, with its turn.
+  await row.locator(".pick").click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator(".transcript article.user .text").last()).toHaveText("the one left behind")
+
+  expect(errors).toEqual([])
+})

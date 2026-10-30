@@ -451,6 +451,15 @@ pub async fn git_status(base: &Path) -> Result<Option<BTreeMap<String, String>>,
         Err(_) if !in_a_repository(base) => return Ok(None),
         Err(error) => return Err(error),
     };
+    // Porcelain paths are from the repository's top, never from where git
+    // ran. Where the base is a folder inside the repository — a session's
+    // folder, or `serve` started below the top — they are made the base's,
+    // and what is outside it is not this tree's to show. See
+    // `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    let prefix = git(base, &["rev-parse", "--show-prefix"])
+        .await
+        .map(|prefix| prefix.trim_end_matches('\n').to_string())
+        .unwrap_or_default();
     let mut map = BTreeMap::new();
     let mut fields = out.split('\0').filter(|part| !part.is_empty());
     while let Some(record) = fields.next() {
@@ -469,7 +478,10 @@ pub async fn git_status(base: &Path) -> Result<Option<BTreeMap<String, String>>,
         if code.starts_with('R') || code.starts_with('C') {
             let _ = fields.next();
         }
-        map.insert(path, code);
+        let Some(path) = path.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        map.insert(path.to_string(), code);
     }
     Ok(Some(map))
 }
@@ -979,6 +991,50 @@ mod tests {
 
         assert_eq!(git_status(&repo).await.unwrap(), Some(BTreeMap::new()));
         assert_eq!(index(), before, "git status rewrote the index");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// From a folder inside a repository, status paths are the folder's:
+    /// porcelain says them from the top, and what is outside the folder is
+    /// left out. What a session working in a subfolder sees in its git panel.
+    #[tokio::test]
+    async fn status_from_a_subfolder_is_said_from_the_subfolder() {
+        let repo = std::env::temp_dir().join(format!("luu-subfolder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        if !run(&["init", "-q"]) {
+            return;
+        }
+        // Tracked and then changed: an untracked folder is reported collapsed,
+        // as `sub/`, which is git's own default and not what this is about.
+        std::fs::write(repo.join("sub/inside.txt"), "x\n").unwrap();
+        std::fs::write(repo.join("outside.txt"), "x\n").unwrap();
+        assert!(run(&["add", "."]) && run(&["commit", "-qm", "a"]));
+        std::fs::write(repo.join("sub/inside.txt"), "y\n").unwrap();
+        std::fs::write(repo.join("outside.txt"), "y\n").unwrap();
+        let from_top = git_status(&repo).await.unwrap().unwrap();
+        assert!(from_top.contains_key("outside.txt"), "{from_top:?}");
+        let from_sub = git_status(&repo.join("sub")).await.unwrap().unwrap();
+        assert_eq!(
+            from_sub.keys().collect::<Vec<_>>(),
+            ["inside.txt"],
+            "the folder's own path, and nothing outside it",
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 

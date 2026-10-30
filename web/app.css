@@ -866,3 +866,18 @@ html.resizing-rows, html.resizing-rows * { cursor: row-resize !important; user-s
   font-size: 14px;
 }
 
+
+/* A live session not on screen wants a look: a turn ended there, or (amber)
+   it waits at its gate. See RECORD/2026-10-30.sessions-side-by-side.WIP.md §6. */
+.chat .acts button.history { position: relative; }
+.chat .acts button.history .behind {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--luu-accent);
+  box-shadow: 0 0 0 2px var(--luu-bg, transparent);
+}
+.chat .acts button.history .behind.gate { background: var(--luu-warn); }

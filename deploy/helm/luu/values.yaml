@@ -1,0 +1,50 @@
+# luu serve, as `deploy/Containerfile.release` builds it. One identity — the
+# token the entrypoint writes on the first start — and one replica: `serve`
+# runs one live session at a time. See RECORD/2026-10-30.three-ways-in.WIP.md.
+
+image:
+  repository: ghcr.io/jgermade/luu
+  # Empty is the chart's appVersion, the release it was published with.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The name a browser types, with its scheme: what the server checks `Origin`
+# against behind a proxy (LUU_ORIGIN). Set from the ingress where empty and the
+# ingress has a host.
+origin: ""
+
+service:
+  type: ClusterIP
+  port: 7878
+
+ingress:
+  enabled: false
+  className: ""
+  host: luu.example.com
+  # cert-manager's, for instance: cert-manager.io/cluster-issuer: letsencrypt
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: luu-tls
+
+persistence:
+  # /state: config.toml, sessions.db, the token.
+  state:
+    size: 1Gi
+    storageClass: ""
+    existingClaim: ""
+  # /work: the tree the agent works in.
+  work:
+    size: 10Gi
+    storageClass: ""
+    existingClaim: ""
+
+# The policy `luu serve` runs under, mounted at /etc/luu/luu.toml. Empty is the
+# image's own (deploy/luu.toml): /work read and write, cargo, rustc, git, rg,
+# ls, no network.
+policy: ""
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -37,6 +37,26 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
 
+  # The chart renders, with and without its options: a lint holds it to that
+  # much, and nothing here holds it to a cluster.
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - run: helm lint deploy/helm/luu
+      - run: helm template luu deploy/helm/luu >/dev/null
+      - run: |
+          helm template luu deploy/helm/luu \
+            --set ingress.enabled=true --set ingress.tls.enabled=true \
+            --set-string policy='[sandbox]' \
+            --set persistence.work.existingClaim=work |
+            grep -q 'value: "https://luu.example.com"'
+
   # The four targets `pages/setup.sh` installs. Linux is built on the oldest
   # Ubuntu runner rather than the newest, because a binary needs the glibc it
   # was linked against or newer: built on 24.04 it wants 2.39 and will not start

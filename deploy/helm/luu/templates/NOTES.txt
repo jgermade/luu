@@ -1,0 +1,17 @@
+luu serve is starting, with its state in a volume that outlives the release.
+
+The token, written on the first start:
+
+  kubectl exec deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- cat /state/token
+
+{{- if .Values.ingress.enabled }}
+
+Then open {{ include "luu.origin" . }}/?token=<the token>
+{{- else }}
+
+Then, with no ingress:
+
+  kubectl port-forward svc/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} 7878:{{ .Values.service.port }}
+
+and open http://localhost:7878/?token=<the token>
+{{- end }}

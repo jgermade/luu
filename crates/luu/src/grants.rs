@@ -209,7 +209,7 @@ fn denied(paths: &[String], target: &str) -> bool {
 }
 
 /// What a session grant for `call` would be: the program `run_command` runs,
-/// by its name, or the path a file tool writes, relative to `base` where it is
+/// by its name — `apt-get` for `install` — or the path a file tool writes, relative to `base` where it is
 /// under it. `None` for a call no grant is about.
 pub fn grant_for(call: &ToolCall, base: &Path) -> Option<Grant> {
     match call.name.as_str() {
@@ -221,6 +221,12 @@ pub fn grant_for(call: &ToolCall, base: &Path) -> Option<Grant> {
                 target: program.to_string(),
             })
         }
+        // `install` is `apt-get` to the shell list: a yes to it is a yes to
+        // the program it runs. See `agent_core::tools::install`.
+        "install" => Some(Grant {
+            kind: GrantKind::Command,
+            target: agent_core::tools::install::APT.to_string(),
+        }),
         "write_file" | "edit_file" => {
             let path = call.arguments.get("path")?.as_str()?;
             Some(Grant {
@@ -329,6 +335,17 @@ mod tests {
                 base
             ),
             None
+        );
+        // `install` is the program it runs, whatever it installs.
+        assert_eq!(
+            grant_for(
+                &call("install", serde_json::json!({ "packages": ["jq"] })),
+                base
+            ),
+            Some(Grant {
+                kind: GrantKind::Command,
+                target: "apt-get".into()
+            })
         );
     }
 

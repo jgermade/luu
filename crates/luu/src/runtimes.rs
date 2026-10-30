@@ -946,6 +946,12 @@ mod tests {
         }
         let source = last_stage(include_str!("../../../Containerfile"));
         assert_eq!(last_stage(RELEASE_CONTAINERFILE), source);
+        // And `luu serve`'s pair, published as `ghcr.io/jgermade/luu`. See
+        // `RECORD/2026-10-30.three-ways-in.WIP.md`.
+        assert_eq!(
+            last_stage(include_str!("../../../deploy/Containerfile.release")),
+            last_stage(include_str!("../../../deploy/Containerfile")),
+        );
         assert!(
             source.contains(&"COPY --from=… /usr/local/bin/luu".to_string()),
             "{source:?}"

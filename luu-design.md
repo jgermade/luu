@@ -13,7 +13,9 @@ directory per revision; nothing there is an answer to what this file answers. Se
 - **Constrain resource access**: configurable folders and commands the agent can reach, checked in our own code *and* held by the kernel (Landlock + seccomp) for anything that runs as a subprocess.
 - **Container mode**: option to run inside a container to isolate system access.
 - **CLI mode**: direct terminal usage.
-- **VSCode integration**: a chat tab similar to Copilot Chat.
+- **No editor integration in the MVP** (since 2026-10-30): the VS Code extension and
+  `luu stdio`, its only consumer, are retired. One that comes back talks to `luu serve`
+  over its WebSocket, as the page does. See [`RECORD/2026-10-30.no-editor-in-the-mvp.completed.md`](RECORD/2026-10-30.no-editor-in-the-mvp.completed.md).
 
 ## Jobs (and Model Tasks)
 
@@ -431,12 +433,12 @@ container is what makes it real.
 ## Overall architecture
 
 ```
-┌─────────────┐   ┌──────────────────┐   ┌─────────────────┐
-│  CLI (bin)  │   │  VSCode ext (TS) │   │  Web debug UI   │
-└──────┬──────┘   └────────┬─────────┘   └────────┬────────┘
-       │ in-process        │ stdio               │ WebSocket
-       └───────────────────┴─────────────────────┘
-                            │   one JSON message schema, N transports
+┌─────────────┐                          ┌─────────────────┐
+│  CLI (bin)  │                          │  Web debug UI   │
+└──────┬──────┘                          └────────┬────────┘
+       │ in-process                               │ WebSocket
+       └───────────────────┬──────────────────────┘
+                            │   one JSON message schema
                   ┌─────────▼──────────┐
                   │   agent-core (lib) │  ← all the brains here
                   │  tasks, context,   │
@@ -448,7 +450,7 @@ container is what makes it real.
                   └─────────────────────┘
 ```
 
-The core knows nothing about CLI, VSCode or the browser — it exposes an internal API (Rust) plus a local server speaking a single JSON message schema over swappable transports. This is also what makes container isolation a packaging question: the container wraps tool execution, not the whole core — see [Container mode](#container-mode) and [`RECORD/2026-09-01.the-container-decided.completed.md`](RECORD/2026-09-01.the-container-decided.completed.md).
+The core knows nothing about the CLI or the browser — it exposes an internal API (Rust) plus a local server speaking a single JSON message schema. A second transport, stdin/stdout for an editor, existed until 2026-10-30 and is retired with the editor ([`RECORD/2026-10-30.no-editor-in-the-mvp.completed.md`](RECORD/2026-10-30.no-editor-in-the-mvp.completed.md)). This is also what makes container isolation a packaging question: the container wraps tool execution, not the whole core — see [Container mode](#container-mode) and [`RECORD/2026-09-01.the-container-decided.completed.md`](RECORD/2026-09-01.the-container-decided.completed.md).
 
 ## Context management (the differentiating piece)
 
@@ -563,7 +565,7 @@ nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.completed.md`](RECORD/
 - **Hierarchical compaction**: built, and measured once. A closed task is replaced by its deterministic summary — the approved plan plus the evidence: paths, commands and exit codes — and full text is kept only for the live one. The token threshold stays as the fallback for a task that overflows alone. Against the recorded baseline (twenty prompts, 1024-token window, mock backend): mean prefix reuse 69.9% under per-turn eviction and 89.9% under block eviction becomes **91.3%** with four task boundaries, and the prompts sent shrink from 16 715 to **13 417 tokens** — with eviction never firing at all, because the folded history never grew enough to need it. What the fold *loses* is the conversation itself — the turns' own prose — and, until it quoted them, the files the turns were shown: that second loss was measured against a real model (two of three closed-task questions came back wrong, one of them a refusal) and closed by quoting the fragments verbatim into the summary. On the mock pair that quote costs 16 927 → 24 356 tokens over the twenty prompts, against 30 682 unfolded, and leaves reuse where it was (89.6% → 89.3%). On the real model (`qwen2.5-coder:7b`, sampling pinned) both closed-task questions that broke before the fix now answer correctly, matching the unfolded run almost word for word, and the fold still wins on tokens but by less than estimated: 29 135 tokens against 36 288 unfolded, a 19.7% win rather than the ~50% win before the fix paid for the quote — see [`RECORD/2026-08-30.the-fold-fix-verified.completed.md`](RECORD/2026-08-30.the-fold-fix-verified.completed.md). Model prose in the summary stays rejected — it would enter the write-once region every later turn is built on, which is exactly why the quote is the file's bytes and not a digest of them.
 - **Grounding a turn with a real file**: built. `--fragment PATH[:START-END]`, and `## fragment:` in a script, read a file **through the sandbox** and fuse it into one turn's user message — the `code` bucket, which existed from the start and until now was always zero. A path the sandbox would refuse to `read_file` is refused here too, and a denial is an error rather than a warning: a run that quietly dropped its grounding answers out of the model's training and looks like it worked, which is exactly what a real 7B did to twenty ungrounded turns. It is attached to one turn and then gone, because which turns a file belongs in is the next item's question and attaching it to all of them answers it wrongly, at every turn's expense. `scripts/tasks/grounded{,-tasks}.txt` are the pair this makes possible: the same twenty prompts, one grouped into tasks, with a last group that attaches nothing and asks the first fifteen again — the first corpus in which *does the fold lose what the task needed* is a question with an answer. The protocol for asking it is [`RECORD/2026-08-27.grounded-fold-probe.completed.md`](RECORD/2026-08-27.grounded-fold-probe.completed.md). `scripts/tasks/edit-reread.txt` is the one that **edits** what it grounds — the same directive over a committed scratch tree rather than over this repository, because every prompt that changes a file changes it for the rest of the session — and it is what makes *is this file's content in this prompt twice* a question with a number instead of an argument.
 - **The repository map**: built, and ranked **behind a flag that is off**. Every `.rs` file's definitions with their signatures, bodies elided, from `tree-sitter`'s own `TAGS_QUERY`, in the cached prefix under the tool definitions — where blocks are ordered by how often they are rewritten, and the map changes only when the repository does. `--map-tokens N`, off by default so that every recording made before it stays comparable, and `luu map` prints the exact bytes. Files are outlined in path order until one does not fit; the map then says how many it left out. **`--map-rank` orders them by what the rest of the tree depends on instead** — a reference graph over the same query's `@reference.*` captures, PageRank with a *uniform* teleport, which is what keeps the map a prefix: Aider seeds its ranking with the files in the conversation, and that is the half that would rewrite the block every turn. It is off because it was measured and lost, twice, on two differently-built corpora: at 1024 tokens path order holds five files and the ranking holds two, because rank order puts the big central files first and the fill rule stops at the first file that does not fit — and on a corpus of 38 questions chosen one per file before either order was checked (so the loss cannot be the corpus favouring path order's own holdings), path order named the right file for **100%** of the questions it covered against rank order's **12.5%**, and rank order's denser, more self-referential files pushed a 7B into paragraphs of fabricated Rust that evicted the session's own history 24 times in 38 turns, where path order evicted nothing. `luu map --explain` prints the ranking under either order — each file's score and who references it — so the order the map did not take can be read beside the one it did. To address the oversized file trap and leaf-sink penalty, **`--map-in-degree`** weights inbound references by caller diversity rather than random-walk damping, and **`--map-non-greedy`** skips over files that exceed the remaining token budget to continue packing smaller ones (packing 5 files and 1026/1024 tokens at 1024 tokens, vs 2 files and 664 tokens under greedy fill). This repository is still the argument for doing this properly: its whole outline is **6 327 tokens, 77% of an 8K window**, so at any affordable budget most of it is missing and the alphabet chose which part. What it costs on the grounded script: 870 tokens a turn at `--map-tokens 1024`, +56% on the run's total prompt tokens — and a prefix-reuse number that rises from 93.9% to 96.3% for purely arithmetic reasons, which is why a map-on run is not comparable on reuse to a map-off one. See [`RECORD/2026-08-31.the-repo-map.completed.md`](RECORD/2026-08-31.the-repo-map.completed.md), [`RECORD/2026-09-02.ranking-the-map.completed.md`](RECORD/2026-09-02.ranking-the-map.completed.md), [`RECORD/2026-09-03.the-map-order-probe.completed.md`](RECORD/2026-09-03.the-map-order-probe.completed.md) and [`RECORD/2026-09-04.in-degree-and-fill.completed.md`](RECORD/2026-09-04.in-degree-and-fill.completed.md).
-- **Relevance over recency**: built, measured, and **on this repository's own corpus it is the largest single win the context manager has**. `--select-tokens N` fills the `code` bucket with the definitions *this turn's text points at*, chosen by `agent_core::select` and read through the sandbox by the same loader `--fragment` uses — so a selected fragment enters a turn by the door that already existed, and is gone when the turn is. **The mechanism is `tree-sitter` tags plus what the file says it is for, and the reference graph is off**: on the 38-question corpus, at 1024 tokens, a path-ordered map holds the answer to **3** of the questions and a selection holds **33**, with the right file first 19 times and in the top three 31. The graph hop — one step from a file that matched, which is what this module was expected to be *about* — was implemented, measured, and **lost a third time**: it moves the right file out of first place five times in 38, holds no more targets, and costs 13% more tokens, because on a tree this connected a neighbour is most of the tree. It ships off, switchable, exactly as `--map-rank` did. The doc signal is doing much of the work and the corpus was written from module docs, so the ablation is the honest row: tags and path alone hold **19** of 38 at 1024, still six times the map. What is *not* measured is precision — whether a model uses what it was handed — and that needs a box. Off by default, because it changes every number in every recording made before it, and unlike the map it is **not** cached: a run with selection on is not comparable on prefix reuse to one without. Decided against Aider's implementation and against embeddings; see [`RECORD/2026-08-27.aider-repo-map.completed.md`](RECORD/2026-08-27.aider-repo-map.completed.md) and [`RECORD/2026-09-05.choosing-fragments.completed.md`](RECORD/2026-09-05.choosing-fragments.completed.md). **Precision is now measured too, and the selector is used**: the same 38 questions against `qwen2.5-coder:7b`, one flag apart, answer **33** correctly with selection on and **0** with it off — handed nothing the model does not know the tree is Rust and answers `main.py`. Precision on the 33 targets it held is **91%**, there is no stuck default, and *position inside the bucket does not matter*: held-but-not-first scores 13/14 against first place's 17/19, which retires "it moves the right file out of first place" as a reason to reject anything. The price is now known and it is not the per-turn prompt: a fragment is fused into the turn's user message and **stays in history**, so a 38-turn run evicted 31 times, prefix reuse fell from 93.3% to **17.7%**, and the run took **11.6×** the wall clock of the ungrounded one. Dropping the quoted code from a turn once it is answered is untried and is the same problem as active pruning below. See [`RECORD/2026-09-06.does-the-model-read-it.completed.md`](RECORD/2026-09-06.does-the-model-read-it.completed.md), whose answers are on disk in [`RECORD/runs/2026-09-06.precision/`](RECORD/runs/2026-09-06.precision/). **It is in every surface, not only `chat`**: `serve` and `stdio` take the same flag, the tree is walked at startup beside the map and **re-stamped before every turn** — `rewalk_sources` re-parses only the files whose mtime or length moved — and a turn selects under the lock that hands out its number. The re-stamp is not an optimisation of the walk, it is a correctness fix: a walk kept from startup does not stop offering a file the session edited, it offers it at the line numbers it had before the edit, and the fragment loader reads the *current* file at them — wrong lines under a right path. It refreshes through the **agency's** sandbox rather than the live job's, because the walk is the session's cache and a narrow plan must not shrink it for every turn after; the narrowing stays at the read. The map is deliberately not rebuilt: it is the cached prefix, and a stale line number a reader follows by hand is not the same failure as a stale range delivered as the definition. In those two the selection is read through the **live job's** sandbox rather than the policy file — an approved plan narrows what may be *chosen* exactly as it narrows what may be opened, which is what makes a selector admissible behind a gate at all. The consequence is that a plan a 7B wrote bounds the selector's reach: on the end-to-end run the planning call selected over the whole tree at 2 678 prompt tokens, the model's plan granted one file, and the approved turn selected at 797. A person who knows better adds files at the gate, which is what `approve_job` already carries. See [`RECORD/2026-09-06.selection-at-the-gate.completed.md`](RECORD/2026-09-06.selection-at-the-gate.completed.md).
+- **Relevance over recency**: built, measured, and **on this repository's own corpus it is the largest single win the context manager has**. `--select-tokens N` fills the `code` bucket with the definitions *this turn's text points at*, chosen by `agent_core::select` and read through the sandbox by the same loader `--fragment` uses — so a selected fragment enters a turn by the door that already existed, and is gone when the turn is. **The mechanism is `tree-sitter` tags plus what the file says it is for, and the reference graph is off**: on the 38-question corpus, at 1024 tokens, a path-ordered map holds the answer to **3** of the questions and a selection holds **33**, with the right file first 19 times and in the top three 31. The graph hop — one step from a file that matched, which is what this module was expected to be *about* — was implemented, measured, and **lost a third time**: it moves the right file out of first place five times in 38, holds no more targets, and costs 13% more tokens, because on a tree this connected a neighbour is most of the tree. It ships off, switchable, exactly as `--map-rank` did. The doc signal is doing much of the work and the corpus was written from module docs, so the ablation is the honest row: tags and path alone hold **19** of 38 at 1024, still six times the map. What is *not* measured is precision — whether a model uses what it was handed — and that needs a box. Off by default, because it changes every number in every recording made before it, and unlike the map it is **not** cached: a run with selection on is not comparable on prefix reuse to one without. Decided against Aider's implementation and against embeddings; see [`RECORD/2026-08-27.aider-repo-map.completed.md`](RECORD/2026-08-27.aider-repo-map.completed.md) and [`RECORD/2026-09-05.choosing-fragments.completed.md`](RECORD/2026-09-05.choosing-fragments.completed.md). **Precision is now measured too, and the selector is used**: the same 38 questions against `qwen2.5-coder:7b`, one flag apart, answer **33** correctly with selection on and **0** with it off — handed nothing the model does not know the tree is Rust and answers `main.py`. Precision on the 33 targets it held is **91%**, there is no stuck default, and *position inside the bucket does not matter*: held-but-not-first scores 13/14 against first place's 17/19, which retires "it moves the right file out of first place" as a reason to reject anything. The price is now known and it is not the per-turn prompt: a fragment is fused into the turn's user message and **stays in history**, so a 38-turn run evicted 31 times, prefix reuse fell from 93.3% to **17.7%**, and the run took **11.6×** the wall clock of the ungrounded one. Dropping the quoted code from a turn once it is answered is untried and is the same problem as active pruning below. See [`RECORD/2026-09-06.does-the-model-read-it.completed.md`](RECORD/2026-09-06.does-the-model-read-it.completed.md), whose answers are on disk in [`RECORD/runs/2026-09-06.precision/`](RECORD/runs/2026-09-06.precision/). **It is in every surface, not only `chat`**: `serve` takes the same flag, the tree is walked at startup beside the map and **re-stamped before every turn** — `rewalk_sources` re-parses only the files whose mtime or length moved — and a turn selects under the lock that hands out its number. The re-stamp is not an optimisation of the walk, it is a correctness fix: a walk kept from startup does not stop offering a file the session edited, it offers it at the line numbers it had before the edit, and the fragment loader reads the *current* file at them — wrong lines under a right path. It refreshes through the **agency's** sandbox rather than the live job's, because the walk is the session's cache and a narrow plan must not shrink it for every turn after; the narrowing stays at the read. The map is deliberately not rebuilt: it is the cached prefix, and a stale line number a reader follows by hand is not the same failure as a stale range delivered as the definition. There the selection is read through the **live job's** sandbox rather than the policy file — an approved plan narrows what may be *chosen* exactly as it narrows what may be opened, which is what makes a selector admissible behind a gate at all. The consequence is that a plan a 7B wrote bounds the selector's reach: on the end-to-end run the planning call selected over the whole tree at 2 678 prompt tokens, the model's plan granted one file, and the approved turn selected at 797. A person who knows better adds files at the gate, which is what `approve_job` already carries. See [`RECORD/2026-09-06.selection-at-the-gate.completed.md`](RECORD/2026-09-06.selection-at-the-gate.completed.md).
 - **What leaves the history**: **built, three rules, one of them on by default, and each one a session's to choose** — `POST /api/sessions` takes them beside the provider and the posture, so what the paragraph below calls a default is what a session starts on and no longer what a process is stuck with. **Rule A is on and B and C are off**, which is not the three ranked by what they save: ranked that way the winner is C, the only one of the three that has never been put in front of a model. The criterion is *fewest tokens without affecting the result*, and it selects the one rule whose saving has been shown to cost nothing — n=1, and said so where it is decided. A `cat` capped at 8 KiB and a selected fragment are the same object to the window — a block of file bytes that earned its place in *one* turn and is charged to every turn after it — and by turn 20 of the precision run ~90% of the `history` block is quoted code. Three rules over one window, and they are not the same size: two of them reach quoted code and the third reaches the block the first two were named after and could not touch. **Rule A, *do not re-inject*, is built and on by default since 2026-09-19** (`--repeat-once`, `--no-repeat-once`, `Budget::repeat`): a span is rendered by the **oldest** turn of the window that carries it and skipped by every turn after it, the turn being asked included. Oldest and not newest is the whole reason it is cheap — the block above the newest message stays byte-identical, so the only thing that moves is the message that moves anyway — and it is also what stops eviction orphaning a span, because ownership is only ever handed *forward*, to a turn that will outlive the one giving it up. The owner is chosen inside the window being rendered and never over the session: an owner already below the floor is [`the-fold-fix-verified`](RECORD/2026-08-30.the-fold-fix-verified.completed.md)'s failure with a different mechanism, and the precision corpus offers it 22 chances. A fragment's identity is its **path and its bytes**, so the same span after an edit is a different span — which is the right rule for *has this exact block already been rendered* and the wrong one for *is this file's content in this prompt twice*. **So the promise needs a second half, and since 2026-09-20 it has one: the span that is rendered once is the *newest* one.** `code_context` is written when a turn closes and never refreshed, while every turn re-reads its own spans, so a file edited mid-session used to go out as two blocks under one `// path` header with nothing saying which was true — and rule A could not collapse them, because by its own identity rule they are different spans. **Now the newest body of a path wins and the older ones go out as the line that cites them** (`// path — N tokens, superseded`), where *newest* means the body carried by the newest turn that read it, the turn being asked ahead of all of them. **Derived and not stored, which is what makes it a ratchet**: it is computed over every turn the session holds, the evicted ones included, so the newest reader of a path only ever moves forward and a body the session watched go stale cannot come back by anything *leaving* the window — the floor and the prune line each needed a field for that property and this one gets it from the derivation, on `SessionView::counts()`'s argument one structure along. A file edited **back** to what it was is the case that decides the shape: a ratchet over bodies ever found stale would go on citing bytes that are on disk, and a ratchet over readers does not. The citation is **unguarded**, which is the one place it parts company with rule B's: a pruned span's citation is a *saving* and is not taken where it costs more than the span, and this one is a *correction* — what it replaces is not expensive, it is untrue, and being cheap to send is not a reason to send bytes the session knows are stale. It is **rule A's repair and not a fourth rule**: nothing is superseded under `Repeat::Always`, where a prompt carrying one path twice is the documented behaviour and the blocks read as per-turn snapshots, so there is no `--no-supersede` — the way back is `--no-repeat-once`, and a run made without rule A is byte-identical to what it was. The detector stays exactly as it is, unchanged and still computed over what was sent: `Selection::diverged` and the `diverged` **trace** line report every path a render sent under more than one body, and the only evidence the fix works is that they now find nothing. Beside them, `Selection::superseded` and a `superseded` trace line say what the render did instead (`record::FORMAT` 15; `protocol::VERSION` unchanged at 6) — trace for the same reason `pruned` is one, since every turn is still asked, answered and in the transcript and what changed is the prompt. **That bump makes an older line mean something new, which none of the others did**: a stream at 12 to 14 carries `diverged` because the defect was reported and not repaired, and a stream at 15 carries `superseded` where those would have been, so `diverged` empty is *nothing went stale* on an old stream and *everything stale was replaced* on a new one, and the format number is what tells them apart. The measurement that decided it, on [`scripts/tasks/edit-reread.txt`](scripts/tasks/edit-reread.txt) — thirteen turns over a committed scratch tree that reads four files, edits three and asks about two of those again, with a control that must stay quiet and both blind spots in it — is **two edits leaving 8 of 13 prompts carrying two bodies for one path**, six of the eight attaching nothing of that file, so a divergence is a state the window enters rather than an event at the turn that causes it. Against the parent commit, same corpus and same flags: **8 of 13 renders repaired, 10 spans, 898 tokens of stale bytes replaced**, session prefix reuse 93.95% → 87.14% with **every point of that in the two turns that re-read the edited file** — the break is one per *edit* and not one per render, because the citation standing in the old block's place is itself stable — and the history bucket **falling** 7 200 → 6 432 tokens, since a citation is cheaper than the bytes it replaces. The repair is not paid for out of the window; it pays the window back. What it does **not** do is settle whether a model notices: the edits are scripted, so the number is a fact about the corpus, and what a *model* does is the run the corpus exists for. Two blind spots are unchanged and inherited exactly, because the fix reads the same identity the detector does: a file edited after its only read has nothing to contradict it, and two *overlapping* specs of one file (`1-6` and `1-16`) are two paths. See [`RECORD/2026-09-19.one-path-two-bodies.completed.md`](RECORD/2026-09-19.one-path-two-bodies.completed.md), [`RECORD/2026-09-19.a-corpus-that-edits.completed.md`](RECORD/2026-09-19.a-corpus-that-edits.completed.md) and [`RECORD/2026-09-20.the-newest-body-wins.completed.md`](RECORD/2026-09-20.the-newest-body-wins.completed.md), with the run in [`RECORD/runs/2026-09-20.the-newest-body-wins/`](RECORD/runs/2026-09-20.the-newest-body-wins/). On twenty grounded turns at `--select-tokens 1024`, one flag apart: the `code` bucket falls **19.5%** (20 274 → 16 318 tokens), the history does not grow to absorb it, the window fills slowly enough to need **8 cuts instead of 12**, and mean prefix reuse goes from 34.0% to **52.0%** — that last one predicted by nothing and a consequence rather than a claim. The accounting had to follow or the budget would lie: a turn costs its stored count *less what this render drops*, and `Evicted.tokens` is now the difference of two windows rather than the sum of the items below the floor, which was an over-report the moment a span could outlive the turn that owned it. **And since `record::FORMAT` 14 the rule says what it did**: a `repeated` trace line names the turns that gave up spans, how many, and what they would have cost — trace for the reason `pruned` and `diverged` are. Until it, rule A was the only one of the three that reported nothing at all: the number was computed in `split_shown`, subtracted from the `history` bucket and dropped, so a run that collapsed forty spans and one that collapsed none left the same evidence, which is the complaint format 11 was bumped to fix one field along. It is **the sum of the spans a render did not resend** and deliberately not what `Pruned.tokens` is — that one is the difference of two windows precisely because a span its turn owned passes to a younger turn instead of leaving, and this is the other side of the same passing-down, so it is not what the window would have been under `Repeat::Always`. On the edit-and-re-read corpus it is 7 renders and 854 tokens with fragments typed by hand, and **11 renders, 43 spans and 2 466 tokens with a selector on**, which is where the rule's own justification comes from showing up as an arm rather than as a figure. See [`RECORD/2026-09-19.one-counting-surface.completed.md`](RECORD/2026-09-19.one-counting-surface.completed.md) and [`RECORD/runs/2026-09-19.one-counting-surface/`](RECORD/runs/2026-09-19.one-counting-surface/). **Rule B, *prune behind*, is built and off by default** (`--prune-behind`, `Budget::prune`): under pressure the oldest turns of the window give up their spans and keep their exchange — the code becomes the line that cites it (`// path:1-15 — 312 tokens, pruned`), and a turn is evicted whole only when pruning the whole window is still not enough. The prune line is a **second ratchet beside the floor**: it only moves forward, so between two moves the pruned turn's render is byte-identical, and it moves to the **eviction policy's own target**, so depth against frequency stays one trade with one knob rather than a second invented constant. A citation that would cost more than the span it replaces is not taken. It is not monotone under rule A — pruning the turn that *owns* a shared span hands the whole span to a younger turn and adds a citation where it stood, which is bigger — so the line moves to the shallowest position that fits and otherwise to the one that leaves the window smallest, which means **rule B declines where rule A has already taken the saving**. What it buys is not tokens: on the same twenty grounded turns the prompt moves −0.3% and **nothing is evicted at all** — 0 turns dropped against 13, with 13 732 tokens of quoted code out of the window and the whole conversation still in it. Under `--evict block` the line moves **4 times instead of 13** and mean prefix reuse is 69.8% against the 66.5% of the arm that was dropping turns, which is the policy's character being inherited rather than re-invented. A run under the flag says so on the wire: a `pruned` **trace** line names the turns that gave up spans and what the window saved — trace and not protocol, because a pruned turn is still asked, still answered and still in the transcript, so what changed is the prompt and not the conversation (`record::FORMAT` 8, `protocol::VERSION` unchanged at 5). That line says when the rule **fired**, which is not the same fact as which arm the run was: a `--prune-behind` run that pruned nothing was indistinguishable from a run without the flag until the header carried all three rules itself (`record::FORMAT` 11). A resumed session **used to** have nothing to prune, because `Context::from_view` rebuilt turns without their fragments. Since 2026-09-19 it rebuilds them **by reference** — a `grounded` protocol line carries each turn's specs and `from_view` reads them again through the sandbox the resume is under — so a resumed session has spans to prune like any other, and the one it cannot read comes back as this same citation with the reason in it. See [`RECORD/2026-09-19.fragments-by-reference.completed.md`](RECORD/2026-09-19.fragments-by-reference.completed.md). **Rule C, *a result is bytes too*, is built, off by default, and cuts by tool** (`--prune-results`, `Budget::results`): the 8 KiB cap means one `cat` is ~2 000 tokens at the approximate counter — twice what a whole turn selects at `--select-tokens 1024` — charged to every turn after the one that made the call, and until it landed the only thing that ever took it out of the prompt was evicting that turn with its question and its answer. It has no line of its own: rule B already decides which turns are old enough to give something up, and this decides whether tool output is one of the things they give, which is why it is **inert without `--prune-behind`** and why it is a third flag rather than a widening of the second — there is a run on disk under `--prune-behind`, and a flag that quietly starts meaning something else turns a recorded arm into an unrecorded one. What is replaced is the result *whole*, its `[name] ok` head included, so the citation reports the cost of exactly what is no longer there (`[run_command] output — 1 987 tokens, pruned`); the assistant message that asked for it is never rewritten, because it is the model's own words and it is what says which call the line answers. The same guard as a span's citation: one that is not cheaper than what it replaces is not taken. It reaches a case rule B cannot — a turn that ran a tool and selected nothing has no spans to give. It was also the only thing that reached a *resumed* turn at all, while fragments did not survive a resume; now that they do, that is one case narrower and the rule is unchanged. The fold is unaffected either way: `summary_text` builds its evidence from the stored steps, not from what was rendered. What it does **not** have is a number: no run has been made one flag apart, on this or on any corpus. The 8 KiB cap stays what it always was. **And it is three values rather than two**, because tool output is not one kind of thing: `cited_reads` gives up what could be asked for again — a file's bytes, a directory listing, the same object as a selected span by this project's own account — and keeps what a command found, which is a *record of something that happened* rather than a view of something still there. That is where the measured saving actually came from: every one of the 20 turns that freed 32 752 tokens called `read_file` on a 136 KB file against the 8 KiB cap, and **no corpus here has ever pruned a command's output**, so `cited_reads` ships the whole number and makes none of the claim item 5 is open about. `cited` still takes both and is unchanged — there is a run on disk under it, and a value that quietly starts meaning something narrower turns a recorded arm into an unrecorded one, which is the sentence rule C's own flag exists because of. `--prune-results` still means `cited` for that reason; `cited_reads` is reachable from `[resend]` and from the page and not from the flag. An **unknown tool's output is evidence**: a sixth tool arriving as cheap-to-lose would be the same failure one level down, so the registry's size is asserted in a test and a new tool has to say which it is. The render and the accounting go through **one** function, because under two values each site could carry its own `match` and stay honest, and under three a second copy would be a window whose reported cost and actual cost differ by exactly one tool's output. See [`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md), [`RECORD/2026-09-08.prune-behind.completed.md`](RECORD/2026-09-08.prune-behind.completed.md) and [`RECORD/2026-09-09.what-a-result-costs.completed.md`](RECORD/2026-09-09.what-a-result-costs.completed.md), with the runs in [`RECORD/runs/2026-09-07.repeat-once/`](RECORD/runs/2026-09-07.repeat-once/) and [`RECORD/runs/2026-09-08.prune-behind/`](RECORD/runs/2026-09-08.prune-behind/); the proposal the first two rules come from is [`RECORD/2026-09-06.what-leaves-the-history.completed.md`](RECORD/2026-09-06.what-leaves-the-history.completed.md).
 
 ## Tool calling: how actions actually get executed
@@ -593,8 +595,7 @@ The model never executes anything directly — it only emits a structured reques
   no limit and Manual asks again. **The number is the model's `max-tool-steps`,
   then its provider's, then the file's own (Settings → General), then 8**; read
   at each turn, so Settings reaches the next one; `--max-tool-steps` holds over
-  all three. `luu stdio` asks as `serve` does, on its own channel; `luu chat`
-  has nobody to ask, and ends on it as before. See
+  all three. `luu chat` has nobody to ask, and ends on it as before. See
   [`RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`](RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md).
 - **The steps are messages, and they alternate**: a turn renders as `user(prompt)`,
   then `assistant(call) · user(result)` per step, then `assistant(answer)` — where
@@ -657,8 +658,8 @@ The model never executes anything directly — it only emits a structured reques
   compile — falls back to the pre-retry drifted answer instead of failing the
   turn, and reports the refusal once, loudly, on stderr rather than the wire:
   `TurnEvent::ConstraintRefused` is debug data, like `ModelCall`, and never
-  becomes a protocol message. `--constrain` reaches `chat`, `serve` and
-  `stdio` alike, one flag built once per session rather than compiled per
+  becomes a protocol message. `--constrain` reaches `chat` and `serve`
+  alike, one flag built once per session rather than compiled per
   turn. `llama-server` honours a bare `grammar` field as an undocumented
   extension; Ollama's own `/v1` and native `/api/chat` do not, and say so once
   per run rather than silently sending nothing (`Backend::constrain_caveat`).
@@ -859,8 +860,7 @@ inside the image is one that moves every time the image is rebuilt. If adding
 the container had had to touch the loop, the loop was wrong.
 
 **The container's PID 1 is the worker.** `<runtime> run --rm -i --name … luu
-worker`, spoken to over stdio — the same transport the VSCode extension uses,
-pointed the other way. So the container's lifetime *is* the worker's: no
+worker`, spoken to over its stdin and stdout. So the container's lifetime *is* the worker's: no
 `docker rm` to forget, and no way to leave one running after the session that
 owned it died. One per session, not one per command, because a container per
 command is a start — on some runtimes a VM boot — per command. **The name is a
@@ -1032,10 +1032,18 @@ access = "execute"
   default seccomp profile. Until 2026-09-08 every contained run in this
   repository was Docker Desktop on macOS, by hand, once. See
   [`RECORD/2026-09-08.the-container-on-a-runner.completed.md`](RECORD/2026-09-08.the-container-on-a-runner.completed.md).
-- **A session picks its posture, and the container's lifetime is the session's.**
-  What is chosen is not a runtime but a *posture* — the policy file, which
-  decides the sandbox and the seam together, on purpose — named in the state
-  directory's `config.toml` beside the providers:
+- **A session is made from a runtime, an image and lists, and the container's
+  lifetime is the session's.** Until 2026-10-30 what was chosen was a *posture*
+  — the policy file, which decided the sandbox and the seam together, on purpose.
+  That purpose did not survive the lists: a posture moved what a session may do
+  with where it runs, so *Docker with no network* was a second file. **Postures
+  are gone from every surface**: nothing offers or writes one, and a
+  `[posture.<name>]` still in `config.toml` is read as an environment of the same
+  name (`policies::Resolved::of_posture` — its file's sandbox unchanged, three
+  lists named after it), so a session recorded on one resumes on it. See
+  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
+  step 4. What the rest of this entry says of a posture is how it worked, and how
+  an environment by name still does:
 
   ```toml
   [posture.container]
@@ -1055,6 +1063,23 @@ access = "execute"
   while a turn runs, a proposal waits at the gate or an approved job is open, and
   otherwise swaps the agency, ends the old worker and writes a header line, so the
   fold's *last header wins* says from where on the session ran somewhere else.
+  **A session that carries its lists moves by runtime alone** (since 2026-10-30):
+  `PUT /api/session/runtime {runtime, image}` makes it again from its copy on the new place
+  (`Policies::recompose`), so its lists, grants and forbiddens go with it; it waits for a
+  turn and the gate, and **not** for an approved job, since the policy does not move with the
+  place. What can change is what holds the lists, and the picker says it before the move — a
+  place's `gap` is this machine's kernel gap on the host (`sandbox::host_gap`). A session on a
+  posture or the server's own file still moves by name. See
+  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §2.
+  **What a container gained goes with a move only when asked**: the sixth tool, `install`
+  (`{packages}`, apt only), runs in a container as its root from the host
+  (`<runtime> exec --user 0`), outside the worker's Landlock, held to the shell list as the
+  program `apt-get` — so a list that does not name it leaves it to a person. On this machine
+  it fails and asks nobody. The worker remembers what it installed for as long as its
+  container lives, `/api/terminal` says it, and the Runtime dialog's *Move and reinstall*
+  (`reinstall: true`) asks the next container for it before the move is answered — at once,
+  then one package at a time, the session staying where it moved and naming what is missing.
+  It costs every prompt ~280 bytes of tool block.
   **Since 2026-10-22 a session may name an environment instead**: `[shell.<name>]`,
   `[network.<name>]` and `[files.<name>]` lists in two zones, `allow` and `deny` — what
   neither names is asked (**since 2026-10-23**; the loader refuses an `ask` zone) — and
@@ -1070,9 +1095,15 @@ access = "execute"
   back; the environments are resolved again on every save, so the next session on one runs
   under the lists as written. The live session keeps what it was built with.
   **The new session's dialog makes every session from a runtime and three lists** (since
-  2026-10-23; there is no preset to start from): where it runs — this machine, or an image a
-  posture or an environment names, on any container runtime this machine has
-  (`/api/postures`' `runtimes`), so the page never names an image of its own; the shell,
+  2026-10-23; there is no preset to start from): where it runs — this machine, or an image
+  `config.toml` declares, on any container runtime this machine has (`/api/postures`'
+  `runtimes`), so the dialog never names an image of its own. **Since 2026-10-30 an image
+  is a table of its own**, `[image.<name>]` — its `ref` and the in-image paths the host must
+  not resolve — written from Settings → Runtimes (`PUT /api/images`, a browser on this
+  machine only) and offered first; an image a posture or an environment names is still
+  offered after them until postures go
+  ([`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
+  §2). The shell,
   network and files lists by name, an unchosen one the empty list (read the folder, ask the
   rest), what the last session used offered first — the runtime with what choosing it means
   beside it, as tall as the field's box: this machine as the person, its terminal the whole
@@ -1084,17 +1115,24 @@ access = "execute"
   right after the name). `POST /api/sessions` with `lists`
   and no posture is `Policies::compose`, named by its lists and recorded with
   `record::Composed` — the runtime and image it was asked with (`record::FORMAT` 24) — so a
-  resume from the history asks for the same again; with a posture or an environment it is as
+  resume from the history asks for the same again. **And it carries its lists**: since
+  2026-10-30 each is copied, as written, into the header beside its hash
+  (`record::Copied`, `record::FORMAT` 26), and a resume makes the session again from the copy
+  (`Policies::recompose`) rather than from `config.toml` by name — so a list edited, renamed
+  or deleted since changes nothing about a session that started on it, and no longer refuses
+  its resume. See
+  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md).
+  With a posture or an environment it is as
   before (`resolve_with` swaps an environment's lists; a posture's lists are its policy file).
-  **Settings → Runtimes writes the postures table**, naming a policy file out of the
-  ones at the top of the checkout and never one the page types, and the server
-  replaces the postures it offers at once. Postures are no longer read only at
-  startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)).
+  **Settings → Runtimes wrote the postures table** from 2026-10-01
+  ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md))
+  until 2026-10-30, when the section and `PUT /api/postures` went; it writes the
+  images now.
   **And one container runtime may be the default**: `[runtimes] default`,
   written from its card (`PUT /api/runtimes/default`; `host`, written as no
   table, is this machine again), is where sessions start — the first one of
   `luu serve`, made through the same route as the dialog's from that runtime,
-  the first image a posture or an environment names and the empty lists, and
+  the first image `config.toml` declares and the empty lists, and
   the new session's *Runtime* before anything else is chosen. **Absent is this
   machine**, and no card says *default*: a session in a container nobody chose
   was a label promising what the server did not do. Where the default cannot
@@ -1112,7 +1150,7 @@ access = "execute"
   card when it answers, so a runtime that takes its five seconds to say nothing
   holds up only itself
   ([`RECORD/2026-10-27.runtimes-without-the-wait.completed.md`](RECORD/2026-10-27.runtimes-without-the-wait.completed.md)). See
-  [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md). `luu chat` and `luu stdio` are unaffected:
+  [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md). `luu chat` is unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
   Starting the worker with the session was chosen before anyone had a number.
@@ -1135,15 +1173,22 @@ access = "execute"
   thing that says where the rest of those turns ran. Before this the endpoint
   refused a *named* posture and inherited a different one silently. See
   [`RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`](RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md).
-- Still ahead: `--cap-drop=ALL`, a pids cgroup in place of `RLIMIT_NPROC`, and
-  concurrent sessions — one live session per `serve` is still the shape, so one
-  container at a time is still the shape.
+- Still ahead: `--cap-drop=ALL` and a pids cgroup in place of `RLIMIT_NPROC`.
+  **Concurrent sessions are built** (since 2026-10-30): each live session has its
+  own agency, worker and container, so several containers run at once — see
+  *Resuming and sessions side by side* below.
 
-## VSCode integration
+## Editor integration — not in the MVP
 
-- Use the **VSCode Chat API** (`vscode.chat.createChatParticipant`) — requires a lightweight TypeScript extension.
-- The TS extension acts as a bridge: renders the UI (messages, plan approval) and talks to a **spawned `luu stdio` subprocess** — one process per window, no port, no bind, no token, speaking line-oriented NDJSON with errors on stderr. Not a socket: the moment there is one, `approve_task` is reachable on it, and signed approvals become a precondition rather than a later step. The socket transport stays what `serve` already offers and becomes interesting for the editor only once multi-session exists. See [`RECORD/2026-09-01.how-a-surface-reaches-the-engine.completed.md`](RECORD/2026-09-01.how-a-surface-reaches-the-engine.completed.md), [`RECORD/2026-09-04.protocol-over-stdio.completed.md`](RECORD/2026-09-04.protocol-over-stdio.completed.md), and [`RECORD/2026-09-04.vscode-extension.completed.md`](RECORD/2026-09-04.vscode-extension.completed.md). Surface #3 lives in `editors/vscode/`.
-- The task's confirmation step maps well to this UX: an editable plan before execution (similar to how Copilot shows changes before applying them), then execution with streaming of which tool is being used, and a closed task collapsing to its summary in the thread.
+Retired on 2026-10-30. The VS Code extension in `editors/vscode` spawned `luu stdio` and spoke
+the protocol over its stdin and stdout; it had stopped at protocol 7 while luu reached 12, so it
+was refused at the handshake, and it was `luu stdio`'s only consumer. Both are gone. An editor
+surface that comes back talks to `luu serve` over `/ws`, which needs no `Origin` and takes the
+token as a bearer header — or embeds the page in a webview. Its open questions are the server's:
+which live session it speaks for (`/ws?session=<id>`, since 2026-10-30), and which folder
+`serve` works in. See
+[`RECORD/2026-10-30.no-editor-in-the-mvp.completed.md`](RECORD/2026-10-30.no-editor-in-the-mvp.completed.md), and for how it was, [`RECORD/2026-09-04.protocol-over-stdio.completed.md`](RECORD/2026-09-04.protocol-over-stdio.completed.md)
+and [`RECORD/2026-09-04.vscode-extension.completed.md`](RECORD/2026-09-04.vscode-extension.completed.md).
 
 ## Debug web client (agent protocol)
 
@@ -1444,8 +1489,8 @@ when only the index, `HEAD` or a ref moved, or `all` past a thousand paths. The 
 what is on screen: the open directories each path sits under (a directory's row carries the
 loudest git letter beneath it), git at most once a second, and the active tab, quietly, without a
 `loading` blank, so the scroll stays where it was. Another tab re-reads when it is activated, as
-it always did. **Server-sent events, not the socket**: `/ws` is the protocol, which stdio carries
-too, and a file tree is the page's alone. **Read with `fetch`, not `EventSource`**, so the bearer
+it always did. **Server-sent events, not the socket**: `/ws` is the protocol, and a file
+tree is the page's alone. **Read with `fetch`, not `EventSource`**, so the bearer
 token travels as a header and `?token=` stays the `/ws` exception. A path is named only when its
 directory is one the panels may list, and a listing already names everything in it. One watcher per
 stream, dropped with it. See
@@ -1533,7 +1578,8 @@ make sense of bumps both from here.
 
 ### Transport: HTTP + WebSocket, not REST-only and not gRPC
 
-**Decision: one JSON message schema, several transports (stdio, WebSocket), served over plain HTTP.**
+**Decision: one JSON message schema, over a WebSocket, served over plain HTTP.** (Stdio was a
+second transport until 2026-10-30, retired with the editor surface that used it.)
 
 - **Not gRPC.** Browsers can't speak gRPC natively — it needs grpc-web plus a proxy (Envoy) or
   Connect. `tonic` also forces a protobuf IDL maintained in parallel with the `serde` types, with
@@ -1542,7 +1588,7 @@ make sense of bumps both from here.
   browser. The cost is all setup and the benefit is nil.
 - **Not REST-only.** No streaming of tokens or tool events; polling makes a debug UI useless. Adding
   SSE on top gets you halfway to a WebSocket with more moving parts.
-- **Reuse what stdio already needs.** The VSCode bridge already requires a JSON-lines protocol.
+- **Reuse what stdio already needed.** The VSCode bridge, while it existed, required a JSON-lines protocol.
   Define the messages once as `serde` enums (`#[serde(tag = "type")]`), put the transport behind a
   trait, and the web client and the extension speak the same protocol — one schema to version, two
   clients debugged at once.
@@ -1619,8 +1665,8 @@ can read. A mismatch in *either* direction is a `refused` with reason `version` 
 close — a newer client is the case the host cannot parse and an older one is the case the
 client cannot, and neither side guesses. It is **required as the first message on a port
 that asks for a bearer token** (which is every port off loopback, since binding one
-without a token is refused) and optional on loopback and over stdio, where the peer is
-this machine's own browser or the process that spawned us. The server's `hello` also
+without a token is refused) and optional on loopback, where the peer is
+this machine's own browser. The server's `hello` also
 carries the `session` id, because an approval is signed against it.
 
 **An approval can be signed.** `approve_plan` carries an optional
@@ -1632,7 +1678,11 @@ exists — it is the one thing the gate still names, and only because a signatur
 bound to no job could be replayed against any of them. The server refuses a
 signature that names an id other than the one it is about to open, and an
 unsigned approval names nothing at all. The verifying
-keys are named in `luu.toml`:
+keys are named in **luu's own `config.toml`** — since 2026-10-30; a policy file's
+`[approvals]` is read only where `config.toml` has none, with a warning, because who
+may approve is the operator's to say and never a project's
+([`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md),
+step 4):
 
 ```toml
 [approvals]
@@ -2139,7 +2189,7 @@ sends, which is a fact about the run and not about the screen somebody reads
 from. Every key is optional, and an unnamed one means *this machine states no
 position* rather than *this machine chose off* — the same distinction the header
 draws between a file that says `always` and one written before the field
-existed. `luu chat` and `luu stdio` read it too: it sits beside this machine's
+existed. `luu chat` reads it too: it sits beside this machine's
 default destination and is the same kind of fact. **A flag beats it, one way
 only** — a `bool` flag can only turn a rule on, so `--repeat-once` overrides a
 file that says `always` and a file that says `once` cannot be turned off from
@@ -2461,7 +2511,7 @@ extension.
 **It is all automatic.** luu's own copy is downloaded the first time a session needs it; the
 engine starts then; a session that picks another model restarts a llama.cpp engine on it (it
 holds one); and an engine no session sends to is stopped, so a model does not stay in memory
-until `serve` exits. `luu chat` and `luu stdio` start it for the length of the run.
+until `serve` exits. `luu chat` starts it for the length of the run.
 
 **A switch does not wait for the load; the first call does.** Choosing another model answers
 as soon as the session points there, and the engine loads behind the answer
@@ -2586,7 +2636,7 @@ is what luu sends as `num_ctx`, and taking the model's trained length would
 ask for a KV cache nobody chose. `serve` asks in the background once a session
 points somewhere (an engine waits until it is up). If the session is still
 there when the answer comes, the destination takes the window and the stream
-gains a header carrying it. `chat` and `stdio` ask once before the first turn
+gains a header carrying it. `chat` asks once before the first turn
 and print `window: 32768, from the server`. See
 [`RECORD/2026-09-30.the-window-the-server-says.completed.md`](RECORD/2026-09-30.the-window-the-server-says.completed.md).
 
@@ -2642,7 +2692,7 @@ Resolved in order: `LUU_HOME` if set, then `~/.luu` if it exists, then
 where the settings live would have to live somewhere, and that somewhere is the
 question. Off a terminal it does not ask: it takes the XDG path, says so, and
 names `LUU_HOME`, because a prompt nobody can answer is a hang and a hang in
-`luu stdio` is a parent process waiting on a pipe. See
+a process another one spawned is a parent waiting on a pipe. See
 [`RECORD/2026-09-04.the-name-and-the-config-dir.completed.md`](RECORD/2026-09-04.the-name-and-the-config-dir.completed.md).
 
 **A row is the fold, whole, and nothing else.** `SessionView` serialised into one
@@ -2664,12 +2714,41 @@ and a stored session could not be replayed at all. A session stored before schem
 2 has none, and that is reported rather than repaired: folding a view back into a
 stream would invent line orders and timings the session never had.
 
-**Resuming and multi-session switching are supported.** `SessionStore::resume`
+**Resuming, and sessions side by side.** `SessionStore::resume`
 reconstructs the write-side `AgentContext` and turn counter from stored turns and
-jobs, validated in `store_parity.rs`. In `serve`, `POST /api/sessions` starts a
-clean session checkpointing the active one, `POST /api/sessions/:id/resume`
-restores a stored session into the live engine, and `DELETE /api/sessions/:id`
-removes past sessions. The web UI header displays stored sessions in a switcher
+jobs, validated in `store_parity.rs`. **Since 2026-10-30 several sessions are live at
+once** ([`RECORD/2026-10-30.sessions-side-by-side.WIP.md`](RECORD/2026-10-30.sessions-side-by-side.WIP.md)): `App` holds a map of `LiveSession`s — each its own destination,
+agency (worker, container), grants, fold, stream and event channel — and which one was
+used most recently. `POST /api/sessions` makes one **beside** the others, built on
+`LiveSession::blank`, and makes it current; `POST /api/sessions/:id/resume` makes a stored
+one live the same way, or, when it is already live, attaches to it as it is. Neither ends
+anything: a turn in one runs while another is on screen. **Addressed by `?session=<id>`** on
+`/ws` and on any route (a middleware puts it in a task-local, `App::addressed`); without it,
+a route acts on the current one and a socket follows the current one, saying `hello` again
+when it changes. **`[sessions] max-live`** (4) bounds them: one more puts the least recently
+used idle one to sleep — checkpointed, its worker ended, out of the map, resumed when opened —
+and is refused only when none may sleep. **`idle-minutes`** (30) sleeps an idle one on its own;
+the current one, one with a client, a turn or a proposal never sleeps. `DELETE
+/api/sessions/:id/live` sleeps one on request; a live session cannot be deleted, and archiving
+one sleeps it first. Engines stop only when no live session sends to them. **Each works in its own folder**,
+chosen under where `serve` was started (`folder` on `POST /api/sessions`, root-relative, never
+above the root): it is the base of its sandbox, so its tree, its git panel (status paths made
+the folder's with `git rev-parse --show-prefix`), its repository map and its selection walk are
+that folder's — roadmap row 49's *the folder chosen becomes the session's base rather than a
+filter*. `record::Posture` names it (`record::FORMAT` 27) and a resume makes the session again
+there; a runtime or posture move keeps it. `PUT /api/session/folder` moves a session **before
+its first turn** — after it, its history is about the tree it worked in, and another folder is
+another session. The folder picker browses the root (`GET /api/folders`), *Use this folder*
+moves a fresh session and is remembered for the next ones, and `/api/settings` says `root`,
+`folder` and the other live sessions `shared_with` it. **The page shows them**: each row of
+`GET /api/sessions` that is live carries `live: { state, current }` — `running`, `gate`
+(a proposal, a refused call or a tool limit waits) or `idle` — and the history marks a live
+session not on screen with it, offers *Put to sleep* in place of *Delete*, and lists one that
+is running or waiting before its first turn ends (an empty idle one stays out, as before).
+While one not on screen runs or waits, the page asks for the list every 4 s; one that ends a
+turn or opens a gate there is a dot on the history button — amber for a gate — until it is
+opened. `DELETE /api/sessions/:id` removes past
+sessions. The web UI header displays stored sessions in a switcher
 dropdown alongside a `+ New` button. See
 [`RECORD/2026-09-04.session-resume.completed.md`](RECORD/2026-09-04.session-resume.completed.md) and
 [`RECORD/2026-09-04.multi-session-in-serve.completed.md`](RECORD/2026-09-04.multi-session-in-serve.completed.md).
@@ -2793,7 +2872,7 @@ and [`RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md`](RECORD/2
 ## Suggested work order
 
 1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *Done.*
-2. Context manager (the differentiating piece) working in plain CLI, without container or VSCode — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction, block eviction, compaction on task boundaries and the repository map exist; eviction is recorded rather than only applied, and prefix reuse is measured per turn. The reference graph and the ranking exist and are **off by default**: measured against the path-order baseline on this tree they hold two files where the alphabet holds five, because rank order leads with the big central files and the fill rule stops at the first that does not fit. So what is left of the step is the same item with a sharper question — ranking and the fill rule are one decision, not two, and the corpus that would settle them has to be built first, because the existing one defines its control group as "the files a path-ordered map holds". See [`RECORD/2026-09-02.ranking-the-map.completed.md`](RECORD/2026-09-02.ranking-the-map.completed.md).*
+2. Context manager (the differentiating piece) working in plain CLI, without a container — to measure and iterate on performance quickly. *History, the budget, whole-turn eviction, block eviction, compaction on task boundaries and the repository map exist; eviction is recorded rather than only applied, and prefix reuse is measured per turn. The reference graph and the ranking exist and are **off by default**: measured against the path-order baseline on this tree they hold two files where the alphabet holds five, because rank order leads with the big central files and the fill rule stops at the first that does not fit. So what is left of the step is the same item with a sharper question — ranking and the fill rule are one decision, not two, and the corpus that would settle them has to be built first, because the existing one defines its control group as "the files a path-ordered map holds". See [`RECORD/2026-09-02.ranking-the-map.completed.md`](RECORD/2026-09-02.ranking-the-map.completed.md).*
 3. Agent protocol + `luu serve` + debug web client — early, because it is the instrument used to
    measure step 2. *Done.*
 4. Path/command sandbox — in-process checks, then the kernel holding subprocesses. *Done; see the section above. What is still open is per-task policy, which waits on tasks.*
@@ -2804,7 +2883,8 @@ and [`RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md`](RECORD/2
    What is left of the step is the narrowing: egress through the host, and
    `network` per plan. It no longer blocks the exit-code rung or the gate probe's
    command prompts on macOS.*
-6. VSCode extension last, once the core is stable — it reuses the protocol from step 3.
+6. ~~VSCode extension last, once the core is stable — it reuses the protocol from step 3.~~
+   Out of the MVP since 2026-10-30, with `luu stdio`; see [`RECORD/2026-10-30.no-editor-in-the-mvp.completed.md`](RECORD/2026-10-30.no-editor-in-the-mvp.completed.md).
 
 The six steps are the *shape* of the work and have not changed. What is being
 built next, in what order, and what blocks what is a separate question with a

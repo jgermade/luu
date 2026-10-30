@@ -15,6 +15,7 @@ import { $reactive } from "@web/vendor/jq79.js"
 import { prefs, setStart } from "./prefs.js"
 import { runtimeOptions } from "./places.js"
 import { loadPolicies } from "./policies.js"
+import { folderForNew } from "./workspace.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
   newSession, resumeSession, apiHeaders, refreshSettings,
@@ -327,6 +328,10 @@ export async function startSession() {
     provider: ui.starter.provider,
     model: ui.starter.model,
     ...(choosable ? { runtime, ...(image ? { image } : {}), lists } : {}),
+    // In the folder chosen here last, else the one on screen's: a session
+    // works in its own folder. See
+    // `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    ...(choosable ? { folder: folderForNew() } : {}),
   })
   ui.starting = false
   if (ok) {
