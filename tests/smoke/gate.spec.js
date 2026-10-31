@@ -1157,6 +1157,17 @@ test("the workspace can be narrowed to a subdirectory of where serve started", a
   await expect(page.locator("dialog.modal")).toHaveCount(0)
   await expect(page.locator(".inspector .col-foot .root")).toContainText("crates")
 
+  // The folder is the server's session's, not this browser's, and every test
+  // in this file shares the server: put it back where `serve` started. Left in
+  // `crates/`, the next test's fresh browser asks nothing — the session already
+  // has a folder — and its tree has no `Makefile`.
+  const back = await fetch(`${BASE}/api/session/folder`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ folder: "" }),
+  })
+  expect(back.ok, await back.text()).toBe(true)
+
   expect(errors, "the page logged errors").toEqual([])
 })
 

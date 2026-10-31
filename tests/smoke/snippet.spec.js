@@ -99,7 +99,13 @@ test("an HTML block opens as a page in a frame that cannot reach the server", as
   await page.goto(`${BASE}/index.html`)
   const picker = page.locator("dialog.modal").first()
   await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
-  if (await picker.isVisible()) await picker.locator('button:has-text("Use this folder")').click()
+  if (await picker.isVisible()) {
+    await picker.locator('button:has-text("Use this folder")').click()
+    // It closes once the session has moved there, two requests later; until
+    // then it is modal, the composer behind it is inert, and a fill there
+    // types into nothing.
+    await expect(picker).toBeHidden()
+  }
 
   const composer = page.locator(".composer input")
   await expect(composer).toBeEnabled()
@@ -138,7 +144,10 @@ test("a reply's Markdown is drawn, escaped, under a prompt marked with a bar", a
   await page.goto(`${BASE}/index.html`)
   const picker = page.locator("dialog.modal").first()
   await picker.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
-  if (await picker.isVisible()) await picker.locator('button:has-text("Use this folder")').click()
+  if (await picker.isVisible()) {
+    await picker.locator('button:has-text("Use this folder")').click()
+    await expect(picker).toBeHidden()
+  }
 
   const composer = page.locator(".composer input")
   await expect(composer).toBeEnabled()
