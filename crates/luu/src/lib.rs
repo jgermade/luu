@@ -52,6 +52,7 @@ pub mod session;
 pub mod store;
 #[cfg(unix)]
 pub mod terminal;
+pub mod users;
 pub mod workspace;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::io::{AsyncWriteExt, stdout};
@@ -161,7 +162,7 @@ enum Command {
     /// rather than with `openssl rand` and a `chmod`, because the mode is what
     /// `serve` checks and a token written first and narrowed second was
     /// readable in between. A container makes its own on first start with
-    /// `--if-missing`. See `RECORD/2026-10-07.a-public-luu.WIP.md`.
+    /// `--if-missing`. See `RECORD/2026-10-07.a-public-luu.completed.md`.
     Token {
         /// Where to write it. Never overwritten: a token in use is replaced by
         /// deleting it, which is a decision and not a side effect.
@@ -170,6 +171,26 @@ enum Command {
         /// Succeed quietly when the file is already there.
         #[arg(long)]
         if_missing: bool,
+    },
+
+    /// Who may log in to a public `serve`: `auth.db` in the state directory.
+    ///
+    /// The way in that needs no request — the person at this machine, which
+    /// is what loopback is on a laptop. `luu user code` prints a code to log
+    /// in with until a server can send it by email. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    User {
+        #[command(subcommand)]
+        action: UserAction,
+
+        /// The user database. Defaults to `auth.db` in the state directory.
+        #[arg(long, global = true, value_name = "PATH", env = "LUU_AUTH_DB")]
+        auth_db: Option<std::path::PathBuf>,
+
+        /// The session store `remove` counts a user's sessions in. Defaults
+        /// to `sessions.db` in the state directory.
+        #[arg(long, global = true, value_name = "PATH")]
+        store: Option<std::path::PathBuf>,
     },
 
     /// Print the repository map that a budget resolves to, and what it cost.
@@ -287,6 +308,11 @@ enum Command {
         /// front of it: `https://luu.example.com`. Overrides `[server] origin`.
         #[arg(long, value_name = "URL", env = "LUU_ORIGIN")]
         origin: Option<String>,
+
+        /// Who may log in, where `exposure = "public"`: the database `luu
+        /// user` writes. Defaults to `auth.db` in the state directory.
+        #[arg(long, value_name = "PATH", env = "LUU_AUTH_DB")]
+        auth_db: Option<std::path::PathBuf>,
 
         /// Where sessions are cached between restarts, as SQLite. Defaults to
         /// `sessions.db` in the state directory the first run chose
@@ -769,6 +795,34 @@ fn fill_of(non_greedy: bool) -> agent_core::repo_map::Fill {
 }
 
 #[derive(Subcommand)]
+enum UserAction {
+    /// Add someone. There is no sign-up: this, or an admin, is how a person
+    /// becomes a user.
+    Add {
+        email: String,
+        #[arg(long, value_enum, default_value = "user")]
+        role: crate::users::Role,
+    },
+    /// Everyone, with their role and whether they are suspended.
+    List,
+    /// Change what someone may do. The last owner is not demoted.
+    Role {
+        email: String,
+        #[arg(value_enum)]
+        role: crate::users::Role,
+    },
+    /// Stop someone logging in, and end every login they have.
+    Suspend { email: String },
+    /// Let a suspended user log in again.
+    Resume { email: String },
+    /// Remove someone. Refused while they have sessions: what removing does
+    /// with those is still open, and `suspend` keeps everything.
+    Remove { email: String },
+    /// Print a code to log in with: six digits, ten minutes, one use.
+    Code { email: String },
+}
+
+#[derive(Subcommand)]
 enum KeyAction {
     /// Make a key, write the private half, and print the block to paste into
     /// `luu.toml`.
@@ -891,6 +945,114 @@ fn write_private(path: &std::path::Path, text: &str) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("setting the mode of {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// How long ago `at` (ms since the epoch) was, as a person says it.
+fn ago(at: u64) -> String {
+    let seconds = crate::session::now_ms().saturating_sub(at) / 1000;
+    match seconds {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{}m ago", seconds / 60),
+        3600..86_400 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86_400),
+    }
+}
+
+/// `luu user`.
+fn run_user(
+    action: &UserAction,
+    auth_db: Option<&std::path::Path>,
+    store: Option<&std::path::Path>,
+) -> Result<()> {
+    use crate::users::{Users, email_of};
+    let path = match auth_db {
+        Some(path) => path.to_path_buf(),
+        None => crate::users::default_path().context(
+            "no state directory (neither LUU_HOME nor HOME is set): pass --auth-db <PATH>",
+        )?,
+    };
+    let users = Users::open(&path)?;
+    match action {
+        UserAction::Add { email, role } => {
+            let user = users.add(email, *role)?;
+            eprintln!(
+                "added {} as {} ({})",
+                user.email,
+                user.role.as_str(),
+                user.id
+            );
+            eprintln!("they log in with a code: luu user code {}", user.email);
+        }
+        UserAction::List => {
+            for user in users.list()? {
+                let state = if user.suspended {
+                    "suspended"
+                } else {
+                    "active"
+                };
+                let last = user
+                    .last_login
+                    .map(|at| format!("last login {}", ago(at)))
+                    .unwrap_or_else(|| "never logged in".to_string());
+                println!(
+                    "{:<32} {:<6} {:<9} {}  {last}",
+                    user.email,
+                    user.role.as_str(),
+                    state,
+                    user.id
+                );
+            }
+        }
+        UserAction::Role { email, role } => {
+            let user = users.set_role(email, *role)?;
+            eprintln!("{} is now {}", user.email, user.role.as_str());
+        }
+        UserAction::Suspend { email } => {
+            let user = users.set_suspended(email, true)?;
+            eprintln!(
+                "{} is suspended, and every login of theirs ended",
+                user.email
+            );
+        }
+        UserAction::Resume { email } => {
+            let user = users.set_suspended(email, false)?;
+            eprintln!("{} may log in again", user.email);
+        }
+        UserAction::Remove { email } => {
+            let email = email_of(email)?;
+            let user = users
+                .find(&email)?
+                .with_context(|| format!("{email} is not a user"))?;
+            let store = store
+                .map(std::path::Path::to_path_buf)
+                .or_else(crate::store::default_path);
+            let sessions = match store.filter(|path| path.exists()) {
+                Some(path) => crate::store::SessionStore::open(&path)?.count_owned(&user.id)?,
+                None => 0,
+            };
+            if sessions > 0 {
+                anyhow::bail!(
+                    "{} has {sessions} session(s), and what removing a user does with them is \
+                     not decided yet: `luu user suspend {}` keeps everything and stops them \
+                     logging in",
+                    user.email,
+                    user.email
+                );
+            }
+            users.remove(&email)?;
+            eprintln!("removed {}", user.email);
+        }
+        UserAction::Code { email } => {
+            let code = users.issue_code(email)?;
+            eprintln!(
+                "a code for {}: valid for {} minutes, once",
+                email_of(email)?,
+                crate::users::CODE_MINUTES
+            );
+            println!("{code}");
+        }
     }
     Ok(())
 }
@@ -2329,6 +2491,15 @@ pub async fn run() -> Result<()> {
         return run_token(path, *if_missing);
     }
 
+    if let Command::User {
+        action,
+        auth_db,
+        store,
+    } = &command
+    {
+        return run_user(action, auth_db.as_deref(), store.as_deref());
+    }
+
     if let Command::Tools { sandbox } = &command {
         let agency = sandbox.resolve().await?;
         print!("{}", agency.describe());
@@ -2444,6 +2615,7 @@ pub async fn run() -> Result<()> {
         auth_token_file,
         exposure,
         origin,
+        auth_db,
         store,
         no_store,
         no_log,
@@ -2529,7 +2701,7 @@ pub async fn run() -> Result<()> {
         // same file. A config that will not load is not a reason to refuse to
         // serve: it is already reported where the providers are, and a machine
         // with none simply offers none.
-        let (postures, environments, postures_path, ui, resend, server) =
+        let (postures, environments, postures_path, ui, resend, server, auth_table) =
             match crate::provider::Config::load() {
                 Ok((config, path)) => (
                     // Read as environments of the same name: nothing offers a
@@ -2550,12 +2722,14 @@ pub async fn run() -> Result<()> {
                     config.ui().cloned(),
                     config.resend().unwrap_or_default(),
                     config.server(),
+                    config.auth(),
                 ),
                 Err(_) => (
                     Default::default(),
                     Default::default(),
                     None,
                     None,
+                    Default::default(),
                     Default::default(),
                     Default::default(),
                 ),
@@ -2720,6 +2894,8 @@ pub async fn run() -> Result<()> {
             auth_token_file,
             exposure,
             origin,
+            auth_db,
+            auth: auth_table,
             approvers,
             max_tool_steps: sandbox_args.max_tool_steps,
         })

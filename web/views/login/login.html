@@ -1,0 +1,120 @@
+<script :setup>
+  // The page on a server with users, before a login: an email and the code
+  // `luu user code` printed for it. Nothing else of the app loads until the
+  // server knows who this is — every route behind the login would be a 401.
+  // See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+  const { logIn } = await import("@web/lib/account.js")
+
+  let email = ""
+  let code = ""
+  let busy = false
+  let said = ""
+
+  $: ready = email.includes("@") && code.replace(/\s/g, "").length === 6 && !busy
+
+  const submit = async () => {
+    if (!ready) return
+    busy = true
+    said = ""
+    const problem = await logIn(email.trim(), code)
+    busy = false
+    if (problem) {
+      said = problem
+      return
+    }
+    location.reload()
+  }
+</script>
+
+<div class="login">
+  <div class="card">
+    <img class="logo" src="./logo.svg" alt="" width="40" height="40">
+    <h1>Log in to luu</h1>
+    <p class="lead">This server has users. Log in with your email and a code.</p>
+
+    <label for="login-email">Email</label>
+    <input id="login-email" type="email" autocomplete="username" autofocus
+           :value="email" @input="email = $event.target.value"
+           @keydown.enter="submit()">
+
+    <label for="login-code">Code</label>
+    <input id="login-code" class="code" inputmode="numeric" autocomplete="one-time-code"
+           maxlength="7" placeholder="123456"
+           :value="code" @input="code = $event.target.value"
+           @keydown.enter="submit()">
+
+    <button type="button" class="go" :disabled="!ready" @click="submit()">
+      {{ busy ? "Logging in…" : "Log in" }}
+    </button>
+    <p :if="said" class="said" role="alert">{{ said }}</p>
+
+    <p class="note">
+      An owner of this server gives you a code. On the server itself,
+      <code>luu user code &lt;email&gt;</code> prints one: six digits,
+      valid for ten minutes, once.
+    </p>
+  </div>
+</div>
+
+<style scoped>
+  .login {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    box-sizing: border-box;
+    background: var(--luu-bg);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+  }
+  .card {
+    width: 100%;
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 28px 24px;
+    border: 1px solid var(--luu-border);
+    border-radius: 10px;
+    background: var(--luu-surface);
+    box-sizing: border-box;
+  }
+  .logo { margin-bottom: 4px; }
+  h1 { font-size: var(--luu-text-xl); margin: 0; }
+  .lead { margin: 0 0 12px; color: var(--luu-fg-muted); font-size: var(--luu-text-md); }
+  label { font-size: var(--luu-text-sm); color: var(--luu-fg-muted); margin-top: 6px; }
+  input {
+    font: inherit;
+    font-size: var(--luu-text-lg);
+    padding: 8px 10px;
+    border: 1px solid var(--luu-border);
+    border-radius: 6px;
+    background: var(--luu-field);
+    color: var(--luu-fg);
+  }
+  input:focus { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .code { font-family: var(--luu-font-mono); letter-spacing: .2em; }
+  .go {
+    margin-top: 14px;
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--luu-accent);
+    color: var(--luu-on-accent);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .go:hover:not(:disabled) { background: var(--luu-accent-hover); }
+  .go:disabled { opacity: .5; cursor: default; }
+  .said {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--luu-bad-soft);
+    color: var(--luu-bad);
+    font-size: var(--luu-text-md);
+  }
+  .note { margin: 14px 0 0; color: var(--luu-fg-subtle); font-size: var(--luu-text-sm); }
+  code { font-family: var(--luu-font-mono); }
+</style>

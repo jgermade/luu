@@ -25,6 +25,11 @@ pub enum Auth {
     Loopback,
     /// A bearer token, required on the control and read surfaces.
     Token(String),
+    /// Users, each with a login: `exposure = "public"`. No bearer token is
+    /// accepted, in a header or in a URL — a login is a cookie, checked by
+    /// `serve`'s own middleware against `auth.db`. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    Users,
 }
 
 impl Auth {
@@ -37,11 +42,20 @@ impl Auth {
             Auth::Token(expected) => {
                 presented.is_some_and(|token| constant_time_eq(expected, token))
             }
+            Auth::Users => false,
         }
     }
 
-    pub fn is_token(&self) -> bool {
-        matches!(self, Auth::Token(_))
+    /// Whether a network can reach this port and something guards it: a
+    /// token or a login. What every check that used to ask *is there a
+    /// token* means.
+    pub fn is_guarded(&self) -> bool {
+        matches!(self, Auth::Token(_) | Auth::Users)
+    }
+
+    /// Whether this port has users.
+    pub fn has_users(&self) -> bool {
+        matches!(self, Auth::Users)
     }
 }
 
@@ -74,6 +88,11 @@ pub fn resolve(
             "exposure = \"private\" requires a bearer token, and none was named. Make one with \
              `luu token <PATH>`, and name it as [server] token-file or --auth-token-file."
         ),
+        Some(Exposure::Public) if token_file.is_some() => bail!(
+            "exposure = \"public\" logs users in with a code, and accepts no bearer token: \
+             drop [server] token-file (or --auth-token-file), or say exposure = \"private\"."
+        ),
+        Some(Exposure::Public) => return Ok(Auth::Users),
         _ => {}
     }
     match (token_file, address.ip().is_loopback()) {
@@ -138,6 +157,14 @@ mod tests {
         assert!(resolve(&address("127.0.0.1:7878"), token, loopback).is_err());
         let tokenless = resolve(&address("127.0.0.1:7878"), None, private).unwrap_err();
         assert!(tokenless.to_string().contains("luu token"), "{tokenless}");
+        // Public: users on any address, and never a token.
+        let public = Some(Exposure::Public);
+        assert_eq!(
+            resolve(&address("0.0.0.0:7878"), None, public).unwrap(),
+            Auth::Users
+        );
+        assert!(resolve(&address("0.0.0.0:7878"), token, public).is_err());
+        assert!(!Auth::Users.admits(Some("anything")));
     }
 
     #[test]

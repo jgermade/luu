@@ -1,6 +1,12 @@
-# The policy `luu serve` runs under in its container: /work, read and write,
-# and the commands the image carries. The container is the outer wall; this is
-# the inner one, and `enforcement = "kernel"` asks Landlock to hold it.
+# The policy `luu serve` runs under in its container: the session's folder
+# under /work, read and write, and the commands the image carries. The
+# container is the outer wall; this is the inner one, and
+# `enforcement = "kernel"` asks Landlock to hold it.
+#
+# `.` and not `/work`: a relative path is the session's folder, so a session
+# reaches its own tree and not its siblings — and on a server with users
+# (`exposure = "public"`) a grant that holds every user's folder is refused.
+# See RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md.
 #
 # Mount another file at /etc/luu/luu.toml to change it — a deployment's policy
 # is the deployment's, not the image's.
@@ -15,7 +21,7 @@ cpu-seconds = 300
 file-size-mb = 1024
 
 [[sandbox.paths]]
-path = "/work"
+path = "."
 access = "read-write"
 
 # The toolchain, where the image keeps it.
@@ -27,6 +33,8 @@ access = "execute"
 path = "/usr/local/rustup"
 access = "execute"
 
+# Shared by every session, and on a server with users by every user: `serve`
+# says so when it starts. A cargo home per user is still open.
 [[sandbox.paths]]
 path = "/state/cargo"
 access = "read-write"

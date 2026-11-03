@@ -146,12 +146,12 @@ continue from 46.
 
 **Section F — a public luu: users.** Added 2026-11-03, inside this revision,
 from [`users-and-a-code-by-email`](../../RECORD/2026-11-03.users-and-a-code-by-email.WIP.md),
-which takes over steps 2–4 of [`a-public-luu`](../../RECORD/2026-10-07.a-public-luu.WIP.md).
+which takes over steps 2–4 of [`a-public-luu`](../../RECORD/2026-10-07.a-public-luu.completed.md).
 Its own order, one row per step. New rows continue from 56.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 56 | **Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner and seen only by their user, `max-live` per user, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder | nothing | *In what order*, 1; *What a user owns*; *the three questions, answered* §2 |
+| 56 | ~~**Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner and seen only by their user, `max-live` per user, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder~~. *Built 2026-11-03*, with the API-level isolation tested. What is left is the run in the published image, with Landlock holding a command that tries another user's folder | that run | [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) |
 | 57 | **The code by email**: `[auth.smtp]`, rate limits. No sign-up: a user exists because an admin or an owner added them | row 56 | *A code by email*; *the three questions, answered* §1 |
 | 58 | **Roles enforced**: Settings writes by role, Settings → Users, Account | row 56 | *Three roles* |
 | 59 | **Passkeys**, and first whether WebAuthn can be had without OpenSSL | row 56 | *Passkeys*; *What it costs* |

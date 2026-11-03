@@ -40,8 +40,8 @@ persistence:
     existingClaim: ""
 
 # The policy `luu serve` runs under, mounted at /etc/luu/luu.toml. Empty is the
-# image's own (deploy/luu.toml): /work read and write, cargo, rustc, git, rg,
-# ls, no network.
+# image's own (deploy/luu.toml): the session's folder under /work read and
+# write, cargo, rustc, git, rg, ls, no network.
 policy: ""
 
 resources: {}

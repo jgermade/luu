@@ -1607,7 +1607,7 @@ browser cannot request with a header. `Authorization: Bearer <token>` everywhere
 [`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
 
 **How a server is reached is written down, too**: `[server]` in `config.toml` —
-`exposure` (`loopback` or `private`), `bind`, `token-file`, `origin` — under
+`exposure` (`loopback`, `private` or `public`), `bind`, `token-file`, `origin` — under
 `--exposure`, `--bind`, `--auth-token-file`, `--origin` and their `LUU_*`
 variables, because a container is configured by its files and its environment.
 Absent, the address decides as above. Present, `exposure` is a promise the address
@@ -1618,7 +1618,44 @@ an `Origin` beside the request's `Host`. `deploy/` is that server in a container
 (`deploy/Containerfile`, whose tools run in the container itself, as user `luu`,
 under `deploy/luu.toml`) and behind Caddy (`deploy/compose.yaml`); the first start
 writes `[server]` and the token into the state volume. See
-[`RECORD/2026-10-07.a-public-luu.WIP.md`](RECORD/2026-10-07.a-public-luu.WIP.md).
+[`RECORD/2026-10-07.a-public-luu.completed.md`](RECORD/2026-10-07.a-public-luu.completed.md).
+
+**`public` is users.** Who may log in is data, not configuration: `auth.db` in
+the state directory, created `0600` and refused when it is anything looser,
+holds the users (a random 12-hex id, an email, a role — `user`, `admin` or
+`owner` — and whether they are suspended), the one-time codes they log in with
+and the logins those became, each secret stored as its `sha256`. There is no
+sign-up: `luu user add` on the machine is how a person becomes a user, and
+`luu user code` prints the six-digit code they log in with — ten minutes, one
+use, five wrong tries burn it — until a server can send it by email. The last
+owner cannot be demoted, suspended or removed, and `remove` refuses while the
+user has sessions. `POST /api/auth/login` exchanges a code for an `HttpOnly;
+SameSite=Strict` cookie (`Secure` behind an `https` origin) that lasts
+`[auth] session-hours`, a week by default; every failure gets one answer, so
+the endpoint says nothing about who is here. `public` needs `origin` and
+refuses a token, and **`Origin` has to be that origin on every write and every
+socket upgrade**, the login included. `GET /api/auth/me` (and `.json`, which
+`luu export` writes as `{"users": false}`) is the one question the page asks
+before it mounts: with users and no login it mounts a login view instead of
+the app, and Settings → General shows the account and *Sign out*.
+
+**A user has their own sessions and their own folder, and nobody else's.** The
+login middleware puts the user in scope for the request, so *the current
+session* is per user — a user with none gets one at their first request, made
+in `<root>/<user id>` and sending where the server's own session sends — and a
+socket follows its own user's current session and nobody else's. Sessions
+carry their owner (`sessions.owner`, schema 6; rows from before it are the
+owners'); another user's session, by path, by `?session=` or on a socket, is a
+`404`, not a `403`, an owner included. `max-live` counts per user. The folder
+picker browses only the user's folder, and **a user's agency is refused where
+its policy grants a path that holds the root or reaches another user's
+folder** — a check on the policy, not a policy, so a deployment's file cannot
+widen it; `deploy/luu.toml` grants `.` (the session's folder) for that reason.
+Writable paths outside the root are shared by every user, and `serve` names
+them when it starts. A host shell is an owner's only, and Settings writes stay
+refused off loopback until roles reach them (step 3 of
+[`RECORD/2026-11-03.users-and-a-code-by-email.WIP.md`](RECORD/2026-11-03.users-and-a-code-by-email.WIP.md)).
+See [`RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md).
 
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and
 is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node

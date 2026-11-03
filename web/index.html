@@ -21,7 +21,12 @@
   // Before jq79, which fetches a component each time a setup imports it.
   import "./lib/components-once.js"
   import { C79 } from "./vendor/jq79.js"
-  C79.fetch("./app.html").mount("#app")
+  import { whoAmI } from "./lib/account.js"
+  // On a server with users nothing loads before a login: every request the
+  // app makes would be a 401. Everywhere else the answer is `users: false`.
+  const account = await whoAmI()
+  const page = account.users && !account.loggedIn ? "./views/login/login.html" : "./app.html"
+  C79.fetch(page).mount("#app")
 </script>
 </body>
 </html>

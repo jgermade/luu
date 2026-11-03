@@ -5,7 +5,7 @@
 # policy runs tools on the host side of nothing (`runtime = "host"`), as the
 # user `luu`, inside whatever the container runtime grants — and Landlock still
 # runs inside, where the kernel has it. See
-# RECORD/2026-10-07.a-public-luu.WIP.md.
+# RECORD/2026-10-07.a-public-luu.completed.md.
 #
 #   docker build -t luu -f deploy/Containerfile .
 #   docker run -p 7878:7878 -v luu-state:/state -v luu-work:/work luu

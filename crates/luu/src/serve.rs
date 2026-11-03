@@ -471,6 +471,11 @@ struct LiveSession {
     /// How many protocol sockets are attached to it now. A session somebody is
     /// looking at does not sleep.
     clients: std::sync::atomic::AtomicUsize,
+    /// The user it belongs to, on a server with users; `None` everywhere
+    /// else, and for the session a public server starts with, which is
+    /// nobody's and shown to nobody. Fixed for its life. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    owner: Option<String>,
 }
 
 impl LiveSession {
@@ -502,6 +507,7 @@ impl LiveSession {
         agency: Arc<Agency>,
         recorder: Option<Arc<Recorder>>,
         (map_rendered, walked): (String, Vec<agent_core::repo_map::Walked>),
+        owner: Option<String>,
     ) -> Self {
         let started_at = now_ms();
         Self {
@@ -537,6 +543,7 @@ impl LiveSession {
             walked: Mutex::new(walked),
             last_active: std::sync::atomic::AtomicU64::new(started_at),
             clients: Default::default(),
+            owner,
         }
     }
 
@@ -552,7 +559,9 @@ impl LiveSession {
 /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
 struct Lives {
     map: std::collections::BTreeMap<String, Arc<LiveSession>>,
-    current: String,
+    /// The current one **per owner**: `None` is the only key where there are
+    /// no users, so there it is one session, as it always was.
+    current: std::collections::BTreeMap<Option<String>, String>,
 }
 
 impl Lives {
@@ -566,7 +575,7 @@ impl Lives {
             .clone();
         Self {
             map: std::collections::BTreeMap::from([(id.clone(), live)]),
-            current: id,
+            current: std::collections::BTreeMap::from([(None, id)]),
         }
     }
 }
@@ -667,7 +676,10 @@ struct App {
     /// Told the id of the session that became the most recent one, so a socket
     /// that named none follows it, as the one socket the page opens did when
     /// there was one session.
-    current_changed: tokio::sync::watch::Sender<String>,
+    current_changed: tokio::sync::watch::Sender<(Option<String>, String)>,
+    /// Held while a user's first session is made, so two requests arriving
+    /// together make one. See [`ensure_current`].
+    making: Mutex<()>,
 }
 
 /// Given the policy file a session named — or `None` for the server's own — the
@@ -1380,8 +1392,10 @@ impl App {
                 walked: Mutex::new(walked),
                 last_active: std::sync::atomic::AtomicU64::new(now_ms()),
                 clients: Default::default(),
+                owner: None,
             }))),
-            current_changed: tokio::sync::watch::channel(String::new()).0,
+            current_changed: tokio::sync::watch::channel((None, String::new())).0,
+            making: Mutex::new(()),
         }))
     }
 
@@ -1429,14 +1443,43 @@ impl App {
         .await
     }
 
-    /// The live session used most recently: what a route or a socket that
-    /// names none acts on.
+    /// The live session used most recently by the person asking: what a
+    /// route or a socket that names none acts on. On a server with users that
+    /// is the user's own, which [`require_login`] makes before any route runs.
     fn current(&self) -> Arc<LiveSession> {
+        self.current_of(&owner_key()).expect(
+            "a user's current session is made by the login middleware before any route asks",
+        )
+    }
+
+    /// `owner`'s current session, if they have one live.
+    fn current_of(&self, owner: &Option<String>) -> Option<Arc<LiveSession>> {
         let lives = self
             .lives
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        lives.map[&lives.current].clone()
+        lives
+            .current
+            .get(owner)
+            .and_then(|id| lives.map.get(id))
+            .cloned()
+    }
+
+    /// Whether `live` is its owner's current session. Asked of the session
+    /// rather than of the request, so a task with nobody in scope — the idle
+    /// sleeper — gets the same answer a request would.
+    fn is_current(&self, live: &Arc<LiveSession>) -> bool {
+        self.current_of(&live.owner)
+            .is_some_and(|current| Arc::ptr_eq(&current, live))
+    }
+
+    /// The directory a person's sessions are made under: `serve`'s root
+    /// where there are no users, and `<root>/<user id>` for a user.
+    fn root_of(&self, owner: &Option<String>) -> PathBuf {
+        match owner {
+            None => self.root.clone(),
+            Some(id) => self.root.join(id),
+        }
     }
 
     /// The live session this request acts on: the one it named with
@@ -1477,10 +1520,11 @@ impl App {
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             lives.map.insert(id.to_string(), live.clone());
-            lives.current = id.to_string();
+            lives.current.insert(live.owner.clone(), id.to_string());
         }
         live.touch();
-        self.current_changed.send_replace(id.to_string());
+        self.current_changed
+            .send_replace((live.owner.clone(), id.to_string()));
     }
 
     /// Publishes one event of `live`'s to its clients and to the record, in
@@ -1552,7 +1596,7 @@ impl App {
         // The profile this session ran on, so the picker can start on the
         // model it was last given. `None` where nothing named a profile.
         let provider = live.destination().await.settings.profile.clone();
-        if let Err(error) = store.save(&stored, provider.as_deref()) {
+        if let Err(error) = store.save_owned(&stored, provider.as_deref(), live.owner.as_deref()) {
             eprintln!("warning: could not write the session store: {error:#}");
         }
     }
@@ -1661,6 +1705,11 @@ pub struct ServeOptions {
     /// What a browser types to reach this server, when a proxy stands in
     /// front: accepted as an `Origin` beside the request's own `Host`.
     pub origin: Option<String>,
+    /// Who may log in, where the exposure is `public`: `auth.db`. `None` is
+    /// the state directory's. Not opened under any other exposure.
+    pub auth_db: Option<PathBuf>,
+    /// `[auth]`: how long a login lasts.
+    pub auth: crate::provider::AuthTable,
     /// Where sessions are cached between restarts. `None` keeps the session in
     /// memory for the life of the process, which is what `serve` did before the
     /// store existed.
@@ -1831,6 +1880,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         auth_token_file,
         exposure,
         origin,
+        auth_db,
+        auth: auth_settings,
         store,
         approvers,
         icons,
@@ -1844,6 +1895,39 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         auth_token_file.as_deref(),
         exposure,
     )?);
+    // Users, where the exposure is public: `auth.db`, opened before the
+    // listener exists for the same reason the token is read here.
+    let users = match auth.has_users() {
+        false => None,
+        true => {
+            if origin.is_none() {
+                anyhow::bail!(
+                    "exposure = \"public\" needs [server] origin (or --origin): what a browser \
+                     types to reach this server, which every login and every write is checked \
+                     against"
+                );
+            }
+            let path = match auth_db {
+                Some(path) => path,
+                None => crate::users::default_path().context(
+                    "no state directory (neither LUU_HOME nor HOME is set): pass --auth-db <PATH>",
+                )?,
+            };
+            let users = crate::users::Users::open(&path)?;
+            let everyone = users.list()?;
+            eprintln!("users — {} ({} of them)", path.display(), everyone.len());
+            if !everyone
+                .iter()
+                .any(|user| user.role == crate::users::Role::Owner && !user.suspended)
+            {
+                eprintln!(
+                    "warning: nobody here is an owner: `luu user add <email> --role owner`, \
+                     then `luu user code <email>` to log in"
+                );
+            }
+            Some(Arc::new(users))
+        }
+    };
     let starts = crate::engines::for_run(&provider);
     let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
@@ -1927,9 +2011,16 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // future run on this machine, outside the gate and after the
         // session ends — a larger authority than approving one job, and
         // not one a bearer token should carry.
-        providers_editable: address.ip().is_loopback(),
+        // And never on a server with users: there, what a request may
+        // write is a role's to say (step 3), not the address's.
+        providers_editable: address.ip().is_loopback() && !auth.has_users(),
         origin: origin.clone(),
+        users: users.clone(),
+        session_hours: auth_settings.session_hours(),
     };
+    if users.is_some() {
+        shared_paths_said(&app).await;
+    }
     let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
@@ -2081,9 +2172,16 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/h/{name}/ws", get(host_socket))
         .route("/h/{name}/ws/{*rest}", get(host_socket))
         .layer(middleware::from_fn_with_state(app.clone(), address_session))
-        .layer(middleware::from_fn_with_state(auth.clone(), require_token));
+        .layer(middleware::from_fn_with_state(state.clone(), gate));
 
     let router = guarded
+        // Logging in, out, and who this is: outside the gate, because they are
+        // how a request gets through it. Each answers `users: false` or a 404
+        // where there are no users. See [`post_login`].
+        .route("/api/auth/login", post(post_login))
+        .route("/api/auth/logout", post(post_logout))
+        .route("/api/auth/me", get(get_me))
+        .route("/api/auth/me.json", get(get_me))
         .route(
             "/",
             get(|headers: axum::http::HeaderMap| async move {
@@ -2144,6 +2242,11 @@ struct AppRouterState {
     /// `[server] origin`: the address a browser uses when a proxy stands in
     /// front, and so an `Origin` this server's own page may send.
     origin: Option<String>,
+    /// Who may log in, where the exposure is `public`. `None` everywhere
+    /// else. See `crate::users`.
+    users: Option<Arc<crate::users::Users>>,
+    /// `[auth] session-hours`.
+    session_hours: u64,
 }
 
 async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
@@ -2351,6 +2454,13 @@ async fn terminal_shell(
                     .to_string(),
             );
         }
+        _ if who().is_some_and(|who| who.role != crate::users::Role::Owner) => {
+            return Err(
+                "a shell on the host reaches every user's folder and the state directory, so on \
+                 a server with users it is an owner's"
+                    .to_string(),
+            );
+        }
         crate::provider::HostShell::Loopback
             if !(state.providers_editable && host_is_loopback(host)) =>
         {
@@ -2436,7 +2546,7 @@ fn terminal_allowed(
             "Origin `{origin}` is not this server (`{host}`), and only this server's page opens a terminal"
         )));
     }
-    if !state.auth.is_token() && !host_is_loopback(host) {
+    if !state.auth.is_guarded() && !host_is_loopback(host) {
         return Err(refuse(format!(
             "Host `{host}` is not this machine, and an unguarded port opens a terminal only to it"
         )));
@@ -2552,6 +2662,50 @@ tokio::task_local! {
     /// The live session a request named with `?session=<id>`, for the length
     /// of that request. See [`address_session`] and [`App::addressed`].
     static ADDRESSED: Arc<LiveSession>;
+    /// Who is asking, on a server with users, for the length of the request.
+    /// Set by [`require_login`]; absent everywhere else, which is *nobody* and
+    /// what every request was before users. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`, *How the user
+    /// reaches the code*.
+    static WHO: Who;
+}
+
+/// A logged-in user, as a request carries them.
+#[derive(Debug, Clone)]
+struct Who {
+    id: String,
+    role: crate::users::Role,
+}
+
+/// Who is asking, if anybody is.
+fn who() -> Option<Who> {
+    WHO.try_with(Clone::clone).ok()
+}
+
+/// Whose sessions this request acts on: the user's id, or `None` where there
+/// are no users.
+fn owner_key() -> Option<String> {
+    who().map(|who| who.id)
+}
+
+/// Whether `who` may see a live session owned by `owner`. Where there are no
+/// users, everyone sees everything, as before.
+fn sees_live(who: &Option<Who>, owner: &Option<String>) -> bool {
+    match who {
+        None => true,
+        Some(who) => owner.as_deref() == Some(who.id.as_str()),
+    }
+}
+
+/// Whether `who` may see a *stored* session owned by `owner`. One with no
+/// owner was made before there were users, by whoever held the machine, and
+/// is the owners'.
+fn sees_stored(who: &Option<Who>, owner: &Option<String>) -> bool {
+    match (who, owner) {
+        (None, _) => true,
+        (Some(who), None) => who.role == crate::users::Role::Owner,
+        (Some(who), Some(owner)) => *owner == who.id,
+    }
 }
 
 /// `?session=<id>` on any route: the request acts on that live session rather
@@ -2559,7 +2713,18 @@ tokio::task_local! {
 /// every route written twice. A session that is not live is a 404. A host's
 /// routes (`/h/<name>/…`) are that host's to answer, and pass through. See
 /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §2.
+///
+/// **And on a server with users, nobody reaches another user's session**: a
+/// session named in the path (`/api/sessions/<id>/…`) or by `?session=` that
+/// is not the asker's is a `404`, not a `403` — a `403` would say it exists.
 async fn address_session(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    let asking = who();
+    if asking.is_some()
+        && let Some(id) = session_in_path(request.uri().path())
+        && !visible(&app, &asking, &id).await
+    {
+        return not_found("session");
+    }
     let named = request
         .uri()
         .query()
@@ -2573,9 +2738,36 @@ async fn address_session(State(app): State<Arc<App>>, request: Request, next: Ne
     let Some(id) = named.filter(|id| !id.is_empty()) else {
         return next.run(request).await;
     };
-    match app.live(&id) {
+    match app.live(&id).filter(|live| sees_live(&asking, &live.owner)) {
         Some(live) => ADDRESSED.scope(live, next.run(request)).await,
         None => (StatusCode::NOT_FOUND, format!("session {id} is not live")).into_response(),
+    }
+}
+
+/// The session a `/api/sessions/<id>/…` path names, other than `live` —
+/// which is always the asker's own.
+fn session_in_path(path: &str) -> Option<String> {
+    let id = path.strip_prefix("/api/sessions/")?.split('/').next()?;
+    let id = bare(id);
+    (!id.is_empty() && id != LIVE_SESSION).then(|| id.to_string())
+}
+
+/// Whether the asker may see session `id`, live or stored. One that is
+/// neither is not refused here: the route says it is not there.
+async fn visible(app: &App, asking: &Option<Who>, id: &str) -> bool {
+    if let Some(live) = app.live(id) {
+        return sees_live(asking, &live.owner);
+    }
+    let Some(store) = &app.store else {
+        return true;
+    };
+    match store.lock().await.owner_of(id) {
+        Ok(Some(owner)) => sees_stored(asking, &owner),
+        Ok(None) => true,
+        Err(error) => {
+            eprintln!("warning: could not read the session store: {error:#}");
+            false
+        }
     }
 }
 
@@ -2588,7 +2780,243 @@ async fn address_session(State(app): State<Arc<App>>, request: Request, next: Ne
 /// not accepted anywhere else — a query string is the part of a URL that ends
 /// up in shell history and proxy logs, so the exception stays as narrow as the
 /// thing that forces it.
-async fn require_token(State(auth): State<Arc<Auth>>, request: Request, next: Next) -> Response {
+/// What stands before the control and read surfaces: a login on a server with
+/// users, the bearer token on one with a token, and nothing on loopback.
+async fn gate(State(state): State<AppRouterState>, request: Request, next: Next) -> Response {
+    match state.users.clone() {
+        Some(users) => require_login(state, users, request, next).await,
+        None => require_token(state.auth.clone(), request, next).await,
+    }
+}
+
+/// A login, on a server with users.
+///
+/// **`Origin` is the stated origin on every write and every socket**: a
+/// cookie is sent by any tab, and `Origin` is what tells this page from
+/// another site's. Then the cookie names a user, the user is put in scope as
+/// [`WHO`] for the rest of the request, and the user's own session is made if
+/// they have none — so every route below can ask for *the current session*
+/// and get theirs. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+async fn require_login(
+    state: AppRouterState,
+    users: Arc<crate::users::Users>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if needs_origin(&request) && !from_origin(&state, request.headers()) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's, and on a server with users only its \
+             own page may write",
+        )
+            .into_response();
+    }
+    let user = cookie(request.headers(), crate::users::COOKIE)
+        .and_then(|token| users.identify(&token).ok().flatten());
+    let Some(user) = user else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "log in first: this server has users (POST /api/auth/login)\n",
+        )
+            .into_response();
+    };
+    let who = Who {
+        id: user.id,
+        role: user.role,
+    };
+    WHO.scope(who, async move {
+        if let Err(refused) = ensure_current(&state).await {
+            return refused;
+        }
+        next.run(request).await
+    })
+    .await
+}
+
+/// A user's own current session, made when they have none: in their folder,
+/// sending where the server's own session sends — what a fresh `serve` gives
+/// the one person on a laptop, given to each user. Nothing where there are no
+/// users.
+async fn ensure_current(state: &AppRouterState) -> Result<(), Response> {
+    let owner = owner_key();
+    if owner.is_none() || state.app.current_of(&owner).is_some() {
+        return Ok(());
+    }
+    let _making = state.app.making.lock().await;
+    if state.app.current_of(&owner).is_some() {
+        return Ok(());
+    }
+    new_session(state, NewSession::default()).await.map(|_| ())
+}
+
+/// A write, or a socket: what has to come from this server's own page.
+fn needs_origin(request: &Request) -> bool {
+    !matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    ) || request.headers().contains_key(header::UPGRADE)
+}
+
+/// Whether the request's `Origin` is the one `[server] origin` states.
+fn from_origin(state: &AppRouterState, headers: &axum::http::HeaderMap) -> bool {
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    origin.is_some() && origin == state.origin.as_deref()
+}
+
+/// One cookie's value out of the request's `Cookie` headers.
+fn cookie(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value.to_string())
+}
+
+/// The login cookie, or the header that clears it. `Secure` where the origin
+/// is `https`: a plain `http` origin is a server tried on its own machine,
+/// where a browser would drop a `Secure` cookie.
+fn login_cookie(state: &AppRouterState, token: Option<&str>) -> String {
+    let secure = match state.origin.as_deref() {
+        Some(origin) if origin.starts_with("https://") => "; Secure",
+        _ => "",
+    };
+    let name = crate::users::COOKIE;
+    match token {
+        Some(token) => format!(
+            "{name}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}{secure}",
+            state.session_hours.max(1) * 3600
+        ),
+        None => format!("{name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LoginAsk {
+    email: String,
+    code: String,
+}
+
+/// `POST /api/auth/login {email, code}`: a code exchanged for a login.
+///
+/// **One answer for every failure** — not a user, no code, a wrong code, an
+/// old one, a burnt one, a suspended user — so the endpoint says nothing about
+/// who is here. Its `Origin` is checked like any write's: a page on another
+/// site must not be able to log a browser into an account of its choosing.
+async fn post_login(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<LoginAsk>,
+) -> Response {
+    let Some(users) = &state.users else {
+        return (StatusCode::NOT_FOUND, "this server has no users").into_response();
+    };
+    if !from_origin(&state, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's",
+        )
+            .into_response();
+    }
+    match users.redeem(&asked.email, &asked.code, state.session_hours) {
+        Ok(Some((user, token))) => {
+            tracing::info!(target: "luu::auth", user = user.id.as_str(), "logged in");
+            (
+                StatusCode::NO_CONTENT,
+                [(header::SET_COOKIE, login_cookie(&state, Some(&token)))],
+            )
+                .into_response()
+        }
+        Ok(None) => {
+            tracing::info!(target: "luu::auth", "a login was refused");
+            (StatusCode::UNAUTHORIZED, "that code is not valid").into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response(),
+    }
+}
+
+/// `POST /api/auth/logout`: ends this login, and clears its cookie.
+async fn post_logout(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let Some(users) = &state.users else {
+        return (StatusCode::NOT_FOUND, "this server has no users").into_response();
+    };
+    if !from_origin(&state, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's",
+        )
+            .into_response();
+    }
+    if let Some(token) = cookie(&headers, crate::users::COOKIE)
+        && let Err(error) = users.logout(&token)
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
+    }
+    (
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, login_cookie(&state, None))],
+    )
+        .into_response()
+}
+
+/// `GET /api/auth/me`: whether this server has users, and if so who this is
+/// — a `401` when nobody is logged in. The one question the page asks before
+/// it loads anything else.
+async fn get_me(State(state): State<AppRouterState>, headers: axum::http::HeaderMap) -> Response {
+    let Some(users) = &state.users else {
+        return Json(serde_json::json!({ "users": false })).into_response();
+    };
+    let user = cookie(&headers, crate::users::COOKIE)
+        .and_then(|token| users.identify(&token).ok().flatten());
+    match user {
+        Some(user) => Json(serde_json::json!({
+            "users": true,
+            "id": user.id,
+            "email": user.email,
+            "role": user.role,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "users": true })),
+        )
+            .into_response(),
+    }
+}
+
+/// Says, at startup, every path outside `serve`'s root that a user's
+/// commands could write under the server's own policy: shared by every user,
+/// so a channel between them. Said rather than refused — the image's cargo
+/// cache is one — see `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`,
+/// *Still open*.
+async fn shared_paths_said(app: &App) {
+    let Some(own) = app.current_of(&None) else {
+        return;
+    };
+    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
+    for granted in own.agency().await.sandbox.roots() {
+        if !granted.implicit
+            && granted.access == agent_core::sandbox::Access::ReadWrite
+            && !granted.path.starts_with(&root)
+        {
+            eprintln!(
+                "warning: `{}` ({}) is writable by every user's commands, so anything one user \
+                 leaves there another's may run",
+                granted.source,
+                granted.path.display()
+            );
+        }
+    }
+}
+
+async fn require_token(auth: Arc<Auth>, request: Request, next: Next) -> Response {
     let header = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -2686,15 +3114,21 @@ async fn protocol_socket(
     State(state): State<AppRouterState>,
     Query(asked): Query<SocketFor>,
 ) -> Response {
+    let asking = who();
     if let Some(id) = &asked.session
-        && state.app.live(id).is_none()
+        && !state
+            .app
+            .live(id)
+            .is_some_and(|live| sees_live(&asking, &live.owner))
     {
         return (StatusCode::NOT_FOUND, format!("session {id} is not live")).into_response();
     }
+    // Taken now: the socket outlives the request, and [`WHO`] with it.
+    let owner = asking.map(|who| who.id);
     ws.on_upgrade(move |socket| async move {
         let id = SOCKETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         tracing::info!(target: "luu::ws", socket = id, channel = "protocol", "open");
-        run_protocol_socket(socket, state, asked.session).await;
+        run_protocol_socket(socket, state, asked.session, owner).await;
         tracing::info!(target: "luu::ws", socket = id, channel = "protocol", "closed");
     })
 }
@@ -2772,7 +3206,12 @@ async fn hello_of(live: &LiveSession) -> ServerMessage {
     }
 }
 
-async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Option<String>) {
+async fn run_protocol_socket(
+    socket: WebSocket,
+    state: AppRouterState,
+    asked: Option<String>,
+    owner: Option<String>,
+) {
     let AppRouterState { app, auth, .. } = state;
     let (mut sink, mut stream) = socket.split();
     // Named, it speaks for that session for its whole life. Unnamed, it
@@ -2781,9 +3220,13 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Op
     // what the one socket the page opens has always been told.
     let following = asked.is_none();
     let mut changed = app.current_changed.subscribe();
+    // Unnamed, it follows its user's current session and nobody else's.
     let mut live = match asked.as_deref().and_then(|id| app.live(id)) {
         Some(live) => live,
-        None => app.current(),
+        None => match app.current_of(&owner) {
+            Some(live) => live,
+            None => return,
+        },
     };
     // Held for the socket's life; replaced when it follows another session.
     let mut _attached = Attached::new(live.clone());
@@ -2795,7 +3238,7 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Op
     // artifact as this binary — and requiring it would break every client
     // written before the handshake existed for a property the operating system
     // already gives.
-    let must_greet = auth.is_token();
+    let must_greet = auth.is_guarded();
     let mut greeted = false;
 
     let hello = hello_of(&live).await;
@@ -2809,7 +3252,13 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Op
     loop {
         tokio::select! {
             Ok(()) = changed.changed(), if following => {
-                let now = app.current();
+                let (whose, _) = changed.borrow_and_update().clone();
+                if whose != owner {
+                    continue;
+                }
+                let Some(now) = app.current_of(&owner) else {
+                    continue;
+                };
                 if Arc::ptr_eq(&now, &live) {
                     continue;
                 }
@@ -4731,11 +5180,15 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     let agency = live.agency().await;
     settings.sandbox = agency.describe();
     settings.base = agency.sandbox.base().display().to_string();
-    settings.root = app.root.display().to_string();
+    settings.root = app.root_of(&owner_key()).display().to_string();
     settings.folder = folder_of(app, agency.sandbox.base());
     let id = live.session_id.lock().await.clone();
     for (other, one) in app.all_live() {
-        if other != id && one.agency().await.sandbox.base() == agency.sandbox.base() {
+        // Another user's session is not named, even when it shares nothing.
+        if other != id
+            && one.owner == live.owner
+            && one.agency().await.sandbox.base() == agency.sandbox.base()
+        {
             settings.shared_with.push(other);
         }
     }
@@ -8636,10 +9089,17 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
         });
         (row, last, id)
     }
+    let asking = who();
     let mut stored = Vec::new();
     if let Some(store) = &state.app.store {
-        match store.lock().await.list() {
-            Ok(rows) => stored = rows,
+        match store.lock().await.list_owned() {
+            Ok(rows) => {
+                stored = rows
+                    .into_iter()
+                    .filter(|(_, owner)| sees_stored(&asking, owner))
+                    .map(|(row, _)| row)
+                    .collect()
+            }
             Err(error) => eprintln!("warning: could not list the session store: {error:#}"),
         }
     }
@@ -8665,7 +9125,7 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     let mut sessions = vec![first];
     let mut live_ids = vec![current_id.clone()];
     for (id, live) in state.app.all_live() {
-        if id == current_id {
+        if id == current_id || !sees_live(&asking, &live.owner) {
             continue;
         }
         let (mut row, last, _) = row_of(&live).await;
@@ -9264,7 +9724,53 @@ async fn finish(
     let agency = build(policy, runtime, folder.map(std::path::Path::to_path_buf))
         .await
         .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error:#}")))?;
+    if let Some(who) = who() {
+        confined(&app.root, &who.id, &agency)?;
+    }
     Ok((asked.map(str::to_string), Arc::new(agency)))
+}
+
+/// Refuses a user's agency that reaches past their folder: a granted path
+/// that holds `serve`'s root — every user's folder at once — or one under
+/// the root and outside `<root>/<user id>`. **A check on the policy, not a
+/// policy**: whatever the file grants, this is what a user's session may not
+/// have. Paths outside the root are the deployment's, and shared; `serve`
+/// names the writable ones when it starts. See
+/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`, *the wall the
+/// server holds*.
+fn confined(
+    root: &std::path::Path,
+    user: &str,
+    agency: &Agency,
+) -> Result<(), (StatusCode, String)> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mine = root.join(user);
+    let mine = mine.canonicalize().unwrap_or(mine);
+    for granted in agency.sandbox.roots() {
+        let path = &granted.path;
+        if root.starts_with(path) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!(
+                    "this session's policy grants `{}` ({}), which holds every user's folder: \
+                     a user's session may reach only their own. Grant `.` instead",
+                    granted.source,
+                    path.display()
+                ),
+            ));
+        }
+        if path.starts_with(&root) && !path.starts_with(&mine) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!(
+                    "this session's policy grants `{}` ({}), outside your folder",
+                    granted.source,
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The line that says the rest of this stream was produced somewhere else.
@@ -9446,20 +9952,42 @@ async fn destination_for(
 }
 
 async fn create_session(State(state): State<AppRouterState>, body: axum::body::Bytes) -> Response {
-    let app = &state.app;
     let asked = match asked_for(&body) {
         Ok(asked) => asked,
         Err((status, message)) => return (status, message).into_response(),
     };
+    match new_session(&state, asked).await {
+        Ok(summary) => (StatusCode::CREATED, Json(summary)).into_response(),
+        Err(refused) => refused,
+    }
+}
 
+/// A new session, made current for whoever asked: what `POST /api/sessions`
+/// does, and what a user's first request does when they have none — see
+/// [`ensure_current`].
+async fn new_session(
+    state: &AppRouterState,
+    asked: NewSession,
+) -> Result<agent_core::api::SessionSummary, Response> {
+    let app = &state.app;
     // Beside the others, not in place of the current one: a turn running in
     // it goes on. Refused only when there is no room for one more. See
     // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
     if let Err(refused) = room_for_one(app).await {
-        return *refused;
+        return Err(*refused);
     }
-    let previous = app.current();
-    app.checkpoint(&previous).await;
+    // The session it is made beside, whose destination it starts from: the
+    // asker's current one, or — for a user's first — the server's own.
+    let previous = app.current_of(&owner_key());
+    let template = match &previous {
+        Some(previous) => previous.clone(),
+        None => app
+            .current_of(&None)
+            .expect("a server always has its own session"),
+    };
+    if let Some(previous) = &previous {
+        app.checkpoint(previous).await;
+    }
 
     // Resolved before anything is reset: a session that cannot be pointed
     // anywhere is one that should not have ended the previous one.
@@ -9470,20 +9998,20 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         // `true` for editable: following the file is not a token holder
         // picking a destination, which is what that check is about.
         (false, false) => {
-            let current = previous.destination().await;
+            let current = template.destination().await;
             match current.settings.follows_default {
                 false => current,
                 true => match destination_for(app, &current, &asked, true).await {
                     Ok(next) => Arc::new(next),
-                    Err((status, message)) => return (status, message).into_response(),
+                    Err((status, message)) => return Err((status, message).into_response()),
                 },
             }
         }
         _ => {
-            let current = previous.destination().await;
+            let current = template.destination().await;
             match destination_for(app, &current, &asked, state.providers_editable).await {
                 Ok(next) => Arc::new(next),
-                Err((status, message)) => return (status, message).into_response(),
+                Err((status, message)) => return Err((status, message).into_response()),
             }
         }
     };
@@ -9511,7 +10039,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // The folder it works in, checked before anything is built.
     let folder = match folder_under_root(app, asked.folder.as_deref()) {
         Ok(folder) => folder,
-        Err((status, message)) => return (status, message).into_response(),
+        Err((status, message)) => return Err((status, message).into_response()),
     };
     let (posture_name, agency) = match posture_for(
         app,
@@ -9524,13 +10052,14 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     .await
     {
         Ok(resolved) => resolved,
-        Err((status, message)) => return (status, message).into_response(),
+        Err((status, message)) => return Err((status, message).into_response()),
     };
     let live = Arc::new(LiveSession::blank(
         sending.clone(),
         agency.clone(),
-        previous.recorder.clone(),
+        template.recorder.clone(),
         app.map_for(&agency, sending.counter.clone()).await,
+        owner_key(),
     ));
     *live.destination.write().await = sending.clone();
     tracing::info!(
@@ -9652,7 +10181,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     app.publish(&live, Event::Protocol(hello)).await;
     app.make_current(&summary.id, live.clone());
 
-    (StatusCode::CREATED, Json(summary)).into_response()
+    Ok(summary)
 }
 
 /// A session's folder, out of what a request or a recording says: a
@@ -9660,17 +10189,23 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
 /// root itself. Relative is taken from the root; absolute is checked to be
 /// under it. Never above it: a folder is a narrowing of where `serve` was
 /// started, the rule the page's picker has always held.
+///
+/// **A user's root is their own folder**, `<root>/<user id>`, made here the
+/// first time it is asked for: the answer is never `None` for a user, because
+/// `None` is `serve`'s root, which holds every user's folder. See
+/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
 fn folder_under_root(
     app: &App,
     asked: Option<&str>,
 ) -> Result<Option<PathBuf>, (StatusCode, String)> {
+    let owner = owner_key();
+    let root = user_root(app, &owner)?;
     let Some(asked) = asked
         .map(str::trim)
         .filter(|asked| !asked.is_empty() && *asked != ".")
     else {
-        return Ok(None);
+        return Ok(owner.is_some().then_some(root));
     };
-    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
     let joined = root.join(asked);
     let folder = joined.canonicalize().map_err(|error| {
         (
@@ -9684,19 +10219,42 @@ fn folder_under_root(
     if !folder.starts_with(&root) {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!(
-                "{asked}: outside {}, where this server was started",
-                root.display()
-            ),
+            match owner {
+                None => format!(
+                    "{asked}: outside {}, where this server was started",
+                    root.display()
+                ),
+                Some(_) => format!("{asked}: outside your folder"),
+            },
         ));
     }
-    Ok((folder != root).then_some(folder))
+    Ok(match owner {
+        None => (folder != root).then_some(folder),
+        Some(_) => Some(folder),
+    })
+}
+
+/// The root a person's folders are chosen under, canonical: `serve`'s own
+/// where there are no users, and the user's folder — made when it is not
+/// there yet — for a user.
+fn user_root(app: &App, owner: &Option<String>) -> Result<PathBuf, (StatusCode, String)> {
+    let root = app.root_of(owner);
+    if owner.is_some() {
+        std::fs::create_dir_all(&root).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("making your folder: {error}"),
+            )
+        })?;
+    }
+    Ok(root.canonicalize().unwrap_or(root))
 }
 
 /// A folder as the page names it: relative to `serve`'s root, `""` for the
 /// root itself.
 fn folder_of(app: &App, base: &std::path::Path) -> String {
-    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
+    let root = app.root_of(&owner_key());
+    let root = root.canonicalize().unwrap_or(root);
     match base.strip_prefix(&root) {
         Ok(under) => under.display().to_string(),
         Err(_) => base.display().to_string(),
@@ -9712,7 +10270,10 @@ async fn get_folders(
     State(state): State<AppRouterState>,
     Query(query): Query<WorkspaceQuery>,
 ) -> Response {
-    let root = state.app.root.clone();
+    let root = match user_root(&state.app, &owner_key()) {
+        Ok(root) => root,
+        Err((status, message)) => return (status, message).into_response(),
+    };
     let policy = agent_core::sandbox::SandboxPolicy {
         paths: vec![agent_core::sandbox::PathRule::new(
             ".",
@@ -9766,6 +10327,7 @@ async fn put_session_folder(
     let target = folder
         .clone()
         .unwrap_or_else(|| app.root.canonicalize().unwrap_or_else(|_| app.root.clone()));
+    // (A user's `folder` is never `None`: see [`folder_under_root`].)
     let current = leaving.posture(live.posture.lock().await.clone());
     // Where it already is is an answer, whatever it has done there.
     if leaving.sandbox.base() == target {
@@ -9819,8 +10381,17 @@ async fn room_for_one(app: &App) -> Result<(), Box<Response>> {
         .map(|(config, _)| config.sessions().max_live)
         .unwrap_or(crate::provider::Sessions::default().max_live)
         .max(1);
+    // Counted per user on a server with users: nobody else may free a user's
+    // slot, so one user must not be able to take all of them. See
+    // `RECORD/2026-11-03.users-and-a-code-by-email.WIP.md`, *the three
+    // questions, answered* §2.
+    let owner = owner_key();
     loop {
-        let live = app.all_live();
+        let live: Vec<(String, Arc<LiveSession>)> = app
+            .all_live()
+            .into_iter()
+            .filter(|(_, one)| one.owner == owner)
+            .collect();
         if live.len() < max {
             return Ok(());
         }
@@ -9854,9 +10425,7 @@ async fn room_for_one(app: &App) -> Result<(), Box<Response>> {
 /// Whether a live session may be put to sleep: not the current one, nobody
 /// attached to it, no turn running and nothing waiting at its gate.
 async fn may_sleep(app: &App, live: &Arc<LiveSession>) -> bool {
-    if Arc::ptr_eq(live, &app.current())
-        || live.clients.load(std::sync::atomic::Ordering::Relaxed) > 0
-    {
+    if app.is_current(live) || live.clients.load(std::sync::atomic::Ordering::Relaxed) > 0 {
         return false;
     }
     let session = live.session.lock().await;
@@ -9870,7 +10439,7 @@ async fn sleep_live(app: &App, id: &str) {
     let Some(live) = app.live(id) else {
         return;
     };
-    if Arc::ptr_eq(&live, &app.current()) {
+    if app.is_current(&live) {
         return;
     }
     app.checkpoint(&live).await;
@@ -9918,7 +10487,7 @@ async fn end_live(State(state): State<AppRouterState>, Path(id): Path<String>) -
     let Some(live) = app.live(id) else {
         return (StatusCode::NOT_FOUND, format!("session {id} is not live")).into_response();
     };
-    if Arc::ptr_eq(&live, &app.current()) {
+    if app.is_current(&live) {
         return (
             StatusCode::CONFLICT,
             "the current session is the one on screen: open another first",
@@ -10376,7 +10945,9 @@ async fn resume_session(
                 eprintln!("warning: session {id} resumes at the root: {why}");
                 None
             }
-        });
+        })
+        // A user's root is their folder, and never `serve`'s.
+        .or_else(|| folder_under_root(app, None).ok().flatten());
     let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
         (None, None, Some(stored)) => {
             posture_from_copy(
@@ -10498,6 +11069,7 @@ async fn resume_session(
         agency.clone(),
         previous.recorder.clone(),
         built,
+        owner_key(),
     ));
     *live.destination.write().await = sending.clone();
     tracing::info!(
@@ -10720,7 +11292,7 @@ async fn rename_session(
         // The one on screen is not archived; one live beside it is put to
         // sleep first, as a person putting it away means, unless it is busy.
         if let Some(live) = &named {
-            if Arc::ptr_eq(live, &state.app.current()) {
+            if state.app.is_current(live) {
                 return (
                     StatusCode::BAD_REQUEST,
                     "the session on screen is not archived: start or open another first",
@@ -11100,8 +11672,10 @@ mod tests {
                 walked: Mutex::new(walked),
                 last_active: std::sync::atomic::AtomicU64::new(now_ms()),
                 clients: Default::default(),
+                owner: None,
             }))),
-            current_changed: tokio::sync::watch::channel(String::new()).0,
+            current_changed: tokio::sync::watch::channel((None, String::new())).0,
+            making: Mutex::new(()),
         })
     }
 

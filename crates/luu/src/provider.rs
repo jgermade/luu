@@ -494,6 +494,9 @@ struct File {
     /// `[server]`: how `luu serve` is reached. See [`Server`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     server: Option<Server>,
+    /// `[auth]`: how a public server's logins behave. See [`AuthTable`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<AuthTable>,
     /// `[host.<name>]`: another `luu serve` this one forwards to. See [`Host`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     host: BTreeMap<String, Host>,
@@ -503,7 +506,7 @@ struct File {
 /// every start — a container is configured by its files and its environment,
 /// not by somebody at a prompt. Every key is optional, and a flag or a
 /// `LUU_*` variable overrides it for one run. See
-/// `RECORD/2026-10-07.a-public-luu.WIP.md`.
+/// `RECORD/2026-10-07.a-public-luu.completed.md`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Server {
@@ -524,8 +527,7 @@ pub struct Server {
     pub origin: Option<String>,
 }
 
-/// Who may reach a `luu serve`. `public` — identities with passkeys — is the
-/// next step of the record, and is not a value until it exists.
+/// Who may reach a `luu serve`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Exposure {
@@ -534,6 +536,10 @@ pub enum Exposure {
     Loopback,
     /// Anyone who holds the bearer token, on any address.
     Private,
+    /// Users, each logged in with a code: `auth.db` in the state directory,
+    /// and `luu user` to add them. Needs `origin`. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    Public,
 }
 
 impl Exposure {
@@ -541,7 +547,26 @@ impl Exposure {
         match self {
             Self::Loopback => "loopback",
             Self::Private => "private",
+            Self::Public => "public",
         }
+    }
+}
+
+/// `[auth]`: how a public server's logins behave. Read only where
+/// `exposure = "public"`.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct AuthTable {
+    /// How long a login lasts, in hours. A week when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_hours: Option<u64>,
+}
+
+impl AuthTable {
+    pub fn session_hours(self) -> u64 {
+        self.session_hours
+            .filter(|hours| *hours > 0)
+            .unwrap_or(crate::users::SESSION_HOURS)
     }
 }
 
@@ -874,6 +899,7 @@ pub struct Config {
     engines: BTreeMap<String, Engine>,
     hosts: BTreeMap<String, Host>,
     server: Option<Server>,
+    auth: Option<AuthTable>,
 }
 
 /// A default that points off this machine and has not said `remote = true`:
@@ -1011,6 +1037,7 @@ impl Config {
             engines: file.engine,
             hosts: file.host,
             server: file.server,
+            auth: file.auth,
         };
         config.held = config.check_default(path)?;
         config.check_engines(path)?;
@@ -1320,6 +1347,7 @@ impl Config {
             engine: self.engines.clone(),
             host: self.hosts.clone(),
             server: self.server.clone(),
+            auth: self.auth,
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -1406,6 +1434,7 @@ impl Config {
             engines: self.engines.clone(),
             hosts: self.hosts.clone(),
             server: self.server.clone(),
+            auth: self.auth,
         }
     }
 
@@ -1491,6 +1520,11 @@ impl Config {
     /// `[server]`, or every key absent.
     pub fn server(&self) -> Server {
         self.server.clone().unwrap_or_default()
+    }
+
+    /// `[auth]`, defaulted where the file says nothing.
+    pub fn auth(&self) -> AuthTable {
+        self.auth.unwrap_or_default()
     }
 
     /// Every host the file names.

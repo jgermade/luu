@@ -2,7 +2,7 @@
 //! how a real `luu serve` is reached. The binary, for `tests/hosts.rs`'s
 //! reason: the file is read from `LUU_HOME`, and in-process that would be
 //! every other test's environment too. See
-//! `RECORD/2026-10-07.a-public-luu.WIP.md`.
+//! `RECORD/2026-10-07.a-public-luu.completed.md`.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -32,7 +32,8 @@ fn luu(home: &Path) -> Command {
         .env_remove("LUU_BIND")
         .env_remove("LUU_EXPOSURE")
         .env_remove("LUU_AUTH_TOKEN_FILE")
-        .env_remove("LUU_ORIGIN");
+        .env_remove("LUU_ORIGIN")
+        .env_remove("LUU_AUTH_DB");
     command
 }
 
@@ -146,4 +147,95 @@ fn an_origin_that_is_not_one_is_a_load_error() {
         matches!(parsed, Err(luu::provider::ConfigError::BadServer { .. })),
         "a path is not part of an origin"
     );
+}
+
+#[tokio::test]
+async fn public_needs_an_origin_and_logs_in_with_a_code_luu_user_printed() {
+    let home = scratch();
+    std::fs::write(
+        home.join("config.toml"),
+        "[server]\nexposure = \"public\"\nbind = \"127.0.0.1:0\"\n",
+    )
+    .unwrap();
+    let refused = start(luu(&home)).expect_err("public with no origin is refused");
+    assert!(refused.contains("origin"), "{refused}");
+
+    std::fs::write(
+        home.join("config.toml"),
+        "[server]\nexposure = \"public\"\nbind = \"127.0.0.1:0\"\n\
+         origin = \"http://luu.test\"\n[auth]\nsession-hours = 2\n",
+    )
+    .unwrap();
+    let added = luu(&home)
+        .args(["user", "add", "Ana@Example.com", "--role", "owner"])
+        .output()
+        .unwrap();
+    assert!(added.status.success(), "{added:?}");
+    // The last owner stays.
+    let demoted = luu(&home)
+        .args(["user", "role", "ana@example.com", "user"])
+        .output()
+        .unwrap();
+    assert!(!demoted.status.success());
+    assert!(String::from_utf8_lossy(&demoted.stderr).contains("last owner"));
+    let code = luu(&home)
+        .args(["user", "code", "ana@example.com"])
+        .output()
+        .unwrap();
+    assert!(code.status.success(), "{code:?}");
+    let code = String::from_utf8(code.stdout).unwrap().trim().to_string();
+    assert_eq!(code.len(), 6, "{code}");
+
+    let (mut child, address) = start(luu(&home)).expect("a public server starts");
+    let http = reqwest::Client::new();
+    let bare = http
+        .get(format!("http://{address}/api/settings"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bare.status(), 401, "public asks for a login");
+    let login = http
+        .post(format!("http://{address}/api/auth/login"))
+        .header("Origin", "http://luu.test")
+        .json(&serde_json::json!({ "email": "ana@example.com", "code": code }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 204);
+    let cookie = login.headers()["set-cookie"].to_str().unwrap().to_string();
+    assert!(
+        cookie.contains("Max-Age=7200"),
+        "[auth] session-hours: {cookie}"
+    );
+    let cookie = cookie.split(';').next().unwrap().to_string();
+    let me = http
+        .get(format!("http://{address}/api/auth/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me.status(), 200);
+    let me: serde_json::Value = me.json().await.unwrap();
+    assert_eq!(me["role"], "owner");
+    // A Settings write is still refused: roles reach Settings in step 3.
+    let write = http
+        .put(format!("http://{address}/api/tool-steps"))
+        .header("Cookie", &cookie)
+        .header("Origin", "http://luu.test")
+        .json(&serde_json::json!({ "steps": 9 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(write.status(), 403);
+    let _ = child.kill();
+    let _ = child.wait();
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(home.join("auth.db"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    assert_eq!(mode, 0o600);
 }

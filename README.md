@@ -86,9 +86,12 @@ helm install luu oci://ghcr.io/jgermade/charts/luu \
 kubectl exec deploy/luu -- cat /state/token
 ```
 
-One identity, the token; several are
-[`a-public-luu`](RECORD/2026-10-07.a-public-luu.WIP.md)'s later steps. See
-[`three-ways-in`](RECORD/2026-10-30.three-ways-in.WIP.md).
+One identity, the token. For several, say `exposure = "public"` in
+`/state/config.toml` (and drop `token-file`): people are added with
+`luu user add <email>` and log in with the code `luu user code <email>`
+prints; each has their own sessions and folder. See
+[`a-user-a-code-and-a-folder`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md)
+and [`three-ways-in`](RECORD/2026-10-30.three-ways-in.WIP.md).
 
 ## First run
 
