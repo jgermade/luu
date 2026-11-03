@@ -239,3 +239,96 @@ async fn public_needs_an_origin_and_logs_in_with_a_code_luu_user_printed() {
     };
     assert_eq!(mode, 0o600);
 }
+
+#[tokio::test]
+async fn luu_setup_puts_a_server_online_and_keeps_the_rest_of_the_file() {
+    let home = scratch();
+    // A private server with a table of its own, as a container's first start
+    // leaves it, plus a setting nobody should lose.
+    std::fs::write(
+        home.join("config.toml"),
+        "[server]\nexposure = \"private\"\nbind = \"127.0.0.1:0\"\ntoken-file = \"/nonexistent/token\"\n\
+         [sessions]\nmax-live = 2\n",
+    )
+    .unwrap();
+
+    // Without a terminal, what no flag said is an error naming the flag.
+    let asked = luu(&home)
+        .args(["setup", "--owner", "ana@example.com"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!asked.status.success());
+    assert!(String::from_utf8_lossy(&asked.stderr).contains("--origin"));
+
+    let set = luu(&home)
+        .args([
+            "setup",
+            "--origin",
+            "http://luu.test",
+            "--owner",
+            "Ana@Example.com",
+            "--bind",
+            "127.0.0.1:0",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(set.status.success(), "{set:?}");
+    let said = String::from_utf8(set.stdout).unwrap();
+    assert!(said.contains("restart it"), "{said}");
+    let code = said
+        .lines()
+        .find_map(|line| line.strip_prefix("code:"))
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("a code")
+        .to_string();
+    assert_eq!(code.len(), 6, "{said}");
+
+    let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(written.contains("exposure = \"public\""), "{written}");
+    assert!(!written.contains("token-file"), "{written}");
+    assert!(written.contains("max-live = 2"), "{written}");
+
+    // And the server it describes starts, and the owner logs in with that code.
+    let (mut child, address) = start(luu(&home)).expect("an online server starts");
+    let http = reqwest::Client::new();
+    let login = http
+        .post(format!("http://{address}/api/auth/login"))
+        .header("Origin", "http://luu.test")
+        .json(&serde_json::json!({ "email": "ana@example.com", "code": code }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 204);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // Run again for someone who is already a user: raised to owner, and a new
+    // code; the file is the same.
+    let again = luu(&home)
+        .args(["user", "add", "bo@example.com"])
+        .output()
+        .unwrap();
+    assert!(again.status.success());
+    let raised = luu(&home)
+        .args([
+            "setup",
+            "--origin",
+            "http://luu.test",
+            "--owner",
+            "bo@example.com",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(raised.status.success(), "{raised:?}");
+    let listed = luu(&home).args(["user", "list"]).output().unwrap();
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    assert!(
+        listed
+            .lines()
+            .any(|line| line.starts_with("bo@example.com") && line.contains("owner")),
+        "{listed}"
+    );
+}

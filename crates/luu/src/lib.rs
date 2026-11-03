@@ -173,6 +173,34 @@ enum Command {
         if_missing: bool,
     },
 
+    /// Put this luu online: `[server]` with `exposure = "public"`, the
+    /// origin a browser types and the address to bind, then the first owner
+    /// and a code for them.
+    ///
+    /// The step an online install, a container and a chart share — run by
+    /// `setup.sh` for the first, `docker exec -it luu luu setup` and `kubectl
+    /// exec -it deploy/luu -- luu setup` for the others. On a terminal it asks
+    /// what no flag said. `luu serve` reads `[server]` when it starts, so
+    /// restart it after. See `RECORD/2026-11-03.local-or-online.WIP.md`.
+    Setup {
+        /// What a browser types to reach it: `https://luu.example.com`.
+        #[arg(long, value_name = "URL")]
+        origin: Option<String>,
+
+        /// The first owner's email.
+        #[arg(long, value_name = "EMAIL")]
+        owner: Option<String>,
+
+        /// Where `luu serve` listens. Default: `127.0.0.1:7878` on a machine,
+        /// with a proxy in front; `0.0.0.0:7878` inside a container.
+        #[arg(long, value_name = "ADDR")]
+        bind: Option<std::net::SocketAddr>,
+
+        /// The user database. Defaults to `auth.db` in the state directory.
+        #[arg(long, value_name = "PATH", env = "LUU_AUTH_DB")]
+        auth_db: Option<std::path::PathBuf>,
+    },
+
     /// Who may log in to a public `serve`: `auth.db` in the state directory.
     ///
     /// The way in that needs no request — the person at this machine, which
@@ -958,6 +986,130 @@ fn ago(at: u64) -> String {
         3600..86_400 => format!("{}h ago", seconds / 3600),
         _ => format!("{}d ago", seconds / 86_400),
     }
+}
+
+/// Whether this process runs inside a container: where `luu setup` binds
+/// every interface by default, because a published port is the only way in.
+fn in_a_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || std::env::var_os("KUBERNETES_SERVICE_HOST").is_some()
+}
+
+/// One answer, from the flag, else asked on the terminal, else an error that
+/// names the flag. `current` is offered as the default when there is one.
+fn answer(
+    given: Option<String>,
+    question: &str,
+    current: Option<String>,
+    flag: &str,
+) -> Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if let Some(given) = given {
+        return Ok(given);
+    }
+    if !std::io::stdin().is_terminal() {
+        return match current {
+            Some(current) => Ok(current),
+            None => anyhow::bail!("{flag} is needed: there is no terminal to ask on"),
+        };
+    }
+    let shown = current
+        .as_deref()
+        .map(|current| format!(" [{current}]"))
+        .unwrap_or_default();
+    eprint!("{question}{shown}: ");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    match (line.trim(), current) {
+        ("", Some(current)) => Ok(current),
+        ("", None) => anyhow::bail!("{flag} is needed, and nothing was typed"),
+        (typed, _) => Ok(typed.to_string()),
+    }
+}
+
+/// `luu setup`: `[server]`, the first owner, and their code.
+fn run_setup(
+    origin: Option<String>,
+    owner: Option<String>,
+    bind: Option<std::net::SocketAddr>,
+    auth_db: Option<&std::path::Path>,
+) -> Result<()> {
+    let dir = crate::config::dir()
+        .context("no state directory (neither LUU_HOME nor HOME is set): set LUU_HOME")?;
+    let path = dir.join(crate::provider::FILE);
+    let config = match path.exists() {
+        true => crate::provider::Config::from_toml(
+            &std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+            &path.display().to_string(),
+        )?,
+        false => crate::provider::Config::default(),
+    };
+    let server = config.server();
+
+    let origin = answer(
+        origin,
+        "What a browser types to reach luu (https://luu.example.com)",
+        server.origin.clone(),
+        "--origin",
+    )?;
+    if !crate::provider::is_origin(&origin) {
+        anyhow::bail!("{origin} is not a scheme and a host, as `https://luu.example.com`");
+    }
+    let owner = answer(owner, "Your email, the first owner", None, "--owner")?;
+    let owner = crate::users::email_of(&owner)?;
+    let bind = bind.or(server.bind).unwrap_or_else(|| {
+        match in_a_container() {
+            true => "0.0.0.0:7878",
+            false => "127.0.0.1:7878",
+        }
+        .parse()
+        .expect("a literal address")
+    });
+
+    // `public` refuses a token, so the file stops naming one; the token file
+    // itself is left where it is.
+    let next = config.with_server(crate::provider::Server {
+        exposure: Some(crate::provider::Exposure::Public),
+        bind: Some(bind),
+        token_file: None,
+        origin: Some(origin.clone()),
+    });
+    next.write(&path)?;
+
+    let users_path = match auth_db {
+        Some(path) => path.to_path_buf(),
+        None => dir.join("auth.db"),
+    };
+    let users = crate::users::Users::open(&users_path)?;
+    let user = match users.find(&owner)? {
+        None => users.add(&owner, crate::users::Role::Owner)?,
+        Some(user) => {
+            if user.suspended {
+                users.set_suspended(&owner, false)?;
+            }
+            match user.role {
+                crate::users::Role::Owner => user,
+                _ => users.set_role(&owner, crate::users::Role::Owner)?,
+            }
+        }
+    };
+    let code = users.issue_code(&user.email)?;
+
+    println!(
+        "[server] in {}: exposure = \"public\", origin {origin}, bind {bind}",
+        path.display()
+    );
+    println!("owner: {}", user.email);
+    println!(
+        "code:  {code}   (valid for {} minutes, once)",
+        crate::users::CODE_MINUTES
+    );
+    println!();
+    println!("luu serve reads [server] when it starts: restart it, then open {origin} and log in.");
+    Ok(())
 }
 
 /// `luu user`.
@@ -2509,6 +2661,16 @@ pub async fn run() -> Result<()> {
     } = &command
     {
         return run_user(action, auth_db.as_deref(), store.as_deref());
+    }
+
+    if let Command::Setup {
+        origin,
+        owner,
+        bind,
+        auth_db,
+    } = &command
+    {
+        return run_setup(origin.clone(), owner.clone(), *bind, auth_db.as_deref());
     }
 
     if let Command::Tools { sandbox } = &command {
