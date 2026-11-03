@@ -1491,7 +1491,7 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
           <h2>One line, a container, or a chart.</h2>
           <!-- Three ways in, as tabs once the script has run; without it all
                three are shown, one after the other. Each is local or online,
-               and online is `luu setup` in all three. See
+               and online is `luu config` in all three. See
                RECORD/2026-10-30.three-ways-in.WIP.md and
                RECORD/2026-11-03.local-or-online.WIP.md. -->
           <div class="ways" role="tablist" aria-label="How to install">
@@ -1503,8 +1503,8 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
           <div class="way" id="panel-line" role="tabpanel" aria-labelledby="way-line">
             <p class="lead">One binary, checked against the release's sha256. Then it asks how luu runs:
               <strong>local</strong>, for you, in <code>~/.local/bin</code> with no root — or
-              <strong>online</strong>, for people who log in: a systemd service on Linux, its first owner,
-              and the code they log in with.</p>
+              <strong>online</strong>, for people who log in: a systemd service on Linux, and a one-time
+              link to finish it in the page — its mail, and you as its owner.</p>
             <div class="getter" role="radiogroup" aria-label="Download with">
               <button type="button" role="radio" data-get="curl" aria-checked="true">curl</button>
               <button type="button" role="radio" data-get="wget" aria-checked="false" title="For a machine with no curl, such as a minimal Debian">wget</button>
@@ -1531,9 +1531,10 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
   -v luu-state:/state -v luu-work:/work \
   -p 7878:7878 ghcr.io/jgermade/luu</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
             </div>
-            <p class="note">Online — your domain, the first owner and their code — then a restart:</p>
+            <p class="note">Online — your domain, then how it sends mail and you as its owner, proved by
+              one code sent to you — then a restart:</p>
             <div class="oneline">
-              <pre>docker exec -it luu luu setup</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+              <pre>docker exec -it luu luu config</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
             </div>
             <div class="oneline">
               <pre>docker restart luu</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
@@ -1557,7 +1558,7 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
             </div>
             <p class="note">Online, then a restart:</p>
             <div class="oneline">
-              <pre>kubectl exec -it deploy/luu -- luu setup</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+              <pre>kubectl exec -it deploy/luu -- luu config</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
             </div>
             <div class="oneline">
               <pre>kubectl rollout restart deploy/luu</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>

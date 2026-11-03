@@ -3,7 +3,9 @@
 // page) the answer is `{ users: false }` and the page is what it always was.
 // See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
 
-export const account = { users: false, loggedIn: false, email: null, role: null }
+// `owner`: whether the server has one yet — none means setup, not a login.
+// `mail`: whether a code can come by email.
+export const account = { users: false, loggedIn: false, owner: true, mail: false, email: null, role: null }
 
 export async function whoAmI() {
   try {
@@ -44,4 +46,40 @@ export async function logOut() {
   } finally {
     location.reload()
   }
+}
+
+async function post(path, body) {
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    return { ok: response.ok, status: response.status, text: await response.text() }
+  } catch {
+    return { ok: false, status: 0, text: "the server did not answer" }
+  }
+}
+
+// A code by email. The server answers the same whoever asked, so this says
+// only that the request went.
+export async function emailCode(email) {
+  const sent = await post("./api/auth/code", { email })
+  return sent.ok ? null : sent.text || `the server answered ${sent.status}`
+}
+
+// Setup in the page: the first owner's code, sent under the mail settings as
+// typed — the test of them. `null` when it went, else why not.
+export async function setupSend(fields) {
+  const sent = await post("./api/setup/send", fields)
+  return sent.ok ? null : sent.text || `the server answered ${sent.status}`
+}
+
+// The code back: the owner made, logged in, and the mail settings saved.
+export async function setupClaim(fields) {
+  const sent = await post("./api/setup/claim", fields)
+  if (sent.ok) return null
+  if (sent.status === 401) return "That code is not valid. Send another."
+  return sent.text || `the server answered ${sent.status}`
 }

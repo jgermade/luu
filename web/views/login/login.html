@@ -3,7 +3,7 @@
   // `luu user code` printed for it. Nothing else of the app loads until the
   // server knows who this is — every route behind the login would be a 401.
   // See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
-  const { logIn } = await import("@web/lib/account.js")
+  const { logIn, emailCode, account } = await import("@web/lib/account.js")
   const OtpInput = await import("@web/components/otp-input.html")
 
   let email = ""
@@ -32,6 +32,20 @@
     setTimeout(() => location.reload(), 800)
   }
 
+  // A code by email, where the server has mail. The answer is the same
+  // whoever asked; the button rests a minute, as the server does.
+  let mailed = ""
+  let resting = false
+  const mailMe = async () => {
+    if (!email.includes("@") || resting) return
+    said = ""
+    const problem = await emailCode(email.trim())
+    if (problem) { said = problem; return }
+    mailed = "If that address has an account here, a code is on its way."
+    resting = true
+    setTimeout(() => { resting = false }, 60_000)
+  }
+
   // An edit after a refusal: the boxes are waiting again.
   const edited = () => {
     if (status === "error") status = "idle"
@@ -43,12 +57,16 @@
   <div class="card">
     <img class="logo" src="./logo.svg" alt="" width="40" height="40">
     <h1>Log in to luu</h1>
-    <p class="lead">This server has users. Log in with your email and a code.</p>
+    <p class="lead">Log in with your email and the code sent to it.</p>
 
     <label for="login-email">Email</label>
     <input id="login-email" type="email" autocomplete="username" autofocus
            :value="email" @input="email = $event.target.value"
            @keydown.enter="submit()">
+
+    <button :if="account.mail" type="button" class="mail" :disabled="!email.includes('@') || resting"
+            @click="mailMe()">Email me a code</button>
+    <p :if="mailed" class="mailed">{{ mailed }}</p>
 
     <span class="label" id="login-code">Code</span>
     <div class="code">
@@ -61,10 +79,10 @@
     </button>
     <p :if="said" class="said" role="alert">{{ said }}</p>
 
-    <p class="note">
-      An owner of this server gives you a code. On the server itself,
-      <code>luu user code &lt;email&gt;</code> prints one: six digits,
-      valid for ten minutes, once.
+    <p class="note" :if="!account.mail">
+      This server sends no mail yet, so an owner gives you a code. On the
+      server itself, <code>luu user code &lt;email&gt;</code> prints one: six
+      digits, valid for ten minutes, once.
     </p>
   </div>
 </div>
@@ -129,6 +147,21 @@
     color: var(--luu-bad);
     font-size: var(--luu-text-md);
   }
+  .mail {
+    align-self: flex-start;
+    margin-top: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--luu-border);
+    border-radius: 6px;
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    font: inherit;
+    font-size: var(--luu-text-md);
+    cursor: pointer;
+  }
+  .mail:hover:not(:disabled) { background: var(--luu-hover); }
+  .mail:disabled { opacity: .5; cursor: default; }
+  .mailed { margin: 2px 0 0; color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
   .note { margin: 14px 0 0; color: var(--luu-fg-subtle); font-size: var(--luu-text-sm); }
   code { font-family: var(--luu-font-mono); }
 </style>

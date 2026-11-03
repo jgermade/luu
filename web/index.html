@@ -25,7 +25,11 @@
   // On a server with users nothing loads before a login: every request the
   // app makes would be a 401. Everywhere else the answer is `users: false`.
   const account = await whoAmI()
-  const page = account.users && !account.loggedIn ? "./views/login/login.html" : "./app.html"
+  // No owner yet is setup, which takes the one-time link `luu config
+  // setup-url` prints. See RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
+  const page = !account.users || account.loggedIn ? "./app.html"
+    : account.owner ? "./views/login/login.html"
+    : "./views/login/setup.html"
   C79.fetch(page).mount("#app")
 </script>
 </body>

@@ -334,8 +334,15 @@ async fn luu_config_owner_proves_the_mail_and_the_mailbox_with_one_code() {
             .contains("[auth.smtp]")
     );
 
-    // The fake one: a code arrives, and typed back it makes the owner and
-    // saves the mail.
+    // The fake one, with a user and a password from a file a script would
+    // hand it: a code arrives, and typed back it makes the owner and saves
+    // the mail.
+    let secret = home.join("given-password");
+    std::fs::write(&secret, "s3cret-smtp\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let mut child = luu(&home)
         .args([
             "config",
@@ -346,6 +353,10 @@ async fn luu_config_owner_proves_the_mail_and_the_mailbox_with_one_code() {
             &inbox.url,
             "--smtp-from",
             "luu <luu@example.com>",
+            "--smtp-user",
+            "luu",
+            "--smtp-password-file",
+            secret.to_str().unwrap(),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -365,6 +376,20 @@ async fn luu_config_owner_proves_the_mail_and_the_mailbox_with_one_code() {
     let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
     assert!(written.contains("[auth.smtp]"), "{written}");
     assert!(written.contains(&inbox.url), "{written}");
+    // The password is not in config.toml: it is in smtp.password, 0600, which
+    // the file names.
+    assert!(!written.contains("s3cret"), "{written}");
+    assert!(written.contains("password-file"), "{written}");
+    let saved = home.join("smtp.password");
+    assert_eq!(
+        std::fs::read_to_string(&saved).unwrap().trim(),
+        "s3cret-smtp"
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
     let listed = luu(&home).args(["user", "list"]).output().unwrap();
     let listed = String::from_utf8(listed.stdout).unwrap();
     assert!(

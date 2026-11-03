@@ -152,7 +152,7 @@ Its own order, one row per step. New rows continue from 56.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 56 | ~~**Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner and seen only by their user, `max-live` per user, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder~~. *Built 2026-11-03*, with the API-level isolation tested. What is left is the run in the published image, with Landlock holding a command that tries another user's folder | that run | [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) |
-| 57 | **The code by email**: `[auth.smtp]`, rate limits. No sign-up: a user exists because an admin or an owner added them | row 56 | *A code by email*; *the three questions, answered* §1 |
+| 57 | ~~**The code by email**: `[auth.smtp]`, rate limits. No sign-up: a user exists because an admin or an owner added them~~. *Built 2026-11-03*, with the first owner proved by the code that tests the mail (`luu config`, or the page behind a one-time link). What is left is a real mail server: only a fake one has been sent to | a real mail server | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) |
 | 58 | **Roles enforced**: Settings writes by role, Settings → Users, Account | row 56 | *Three roles* |
 | 59 | **Passkeys**, and first whether WebAuthn can be had without OpenSSL | row 56 | *Passkeys*; *What it costs* |
 | 60 | **A user's API tokens** for `[host.*]` and the CLI | row 56 | *A login, the socket, and API tokens* |

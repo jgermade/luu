@@ -1,0 +1,207 @@
+<script :setup>
+  // A server with users and no owner yet. With the one-time link `luu config
+  // setup-url` printed (`?setup=<key>`): the mail settings and your email,
+  // then the code sent to it — **the code is the test of the mail**, and the
+  // settings are saved, and you made the owner, only when it comes back.
+  // Without the link: what to run on the server. See
+  // `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+  const { setupSend, setupClaim } = await import("@web/lib/account.js")
+  const OtpInput = await import("@web/components/otp-input.html")
+
+  const key = new URLSearchParams(location.search).get("setup") || ""
+
+  let url = ""
+  let from = ""
+  let user = ""
+  let password = ""
+  let email = ""
+  let code = ""
+  let busy = false
+  let said = ""
+  let sentTo = ""
+  let status = "idle"
+
+  $: ready = url.trim() && from.trim() && email.includes("@") && !busy
+
+  const send = async () => {
+    if (!ready) return
+    busy = true
+    said = ""
+    const problem = await setupSend({ key, url: url.trim(), from: from.trim(), user, password, email: email.trim() })
+    busy = false
+    if (problem) { said = problem; return }
+    sentTo = email.trim()
+    code = ""
+    status = "idle"
+  }
+
+  const claim = async () => {
+    if (code.length !== 6 || busy) return
+    busy = true
+    said = ""
+    const problem = await setupClaim({ key, email: sentTo, code })
+    busy = false
+    if (problem) { said = problem; status = "error"; return }
+    status = "success"
+    // The link is spent: the page reloads without it, logged in.
+    history.replaceState(null, "", location.pathname)
+    setTimeout(() => location.reload(), 800)
+  }
+
+  const back = () => { sentTo = ""; said = ""; status = "idle" }
+  const edited = () => { if (status === "error") status = "idle"; said = "" }
+</script>
+
+<div class="setup">
+  <div class="card">
+    <img class="logo" src="./logo.svg" alt="" width="40" height="40">
+    <h1>Set up luu</h1>
+
+    <div :if="!key">
+      <p class="lead">This server has no owner yet. On the server, either finish it in a terminal:</p>
+      <pre>luu config</pre>
+      <p class="lead">or ask for a link that opens this page to do it here — an hour, once:</p>
+      <pre>luu config setup-url</pre>
+      <p class="note">As the service: <code>sudo -u luu env LUU_HOME=/var/lib/luu luu config setup-url</code>.
+        In a container: <code>docker exec luu luu config setup-url</code>.</p>
+    </div>
+
+    <div :if="key && !sentTo" class="form">
+      <p class="lead">How this server sends mail, and you, its owner. A code goes to your email
+        through these settings: it is their test, and they are saved only when it comes back.</p>
+
+      <label for="setup-url">Mail server</label>
+      <input id="setup-url" placeholder="smtps://smtp.example.com:465" autocomplete="off"
+             :value="url" @input="url = $event.target.value">
+      <p class="hint">Or <code>smtp://host:587?tls=required</code> for STARTTLS.</p>
+
+      <label for="setup-from">Send from</label>
+      <input id="setup-from" placeholder="luu <luu@example.com>" autocomplete="off"
+             :value="from" @input="from = $event.target.value">
+
+      <div class="pair">
+        <div>
+          <label for="setup-user">User</label>
+          <input id="setup-user" autocomplete="off" :value="user" @input="user = $event.target.value">
+        </div>
+        <div>
+          <label for="setup-password">Password</label>
+          <input id="setup-password" type="password" autocomplete="new-password"
+                 :value="password" @input="password = $event.target.value">
+        </div>
+      </div>
+
+      <label for="setup-email">Your email</label>
+      <input id="setup-email" type="email" autocomplete="email"
+             :value="email" @input="email = $event.target.value" @keydown.enter="send()">
+
+      <button type="button" class="go" :disabled="!ready" @click="send()">
+        {{ busy ? "Sending…" : "Send me a code" }}
+      </button>
+    </div>
+
+    <div :if="key && sentTo" class="form">
+      <p class="lead">A code went to <strong>{{ sentTo }}</strong>. Type it here: that saves the mail
+        settings and makes you this server's owner.</p>
+      <div class="code">
+        <OtpInput :model="code" :status="status" :disabled="busy" label="Code"
+                  @change="edited()" @complete="claim()" />
+      </div>
+      <button type="button" class="go" :disabled="code.length !== 6 || busy" @click="claim()">
+        {{ busy ? "Checking…" : "Make me the owner" }}
+      </button>
+      <button type="button" class="back" @click="back()">Change the settings</button>
+    </div>
+
+    <p :if="said" class="said" role="alert">{{ said }}</p>
+  </div>
+</div>
+
+<style scoped>
+  .setup {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    box-sizing: border-box;
+    background: var(--luu-bg);
+    color: var(--luu-fg);
+    font-family: var(--luu-font-sans);
+  }
+  .card {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 28px 24px;
+    border: 1px solid var(--luu-border);
+    border-radius: 10px;
+    background: var(--luu-surface);
+    box-sizing: border-box;
+  }
+  .form { display: flex; flex-direction: column; gap: 6px; }
+  .logo { margin-bottom: 4px; }
+  h1 { font-size: var(--luu-text-xl); margin: 0 0 4px; }
+  .lead { margin: 0 0 8px; color: var(--luu-fg-muted); font-size: var(--luu-text-md); line-height: 1.5; }
+  label { font-size: var(--luu-text-sm); color: var(--luu-fg-muted); margin-top: 6px; }
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: var(--luu-text-lg);
+    padding: 8px 10px;
+    border: 1px solid var(--luu-border);
+    border-radius: 6px;
+    background: var(--luu-field);
+    color: var(--luu-fg);
+  }
+  input:focus { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .hint { margin: 2px 0 0; color: var(--luu-fg-subtle); font-size: var(--luu-text-sm); }
+  pre {
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--luu-sunken);
+    font-family: var(--luu-font-mono);
+    font-size: var(--luu-text-md);
+    overflow-x: auto;
+  }
+  code { font-family: var(--luu-font-mono); }
+  .code { display: flex; justify-content: center; margin: 4px 0; --otp-box: 44px; }
+  @media (max-width: 420px) { .code { --otp-box: 38px; } .pair { grid-template-columns: 1fr; } }
+  .go {
+    margin-top: 14px;
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--luu-accent);
+    color: var(--luu-on-accent);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .go:hover:not(:disabled) { background: var(--luu-accent-hover); }
+  .go:disabled { opacity: .5; cursor: default; }
+  .back {
+    align-self: center;
+    margin-top: 4px;
+    border: 0;
+    background: none;
+    color: var(--luu-fg-muted);
+    font: inherit;
+    font-size: var(--luu-text-sm);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .said {
+    margin: 10px 0 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--luu-bad-soft);
+    color: var(--luu-bad);
+    font-size: var(--luu-text-md);
+  }
+  .note { margin: 4px 0 0; color: var(--luu-fg-subtle); font-size: var(--luu-text-sm); line-height: 1.5; }
+</style>

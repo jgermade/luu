@@ -1039,7 +1039,7 @@ fn ago(at: u64) -> String {
     }
 }
 
-/// Whether this process runs inside a container: where `luu setup` binds
+/// Whether this process runs inside a container: where `luu config` binds
 /// every interface by default, because a published port is the only way in.
 fn in_a_container() -> bool {
     std::path::Path::new("/.dockerenv").exists()

@@ -1685,18 +1685,34 @@ The code is typed into six boxes (`web/components/otp-input.html`), which submit
 once the sixth digit arrives, shake red on a refusal and draw a green ring before the
 page reloads.
 
-**Local or online, and `luu setup` for the online step in all three ways in.**
-`luu setup [--origin] [--owner] [--bind]` writes `[server]`:
+**Local or online, and `luu config` for the online steps in all three ways in.**
 
-- `exposure = "public"`;
-- the origin;
-- the bind, `127.0.0.1:7878` on a machine and `0.0.0.0:7878` in a container;
-- and no `token-file`.
+1. **`luu config server [--origin] [--bind]`** writes `[server]`:
+   `exposure = "public"`, the origin, the bind (`127.0.0.1:7878` on a machine,
+   `0.0.0.0:7878` in a container) and no `token-file`. It carries the rest of
+   `config.toml`, as a Settings write does. `serve` reads `[server]` when it
+   starts, so it says to restart it.
+2. **`luu config owner`** sets the mail and the first owner in one step,
+   proved by one code. `[auth.smtp]` holds a URL, a from address and a user;
+   the password goes in `smtp.password`, `0600`, which the table names. The
+   code goes to the owner's email **under the settings as typed, unsaved**,
+   and they are saved, and the owner made, only when the code comes back. So
+   the code tests the mail, the mailbox and whose it is at once.
+   - A failed send saves nothing and forgets the code.
+   - `smtp://` with no `tls=` is refused except to this machine.
+   - A password inside the URL is refused.
+3. **`luu config mail`** proves other settings the same way, to an owner.
+4. **`luu config setup-url`** prints a one-time link (`?setup=<key>`): 32
+   random bytes, stored as their sha256, valid for an hour, and spent by the
+   owner it makes. The link opens step 2 in the page. A page with no owner
+   and no key says what to run; it does not offer the form, or whoever
+   arrived first would own the server.
 
-It carries the rest of `config.toml`, as a Settings write does. Then it makes
-the owner (added, raised or let back in), prints a code, and says to restart
-`serve`, which reads `[server]` when it starts. On a terminal it asks what no
-flag said.
+`luu config` with no step does 1 and 2 on a terminal. After that, a user logs
+in by asking for a code by email (`POST /api/auth/code`). The server answers
+the same `202` whoever asks and sends after answering. It sends one code per
+address a minute, and sixty an hour at most. See
+[`RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`](RECORD/2026-11-03.an-owner-proved-by-email.WIP.md).
 
 `setup.sh` asks after an install: **local** is the binary in `~/.local/bin`, no
 root. **online** is Linux with systemd, each root step through `sudo`:
@@ -1705,14 +1721,15 @@ root. **online** is Linux with systemd, each root step through `sudo`:
 - a system user `luu` whose home `/var/lib/luu` is the state directory, with
   `work/` as `serve`'s root;
 - `/etc/luu/luu.toml` when there is none;
-- `luu setup` as `luu`;
+- `luu config server` as `luu`, for the origin;
 - a `luu.service` held by `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`
   and `NoNewPrivileges`, writable only in `/var/lib/luu`.
 
 An online install is known afterwards by its unit: `reinstall` restarts it, and
 `uninstall --purge` removes the unit, the binary, `/var/lib/luu`, `/etc/luu` and
-the user. In Docker and the chart the online step is `luu setup` through `exec`,
-and a restart. See
+the user. It ends by printing the setup link (and `luu config` as the
+terminal's way). In Docker and the chart the online steps are `luu config`
+through `exec`, and a restart. See
 [`RECORD/2026-11-03.local-or-online.WIP.md`](RECORD/2026-11-03.local-or-online.WIP.md).
 
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and

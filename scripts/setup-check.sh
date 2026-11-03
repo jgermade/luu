@@ -90,11 +90,10 @@ sh "$setup" uninstall --purge --yes
 # /var/lib/luu, /etc/luu and luu.service, so it removes them again whatever
 # happens. See RECORD/2026-11-03.local-or-online.WIP.md.
 if [ "$(uname -s)" = Linux ] && [ -d /run/systemd/system ] && sudo -n true 2>/dev/null; then
-  step "online: a service, a user, a policy and a first owner"
+  step "online: a service, a user, a policy, and a link to finish it"
   trap 'sh "$setup" uninstall --purge --yes </dev/null >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
-  sh "$setup" install --mode online --origin http://luu.test:7878 --owner Ci@Example.com </dev/null |
-    tee "$work/out"
-  grep -q '^code: ' "$work/out" || fail "online printed no code"
+  sh "$setup" install --mode online --origin http://luu.test:7878 </dev/null | tee "$work/out"
+  grep -q 'http://luu.test:7878/?setup=' "$work/out" || fail "online printed no setup link"
   answered=""
   for _ in $(seq 1 30); do
     # Not `-f`: with users and nobody logged in, the answer is a 401 — and
@@ -105,7 +104,7 @@ if [ "$(uname -s)" = Linux ] && [ -d /run/systemd/system ] && sudo -n true 2>/de
     fi
     sleep 1
   done
-  if [ -z "$answered" ] || ! grep -q '"users":true' "$work/me"; then
+  if [ -z "$answered" ] || ! grep -q '"users":true' "$work/me" || ! grep -q '"owner":false' "$work/me"; then
     sudo systemctl status luu --no-pager || true
     sudo journalctl -u luu --no-pager | tail -30 || true
     fail "luu.service did not answer as a server with users"

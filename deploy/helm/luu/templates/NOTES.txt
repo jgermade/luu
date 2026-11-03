@@ -1,9 +1,10 @@
 luu serve is starting, with its state in a volume that outlives the release.
 
-Online, for people who log in: `luu setup` writes your domain and makes you
-the first owner, with a code to log in with; then restart it.
+Online, for people who log in: `luu config` writes your domain, then proves
+how it sends mail and you as its owner with one code sent to you; then restart
+it. (`luu config setup-url` gives a link to do the second half in the page.)
 
-  kubectl exec -it deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- luu setup
+  kubectl exec -it deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- luu config
   kubectl rollout restart deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }}
 
 Or keep it to whoever holds the token:

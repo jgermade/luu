@@ -1543,7 +1543,7 @@ impl Config {
         self.server.clone().unwrap_or_default()
     }
 
-    /// The same file with another `[server]`: what `luu setup` writes. An
+    /// The same file with another `[server]`: what `luu config server` writes. An
     /// empty table is written as no table, and everything else is carried
     /// through, for [`Config::with_resend`]'s reason.
     pub fn with_server(&self, server: Server) -> Self {

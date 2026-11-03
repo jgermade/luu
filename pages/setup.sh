@@ -5,7 +5,7 @@
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- reinstall
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall
 #   curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- install --mode online \
-#     --origin https://luu.example.com --owner me@example.com
+#     --origin https://luu.example.com
 #   wget -qO- https://jgermade.github.io/luu/setup.sh | sh    # where there is no curl
 #
 # With no command and a terminal to ask on, the first line asks what to do:
@@ -16,10 +16,12 @@
 # which is everything below; or **online**, for people who log in — Linux with
 # systemd: the binary in /usr/local/bin, a system user `luu` whose home
 # /var/lib/luu is the state directory, a policy in /etc/luu/luu.toml, `luu
-# setup` for the origin and the first owner, and luu.service. Each step that
+# config server` for the origin, luu.service, and a one-time link to finish
+# in the page — mail, and the owner, proved by one code. Each step that
 # needs root runs through sudo where the script is not root already. An online
 # install is known afterwards by its unit: reinstall restarts it, uninstall
-# removes it. See RECORD/2026-11-03.local-or-online.WIP.md.
+# removes it. See RECORD/2026-11-03.local-or-online.WIP.md and
+# RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
 #
 # One binary, from a GitHub release, into ~/.local/bin (or --dir). No root, and
 # nothing outside that directory is written: no shell profile is edited, and
@@ -72,7 +74,6 @@ Options:
                    people who log in — a systemd service, Linux only, which
                    needs root. (or LUU_MODE)
   --origin URL     Online: what a browser types, https://luu.example.com.
-  --owner EMAIL    Online: the first owner, who logs in with the code printed.
   --dir DIR        Where the binary goes. Default: ~/.local/bin, or
                    /usr/local/bin online. (or LUU_INSTALL_DIR)
   --version TAG    A release tag, such as v0.1.1. Default: the latest one.
@@ -463,11 +464,11 @@ WantedBy=multi-user.target
 UNIT
 }
 
-# The online half of an install: the user, the policy, `luu setup`, the unit.
+# The online half of an install: the user, the policy, `luu config server`,
+# the unit, and the link that finishes it in the page.
 go_online() {
 	online_possible || die "online needs Linux with systemd running, and this machine has neither"
 	[ -n "$ORIGIN" ] || ORIGIN=$(ask "What a browser types to reach luu (https://luu.example.com)" --origin)
-	[ -n "$OWNER" ] || OWNER=$(ask "Your email, the first owner" --owner)
 	TMP=${TMP:-$(mktemp -d "${TMPDIR:-/tmp}/luu-setup.XXXXXX")}
 
 	if ! id luu >/dev/null 2>&1; then
@@ -486,10 +487,8 @@ go_online() {
 		say "Wrote $POLICY."
 	fi
 
-	say ""
-	as_luu env LUU_HOME="$SERVICE_HOME" "$DIR/luu" setup \
-		--origin "$ORIGIN" --owner "$OWNER" </dev/null || die "luu setup failed"
-	say ""
+	as_luu env LUU_HOME="$SERVICE_HOME" "$DIR/luu" config server \
+		--origin "$ORIGIN" </dev/null >/dev/null || die "luu config server failed"
 
 	unit_text >"$TMP/luu.service"
 	as_root cp "$TMP/luu.service" "$UNIT"
@@ -501,11 +500,16 @@ go_online() {
 	say ""
 	say "Put TLS in front of it, for instance with Caddy:"
 	say "  caddy reverse-proxy --from ${ORIGIN#*://} --to 127.0.0.1:7878"
-	say "then open $ORIGIN and log in with the code above."
+	say ""
+	link=$(as_luu env LUU_HOME="$SERVICE_HOME" "$DIR/luu" config setup-url </dev/null 2>/dev/null || true)
+	say "Then finish it — how it sends mail, and you as its owner, proved by one code:"
+	if [ -n "$link" ]; then
+		say "  $link    (an hour, once)"
+	fi
+	say "or in a terminal here:"
+	say "  sudo -u luu env LUU_HOME=$SERVICE_HOME $DIR/luu config"
 	say ""
 	say "  systemctl status luu"
-	say "  sudo -u luu env LUU_HOME=$SERVICE_HOME $DIR/luu user code $OWNER    a new code"
-	say "  sudo -u luu env LUU_HOME=$SERVICE_HOME $DIR/luu user add <email>    someone else"
 }
 
 # The binary an online install runs, out of its unit.
@@ -666,7 +670,6 @@ main() {
 	VERSION=${LUU_VERSION:-}
 	MODE=${LUU_MODE:-}
 	ORIGIN=""
-	OWNER=""
 	PURGE=0
 	YES=0
 	while [ $# -gt 0 ]; do
@@ -703,12 +706,6 @@ main() {
 			shift
 			;;
 		--origin=*) ORIGIN=${1#*=} ;;
-		--owner)
-			[ $# -ge 2 ] || die "--owner needs an email"
-			OWNER=$2
-			shift
-			;;
-		--owner=*) OWNER=${1#*=} ;;
 		--purge) PURGE=1 ;;
 		-y | --yes) YES=1 ;;
 		*) die "unknown argument: $1 (see --help)" ;;
