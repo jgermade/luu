@@ -151,12 +151,12 @@ Its own order, one row per step. New rows continue from 56.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 56 | **Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder | nothing | *In what order*, 1; *What a user owns* |
-| 57 | **The code by email**: `[auth.smtp]`, `signup`, rate limits | row 56 | *A code by email* |
+| 56 | **Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner and seen only by their user, `max-live` per user, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder | nothing | *In what order*, 1; *What a user owns*; *the three questions, answered* §2 |
+| 57 | **The code by email**: `[auth.smtp]`, rate limits. No sign-up: a user exists because an admin or an owner added them | row 56 | *A code by email*; *the three questions, answered* §1 |
 | 58 | **Roles enforced**: Settings writes by role, Settings → Users, Account | row 56 | *Three roles* |
 | 59 | **Passkeys**, and first whether WebAuthn can be had without OpenSSL | row 56 | *Passkeys*; *What it costs* |
 | 60 | **A user's API tokens** for `[host.*]` and the CLI | row 56 | *A login, the socket, and API tokens* |
-| 61 | **Per-user configuration on a remote server** | a decision | *Still open* |
+| 61 | ~~**Per-user configuration on a remote server**~~. *Decided 2026-11-03*: not for now; a remote server uses its own configuration | — | *the three questions, answered* §3 |
 
 ```mermaid
 gantt
