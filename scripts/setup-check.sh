@@ -97,7 +97,9 @@ if [ "$(uname -s)" = Linux ] && [ -d /run/systemd/system ] && sudo -n true 2>/de
   grep -q '^code: ' "$work/out" || fail "online printed no code"
   answered=""
   for _ in $(seq 1 30); do
-    if curl -fsS http://127.0.0.1:7878/api/auth/me.json >"$work/me" 2>/dev/null; then
+    # Not `-f`: with users and nobody logged in, the answer is a 401 — and
+    # `{"users":true}` is exactly what it says.
+    if curl -sS http://127.0.0.1:7878/api/auth/me.json >"$work/me" 2>/dev/null; then
       answered=1
       break
     fi

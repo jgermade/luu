@@ -118,9 +118,18 @@ as_luu() {
 	fi
 }
 
-# in_dir CMD...: run as whoever may write DIR — this user, else root.
+# in_dir CMD...: run as whoever may write DIR. Local never asks for root: a
+# directory it cannot write is the error it always was. Online asks for it
+# where the nearest directory that exists — DIR, or the first parent that
+# does — is not this user's to write.
 in_dir() {
-	if [ -w "$DIR" ] || { [ ! -e "$DIR" ] && [ -w "$(dirname "$DIR")" ]; }; then
+	if [ "$MODE" != online ]; then
+		"$@"
+		return
+	fi
+	d=$DIR
+	while [ ! -e "$d" ]; do d=$(dirname "$d"); done
+	if [ -w "$d" ]; then
 		"$@"
 	else
 		as_root "$@"
