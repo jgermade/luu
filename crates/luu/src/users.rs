@@ -27,6 +27,10 @@ pub const CODE_TRIES: u32 = 5;
 pub const SESSION_HOURS: u64 = 168;
 /// The cookie a login is carried in.
 pub const COOKIE: &str = "luu_login";
+/// How long a code by email waits before another to the same address.
+pub const CODE_COOLDOWN_SECONDS: u64 = 60;
+/// How long a setup link lasts.
+pub const SETUP_MINUTES: u64 = 60;
 
 /// What a user may do. Ordered, so `role >= Role::Admin` reads as it means.
 /// See the parent record's *Three roles*.
@@ -100,7 +104,10 @@ pub fn default_path() -> Option<PathBuf> {
     Some(crate::config::dir()?.join("auth.db"))
 }
 
-const SCHEMA: i32 = 1;
+/// 2 added `codes.issued_at`, for one code by email a minute, and
+/// `setup_keys`, for the one-time link that makes the first owner in the
+/// page. See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+const SCHEMA: i32 = 2;
 
 const TABLES: &str = "
 CREATE TABLE IF NOT EXISTS users (
@@ -115,12 +122,25 @@ CREATE TABLE IF NOT EXISTS codes (
     email      TEXT PRIMARY KEY,
     hash       BLOB NOT NULL,
     expires_at INTEGER NOT NULL,
-    tries      INTEGER NOT NULL
+    tries      INTEGER NOT NULL,
+    issued_at  INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS logins (
     hash       BLOB PRIMARY KEY,
     user       TEXT NOT NULL,
     created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS setup_keys (
+    hash       BLOB PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+);";
+
+/// Schema 1 to 2: the column and the table, no row touched.
+const TO_2: &str = "
+ALTER TABLE codes ADD COLUMN issued_at INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS setup_keys (
+    hash       BLOB PRIMARY KEY,
     expires_at INTEGER NOT NULL
 );";
 
@@ -151,6 +171,10 @@ impl Users {
         match version {
             0 => {
                 connection.execute_batch(TABLES)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            1 => {
+                connection.execute_batch(TO_2)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -283,15 +307,155 @@ impl Users {
         if user.suspended {
             bail!("{} is suspended: `luu user resume` them first", user.email);
         }
-        let code = six_digits()?;
-        let expires_at = crate::session::now_ms() + CODE_MINUTES * 60_000;
+        store_code(&connection, &user.email)
+    }
+
+    /// A code to email to `email`, for `POST /api/auth/code`: only for a user
+    /// who exists and is not suspended, and not a second within
+    /// [`CODE_COOLDOWN_SECONDS`]. `None` for every reason not to send one,
+    /// which the caller answers the same way whatever it was.
+    pub fn code_to_mail(&self, email: &str) -> Result<Option<String>> {
+        let Ok(email) = email_of(email) else {
+            return Ok(None);
+        };
+        let connection = self.connection();
+        if !find(&connection, &email)?.is_some_and(|user| !user.suspended)
+            || cooling(&connection, &email)?
+        {
+            return Ok(None);
+        }
+        Ok(Some(store_code(&connection, &email)?))
+    }
+
+    /// A code to email to whoever is to be the first owner: for an address
+    /// that need not be a user yet, only while the server has no owner, and
+    /// under the same minute's rule.
+    pub fn code_to_claim(&self, email: &str) -> Result<Option<String>> {
+        let email = email_of(email)?;
+        let connection = self.connection();
+        if has_owner(&connection)? || cooling(&connection, &email)? {
+            return Ok(None);
+        }
+        Ok(Some(store_code(&connection, &email)?))
+    }
+
+    /// The first owner, made by the code their address was sent, and logged
+    /// in. `None` when the code is not right, or when the server already has
+    /// an owner. A user of that address already there is made the owner; any
+    /// setup link still waiting is spent.
+    pub fn claim_owner(
+        &self,
+        email: &str,
+        code: &str,
+        hours: u64,
+    ) -> Result<Option<(User, String)>> {
+        let Ok(email) = email_of(email) else {
+            return Ok(None);
+        };
+        let connection = self.connection();
+        if has_owner(&connection)? || !spend_code(&connection, &email, code)? {
+            return Ok(None);
+        }
+        let user = match find(&connection, &email)? {
+            Some(user) => {
+                connection.execute(
+                    "UPDATE users SET role = 'owner', suspended = 0 WHERE id = ?1",
+                    [&user.id],
+                )?;
+                User {
+                    role: Role::Owner,
+                    suspended: false,
+                    ..user
+                }
+            }
+            None => {
+                let user = User {
+                    id: hex(&random::<6>()?),
+                    email: email.clone(),
+                    role: Role::Owner,
+                    suspended: false,
+                    created_at: crate::session::now_ms(),
+                    last_login: None,
+                };
+                connection.execute(
+                    "INSERT INTO users (id, email, role, suspended, created_at)
+                     VALUES (?1, ?2, 'owner', 0, ?3)",
+                    rusqlite::params![user.id, user.email, user.created_at as i64],
+                )?;
+                user
+            }
+        };
+        connection.execute("DELETE FROM setup_keys", [])?;
+        let token = login(&connection, &user, hours)?;
+        Ok(Some((user, token)))
+    }
+
+    /// Spends `code` if it is the one `email` was given: what proves new mail
+    /// settings to an owner who already exists.
+    pub fn check_code(&self, email: &str, code: &str) -> Result<bool> {
+        let Ok(email) = email_of(email) else {
+            return Ok(false);
+        };
+        spend_code(&self.connection(), &email, code)
+    }
+
+    /// Forgets the code waiting for `email`: one that could not be sent, so
+    /// it does not hold the minute's rule against a second try.
+    pub fn forget_code(&self, email: &str) -> Result<()> {
+        if let Ok(email) = email_of(email) {
+            self.connection()
+                .execute("DELETE FROM codes WHERE email = ?1", [email])?;
+        }
+        Ok(())
+    }
+
+    /// Every owner who can log in.
+    pub fn owners(&self) -> Result<Vec<User>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|user| user.role == Role::Owner && !user.suspended)
+            .collect())
+    }
+
+    /// Whether anybody can log in as an owner.
+    pub fn has_owner(&self) -> Result<bool> {
+        has_owner(&self.connection())
+    }
+
+    /// A one-time setup link's key: 32 random bytes, valid for
+    /// [`SETUP_MINUTES`], spent when an owner is made. Only while there is no
+    /// owner: afterwards an owner adds people.
+    pub fn issue_setup_key(&self) -> Result<String> {
+        let connection = self.connection();
+        if has_owner(&connection)? {
+            bail!("this server has an owner: they add people, and no setup link is needed");
+        }
+        let key = hex(&random::<32>()?);
+        let expires_at = crate::session::now_ms() + SETUP_MINUTES * 60_000;
         connection.execute(
-            "INSERT INTO codes (email, hash, expires_at, tries) VALUES (?1, ?2, ?3, 0)
-             ON CONFLICT(email) DO UPDATE SET
-                 hash = excluded.hash, expires_at = excluded.expires_at, tries = 0",
-            rusqlite::params![user.email, code_hash(&user.email, &code), expires_at as i64],
+            "INSERT INTO setup_keys (hash, expires_at) VALUES (?1, ?2)",
+            rusqlite::params![login_hash(&key), expires_at as i64],
         )?;
-        Ok(code)
+        Ok(key)
+    }
+
+    /// Whether `key` opens setup: issued, not expired, and no owner yet.
+    pub fn setup_key_opens(&self, key: &str) -> Result<bool> {
+        let connection = self.connection();
+        if has_owner(&connection)? {
+            return Ok(false);
+        }
+        let now = crate::session::now_ms() as i64;
+        connection.execute("DELETE FROM setup_keys WHERE expires_at <= ?1", [now])?;
+        let found: Option<i64> = connection
+            .query_row(
+                "SELECT expires_at FROM setup_keys WHERE hash = ?1",
+                [login_hash(key)],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
     }
 
     /// A code exchanged for a login: the user and the cookie's value, or
@@ -301,56 +465,17 @@ impl Users {
         let Ok(email) = email_of(email) else {
             return Ok(None);
         };
-        let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-        let now = crate::session::now_ms();
         let connection = self.connection();
-        connection.execute("DELETE FROM logins WHERE expires_at <= ?1", [now as i64])?;
-        let waiting: Option<(Vec<u8>, i64, u32)> = connection
-            .query_row(
-                "SELECT hash, expires_at, tries FROM codes WHERE email = ?1",
-                [&email],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        let Some((hash, expires_at, tries)) = waiting else {
-            return Ok(None);
-        };
-        if (expires_at as u64) <= now || tries >= CODE_TRIES {
-            connection.execute("DELETE FROM codes WHERE email = ?1", [&email])?;
+        if !spend_code(&connection, &email, code)? {
             return Ok(None);
         }
-        if !same(&hash, &code_hash(&email, &code)) {
-            match tries + 1 >= CODE_TRIES {
-                true => connection.execute("DELETE FROM codes WHERE email = ?1", [&email])?,
-                false => connection.execute(
-                    "UPDATE codes SET tries = tries + 1 WHERE email = ?1",
-                    [&email],
-                )?,
-            };
-            return Ok(None);
-        }
-        connection.execute("DELETE FROM codes WHERE email = ?1", [&email])?;
         let Some(user) = find(&connection, &email)?.filter(|user| !user.suspended) else {
             return Ok(None);
         };
-        let token = hex(&random::<32>()?);
-        let hours = hours.max(1);
-        connection.execute(
-            "INSERT INTO logins (hash, user, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
-                login_hash(&token),
-                user.id,
-                now as i64,
-                (now + hours * 3_600_000) as i64
-            ],
-        )?;
-        connection.execute(
-            "UPDATE users SET last_login = ?2 WHERE id = ?1",
-            rusqlite::params![user.id, now as i64],
-        )?;
+        let token = login(&connection, &user, hours)?;
         Ok(Some((
             User {
-                last_login: Some(now),
+                last_login: Some(crate::session::now_ms()),
                 ..user
             },
             token,
@@ -440,6 +565,101 @@ fn last_owner_guard(connection: &Connection, user: &User, what: &str) -> Result<
         );
     }
     Ok(())
+}
+
+/// A new code for `email`, replacing any it had, timed for the minute's rule.
+fn store_code(connection: &Connection, email: &str) -> Result<String> {
+    let code = six_digits()?;
+    let now = crate::session::now_ms();
+    connection.execute(
+        "INSERT INTO codes (email, hash, expires_at, tries, issued_at) VALUES (?1, ?2, ?3, 0, ?4)
+         ON CONFLICT(email) DO UPDATE SET
+             hash = excluded.hash, expires_at = excluded.expires_at, tries = 0,
+             issued_at = excluded.issued_at",
+        rusqlite::params![
+            email,
+            code_hash(email, &code),
+            (now + CODE_MINUTES * 60_000) as i64,
+            now as i64
+        ],
+    )?;
+    Ok(code)
+}
+
+/// Whether a code went to `email` less than a minute ago.
+fn cooling(connection: &Connection, email: &str) -> Result<bool> {
+    let issued: Option<i64> = connection
+        .query_row(
+            "SELECT issued_at FROM codes WHERE email = ?1",
+            [email],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let now = crate::session::now_ms() as i64;
+    Ok(issued.is_some_and(|at| now - at < (CODE_COOLDOWN_SECONDS * 1000) as i64))
+}
+
+/// Checks `code` against the one `email` was given, and spends it: once
+/// right, or after the tries run out, or once expired.
+fn spend_code(connection: &Connection, email: &str, code: &str) -> Result<bool> {
+    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    let now = crate::session::now_ms();
+    let waiting: Option<(Vec<u8>, i64, u32)> = connection
+        .query_row(
+            "SELECT hash, expires_at, tries FROM codes WHERE email = ?1",
+            [email],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((hash, expires_at, tries)) = waiting else {
+        return Ok(false);
+    };
+    if (expires_at as u64) <= now || tries >= CODE_TRIES {
+        connection.execute("DELETE FROM codes WHERE email = ?1", [email])?;
+        return Ok(false);
+    }
+    if !same(&hash, &code_hash(email, &code)) {
+        match tries + 1 >= CODE_TRIES {
+            true => connection.execute("DELETE FROM codes WHERE email = ?1", [email])?,
+            false => connection.execute(
+                "UPDATE codes SET tries = tries + 1 WHERE email = ?1",
+                [email],
+            )?,
+        };
+        return Ok(false);
+    }
+    connection.execute("DELETE FROM codes WHERE email = ?1", [email])?;
+    Ok(true)
+}
+
+/// A new login for `user`, for `hours`: the cookie's value.
+fn login(connection: &Connection, user: &User, hours: u64) -> Result<String> {
+    let now = crate::session::now_ms();
+    connection.execute("DELETE FROM logins WHERE expires_at <= ?1", [now as i64])?;
+    let token = hex(&random::<32>()?);
+    connection.execute(
+        "INSERT INTO logins (hash, user, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            login_hash(&token),
+            user.id,
+            now as i64,
+            (now + hours.max(1) * 3_600_000) as i64
+        ],
+    )?;
+    connection.execute(
+        "UPDATE users SET last_login = ?2 WHERE id = ?1",
+        rusqlite::params![user.id, now as i64],
+    )?;
+    Ok(token)
+}
+
+fn has_owner(connection: &Connection) -> Result<bool> {
+    let owners: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM users WHERE role = 'owner' AND suspended = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(owners > 0)
 }
 
 fn end_everything(connection: &Connection, user: &User) -> Result<()> {
@@ -599,6 +819,92 @@ mod tests {
         assert!(users.add("CY@example.com", Role::Admin).is_err());
         assert!(users.add("not-an-email", Role::User).is_err());
         assert_eq!(users.list().unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_setup_link_makes_one_owner_by_a_code_sent_to_them() {
+        let (dir, users) = scratch("claim");
+        assert!(!users.has_owner().unwrap());
+        let key = users.issue_setup_key().unwrap();
+        assert_eq!(key.len(), 64);
+        assert!(users.setup_key_opens(&key).unwrap());
+        assert!(!users.setup_key_opens("not-the-key").unwrap());
+
+        let code = users
+            .code_to_claim("Jo@Example.com")
+            .unwrap()
+            .expect("a code");
+        // One a minute.
+        assert!(users.code_to_claim("jo@example.com").unwrap().is_none());
+        let wrong = if code == "000000" { "000001" } else { "000000" };
+        assert!(
+            users
+                .claim_owner("jo@example.com", wrong, 1)
+                .unwrap()
+                .is_none()
+        );
+        let (owner, token) = users
+            .claim_owner("jo@example.com", &code, 1)
+            .unwrap()
+            .expect("the owner");
+        assert_eq!(owner.role, Role::Owner);
+        assert_eq!(
+            users.identify(&token).unwrap().map(|u| u.email),
+            Some("jo@example.com".into())
+        );
+        // Spent: the link, and any second claim.
+        assert!(!users.setup_key_opens(&key).unwrap());
+        assert!(users.issue_setup_key().is_err());
+        assert!(users.code_to_claim("eve@example.com").unwrap().is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_code_by_mail_goes_only_to_a_user_and_once_a_minute() {
+        let (dir, users) = scratch("mail");
+        users.add("al@example.com", Role::User).unwrap();
+        assert!(users.code_to_mail("nobody@example.com").unwrap().is_none());
+        assert!(users.code_to_mail("not an email").unwrap().is_none());
+        let code = users
+            .code_to_mail("al@example.com")
+            .unwrap()
+            .expect("a code");
+        assert!(
+            users.code_to_mail("al@example.com").unwrap().is_none(),
+            "a minute between"
+        );
+        assert!(users.redeem("al@example.com", &code, 1).unwrap().is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_schema_1_file_gains_the_minute_and_the_setup_keys() {
+        let dir = std::env::temp_dir().join(format!("luu-users-v1-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("auth.db");
+        create_private(&path).unwrap();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
+                       role TEXT NOT NULL, suspended INTEGER NOT NULL DEFAULT 0,
+                       created_at INTEGER NOT NULL, last_login INTEGER);
+                     CREATE TABLE codes (email TEXT PRIMARY KEY, hash BLOB NOT NULL,
+                       expires_at INTEGER NOT NULL, tries INTEGER NOT NULL);
+                     CREATE TABLE logins (hash BLOB PRIMARY KEY, user TEXT NOT NULL,
+                       created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+                     INSERT INTO users VALUES ('abc', 'old@example.com', 'owner', 0, 1, NULL);",
+                )
+                .unwrap();
+            connection.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let users = Users::open(&path).unwrap();
+        assert!(users.has_owner().unwrap());
+        let code = users.issue_code("old@example.com").unwrap();
+        assert!(users.redeem("old@example.com", &code, 1).unwrap().is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
 

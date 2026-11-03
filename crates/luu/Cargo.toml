@@ -49,5 +49,7 @@ sha2.workspace = true
 tokio-tungstenite.workspace = true
 # The server's log. See `crate::log`.
 tracing.workspace = true
+# The code a user logs in with, by email — `crate::mail`.
+lettre.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

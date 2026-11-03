@@ -241,7 +241,7 @@ async fn public_needs_an_origin_and_logs_in_with_a_code_luu_user_printed() {
 }
 
 #[tokio::test]
-async fn luu_setup_puts_a_server_online_and_keeps_the_rest_of_the_file() {
+async fn luu_config_server_puts_a_server_online_and_keeps_the_rest_of_the_file() {
     let home = scratch();
     // A private server with a table of its own, as a container's first start
     // leaves it, plus a setting nobody should lose.
@@ -254,7 +254,7 @@ async fn luu_setup_puts_a_server_online_and_keeps_the_rest_of_the_file() {
 
     // Without a terminal, what no flag said is an error naming the flag.
     let asked = luu(&home)
-        .args(["setup", "--owner", "ana@example.com"])
+        .args(["config", "server"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -262,73 +262,281 @@ async fn luu_setup_puts_a_server_online_and_keeps_the_rest_of_the_file() {
     assert!(String::from_utf8_lossy(&asked.stderr).contains("--origin"));
 
     let set = luu(&home)
-        .args([
-            "setup",
-            "--origin",
-            "http://luu.test",
-            "--owner",
-            "Ana@Example.com",
-            "--bind",
-            "127.0.0.1:0",
-        ])
+        .args(["config", "server", "--origin", "http://luu.test"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(set.status.success(), "{set:?}");
-    let said = String::from_utf8(set.stdout).unwrap();
-    assert!(said.contains("restart it"), "{said}");
-    let code = said
-        .lines()
-        .find_map(|line| line.strip_prefix("code:"))
-        .and_then(|rest| rest.split_whitespace().next())
-        .expect("a code")
-        .to_string();
-    assert_eq!(code.len(), 6, "{said}");
-
+    assert!(
+        String::from_utf8(set.stdout)
+            .unwrap()
+            .contains("restart it")
+    );
     let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
     assert!(written.contains("exposure = \"public\""), "{written}");
     assert!(!written.contains("token-file"), "{written}");
     assert!(written.contains("max-live = 2"), "{written}");
+    // The bind it had is kept: a test server's `127.0.0.1:0`.
+    assert!(written.contains("127.0.0.1:0"), "{written}");
 
-    // And the server it describes starts, and the owner logs in with that code.
+    // The server it describes starts, with nobody yet: the page says so.
     let (mut child, address) = start(luu(&home)).expect("an online server starts");
-    let http = reqwest::Client::new();
-    let login = http
-        .post(format!("http://{address}/api/auth/login"))
-        .header("Origin", "http://luu.test")
-        .json(&serde_json::json!({ "email": "ana@example.com", "code": code }))
-        .send()
+    let me = reqwest::get(format!("http://{address}/api/auth/me.json"))
         .await
         .unwrap();
-    assert_eq!(login.status(), 204);
+    assert_eq!(me.status(), 401);
+    let me: serde_json::Value = me.json().await.unwrap();
+    assert_eq!(me["users"], true);
+    assert_eq!(me["owner"], false);
     let _ = child.kill();
     let _ = child.wait();
 
-    // Run again for someone who is already a user: raised to owner, and a new
-    // code; the file is the same.
-    let again = luu(&home)
-        .args(["user", "add", "bo@example.com"])
-        .output()
-        .unwrap();
-    assert!(again.status.success());
-    let raised = luu(&home)
+    // A setup link needs no owner, and names the origin.
+    let link = luu(&home).args(["config", "setup-url"]).output().unwrap();
+    assert!(link.status.success(), "{link:?}");
+    let link = String::from_utf8(link.stdout).unwrap();
+    assert!(link.starts_with("http://luu.test/?setup="), "{link}");
+}
+
+#[path = "support/smtp.rs"]
+mod smtp;
+
+#[tokio::test]
+async fn luu_config_owner_proves_the_mail_and_the_mailbox_with_one_code() {
+    let home = scratch();
+    std::fs::write(
+        home.join("config.toml"),
+        "[server]\nexposure = \"public\"\nbind = \"127.0.0.1:0\"\norigin = \"http://luu.test\"\n",
+    )
+    .unwrap();
+    let inbox = smtp::start().await;
+
+    // A mail server that is not there: the send fails, and nothing is saved.
+    let refused = luu(&home)
         .args([
-            "setup",
-            "--origin",
-            "http://luu.test",
-            "--owner",
-            "bo@example.com",
+            "config",
+            "owner",
+            "--email",
+            "ana@example.com",
+            "--smtp-url",
+            "smtp://127.0.0.1:1",
+            "--smtp-from",
+            "luu <luu@example.com>",
         ])
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert!(raised.status.success(), "{raised:?}");
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("nothing was saved"));
+    assert!(
+        !std::fs::read_to_string(home.join("config.toml"))
+            .unwrap()
+            .contains("[auth.smtp]")
+    );
+
+    // The fake one: a code arrives, and typed back it makes the owner and
+    // saves the mail.
+    let mut child = luu(&home)
+        .args([
+            "config",
+            "owner",
+            "--email",
+            "Ana@Example.com",
+            "--smtp-url",
+            &inbox.url,
+            "--smtp-from",
+            "luu <luu@example.com>",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mail = inbox.wait_for("ana@example.com").await;
+    let code = mail.code().expect("a code in the subject");
+    assert!(mail.data.contains("http://luu.test"), "{}", mail.data);
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "{code}").unwrap();
+    }
+    let done = child.wait_with_output().unwrap();
+    assert!(done.status.success(), "{done:?}");
+    let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(written.contains("[auth.smtp]"), "{written}");
+    assert!(written.contains(&inbox.url), "{written}");
     let listed = luu(&home).args(["user", "list"]).output().unwrap();
     let listed = String::from_utf8(listed.stdout).unwrap();
     assert!(
         listed
             .lines()
-            .any(|line| line.starts_with("bo@example.com") && line.contains("owner")),
+            .any(|line| line.starts_with("ana@example.com") && line.contains("owner")),
         "{listed}"
     );
+
+    // And now there is an owner: no second, and no setup link.
+    let again = luu(&home)
+        .args(["config", "owner", "--email", "eve@example.com"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    let link = luu(&home).args(["config", "setup-url"]).output().unwrap();
+    assert!(!link.status.success());
+}
+
+#[tokio::test]
+async fn setup_in_the_page_makes_the_owner_and_codes_come_by_email_after() {
+    let home = scratch();
+    std::fs::write(
+        home.join("config.toml"),
+        "[server]\nexposure = \"public\"\nbind = \"127.0.0.1:0\"\norigin = \"http://luu.test\"\n",
+    )
+    .unwrap();
+    let inbox = smtp::start().await;
+    let (mut child, address) = start(luu(&home)).expect("an online server starts");
+    let http = reqwest::Client::new();
+    let post = |path: &str, body: serde_json::Value| {
+        http.post(format!("http://{address}{path}"))
+            .header("Origin", "http://luu.test")
+            .json(&body)
+            .send()
+    };
+
+    let me: serde_json::Value = reqwest::get(format!("http://{address}/api/auth/me.json"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (me["owner"].clone(), me["mail"].clone()),
+        (false.into(), false.into())
+    );
+
+    // No key, no setup.
+    let refused = post(
+        "/api/setup/send",
+        serde_json::json!({ "key": "nope", "email": "ana@example.com", "url": inbox.url, "from": "luu@example.com" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refused.status(), 403);
+
+    let link = luu(&home).args(["config", "setup-url"]).output().unwrap();
+    let link = String::from_utf8(link.stdout).unwrap();
+    let key = link.trim().rsplit("setup=").next().unwrap().to_string();
+
+    // Mail settings that cannot send: said, and nothing saved.
+    let failed = post(
+        "/api/setup/send",
+        serde_json::json!({ "key": key, "email": "ana@example.com", "url": "smtp://127.0.0.1:1", "from": "luu@example.com" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(failed.status(), 502);
+    assert!(failed.text().await.unwrap().contains("nothing was saved"));
+
+    // The owner's code is the test of the mail.
+    let sent = post(
+        "/api/setup/send",
+        serde_json::json!({ "key": key, "email": "Ana@Example.com", "url": inbox.url, "from": "luu <luu@example.com>" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sent.status(), 202, "{:?}", sent.text().await);
+    let code = inbox.wait_for("ana@example.com").await.code().unwrap();
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    let bad = post(
+        "/api/setup/claim",
+        serde_json::json!({ "key": key, "email": "ana@example.com", "code": wrong }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(bad.status(), 401);
+    let claimed = post(
+        "/api/setup/claim",
+        serde_json::json!({ "key": key, "email": "ana@example.com", "code": code }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(claimed.status(), 204);
+    let cookie = claimed.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let me: serde_json::Value = http
+        .get(format!("http://{address}/api/auth/me.json"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(me["role"], "owner");
+    assert_eq!(me["mail"], true);
+    let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(
+        written.contains("[auth.smtp]") && written.contains(&inbox.url),
+        "{written}"
+    );
+
+    // The link is spent.
+    let spent = post(
+        "/api/setup/send",
+        serde_json::json!({ "key": key, "email": "eve@example.com" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(spent.status(), 403);
+
+    // After: a user asks for a code and gets it by email; a stranger gets
+    // the same answer and no email.
+    assert!(
+        luu(&home)
+            .args(["user", "add", "bo@example.com"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let asked = post(
+        "/api/auth/code",
+        serde_json::json!({ "email": "bo@example.com" }),
+    )
+    .await
+    .unwrap();
+    let stranger = post(
+        "/api/auth/code",
+        serde_json::json!({ "email": "eve@example.com" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (asked.status().as_u16(), stranger.status().as_u16()),
+        (202, 202)
+    );
+    assert_eq!(asked.text().await.unwrap(), stranger.text().await.unwrap());
+    let code = inbox.wait_for("bo@example.com").await.code().unwrap();
+    let login = post(
+        "/api/auth/login",
+        serde_json::json!({ "email": "bo@example.com", "code": code }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(login.status(), 204);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !inbox
+            .sent()
+            .iter()
+            .any(|sent| sent.to.iter().any(|to| to.contains("eve@"))),
+        "a stranger got mail"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
 }

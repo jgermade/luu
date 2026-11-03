@@ -32,6 +32,10 @@ landlock = "0.4"
 # See RECORD/2026-10-01.the-tree-follows-the-disk.completed.md.
 notify = "8"
 libc = "0.2"
+# Mail for the code a user logs in with. rustls, never its default
+# native-tls, which would bring OpenSSL in. See
+# RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1-rustls-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 mime_guess = "2"
 # `include-exclude` is what lets the UI folder keep a gitignored

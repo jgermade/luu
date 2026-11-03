@@ -554,16 +554,37 @@ impl Exposure {
 
 /// `[auth]`: how a public server's logins behave. Read only where
 /// `exposure = "public"`.
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct AuthTable {
     /// How long a login lasts, in hours. A week when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_hours: Option<u64>,
+    /// How codes are emailed. Absent, codes come only from `luu user code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smtp: Option<SmtpTable>,
+}
+
+/// `[auth.smtp]`: the mail server codes go out through. Written by `luu
+/// config` or setup in the page, and only once a code sent through it came
+/// back. See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SmtpTable {
+    /// `smtps://smtp.example.com:465`, or `smtp://smtp.example.com:587?tls=required`
+    /// for STARTTLS.
+    pub url: String,
+    /// What the email says it is from: `luu <luu@example.com>`.
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// The password, in a file whose mode is checked, as a provider's key is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_file: Option<PathBuf>,
 }
 
 impl AuthTable {
-    pub fn session_hours(self) -> u64 {
+    pub fn session_hours(&self) -> u64 {
         self.session_hours
             .filter(|hours| *hours > 0)
             .unwrap_or(crate::users::SESSION_HOURS)
@@ -1347,7 +1368,7 @@ impl Config {
             engine: self.engines.clone(),
             host: self.hosts.clone(),
             server: self.server.clone(),
-            auth: self.auth,
+            auth: self.auth.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -1434,7 +1455,7 @@ impl Config {
             engines: self.engines.clone(),
             hosts: self.hosts.clone(),
             server: self.server.clone(),
-            auth: self.auth,
+            auth: self.auth.clone(),
         }
     }
 
@@ -1534,7 +1555,15 @@ impl Config {
 
     /// `[auth]`, defaulted where the file says nothing.
     pub fn auth(&self) -> AuthTable {
-        self.auth.unwrap_or_default()
+        self.auth.clone().unwrap_or_default()
+    }
+
+    /// The same file with another `[auth]`: what saving mail settings writes.
+    pub fn with_auth(&self, auth: AuthTable) -> Self {
+        Self {
+            auth: (auth != AuthTable::default()).then_some(auth),
+            ..self.clone()
+        }
     }
 
     /// Every host the file names.

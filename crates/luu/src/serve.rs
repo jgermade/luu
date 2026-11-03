@@ -2017,6 +2017,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         origin: origin.clone(),
         users: users.clone(),
         session_hours: auth_settings.session_hours(),
+        pending_mail: Arc::default(),
+        mailed: Arc::default(),
     };
     if users.is_some() {
         shared_paths_said(&app).await;
@@ -2182,6 +2184,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/auth/logout", post(post_logout))
         .route("/api/auth/me", get(get_me))
         .route("/api/auth/me.json", get(get_me))
+        .route("/api/auth/code", post(post_code))
+        .route("/api/setup/send", post(post_setup_send))
+        .route("/api/setup/claim", post(post_setup_claim))
         .route(
             "/",
             get(|headers: axum::http::HeaderMap| async move {
@@ -2247,6 +2252,11 @@ struct AppRouterState {
     users: Option<Arc<crate::users::Users>>,
     /// `[auth] session-hours`.
     session_hours: u64,
+    /// Mail settings typed into setup in the page, held from the code's send
+    /// to its return — saved only then. By the address the code went to.
+    pending_mail: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::mail::Mail>>>,
+    /// When the last codes by email went out, for a ceiling on them all.
+    mailed: Arc<std::sync::Mutex<std::collections::VecDeque<u64>>>,
 }
 
 async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
@@ -2975,20 +2985,288 @@ async fn get_me(State(state): State<AppRouterState>, headers: axum::http::Header
     };
     let user = cookie(&headers, crate::users::COOKIE)
         .and_then(|token| users.identify(&token).ok().flatten());
+    let mail = mail_configured().await;
     match user {
         Some(user) => Json(serde_json::json!({
             "users": true,
+            "owner": true,
+            "mail": mail,
             "id": user.id,
             "email": user.email,
             "role": user.role,
         }))
         .into_response(),
+        // Whether there is an owner yet, which decides between the login
+        // view and setup; and whether a code can come by email.
         None => (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "users": true })),
+            Json(serde_json::json!({
+                "users": true,
+                "owner": users.has_owner().unwrap_or(true),
+                "mail": mail,
+            })),
         )
             .into_response(),
     }
+}
+
+/// Whether `[auth.smtp]` is there: codes can come by email.
+async fn mail_configured() -> bool {
+    load_config()
+        .await
+        .is_ok_and(|(config, _)| config.auth().smtp.is_some())
+}
+
+/// The saved mail settings, ready to send, or why not.
+async fn saved_mail() -> Result<crate::mail::Mail, String> {
+    let (config, _) = load_config().await.map_err(|error| error.to_string())?;
+    let table = config
+        .auth()
+        .smtp
+        .ok_or("this server sends no mail: ask an owner for a code")?;
+    crate::mail::Mail::from_table(&table).map_err(|error| format!("{error:#}"))
+}
+
+/// How many codes by email the whole server sends in an hour. Each address
+/// gets one a minute already; this is the ceiling on all of them, which is
+/// what a list of addresses tried one after another would run into.
+const MAILED_AN_HOUR: usize = 60;
+
+#[derive(serde::Deserialize)]
+struct CodeAsk {
+    email: String,
+}
+
+/// `POST /api/auth/code {email}`: a code by email to a user. **The same
+/// `202` whoever asked**, and the send happens after the answer, so neither
+/// the status nor the time says who is a user. See
+/// `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+async fn post_code(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<CodeAsk>,
+) -> Response {
+    let Some(users) = state.users.clone() else {
+        return (StatusCode::NOT_FOUND, "this server has no users").into_response();
+    };
+    if !from_origin(&state, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's",
+        )
+            .into_response();
+    }
+    let mail = match saved_mail().await {
+        Ok(mail) => mail,
+        Err(why) => return (StatusCode::CONFLICT, why).into_response(),
+    };
+    let now = now_ms();
+    let under_ceiling = {
+        let mut mailed = state
+            .mailed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while mailed.front().is_some_and(|at| now - at > 3_600_000) {
+            mailed.pop_front();
+        }
+        mailed.len() < MAILED_AN_HOUR
+    };
+    if under_ceiling && let Ok(Some(code)) = users.code_to_mail(&asked.email) {
+        state
+            .mailed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(now);
+        let origin = state.origin.clone();
+        let email = asked.email.clone();
+        tokio::spawn(async move {
+            if let Err(error) = mail.send_code(&email, &code, origin.as_deref()).await {
+                let _ = users.forget_code(&email);
+                tracing::warn!(target: "luu::auth", error = %format!("{error:#}"), "a code could not be emailed");
+            }
+        });
+    }
+    (
+        StatusCode::ACCEPTED,
+        "if that address has an account here, a code is on its way",
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct SetupSend {
+    key: String,
+    email: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// The setup checks every `/api/setup/*` makes: users, this server's
+/// `Origin`, and a live setup key (which also means no owner yet).
+fn setup_open(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+    key: &str,
+) -> Result<Arc<crate::users::Users>, Box<Response>> {
+    let Some(users) = state.users.clone() else {
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "this server has no users").into_response(),
+        ));
+    };
+    if !from_origin(state, headers) {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "this request's Origin is not this server's",
+            )
+                .into_response(),
+        ));
+    }
+    if !users.setup_key_opens(key).unwrap_or(false) {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "this setup link does not open setup: it lasts an hour, and ends once the server \
+                 has an owner. On the server, `luu config setup-url` makes another",
+            )
+                .into_response(),
+        ));
+    }
+    Ok(users)
+}
+
+/// `POST /api/setup/send`: the first owner's code, sent under the mail
+/// settings as typed — **the test of them**. Nothing is saved: they wait
+/// here until the code comes back. A failed send says why, so the settings
+/// can be fixed.
+async fn post_setup_send(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<SetupSend>,
+) -> Response {
+    let users = match setup_open(&state, &headers, &asked.key) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    let mail = match asked.url.trim() {
+        // None typed: the settings the server has, already proved.
+        "" => match saved_mail().await {
+            Ok(mail) => mail,
+            Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
+        },
+        url => crate::mail::Mail {
+            url: url.to_string(),
+            from: asked.from.trim().to_string(),
+            user: asked.user.filter(|user| !user.trim().is_empty()),
+            password: asked.password.filter(|password| !password.is_empty()),
+        },
+    };
+    if let Err(error) = mail.check() {
+        return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response();
+    }
+    let email = match crate::users::email_of(&asked.email) {
+        Ok(email) => email,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let code = match users.code_to_claim(&email) {
+        Ok(Some(code)) => code,
+        Ok(None) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "a code went to that address less than a minute ago: wait, then ask again",
+            )
+                .into_response();
+        }
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    if let Err(error) = mail.send_code(&email, &code, state.origin.as_deref()).await {
+        let _ = users.forget_code(&email);
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("the code could not be sent, and nothing was saved: {error:#}"),
+        )
+            .into_response();
+    }
+    state
+        .pending_mail
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(email, mail);
+    (StatusCode::ACCEPTED, "a code is on its way").into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct SetupClaim {
+    key: String,
+    email: String,
+    code: String,
+}
+
+/// `POST /api/setup/claim`: the code back. The owner is made and logged in,
+/// and the mail settings it was sent under are saved.
+async fn post_setup_claim(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<SetupClaim>,
+) -> Response {
+    let users = match setup_open(&state, &headers, &asked.key) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    let Ok(email) = crate::users::email_of(&asked.email) else {
+        return (StatusCode::UNAUTHORIZED, "that code is not valid").into_response();
+    };
+    let Ok(Some((owner, token))) = users.claim_owner(&email, &asked.code, state.session_hours)
+    else {
+        return (StatusCode::UNAUTHORIZED, "that code is not valid").into_response();
+    };
+    let pending = state
+        .pending_mail
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&email);
+    if let Some(mail) = pending
+        && let Err(error) = save_mail(&mail).await
+    {
+        tracing::warn!(target: "luu::auth", error = %error, "the owner was made, and the mail settings could not be saved");
+    }
+    tracing::info!(target: "luu::auth", user = owner.id.as_str(), "the first owner was made");
+    (
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, login_cookie(&state, Some(&token)))],
+    )
+        .into_response()
+}
+
+/// Writes proved mail settings: the password beside `config.toml`, and
+/// `[auth.smtp]` in it.
+async fn save_mail(mail: &crate::mail::Mail) -> Result<(), String> {
+    let path = config_path()
+        .await
+        .ok_or("this machine has no state directory to write config.toml in")?;
+    let dir = path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or("config.toml has no directory")?;
+    let config = load_config()
+        .await
+        .map(|(config, _)| config)
+        .map_err(|error| error.to_string())?;
+    let table = mail.save(&dir).map_err(|error| format!("{error:#}"))?;
+    let auth = crate::provider::AuthTable {
+        smtp: Some(table),
+        ..config.auth()
+    };
+    config
+        .with_auth(auth)
+        .write(&path)
+        .map_err(|error| error.to_string())
 }
 
 /// Says, at startup, every path outside `serve`'s root that a user's

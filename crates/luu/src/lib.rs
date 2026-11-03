@@ -42,6 +42,7 @@ pub mod highlight;
 pub mod hosts;
 pub mod icons;
 pub mod log;
+pub mod mail;
 pub mod models;
 pub mod policies;
 pub mod provider;
@@ -173,31 +174,20 @@ enum Command {
         if_missing: bool,
     },
 
-    /// Put this luu online: `[server]` with `exposure = "public"`, the
-    /// origin a browser types and the address to bind, then the first owner
-    /// and a code for them.
+    /// Put this luu online, and give it an owner proved by email.
     ///
-    /// The step an online install, a container and a chart share — run by
-    /// `setup.sh` for the first, `docker exec -it luu luu setup` and `kubectl
-    /// exec -it deploy/luu -- luu setup` for the others. On a terminal it asks
-    /// what no flag said. `luu serve` reads `[server]` when it starts, so
-    /// restart it after. See `RECORD/2026-11-03.local-or-online.WIP.md`.
-    Setup {
-        /// What a browser types to reach it: `https://luu.example.com`.
-        #[arg(long, value_name = "URL")]
-        origin: Option<String>,
-
-        /// The first owner's email.
-        #[arg(long, value_name = "EMAIL")]
-        owner: Option<String>,
-
-        /// Where `luu serve` listens. Default: `127.0.0.1:7878` on a machine,
-        /// with a proxy in front; `0.0.0.0:7878` inside a container.
-        #[arg(long, value_name = "ADDR")]
-        bind: Option<std::net::SocketAddr>,
+    /// With no step, both, asked on a terminal: the server (`[server]`, with
+    /// `exposure = "public"`, the origin and the bind), then mail and the
+    /// first owner together — the owner's code goes out under the mail
+    /// settings as typed, and they are saved only when it comes back. `luu
+    /// serve` reads `[server]` when it starts, so restart it after that step.
+    /// See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+    Config {
+        #[command(subcommand)]
+        step: Option<ConfigStep>,
 
         /// The user database. Defaults to `auth.db` in the state directory.
-        #[arg(long, value_name = "PATH", env = "LUU_AUTH_DB")]
+        #[arg(long, global = true, value_name = "PATH", env = "LUU_AUTH_DB")]
         auth_db: Option<std::path::PathBuf>,
     },
 
@@ -823,6 +813,67 @@ fn fill_of(non_greedy: bool) -> agent_core::repo_map::Fill {
 }
 
 #[derive(Subcommand)]
+enum ConfigStep {
+    /// `[server]`: `exposure = "public"`, the origin, the bind. What
+    /// `setup.sh` runs.
+    Server {
+        /// What a browser types to reach it: `https://luu.example.com`.
+        #[arg(long, value_name = "URL")]
+        origin: Option<String>,
+        /// Where `luu serve` listens. Default: `127.0.0.1:7878` on a machine,
+        /// with a proxy in front; `0.0.0.0:7878` inside a container.
+        #[arg(long, value_name = "ADDR")]
+        bind: Option<std::net::SocketAddr>,
+    },
+    /// Mail and the first owner: a code to their email under the mail
+    /// settings, typed back here. Nothing is saved until it is.
+    Owner {
+        /// The owner's email.
+        #[arg(long, value_name = "EMAIL")]
+        email: Option<String>,
+        #[command(flatten)]
+        smtp: SmtpArgs,
+    },
+    /// Other mail settings, proved by a code to an owner, typed back here.
+    Mail {
+        /// Where the code goes: an owner's email. Default: the only owner.
+        #[arg(long, value_name = "EMAIL")]
+        to: Option<String>,
+        #[command(flatten)]
+        smtp: SmtpArgs,
+    },
+    /// A one-time link to do the owner step in the page: an hour, once.
+    SetupUrl,
+}
+
+/// Mail settings, as flags. What no flag says is asked on a terminal.
+#[derive(clap::Args, Default)]
+struct SmtpArgs {
+    /// `smtps://smtp.example.com:465`, or `smtp://smtp.example.com:587?tls=required`.
+    #[arg(long, value_name = "URL")]
+    smtp_url: Option<String>,
+    /// What the email says it is from: `luu <luu@example.com>`.
+    #[arg(long, value_name = "ADDRESS")]
+    smtp_from: Option<String>,
+    /// The mail account's user.
+    #[arg(long, value_name = "USER")]
+    smtp_user: Option<String>,
+    /// A file holding its password, for a script; on a terminal it is asked
+    /// without echo.
+    #[arg(long, value_name = "PATH")]
+    smtp_password_file: Option<std::path::PathBuf>,
+}
+
+impl SmtpArgs {
+    fn given(&self) -> bool {
+        self.smtp_url.is_some()
+            || self.smtp_from.is_some()
+            || self.smtp_user.is_some()
+            || self.smtp_password_file.is_some()
+    }
+}
+
+#[derive(Subcommand)]
 enum UserAction {
     /// Add someone. There is no sign-up: this, or an admin, is how a person
     /// becomes a user.
@@ -1029,13 +1080,47 @@ fn answer(
     }
 }
 
-/// `luu setup`: `[server]`, the first owner, and their code.
-fn run_setup(
-    origin: Option<String>,
-    owner: Option<String>,
-    bind: Option<std::net::SocketAddr>,
-    auth_db: Option<&std::path::Path>,
-) -> Result<()> {
+/// A secret typed on a terminal, not echoed. Without a terminal, a line of
+/// stdin.
+fn secret_line(prompt: &str) -> Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let terminal = std::io::stdin().is_terminal();
+    eprint!("{prompt}: ");
+    std::io::stderr().flush().ok();
+    #[cfg(unix)]
+    let restore = terminal.then(|| {
+        // SAFETY: tcgetattr and tcsetattr on stdin with a termios this owns.
+        unsafe {
+            let mut term: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(0, &mut term) != 0 {
+                return None;
+            }
+            let before = term;
+            term.c_lflag &= !libc::ECHO;
+            libc::tcsetattr(0, libc::TCSANOW, &term);
+            Some(before)
+        }
+    });
+    let mut line = String::new();
+    let read = std::io::stdin().lock().read_line(&mut line);
+    #[cfg(unix)]
+    if let Some(Some(before)) = restore {
+        // SAFETY: as above, putting back what was there.
+        unsafe {
+            libc::tcsetattr(0, libc::TCSANOW, &before);
+        }
+        eprintln!();
+    }
+    read?;
+    Ok(line.trim_end_matches(['\n', '\r']).to_string())
+}
+
+/// The state directory, `config.toml` in it, and the file as it stands.
+fn config_here() -> Result<(
+    std::path::PathBuf,
+    std::path::PathBuf,
+    crate::provider::Config,
+)> {
     let dir = crate::config::dir()
         .context("no state directory (neither LUU_HOME nor HOME is set): set LUU_HOME")?;
     let path = dir.join(crate::provider::FILE);
@@ -1047,8 +1132,59 @@ fn run_setup(
         )?,
         false => crate::provider::Config::default(),
     };
-    let server = config.server();
+    Ok((dir, path, config))
+}
 
+/// `luu config`, or one of its steps.
+async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>) -> Result<()> {
+    let users_at = |dir: &std::path::Path| match auth_db {
+        Some(path) => path.to_path_buf(),
+        None => dir.join("auth.db"),
+    };
+    match step {
+        Some(ConfigStep::Server { origin, bind }) => config_server(origin.clone(), *bind),
+        Some(ConfigStep::Owner { email, smtp }) => {
+            let (dir, _, _) = config_here()?;
+            config_owner(email.clone(), smtp, &users_at(&dir)).await
+        }
+        Some(ConfigStep::Mail { to, smtp }) => {
+            let (dir, _, _) = config_here()?;
+            config_mail(to.clone(), smtp, &users_at(&dir)).await
+        }
+        Some(ConfigStep::SetupUrl) => {
+            let (dir, _, config) = config_here()?;
+            let origin = config.server().origin.context(
+                "[server] names no origin yet, and a link needs one: `luu config server --origin URL`",
+            )?;
+            let users = crate::users::Users::open(&users_at(&dir))?;
+            let key = users.issue_setup_key()?;
+            eprintln!(
+                "a link to make this server's owner in the page: {} minutes, once",
+                crate::users::SETUP_MINUTES
+            );
+            println!("{}/?setup={key}", origin.trim_end_matches('/'));
+            Ok(())
+        }
+        None => {
+            config_server(None, None)?;
+            let (dir, _, _) = config_here()?;
+            let users = crate::users::Users::open(&users_at(&dir))?;
+            if users.has_owner()? {
+                eprintln!(
+                    "\nThis server has an owner. To change how it sends mail: luu config mail"
+                );
+                return Ok(());
+            }
+            eprintln!("\nMail and you, its owner: a code goes to your email under these settings.");
+            config_owner(None, &SmtpArgs::default(), &users_at(&dir)).await
+        }
+    }
+}
+
+/// `luu config server`: `[server]`, the rest of `config.toml` carried.
+fn config_server(origin: Option<String>, bind: Option<std::net::SocketAddr>) -> Result<()> {
+    let (_, path, config) = config_here()?;
+    let server = config.server();
     let origin = answer(
         origin,
         "What a browser types to reach luu (https://luu.example.com)",
@@ -1058,8 +1194,6 @@ fn run_setup(
     if !crate::provider::is_origin(&origin) {
         anyhow::bail!("{origin} is not a scheme and a host, as `https://luu.example.com`");
     }
-    let owner = answer(owner, "Your email, the first owner", None, "--owner")?;
-    let owner = crate::users::email_of(&owner)?;
     let bind = bind.or(server.bind).unwrap_or_else(|| {
         match in_a_container() {
             true => "0.0.0.0:7878",
@@ -1068,47 +1202,178 @@ fn run_setup(
         .parse()
         .expect("a literal address")
     });
-
     // `public` refuses a token, so the file stops naming one; the token file
     // itself is left where it is.
-    let next = config.with_server(crate::provider::Server {
-        exposure: Some(crate::provider::Exposure::Public),
-        bind: Some(bind),
-        token_file: None,
-        origin: Some(origin.clone()),
-    });
-    next.write(&path)?;
-
-    let users_path = match auth_db {
-        Some(path) => path.to_path_buf(),
-        None => dir.join("auth.db"),
-    };
-    let users = crate::users::Users::open(&users_path)?;
-    let user = match users.find(&owner)? {
-        None => users.add(&owner, crate::users::Role::Owner)?,
-        Some(user) => {
-            if user.suspended {
-                users.set_suspended(&owner, false)?;
-            }
-            match user.role {
-                crate::users::Role::Owner => user,
-                _ => users.set_role(&owner, crate::users::Role::Owner)?,
-            }
-        }
-    };
-    let code = users.issue_code(&user.email)?;
-
+    config
+        .with_server(crate::provider::Server {
+            exposure: Some(crate::provider::Exposure::Public),
+            bind: Some(bind),
+            token_file: None,
+            origin: Some(origin.clone()),
+        })
+        .write(&path)?;
     println!(
         "[server] in {}: exposure = \"public\", origin {origin}, bind {bind}",
         path.display()
     );
-    println!("owner: {}", user.email);
+    println!("luu serve reads [server] when it starts: restart it.");
+    Ok(())
+}
+
+/// Mail settings from the flags, else the terminal: not saved, not tried.
+fn mail_asked(smtp: &SmtpArgs) -> Result<crate::mail::Mail> {
+    let url = answer(
+        smtp.smtp_url.clone(),
+        "Mail server (smtps://smtp.example.com:465, or smtp://host:587?tls=required)",
+        None,
+        "--smtp-url",
+    )?;
+    let from = answer(
+        smtp.smtp_from.clone(),
+        "Send from (luu <luu@example.com>)",
+        None,
+        "--smtp-from",
+    )?;
+    let user = match &smtp.smtp_user {
+        Some(user) => Some(user.clone()),
+        None if smtp.given() => None,
+        None => Some(answer(
+            None,
+            "Its user (empty for none)",
+            Some(String::new()),
+            "--smtp-user",
+        )?)
+        .filter(|user| !user.is_empty()),
+    };
+    let password = match (&smtp.smtp_password_file, &user) {
+        (Some(path), _) => Some(crate::secret::read(
+            path,
+            "the SMTP password file",
+            "hands the mail account to anyone who can read it",
+        )?),
+        (None, Some(_)) => Some(secret_line("Its password")?),
+        (None, None) => None,
+    };
+    let mail = crate::mail::Mail {
+        url,
+        from,
+        user,
+        password,
+    };
+    mail.check()?;
+    Ok(mail)
+}
+
+/// Sends `code` to `to` under `mail`, then reads it back from the person. A
+/// send that fails forgets the code, so a second try need not wait a minute.
+async fn proved_by_code(
+    users: &crate::users::Users,
+    mail: &crate::mail::Mail,
+    to: &str,
+    code: &str,
+    origin: Option<&str>,
+) -> Result<String> {
+    if let Err(error) = mail.send_code(to, code, origin).await {
+        users.forget_code(to)?;
+        return Err(error.context("the code could not be sent, and nothing was saved"));
+    }
+    eprintln!("A code went to {to}.");
+    // A line of stdin, terminal or not: a script pipes the code it read.
+    use std::io::{BufRead, Write};
+    eprint!("The code: ");
+    std::io::stderr().flush().ok();
+    let mut typed = String::new();
+    std::io::stdin().lock().read_line(&mut typed)?;
+    Ok(typed.trim().to_string())
+}
+
+/// `luu config owner`: mail and the first owner, both proved by one code.
+async fn config_owner(
+    email: Option<String>,
+    smtp: &SmtpArgs,
+    users_path: &std::path::Path,
+) -> Result<()> {
+    let (dir, path, config) = config_here()?;
+    let users = crate::users::Users::open(users_path)?;
+    if users.has_owner()? {
+        anyhow::bail!(
+            "this server has an owner: they add people (`luu user add`), and mail changes with \
+             `luu config mail`"
+        );
+    }
+    // Mail already proved is used as it is, unless other settings were named.
+    let saved = config.auth().smtp;
+    let (mail, new) = match (&saved, smtp.given()) {
+        (Some(table), false) => (crate::mail::Mail::from_table(table)?, false),
+        _ => (mail_asked(smtp)?, true),
+    };
+    let email = answer(email, "Your email, the owner", None, "--email")?;
+    let email = crate::users::email_of(&email)?;
+    let code = users.code_to_claim(&email)?.context(
+        "a code went to that address less than a minute ago, or the server has an owner: wait \
+         a minute and run this again",
+    )?;
+    let origin = config.server().origin;
+    let typed = proved_by_code(&users, &mail, &email, &code, origin.as_deref()).await?;
+    let hours = config.auth().session_hours();
+    let Some((owner, token)) = users.claim_owner(&email, &typed, hours)? else {
+        anyhow::bail!(
+            "that code is not valid, and nothing was saved: run this again for a new one"
+        );
+    };
+    // A login nobody will use: this is a terminal, not a browser.
+    users.logout(&token)?;
+    if new {
+        let table = mail.save(&dir)?;
+        let auth = crate::provider::AuthTable {
+            smtp: Some(table),
+            ..config.auth()
+        };
+        config.with_auth(auth).write(&path)?;
+        println!("[auth.smtp] in {}: {}", path.display(), mail.url);
+    }
     println!(
-        "code:  {code}   (valid for {} minutes, once)",
-        crate::users::CODE_MINUTES
+        "{} owns this server, and logs in with a code by email.",
+        owner.email
     );
-    println!();
-    println!("luu serve reads [server] when it starts: restart it, then open {origin} and log in.");
+    Ok(())
+}
+
+/// `luu config mail`: other mail settings, proved by a code to an owner.
+async fn config_mail(
+    to: Option<String>,
+    smtp: &SmtpArgs,
+    users_path: &std::path::Path,
+) -> Result<()> {
+    let (dir, path, config) = config_here()?;
+    let users = crate::users::Users::open(users_path)?;
+    let owners = users.owners()?;
+    let to = match (to, owners.as_slice()) {
+        (Some(to), _) => to,
+        (None, [only]) => only.email.clone(),
+        (None, []) => anyhow::bail!("this server has no owner yet: `luu config owner` does both"),
+        (None, _) => answer(None, "Which owner gets the code", None, "--to")?,
+    };
+    let to = crate::users::email_of(&to)?;
+    if !owners.iter().any(|owner| owner.email == to) {
+        anyhow::bail!("{to} is not an owner here: new mail is proved to an owner");
+    }
+    let mail = mail_asked(smtp)?;
+    let code = users.issue_code(&to)?;
+    let origin = config.server().origin;
+    let typed = proved_by_code(&users, &mail, &to, &code, origin.as_deref()).await?;
+    if !users.check_code(&to, &typed)? {
+        anyhow::bail!(
+            "that code is not valid, and nothing was saved: run this again for a new one"
+        );
+    }
+    let table = mail.save(&dir)?;
+    let auth = crate::provider::AuthTable {
+        smtp: Some(table),
+        ..config.auth()
+    };
+    config.with_auth(auth).write(&path)?;
+    println!("[auth.smtp] in {}: {}", path.display(), mail.url);
     Ok(())
 }
 
@@ -2663,14 +2928,8 @@ pub async fn run() -> Result<()> {
         return run_user(action, auth_db.as_deref(), store.as_deref());
     }
 
-    if let Command::Setup {
-        origin,
-        owner,
-        bind,
-        auth_db,
-    } = &command
-    {
-        return run_setup(origin.clone(), owner.clone(), *bind, auth_db.as_deref());
+    if let Command::Config { step, auth_db } = &command {
+        return run_config(step.as_ref(), auth_db.as_deref()).await;
     }
 
     if let Command::Tools { sandbox } = &command {
