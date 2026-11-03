@@ -11,6 +11,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub struct Sent {
     pub to: Vec<String>,
     pub data: String,
+    /// The password the connection logged in with, by `AUTH PLAIN`.
+    pub password: Option<String>,
 }
 
 impl Sent {
@@ -63,11 +65,19 @@ pub async fn start() -> Inbox {
                 let mut lines = BufReader::new(read).lines();
                 let _ = write.write_all(b"220 luu-test ESMTP\r\n").await;
                 let mut to = Vec::new();
+                let mut password = None;
                 while let Ok(Some(line)) = lines.next_line().await {
                     let upper = line.to_ascii_uppercase();
                     let reply: &[u8] = if upper.starts_with("EHLO") {
                         b"250-luu-test\r\n250 AUTH PLAIN LOGIN\r\n"
                     } else if upper.starts_with("AUTH") {
+                        // `AUTH PLAIN <base64 of \0user\0password>`, as lettre
+                        // sends it: one line.
+                        password = line
+                            .split_whitespace()
+                            .nth(2)
+                            .and_then(base64)
+                            .and_then(|plain| plain.rsplit('\0').next().map(str::to_string));
                         b"235 2.7.0 Authentication successful\r\n"
                     } else if upper.starts_with("RCPT TO:") {
                         to.push(line[8..].trim().to_string());
@@ -85,6 +95,7 @@ pub async fn start() -> Inbox {
                         kept.lock().unwrap().push(Sent {
                             to: std::mem::take(&mut to),
                             data,
+                            password: password.clone(),
                         });
                         b"250 OK queued\r\n"
                     } else if upper.starts_with("QUIT") {
@@ -104,4 +115,23 @@ pub async fn start() -> Inbox {
         url: format!("smtp://127.0.0.1:{port}"),
         sent,
     }
+}
+
+/// Standard base64 to text, enough for an `AUTH PLAIN` line.
+fn base64(text: &str) -> Option<String> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bits = 0u32;
+    let mut count = 0;
+    let mut out = Vec::new();
+    for byte in text.trim_end_matches('=').bytes() {
+        let value = ALPHABET.iter().position(|&a| a == byte)? as u32;
+        bits = (bits << 6) | value;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }

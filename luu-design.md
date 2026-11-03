@@ -1701,6 +1701,15 @@ page reloads.
    - A failed send saves nothing and forgets the code.
    - `smtp://` with no `tls=` is refused except to this machine.
    - A password inside the URL is refused.
+   - **A password mounted for luu stays where it is**:
+     `--smtp-password-ref file:/run/secrets/luu/smtp-password` saves
+     `password-ref`, read on every send, so a rotated Kubernetes or Docker
+     secret is the next email's. Its mode is not checked (a Secret is
+     mounted `0644`), and a stale `smtp.password` is removed. The chart
+     mounts one with `mail.passwordSecret`. **Never `env:`**: a session's
+     commands inherit luu's environment. **Any password file under a root
+     every command can read (`/etc`, `/usr`, `/opt`, …) is refused**: the
+     commands run as luu's user, so no mode keeps them out.
 3. **`luu config mail`** proves other settings the same way, to an owner.
 4. **`luu config setup-url`** prints a one-time link (`?setup=<key>`): 32
    random bytes, stored as their sha256, valid for an hour, and spent by the

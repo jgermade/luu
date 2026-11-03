@@ -578,9 +578,16 @@ pub struct SmtpTable {
     pub from: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
-    /// The password, in a file whose mode is checked, as a provider's key is.
+    /// The password, in a file luu wrote and whose mode is checked, as a
+    /// provider's key is: `smtp.password` in the state directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_file: Option<PathBuf>,
+    /// Or where the password is mounted for luu, a file it reads on every
+    /// send and never writes: `file:/run/secrets/luu/smtp-password`, a
+    /// Kubernetes or Docker secret. Never `env:`: a session's commands inherit
+    /// luu's environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_ref: Option<String>,
 }
 
 impl AuthTable {

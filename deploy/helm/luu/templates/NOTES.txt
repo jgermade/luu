@@ -6,6 +6,16 @@ it. (`luu config setup-url` gives a link to do the second half in the page.)
 
   kubectl exec -it deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- luu config
   kubectl rollout restart deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }}
+{{- if .Values.mail.passwordSecret }}
+
+The SMTP password is the Secret {{ .Values.mail.passwordSecret }}'s, mounted at
+/run/secrets/luu/smtp-password. `luu config` asks for it unless told where it
+is: after `luu config server`, prove the mail and the owner with
+
+  kubectl exec -it deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- \
+    luu config owner --smtp-url smtps://<host>:465 --smtp-from '<from>' \
+    --smtp-user <user> --smtp-password-ref file:/run/secrets/luu/smtp-password
+{{- end }}
 
 Or keep it to whoever holds the token:
 

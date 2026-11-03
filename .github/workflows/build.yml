@@ -79,6 +79,16 @@ jobs:
           host=$(helm template luu deploy/helm/luu)
           ! grep -qE 'kind: (Role|ServiceAccount|NetworkPolicy)' <<<"$host"
           grep -qF 'automountServiceAccountToken: false' <<<"$host"
+      # The SMTP password from a Secret: mounted under /run, which no
+      # session's command is granted, and not at all when none is named.
+      - run: |
+          set -euo pipefail
+          mail=$(helm template luu deploy/helm/luu --set mail.passwordSecret=luu-smtp)
+          for want in 'mountPath: /run/secrets/luu' 'secretName: luu-smtp' \
+              'key: password' 'path: smtp-password'; do
+            grep -qF -- "$want" <<<"$mail" || { echo "::error::missing: $want"; exit 1; }
+          done
+          ! grep -qF 'smtp-password' <<<"$(helm template luu deploy/helm/luu)"
 
   # The four targets `pages/setup.sh` installs. Linux is built on the oldest
   # Ubuntu runner rather than the newest, because a binary needs the glibc it

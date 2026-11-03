@@ -118,6 +118,12 @@ spec:
               subPath: luu.toml
               readOnly: true
             {{- end }}
+            {{- if .Values.mail.passwordSecret }}
+            # Under /run, which no session's command is granted: not /etc.
+            - name: smtp-password
+              mountPath: /run/secrets/luu
+              readOnly: true
+            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -135,6 +141,15 @@ spec:
         - name: policy
           configMap:
             name: {{ include "luu.fullname" . }}-policy
+        {{- end }}
+        {{- if .Values.mail.passwordSecret }}
+        - name: smtp-password
+          secret:
+            secretName: {{ .Values.mail.passwordSecret }}
+            defaultMode: 0400
+            items:
+              - key: {{ .Values.mail.passwordKey }}
+                path: smtp-password
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

@@ -19,6 +19,17 @@
 #   docker compose -f deploy/compose.yaml exec luu luu config
 #   docker compose -f deploy/compose.yaml restart luu
 #
+# The SMTP password typed there goes to /state/smtp.password, 0600. To keep
+# it in a file of yours instead, uncomment `secrets` below (both places): the
+# file is mounted as it is, so the image's user, uid 10001, has to be able to
+# read it. Then tell `luu config` where it is; it is read there on every send:
+#
+#   docker compose -f deploy/compose.yaml exec luu luu config owner \
+#     --smtp-url smtps://<host>:465 --smtp-from '<from>' --smtp-user <user> \
+#     --smtp-password-ref file:/run/secrets/smtp-password
+#
+# Never an environment variable: a session's commands inherit luu's.
+#
 # See RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
 
 services:
@@ -34,6 +45,7 @@ services:
     volumes:
       - state:/state
       - work:/work
+    # secrets: [smtp-password]
     # The container is the sandbox: nothing it does not need.
     read_only: true
     tmpfs: [/tmp]
@@ -53,3 +65,7 @@ volumes:
   state: {}
   work: {}
   caddy: {}
+
+# secrets:
+#   smtp-password:
+#     file: ./smtp-password

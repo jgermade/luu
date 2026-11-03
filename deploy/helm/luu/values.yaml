@@ -69,6 +69,17 @@ worker:
   runtimeClassName: ""
   resources: {}
 
+# The SMTP password, from a Secret you manage, mounted at
+# /run/secrets/luu/smtp-password. luu reads it there on every send, so a rotated
+# Secret is the next email's; `luu config` is told where it is (NOTES.txt says
+# how) and copies nothing. Empty, the password typed in `luu config` or the
+# setup page goes to /state/smtp.password, 0600. Never an environment variable:
+# a session's commands inherit luu's. See
+# RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
+mail:
+  passwordSecret: ""
+  passwordKey: password
+
 # The policy `luu serve` runs under, mounted at /etc/luu/luu.toml. Empty is the
 # image's own (deploy/luu.toml): the session's folder under /work read and
 # write, cargo, rustc, git, rg, ls, no network.

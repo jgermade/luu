@@ -864,10 +864,15 @@ struct SmtpArgs {
     /// The mail account's user.
     #[arg(long, value_name = "USER")]
     smtp_user: Option<String>,
-    /// A file holding its password, for a script; on a terminal it is asked
-    /// without echo.
-    #[arg(long, value_name = "PATH")]
+    /// A file holding its password, for a script: read once and copied to
+    /// `smtp.password`. On a terminal it is asked without echo.
+    #[arg(long, value_name = "PATH", conflicts_with = "smtp_password_ref")]
     smtp_password_file: Option<std::path::PathBuf>,
+    /// Where its password is mounted for luu, read on every send and never
+    /// copied: `file:/run/secrets/luu/smtp-password`, a Kubernetes or Docker
+    /// secret.
+    #[arg(long, value_name = "file:PATH")]
+    smtp_password_ref: Option<String>,
 }
 
 impl SmtpArgs {
@@ -876,6 +881,7 @@ impl SmtpArgs {
             || self.smtp_from.is_some()
             || self.smtp_user.is_some()
             || self.smtp_password_file.is_some()
+            || self.smtp_password_ref.is_some()
     }
 }
 
@@ -1293,21 +1299,28 @@ fn mail_asked(smtp: &SmtpArgs) -> Result<crate::mail::Mail> {
         )?)
         .filter(|user| !user.is_empty()),
     };
-    let password = match (&smtp.smtp_password_file, &user) {
-        (Some(path), _) => Some(crate::secret::read(
-            path,
-            "the SMTP password file",
-            "hands the mail account to anyone who can read it",
-        )?),
-        (None, Some(_)) => Some(secret_line("Its password")?),
-        (None, None) => None,
-    };
     let mail = crate::mail::Mail {
         url,
         from,
-        user,
-        password,
+        ..Default::default()
     };
+    let mail = match (&smtp.smtp_password_ref, &smtp.smtp_password_file, &user) {
+        (Some(reference), _, _) => mail.with_mounted(reference)?,
+        (None, Some(path), _) => crate::mail::Mail {
+            password: Some(crate::secret::read(
+                path,
+                "the SMTP password file",
+                "hands the mail account to anyone who can read it",
+            )?),
+            ..mail
+        },
+        (None, None, Some(_)) => crate::mail::Mail {
+            password: Some(secret_line("Its password")?),
+            ..mail
+        },
+        (None, None, None) => mail,
+    };
+    let mail = crate::mail::Mail { user, ..mail };
     mail.check()?;
     Ok(mail)
 }

@@ -3165,6 +3165,7 @@ async fn post_setup_send(
             from: asked.from.trim().to_string(),
             user: asked.user.filter(|user| !user.trim().is_empty()),
             password: asked.password.filter(|password| !password.is_empty()),
+            mounted: None,
         },
     };
     if let Err(error) = mail.check() {

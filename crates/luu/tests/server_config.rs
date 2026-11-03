@@ -368,6 +368,7 @@ async fn luu_config_owner_proves_the_mail_and_the_mailbox_with_one_code() {
     let mail = inbox.wait_for("ana@example.com").await;
     let code = mail.code().expect("a code in the subject");
     assert!(mail.data.contains("http://luu.test"), "{}", mail.data);
+    assert_eq!(mail.password.as_deref(), Some("s3cret-smtp"));
     {
         use std::io::Write;
         let mut stdin = child.stdin.take().unwrap();
@@ -400,6 +401,59 @@ async fn luu_config_owner_proves_the_mail_and_the_mailbox_with_one_code() {
             .any(|line| line.starts_with("ana@example.com") && line.contains("owner")),
         "{listed}"
     );
+
+    // Other mail, with the password a cluster mounts: read where it is, with
+    // the mode a Kubernetes Secret has, and never copied.
+    let mounted = home.join("run-secrets").join("smtp-password");
+    std::fs::create_dir_all(mounted.parent().unwrap()).unwrap();
+    std::fs::write(&mounted, "m0unted\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&mounted, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let reference = format!("file:{}", mounted.display());
+    let env = luu(&home)
+        .args(["config", "mail", "--smtp-url", &inbox.url])
+        .args(["--smtp-from", "luu@example.com", "--smtp-user", "luu"])
+        .args(["--smtp-password-ref", "env:SMTP_PASSWORD"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!env.status.success());
+    assert!(String::from_utf8_lossy(&env.stderr).contains("inherits"));
+    let mut child = luu(&home)
+        .args(["config", "mail", "--smtp-url", &inbox.url])
+        .args(["--smtp-from", "luu@example.com", "--smtp-user", "luu"])
+        .args(["--smtp-password-ref", &reference])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let before = inbox.sent().len();
+    let mail = loop {
+        let sent = inbox.sent();
+        if sent.len() > before {
+            break sent.last().unwrap().clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert_eq!(mail.password.as_deref(), Some("m0unted"));
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "{}", mail.code().unwrap()).unwrap();
+    }
+    let done = child.wait_with_output().unwrap();
+    assert!(done.status.success(), "{done:?}");
+    let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(
+        written.contains(&format!("password-ref = \"{reference}\"")),
+        "{written}"
+    );
+    assert!(!written.contains("password-file"), "{written}");
+    assert!(!written.contains("m0unted"), "{written}");
+    assert!(!home.join("smtp.password").exists());
 
     // And now there is an owner: no second, and no setup link.
     let again = luu(&home)
