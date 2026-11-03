@@ -2826,7 +2826,7 @@ async fn require_login(
     };
     WHO.scope(who, async move {
         if let Err(refused) = ensure_current(&state).await {
-            return refused;
+            return *refused;
         }
         next.run(request).await
     })
@@ -2837,7 +2837,7 @@ async fn require_login(
 /// sending where the server's own session sends — what a fresh `serve` gives
 /// the one person on a laptop, given to each user. Nothing where there are no
 /// users.
-async fn ensure_current(state: &AppRouterState) -> Result<(), Response> {
+async fn ensure_current(state: &AppRouterState) -> Result<(), Box<Response>> {
     let owner = owner_key();
     if owner.is_none() || state.app.current_of(&owner).is_some() {
         return Ok(());
@@ -9958,7 +9958,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     };
     match new_session(&state, asked).await {
         Ok(summary) => (StatusCode::CREATED, Json(summary)).into_response(),
-        Err(refused) => refused,
+        Err(refused) => *refused,
     }
 }
 
@@ -9968,14 +9968,12 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
 async fn new_session(
     state: &AppRouterState,
     asked: NewSession,
-) -> Result<agent_core::api::SessionSummary, Response> {
+) -> Result<agent_core::api::SessionSummary, Box<Response>> {
     let app = &state.app;
     // Beside the others, not in place of the current one: a turn running in
     // it goes on. Refused only when there is no room for one more. See
     // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
-    if let Err(refused) = room_for_one(app).await {
-        return Err(*refused);
-    }
+    room_for_one(app).await?;
     // The session it is made beside, whose destination it starts from: the
     // asker's current one, or — for a user's first — the server's own.
     let previous = app.current_of(&owner_key());
@@ -10003,7 +10001,9 @@ async fn new_session(
                 false => current,
                 true => match destination_for(app, &current, &asked, true).await {
                     Ok(next) => Arc::new(next),
-                    Err((status, message)) => return Err((status, message).into_response()),
+                    Err((status, message)) => {
+                        return Err(Box::new((status, message).into_response()));
+                    }
                 },
             }
         }
@@ -10011,7 +10011,7 @@ async fn new_session(
             let current = template.destination().await;
             match destination_for(app, &current, &asked, state.providers_editable).await {
                 Ok(next) => Arc::new(next),
-                Err((status, message)) => return Err((status, message).into_response()),
+                Err((status, message)) => return Err(Box::new((status, message).into_response())),
             }
         }
     };
@@ -10039,7 +10039,7 @@ async fn new_session(
     // The folder it works in, checked before anything is built.
     let folder = match folder_under_root(app, asked.folder.as_deref()) {
         Ok(folder) => folder,
-        Err((status, message)) => return Err((status, message).into_response()),
+        Err((status, message)) => return Err(Box::new((status, message).into_response())),
     };
     let (posture_name, agency) = match posture_for(
         app,
@@ -10052,7 +10052,7 @@ async fn new_session(
     .await
     {
         Ok(resolved) => resolved,
-        Err((status, message)) => return Err((status, message).into_response()),
+        Err((status, message)) => return Err(Box::new((status, message).into_response())),
     };
     let live = Arc::new(LiveSession::blank(
         sending.clone(),
