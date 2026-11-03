@@ -172,13 +172,14 @@ no nested containers. New rows continue from 62.
 **Section H — one luu to another.** Added 2026-11-03, inside this revision,
 from [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md):
 a luu managed from another and providers used across them, over SSH by key,
-the way intergate connects. Waiting on its four questions. New rows continue
+the way intergate connects. Its four questions were answered the same day:
+the online page as a way into the luu at home comes first. New rows continue
 from 65.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 65 | **Keys and the link**: `russh` built without OpenSSL on the four targets, host and identity keys, a user's keys (`auth.db`, Settings → Account → Keys, `luu user key`), `luu link` with a pinned host key and intergate's reconnection, `[server] ssh` | the four questions | *One connection, the way intergate makes one* |
-| 66 | **A local luu managed from an online one**: `/h/<name>/` for the linked user only, the peer identity and `may` on the local side, and a test that a peer never reaches Settings or the host shell | row 65 | *1. A local luu managed from an online luu* |
+| 65 | **Keys and the link**: `russh` built without OpenSSL on the four targets, host and identity keys, a user's keys (`auth.db`, Settings → Account → Keys, `luu user key`), `luu link` with a pinned host key and intergate's reconnection, `[server] ssh` | nothing | *One connection, the way intergate makes one* |
+| 66 | **A local luu managed from an online one**: `/h/<name>/` for the linked user only, the peer identity and `may` (`sessions`, `terminal`, `settings`) on the local side, Remote access in the local page, Account → Keys in the online one, and a test that a peer never reaches Remote access, nor Settings or the host shell unless allowed | row 65 | *1. A local luu managed from an online luu* |
 | 67 | **Providers across luus**: `/api/infer/<provider>/…`, `offer`, `via`, the backends' HTTP through the channel in-process, `remote` on a `via` default | row 65 | *2. Providers across luus* |
 | 68 | **`[host.*]` and its token replaced by `[peer.*]`**, and the CLI by key | rows 66–67 | *What `[host.*]` becomes* |
 
