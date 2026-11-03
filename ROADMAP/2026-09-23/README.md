@@ -144,6 +144,20 @@ continue from 46.
 | 54 | **The `--allow-*` flags add a second rule for a path**, and the first answers: a policy reading `.` with `--allow-write .` still refuses the write. The lists merge by path (`policies::widen`); the flags do not | nothing | *step 2a, built* |
 | 55 | ~~**A step runs every call its reply carries** — the loop executes the whole list a native reply streams, keyed `(step, index)`; today only the first runs and the rest read *not run*~~. *Built 2026-10-25*: `parse_calls`, the loop runs the list, `index` is an optional field on four protocol messages and the format stayed where it was. What is left is the count — the grounded scripts under `--tool-calls native`, tool cards per step — which decides whether the planning prompt says anything about it | the count | [`more-than-one-call-in-a-reply`](../../RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md) |
 
+**Section F — a public luu: users.** Added 2026-11-03, inside this revision,
+from [`users-and-a-code-by-email`](../../RECORD/2026-11-03.users-and-a-code-by-email.WIP.md),
+which takes over steps 2–4 of [`a-public-luu`](../../RECORD/2026-10-07.a-public-luu.WIP.md).
+Its own order, one row per step. New rows continue from 56.
+
+| # | Item | Blocked on | Argued in |
+| --- | --- | --- | --- |
+| 56 | **Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder | nothing | *In what order*, 1; *What a user owns* |
+| 57 | **The code by email**: `[auth.smtp]`, `signup`, rate limits | row 56 | *A code by email* |
+| 58 | **Roles enforced**: Settings writes by role, Settings → Users, Account | row 56 | *Three roles* |
+| 59 | **Passkeys**, and first whether WebAuthn can be had without OpenSSL | row 56 | *Passkeys*; *What it costs* |
+| 60 | **A user's API tokens** for `[host.*]` and the CLI | row 56 | *A login, the socket, and API tokens* |
+| 61 | **Per-user configuration on a remote server** | a decision | *Still open* |
+
 ```mermaid
 gantt
     title The order as of 2026-09-23
