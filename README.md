@@ -86,6 +86,11 @@ helm install luu oci://ghcr.io/jgermade/charts/luu \
 kubectl exec deploy/luu -- cat /state/token
 ```
 
+Sessions run in luu's own pod by default. With `--set runtime=kubernetes`
+each session runs in a pod of its own that mounts only its folder; hold the
+namespace to Pod Security `restricted` (see
+[`a-pod-per-session`](RECORD/2026-11-03.a-pod-per-session.WIP.md)).
+
 One identity, the token. For several, say `exposure = "public"` in
 `/state/config.toml` (and drop `token-file`): people are added with
 `luu user add <email>` and log in with the code `luu user code <email>`

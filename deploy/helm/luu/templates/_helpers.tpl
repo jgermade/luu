@@ -27,3 +27,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s://%s" (ternary "https" "http" .Values.ingress.tls.enabled) .Values.ingress.host -}}
 {{- end -}}
 {{- end -}}
+
+
+{{/* The claim that holds /work. */}}
+{{- define "luu.workClaim" -}}
+{{- .Values.persistence.work.existingClaim | default (printf "%s-work" (include "luu.fullname" .)) -}}
+{{- end -}}
+
+{{/* Whether sessions run in pods of their own. */}}
+{{- define "luu.pods" -}}
+{{- if eq .Values.runtime "kubernetes" }}true{{ end -}}
+{{- end -}}
+
+{{/*
+What a worker pod is labelled with, as `a=b,c=d`: never the Deployment's
+selector, or its ReplicaSet would adopt the pod, and the Service would send
+it traffic.
+*/}}
+{{- define "luu.workerLabels" -}}
+app.kubernetes.io/name={{ .Chart.Name }}-worker,app.kubernetes.io/instance={{ .Release.Name }}
+{{- end -}}

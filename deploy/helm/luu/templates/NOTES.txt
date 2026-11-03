@@ -15,3 +15,11 @@ Then, with no ingress:
 
 and open http://localhost:7878/?token=<the token>
 {{- end }}
+{{- if include "luu.pods" . }}
+
+Every session runs in a pod of its own (runtime: kubernetes), made through the
+ServiceAccount {{ include "luu.fullname" . }}, which may create pods here. Hold
+this namespace to Pod Security `restricted` — the worker pods already meet it:
+
+  kubectl label ns {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=restricted
+{{- end }}

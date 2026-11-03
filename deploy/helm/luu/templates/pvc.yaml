@@ -13,7 +13,7 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
 spec:
-  accessModes: ["ReadWriteOnce"]
+  accessModes: [{{ $spec.accessMode | default "ReadWriteOnce" | quote }}]
   {{- with $spec.storageClass }}
   storageClassName: {{ . }}
   {{- end }}

@@ -915,6 +915,31 @@ access = "execute"
   `--network none` at all — under which the container stays attached, the
   per-command seccomp filter is doing all the denying, and the verdict reports
   it.
+- **`kubernetes` is a pod per session**, through `kubectl` — still an argv:
+  `kubectl run --rm -i --restart=Never --overrides=<the pod>` is `docker run
+  --rm -i` in another spelling, and the worker speaks over the same pipe. The
+  pod is luu's to write whole: the work claim mounted at the session's base by
+  `subPath`, so **only that folder is in the pod**; an `emptyDir` home and
+  `/tmp` of its own, which makes the cargo home per session; luu's uid, a
+  read-only root, every capability dropped, `RuntimeDefault` seccomp and no
+  service account token (Pod Security `restricted`); luu's pod as its
+  controlling owner; and, the claim being `ReadWriteOnce` by default, a required
+  `podAffinity` to luu's node. A session that may not reach the network makes a
+  pod labelled `luu.dev/network: none`, which the chart's NetworkPolicy seals —
+  held only by a CNI that enforces NetworkPolicy, which `Runtime::cannot` says.
+  **The container waits for one line on stdin before it becomes the worker**,
+  and luu writes it as soon as `kubectl` is spawned: `kubectl run -i` attaches
+  only once the pod runs, and a hello written before the attach is not
+  replayed. Configured by `LUU_KUBE_*`, which the chart writes from the
+  Downward API (`runtime: kubernetes`, with a ServiceAccount whose Role makes,
+  attaches to, execs into and deletes pods). It builds and installs nothing:
+  `install` has no root to run as there, and it is not offered in Settings →
+  Runtimes, because a cluster is the deployment's choice rather than a
+  machine's install. **The image is not given nested containers** —
+  Docker-in-Docker is `--privileged`, the host's socket is root on the host —
+  so inside `ghcr.io/jgermade/luu` sessions run on `host`, one trust domain held
+  by Landlock. See
+  [`RECORD/2026-11-03.a-pod-per-session.WIP.md`](RECORD/2026-11-03.a-pod-per-session.WIP.md).
 - **`runtime = "host"` is the default** and is every run this repository has
   measured. `direct` runs the worker as a plain child with no container: it
   isolates nothing, says so in every line that reports it, and exists so the seam

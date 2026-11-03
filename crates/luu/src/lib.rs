@@ -1148,8 +1148,9 @@ pub(crate) struct SandboxArgs {
     no_tools: bool,
 
     /// Where tool calls run: `host` (this process), `direct` (a `luu worker`
-    /// child, no container), or a container runtime — `docker`, `podman`,
-    /// `nerdctl`, `container`, `colima`. Overrides `[worker] runtime`.
+    /// child, no container), a container runtime — `docker`, `podman`,
+    /// `nerdctl`, `container`, `colima` — or `kubernetes`, a pod per session
+    /// in the cluster the chart runs luu in. Overrides `[worker] runtime`.
     ///
     /// `direct` isolates nothing and says so in every line that reports it. It
     /// exists so the seam can be exercised where no runtime is installed.
@@ -1463,7 +1464,17 @@ impl SandboxArgs {
                     // The seam's clock: how long a call with no clock of its
                     // own may take before the worker is treated as stuck. See
                     // `RECORD/2026-09-05.a-clock-at-the-seam.completed.md`.
-                    .with_timeout_ms(worker_config.timeout_ms);
+                    .with_timeout_ms(worker_config.timeout_ms)
+                    // A pod's claim, owner and labels, from the `LUU_KUBE_*`
+                    // the chart writes. See
+                    // `RECORD/2026-11-03.a-pod-per-session.WIP.md`.
+                    .with_kube(match worker_config.runtime {
+                        Runtime::Kubernetes => Some(
+                            agent_core::worker::kubernetes::Kube::from_env()
+                                .map_err(anyhow::Error::msg)?,
+                        ),
+                        _ => None,
+                    });
                 // What the runtime cannot express, said once, where a person
                 // reads it — rather than silently dropped from the argv. Before
                 // the start rather than after it, so a run that fails for an

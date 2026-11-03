@@ -158,6 +158,17 @@ Its own order, one row per step. New rows continue from 56.
 | 60 | **A user's API tokens** for `[host.*]` and the CLI | row 56 | *A login, the socket, and API tokens* |
 | 61 | ~~**Per-user configuration on a remote server**~~. *Decided 2026-11-03*: not for now; a remote server uses its own configuration | — | *the three questions, answered* §3 |
 
+**Section G — where a session runs, deployed.** Added 2026-11-03, inside this
+revision, from [`a-pod-per-session`](../../RECORD/2026-11-03.a-pod-per-session.WIP.md):
+the `kubernetes` runtime is built, and the image stays one trust domain with
+no nested containers. New rows continue from 62.
+
+| # | Item | Blocked on | Argued in |
+| --- | --- | --- | --- |
+| 62 | **The `kubernetes` runtime on a cluster**: the attach and its start line, the image pull under `--pod-running-timeout`, the claim by `subPath` on luu's node, and a NetworkPolicy that seals a worker | a cluster, and a release that publishes the images | *Still open* |
+| 63 | **A sweep of `Completed` worker pods** whose `kubectl` died, at luu's start | row 62 | *Still open* |
+| 64 | **Inside the image, the two gaps between users**: a cargo home per user, and Landlock's signal scoping (ABI 6) | nothing | *Docker: no container inside a container*; [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) *Still open* |
+
 ```mermaid
 gantt
     title The order as of 2026-09-23

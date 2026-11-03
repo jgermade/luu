@@ -17,11 +17,21 @@ spec:
     metadata:
       labels:
         {{- include "luu.selector" . | nindent 8 }}
+        # What a worker pod's affinity finds this one by.
+        app.kubernetes.io/component: server
       {{- if .Values.policy }}
       annotations:
         checksum/policy: {{ .Values.policy | sha256sum }}
       {{- end }}
     spec:
+      {{- if include "luu.pods" . }}
+      # kubectl's, for a pod per session: see rbac.yaml.
+      serviceAccountName: {{ include "luu.fullname" . }}
+      automountServiceAccountToken: true
+      {{- else }}
+      # Nothing here talks to the cluster.
+      automountServiceAccountToken: false
+      {{- end }}
       # The image's `luu` user, and the volumes made its own.
       securityContext:
         runAsUser: 10001
@@ -34,11 +44,55 @@ spec:
         - name: luu
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- with include "luu.origin" . }}
+          {{- if include "luu.pods" . }}
+          # Every session's worker a pod: `luu serve --worker kubernetes`.
+          args:
+            - --worker
+            - kubernetes
+            - --worker-image
+            - "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag | default .Chart.AppVersion }}"
+          {{- end }}
           env:
+            {{- with include "luu.origin" . }}
             - name: LUU_ORIGIN
               value: {{ . | quote }}
-          {{- end }}
+            {{- end }}
+            {{- if include "luu.pods" . }}
+            # What a worker pod needs that luu's own pod knows. See
+            # RECORD/2026-11-03.a-pod-per-session.WIP.md.
+            - name: LUU_KUBE_CLAIM
+              value: {{ include "luu.workClaim" . | quote }}
+            - name: LUU_KUBE_CLAIM_ROOT
+              value: /work
+            - name: LUU_KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: LUU_KUBE_OWNER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: LUU_KUBE_OWNER_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: LUU_KUBE_LABELS
+              value: {{ include "luu.workerLabels" . | quote }}
+            {{- if .Values.worker.sameNode }}
+            - name: LUU_KUBE_SAME_NODE
+              value: "app.kubernetes.io/name={{ .Chart.Name }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=server"
+            {{- end }}
+            {{- with .Values.worker.runtimeClassName }}
+            - name: LUU_KUBE_RUNTIME_CLASS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.worker.resources }}
+            - name: LUU_KUBE_RESOURCES
+              value: {{ toJson . | quote }}
+            {{- end }}
+            - name: LUU_KUBE_PULL_POLICY
+              value: {{ .Values.worker.image.pullPolicy | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 7878
@@ -74,7 +128,7 @@ spec:
             claimName: {{ .Values.persistence.state.existingClaim | default (printf "%s-state" (include "luu.fullname" .)) }}
         - name: work
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.work.existingClaim | default (printf "%s-work" (include "luu.fullname" .)) }}
+            claimName: {{ include "luu.workClaim" . }}
         - name: tmp
           emptyDir: {}
         {{- if .Values.policy }}

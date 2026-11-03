@@ -1,6 +1,6 @@
-# luu serve, as `deploy/Containerfile.release` builds it. One identity — the
-# token the entrypoint writes on the first start — and one replica: `serve`
-# runs one live session at a time. See RECORD/2026-10-30.three-ways-in.WIP.md.
+# luu serve, as `deploy/Containerfile.release` builds it. One replica: its
+# sessions live in it, and a session does not move between machines. See
+# RECORD/2026-10-30.three-ways-in.WIP.md.
 
 image:
   repository: ghcr.io/jgermade/luu
@@ -33,11 +33,41 @@ persistence:
     size: 1Gi
     storageClass: ""
     existingClaim: ""
-  # /work: the tree the agent works in.
+  # /work: the tree the agent works in. ReadWriteMany (NFS, EFS, CephFS) lets
+  # worker pods run on any node; see worker.sameNode.
   work:
+    accessMode: ReadWriteOnce
     size: 10Gi
     storageClass: ""
     existingClaim: ""
+
+# Where a session's commands run:
+#
+#   host        in luu's own container, held by Landlock. Every session shares
+#               the pod: one person, or a team that trusts each other.
+#   kubernetes  a pod per session, mounting only that session's folder, made
+#               with kubectl through a ServiceAccount this chart creates. It can
+#               create pods in this namespace, so put the namespace under Pod
+#               Security `restricted` — the workers already meet it:
+#                 kubectl label ns <ns> pod-security.kubernetes.io/enforce=restricted
+#
+# See RECORD/2026-11-03.a-pod-per-session.WIP.md.
+runtime: host
+
+# The worker pods, with `runtime: kubernetes`.
+worker:
+  image:
+    repository: ghcr.io/jgermade/luu-worker
+    # Empty is the chart's appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # The work claim is ReadWriteOnce by default, which pods on one node only can
+  # mount: a worker runs on luu's node. With a ReadWriteMany claim
+  # (persistence.work.accessMode), false lets it run anywhere.
+  sameNode: true
+  # gVisor or Kata, where the cluster has them.
+  runtimeClassName: ""
+  resources: {}
 
 # The policy `luu serve` runs under, mounted at /etc/luu/luu.toml. Empty is the
 # image's own (deploy/luu.toml): the session's folder under /work read and

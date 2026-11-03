@@ -56,6 +56,29 @@ jobs:
             --set-string policy='[sandbox]' \
             --set persistence.work.existingClaim=work |
             grep -q 'value: "https://luu.example.com"'
+      # A pod per session: the ServiceAccount and its Role, the pod settings,
+      # the NetworkPolicy that seals a worker, and `--worker kubernetes` —
+      # and none of it under the default `runtime: host`. See
+      # RECORD/2026-11-03.a-pod-per-session.WIP.md.
+      - run: helm lint deploy/helm/luu --set runtime=kubernetes
+      - run: |
+          set -euo pipefail
+          pods=$(helm template luu deploy/helm/luu --set runtime=kubernetes \
+            --set worker.runtimeClassName=gvisor \
+            --set worker.resources.limits.memory=4Gi)
+          for want in 'kind: Role' 'kind: RoleBinding' 'kind: ServiceAccount' \
+              'name: LUU_KUBE_CLAIM' 'name: LUU_KUBE_SAME_NODE' 'name: LUU_KUBE_OWNER_UID' \
+              'luu.dev/network: none' 'app.kubernetes.io/name: luu-worker' \
+              'serviceAccountName: luu' '- kubernetes' 'value: "gvisor"'; do
+            grep -qF -- "$want" <<<"$pods" || { echo "::error::missing: $want"; exit 1; }
+          done
+          rwx=$(helm template luu deploy/helm/luu --set runtime=kubernetes \
+            --set worker.sameNode=false --set persistence.work.accessMode=ReadWriteMany)
+          ! grep -qF 'LUU_KUBE_SAME_NODE' <<<"$rwx"
+          grep -qF '"ReadWriteMany"' <<<"$rwx"
+          host=$(helm template luu deploy/helm/luu)
+          ! grep -qE 'kind: (Role|ServiceAccount|NetworkPolicy)' <<<"$host"
+          grep -qF 'automountServiceAccountToken: false' <<<"$host"
 
   # The four targets `pages/setup.sh` installs. Linux is built on the oldest
   # Ubuntu runner rather than the newest, because a binary needs the glibc it

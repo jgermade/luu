@@ -19,6 +19,20 @@ WORKDIR /src
 COPY . .
 RUN cargo build --release --bin luu
 
+# kubectl, for `runtime: kubernetes` in the chart: a session's worker as a
+# pod. Pinned, and checked against the sha256 dl.k8s.io publishes beside it.
+# See RECORD/2026-11-03.a-pod-per-session.WIP.md.
+FROM rust:1-bookworm AS kubectl
+ARG KUBECTL_VERSION=v1.34.1
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    base="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}"; \
+    cd /tmp; \
+    curl -fsSLO "$base/kubectl"; \
+    curl -fsSLO "$base/kubectl.sha256"; \
+    echo "$(cat kubectl.sha256)  kubectl" | sha256sum -c -; \
+    install -m 0755 kubectl /kubectl
+
 # The rust image again, and not a slim one, on purpose: the agent's tools are
 # what the policy's `commands` names — cargo, git, rg — and a container that
 # lacks them is a policy that says `absent`. A deployment for another language
@@ -31,6 +45,7 @@ RUN apt-get update \
  && mkdir -p /work /etc/luu \
  && chown luu:luu /state /work
 COPY --from=build /src/target/release/luu /usr/local/bin/luu
+COPY --from=kubectl /kubectl /usr/local/bin/kubectl
 COPY deploy/luu.toml /etc/luu/luu.toml
 COPY deploy/entrypoint.sh /usr/local/bin/luu-entrypoint
 
