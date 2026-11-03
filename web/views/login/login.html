@@ -4,25 +4,38 @@
   // server knows who this is — every route behind the login would be a 401.
   // See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
   const { logIn } = await import("@web/lib/account.js")
+  const OtpInput = await import("@web/components/otp-input.html")
 
   let email = ""
   let code = ""
   let busy = false
   let said = ""
+  // The code boxes' state: shaken red on a refusal, ringed green on a login.
+  let status = "idle"
 
-  $: ready = email.includes("@") && code.replace(/\s/g, "").length === 6 && !busy
+  $: ready = email.includes("@") && code.length === 6 && !busy
 
   const submit = async () => {
     if (!ready) return
     busy = true
     said = ""
+    status = "idle"
     const problem = await logIn(email.trim(), code)
     busy = false
     if (problem) {
       said = problem
+      status = "error"
       return
     }
-    location.reload()
+    status = "success"
+    // Long enough for the ring to draw round every box.
+    setTimeout(() => location.reload(), 800)
+  }
+
+  // An edit after a refusal: the boxes are waiting again.
+  const edited = () => {
+    if (status === "error") status = "idle"
+    said = ""
   }
 </script>
 
@@ -37,11 +50,11 @@
            :value="email" @input="email = $event.target.value"
            @keydown.enter="submit()">
 
-    <label for="login-code">Code</label>
-    <input id="login-code" class="code" inputmode="numeric" autocomplete="one-time-code"
-           maxlength="7" placeholder="123456"
-           :value="code" @input="code = $event.target.value"
-           @keydown.enter="submit()">
+    <span class="label" id="login-code">Code</span>
+    <div class="code">
+      <OtpInput :model="code" :status="status" :disabled="busy" label="Code"
+                @change="edited()" @complete="submit()" />
+    </div>
 
     <button type="button" class="go" :disabled="!ready" @click="submit()">
       {{ busy ? "Logging in…" : "Log in" }}
@@ -69,7 +82,7 @@
   }
   .card {
     width: 100%;
-    max-width: 360px;
+    max-width: 380px;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -82,7 +95,7 @@
   .logo { margin-bottom: 4px; }
   h1 { font-size: var(--luu-text-xl); margin: 0; }
   .lead { margin: 0 0 12px; color: var(--luu-fg-muted); font-size: var(--luu-text-md); }
-  label { font-size: var(--luu-text-sm); color: var(--luu-fg-muted); margin-top: 6px; }
+  label, .label { font-size: var(--luu-text-sm); color: var(--luu-fg-muted); margin-top: 6px; }
   input {
     font: inherit;
     font-size: var(--luu-text-lg);
@@ -93,7 +106,8 @@
     color: var(--luu-fg);
   }
   input:focus { outline: 2px solid var(--luu-focus); outline-offset: 1px; }
-  .code { font-family: var(--luu-font-mono); letter-spacing: .2em; }
+  .code { display: flex; justify-content: center; margin-top: 2px; --otp-box: 44px; }
+  @media (max-width: 400px) { .code { --otp-box: 38px; } }
   .go {
     margin-top: 14px;
     padding: 9px 12px;

@@ -1,0 +1,272 @@
+<script :setup="{ model = '', length = 6, status = 'idle', disabled = false, autofocus = false, label = 'Code' }">
+  // A one-time code, one box per digit. The idea is rare-ui's `otp-input`; the
+  // code is not (see `RECORD/2026-09-28.components-of-our-own.completed.md`):
+  //
+  // - a digit **rolls up** into its box, and one caret **slides** to the box
+  //   that is waiting, blinking there;
+  // - `status = 'error'` **shakes** the row and rings it red; `'success'`
+  //   **draws** a green ring round each box in turn;
+  // - typing moves on, Backspace clears and steps back, the arrows move, and
+  //   a paste or the phone's autofill (`autocomplete="one-time-code"`) fills
+  //   from the box it lands in. A click past the first empty box lands on
+  //   it, so the code stays in one piece.
+  //
+  // **Self-contained**, like everything in `components/`: it imports nothing,
+  // and draws with the page's tokens where they exist and its own where not.
+  //
+  //   <OtpInput :model="code" :status="status" @complete="submit()" @change="status = 'idle'" />
+  //
+  // `--otp-box` on an ancestor sets the box size (48px by default).
+  //
+  // The code goes back up through `:model`; `change` on every edit, and
+  // `complete` once every box has a digit. A status set again re-runs its
+  // animation only after it was something else, so a second wrong code wants
+  // `idle` in between — which `change` is the place for.
+
+  const blank = () => Array.from({ length }, () => "")
+  // What each box shows. Not the model alone: a Backspace in the middle leaves
+  // a gap the model, a string, cannot hold.
+  let chars = blank()
+  // How many times each box was set, so a digit replaced by another rolls in
+  // again rather than swapping in place.
+  let stamps = blank().map(() => 0)
+  let focused = null
+  let caretX = 0
+  let caretMoving = false
+
+  const code = () => chars.join("")
+
+  // The model, when the caller changes it — cleared after a refusal, say. Only
+  // a value this component did not send: its own edit reaches the caller and
+  // comes back a moment later, and a reactive pass in that moment still sees
+  // the old one — following that would wipe the digit just typed.
+  let seen = model || ""
+  const follow = () => {
+    const now = model || ""
+    if (now === seen) return
+    seen = now
+    if (now !== code()) chars = Array.from({ length }, (_, i) => now[i] || "")
+  }
+  $: (model, follow())
+
+  const commit = next => {
+    chars = next
+    const joined = code()
+    seen = joined
+    $updateModel(joined)
+    $emit("change", joined)
+    if (chars.every(Boolean)) $emit("complete", joined)
+  }
+
+  const box = i => $self(`[data-i="${i}"] input`)
+  const focusAt = i => {
+    const input = box(Math.min(Math.max(i, 0), length - 1))
+    if (input) { input.focus(); input.select() }
+  }
+
+  const setAt = (i, digit) => {
+    const next = [...chars]
+    next[i] = digit
+    stamps = stamps.map((n, at) => (at === i ? n + 1 : n))
+    commit(next)
+  }
+
+  // A paste or an autofill: every digit from `i` on, as far as there is room.
+  const fill = (i, digits) => {
+    const room = Math.min(digits.length, length - i)
+    const next = [...chars]
+    for (let k = 0; k < room; k++) next[i + k] = digits[k]
+    stamps = stamps.map((n, at) => (at >= i && at < i + room ? n + 1 : n))
+    commit(next)
+    focusAt(i + room)
+  }
+
+  const typed = (i, event) => {
+    const digits = event.target.value.replace(/\D/g, "")
+    // Typing into a box that has a digit puts the new one after it.
+    const single = digits.length === 1 ? digits
+      : digits.length === 2 && digits[0] === chars[i] ? digits[1] : null
+    event.target.value = chars[i]
+    if (!digits) return
+    if (single === null) return fill(i, digits)
+    setAt(i, single)
+    focusAt(i + 1)
+  }
+
+  const key = (i, event) => {
+    const act = {
+      ArrowLeft: () => focusAt(i - 1),
+      ArrowRight: () => focusAt(i + 1),
+      Home: () => focusAt(0),
+      End: () => focusAt(length - 1),
+      Backspace: () => {
+        if (chars[i]) return setAt(i, "")
+        if (i > 0) { setAt(i - 1, ""); focusAt(i - 1) }
+      },
+      Delete: () => chars[i] && setAt(i, ""),
+    }[event.key]
+    if (!act) return
+    event.preventDefault()
+    act()
+  }
+
+  const pasted = (i, event) => {
+    event.preventDefault()
+    const digits = (event.clipboardData?.getData("text") || "").replace(/\D/g, "")
+    if (digits) fill(i, digits)
+  }
+
+  // A click past the first empty box lands on it.
+  const pressed = (i, event) => {
+    const gap = chars.findIndex(c => !c)
+    if (gap !== -1 && gap < i) {
+      event.preventDefault()
+      focusAt(gap)
+    }
+  }
+
+  const entered = i => {
+    const cell = $self(`[data-i="${i}"]`)
+    if (cell) caretX = cell.offsetLeft + cell.offsetWidth / 2
+    // Appears where it belongs the first time, and slides only after.
+    if (focused === null) caretMoving = false
+    focused = i
+    box(i)?.select()
+    requestAnimationFrame(() => { caretMoving = true })
+  }
+
+  const left = event => {
+    if (!$self(".row")?.contains(event.relatedTarget)) focused = null
+  }
+
+  await $mounted()
+  if (autofocus) focusAt(0)
+
+  $: caretOn = focused !== null && !chars[focused] && !disabled
+  $: caretStyle = `transform:translateX(${caretX}px)`
+</script>
+
+<!-- The state as an attribute, not a class: `.error` is the page's own, and
+     a component must not draw what a page means by a word. -->
+<div class="otp" :data-status="status" role="group" :aria-label="label">
+  <div class="row" :class.shake="status === 'error'">
+    <div :each="char, i in chars" :key="i" class="cell" :data-i="i" :class.filled="!!char">
+      <input
+        :value="char"
+        type="text"
+        inputmode="numeric"
+        :autocomplete="i === 0 ? 'one-time-code' : 'off'"
+        :disabled="disabled"
+        :aria-label="`Digit ${i + 1} of ${length}`"
+        @input="typed(i, $event)"
+        @keydown="key(i, $event)"
+        @paste="pasted(i, $event)"
+        @pointerdown="pressed(i, $event)"
+        @focus="entered(i)"
+        @blur="left($event)">
+      <span class="face" aria-hidden="true">
+        <span :each="stamp in char ? [char + ':' + stamps[i]] : []" :key="stamp" class="char">{{ char }}</span>
+      </span>
+      <svg class="ring" viewBox="0 0 48 48" aria-hidden="true">
+        <rect x="1" y="1" width="46" height="46" rx="11" pathLength="1"
+              :style="`transition-delay:${0.15 + i * 0.05}s`" />
+      </svg>
+    </div>
+    <span class="caret" :class.on="caretOn" :class.moving="caretMoving" :style="caretStyle" aria-hidden="true"></span>
+  </div>
+</div>
+
+<style scoped>
+  .otp { display: inline-flex; }
+  .row { position: relative; display: flex; gap: 8px; }
+  /* `--otp-box` from the caller resizes the boxes: a phone wants them smaller. */
+  .cell { position: relative; width: var(--otp-box, 48px); height: var(--otp-box, 48px); }
+  input {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 12px;
+    background: var(--luu-sunken, #f0f1f6);
+    color: transparent;
+    caret-color: transparent;
+    text-align: center;
+    font: inherit;
+    font-size: 20px;
+    outline: none;
+    transition: box-shadow .2s;
+  }
+  input::selection { background: transparent; }
+  input:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--luu-fg-subtle, #868593) 50%, transparent); }
+  input:disabled { cursor: not-allowed; opacity: .5; }
+  .face {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .char {
+    font-family: var(--luu-font-mono, ui-monospace, monospace);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--luu-fg, #1a1d23);
+    animation: roll-in .32s cubic-bezier(.34, 1.4, .64, 1);
+  }
+  @keyframes roll-in {
+    from { transform: translateY(110%); }
+    to { transform: translateY(0); }
+  }
+  /* One caret for the row, at the box that waits. */
+  .caret {
+    position: absolute;
+    top: 50%;
+    left: -1px;
+    width: 2px;
+    height: 24px;
+    margin-top: -12px;
+    border-radius: 1px;
+    background: var(--luu-fg, #1a1d23);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .caret.on { animation: blink 1.1s steps(1, end) infinite; }
+  .caret.moving { transition: transform .26s cubic-bezier(.32, .72, 0, 1); }
+  @keyframes blink {
+    0% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  /* Wrong: the row shakes once, and every box is ringed red. */
+  .shake { animation: shake .32s ease-out; }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    50% { transform: translateX(4px); }
+    75% { transform: translateX(-2px); }
+  }
+  [data-status="error"] input { box-shadow: 0 0 0 2px color-mix(in srgb, var(--luu-bad, #ff3b30) 70%, transparent); }
+  /* Right: a green ring draws itself round each box, one after the other. */
+  .ring {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  .ring rect {
+    fill: none;
+    stroke: var(--luu-ok, #34c759);
+    stroke-width: 2;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    opacity: 0;
+    transition: stroke-dashoffset .45s ease-out, opacity .15s;
+  }
+  [data-status="success"] .ring rect { stroke-dashoffset: 0; opacity: 1; }
+  @media (prefers-reduced-motion: reduce) {
+    .char, .shake, .caret.on { animation: none; }
+    .caret.on { opacity: 1; }
+    .caret.moving, .ring rect { transition: none; }
+  }
+</style>
