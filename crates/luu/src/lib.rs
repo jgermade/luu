@@ -842,8 +842,14 @@ enum ConfigStep {
         #[command(flatten)]
         smtp: SmtpArgs,
     },
-    /// A one-time link to do the owner step in the page: an hour, once.
-    SetupUrl,
+    /// A one-time link to do the owner step in the page: an hour, once. On a
+    /// terminal, a QR code of it too, for a phone.
+    SetupUrl {
+        /// The QR code even where stdout is not a terminal: `docker exec`
+        /// without `-t`, or a script that shows what it ran.
+        #[arg(long)]
+        qr: bool,
+    },
 }
 
 /// Mail settings, as flags. What no flag says is asked on a terminal.
@@ -1080,6 +1086,40 @@ fn answer(
     }
 }
 
+/// `text` as a QR code, two modules a character with half blocks, in black
+/// on white whatever the terminal's own colours — a scanner wants dark on
+/// light, and a dark terminal would otherwise invert it. A quiet zone of two
+/// modules round it, which is what lets a camera find its edge.
+fn qr_lines(text: &str) -> Result<Vec<String>> {
+    let code = qrcode::QrCode::new(text.as_bytes()).context("the setup link as a QR code")?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let quiet = 2;
+    let size = width + 2 * quiet;
+    let dark = |x: usize, y: usize| {
+        x >= quiet
+            && y >= quiet
+            && x < quiet + width
+            && y < quiet + width
+            && colors[(y - quiet) * width + (x - quiet)] == qrcode::Color::Dark
+    };
+    let mut lines = Vec::new();
+    for y in (0..size).step_by(2) {
+        let mut line = String::from("\x1b[30;47m");
+        for x in 0..size {
+            line.push(match (dark(x, y), y + 1 < size && dark(x, y + 1)) {
+                (false, false) => ' ',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (true, true) => '█',
+            });
+        }
+        line.push_str("\x1b[0m");
+        lines.push(line);
+    }
+    Ok(lines)
+}
+
 /// A secret typed on a terminal, not echoed. Without a terminal, a line of
 /// stdin.
 fn secret_line(prompt: &str) -> Result<String> {
@@ -1151,7 +1191,7 @@ async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>
             let (dir, _, _) = config_here()?;
             config_mail(to.clone(), smtp, &users_at(&dir)).await
         }
-        Some(ConfigStep::SetupUrl) => {
+        Some(ConfigStep::SetupUrl { qr }) => {
             let (dir, _, config) = config_here()?;
             let origin = config.server().origin.context(
                 "[server] names no origin yet, and a link needs one: `luu config server --origin URL`",
@@ -1162,7 +1202,15 @@ async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>
                 "a link to make this server's owner in the page: {} minutes, once",
                 crate::users::SETUP_MINUTES
             );
-            println!("{}/?setup={key}", origin.trim_end_matches('/'));
+            let link = format!("{}/?setup={key}", origin.trim_end_matches('/'));
+            println!("{link}");
+            use std::io::IsTerminal;
+            if *qr || std::io::stdout().is_terminal() {
+                println!();
+                for line in qr_lines(&link)? {
+                    println!("{line}");
+                }
+            }
             Ok(())
         }
         None => {
@@ -4088,6 +4136,31 @@ pub async fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_setup_link_is_a_qr_code_of_half_blocks_in_black_on_white() {
+        let link = "https://luu.example.com/?setup=64ecac26b49ff5cf432f3d2aef78b546a824cbcb6746014642f2d8c4936eed0a";
+        let lines = super::qr_lines(link).expect("a QR code");
+        let width = qrcode::QrCode::new(link.as_bytes()).unwrap().width() + 4;
+        // Two modules a line, the quiet zone included.
+        assert_eq!(lines.len(), width.div_ceil(2));
+        for line in &lines {
+            // Its own colours whatever the terminal's, and nothing else drawn.
+            assert!(
+                line.starts_with("\x1b[30;47m") && line.ends_with("\x1b[0m"),
+                "{line:?}"
+            );
+            let body = &line["\x1b[30;47m".len()..line.len() - "\x1b[0m".len()];
+            assert_eq!(body.chars().count(), width);
+            assert!(
+                body.chars().all(|c| matches!(c, ' ' | '▀' | '▄' | '█')),
+                "{body:?}"
+            );
+        }
+        // The quiet zone: the first line is light all the way across.
+        assert!(lines[0].contains(&" ".repeat(width)));
+    }
+
     use std::path::{Path, PathBuf};
 
     use super::*;

@@ -35,6 +35,9 @@ libc = "0.2"
 # Mail for the code a user logs in with. rustls, never its default
 # native-tls, which would bring OpenSSL in. See
 # RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
+# The setup link as a QR code on the terminal, for a phone. No image
+# support: drawn in text.
+qrcode = { version = "0.14", default-features = false }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1-rustls-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 mime_guess = "2"

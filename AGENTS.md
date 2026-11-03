@@ -407,7 +407,7 @@ refused off loopback until roles reach them. See
 ```sh
 luu config                                  # [server], then mail and the owner, proved by one code
 luu config server --origin https://luu.example.com   # [server] alone: what setup.sh runs
-luu config setup-url                        # a one-time link to finish it in the page
+luu config setup-url [--qr]                 # a one-time link to finish it in the page, and its QR
 luu user add me@example.com --role owner   # owner | admin | user
 luu user code me@example.com               # six digits, ten minutes, once
 luu user list

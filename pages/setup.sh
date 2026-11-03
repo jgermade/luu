@@ -501,11 +501,12 @@ go_online() {
 	say "Put TLS in front of it, for instance with Caddy:"
 	say "  caddy reverse-proxy --from ${ORIGIN#*://} --to 127.0.0.1:7878"
 	say ""
-	link=$(as_luu env LUU_HOME="$SERVICE_HOME" "$DIR/luu" config setup-url </dev/null 2>/dev/null || true)
-	say "Then finish it — how it sends mail, and you as its owner, proved by one code:"
-	if [ -n "$link" ]; then
-		say "  $link    (an hour, once)"
-	fi
+	say "Then finish it — how it sends mail, and you as its owner, proved by one code —"
+	say "in the page this link opens (an hour, once; the QR code is the same link):"
+	say ""
+	as_luu env LUU_HOME="$SERVICE_HOME" "$DIR/luu" config setup-url --qr </dev/null 2>/dev/null ||
+		warn "no setup link: run \`sudo -u luu env LUU_HOME=$SERVICE_HOME $DIR/luu config setup-url\`"
+	say ""
 	say "or in a terminal here:"
 	say "  sudo -u luu env LUU_HOME=$SERVICE_HOME $DIR/luu config"
 	say ""

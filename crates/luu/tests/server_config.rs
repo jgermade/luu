@@ -296,6 +296,8 @@ async fn luu_config_server_puts_a_server_online_and_keeps_the_rest_of_the_file()
     assert!(link.status.success(), "{link:?}");
     let link = String::from_utf8(link.stdout).unwrap();
     assert!(link.starts_with("http://luu.test/?setup="), "{link}");
+    // Not a terminal and no --qr: the link alone, for a script to read.
+    assert_eq!(link.lines().count(), 1, "{link}");
 }
 
 #[path = "support/smtp.rs"]

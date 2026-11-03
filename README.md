@@ -46,8 +46,9 @@ systemd, and root through `sudo`. It does five things:
 - makes a system user `luu` whose home `/var/lib/luu` is the state directory;
 - writes `/etc/luu/luu.toml`;
 - writes your domain into its `[server]` (`luu config server`);
-- starts `luu.service`, and prints a one-time link to finish in the page: how
-  it sends mail, and you as its owner, proved by one code sent to you.
+- starts `luu.service`, and prints a one-time link to finish in the page, with
+  a QR code of it for your phone. The page sets how it sends mail, and makes
+  you its owner, proved by one code sent to you.
 
 `reinstall` restarts the service, and `uninstall --purge` removes all of it.
 Without a terminal, say it:

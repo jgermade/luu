@@ -1704,7 +1704,9 @@ page reloads.
 3. **`luu config mail`** proves other settings the same way, to an owner.
 4. **`luu config setup-url`** prints a one-time link (`?setup=<key>`): 32
    random bytes, stored as their sha256, valid for an hour, and spent by the
-   owner it makes. The link opens step 2 in the page. A page with no owner
+   owner it makes. On a terminal, or with `--qr`, it also draws the link as a
+   QR code for a phone, in black-on-white half blocks whatever the terminal's
+   colours. The link opens step 2 in the page. A page with no owner
    and no key says what to run; it does not offer the form, or whoever
    arrived first would own the server.
 
