@@ -155,7 +155,7 @@ Its own order, one row per step. New rows continue from 56.
 | 57 | ~~**The code by email**: `[auth.smtp]`, rate limits. No sign-up: a user exists because an admin or an owner added them~~. *Built 2026-11-03*, with the first owner proved by the code that tests the mail (`luu config`, or the page behind a one-time link). What is left is a real mail server: only a fake one has been sent to | a real mail server | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) |
 | 58 | **Roles enforced**: Settings writes by role, Settings → Users, Account | row 56 | *Three roles* |
 | 59 | **Passkeys**, and first whether WebAuthn can be had without OpenSSL | row 56 | *Passkeys*; *What it costs* |
-| 60 | **A user's API tokens** for `[host.*]` and the CLI | row 56 | *A login, the socket, and API tokens* |
+| 60 | ~~**A user's API tokens** for `[host.*]` and the CLI~~. *Superseded 2026-11-03* by a user's SSH keys: row 65 | — | *A login, the socket, and API tokens*; [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md) *Rejected* |
 | 61 | ~~**Per-user configuration on a remote server**~~. *Decided 2026-11-03*: not for now; a remote server uses its own configuration | — | *the three questions, answered* §3 |
 
 **Section G — where a session runs, deployed.** Added 2026-11-03, inside this
@@ -168,6 +168,19 @@ no nested containers. New rows continue from 62.
 | 62 | **The `kubernetes` runtime on a cluster**: the attach and its start line, the image pull under `--pod-running-timeout`, the claim by `subPath` on luu's node, and a NetworkPolicy that seals a worker | a cluster, and a release that publishes the images | *Still open* |
 | 63 | **A sweep of `Completed` worker pods** whose `kubectl` died, at luu's start | row 62 | *Still open* |
 | 64 | **Inside the image, the two gaps between users**: a cargo home per user, and Landlock's signal scoping (ABI 6) | nothing | *Docker: no container inside a container*; [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) *Still open* |
+
+**Section H — one luu to another.** Added 2026-11-03, inside this revision,
+from [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md):
+a luu managed from another and providers used across them, over SSH by key,
+the way intergate connects. Waiting on its four questions. New rows continue
+from 65.
+
+| # | Item | Blocked on | Argued in |
+| --- | --- | --- | --- |
+| 65 | **Keys and the link**: `russh` built without OpenSSL on the four targets, host and identity keys, a user's keys (`auth.db`, Settings → Account → Keys, `luu user key`), `luu link` with a pinned host key and intergate's reconnection, `[server] ssh` | the four questions | *One connection, the way intergate makes one* |
+| 66 | **A local luu managed from an online one**: `/h/<name>/` for the linked user only, the peer identity and `may` on the local side, and a test that a peer never reaches Settings or the host shell | row 65 | *1. A local luu managed from an online luu* |
+| 67 | **Providers across luus**: `/api/infer/<provider>/…`, `offer`, `via`, the backends' HTTP through the channel in-process, `remote` on a `via` default | row 65 | *2. Providers across luus* |
+| 68 | **`[host.*]` and its token replaced by `[peer.*]`**, and the CLI by key | rows 66–67 | *What `[host.*]` becomes* |
 
 ```mermaid
 gantt
