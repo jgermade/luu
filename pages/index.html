@@ -1490,8 +1490,10 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
           <p class="kicker">Install</p>
           <h2>One line, a container, or a chart.</h2>
           <!-- Three ways in, as tabs once the script has run; without it all
-               three are shown, one after the other. See
-               RECORD/2026-10-30.three-ways-in.WIP.md. -->
+               three are shown, one after the other. Each is local or online,
+               and online is `luu setup` in all three. See
+               RECORD/2026-10-30.three-ways-in.WIP.md and
+               RECORD/2026-11-03.local-or-online.WIP.md. -->
           <div class="ways" role="tablist" aria-label="How to install">
             <button type="button" role="tab" id="way-line" aria-controls="panel-line" aria-selected="true">One line</button>
             <button type="button" role="tab" id="way-docker" aria-controls="panel-docker" aria-selected="false">Docker</button>
@@ -1499,7 +1501,10 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
           </div>
 
           <div class="way" id="panel-line" role="tabpanel" aria-labelledby="way-line">
-            <p class="lead">One binary in <code>~/.local/bin</code>, checked against the release's sha256. No root.</p>
+            <p class="lead">One binary, checked against the release's sha256. Then it asks how luu runs:
+              <strong>local</strong>, for you, in <code>~/.local/bin</code> with no root — or
+              <strong>online</strong>, for people who log in: a systemd service on Linux, its first owner,
+              and the code they log in with.</p>
             <div class="getter" role="radiogroup" aria-label="Download with">
               <button type="button" role="radio" data-get="curl" aria-checked="true">curl</button>
               <button type="button" role="radio" data-get="wget" aria-checked="false" title="For a machine with no curl, such as a minimal Debian">wget</button>
@@ -1526,31 +1531,42 @@ footer .line { width: 100%; font: 0.75rem/1.5 var(--mono); }
   -v luu-state:/state -v luu-work:/work \
   -p 7878:7878 ghcr.io/jgermade/luu</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
             </div>
-            <p class="note">The token, written on the first start:</p>
+            <p class="note">Online — your domain, the first owner and their code — then a restart:</p>
             <div class="oneline">
-              <pre>docker exec luu cat /state/token</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+              <pre>docker exec -it luu luu setup</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
             </div>
-            <p class="note">Then open <code>http://localhost:7878/?token=…</code>.
+            <div class="oneline">
+              <pre>docker restart luu</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <p class="note">Or keep it to whoever holds the token: <code>docker exec luu cat /state/token</code>,
+              and open <code>http://localhost:7878/?token=…</code>.
               <a href="https://github.com/jgermade/luu/blob/main/deploy/compose.yaml"><code>deploy/compose.yaml</code></a>
-              puts Caddy in front for TLS on a name of your own.</p>
+              puts Caddy in front for TLS on a name of your own. Every session runs in this one container.</p>
           </div>
 
           <div class="way" id="panel-k8s" role="tabpanel" aria-labelledby="way-k8s">
-            <p class="lead">One pod, its volumes kept on uninstall, behind an Ingress of any class.
+            <p class="lead">luu in a pod, its volumes kept on uninstall, behind an Ingress of any class —
+              and, with <code>runtime=kubernetes</code>, every session in a pod of its own that mounts only its folder.
               The chart is <code>oci://ghcr.io/jgermade/charts/luu</code>.</p>
             <div class="oneline block">
               <pre>helm install luu oci://ghcr.io/jgermade/charts/luu \
   --set ingress.enabled=true \
   --set ingress.host=luu.example.com \
-  --set ingress.tls.enabled=true</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+  --set ingress.tls.enabled=true \
+  --set runtime=kubernetes</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
             </div>
-            <p class="note">The token:</p>
+            <p class="note">Online, then a restart:</p>
             <div class="oneline">
-              <pre>kubectl exec deploy/luu -- cat /state/token</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+              <pre>kubectl exec -it deploy/luu -- luu setup</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
             </div>
-            <p class="note">Then open <code>https://luu.example.com/?token=…</code>. Without an Ingress,
-              <code>kubectl port-forward svc/luu 7878</code>. The policy it runs under is
-              <code>policy:</code> in its values.</p>
+            <div class="oneline">
+              <pre>kubectl rollout restart deploy/luu</pre><button class="copy" type="button" aria-label="Copy command"><svg class="no" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="yes" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7"/></svg></button>
+            </div>
+            <p class="note">A session's pod is made through a ServiceAccount that may create pods, so hold the
+              namespace to Pod Security <code>restricted</code>:
+              <code>kubectl label ns &lt;ns&gt; pod-security.kubernetes.io/enforce=restricted</code>.
+              Or keep it to the token, <code>kubectl exec deploy/luu -- cat /state/token</code>. Without an Ingress,
+              <code>kubectl port-forward svc/luu 7878</code>.</p>
           </div>
         </div>
 <!-- Broken by hand to fit a phone: one flag a line reads the same at any width. -->

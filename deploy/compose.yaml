@@ -10,14 +10,14 @@
 # How the server is reached is /state/config.toml's `[server]`, written on
 # the first start and yours to edit. See RECORD/2026-10-07.a-public-luu.completed.md.
 #
-# With users instead of a token — `exposure = "public"`, and drop `token-file`
-# (LUU_ORIGIN below is the origin it needs) — add yourself and log in with a
-# code:
+# With users instead of a token: `luu setup` writes `exposure = "public"` and
+# the origin, makes you the first owner and prints your code; a restart reads
+# it (LUU_ORIGIN below still wins over the file's origin):
 #
-#   docker compose -f deploy/compose.yaml exec luu luu user add me@example.com --role owner
-#   docker compose -f deploy/compose.yaml exec luu luu user code me@example.com
+#   docker compose -f deploy/compose.yaml exec luu luu setup
+#   docker compose -f deploy/compose.yaml restart luu
 #
-# See RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md.
+# See RECORD/2026-11-03.local-or-online.WIP.md.
 
 services:
   luu:

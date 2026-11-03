@@ -1681,6 +1681,39 @@ them when it starts. A host shell is an owner's only, and Settings writes stay
 refused off loopback until roles reach them (step 3 of
 [`RECORD/2026-11-03.users-and-a-code-by-email.WIP.md`](RECORD/2026-11-03.users-and-a-code-by-email.WIP.md)).
 See [`RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md).
+The code is typed into six boxes (`web/components/otp-input.html`), which submit
+once the sixth digit arrives, shake red on a refusal and draw a green ring before the
+page reloads.
+
+**Local or online, and `luu setup` for the online step in all three ways in.**
+`luu setup [--origin] [--owner] [--bind]` writes `[server]`:
+
+- `exposure = "public"`;
+- the origin;
+- the bind, `127.0.0.1:7878` on a machine and `0.0.0.0:7878` in a container;
+- and no `token-file`.
+
+It carries the rest of `config.toml`, as a Settings write does. Then it makes
+the owner (added, raised or let back in), prints a code, and says to restart
+`serve`, which reads `[server]` when it starts. On a terminal it asks what no
+flag said.
+
+`setup.sh` asks after an install: **local** is the binary in `~/.local/bin`, no
+root. **online** is Linux with systemd, each root step through `sudo`:
+
+- the binary in `/usr/local/bin`;
+- a system user `luu` whose home `/var/lib/luu` is the state directory, with
+  `work/` as `serve`'s root;
+- `/etc/luu/luu.toml` when there is none;
+- `luu setup` as `luu`;
+- a `luu.service` held by `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`
+  and `NoNewPrivileges`, writable only in `/var/lib/luu`.
+
+An online install is known afterwards by its unit: `reinstall` restarts it, and
+`uninstall --purge` removes the unit, the binary, `/var/lib/luu`, `/etc/luu` and
+the user. In Docker and the chart the online step is `luu setup` through `exec`,
+and a restart. See
+[`RECORD/2026-11-03.local-or-online.WIP.md`](RECORD/2026-11-03.local-or-online.WIP.md).
 
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and
 is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
@@ -1899,10 +1932,12 @@ The rest follows from that:
 - **Components**: `web/components/` holds the components the theme does not have yet, which
   import nothing from the page. Everything arrives as props or slots, everything leaves as
   `:model` or `$emit`, and styles are scoped. `Modal` (the `<dialog>` every modal is, with the
-  folio and the child sheet), `Dropup`, `PathText`, and two that each take an idea
+  folio and the child sheet), `Dropup`, `PathText`, and three that each take an idea
   from rare-ui with none of its code: `Rail` (a bar beside the chosen section that springs to it;
-  it was a dot until 2026-09-30) and `SaveButton` (a count of unsaved changes, and a tick once a
-  save lands). See
+  it was a dot until 2026-09-30), `SaveButton` (a count of unsaved changes, and a tick once a
+  save lands) and `OtpInput` (a one-time code in boxes: digits roll in, one caret slides to the
+  box that waits, a refusal shakes the row red and a login rings each box green; its state is a
+  `data-status` attribute, because `.error` is the page's own class). See
   [`RECORD/2026-09-28.components-of-our-own.completed.md`](RECORD/2026-09-28.components-of-our-own.completed.md).
 - **The page draws with a theme, and a theme is a folder**: `web/theme/default/` holds
   `tokens.css` (colour by role, type, space, radii, control heights, shadows, motion, all

@@ -405,6 +405,7 @@ refused off loopback until roles reach them. See
 [`RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md).
 
 ```sh
+luu setup --origin https://luu.example.com --owner me@example.com   # [server], the owner, a code
 luu user add me@example.com --role owner   # owner | admin | user
 luu user code me@example.com               # six digits, ten minutes, once
 luu user list
