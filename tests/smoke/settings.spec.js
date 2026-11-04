@@ -259,6 +259,29 @@ test("the interface theme is light, dark, or the system's, and is remembered", a
   await page.locator(".modal-head button.close", { hasText: "close" }).click()
 })
 
+test("Remote access, on a luu with no users, offers to link it and has nothing linked", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Remote access")')
+  // See `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+  const pane = page.locator('[data-section="remote"]')
+  await expect(pane.locator("h3", { hasText: "Link to a luu" })).toBeVisible()
+  await expect(pane.getByText("Not linked.")).toBeVisible()
+  await expect(pane.locator('[aria-label="Its address"]')).toBeEnabled()
+  // No key until there is something to link: a look writes nothing.
+  await expect(pane.locator("h3", { hasText: "This luu's key" })).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
 test("the resend rules are chosen from the page, and a save says what it did not do", async ({ page }) => {
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
@@ -277,7 +300,8 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // Resend and Authority are one section now, in this order, and the rail
   // puts Engines before Models; Appearance is General's other half since
   // 2026-10-21.
-  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Appearance", "Engines", "Models", "Runtimes", "Policies", "Sessions"])
+  // Remote access last, since 2026-11-04: this luu linked to another.
+  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Appearance", "Engines", "Models", "Runtimes", "Policies", "Sessions", "Remote access"])
   await expect(page.locator("#sessions-resend h2")).toHaveText("Resend")
   await expect(page.locator("#sessions-authority h2")).toHaveText("Authority")
 
