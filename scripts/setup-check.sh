@@ -88,7 +88,7 @@ sh "$setup" uninstall --purge --yes
 # Online for real, where it can be: Linux with systemd running and a sudo
 # that asks nothing — a GitHub runner, not a laptop. It makes the user luu,
 # /var/lib/luu, /etc/luu and luu.service, so it removes them again whatever
-# happens. See RECORD/2026-11-03.local-or-online.WIP.md.
+# happens. See RECORD/2026-11-03.local-or-online.completed.md.
 if [ "$(uname -s)" = Linux ] && [ -d /run/systemd/system ] && sudo -n true 2>/dev/null; then
   step "online: a service, a user, a policy, and a link to finish it"
   trap 'sh "$setup" uninstall --purge --yes </dev/null >/dev/null 2>&1 || true; rm -rf "$work"' EXIT

@@ -155,7 +155,7 @@ Its own order, one row per step. New rows continue from 56.
 | 57 | ~~**The code by email**: `[auth.smtp]`, rate limits. No sign-up: a user exists because an admin or an owner added them~~. *Built 2026-11-03*, with the first owner proved by the code that tests the mail (`luu config`, or the page behind a one-time link). What is left is a real mail server: only a fake one has been sent to | a real mail server | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) |
 | 58 | **Roles enforced**: Settings writes by role, Settings → Users, Account | row 56 | *Three roles* |
 | 59 | **Passkeys**, and first whether WebAuthn can be had without OpenSSL | row 56 | *Passkeys*; *What it costs* |
-| 60 | ~~**A user's API tokens** for `[host.*]` and the CLI~~. *Superseded 2026-11-03* by a user's SSH keys: row 65 | — | *A login, the socket, and API tokens*; [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md) *Rejected* |
+| 60 | ~~**A user's API tokens** for `[host.*]` and the CLI~~. *Superseded 2026-11-03* by a user's SSH keys: row 65 | — | *A login, the socket, and API tokens*; [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) *Rejected* |
 | 61 | ~~**Per-user configuration on a remote server**~~. *Decided 2026-11-03*: not for now; a remote server uses its own configuration | — | *the three questions, answered* §3 |
 
 **Section G — where a session runs, deployed.** Added 2026-11-03, inside this
@@ -170,7 +170,7 @@ no nested containers. New rows continue from 62.
 | 64 | **Inside the image, the two gaps between users**: a cargo home per user, and Landlock's signal scoping (ABI 6) | nothing | *Docker: no container inside a container*; [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) *Still open* |
 
 **Section H — one luu to another.** Added 2026-11-03, inside this revision,
-from [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md):
+from [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md):
 a luu managed from another and providers used across them, over SSH by key,
 the way intergate connects. Its four questions were answered the same day:
 the online page as a way into the luu at home comes first. Rows 65–68 were
@@ -182,6 +182,21 @@ built by 2026-11-04. New rows continue from 65.
 | 66 | ~~**A local luu managed from an online one**: `/h/<name>/` for the linked user only, the peer identity and `may` (`sessions`, `terminal`, `settings`) on the local side, Remote access in the local page, Account → Keys in the online one, and a test that a peer never reaches Remote access, nor Settings or the host shell unless allowed~~. *Built 2026-11-04*: two real servers in `tests/links.rs`, and both pages in Chromium. What is left is a real cluster's LoadBalancer | row 65 | *1. A local luu managed from an online luu* |
 | 67 | ~~**Providers across luus**: `/api/infer/<provider>/…`, `offer`, `via`, the backends' HTTP through the channel in-process, `remote` on a `via` default~~. *Built 2026-11-04*, as `<provider>@<peer>` with nothing written, through a signed unix socket. What is left is a llama.cpp engine switching to the model a linked request names | row 65 | *2. Providers across luus* |
 | 68 | ~~**`[host.*]` and its token replaced by `[peer.*]`**, and the CLI by key~~. *Built 2026-11-04*: a luu without users accepts links by a `[peer.*]` key, either side opens the other's page, and *Add a host* became *Link a luu*. `[host.*]` is kept and still works, no longer added from the page. No CLI talks to a remote server, so there was nothing to move. What is left is removing `[host.*]` | rows 66–67 | *What `[host.*]` becomes* |
+
+**Section I — the public luu, released and proved.** Added 2026-11-04, at the
+end of the branch that built Sections F, G and H
+([PR #70](https://github.com/jgermade/luu/pull/70)), from
+[`where-the-public-luu-stands`](../../RECORD/2026-11-04.where-the-public-luu-stands.completed.md),
+which says what is built, what is verified and how to pick it up. These rows
+collect what F, G and H left owed, so a new branch starts here. New rows
+continue from 69.
+
+| # | Item | Blocked on | Argued in |
+| --- | --- | --- | --- |
+| 69 | **Merge PR #70 and cut v0.1.6**: the images (server and worker), the chart, the four binaries. The landing and `setup.sh` already show `luu config`, the online mode and links, which only this branch has | nothing | *What is owed* §1 |
+| 70 | **The isolation run in the published image** (row 56's leftover): `exposure = "public"` in the release image, two users, a command in one session reading the other's folder, refused by Landlock. Row 64's two gaps are checked the same afternoon. **Before a second real person is let in** | row 69 | [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) *Still open* |
+| 71 | **A real mail server** (row 57's leftover): `luu config owner` against `smtps://` and against STARTTLS (`?tls=required`), with real authentication, and a login code that arrives. **Before a second real person is let in** | an SMTP account | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) *Not verified* |
+| 72 | **Links' leftovers**: (a) `[server] ssh` started without restarting `serve`; (b) a llama.cpp engine started on the model a linked request names, not its provider's; (c) `[host.*]` removed, which is a decision first, since removing it refuses every `config.toml` that has one; (d) the links Service's LoadBalancer on a real cluster | (c) a decision; (d) row 62 | [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) *Built, row 67* and *row 68* |
 
 ```mermaid
 gantt
@@ -254,3 +269,13 @@ deliberately unscheduled.
   before anyone ordered it.
 - **Nothing in Section D blocks anything in A, B or C** — fifth revision
   running.
+- **Section I comes first for the public luu, and in its own order.**
+  - Row 69 makes what the landing shows installable.
+  - Rows 70 and 71 are the two runs owed before anybody but its owner logs
+    in to a public luu.
+  - Then row 58 (roles in the page): it is what makes a public luu managed
+    from its page rather than from `luu user` on the machine.
+  - Then 59 (passkeys), then 62–63 with 72(d) on a cluster, then the rest
+    of 72.
+
+  None of it blocks or is blocked by Sections A–E.

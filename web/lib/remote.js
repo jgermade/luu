@@ -7,7 +7,7 @@
 /// and the luus those keys linked (`/api/auth/keys`). Every path is relative,
 /// so under `/h/<name>/` the page asks that luu — which refuses Remote access
 /// to a peer, as it should. See
-/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 
 import { apiHeaders } from "./store.js"
 

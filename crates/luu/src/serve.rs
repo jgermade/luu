@@ -7406,7 +7406,7 @@ async fn host_page(
 
 // ---- links -----------------------------------------------------------------
 //
-// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 
 /// Where another luu dials to link here, and the key it should expect: over
 /// HTTPS, so the key is the certificate's to vouch for.
@@ -7651,7 +7651,7 @@ async fn post_peer_probe(
 
 // ---- providers offered to a linked luu -------------------------------------
 //
-// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 
 /// One provider this luu offers a linked one: what the luu that sends to it
 /// needs to build its backend, and nothing about the key or the engine.

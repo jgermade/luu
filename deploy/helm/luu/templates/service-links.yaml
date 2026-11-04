@@ -1,6 +1,6 @@
 {{- if .Values.links.enabled }}
 # Links from other luus, over SSH: its own Service, because an Ingress
-# carries HTTP only. See RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md.
+# carries HTTP only. See RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md.
 apiVersion: v1
 kind: Service
 metadata:

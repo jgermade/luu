@@ -20,7 +20,7 @@
 # in the page — mail, and the owner, proved by one code. Each step that
 # needs root runs through sudo where the script is not root already. An online
 # install is known afterwards by its unit: reinstall restarts it, uninstall
-# removes it. See RECORD/2026-11-03.local-or-online.WIP.md and
+# removes it. See RECORD/2026-11-03.local-or-online.completed.md and
 # RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
 #
 # One binary, from a GitHub release, into ~/.local/bin (or --dir). No root, and
@@ -439,7 +439,7 @@ TOML
 unit_text() {
 	cat <<UNIT
 # luu serve, online. Written by setup.sh: see
-# https://github.com/jgermade/luu/blob/main/RECORD/2026-11-03.local-or-online.WIP.md
+# https://github.com/jgermade/luu/blob/main/RECORD/2026-11-03.local-or-online.completed.md
 [Unit]
 Description=luu serve, online
 After=network-online.target

@@ -171,7 +171,7 @@ pub struct Profile {
     /// Whether a luu linked to this one may send here, as `<name>@<this luu>`
     /// there. Absent is yes: what a session here can use, a linked one can.
     /// `false` withholds it. See
-    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offer: Option<bool>,
 }
@@ -537,7 +537,7 @@ pub struct Server {
     pub origin: Option<String>,
     /// Where other luus link to this one, over SSH: `0.0.0.0:2222`. Only on
     /// a server with users, whose keys say who may. See
-    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<String>,
     /// The address a linking luu dials, when it is not the origin's host and
@@ -649,7 +649,7 @@ pub struct Host {
 /// link` or Settings → Remote access. The side behind NAT dials (`dial`), and
 /// what the other side may do *here* is `may`, decided on this machine and
 /// never by the peer. See
-/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Peer {

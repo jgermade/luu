@@ -75,7 +75,7 @@ worker:
 # out through a Service of its own. When what a luu dials is not the origin's
 # host and this port (a NodePort, another port in front), say it with
 # `luu config server --ssh-public host:port`. See
-# RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md.
+# RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md.
 links:
   enabled: true
   port: 2222

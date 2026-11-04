@@ -60,7 +60,7 @@ curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- install --mode onl
 
 luu does not terminate TLS: put a proxy in front, `caddy reverse-proxy --from
 luu.example.com --to 127.0.0.1:7878`. See
-[`local-or-online`](RECORD/2026-11-03.local-or-online.WIP.md).
+[`local-or-online`](RECORD/2026-11-03.local-or-online.completed.md).
 
 | Option | |
 | --- | --- |

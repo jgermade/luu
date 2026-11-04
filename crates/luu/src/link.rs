@@ -18,7 +18,7 @@
 //! every 30 s rather than given up on: from the page, adding the key on the
 //! other side is what fixes it, and the link should follow without a click.
 //!
-//! See `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+//! See `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;

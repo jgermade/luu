@@ -1741,7 +1741,7 @@ An online install is known afterwards by its unit: `reinstall` restarts it, and
 the user. It ends by printing the setup link (and `luu config` as the
 terminal's way). In Docker and the chart the online steps are `luu config`
 through `exec`, and a restart. See
-[`RECORD/2026-11-03.local-or-online.WIP.md`](RECORD/2026-11-03.local-or-online.WIP.md).
+[`RECORD/2026-11-03.local-or-online.completed.md`](RECORD/2026-11-03.local-or-online.completed.md).
 
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and
 is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
@@ -3105,7 +3105,7 @@ exact name wins.
 
 **What a link trusts:** the online server ends TLS for the browser and holds
 the connection, so it sees what crosses it. See
-[`RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`](RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md).
+[`RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`](RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md).
 
 ## Suggested work order
 

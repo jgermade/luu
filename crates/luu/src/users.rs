@@ -122,7 +122,7 @@ pub fn default_path() -> Option<PathBuf> {
 /// `setup_keys`, for the one-time link that makes the first owner in the
 /// page. See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
 /// 3 added `keys`: a user's SSH keys, which link their luus to this one. See
-/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 const SCHEMA: i32 = 3;
 
 const TABLES: &str = "

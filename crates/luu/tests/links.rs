@@ -2,7 +2,7 @@
 //! online one with users and a local one that dials it, the way a person
 //! would set them up — `luu link add`, `luu user key add` — and the online
 //! page reaching the local luu through `/h/<name>/`. See
-//! `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+//! `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};

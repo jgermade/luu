@@ -200,7 +200,7 @@ enum Command {
     /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
     /// This luu linked to another, over SSH by key: the online page as a way
     /// into the luu at home. See
-    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
     Link {
         #[command(subcommand)]
         action: LinkAction,

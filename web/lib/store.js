@@ -1107,7 +1107,7 @@ export async function loadPostures() {
 ///
 /// With `linked`, the providers linked luus offer too, by `<provider>@<peer>`:
 /// a session may send there, over the link, and Settings does not edit them.
-/// See `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+/// See `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
 export function offeredProviders(linked = true) {
   const idle = state.providers?.idle || []
   const own = Object.keys(state.providers?.providers || {}).filter(name => !idle.includes(name))

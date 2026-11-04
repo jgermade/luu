@@ -272,7 +272,7 @@ test("Remote access, on a luu with no users, offers to link it and has nothing l
   await chooseFolder(page)
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Remote access")')
-  // See `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+  // See `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
   const pane = page.locator('[data-section="remote"]')
   await expect(pane.locator("h3", { hasText: "Link to a luu" })).toBeVisible()
   await expect(pane.getByText("Not linked.")).toBeVisible()
