@@ -1,0 +1,20 @@
+$ luu config owner --smtp-url 'smtp://localhost:1587?tls=required' … (Mailpit's certificate: a leaf signed by a private CA)
+Error: the code could not be sent, and nothing was saved
+
+Caused by:
+    0: sending through smtp://localhost:1587?tls=required
+    1: Connection error: Connection error: invalid peer certificate: UnknownIssuer
+    2: Connection error: invalid peer certificate: UnknownIssuer
+    3: invalid peer certificate: UnknownIssuer
+exit 1; files: auth.db config.toml 
+
+$ luu config owner --smtp-url 'smtps://localhost:1465' … (Mailpit's certificate: a leaf signed by a private CA)
+Error: the code could not be sent, and nothing was saved
+
+Caused by:
+    0: sending through smtps://localhost:1465
+    1: Connection error: Connection error: invalid peer certificate: UnknownIssuer
+    2: Connection error: invalid peer certificate: UnknownIssuer
+    3: invalid peer certificate: UnknownIssuer
+exit 1; files: auth.db config.toml 
+

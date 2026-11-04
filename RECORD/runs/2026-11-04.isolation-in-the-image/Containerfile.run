@@ -1,0 +1,20 @@
+# deploy/Containerfile.release's final stage, for a run in a container that
+# cannot reach dl.k8s.io or apt: the release's own binary (checked against
+# SHA256SUMS before it was copied here), ripgrep copied rather than installed,
+# and no kubectl, which only the `kubernetes` runtime uses.
+FROM rust:1-bookworm
+COPY rg /usr/bin/rg
+RUN useradd --uid 10001 --create-home --home-dir /state --shell /bin/bash luu \
+ && mkdir -p /work /etc/luu \
+ && chown luu:luu /state /work
+COPY luu /usr/local/bin/luu
+COPY luu.toml /etc/luu/luu.toml
+COPY entrypoint.sh /usr/local/bin/luu-entrypoint
+ENV LUU_HOME=/state \
+    HOME=/state \
+    CARGO_HOME=/state/cargo
+VOLUME ["/state", "/work"]
+WORKDIR /work
+USER luu
+EXPOSE 7878 2222
+ENTRYPOINT ["luu-entrypoint"]

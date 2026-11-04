@@ -5,8 +5,10 @@
 set -eu
 state="${LUU_HOME:-/state}"
 
-# Granted in the policy, and a granted path has to exist: on an empty volume
-# it does not until something makes it.
+# The image's CARGO_HOME, for `docker exec … cargo`. Sessions' commands no
+# longer use it (deploy/luu.toml sends theirs to the session's `.tmp`), but a
+# mounted policy from before may still grant it, and a granted path has to
+# exist: on an empty volume it does not until something makes it.
 mkdir -p "${CARGO_HOME:-$state/cargo}"
 
 if [ ! -f "$state/config.toml" ]; then

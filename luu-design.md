@@ -739,7 +739,11 @@ and 2, and 3 in its development posture. See
    filesystem and seccomp for sockets, applied to the child between `fork` and
    `exec`. `run_command("cargo", …)` otherwise hands a build script the same
    authority the agent has, and checking the string `cargo` against an allowlist
-   and calling that a sandbox is the part that would be a lie.
+   and calling that a sandbox is the part that would be a lie. **From Landlock
+   ABI 6 signals are scoped too**: a held child signals its own children and
+   nothing outside its domain — not `serve`, not another session's command —
+   and the verdict says `(signals scoped)` where the kernel held it. Before
+   2026-11-04 one user's command could signal `serve` in the image.
 3. **A container.** Below, and *on top of* level 2 rather than instead of it:
    Landlock survives `exec` and cannot be dropped. On a Mac it is not a
    duplicate boundary, it is **the only one there is** — which is why it comes
@@ -763,9 +767,21 @@ file-size-mb = 1024             # RLIMIT_FSIZE, per file
 [[sandbox.paths]]
 path = "."
 access = "read-write"           # read | execute | read-write
+
+[sandbox.env]                   # what a child is told over what it inherits
+TMPDIR = "./.tmp"               # `./` is under the session's folder, resolved there
 ```
 
 - **Longest match wins**, so a narrower rule under a broader one grants more.
+- **`[sandbox.env]` says where a child's scratch and its tools' homes go.** A
+  value that is `.` or starts with `./` is resolved against the session's
+  folder; anything else is passed as written. Set last, over what `serve`
+  inherited, carried through a plan's narrowing (a plan has no words for it),
+  and listed by `luu tools`. The image's policy sends `TMPDIR` and `CARGO_HOME`
+  to the session's own `.tmp`: without `TMPDIR` a compiler finds `/tmp` refused
+  and nothing links, and a `CARGO_HOME` outside the session is a folder every
+  session can write and run from. See
+  [`RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md`](RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md).
 - **There is no deny list**, deliberately, though an earlier version of this file
   had one. Landlock is allow-only: a subtraction could be honoured in-process and
   could not be honoured in a subprocess, so `denied = ["./.env"]` would stop
@@ -938,7 +954,10 @@ access = "execute"
   machine's install. **The image is not given nested containers** —
   Docker-in-Docker is `--privileged`, the host's socket is root on the host —
   so inside `ghcr.io/jgermade/luu` sessions run on `host`, one trust domain held
-  by Landlock. See
+  by Landlock — each session's commands to its own folder, signals scoped, and
+  its scratch and cargo home in its own `.tmp` (`[sandbox.env]`), which a run of
+  the image with two users proved on 2026-11-04
+  ([`the-isolation-run-in-the-image`](RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md)). See
   [`RECORD/2026-11-03.a-pod-per-session.WIP.md`](RECORD/2026-11-03.a-pod-per-session.WIP.md).
 - **`runtime = "host"` is the default** and is every run this repository has
   measured. `direct` runs the worker as a plain child with no container: it
@@ -1677,10 +1696,12 @@ its policy grants a path that holds the root or reaches another user's
 folder** — a check on the policy, not a policy, so a deployment's file cannot
 widen it; `deploy/luu.toml` grants `.` (the session's folder) for that reason.
 Writable paths outside the root are shared by every user, and `serve` names
-them when it starts. A host shell is an owner's only, and Settings writes stay
+them when it starts; `deploy/luu.toml` has none since 2026-11-04, when its
+`/state/cargo` turned out to carry one user's code into another's `cargo run`
+and `[sandbox.env]` moved each session's cargo home into its own `.tmp`. A host shell is an owner's only, and Settings writes stay
 refused off loopback until roles reach them (step 3 of
 [`RECORD/2026-11-03.users-and-a-code-by-email.WIP.md`](RECORD/2026-11-03.users-and-a-code-by-email.WIP.md)).
-See [`RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md).
+See [`RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md).
 The code is typed into six boxes (`web/components/otp-input.html`), which submit
 once the sixth digit arrives, shake red on a refusal and draw a green ring before the
 page reloads.
@@ -1699,7 +1720,11 @@ page reloads.
    and they are saved, and the owner made, only when the code comes back. So
    the code tests the mail, the mailbox and whose it is at once.
    - A failed send saves nothing and forgets the code.
-   - `smtp://` with no `tls=` is refused except to this machine.
+   - `smtp://` without `tls=required` is refused except to this machine:
+     with no `tls`, and with `tls=opportunistic`, which falls back to the
+     clear when the server offers no STARTTLS.
+   - Only certificates under Mozilla's roots (`webpki-roots`) are trusted:
+     not the system's store, so a relay on a private CA is refused.
    - A password inside the URL is refused.
    - **A password mounted for luu stays where it is**:
      `--smtp-password-ref file:/run/secrets/luu/smtp-password` saves

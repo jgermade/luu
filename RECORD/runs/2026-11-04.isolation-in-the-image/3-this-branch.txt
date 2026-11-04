@@ -1,0 +1,55 @@
+=== wide (ana)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 (signals scoped) + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/7d2987079163
+[0] other-is: /work/a0a76a0253d4
+[0] own-write: a
+[2] other-list: ls: cannot open directory '/work/a0a76a0253d4': Permission denied
+[1] other-read: cat: /work/a0a76a0253d4/secret: Permission denied
+[2] other-write: sh: 1: cannot create /work/a0a76a0253d4/from-a-neighbour: Permission denied
+[1] other-symlink: cat: ./to-neighbour/secret: Permission denied
+[1] other-hardlink: ln: failed to create hard link './neighbour-secret' => '/work/a0a76a0253d4/secret': Invalid cross-device link
+[2] work-root-list: ls: cannot open directory '/work': Permission denied
+[2] state-list: ls: cannot open directory '/state': Permission denied
+[1] state-auth-db: head: cannot open '/state/auth.db' for reading: Permission denied
+[1] state-token: cat: /state/token: Permission denied
+[2] cargo-home-list: ls: cannot open directory '/state/cargo': Permission denied
+[2] cargo-home-write: sh: 1: cannot create /state/cargo/left-by-7d2987079163: Permission denied
+[2] cargo-home-exec: sh: 1: cannot create /state/cargo/x: Permission denied
+[2] proc-1-environ: sh: 1: cannot open /proc/1/environ: Permission denied
+[2] proc-list: ls: cannot open directory '/proc': Permission denied
+[1] signal-pid1: bash: line 1: kill: (1) - Operation not permitted
+[2] tmp-write: sh: 1: cannot create /tmp/was-here: Permission denied
+[1] net-tcp: bash: socket: Operation not permitted bash: line 1: /dev/tcp/172.17.0.2/1025: Operation not permitted
+
+
+=== plant (ana)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 (signals scoped) + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/7d2987079163
+[0] other-is: /work/a0a76a0253d4
+[2] plant: sh: 1: cannot create /state/cargo/config.toml: Permission denied
+
+
+=== victim (bo)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 (signals scoped) + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/a0a76a0253d4
+[0] other-is: /work/7d2987079163
+[2] cargo-home-list: ls: cannot open directory '/state/cargo': Permission denied
+[0] cargo-run: hello from bo
+
+
+=== collect (ana)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 (signals scoped) + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/7d2987079163
+[0] other-is: /work/a0a76a0253d4
+[2] cargo-home-list: ls: cannot open directory '/state/cargo': Permission denied
+[1] taken: cat: '/state/cargo/taken-from-*': No such file or directory
+
+

@@ -405,6 +405,11 @@ impl Agency {
                 .describe()
                 .unwrap_or_else(|| "(none: the clock alone)".to_string()),
         ));
+        // What a child is told over what it inherits, as resolved here: a
+        // grant a reader can see rather than one they have to infer.
+        for (key, value) in self.sandbox.env() {
+            text.push_str(&format!("  env        {key}={value}\n"));
+        }
         // The loop's clock, printed whether or not there is a worker: under
         // `runtime = "host"` there is nothing else that would mention it, and
         // that is exactly the mode where it used to be missing.

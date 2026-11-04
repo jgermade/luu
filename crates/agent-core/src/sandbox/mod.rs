@@ -292,6 +292,9 @@ pub struct Sandbox {
     /// What a child may spend. Carried beside `roots` because it is the same
     /// kind of thing: part of what the child is held to, decided in the parent.
     limits: Limits,
+    /// What a child's environment says over what it inherits, as the policy
+    /// wrote it; a `./` value is resolved against `base` when it is asked for.
+    env: std::collections::BTreeMap<String, String>,
     authority: Authority,
 }
 
@@ -431,6 +434,7 @@ impl Sandbox {
             proxy: policy.proxy.clone(),
             enforcement: policy.enforcement,
             limits: policy.limits,
+            env: policy.env.clone(),
             authority: Authority::Policy,
         })
     }
@@ -518,6 +522,7 @@ impl Sandbox {
             proxy: self.proxy.clone(),
             enforcement: self.enforcement,
             limits: self.limits,
+            env: self.env.clone(),
         }
     }
 
@@ -555,6 +560,33 @@ impl Sandbox {
 
     pub fn proxy(&self) -> Option<&str> {
         self.proxy.as_deref()
+    }
+
+    /// The policy's `env` as written, `./` values unresolved: what a narrowed
+    /// sandbox carries on, resolved against its own base.
+    pub fn env_as_written(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.env
+    }
+
+    /// What a child's environment is given over what it inherits, each `./`
+    /// value resolved against this sandbox's base: `TMPDIR = "./.tmp"` is the
+    /// session's own scratch, wherever the session is.
+    pub fn env(&self) -> Vec<(String, String)> {
+        self.env
+            .iter()
+            .map(|(key, value)| {
+                let value = match value.as_str() {
+                    "." => self.base.display().to_string(),
+                    relative if relative.starts_with("./") => self
+                        .base
+                        .join(relative.trim_start_matches("./"))
+                        .display()
+                        .to_string(),
+                    literal => literal.to_string(),
+                };
+                (key.clone(), value)
+            })
+            .collect()
     }
 
     pub fn with_proxy(mut self, proxy: Option<String>) -> Self {

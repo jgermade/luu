@@ -151,7 +151,7 @@ Its own order, one row per step. New rows continue from 56.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 56 | ~~**Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner and seen only by their user, `max-live` per user, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder~~. *Built 2026-11-03*, with the API-level isolation tested. What is left is the run in the published image, with Landlock holding a command that tries another user's folder | that run | [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) |
+| 56 | ~~**Users and a code, without email**: `auth.db`, `luu user`, `exposure = "public"`, a login page and a cookie, `Origin`, sessions with an owner and seen only by their user, `max-live` per user, a folder per user, `deploy/luu.toml` granting `.`, and a test that one user cannot reach another's folder~~. *Built 2026-11-03*, with the API-level isolation tested. What is left is the run in the published image, with Landlock holding a command that tries another user's folder | that run | [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md) |
 | 57 | ~~**The code by email**: `[auth.smtp]`, rate limits. No sign-up: a user exists because an admin or an owner added them~~. *Built 2026-11-03*, with the first owner proved by the code that tests the mail (`luu config`, or the page behind a one-time link). What is left is a real mail server: only a fake one has been sent to | a real mail server | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) |
 | 58 | **Roles enforced**: Settings writes by role, Settings → Users, Account | row 56 | *Three roles* |
 | 59 | **Passkeys**, and first whether WebAuthn can be had without OpenSSL | row 56 | *Passkeys*; *What it costs* |
@@ -167,7 +167,7 @@ no nested containers. New rows continue from 62.
 | --- | --- | --- | --- |
 | 62 | **The `kubernetes` runtime on a cluster**: the attach and its start line, the image pull under `--pod-running-timeout`, the claim by `subPath` on luu's node, and a NetworkPolicy that seals a worker | a cluster, and a release that publishes the images | *Still open* |
 | 63 | **A sweep of `Completed` worker pods** whose `kubectl` died, at luu's start | row 62 | *Still open* |
-| 64 | **Inside the image, the two gaps between users**: a cargo home per user, and Landlock's signal scoping (ABI 6) | nothing | *Docker: no container inside a container*; [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) *Still open* |
+| 64 | ~~**Inside the image, the two gaps between users**: a cargo home per user, and Landlock's signal scoping (ABI 6)~~. *Built 2026-11-04*, found real by row 70's run: one user's `config.toml` in `/state/cargo` ran inside another's `cargo run`, and a command could signal `serve`. The cargo home is per session, not per user (`[sandbox.env]`, the session's `.tmp`), and signals are scoped from ABI 6 — [`the-isolation-run-in-the-image`](../../RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md) | nothing | *Docker: no container inside a container*; [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md) *Still open* |
 
 **Section H — one luu to another.** Added 2026-11-03, inside this revision,
 from [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md):
@@ -193,9 +193,9 @@ continue from 69.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 69 | **Merge PR #70 and cut v0.1.6**: the images (server and worker), the chart, the four binaries. The landing and `setup.sh` already show `luu config`, the online mode and links, which only this branch has | nothing | *What is owed* §1 |
-| 70 | **The isolation run in the published image** (row 56's leftover): `exposure = "public"` in the release image, two users, a command in one session reading the other's folder, refused by Landlock. Row 64's two gaps are checked the same afternoon. **Before a second real person is let in** | row 69 | [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md) *Still open* |
-| 71 | **A real mail server** (row 57's leftover): `luu config owner` against `smtps://` and against STARTTLS (`?tls=required`), with real authentication, and a login code that arrives. **Before a second real person is let in** | an SMTP account | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) *Not verified* |
+| 69 | ~~**Merge PR #70 and cut v0.1.6**: the images (server and worker), the chart, the four binaries. The landing and `setup.sh` already show `luu config`, the online mode and links, which only this branch has~~. *Done 2026-11-04*: merged, and the release run green at 12:51 UTC — the four binaries, both images (public), the chart and Pages. The first release that publishes images | nothing | *What is owed* §1 |
+| 70 | ~~**The isolation run in the published image** (row 56's leftover): `exposure = "public"` in the release image, two users, a command in one session reading the other's folder, refused by Landlock. Row 64's two gaps are checked the same afternoon. **Before a second real person is let in**~~. *Run 2026-11-04*, on the image rebuilt from the release's Containerfile and binary (its layers' host is refused by the environment's network policy). Folders, `/state`, `/proc`, `/tmp` and sockets held. Row 64's two gaps were real, and a third was found: no `cargo build` linked, for want of a `TMPDIR`. All three fixed, and the same run passes — [`the-isolation-run-in-the-image`](../../RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md). What is left is pulling the next release's own layers | row 69 | [`a-user-a-code-and-a-folder`](../../RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md) *Still open* |
+| 71 | **A real mail server** (row 57's leftover): `luu config owner` against `smtps://` and against STARTTLS (`?tls=required`), with real authentication, and a login code that arrives. **Before a second real person is let in**. *Begun 2026-11-04* against Mailpit: real authentication, the code arriving (owner and login), both TLS modes reaching the certificate check and refusing a private CA, and `tls=opportunistic` found sending in the clear and refused since. What is left is a handshake that succeeds, against a certificate under a public root | an SMTP account | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) *Not verified* |
 | 72 | **Links' leftovers**: (a) `[server] ssh` started without restarting `serve`; (b) a llama.cpp engine started on the model a linked request names, not its provider's; (c) `[host.*]` removed, which is a decision first, since removing it refuses every `config.toml` that has one; (d) the links Service's LoadBalancer on a real cluster | (c) a decision; (d) row 62 | [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) *Built, row 67* and *row 68* |
 
 ```mermaid
@@ -270,9 +270,11 @@ deliberately unscheduled.
 - **Nothing in Section D blocks anything in A, B or C** — fifth revision
   running.
 - **Section I comes first for the public luu, and in its own order.**
-  - Row 69 makes what the landing shows installable.
+  - Row 69 makes what the landing shows installable. *Done 2026-11-04.*
   - Rows 70 and 71 are the two runs owed before anybody but its owner logs
-    in to a public luu.
+    in to a public luu. *70 ran 2026-11-04 and found three things, fixed*:
+    so the image that should hold a second person is the **next** release's,
+    not 0.1.6. 71 is down to a real account's TLS.
   - Then row 58 (roles in the page): it is what makes a public luu managed
     from its page rather than from `luu user` on the machine.
   - Then 59 (passkeys), then 62–63 with 72(d) on a cluster, then the rest

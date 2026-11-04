@@ -1,0 +1,213 @@
+{
+ "0.1.6, the release binary": [
+  {
+   "case": "plain-wrong-password",
+   "url": "smtp://127.0.0.1:1025",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtp://127.0.0.1:1025\n    1: permanent error (535): 5.7.8 Authentication credentials invalid\n    2: 5.7.8 Authentication credentials invalid",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "plain",
+   "url": "smtp://127.0.0.1:1025",
+   "exit": 0,
+   "stdout": "[auth.smtp] in /home/user/luu/.tmp/mail-out/plain/config.toml: smtp://127.0.0.1:1025\nowner-plain@example.test owns this server, and logs in with a code by email.",
+   "stderr": "A code went to owner-plain@example.test.\nThe code:",
+   "files": [
+    "auth.db",
+    "config.toml",
+    "smtp.password"
+   ],
+   "smtp saved": true,
+   "password in config.toml": false,
+   "mail": {
+    "to": [
+     "owner-plain@example.test"
+    ],
+    "subject": "Your luu code: 970658",
+    "text": "970658\r\n\r\nYour code to log in to luu at https://luu.example.test. It lasts 10 minutes and works once.\r\n\r\nIf you did not ask for it, nothing happens: without the code nobody logs in."
+   },
+   "smtp.password mode": "0o600"
+  },
+  {
+   "case": "starttls",
+   "url": "smtp://localhost:1587?tls=required",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtp://localhost:1587?tls=required\n    1: Connection error: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    2: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    3: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "smtps",
+   "url": "smtps://localhost:1465",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtps://localhost:1465\n    1: Connection error: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    2: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    3: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "starttls-server-without-tls",
+   "url": "smtp://localhost:1587",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtp://localhost:1587\n    1: permanent error (530): 5.7.0 Must issue a STARTTLS command first\n    2: 5.7.0 Must issue a STARTTLS command first",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "opportunistic-not-loopback",
+   "url": "smtp://172.17.0.2:1025?tls=opportunistic",
+   "exit": 0,
+   "stdout": "[auth.smtp] in /home/user/luu/.tmp/mail-out/opportunistic-not-loopback/config.toml: smtp://172.17.0.2:1025?tls=opportunistic\nowner-opportunistic-not-loopback@example.test owns this server, and logs in with a code by email.",
+   "stderr": "A code went to owner-opportunistic-not-loopback@example.test.\nThe code:",
+   "files": [
+    "auth.db",
+    "config.toml",
+    "smtp.password"
+   ],
+   "smtp saved": true,
+   "password in config.toml": false,
+   "mail": {
+    "to": [
+     "owner-opportunistic-not-loopback@example.test"
+    ],
+    "subject": "Your luu code: 778904",
+    "text": "778904\r\n\r\nYour code to log in to luu at https://luu.example.test. It lasts 10 minutes and works once.\r\n\r\nIf you did not ask for it, nothing happens: without the code nobody logs in."
+   },
+   "smtp.password mode": "0o600"
+  },
+  {
+   "case": "login code from serve",
+   "code request": 202,
+   "mail": {
+    "to": [
+     "bo@example.test"
+    ],
+    "subject": "Your luu code: 238472"
+   },
+   "login": 204,
+   "cookie set": true
+  }
+ ],
+ "with tls=opportunistic refused (this branch)": [
+  {
+   "case": "plain-wrong-password",
+   "url": "smtp://127.0.0.1:1025",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtp://127.0.0.1:1025\n    1: permanent error (535): 5.7.8 Authentication credentials invalid\n    2: 5.7.8 Authentication credentials invalid",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "plain",
+   "url": "smtp://127.0.0.1:1025",
+   "exit": 0,
+   "stdout": "[auth.smtp] in /home/user/luu/.tmp/mail-out-fixed/plain/config.toml: smtp://127.0.0.1:1025\nowner-plain@example.test owns this server, and logs in with a code by email.",
+   "stderr": "A code went to owner-plain@example.test.\nThe code:",
+   "files": [
+    "auth.db",
+    "config.toml",
+    "smtp.password"
+   ],
+   "smtp saved": true,
+   "password in config.toml": false,
+   "mail": {
+    "to": [
+     "owner-plain@example.test"
+    ],
+    "subject": "Your luu code: 450145",
+    "text": "450145\r\n\r\nYour code to log in to luu at https://luu.example.test. It lasts 10 minutes and works once.\r\n\r\nIf you did not ask for it, nothing happens: without the code nobody logs in."
+   },
+   "smtp.password mode": "0o600"
+  },
+  {
+   "case": "starttls",
+   "url": "smtp://localhost:1587?tls=required",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtp://localhost:1587?tls=required\n    1: Connection error: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    2: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    3: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "smtps",
+   "url": "smtps://localhost:1465",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtps://localhost:1465\n    1: Connection error: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    2: Connection error: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))\n    3: invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "starttls-server-without-tls",
+   "url": "smtp://localhost:1587",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtp://localhost:1587\n    1: permanent error (530): 5.7.0 Must issue a STARTTLS command first\n    2: 5.7.0 Must issue a STARTTLS command first",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "opportunistic-not-loopback",
+   "url": "smtp://172.17.0.2:1025?tls=opportunistic",
+   "exit": 1,
+   "stdout": "",
+   "stderr": "Error: `smtp://172.17.0.2:1025?tls=opportunistic` can send the password and every code unencrypted: use smtps://host:465, or smtp://host:587?tls=required",
+   "files": [
+    "auth.db",
+    "config.toml"
+   ],
+   "smtp saved": false,
+   "password in config.toml": false
+  },
+  {
+   "case": "login code from serve",
+   "code request": 202,
+   "mail": {
+    "to": [
+     "bo@example.test"
+    ],
+    "subject": "Your luu code: 960047"
+   },
+   "login": 204,
+   "cookie set": true
+  }
+ ]
+}

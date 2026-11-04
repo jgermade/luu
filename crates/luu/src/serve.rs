@@ -474,7 +474,7 @@ struct LiveSession {
     /// The user it belongs to, on a server with users; `None` everywhere
     /// else, and for the session a public server starts with, which is
     /// nobody's and shown to nobody. Fixed for its life. See
-    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
     owner: Option<String>,
 }
 
@@ -2797,7 +2797,7 @@ tokio::task_local! {
     /// Who is asking, on a server with users, for the length of the request.
     /// Set by [`require_login`]; absent everywhere else, which is *nobody* and
     /// what every request was before users. See
-    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`, *How the user
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`, *How the user
     /// reaches the code*.
     static WHO: Who;
 }
@@ -2928,7 +2928,7 @@ async fn gate(State(state): State<AppRouterState>, request: Request, next: Next)
 /// another site's. Then the cookie names a user, the user is put in scope as
 /// [`WHO`] for the rest of the request, and the user's own session is made if
 /// they have none — so every route below can ask for *the current session*
-/// and get theirs. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+/// and get theirs. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
 async fn require_login(
     state: AppRouterState,
     users: Arc<crate::users::Users>,
@@ -3395,7 +3395,7 @@ async fn save_mail(mail: &crate::mail::Mail) -> Result<(), String> {
 /// Says, at startup, every path outside `serve`'s root that a user's
 /// commands could write under the server's own policy: shared by every user,
 /// so a channel between them. Said rather than refused — the image's cargo
-/// cache is one — see `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`,
+/// cache is one — see `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`,
 /// *Still open*.
 async fn shared_paths_said(app: &App) {
     let Some(own) = app.current_of(&None) else {
@@ -10811,7 +10811,7 @@ async fn finish(
 /// policy**: whatever the file grants, this is what a user's session may not
 /// have. Paths outside the root are the deployment's, and shared; `serve`
 /// names the writable ones when it starts. See
-/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`, *the wall the
+/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`, *the wall the
 /// server holds*.
 fn confined(
     root: &std::path::Path,
@@ -11335,7 +11335,7 @@ async fn new_session(
 /// **A user's root is their own folder**, `<root>/<user id>`, made here the
 /// first time it is asked for: the answer is never `None` for a user, because
 /// `None` is `serve`'s root, which holds every user's folder. See
-/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
 fn folder_under_root(
     app: &App,
     asked: Option<&str>,

@@ -402,7 +402,7 @@ admin) adds people — and nobody sees another user's sessions or folder
 (`<root>/<user id>`), an owner included. A user's session whose policy reaches
 past their folder is refused, whatever the file says. Settings writes stay
 refused off loopback until roles reach them. See
-[`RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md).
+[`RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md).
 
 ```sh
 luu config                                  # [server], then mail and the owner, proved by one code

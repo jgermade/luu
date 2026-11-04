@@ -89,25 +89,33 @@ impl Mail {
                 self.url
             )
         })?;
-        // `smtp://` with no `tls=` is the password and the code in the clear:
-        // only to this machine, a local relay.
+        // Read the way lettre reads it (`url`, the first `tls`), so what is
+        // checked is what will be sent.
         let url = self.url.as_str();
-        let plain = url.starts_with("smtp://") && !url.contains("tls=");
-        let host = url
-            .trim_start_matches("smtp://")
-            .split(['/', '?'])
-            .next()
-            .unwrap_or("");
-        let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
-        let host = host.rsplit_once(':').map_or(host, |(host, _)| host);
-        let local = matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1");
-        if plain && !local {
+        let parsed = reqwest::Url::parse(url)?;
+        let tls = parsed
+            .query_pairs()
+            .find(|(key, _)| key == "tls")
+            .map(|(_, value)| value.into_owned());
+        // Encrypted is `smtps://`, or `smtp://` with `tls=required`. With no
+        // `tls` it is the clear, and `tls=opportunistic` is the clear whenever
+        // the server offers no STARTTLS — which anyone between the two can
+        // arrange. Either is the password and every code readable on the way:
+        // only to this machine, a local relay.
+        let encrypted = parsed.scheme() == "smtps" || tls.as_deref() == Some("required");
+        let host = parsed.host_str().unwrap_or("");
+        let local = host == "localhost"
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback());
+        if !encrypted && !local {
             anyhow::bail!(
-                "`{url}` sends the password and every code unencrypted: use smtps://host:465, \
-                 or smtp://host:587?tls=required"
+                "`{url}` can send the password and every code unencrypted: use \
+                 smtps://host:465, or smtp://host:587?tls=required"
             );
         }
-        if url.contains('@') && url.split('@').next().is_some_and(|auth| auth.contains(':')) {
+        if parsed.password().is_some() {
             anyhow::bail!(
                 "the password goes in its own field, not in the URL: the URL is written to \
                  config.toml, and the password to a file only its owner can read"
@@ -309,6 +317,38 @@ mod tests {
             ..good.clone()
         };
         assert!(relay.check().is_ok());
+        // `opportunistic` is the clear whenever STARTTLS is not offered: found
+        // against Mailpit on 2026-11-04, where it sent the password in the
+        // clear to a host that was not this machine.
+        for url in [
+            "smtp://smtp.example.com:587?tls=opportunistic",
+            "smtp://smtp.example.com:587?tls=opportunistic&tls=required",
+            "smtp://smtp.example.com:587#?tls=required",
+        ] {
+            let mail = Mail {
+                url: url.into(),
+                ..good.clone()
+            };
+            assert!(
+                mail.check()
+                    .is_err_and(|e| e.to_string().contains("unencrypted")),
+                "{url}"
+            );
+        }
+        for url in [
+            "smtp://smtp.example.com:587?tls=required",
+            "smtp://smtp.example.com:587?x=1&tls=required",
+            "smtps://smtp.example.com",
+            "smtp://localhost:1025",
+            "smtp://127.0.0.2:1025?tls=opportunistic",
+            "smtp://[::1]:1025",
+        ] {
+            let mail = Mail {
+                url: url.into(),
+                ..good.clone()
+            };
+            assert!(mail.check().is_ok(), "{url}: {:?}", mail.check());
+        }
         let inline = Mail {
             url: "smtps://luu:secret@smtp.example.com:465".into(),
             ..good.clone()
