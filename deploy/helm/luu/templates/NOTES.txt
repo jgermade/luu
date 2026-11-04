@@ -1,5 +1,31 @@
 luu serve is starting, with its state in a volume that outlives the release.
 
+Online, for people who log in: `luu config` writes your domain, then proves
+how it sends mail and you as its owner with one code sent to you; then restart
+it. (`luu config setup-url` gives a link to do the second half in the page.)
+
+  kubectl exec -it deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- luu config
+  kubectl rollout restart deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }}
+{{- if .Values.mail.passwordSecret }}
+
+The SMTP password is the Secret {{ .Values.mail.passwordSecret }}'s, mounted at
+/run/secrets/luu/smtp-password. `luu config` asks for it unless told where it
+is: after `luu config server`, prove the mail and the owner with
+
+  kubectl exec -it deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- \
+    luu config owner --smtp-url smtps://<host>:465 --smtp-from '<from>' \
+    --smtp-user <user> --smtp-password-ref file:/run/secrets/luu/smtp-password
+{{- end }}
+
+{{- if .Values.links.enabled }}
+
+A luu at home links to this one over SSH, by key, on the Service
+{{ include "luu.fullname" . }}-links (port {{ .Values.links.port }}): from its Settings → Remote access,
+or `luu link add <this origin> --name casa`. Then this page opens it.
+{{- end }}
+
+Or keep it to whoever holds the token:
+
 The token, written on the first start:
 
   kubectl exec deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- cat /state/token
@@ -14,4 +40,12 @@ Then, with no ingress:
   kubectl port-forward svc/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} 7878:{{ .Values.service.port }}
 
 and open http://localhost:7878/?token=<the token>
+{{- end }}
+{{- if include "luu.pods" . }}
+
+Every session runs in a pod of its own (runtime: kubernetes), made through the
+ServiceAccount {{ include "luu.fullname" . }}, which may create pods here. Hold
+this namespace to Pod Security `restricted` — the worker pods already meet it:
+
+  kubectl label ns {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=restricted
 {{- end }}

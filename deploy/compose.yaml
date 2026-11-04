@@ -8,7 +8,29 @@
 # Caddy's own CA instead, for trying it on this machine.
 #
 # How the server is reached is /state/config.toml's `[server]`, written on
-# the first start and yours to edit. See RECORD/2026-10-07.a-public-luu.WIP.md.
+# the first start and yours to edit. See RECORD/2026-10-07.a-public-luu.completed.md.
+#
+# With users instead of a token: `luu config` writes `exposure = "public"` and
+# the origin, then proves the mail and you as owner with one code sent to you;
+# a restart reads [server] (LUU_ORIGIN below still wins over the file's
+# origin). `luu config setup-url` gives a link to do the second half in the
+# page instead.
+#
+#   docker compose -f deploy/compose.yaml exec luu luu config
+#   docker compose -f deploy/compose.yaml restart luu
+#
+# The SMTP password typed there goes to /state/smtp.password, 0600. To keep
+# it in a file of yours instead, uncomment `secrets` below (both places): the
+# file is mounted as it is, so the image's user, uid 10001, has to be able to
+# read it. Then tell `luu config` where it is; it is read there on every send:
+#
+#   docker compose -f deploy/compose.yaml exec luu luu config owner \
+#     --smtp-url smtps://<host>:465 --smtp-from '<from>' --smtp-user <user> \
+#     --smtp-password-ref file:/run/secrets/smtp-password
+#
+# Never an environment variable: a session's commands inherit luu's.
+#
+# See RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
 
 services:
   luu:
@@ -23,6 +45,10 @@ services:
     volumes:
       - state:/state
       - work:/work
+    # secrets: [smtp-password]
+    # Links from other luus, over SSH by key: straight to luu, since Caddy
+    # proxies HTTP only. `luu config` sets [server] ssh to 0.0.0.0:2222.
+    ports: ["2222:2222"]
     # The container is the sandbox: nothing it does not need.
     read_only: true
     tmpfs: [/tmp]
@@ -42,3 +68,7 @@ volumes:
   state: {}
   work: {}
   caddy: {}
+
+# secrets:
+#   smtp-password:
+#     file: ./smtp-password

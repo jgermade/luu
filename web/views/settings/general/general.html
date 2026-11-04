@@ -7,6 +7,9 @@
   const { workspace } = await import("@web/lib/workspace.js")
   const { state, loadProviders, saveToolSteps } = await import("@web/lib/store.js")
   if (!state.providers) loadProviders()
+  // Who is logged in, on a server with users: asked once, before the page
+  // mounted. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+  const { account, logOut } = await import("@web/lib/account.js")
 
   // How many tool calls a turn makes before it asks whether to go on, where
   // neither its provider nor its model says: `max-tool-steps` in
@@ -52,6 +55,23 @@
     <p class="ds-hero-desc">La carpeta en la que se inició <code>luu serve</code>, y la de luu.</p>
   </div>
 </div>
+<section class="pane-group" :if="account.users && account.loggedIn">
+  <h3>Account</h3>
+  <dl class="settings">
+    <dt>Email</dt>
+    <dd class="inline">
+      <span>{{ account.email }}</span>
+      <span class="dim">{{ account.role }}</span>
+    </dd>
+    <dd class="inline">
+      <button type="button" class="sign-out" @click="logOut()">Sign out</button>
+    </dd>
+    <dd class="note">
+      Your sessions and your folder are yours: nobody else on this server
+      sees them, an admin or an owner included.
+    </dd>
+  </dl>
+</section>
 <section class="pane-group">
   <h3>Workspace</h3>
   <dl class="settings">
@@ -107,6 +127,17 @@
   .general-pane { flex: 1 0 auto; }
   .inline { display: flex; align-items: center; gap: .6rem; }
   .steps { width: 5rem; }
+  .sign-out {
+    font: inherit;
+    font-size: var(--luu-text-md);
+    padding: .3rem .8rem;
+    border: 1px solid var(--luu-border);
+    border-radius: 6px;
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    cursor: pointer;
+  }
+  .sign-out:hover { background: var(--luu-hover); }
   .steps.invalid { border-color: var(--luu-bad); }
   .warn { color: var(--luu-warn); }
   .path {

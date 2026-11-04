@@ -49,5 +49,13 @@ sha2.workspace = true
 tokio-tungstenite.workspace = true
 # The server's log. See `crate::log`.
 tracing.workspace = true
+# The code a user logs in with, by email — `crate::mail`.
+lettre.workspace = true
+# The setup link as a QR code on the terminal — `luu config setup-url`.
+qrcode.workspace = true
+# One luu to another, over SSH — `crate::link`.
+russh.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

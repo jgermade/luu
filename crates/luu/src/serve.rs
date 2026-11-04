@@ -471,6 +471,11 @@ struct LiveSession {
     /// How many protocol sockets are attached to it now. A session somebody is
     /// looking at does not sleep.
     clients: std::sync::atomic::AtomicUsize,
+    /// The user it belongs to, on a server with users; `None` everywhere
+    /// else, and for the session a public server starts with, which is
+    /// nobody's and shown to nobody. Fixed for its life. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    owner: Option<String>,
 }
 
 impl LiveSession {
@@ -502,6 +507,7 @@ impl LiveSession {
         agency: Arc<Agency>,
         recorder: Option<Arc<Recorder>>,
         (map_rendered, walked): (String, Vec<agent_core::repo_map::Walked>),
+        owner: Option<String>,
     ) -> Self {
         let started_at = now_ms();
         Self {
@@ -537,6 +543,7 @@ impl LiveSession {
             walked: Mutex::new(walked),
             last_active: std::sync::atomic::AtomicU64::new(started_at),
             clients: Default::default(),
+            owner,
         }
     }
 
@@ -552,7 +559,9 @@ impl LiveSession {
 /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
 struct Lives {
     map: std::collections::BTreeMap<String, Arc<LiveSession>>,
-    current: String,
+    /// The current one **per owner**: `None` is the only key where there are
+    /// no users, so there it is one session, as it always was.
+    current: std::collections::BTreeMap<Option<String>, String>,
 }
 
 impl Lives {
@@ -566,7 +575,7 @@ impl Lives {
             .clone();
         Self {
             map: std::collections::BTreeMap::from([(id.clone(), live)]),
-            current: id,
+            current: std::collections::BTreeMap::from([(None, id)]),
         }
     }
 }
@@ -667,7 +676,10 @@ struct App {
     /// Told the id of the session that became the most recent one, so a socket
     /// that named none follows it, as the one socket the page opens did when
     /// there was one session.
-    current_changed: tokio::sync::watch::Sender<String>,
+    current_changed: tokio::sync::watch::Sender<(Option<String>, String)>,
+    /// Held while a user's first session is made, so two requests arriving
+    /// together make one. See [`ensure_current`].
+    making: Mutex<()>,
 }
 
 /// Given the policy file a session named — or `None` for the server's own — the
@@ -1380,8 +1392,10 @@ impl App {
                 walked: Mutex::new(walked),
                 last_active: std::sync::atomic::AtomicU64::new(now_ms()),
                 clients: Default::default(),
+                owner: None,
             }))),
-            current_changed: tokio::sync::watch::channel(String::new()).0,
+            current_changed: tokio::sync::watch::channel((None, String::new())).0,
+            making: Mutex::new(()),
         }))
     }
 
@@ -1429,14 +1443,43 @@ impl App {
         .await
     }
 
-    /// The live session used most recently: what a route or a socket that
-    /// names none acts on.
+    /// The live session used most recently by the person asking: what a
+    /// route or a socket that names none acts on. On a server with users that
+    /// is the user's own, which [`require_login`] makes before any route runs.
     fn current(&self) -> Arc<LiveSession> {
+        self.current_of(&owner_key()).expect(
+            "a user's current session is made by the login middleware before any route asks",
+        )
+    }
+
+    /// `owner`'s current session, if they have one live.
+    fn current_of(&self, owner: &Option<String>) -> Option<Arc<LiveSession>> {
         let lives = self
             .lives
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        lives.map[&lives.current].clone()
+        lives
+            .current
+            .get(owner)
+            .and_then(|id| lives.map.get(id))
+            .cloned()
+    }
+
+    /// Whether `live` is its owner's current session. Asked of the session
+    /// rather than of the request, so a task with nobody in scope — the idle
+    /// sleeper — gets the same answer a request would.
+    fn is_current(&self, live: &Arc<LiveSession>) -> bool {
+        self.current_of(&live.owner)
+            .is_some_and(|current| Arc::ptr_eq(&current, live))
+    }
+
+    /// The directory a person's sessions are made under: `serve`'s root
+    /// where there are no users, and `<root>/<user id>` for a user.
+    fn root_of(&self, owner: &Option<String>) -> PathBuf {
+        match owner {
+            None => self.root.clone(),
+            Some(id) => self.root.join(id),
+        }
     }
 
     /// The live session this request acts on: the one it named with
@@ -1477,10 +1520,11 @@ impl App {
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             lives.map.insert(id.to_string(), live.clone());
-            lives.current = id.to_string();
+            lives.current.insert(live.owner.clone(), id.to_string());
         }
         live.touch();
-        self.current_changed.send_replace(id.to_string());
+        self.current_changed
+            .send_replace((live.owner.clone(), id.to_string()));
     }
 
     /// Publishes one event of `live`'s to its clients and to the record, in
@@ -1552,7 +1596,7 @@ impl App {
         // The profile this session ran on, so the picker can start on the
         // model it was last given. `None` where nothing named a profile.
         let provider = live.destination().await.settings.profile.clone();
-        if let Err(error) = store.save(&stored, provider.as_deref()) {
+        if let Err(error) = store.save_owned(&stored, provider.as_deref(), live.owner.as_deref()) {
             eprintln!("warning: could not write the session store: {error:#}");
         }
     }
@@ -1661,6 +1705,11 @@ pub struct ServeOptions {
     /// What a browser types to reach this server, when a proxy stands in
     /// front: accepted as an `Origin` beside the request's own `Host`.
     pub origin: Option<String>,
+    /// Who may log in, where the exposure is `public`: `auth.db`. `None` is
+    /// the state directory's. Not opened under any other exposure.
+    pub auth_db: Option<PathBuf>,
+    /// `[auth]`: how long a login lasts.
+    pub auth: crate::provider::AuthTable,
     /// Where sessions are cached between restarts. `None` keeps the session in
     /// memory for the life of the process, which is what `serve` did before the
     /// store existed.
@@ -1702,6 +1751,34 @@ impl Serving {
     /// and the page holds a WebSocket open for as long as it is on screen, so
     /// a Ctrl-C with the page open would never finish.
     pub async fn run(self) -> Result<()> {
+        // The socket a backend dials for a provider another luu offers, over
+        // that luu's link. See `crate::link::relay`.
+        // Where links come in (a server with users and `[server] ssh`), or
+        // where they may go out (a luu with no users).
+        let relays = self.state.links.is_some() || self.state.users.is_none();
+        if relays
+            && let Err(error) =
+                crate::link::relay(self.state.links.clone(), self.state.peers.clone()).await
+        {
+            eprintln!("note: no providers from linked luus: {error:#}");
+        }
+        // The luus this one dials, answered with this router behind a peer's
+        // gate. Never from a server with users: there, links come in.
+        if self.state.users.is_none() {
+            let peers = load_config()
+                .await
+                .map(|(config, _)| config.peers().clone())
+                .unwrap_or_default();
+            let token = match self.state.auth.as_ref() {
+                crate::auth::Auth::Token(token) => Some(token.clone()),
+                _ => None,
+            };
+            // And what the peers it lets in reach over their own channels.
+            if let Some(links) = &self.state.links {
+                links.serve_peers(self.router.clone(), token.clone());
+            }
+            self.state.peers.start(self.router.clone(), token, &peers);
+        }
         let engines = self.app.engines.clone();
         let result = tokio::select! {
             served = async { axum::serve(self.listener, self.router).await } => {
@@ -1831,6 +1908,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         auth_token_file,
         exposure,
         origin,
+        auth_db,
+        auth: auth_settings,
         store,
         approvers,
         icons,
@@ -1844,6 +1923,86 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         auth_token_file.as_deref(),
         exposure,
     )?);
+    // Users, where the exposure is public: `auth.db`, opened before the
+    // listener exists for the same reason the token is read here.
+    let users = match auth.has_users() {
+        false => None,
+        true => {
+            if origin.is_none() {
+                anyhow::bail!(
+                    "exposure = \"public\" needs [server] origin (or --origin): what a browser \
+                     types to reach this server, which every login and every write is checked \
+                     against"
+                );
+            }
+            let path = match auth_db {
+                Some(path) => path,
+                None => crate::users::default_path().context(
+                    "no state directory (neither LUU_HOME nor HOME is set): pass --auth-db <PATH>",
+                )?,
+            };
+            let users = crate::users::Users::open(&path)?;
+            let everyone = users.list()?;
+            eprintln!("users — {} ({} of them)", path.display(), everyone.len());
+            if !everyone
+                .iter()
+                .any(|user| user.role == crate::users::Role::Owner && !user.suspended)
+            {
+                eprintln!(
+                    "warning: nobody here is an owner: `luu user add <email> --role owner`, \
+                     then `luu user code <email>` to log in"
+                );
+            }
+            Some(Arc::new(users))
+        }
+    };
+    // Links from other luus, by key, where `[server] ssh` says: a key on a
+    // user's account on a server with users, a key a `[peer.*]` names on a
+    // luu without them. See `crate::link`.
+    let loaded = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let server_table = loaded.server();
+    let (links, link_info, link_port, keys) = match server_table.ssh.as_deref() {
+        None => (None, None, 0, None),
+        Some(ssh) => {
+            let dir = crate::config::dir().context("no state directory for the SSH host key")?;
+            let host = crate::link::host_key(&dir)?;
+            let links = Arc::new(crate::link::Links::default());
+            let (accepts, keys) = match &users {
+                Some(users) => (crate::link::Accepts::Users(users.clone()), None),
+                None => {
+                    let keys = Arc::new(crate::link::Keys::default());
+                    keys.set(loaded.peers());
+                    (crate::link::Accepts::Keys(keys.clone()), Some(keys))
+                }
+            };
+            let listening = crate::link::listen(ssh, host, accepts, links.clone()).await?;
+            let port = listening.address.port();
+            // What a linking luu dials: said, or the origin's host and this
+            // port, or — on a luu without either — the host its page was
+            // asked by, worked out per request (`get_link_info`).
+            let dialled = server_table.ssh_public.clone().or_else(|| {
+                origin
+                    .as_deref()
+                    .and_then(|origin| origin.split("://").nth(1))
+                    .and_then(|rest| rest.split([':', '/']).next())
+                    .map(|host| format!("{host}:{port}"))
+            });
+            eprintln!(
+                "links — ssh on {}, dialled as {}, key {}",
+                listening.address,
+                dialled.as_deref().unwrap_or("the page's own host"),
+                listening.fingerprint
+            );
+            let info = crate::link::LinkInfo {
+                ssh: dialled.unwrap_or_default(),
+                host_key: listening.host_key,
+            };
+            (Some(links), Some(info), port, keys)
+        }
+    };
     let starts = crate::engines::for_run(&provider);
     let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
@@ -1927,9 +2086,37 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // future run on this machine, outside the gate and after the
         // session ends — a larger authority than approving one job, and
         // not one a bearer token should carry.
-        providers_editable: address.ip().is_loopback(),
+        // And never on a server with users: there, what a request may
+        // write is a role's to say (step 3), not the address's.
+        providers_editable: address.ip().is_loopback() && !auth.has_users(),
         origin: origin.clone(),
+        users: users.clone(),
+        session_hours: auth_settings.session_hours(),
+        pending_mail: Arc::default(),
+        mailed: Arc::default(),
+        links,
+        link_info,
+        link_port,
+        keys,
+        peers: Arc::default(),
     };
+    if users.is_some() {
+        shared_paths_said(&app).await;
+    }
+    // What a linked luu's own channels reach here: `/api/infer`, and nothing
+    // else, as the key's user — no login, no page.
+    if let Some(links) = &state.links {
+        links.offer(
+            Router::new()
+                .route("/api/infer", get(get_infer))
+                .route("/api/infer/{name}/models", get(get_infer_models))
+                .route(
+                    "/api/infer/{name}/to/{*rest}",
+                    axum::routing::any(infer_pass),
+                )
+                .with_state(state.clone()),
+        );
+    }
     let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
@@ -2077,13 +2264,41 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // everything a page served under `/h/<name>/` asks of its API. See
         // `crate::hosts`, and [`hosts_allowed`] for who may.
         .route("/api/hosts", get(get_hosts).put(put_hosts))
+        // Links, by key. A user's keys, on a server with users; the luus this
+        // one dials, on this machine. See `crate::link`.
+        .route("/api/auth/keys", get(get_keys).post(post_key))
+        .route("/api/auth/keys/remove", post(post_key_remove))
+        .route("/api/peers", get(get_peers).put(put_peers))
+        .route("/api/peers/probe", post(post_peer_probe))
+        // The providers this luu offers a linked one, by name, the key and
+        // the engine staying here. A peer reaches them with `sessions`; a
+        // linked luu's own channels reach nothing else. See `crate::link`.
+        .route("/api/infer", get(get_infer))
+        .route("/api/infer/{name}/models", get(get_infer_models))
+        .route(
+            "/api/infer/{name}/to/{*rest}",
+            axum::routing::any(infer_pass),
+        )
         .route("/h/{name}/api/{*rest}", axum::routing::any(host_api))
         .route("/h/{name}/ws", get(host_socket))
         .route("/h/{name}/ws/{*rest}", get(host_socket))
         .layer(middleware::from_fn_with_state(app.clone(), address_session))
-        .layer(middleware::from_fn_with_state(auth.clone(), require_token));
+        .layer(middleware::from_fn_with_state(state.clone(), gate));
 
     let router = guarded
+        // Logging in, out, and who this is: outside the gate, because they are
+        // how a request gets through it. Each answers `users: false` or a 404
+        // where there are no users. See [`post_login`].
+        .route("/api/auth/login", post(post_login))
+        .route("/api/auth/logout", post(post_logout))
+        .route("/api/auth/me", get(get_me))
+        .route("/api/auth/me.json", get(get_me))
+        .route("/api/auth/code", post(post_code))
+        // Where to link to this server, and its key: outside the gate, as the
+        // page is, because a luu asks it before it has any way in.
+        .route("/api/link.json", get(get_link_info))
+        .route("/api/setup/send", post(post_setup_send))
+        .route("/api/setup/claim", post(post_setup_claim))
         .route(
             "/",
             get(|headers: axum::http::HeaderMap| async move {
@@ -2134,6 +2349,16 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
 
 #[derive(Clone)]
 struct AppRouterState {
+    /// The luus linked to this one, on a server with users and `[server] ssh`.
+    links: Option<Arc<crate::link::Links>>,
+    /// Where they dial, and the key they pin: `/api/link.json`.
+    link_info: Option<crate::link::LinkInfo>,
+    /// The port links come to, for an address worked out from a request.
+    link_port: u16,
+    /// On a luu without users, the keys its `[peer.*]` let in.
+    keys: Option<Arc<crate::link::Keys>>,
+    /// The luus this one dials, and how each is doing.
+    peers: Arc<crate::link::Peers>,
     app: Arc<App>,
     /// Whether this surface may rewrite `config.toml`. See where it is set.
     providers_editable: bool,
@@ -2144,6 +2369,16 @@ struct AppRouterState {
     /// `[server] origin`: the address a browser uses when a proxy stands in
     /// front, and so an `Origin` this server's own page may send.
     origin: Option<String>,
+    /// Who may log in, where the exposure is `public`. `None` everywhere
+    /// else. See `crate::users`.
+    users: Option<Arc<crate::users::Users>>,
+    /// `[auth] session-hours`.
+    session_hours: u64,
+    /// Mail settings typed into setup in the page, held from the code's send
+    /// to its return — saved only then. By the address the code went to.
+    pending_mail: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::mail::Mail>>>,
+    /// When the last codes by email went out, for a ceiling on them all.
+    mailed: Arc<std::sync::Mutex<std::collections::VecDeque<u64>>>,
 }
 
 async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
@@ -2351,6 +2586,13 @@ async fn terminal_shell(
                     .to_string(),
             );
         }
+        _ if who().is_some_and(|who| who.role != crate::users::Role::Owner) => {
+            return Err(
+                "a shell on the host reaches every user's folder and the state directory, so on \
+                 a server with users it is an owner's"
+                    .to_string(),
+            );
+        }
         crate::provider::HostShell::Loopback
             if !(state.providers_editable && host_is_loopback(host)) =>
         {
@@ -2436,7 +2678,7 @@ fn terminal_allowed(
             "Origin `{origin}` is not this server (`{host}`), and only this server's page opens a terminal"
         )));
     }
-    if !state.auth.is_token() && !host_is_loopback(host) {
+    if !state.auth.is_guarded() && !host_is_loopback(host) {
         return Err(refuse(format!(
             "Host `{host}` is not this machine, and an unguarded port opens a terminal only to it"
         )));
@@ -2552,6 +2794,50 @@ tokio::task_local! {
     /// The live session a request named with `?session=<id>`, for the length
     /// of that request. See [`address_session`] and [`App::addressed`].
     static ADDRESSED: Arc<LiveSession>;
+    /// Who is asking, on a server with users, for the length of the request.
+    /// Set by [`require_login`]; absent everywhere else, which is *nobody* and
+    /// what every request was before users. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`, *How the user
+    /// reaches the code*.
+    static WHO: Who;
+}
+
+/// A logged-in user, as a request carries them.
+#[derive(Debug, Clone)]
+struct Who {
+    id: String,
+    role: crate::users::Role,
+}
+
+/// Who is asking, if anybody is.
+fn who() -> Option<Who> {
+    WHO.try_with(Clone::clone).ok()
+}
+
+/// Whose sessions this request acts on: the user's id, or `None` where there
+/// are no users.
+fn owner_key() -> Option<String> {
+    who().map(|who| who.id)
+}
+
+/// Whether `who` may see a live session owned by `owner`. Where there are no
+/// users, everyone sees everything, as before.
+fn sees_live(who: &Option<Who>, owner: &Option<String>) -> bool {
+    match who {
+        None => true,
+        Some(who) => owner.as_deref() == Some(who.id.as_str()),
+    }
+}
+
+/// Whether `who` may see a *stored* session owned by `owner`. One with no
+/// owner was made before there were users, by whoever held the machine, and
+/// is the owners'.
+fn sees_stored(who: &Option<Who>, owner: &Option<String>) -> bool {
+    match (who, owner) {
+        (None, _) => true,
+        (Some(who), None) => who.role == crate::users::Role::Owner,
+        (Some(who), Some(owner)) => *owner == who.id,
+    }
 }
 
 /// `?session=<id>` on any route: the request acts on that live session rather
@@ -2559,7 +2845,18 @@ tokio::task_local! {
 /// every route written twice. A session that is not live is a 404. A host's
 /// routes (`/h/<name>/…`) are that host's to answer, and pass through. See
 /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §2.
+///
+/// **And on a server with users, nobody reaches another user's session**: a
+/// session named in the path (`/api/sessions/<id>/…`) or by `?session=` that
+/// is not the asker's is a `404`, not a `403` — a `403` would say it exists.
 async fn address_session(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    let asking = who();
+    if asking.is_some()
+        && let Some(id) = session_in_path(request.uri().path())
+        && !visible(&app, &asking, &id).await
+    {
+        return not_found("session");
+    }
     let named = request
         .uri()
         .query()
@@ -2573,9 +2870,36 @@ async fn address_session(State(app): State<Arc<App>>, request: Request, next: Ne
     let Some(id) = named.filter(|id| !id.is_empty()) else {
         return next.run(request).await;
     };
-    match app.live(&id) {
+    match app.live(&id).filter(|live| sees_live(&asking, &live.owner)) {
         Some(live) => ADDRESSED.scope(live, next.run(request)).await,
         None => (StatusCode::NOT_FOUND, format!("session {id} is not live")).into_response(),
+    }
+}
+
+/// The session a `/api/sessions/<id>/…` path names, other than `live` —
+/// which is always the asker's own.
+fn session_in_path(path: &str) -> Option<String> {
+    let id = path.strip_prefix("/api/sessions/")?.split('/').next()?;
+    let id = bare(id);
+    (!id.is_empty() && id != LIVE_SESSION).then(|| id.to_string())
+}
+
+/// Whether the asker may see session `id`, live or stored. One that is
+/// neither is not refused here: the route says it is not there.
+async fn visible(app: &App, asking: &Option<Who>, id: &str) -> bool {
+    if let Some(live) = app.live(id) {
+        return sees_live(asking, &live.owner);
+    }
+    let Some(store) = &app.store else {
+        return true;
+    };
+    match store.lock().await.owner_of(id) {
+        Ok(Some(owner)) => sees_stored(asking, &owner),
+        Ok(None) => true,
+        Err(error) => {
+            eprintln!("warning: could not read the session store: {error:#}");
+            false
+        }
     }
 }
 
@@ -2588,7 +2912,512 @@ async fn address_session(State(app): State<Arc<App>>, request: Request, next: Ne
 /// not accepted anywhere else — a query string is the part of a URL that ends
 /// up in shell history and proxy logs, so the exception stays as narrow as the
 /// thing that forces it.
-async fn require_token(State(auth): State<Arc<Auth>>, request: Request, next: Next) -> Response {
+/// What stands before the control and read surfaces: a login on a server with
+/// users, the bearer token on one with a token, and nothing on loopback.
+async fn gate(State(state): State<AppRouterState>, request: Request, next: Next) -> Response {
+    match state.users.clone() {
+        Some(users) => require_login(state, users, request, next).await,
+        None => require_token(state.auth.clone(), request, next).await,
+    }
+}
+
+/// A login, on a server with users.
+///
+/// **`Origin` is the stated origin on every write and every socket**: a
+/// cookie is sent by any tab, and `Origin` is what tells this page from
+/// another site's. Then the cookie names a user, the user is put in scope as
+/// [`WHO`] for the rest of the request, and the user's own session is made if
+/// they have none — so every route below can ask for *the current session*
+/// and get theirs. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+async fn require_login(
+    state: AppRouterState,
+    users: Arc<crate::users::Users>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if needs_origin(&request) && !from_origin(&state, request.headers()) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's, and on a server with users only its \
+             own page may write",
+        )
+            .into_response();
+    }
+    let user = cookie(request.headers(), crate::users::COOKIE)
+        .and_then(|token| users.identify(&token).ok().flatten());
+    let Some(user) = user else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "log in first: this server has users (POST /api/auth/login)\n",
+        )
+            .into_response();
+    };
+    let who = Who {
+        id: user.id,
+        role: user.role,
+    };
+    WHO.scope(who, async move {
+        if let Err(refused) = ensure_current(&state).await {
+            return *refused;
+        }
+        next.run(request).await
+    })
+    .await
+}
+
+/// A user's own current session, made when they have none: in their folder,
+/// sending where the server's own session sends — what a fresh `serve` gives
+/// the one person on a laptop, given to each user. Nothing where there are no
+/// users.
+async fn ensure_current(state: &AppRouterState) -> Result<(), Box<Response>> {
+    let owner = owner_key();
+    if owner.is_none() || state.app.current_of(&owner).is_some() {
+        return Ok(());
+    }
+    let _making = state.app.making.lock().await;
+    if state.app.current_of(&owner).is_some() {
+        return Ok(());
+    }
+    new_session(state, NewSession::default()).await.map(|_| ())
+}
+
+/// A write, or a socket: what has to come from this server's own page.
+fn needs_origin(request: &Request) -> bool {
+    !matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    ) || request.headers().contains_key(header::UPGRADE)
+}
+
+/// Whether the request's `Origin` is the one `[server] origin` states.
+fn from_origin(state: &AppRouterState, headers: &axum::http::HeaderMap) -> bool {
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    origin.is_some() && origin == state.origin.as_deref()
+}
+
+/// One cookie's value out of the request's `Cookie` headers.
+fn cookie(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value.to_string())
+}
+
+/// The login cookie, or the header that clears it. `Secure` where the origin
+/// is `https`: a plain `http` origin is a server tried on its own machine,
+/// where a browser would drop a `Secure` cookie.
+fn login_cookie(state: &AppRouterState, token: Option<&str>) -> String {
+    let secure = match state.origin.as_deref() {
+        Some(origin) if origin.starts_with("https://") => "; Secure",
+        _ => "",
+    };
+    let name = crate::users::COOKIE;
+    match token {
+        Some(token) => format!(
+            "{name}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}{secure}",
+            state.session_hours.max(1) * 3600
+        ),
+        None => format!("{name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LoginAsk {
+    email: String,
+    code: String,
+}
+
+/// `POST /api/auth/login {email, code}`: a code exchanged for a login.
+///
+/// **One answer for every failure** — not a user, no code, a wrong code, an
+/// old one, a burnt one, a suspended user — so the endpoint says nothing about
+/// who is here. Its `Origin` is checked like any write's: a page on another
+/// site must not be able to log a browser into an account of its choosing.
+async fn post_login(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<LoginAsk>,
+) -> Response {
+    let Some(users) = &state.users else {
+        return (StatusCode::NOT_FOUND, "this server has no users").into_response();
+    };
+    if !from_origin(&state, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's",
+        )
+            .into_response();
+    }
+    match users.redeem(&asked.email, &asked.code, state.session_hours) {
+        Ok(Some((user, token))) => {
+            tracing::info!(target: "luu::auth", user = user.id.as_str(), "logged in");
+            (
+                StatusCode::NO_CONTENT,
+                [(header::SET_COOKIE, login_cookie(&state, Some(&token)))],
+            )
+                .into_response()
+        }
+        Ok(None) => {
+            tracing::info!(target: "luu::auth", "a login was refused");
+            (StatusCode::UNAUTHORIZED, "that code is not valid").into_response()
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response(),
+    }
+}
+
+/// `POST /api/auth/logout`: ends this login, and clears its cookie.
+async fn post_logout(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let Some(users) = &state.users else {
+        return (StatusCode::NOT_FOUND, "this server has no users").into_response();
+    };
+    if !from_origin(&state, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's",
+        )
+            .into_response();
+    }
+    if let Some(token) = cookie(&headers, crate::users::COOKIE)
+        && let Err(error) = users.logout(&token)
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
+    }
+    (
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, login_cookie(&state, None))],
+    )
+        .into_response()
+}
+
+/// `GET /api/auth/me`: whether this server has users, and if so who this is
+/// — a `401` when nobody is logged in. The one question the page asks before
+/// it loads anything else.
+async fn get_me(State(state): State<AppRouterState>, headers: axum::http::HeaderMap) -> Response {
+    let Some(users) = &state.users else {
+        return Json(serde_json::json!({ "users": false })).into_response();
+    };
+    let user = cookie(&headers, crate::users::COOKIE)
+        .and_then(|token| users.identify(&token).ok().flatten());
+    let mail = mail_configured().await;
+    match user {
+        Some(user) => Json(serde_json::json!({
+            "users": true,
+            "owner": true,
+            "mail": mail,
+            "id": user.id,
+            "email": user.email,
+            "role": user.role,
+        }))
+        .into_response(),
+        // Whether there is an owner yet, which decides between the login
+        // view and setup; and whether a code can come by email.
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "users": true,
+                "owner": users.has_owner().unwrap_or(true),
+                "mail": mail,
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Whether `[auth.smtp]` is there: codes can come by email.
+async fn mail_configured() -> bool {
+    load_config()
+        .await
+        .is_ok_and(|(config, _)| config.auth().smtp.is_some())
+}
+
+/// The saved mail settings, ready to send, or why not.
+async fn saved_mail() -> Result<crate::mail::Mail, String> {
+    let (config, _) = load_config().await.map_err(|error| error.to_string())?;
+    let table = config
+        .auth()
+        .smtp
+        .ok_or("this server sends no mail: ask an owner for a code")?;
+    crate::mail::Mail::from_table(&table).map_err(|error| format!("{error:#}"))
+}
+
+/// How many codes by email the whole server sends in an hour. Each address
+/// gets one a minute already; this is the ceiling on all of them, which is
+/// what a list of addresses tried one after another would run into.
+const MAILED_AN_HOUR: usize = 60;
+
+#[derive(serde::Deserialize)]
+struct CodeAsk {
+    email: String,
+}
+
+/// `POST /api/auth/code {email}`: a code by email to a user. **The same
+/// `202` whoever asked**, and the send happens after the answer, so neither
+/// the status nor the time says who is a user. See
+/// `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+async fn post_code(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<CodeAsk>,
+) -> Response {
+    let Some(users) = state.users.clone() else {
+        return (StatusCode::NOT_FOUND, "this server has no users").into_response();
+    };
+    if !from_origin(&state, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this request's Origin is not this server's",
+        )
+            .into_response();
+    }
+    let mail = match saved_mail().await {
+        Ok(mail) => mail,
+        Err(why) => return (StatusCode::CONFLICT, why).into_response(),
+    };
+    let now = now_ms();
+    let under_ceiling = {
+        let mut mailed = state
+            .mailed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while mailed.front().is_some_and(|at| now - at > 3_600_000) {
+            mailed.pop_front();
+        }
+        mailed.len() < MAILED_AN_HOUR
+    };
+    if under_ceiling && let Ok(Some(code)) = users.code_to_mail(&asked.email) {
+        state
+            .mailed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(now);
+        let origin = state.origin.clone();
+        let email = asked.email.clone();
+        tokio::spawn(async move {
+            if let Err(error) = mail.send_code(&email, &code, origin.as_deref()).await {
+                let _ = users.forget_code(&email);
+                tracing::warn!(target: "luu::auth", error = %format!("{error:#}"), "a code could not be emailed");
+            }
+        });
+    }
+    (
+        StatusCode::ACCEPTED,
+        "if that address has an account here, a code is on its way",
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct SetupSend {
+    key: String,
+    email: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// The setup checks every `/api/setup/*` makes: users, this server's
+/// `Origin`, and a live setup key (which also means no owner yet).
+fn setup_open(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+    key: &str,
+) -> Result<Arc<crate::users::Users>, Box<Response>> {
+    let Some(users) = state.users.clone() else {
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "this server has no users").into_response(),
+        ));
+    };
+    if !from_origin(state, headers) {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "this request's Origin is not this server's",
+            )
+                .into_response(),
+        ));
+    }
+    if !users.setup_key_opens(key).unwrap_or(false) {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "this setup link does not open setup: it lasts an hour, and ends once the server \
+                 has an owner. On the server, `luu config setup-url` makes another",
+            )
+                .into_response(),
+        ));
+    }
+    Ok(users)
+}
+
+/// `POST /api/setup/send`: the first owner's code, sent under the mail
+/// settings as typed — **the test of them**. Nothing is saved: they wait
+/// here until the code comes back. A failed send says why, so the settings
+/// can be fixed.
+async fn post_setup_send(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<SetupSend>,
+) -> Response {
+    let users = match setup_open(&state, &headers, &asked.key) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    let mail = match asked.url.trim() {
+        // None typed: the settings the server has, already proved.
+        "" => match saved_mail().await {
+            Ok(mail) => mail,
+            Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
+        },
+        url => crate::mail::Mail {
+            url: url.to_string(),
+            from: asked.from.trim().to_string(),
+            user: asked.user.filter(|user| !user.trim().is_empty()),
+            password: asked.password.filter(|password| !password.is_empty()),
+            mounted: None,
+        },
+    };
+    if let Err(error) = mail.check() {
+        return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response();
+    }
+    let email = match crate::users::email_of(&asked.email) {
+        Ok(email) => email,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let code = match users.code_to_claim(&email) {
+        Ok(Some(code)) => code,
+        Ok(None) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "a code went to that address less than a minute ago: wait, then ask again",
+            )
+                .into_response();
+        }
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    if let Err(error) = mail.send_code(&email, &code, state.origin.as_deref()).await {
+        let _ = users.forget_code(&email);
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("the code could not be sent, and nothing was saved: {error:#}"),
+        )
+            .into_response();
+    }
+    state
+        .pending_mail
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(email, mail);
+    (StatusCode::ACCEPTED, "a code is on its way").into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct SetupClaim {
+    key: String,
+    email: String,
+    code: String,
+}
+
+/// `POST /api/setup/claim`: the code back. The owner is made and logged in,
+/// and the mail settings it was sent under are saved.
+async fn post_setup_claim(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<SetupClaim>,
+) -> Response {
+    let users = match setup_open(&state, &headers, &asked.key) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    let Ok(email) = crate::users::email_of(&asked.email) else {
+        return (StatusCode::UNAUTHORIZED, "that code is not valid").into_response();
+    };
+    let Ok(Some((owner, token))) = users.claim_owner(&email, &asked.code, state.session_hours)
+    else {
+        return (StatusCode::UNAUTHORIZED, "that code is not valid").into_response();
+    };
+    let pending = state
+        .pending_mail
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&email);
+    if let Some(mail) = pending
+        && let Err(error) = save_mail(&mail).await
+    {
+        tracing::warn!(target: "luu::auth", error = %error, "the owner was made, and the mail settings could not be saved");
+    }
+    tracing::info!(target: "luu::auth", user = owner.id.as_str(), "the first owner was made");
+    (
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, login_cookie(&state, Some(&token)))],
+    )
+        .into_response()
+}
+
+/// Writes proved mail settings: the password beside `config.toml`, and
+/// `[auth.smtp]` in it.
+async fn save_mail(mail: &crate::mail::Mail) -> Result<(), String> {
+    let path = config_path()
+        .await
+        .ok_or("this machine has no state directory to write config.toml in")?;
+    let dir = path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or("config.toml has no directory")?;
+    let config = load_config()
+        .await
+        .map(|(config, _)| config)
+        .map_err(|error| error.to_string())?;
+    let table = mail.save(&dir).map_err(|error| format!("{error:#}"))?;
+    let auth = crate::provider::AuthTable {
+        smtp: Some(table),
+        ..config.auth()
+    };
+    config
+        .with_auth(auth)
+        .write(&path)
+        .map_err(|error| error.to_string())
+}
+
+/// Says, at startup, every path outside `serve`'s root that a user's
+/// commands could write under the server's own policy: shared by every user,
+/// so a channel between them. Said rather than refused — the image's cargo
+/// cache is one — see `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`,
+/// *Still open*.
+async fn shared_paths_said(app: &App) {
+    let Some(own) = app.current_of(&None) else {
+        return;
+    };
+    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
+    for granted in own.agency().await.sandbox.roots() {
+        if !granted.implicit
+            && granted.access == agent_core::sandbox::Access::ReadWrite
+            && !granted.path.starts_with(&root)
+        {
+            eprintln!(
+                "warning: `{}` ({}) is writable by every user's commands, so anything one user \
+                 leaves there another's may run",
+                granted.source,
+                granted.path.display()
+            );
+        }
+    }
+}
+
+async fn require_token(auth: Arc<Auth>, request: Request, next: Next) -> Response {
     let header = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -2686,15 +3515,21 @@ async fn protocol_socket(
     State(state): State<AppRouterState>,
     Query(asked): Query<SocketFor>,
 ) -> Response {
+    let asking = who();
     if let Some(id) = &asked.session
-        && state.app.live(id).is_none()
+        && !state
+            .app
+            .live(id)
+            .is_some_and(|live| sees_live(&asking, &live.owner))
     {
         return (StatusCode::NOT_FOUND, format!("session {id} is not live")).into_response();
     }
+    // Taken now: the socket outlives the request, and [`WHO`] with it.
+    let owner = asking.map(|who| who.id);
     ws.on_upgrade(move |socket| async move {
         let id = SOCKETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         tracing::info!(target: "luu::ws", socket = id, channel = "protocol", "open");
-        run_protocol_socket(socket, state, asked.session).await;
+        run_protocol_socket(socket, state, asked.session, owner).await;
         tracing::info!(target: "luu::ws", socket = id, channel = "protocol", "closed");
     })
 }
@@ -2772,7 +3607,12 @@ async fn hello_of(live: &LiveSession) -> ServerMessage {
     }
 }
 
-async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Option<String>) {
+async fn run_protocol_socket(
+    socket: WebSocket,
+    state: AppRouterState,
+    asked: Option<String>,
+    owner: Option<String>,
+) {
     let AppRouterState { app, auth, .. } = state;
     let (mut sink, mut stream) = socket.split();
     // Named, it speaks for that session for its whole life. Unnamed, it
@@ -2781,9 +3621,13 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Op
     // what the one socket the page opens has always been told.
     let following = asked.is_none();
     let mut changed = app.current_changed.subscribe();
+    // Unnamed, it follows its user's current session and nobody else's.
     let mut live = match asked.as_deref().and_then(|id| app.live(id)) {
         Some(live) => live,
-        None => app.current(),
+        None => match app.current_of(&owner) {
+            Some(live) => live,
+            None => return,
+        },
     };
     // Held for the socket's life; replaced when it follows another session.
     let mut _attached = Attached::new(live.clone());
@@ -2795,7 +3639,7 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Op
     // artifact as this binary — and requiring it would break every client
     // written before the handshake existed for a property the operating system
     // already gives.
-    let must_greet = auth.is_token();
+    let must_greet = auth.is_guarded();
     let mut greeted = false;
 
     let hello = hello_of(&live).await;
@@ -2809,7 +3653,13 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState, asked: Op
     loop {
         tokio::select! {
             Ok(()) = changed.changed(), if following => {
-                let now = app.current();
+                let (whose, _) = changed.borrow_and_update().clone();
+                if whose != owner {
+                    continue;
+                }
+                let Some(now) = app.current_of(&owner) else {
+                    continue;
+                };
                 if Arc::ptr_eq(&now, &live) {
                     continue;
                 }
@@ -4731,11 +5581,15 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     let agency = live.agency().await;
     settings.sandbox = agency.describe();
     settings.base = agency.sandbox.base().display().to_string();
-    settings.root = app.root.display().to_string();
+    settings.root = app.root_of(&owner_key()).display().to_string();
     settings.folder = folder_of(app, agency.sandbox.base());
     let id = live.session_id.lock().await.clone();
     for (other, one) in app.all_live() {
-        if other != id && one.agency().await.sandbox.base() == agency.sandbox.base() {
+        // Another user's session is not named, even when it shares nothing.
+        if other != id
+            && one.owner == live.owner
+            && one.agency().await.sandbox.base() == agency.sandbox.base()
+        {
             settings.shared_with.push(other);
         }
     }
@@ -6223,6 +7077,12 @@ fn hosts_allowed(
     Ok(())
 }
 
+/// A luu that linked to this one by a key a `[peer.*]` names, on a luu
+/// without users.
+fn accepted_link(state: &AppRouterState, name: &str) -> Option<crate::link::Linked> {
+    state.links.as_ref()?.get("_", name)
+}
+
 /// One `[host.<name>]`, or the answer that says it is not there.
 async fn host_named(name: &str) -> Result<crate::provider::Host, Box<Response>> {
     let config = load_config()
@@ -6274,10 +7134,80 @@ async fn hosts_view(state: &AppRouterState) -> Result<HostsView, crate::provider
 }
 
 async fn get_hosts(State(state): State<AppRouterState>) -> Response {
+    // On a server with users, a user's hosts are the luus they linked, and
+    // nobody else's: `[host.*]` is the machine's, with its token paths.
+    if state.users.is_some() {
+        let mine = match (&state.links, owner_key()) {
+            (Some(links), Some(user)) => links.of(&user),
+            _ => Vec::new(),
+        };
+        let hosts: serde_json::Map<String, serde_json::Value> = mine
+            .iter()
+            .map(|linked| {
+                (
+                    linked.name.clone(),
+                    serde_json::json!({
+                        "url": format!("linked · {}", linked.key),
+                        "linked": true,
+                        "since": linked.since,
+                    }),
+                )
+            })
+            .collect();
+        return Json(serde_json::json!({ "hosts": hosts, "editable": false, "path": null }))
+            .into_response();
+    }
     match hosts_view(&state).await {
-        Ok(view) => Json(view).into_response(),
+        Ok(view) => {
+            let mut view = serde_json::to_value(view).unwrap_or_default();
+            if let Some(hosts) = view
+                .get_mut("hosts")
+                .and_then(|hosts| hosts.as_object_mut())
+            {
+                for (name, entry) in linked_hosts(&state).await {
+                    hosts.insert(name, entry);
+                }
+            }
+            Json(view).into_response()
+        }
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     }
+}
+
+/// The luus linked by key that this page can open, as the project modal
+/// lists hosts: the ones this luu dials that are up, and the ones it let in.
+async fn linked_hosts(state: &AppRouterState) -> Vec<(String, serde_json::Value)> {
+    let config = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let mut linked = Vec::new();
+    for (name, status) in state.peers.statuses() {
+        if status.state == "connected" {
+            let ssh = config
+                .peers()
+                .get(&name)
+                .map(|peer| peer.ssh.clone())
+                .unwrap_or_default();
+            linked.push((
+                name,
+                serde_json::json!({ "url": format!("linked · {ssh}"), "linked": true, "since": status.since }),
+            ));
+        }
+    }
+    if let Some(links) = &state.links {
+        for accepted in links.of("_") {
+            linked.push((
+                accepted.name.clone(),
+                serde_json::json!({
+                    "url": format!("linked · {}", accepted.key),
+                    "linked": true,
+                    "since": accepted.since,
+                }),
+            ));
+        }
+    }
+    linked
 }
 
 #[derive(serde::Deserialize)]
@@ -6313,13 +7243,59 @@ async fn put_hosts(
 }
 
 /// A request the page made of a host's API, forwarded.
+/// A user's linked luu by name, on a server with links: theirs, or a 404
+/// that reads the same as one that does not exist.
+fn linked_named(
+    state: &AppRouterState,
+    name: &str,
+) -> Option<Result<crate::link::Linked, Box<Response>>> {
+    let links = state.links.as_ref()?;
+    let found = owner_key().and_then(|user| links.get(&user, name));
+    Some(found.ok_or_else(|| {
+        Box::new(
+            (
+                StatusCode::NOT_FOUND,
+                format!("no luu named {name} is linked to your account"),
+            )
+                .into_response(),
+        )
+    }))
+}
+
 async fn host_api(
     State(state): State<AppRouterState>,
     Path((name, _)): Path<(String, String)>,
     request: Request,
 ) -> Response {
+    if state.users.is_some() {
+        // The login and its Origin were checked by the gate already.
+        let linked = match linked_named(&state, &name) {
+            Some(Ok(linked)) => linked,
+            Some(Err(refused)) => return *refused,
+            None => {
+                return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
+            }
+        };
+        let rest = host_rest(request.uri(), &name);
+        let (parts, body) = request.into_parts();
+        return crate::link::forward(&linked, parts.method, &rest, &parts.headers, body).await;
+    }
     if let Err(refused) = hosts_allowed(&state, request.headers()) {
         return *refused;
+    }
+    // A luu linked by key: one this luu dials, or one it let in.
+    if state.peers.has(&name) {
+        let rest = host_rest(request.uri(), &name);
+        let (parts, body) = request.into_parts();
+        return state
+            .peers
+            .forward(&name, parts.method, &rest, &parts.headers, body)
+            .await;
+    }
+    if let Some(linked) = accepted_link(&state, &name) {
+        let rest = host_rest(request.uri(), &name);
+        let (parts, body) = request.into_parts();
+        return crate::link::forward(&linked, parts.method, &rest, &parts.headers, body).await;
     }
     let host = match host_named(&name).await {
         Ok(host) => host,
@@ -6340,6 +7316,25 @@ async fn host_socket(
     uri: Uri,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if state.users.is_some() {
+        let name = params.get("name").cloned().unwrap_or_default();
+        let linked = match linked_named(&state, &name) {
+            Some(Ok(linked)) => linked,
+            Some(Err(refused)) => return *refused,
+            None => {
+                return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
+            }
+        };
+        let upstream = match crate::link::connect(&linked, &host_rest(&uri, &name)).await {
+            Ok(upstream) => upstream,
+            Err(refused) => return *refused,
+        };
+        return ws.on_upgrade(move |socket| async move {
+            tracing::info!(target: "luu::ws", linked = name, "forwarding");
+            crate::hosts::pipe_to(socket, upstream).await;
+            tracing::info!(target: "luu::ws", linked = name, "closed");
+        });
+    }
     if let Err(refused) = hosts_allowed(&state, &headers) {
         return *refused;
     }
@@ -6351,6 +7346,29 @@ async fn host_socket(
             .into_response();
     }
     let name = params.get("name").cloned().unwrap_or_default();
+    // A luu linked by key: one this luu dials, or one it let in.
+    if state.peers.has(&name) {
+        let upstream = match state.peers.connect(&name, &host_rest(&uri, &name)).await {
+            Ok(upstream) => upstream,
+            Err(refused) => return *refused,
+        };
+        return ws.on_upgrade(move |socket| async move {
+            tracing::info!(target: "luu::ws", linked = name, "forwarding");
+            crate::hosts::pipe_to(socket, upstream).await;
+            tracing::info!(target: "luu::ws", linked = name, "closed");
+        });
+    }
+    if let Some(linked) = accepted_link(&state, &name) {
+        let upstream = match crate::link::connect(&linked, &host_rest(&uri, &name)).await {
+            Ok(upstream) => upstream,
+            Err(refused) => return *refused,
+        };
+        return ws.on_upgrade(move |socket| async move {
+            tracing::info!(target: "luu::ws", linked = name, "forwarding");
+            crate::hosts::pipe_to(socket, upstream).await;
+            tracing::info!(target: "luu::ws", linked = name, "closed");
+        });
+    }
     let host = match host_named(&name).await {
         Ok(host) => host,
         Err(refused) => return *refused,
@@ -6384,6 +7402,490 @@ async fn host_page(
         return installed_asset(xterm_root(), "xterm.js", rest).await;
     }
     serve_asset(&path, &headers).await
+}
+
+// ---- links -----------------------------------------------------------------
+//
+// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+
+/// Where another luu dials to link here, and the key it should expect: over
+/// HTTPS, so the key is the certificate's to vouch for.
+async fn get_link_info(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let Some(info) = &state.link_info else {
+        return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
+    };
+    let mut info = info.clone();
+    // No address said: the one this page was asked by, as the other luu
+    // typed it, with the port links come to.
+    if info.ssh.is_empty() {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("localhost");
+        let name = match host.strip_prefix('[') {
+            Some(rest) => format!("[{}]", rest.split(']').next().unwrap_or("")),
+            None => host
+                .rsplit_once(':')
+                .map_or(host, |(name, _)| name)
+                .to_string(),
+        };
+        info.ssh = format!("{name}:{}", state.link_port);
+    }
+    Json(info).into_response()
+}
+
+/// The logged-in user, on a server with users, or why not.
+fn keys_user(state: &AppRouterState) -> Result<(Arc<crate::users::Users>, String), Box<Response>> {
+    let refuse = |status, why: &str| Box::new((status, why.to_string()).into_response());
+    let users = state.users.clone().ok_or_else(|| {
+        refuse(
+            StatusCode::NOT_FOUND,
+            "this server has no users, so no keys",
+        )
+    })?;
+    let user = owner_key().ok_or_else(|| refuse(StatusCode::UNAUTHORIZED, "log in first"))?;
+    Ok((users, user))
+}
+
+async fn get_keys(State(state): State<AppRouterState>) -> Response {
+    let (users, user) = match keys_user(&state) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    let links = state
+        .links
+        .as_ref()
+        .map(|links| links.of(&user))
+        .unwrap_or_default();
+    match users.keys_of(&user) {
+        Ok(keys) => Json(serde_json::json!({
+            "keys": keys,
+            "links": links.iter().map(|linked| serde_json::json!({
+                "name": linked.name,
+                "key": linked.key,
+                "since": linked.since,
+            })).collect::<Vec<_>>(),
+            "accepts": state.link_info.is_some(),
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct KeyAdd {
+    key: String,
+    #[serde(default)]
+    name: String,
+}
+
+async fn post_key(State(state): State<AppRouterState>, Json(asked): Json<KeyAdd>) -> Response {
+    let (users, user) = match keys_user(&state) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.add_key(&user, &asked.name, &asked.key) {
+        Ok(key) => (StatusCode::CREATED, Json(key)).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct KeyRemove {
+    key: String,
+}
+
+async fn post_key_remove(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<KeyRemove>,
+) -> Response {
+    let (users, user) = match keys_user(&state) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.remove_key(&user, &asked.key) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such key on your account").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// Remote access is this machine's alone: the page on loopback, never a
+/// peer (which `crate::link::needs` refuses before it gets here) and never a
+/// server with users.
+fn peers_allowed(state: &AppRouterState) -> Result<(), Box<Response>> {
+    match state.providers_editable {
+        true => Ok(()),
+        false => Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "Remote access is set from a browser on this machine",
+            )
+                .into_response(),
+        )),
+    }
+}
+
+async fn peers_view(state: &AppRouterState) -> Response {
+    let peers = load_config()
+        .await
+        .map(|(config, _)| config.peers().clone())
+        .unwrap_or_default();
+    // The key exists once there is something to link: a GET with no peers
+    // writes nothing.
+    let key = match peers.is_empty() {
+        true => None,
+        false => state.peers.identity().ok(),
+    };
+    // Links this luu accepts: where, with which key, and who is linked in now.
+    let listening = state.link_info.as_ref().map(|info| {
+        serde_json::json!({
+            "port": state.link_port,
+            "host_key": info.host_key,
+            "fingerprint": crate::link::parse_public(&info.host_key)
+                .map(|key| crate::link::fingerprint(&key))
+                .unwrap_or_default(),
+        })
+    });
+    let accepted: serde_json::Map<String, serde_json::Value> = state
+        .links
+        .iter()
+        .flat_map(|links| links.of("_"))
+        .map(|linked| {
+            (
+                linked.name.clone(),
+                serde_json::json!({ "since": linked.since, "key": linked.key }),
+            )
+        })
+        .collect();
+    Json(serde_json::json!({
+        "listening": listening,
+        "accepted": accepted,
+        "peers": peers,
+        "status": state.peers.statuses(),
+        "key": key.as_ref().map(|key| crate::link::public_line(key.public_key())),
+        "fingerprint": key.as_ref().map(|key| crate::link::fingerprint(key.public_key())),
+        "editable": state.providers_editable,
+        "may": crate::provider::PEER_MAY,
+    }))
+    .into_response()
+}
+
+async fn get_peers(State(state): State<AppRouterState>) -> Response {
+    if state.users.is_some() {
+        return (StatusCode::NOT_FOUND, "a server with users does not dial").into_response();
+    }
+    peers_view(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct PeersEdit {
+    peers: std::collections::BTreeMap<String, crate::provider::Peer>,
+}
+
+/// Replaces every `[peer.*]`, and redials.
+async fn put_peers(State(state): State<AppRouterState>, Json(edit): Json<PeersEdit>) -> Response {
+    if let Err(refused) = peers_allowed(&state) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory to write config.toml in",
+        )
+            .into_response();
+    };
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    if let Err(error) = write_config(current.with_peers(edit.peers.clone()), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    state.peers.restart(&edit.peers);
+    if let Some(keys) = &state.keys {
+        keys.set(&edit.peers);
+    }
+    peers_view(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct PeerProbe {
+    url: String,
+}
+
+/// What a page says about linking to it, asked by this machine over HTTPS,
+/// with this luu's key to add there.
+async fn post_peer_probe(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<PeerProbe>,
+) -> Response {
+    if let Err(refused) = peers_allowed(&state) {
+        return *refused;
+    }
+    let info = match crate::link::probe(&asked.url).await {
+        Ok(info) => info,
+        Err(error) => return (StatusCode::BAD_GATEWAY, format!("{error:#}")).into_response(),
+    };
+    let fingerprint = crate::link::parse_public(&info.host_key)
+        .map(|key| crate::link::fingerprint(&key))
+        .unwrap_or_default();
+    let key = match state.peers.identity() {
+        Ok(key) => key,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
+        }
+    };
+    Json(serde_json::json!({
+        "url": asked.url.trim().trim_end_matches('/'),
+        "ssh": info.ssh,
+        "host_key": info.host_key,
+        "fingerprint": fingerprint,
+        "key": crate::link::public_line(key.public_key()),
+    }))
+    .into_response()
+}
+
+// ---- providers offered to a linked luu -------------------------------------
+//
+// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+
+/// One provider this luu offers a linked one: what the luu that sends to it
+/// needs to build its backend, and nothing about the key or the engine.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Offered {
+    backend: crate::provider::BackendKind,
+    model: String,
+    #[serde(default)]
+    context_limit: u32,
+    #[serde(default)]
+    tool_calls: crate::provider::ToolCalls,
+    #[serde(default)]
+    messages: crate::provider::MessagesKeys,
+}
+
+/// Whether `name` is offered: a profile, not withheld with `offer = false`,
+/// and not one whose engine is switched off.
+fn is_offered(config: &crate::provider::Config, name: &str) -> bool {
+    let Some(profile) = config.profiles().get(name) else {
+        return false;
+    };
+    let idle = profile
+        .engine
+        .as_ref()
+        .and_then(|engine| config.engines().get(engine))
+        .is_some_and(|engine| !engine.enabled);
+    profile.offer != Some(false) && !idle
+}
+
+async fn get_infer() -> Response {
+    let (config, path) = match load_config().await {
+        Ok(loaded) => loaded,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let mut offered = std::collections::BTreeMap::new();
+    for name in config.profiles().keys() {
+        if !is_offered(&config, name) {
+            continue;
+        }
+        let Ok(resolved) = crate::provider::resolve(
+            &config,
+            path.as_deref(),
+            crate::provider::Flags {
+                provider: Some(name),
+                ..Default::default()
+            },
+        ) else {
+            continue;
+        };
+        if resolved.kind == crate::provider::BackendKind::Mock {
+            continue;
+        }
+        offered.insert(
+            name.clone(),
+            Offered {
+                backend: resolved.kind,
+                model: resolved.model,
+                context_limit: resolved.context_limit,
+                tool_calls: resolved.tool_calls,
+                messages: resolved.messages,
+            },
+        );
+    }
+    Json(offered).into_response()
+}
+
+async fn get_infer_models(state: State<AppRouterState>, Path(name): Path<String>) -> Response {
+    let offered = load_config()
+        .await
+        .is_ok_and(|(config, _)| is_offered(&config, &name));
+    if !offered {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("no provider named {name} is offered here"),
+        )
+            .into_response();
+    }
+    get_provider_models(state, Path(name), Query(ModelsAsk { facts: None })).await
+}
+
+fn infer_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("an HTTP client")
+    })
+}
+
+/// A request a linked luu's backend made of one of this luu's providers,
+/// passed through to it: this luu's URL for it, its engine started, its key
+/// added. The key and the engine never leave.
+async fn infer_pass(
+    State(state): State<AppRouterState>,
+    Path((name, rest)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let (config, path) = match load_config().await {
+        Ok(loaded) => loaded,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    if !is_offered(&config, &name) {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("no provider named {name} is offered here"),
+        )
+            .into_response();
+    }
+    let resolved = match crate::provider::resolve(
+        &config,
+        path.as_deref(),
+        crate::provider::Flags {
+            provider: Some(&name),
+            ..Default::default()
+        },
+    ) {
+        Ok(resolved) if resolved.kind != crate::provider::BackendKind::Mock => resolved,
+        Ok(_) => return (StatusCode::NOT_FOUND, "the mock is offered to nobody").into_response(),
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let mut url = resolved.url.clone();
+    if let Some((engine_name, engine)) = crate::engines::for_run(&resolved) {
+        match state.app.engines.ensure(&engine_name, &engine).await {
+            Ok(port) => url = crate::engines::at_port(&url, port).unwrap_or(url),
+            Err(why) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    format!("engine {engine_name}: {why}"),
+                )
+                    .into_response();
+            }
+        }
+    }
+    let key = match crate::api_key(&resolved) {
+        Ok(key) => key,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
+        }
+    };
+    let query = request
+        .uri()
+        .query()
+        .map(|query| format!("?{query}"))
+        .unwrap_or_default();
+    let target = format!("{}/{rest}{query}", url.trim_end_matches('/'));
+    let (parts, body) = request.into_parts();
+    let mut asked = infer_client().request(parts.method, target);
+    for (header_name, value) in &parts.headers {
+        if !crate::hosts::NOT_FORWARDED.contains(header_name) && header_name.as_str() != "x-api-key"
+        {
+            asked = asked.header(header_name, value);
+        }
+    }
+    if let Some(key) = key {
+        asked = match resolved.kind {
+            crate::provider::BackendKind::Anthropic => asked.header("x-api-key", key),
+            _ => asked.bearer_auth(key),
+        };
+    }
+    asked = asked.body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    let answer = match asked.send().await {
+        Ok(answer) => answer,
+        Err(error) => {
+            return (StatusCode::BAD_GATEWAY, format!("{name}: {error}")).into_response();
+        }
+    };
+    let mut response = Response::builder().status(answer.status().as_u16());
+    for (header_name, value) in answer.headers() {
+        if !crate::hosts::NOT_RETURNED.contains(header_name) {
+            response = response.header(header_name.as_str(), value.as_bytes());
+        }
+    }
+    response
+        .body(axum::body::Body::from_stream(answer.bytes_stream()))
+        .unwrap_or_else(|error| (StatusCode::BAD_GATEWAY, error.to_string()).into_response())
+}
+
+/// The providers linked luus offer this person, by `<provider>@<peer>`: the
+/// peers this luu dials that are connected, or, on a server with users, the
+/// luus their keys linked. Asked of each at once, a slow one cut at 3 s.
+async fn linked_offers(
+    state: &AppRouterState,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let owner = owner_key();
+    let peers: Vec<String> = match (&state.links, &owner) {
+        (Some(links), Some(user)) => links
+            .of(user)
+            .into_iter()
+            .map(|linked| linked.name)
+            .collect(),
+        (None, None) => state
+            .peers
+            .statuses()
+            .into_iter()
+            .filter(|(_, status)| status.state == "connected")
+            .map(|(name, _)| name)
+            .chain(
+                state
+                    .links
+                    .iter()
+                    .flat_map(|links| links.of("_"))
+                    .map(|linked| linked.name),
+            )
+            .collect(),
+        _ => Vec::new(),
+    };
+    let asks = peers.iter().map(|peer| {
+        let owner = owner.clone();
+        async move {
+            let asked = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                crate::link::ask_offered(owner.as_deref(), peer, ""),
+            )
+            .await;
+            (peer.clone(), asked)
+        }
+    });
+    let mut linked = std::collections::BTreeMap::new();
+    for (peer, asked) in futures_util::future::join_all(asks).await {
+        let Ok(Ok(serde_json::Value::Object(offered))) = asked else {
+            continue;
+        };
+        for (provider, entry) in offered {
+            let mut entry = entry;
+            if let Some(fields) = entry.as_object_mut() {
+                fields.insert("peer".into(), peer.clone().into());
+                fields.insert("provider".into(), provider.clone().into());
+            }
+            linked.insert(format!("{provider}@{peer}"), entry);
+        }
+    }
+    linked
 }
 
 // ---- engines ---------------------------------------------------------------
@@ -7311,6 +8813,10 @@ struct ProvidersView {
     /// a turn in flight, or turns already sent to the old one.
     #[serde(skip_serializing_if = "Option::is_none")]
     waiting: Option<String>,
+    /// Providers linked luus offer, by `<provider>@<peer>`: offered by the
+    /// pickers beside this luu's own. See [`linked_offers`].
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    linked: std::collections::BTreeMap<String, serde_json::Value>,
     /// Provider name → what may be said about its key file without saying what
     /// is in it. Read from disk here rather than kept in `config.toml`, where
     /// even two ends of a key would be two ends of a key in every backup.
@@ -7358,7 +8864,9 @@ async fn providers_view(
         })
         .await
     };
+    let linked = linked_offers(state).await;
     Ok(ProvidersView {
+        linked,
         path: shown_path(path).await,
         editable: state.providers_editable,
         refused: match state.providers_editable {
@@ -7539,6 +9047,26 @@ async fn get_provider_models(
             return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
         }
     };
+    // A provider another luu offers: its own list, asked over the link.
+    if let Some((provider, peer)) = linked_name(&config, name) {
+        let owner = owner_key();
+        return match crate::link::ask_offered(
+            owner.as_deref(),
+            &peer,
+            &format!("/{provider}/models"),
+        )
+        .await
+        {
+            Ok(models) => Json(models).into_response(),
+            Err(error) => Json(serde_json::json!({
+                "models": [],
+                "reason": format!("{error:#}"),
+                "suggested": null,
+                "suggested_from": null,
+            }))
+            .into_response(),
+        };
+    }
     let resolved = match crate::provider::resolve(
         &config,
         path.as_deref(),
@@ -8636,10 +10164,17 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
         });
         (row, last, id)
     }
+    let asking = who();
     let mut stored = Vec::new();
     if let Some(store) = &state.app.store {
-        match store.lock().await.list() {
-            Ok(rows) => stored = rows,
+        match store.lock().await.list_owned() {
+            Ok(rows) => {
+                stored = rows
+                    .into_iter()
+                    .filter(|(_, owner)| sees_stored(&asking, owner))
+                    .map(|(row, _)| row)
+                    .collect()
+            }
             Err(error) => eprintln!("warning: could not list the session store: {error:#}"),
         }
     }
@@ -8665,7 +10200,7 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     let mut sessions = vec![first];
     let mut live_ids = vec![current_id.clone()];
     for (id, live) in state.app.all_live() {
-        if id == current_id {
+        if id == current_id || !sees_live(&asking, &live.owner) {
             continue;
         }
         let (mut row, last, _) = row_of(&live).await;
@@ -9264,7 +10799,53 @@ async fn finish(
     let agency = build(policy, runtime, folder.map(std::path::Path::to_path_buf))
         .await
         .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error:#}")))?;
+    if let Some(who) = who() {
+        confined(&app.root, &who.id, &agency)?;
+    }
     Ok((asked.map(str::to_string), Arc::new(agency)))
+}
+
+/// Refuses a user's agency that reaches past their folder: a granted path
+/// that holds `serve`'s root — every user's folder at once — or one under
+/// the root and outside `<root>/<user id>`. **A check on the policy, not a
+/// policy**: whatever the file grants, this is what a user's session may not
+/// have. Paths outside the root are the deployment's, and shared; `serve`
+/// names the writable ones when it starts. See
+/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`, *the wall the
+/// server holds*.
+fn confined(
+    root: &std::path::Path,
+    user: &str,
+    agency: &Agency,
+) -> Result<(), (StatusCode, String)> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mine = root.join(user);
+    let mine = mine.canonicalize().unwrap_or(mine);
+    for granted in agency.sandbox.roots() {
+        let path = &granted.path;
+        if root.starts_with(path) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!(
+                    "this session's policy grants `{}` ({}), which holds every user's folder: \
+                     a user's session may reach only their own. Grant `.` instead",
+                    granted.source,
+                    path.display()
+                ),
+            ));
+        }
+        if path.starts_with(&root) && !path.starts_with(&mine) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!(
+                    "this session's policy grants `{}` ({}), outside your folder",
+                    granted.source,
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The line that says the rest of this stream was produced somewhere else.
@@ -9354,38 +10935,21 @@ async fn destination_for(
     let (config, path) = load_config()
         .await
         .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-    // With nothing named and the default held, the mock, as `serve` started:
-    // a new session is not the place the host gets typed.
-    let resolved = crate::provider::resolve_holding(
-        &config,
-        path.as_deref(),
-        crate::provider::Flags {
-            provider: asked.provider.as_deref(),
-            ..Default::default()
-        },
-    )
-    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-
-    // The one authority rule this route has, and it is narrower than the write
-    // route's. Writing a `default` outlives the session and the gate, so it is
-    // loopback-only; a session's destination dies with the session. What the
-    // bearer token must still not buy is *this machine's prompts leaving it* to
-    // a destination whoever holds the token picked — so off loopback the choice
-    // is bounded to profiles that stay here. Decided by `is_this_machine`,
-    // server-side, in the one place it is implemented.
-    if !editable && !resolved.url.is_empty() && !crate::provider::is_this_machine(&resolved.url) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            format!(
-                "{} sends off this machine, and this server is bound off loopback: a token says \
-                 who may reach the port, not where this machine's prompts may go. Choose it from \
-                 a browser on the machine itself.",
-                asked.provider.as_deref().unwrap_or("that provider"),
-            ),
-        ));
-    }
-
+    // `<provider>@<peer>`: one another luu offers, over this person's own
+    // link. Chosen per session, which is typing it, so the rule below about
+    // where prompts may go does not reach it: the link is theirs.
+    let linked = asked
+        .provider
+        .as_deref()
+        .and_then(|name| linked_name(&config, name));
+    let resolved = match linked {
+        Some((provider, peer)) => linked_resolved(&provider, &peer)
+            .await
+            .map_err(|why| (StatusCode::UNPROCESSABLE_ENTITY, why))?,
+        None => checked_resolution(&config, path.as_deref(), asked, editable)?,
+    };
     let mut resolved = resolved;
+
     if let Some(model) = asked
         .model
         .as_deref()
@@ -9445,21 +11009,125 @@ async fn destination_for(
     })
 }
 
+/// A provider of this luu's own, resolved, under the one authority rule this
+/// route has.
+fn checked_resolution(
+    config: &crate::provider::Config,
+    path: Option<&std::path::Path>,
+    asked: &NewSession,
+    editable: bool,
+) -> Result<crate::provider::Resolved, (StatusCode, String)> {
+    // With nothing named and the default held, the mock, as `serve` started:
+    // a new session is not the place the host gets typed.
+    let resolved = crate::provider::resolve_holding(
+        config,
+        path,
+        crate::provider::Flags {
+            provider: asked.provider.as_deref(),
+            ..Default::default()
+        },
+    )
+    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    // The one authority rule this route has, and it is narrower than the write
+    // route's. Writing a `default` outlives the session and the gate, so it is
+    // loopback-only; a session's destination dies with the session. What the
+    // bearer token must still not buy is *this machine's prompts leaving it* to
+    // a destination whoever holds the token picked — so off loopback the choice
+    // is bounded to profiles that stay here. Decided by `is_this_machine`,
+    // server-side, in the one place it is implemented.
+    if !editable && !resolved.url.is_empty() && !crate::provider::is_this_machine(&resolved.url) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} sends off this machine, and this server is bound off loopback: a token says \
+                 who may reach the port, not where this machine's prompts may go. Choose it from \
+                 a browser on the machine itself.",
+                asked.provider.as_deref().unwrap_or("that provider"),
+            ),
+        ));
+    }
+    Ok(resolved)
+}
+
+/// `<provider>@<peer>`, when no profile here has that name: a provider
+/// another luu offers over a link. A profile with that exact name wins.
+fn linked_name(config: &crate::provider::Config, name: &str) -> Option<(String, String)> {
+    if config.profiles().contains_key(name) {
+        return None;
+    }
+    let (provider, peer) = name.rsplit_once('@')?;
+    (!provider.is_empty() && !peer.is_empty()).then(|| (provider.to_string(), peer.to_string()))
+}
+
+/// A provider `peer` offers, as a destination: the backend it is, at the
+/// relay's socket, under the name `<provider>@<peer>`. Asked of the peer now,
+/// so a provider it stopped offering is said, not sent to.
+async fn linked_resolved(provider: &str, peer: &str) -> Result<crate::provider::Resolved, String> {
+    let owner = owner_key();
+    let offered = crate::link::ask_offered(owner.as_deref(), peer, "")
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    let entry = offered
+        .get(provider)
+        .ok_or_else(|| format!("{peer} offers no provider named {provider}"))?;
+    let offered: Offered =
+        serde_json::from_value(entry.clone()).map_err(|error| format!("{peer}: {error}"))?;
+    let (url, socket) = crate::link::via_url(owner.as_deref(), peer, provider)
+        .ok_or("this luu has no socket for linked providers")?;
+    Ok(crate::provider::Resolved {
+        kind: offered.backend,
+        url,
+        model: offered.model,
+        context_limit: offered.context_limit,
+        window_from: match offered.context_limit {
+            0 => crate::provider::WindowFrom::Unset,
+            _ => crate::provider::WindowFrom::Profile,
+        },
+        profile: Some(format!("{provider}@{peer}")),
+        destination_from: crate::provider::DestinationFrom::Profile,
+        tool_calls: offered.tool_calls,
+        messages: offered.messages,
+        named: true,
+        socket: Some(socket),
+        ..crate::provider::Resolved::mock()
+    })
+}
+
 async fn create_session(State(state): State<AppRouterState>, body: axum::body::Bytes) -> Response {
-    let app = &state.app;
     let asked = match asked_for(&body) {
         Ok(asked) => asked,
         Err((status, message)) => return (status, message).into_response(),
     };
+    match new_session(&state, asked).await {
+        Ok(summary) => (StatusCode::CREATED, Json(summary)).into_response(),
+        Err(refused) => *refused,
+    }
+}
 
+/// A new session, made current for whoever asked: what `POST /api/sessions`
+/// does, and what a user's first request does when they have none — see
+/// [`ensure_current`].
+async fn new_session(
+    state: &AppRouterState,
+    asked: NewSession,
+) -> Result<agent_core::api::SessionSummary, Box<Response>> {
+    let app = &state.app;
     // Beside the others, not in place of the current one: a turn running in
     // it goes on. Refused only when there is no room for one more. See
     // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
-    if let Err(refused) = room_for_one(app).await {
-        return *refused;
+    room_for_one(app).await?;
+    // The session it is made beside, whose destination it starts from: the
+    // asker's current one, or — for a user's first — the server's own.
+    let previous = app.current_of(&owner_key());
+    let template = match &previous {
+        Some(previous) => previous.clone(),
+        None => app
+            .current_of(&None)
+            .expect("a server always has its own session"),
+    };
+    if let Some(previous) = &previous {
+        app.checkpoint(previous).await;
     }
-    let previous = app.current();
-    app.checkpoint(&previous).await;
 
     // Resolved before anything is reset: a session that cannot be pointed
     // anywhere is one that should not have ended the previous one.
@@ -9470,20 +11138,22 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         // `true` for editable: following the file is not a token holder
         // picking a destination, which is what that check is about.
         (false, false) => {
-            let current = previous.destination().await;
+            let current = template.destination().await;
             match current.settings.follows_default {
                 false => current,
                 true => match destination_for(app, &current, &asked, true).await {
                     Ok(next) => Arc::new(next),
-                    Err((status, message)) => return (status, message).into_response(),
+                    Err((status, message)) => {
+                        return Err(Box::new((status, message).into_response()));
+                    }
                 },
             }
         }
         _ => {
-            let current = previous.destination().await;
+            let current = template.destination().await;
             match destination_for(app, &current, &asked, state.providers_editable).await {
                 Ok(next) => Arc::new(next),
-                Err((status, message)) => return (status, message).into_response(),
+                Err((status, message)) => return Err(Box::new((status, message).into_response())),
             }
         }
     };
@@ -9511,7 +11181,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // The folder it works in, checked before anything is built.
     let folder = match folder_under_root(app, asked.folder.as_deref()) {
         Ok(folder) => folder,
-        Err((status, message)) => return (status, message).into_response(),
+        Err((status, message)) => return Err(Box::new((status, message).into_response())),
     };
     let (posture_name, agency) = match posture_for(
         app,
@@ -9524,13 +11194,14 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     .await
     {
         Ok(resolved) => resolved,
-        Err((status, message)) => return (status, message).into_response(),
+        Err((status, message)) => return Err(Box::new((status, message).into_response())),
     };
     let live = Arc::new(LiveSession::blank(
         sending.clone(),
         agency.clone(),
-        previous.recorder.clone(),
+        template.recorder.clone(),
         app.map_for(&agency, sending.counter.clone()).await,
+        owner_key(),
     ));
     *live.destination.write().await = sending.clone();
     tracing::info!(
@@ -9652,7 +11323,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     app.publish(&live, Event::Protocol(hello)).await;
     app.make_current(&summary.id, live.clone());
 
-    (StatusCode::CREATED, Json(summary)).into_response()
+    Ok(summary)
 }
 
 /// A session's folder, out of what a request or a recording says: a
@@ -9660,17 +11331,23 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
 /// root itself. Relative is taken from the root; absolute is checked to be
 /// under it. Never above it: a folder is a narrowing of where `serve` was
 /// started, the rule the page's picker has always held.
+///
+/// **A user's root is their own folder**, `<root>/<user id>`, made here the
+/// first time it is asked for: the answer is never `None` for a user, because
+/// `None` is `serve`'s root, which holds every user's folder. See
+/// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
 fn folder_under_root(
     app: &App,
     asked: Option<&str>,
 ) -> Result<Option<PathBuf>, (StatusCode, String)> {
+    let owner = owner_key();
+    let root = user_root(app, &owner)?;
     let Some(asked) = asked
         .map(str::trim)
         .filter(|asked| !asked.is_empty() && *asked != ".")
     else {
-        return Ok(None);
+        return Ok(owner.is_some().then_some(root));
     };
-    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
     let joined = root.join(asked);
     let folder = joined.canonicalize().map_err(|error| {
         (
@@ -9684,19 +11361,42 @@ fn folder_under_root(
     if !folder.starts_with(&root) {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!(
-                "{asked}: outside {}, where this server was started",
-                root.display()
-            ),
+            match owner {
+                None => format!(
+                    "{asked}: outside {}, where this server was started",
+                    root.display()
+                ),
+                Some(_) => format!("{asked}: outside your folder"),
+            },
         ));
     }
-    Ok((folder != root).then_some(folder))
+    Ok(match owner {
+        None => (folder != root).then_some(folder),
+        Some(_) => Some(folder),
+    })
+}
+
+/// The root a person's folders are chosen under, canonical: `serve`'s own
+/// where there are no users, and the user's folder — made when it is not
+/// there yet — for a user.
+fn user_root(app: &App, owner: &Option<String>) -> Result<PathBuf, (StatusCode, String)> {
+    let root = app.root_of(owner);
+    if owner.is_some() {
+        std::fs::create_dir_all(&root).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("making your folder: {error}"),
+            )
+        })?;
+    }
+    Ok(root.canonicalize().unwrap_or(root))
 }
 
 /// A folder as the page names it: relative to `serve`'s root, `""` for the
 /// root itself.
 fn folder_of(app: &App, base: &std::path::Path) -> String {
-    let root = app.root.canonicalize().unwrap_or_else(|_| app.root.clone());
+    let root = app.root_of(&owner_key());
+    let root = root.canonicalize().unwrap_or(root);
     match base.strip_prefix(&root) {
         Ok(under) => under.display().to_string(),
         Err(_) => base.display().to_string(),
@@ -9712,7 +11412,10 @@ async fn get_folders(
     State(state): State<AppRouterState>,
     Query(query): Query<WorkspaceQuery>,
 ) -> Response {
-    let root = state.app.root.clone();
+    let root = match user_root(&state.app, &owner_key()) {
+        Ok(root) => root,
+        Err((status, message)) => return (status, message).into_response(),
+    };
     let policy = agent_core::sandbox::SandboxPolicy {
         paths: vec![agent_core::sandbox::PathRule::new(
             ".",
@@ -9766,6 +11469,7 @@ async fn put_session_folder(
     let target = folder
         .clone()
         .unwrap_or_else(|| app.root.canonicalize().unwrap_or_else(|_| app.root.clone()));
+    // (A user's `folder` is never `None`: see [`folder_under_root`].)
     let current = leaving.posture(live.posture.lock().await.clone());
     // Where it already is is an answer, whatever it has done there.
     if leaving.sandbox.base() == target {
@@ -9819,8 +11523,17 @@ async fn room_for_one(app: &App) -> Result<(), Box<Response>> {
         .map(|(config, _)| config.sessions().max_live)
         .unwrap_or(crate::provider::Sessions::default().max_live)
         .max(1);
+    // Counted per user on a server with users: nobody else may free a user's
+    // slot, so one user must not be able to take all of them. See
+    // `RECORD/2026-11-03.users-and-a-code-by-email.WIP.md`, *the three
+    // questions, answered* §2.
+    let owner = owner_key();
     loop {
-        let live = app.all_live();
+        let live: Vec<(String, Arc<LiveSession>)> = app
+            .all_live()
+            .into_iter()
+            .filter(|(_, one)| one.owner == owner)
+            .collect();
         if live.len() < max {
             return Ok(());
         }
@@ -9854,9 +11567,7 @@ async fn room_for_one(app: &App) -> Result<(), Box<Response>> {
 /// Whether a live session may be put to sleep: not the current one, nobody
 /// attached to it, no turn running and nothing waiting at its gate.
 async fn may_sleep(app: &App, live: &Arc<LiveSession>) -> bool {
-    if Arc::ptr_eq(live, &app.current())
-        || live.clients.load(std::sync::atomic::Ordering::Relaxed) > 0
-    {
+    if app.is_current(live) || live.clients.load(std::sync::atomic::Ordering::Relaxed) > 0 {
         return false;
     }
     let session = live.session.lock().await;
@@ -9870,7 +11581,7 @@ async fn sleep_live(app: &App, id: &str) {
     let Some(live) = app.live(id) else {
         return;
     };
-    if Arc::ptr_eq(&live, &app.current()) {
+    if app.is_current(&live) {
         return;
     }
     app.checkpoint(&live).await;
@@ -9918,7 +11629,7 @@ async fn end_live(State(state): State<AppRouterState>, Path(id): Path<String>) -
     let Some(live) = app.live(id) else {
         return (StatusCode::NOT_FOUND, format!("session {id} is not live")).into_response();
     };
-    if Arc::ptr_eq(&live, &app.current()) {
+    if app.is_current(&live) {
         return (
             StatusCode::CONFLICT,
             "the current session is the one on screen: open another first",
@@ -10376,7 +12087,9 @@ async fn resume_session(
                 eprintln!("warning: session {id} resumes at the root: {why}");
                 None
             }
-        });
+        })
+        // A user's root is their folder, and never `serve`'s.
+        .or_else(|| folder_under_root(app, None).ok().flatten());
     let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
         (None, None, Some(stored)) => {
             posture_from_copy(
@@ -10498,6 +12211,7 @@ async fn resume_session(
         agency.clone(),
         previous.recorder.clone(),
         built,
+        owner_key(),
     ));
     *live.destination.write().await = sending.clone();
     tracing::info!(
@@ -10720,7 +12434,7 @@ async fn rename_session(
         // The one on screen is not archived; one live beside it is put to
         // sleep first, as a person putting it away means, unless it is busy.
         if let Some(live) = &named {
-            if Arc::ptr_eq(live, &state.app.current()) {
+            if state.app.is_current(live) {
                 return (
                     StatusCode::BAD_REQUEST,
                     "the session on screen is not archived: start or open another first",
@@ -11100,8 +12814,10 @@ mod tests {
                 walked: Mutex::new(walked),
                 last_active: std::sync::atomic::AtomicU64::new(now_ms()),
                 clients: Default::default(),
+                owner: None,
             }))),
-            current_changed: tokio::sync::watch::channel(String::new()).0,
+            current_changed: tokio::sync::watch::channel((None, String::new())).0,
+            making: Mutex::new(()),
         })
     }
 

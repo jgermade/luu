@@ -915,6 +915,31 @@ access = "execute"
   `--network none` at all — under which the container stays attached, the
   per-command seccomp filter is doing all the denying, and the verdict reports
   it.
+- **`kubernetes` is a pod per session**, through `kubectl` — still an argv:
+  `kubectl run --rm -i --restart=Never --overrides=<the pod>` is `docker run
+  --rm -i` in another spelling, and the worker speaks over the same pipe. The
+  pod is luu's to write whole: the work claim mounted at the session's base by
+  `subPath`, so **only that folder is in the pod**; an `emptyDir` home and
+  `/tmp` of its own, which makes the cargo home per session; luu's uid, a
+  read-only root, every capability dropped, `RuntimeDefault` seccomp and no
+  service account token (Pod Security `restricted`); luu's pod as its
+  controlling owner; and, the claim being `ReadWriteOnce` by default, a required
+  `podAffinity` to luu's node. A session that may not reach the network makes a
+  pod labelled `luu.dev/network: none`, which the chart's NetworkPolicy seals —
+  held only by a CNI that enforces NetworkPolicy, which `Runtime::cannot` says.
+  **The container waits for one line on stdin before it becomes the worker**,
+  and luu writes it as soon as `kubectl` is spawned: `kubectl run -i` attaches
+  only once the pod runs, and a hello written before the attach is not
+  replayed. Configured by `LUU_KUBE_*`, which the chart writes from the
+  Downward API (`runtime: kubernetes`, with a ServiceAccount whose Role makes,
+  attaches to, execs into and deletes pods). It builds and installs nothing:
+  `install` has no root to run as there, and it is not offered in Settings →
+  Runtimes, because a cluster is the deployment's choice rather than a
+  machine's install. **The image is not given nested containers** —
+  Docker-in-Docker is `--privileged`, the host's socket is root on the host —
+  so inside `ghcr.io/jgermade/luu` sessions run on `host`, one trust domain held
+  by Landlock. See
+  [`RECORD/2026-11-03.a-pod-per-session.WIP.md`](RECORD/2026-11-03.a-pod-per-session.WIP.md).
 - **`runtime = "host"` is the default** and is every run this repository has
   measured. `direct` runs the worker as a plain child with no container: it
   isolates nothing, says so in every line that reports it, and exists so the seam
@@ -1607,7 +1632,7 @@ browser cannot request with a header. `Authorization: Bearer <token>` everywhere
 [`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
 
 **How a server is reached is written down, too**: `[server]` in `config.toml` —
-`exposure` (`loopback` or `private`), `bind`, `token-file`, `origin` — under
+`exposure` (`loopback`, `private` or `public`), `bind`, `token-file`, `origin` — under
 `--exposure`, `--bind`, `--auth-token-file`, `--origin` and their `LUU_*`
 variables, because a container is configured by its files and its environment.
 Absent, the address decides as above. Present, `exposure` is a promise the address
@@ -1618,7 +1643,105 @@ an `Origin` beside the request's `Host`. `deploy/` is that server in a container
 (`deploy/Containerfile`, whose tools run in the container itself, as user `luu`,
 under `deploy/luu.toml`) and behind Caddy (`deploy/compose.yaml`); the first start
 writes `[server]` and the token into the state volume. See
-[`RECORD/2026-10-07.a-public-luu.WIP.md`](RECORD/2026-10-07.a-public-luu.WIP.md).
+[`RECORD/2026-10-07.a-public-luu.completed.md`](RECORD/2026-10-07.a-public-luu.completed.md).
+
+**`public` is users.** Who may log in is data, not configuration: `auth.db` in
+the state directory, created `0600` and refused when it is anything looser,
+holds the users (a random 12-hex id, an email, a role — `user`, `admin` or
+`owner` — and whether they are suspended), the one-time codes they log in with
+and the logins those became, each secret stored as its `sha256`. There is no
+sign-up: `luu user add` on the machine is how a person becomes a user, and
+`luu user code` prints the six-digit code they log in with — ten minutes, one
+use, five wrong tries burn it — until a server can send it by email. The last
+owner cannot be demoted, suspended or removed, and `remove` refuses while the
+user has sessions. `POST /api/auth/login` exchanges a code for an `HttpOnly;
+SameSite=Strict` cookie (`Secure` behind an `https` origin) that lasts
+`[auth] session-hours`, a week by default; every failure gets one answer, so
+the endpoint says nothing about who is here. `public` needs `origin` and
+refuses a token, and **`Origin` has to be that origin on every write and every
+socket upgrade**, the login included. `GET /api/auth/me` (and `.json`, which
+`luu export` writes as `{"users": false}`) is the one question the page asks
+before it mounts: with users and no login it mounts a login view instead of
+the app, and Settings → General shows the account and *Sign out*.
+
+**A user has their own sessions and their own folder, and nobody else's.** The
+login middleware puts the user in scope for the request, so *the current
+session* is per user — a user with none gets one at their first request, made
+in `<root>/<user id>` and sending where the server's own session sends — and a
+socket follows its own user's current session and nobody else's. Sessions
+carry their owner (`sessions.owner`, schema 6; rows from before it are the
+owners'); another user's session, by path, by `?session=` or on a socket, is a
+`404`, not a `403`, an owner included. `max-live` counts per user. The folder
+picker browses only the user's folder, and **a user's agency is refused where
+its policy grants a path that holds the root or reaches another user's
+folder** — a check on the policy, not a policy, so a deployment's file cannot
+widen it; `deploy/luu.toml` grants `.` (the session's folder) for that reason.
+Writable paths outside the root are shared by every user, and `serve` names
+them when it starts. A host shell is an owner's only, and Settings writes stay
+refused off loopback until roles reach them (step 3 of
+[`RECORD/2026-11-03.users-and-a-code-by-email.WIP.md`](RECORD/2026-11-03.users-and-a-code-by-email.WIP.md)).
+See [`RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md).
+The code is typed into six boxes (`web/components/otp-input.html`), which submit
+once the sixth digit arrives, shake red on a refusal and draw a green ring before the
+page reloads.
+
+**Local or online, and `luu config` for the online steps in all three ways in.**
+
+1. **`luu config server [--origin] [--bind]`** writes `[server]`:
+   `exposure = "public"`, the origin, the bind (`127.0.0.1:7878` on a machine,
+   `0.0.0.0:7878` in a container) and no `token-file`. It carries the rest of
+   `config.toml`, as a Settings write does. `serve` reads `[server]` when it
+   starts, so it says to restart it.
+2. **`luu config owner`** sets the mail and the first owner in one step,
+   proved by one code. `[auth.smtp]` holds a URL, a from address and a user;
+   the password goes in `smtp.password`, `0600`, which the table names. The
+   code goes to the owner's email **under the settings as typed, unsaved**,
+   and they are saved, and the owner made, only when the code comes back. So
+   the code tests the mail, the mailbox and whose it is at once.
+   - A failed send saves nothing and forgets the code.
+   - `smtp://` with no `tls=` is refused except to this machine.
+   - A password inside the URL is refused.
+   - **A password mounted for luu stays where it is**:
+     `--smtp-password-ref file:/run/secrets/luu/smtp-password` saves
+     `password-ref`, read on every send, so a rotated Kubernetes or Docker
+     secret is the next email's. Its mode is not checked (a Secret is
+     mounted `0644`), and a stale `smtp.password` is removed. The chart
+     mounts one with `mail.passwordSecret`. **Never `env:`**: a session's
+     commands inherit luu's environment. **Any password file under a root
+     every command can read (`/etc`, `/usr`, `/opt`, …) is refused**: the
+     commands run as luu's user, so no mode keeps them out.
+3. **`luu config mail`** proves other settings the same way, to an owner.
+4. **`luu config setup-url`** prints a one-time link (`?setup=<key>`): 32
+   random bytes, stored as their sha256, valid for an hour, and spent by the
+   owner it makes. On a terminal, or with `--qr`, it also draws the link as a
+   QR code for a phone, in black-on-white half blocks whatever the terminal's
+   colours. The link opens step 2 in the page. A page with no owner
+   and no key says what to run; it does not offer the form, or whoever
+   arrived first would own the server.
+
+`luu config` with no step does 1 and 2 on a terminal. After that, a user logs
+in by asking for a code by email (`POST /api/auth/code`). The server answers
+the same `202` whoever asks and sends after answering. It sends one code per
+address a minute, and sixty an hour at most. See
+[`RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`](RECORD/2026-11-03.an-owner-proved-by-email.WIP.md).
+
+`setup.sh` asks after an install: **local** is the binary in `~/.local/bin`, no
+root. **online** is Linux with systemd, each root step through `sudo`:
+
+- the binary in `/usr/local/bin`;
+- a system user `luu` whose home `/var/lib/luu` is the state directory, with
+  `work/` as `serve`'s root;
+- `/etc/luu/luu.toml` when there is none;
+- `luu config server` as `luu`, for the origin;
+- a `luu.service` held by `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`
+  and `NoNewPrivileges`, writable only in `/var/lib/luu`.
+
+An online install is known afterwards by its unit: `reinstall` restarts it, and
+`uninstall --purge` removes the unit, the binary, `/var/lib/luu`, `/etc/luu` and
+the user. It ends by printing the setup link (and `luu config` as the
+terminal's way). In Docker and the chart the online steps are `luu config`
+through `exec`, and a restart. See
+[`RECORD/2026-11-03.local-or-online.completed.md`](RECORD/2026-11-03.local-or-online.completed.md).
 
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and
 is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
@@ -1837,10 +1960,12 @@ The rest follows from that:
 - **Components**: `web/components/` holds the components the theme does not have yet, which
   import nothing from the page. Everything arrives as props or slots, everything leaves as
   `:model` or `$emit`, and styles are scoped. `Modal` (the `<dialog>` every modal is, with the
-  folio and the child sheet), `Dropup`, `PathText`, and two that each take an idea
+  folio and the child sheet), `Dropup`, `PathText`, and three that each take an idea
   from rare-ui with none of its code: `Rail` (a bar beside the chosen section that springs to it;
-  it was a dot until 2026-09-30) and `SaveButton` (a count of unsaved changes, and a tick once a
-  save lands). See
+  it was a dot until 2026-09-30), `SaveButton` (a count of unsaved changes, and a tick once a
+  save lands) and `OtpInput` (a one-time code in boxes: digits roll in, one caret slides to the
+  box that waits, a refusal shakes the row red and a login rings each box green; its state is a
+  `data-status` attribute, because `.error` is the page's own class). See
   [`RECORD/2026-09-28.components-of-our-own.completed.md`](RECORD/2026-09-28.components-of-our-own.completed.md).
 - **The page draws with a theme, and a theme is a folder**: `web/theme/default/` holds
   `tokens.css` (colour by role, type, space, radii, control heights, shadows, motion, all
@@ -2868,6 +2993,119 @@ dialog's: the modal chose them too until 2026-10-27, a second way to make a
 session. See
 [`RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`](RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md)
 and [`RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md`](RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md).
+
+### A luu linked by key, over SSH: the online page as a way into one at home
+
+**One SSH connection, opened by whichever side can dial**, which is the one
+behind NAT: the luu at home dials the online one, the way intergate's client
+dials intergate. `russh` (with `ring`, no OpenSSL) on both ends.
+
+```sh
+luu link add https://luu.example.com --name casa   # at home: pins its key
+luu user key add ana@example.com "$(luu link key)"  # online, or Account → Keys
+```
+
+- **Keys, like ssh.** Every luu has `<state>/id_ed25519`; a server that accepts
+  links has `ssh_host_ed25519_key`. Both are OpenSSH ed25519 keys made from
+  `/dev/urandom`, `0600`, with their mode checked. A server with users keeps
+  each user's public keys in `auth.db` (schema 3), and a key belongs to one
+  user. A suspended or removed user's key lets nothing in, and a sweep every
+  30 s closes a link whose key left its account.
+- **The server's key is pinned from its page, over HTTPS.**
+  `GET /api/link.json` says where to dial (`[server] ssh`, or `ssh-public`) and
+  the key to expect, so the trust is the certificate's on the address that was
+  typed. A handshake with any other key is refused.
+- **`[server] ssh`** is where links are accepted: `0.0.0.0:2222` by default
+  from `luu config server`, and read only on a server with users. Its own
+  port, because an Ingress or Caddy carries HTTP only. The chart gives it a
+  Service, and compose publishes it.
+- **The online side.** A key's `tcpip-forward` registers its user and its
+  name (the SSH user), and a newer link with the same pair replaces the older
+  at once. `/h/<name>/api/*` and `/h/<name>/ws*` go over one
+  `forwarded-tcpip` channel per request, HTTP/1.1 through `hyper`. They are
+  for that user only: anyone else gets the 404 a missing one gets.
+  `/api/hosts` lists a user's linked luus, and never `[host.*]`.
+- **The dialing side.** `[peer.<name>]` holds `url`, `ssh`, `host-key`,
+  `name`, `dial` and `may`. `luu serve` dials each peer:
+  - the wait starts at 1 s and doubles up to 30 s, and goes back to 1 s once
+    a connection has lasted a minute;
+  - a refusal is retried every 30 s, so a link follows by itself once its key
+    is added on the other side;
+  - a keepalive goes every 30 s.
+- **A channel is served by this luu's own router behind a peer gate, never as
+  loopback.** `may` is `sessions` (by default: every read, and a session's
+  writes), `terminal` and `settings`. Remote access, `[host.*]`, logins and
+  `/h/*` are never a peer's. Past the gate the request is made to look like
+  this machine's own page, so every check below it reads it as it already
+  knows how.
+- **Settings → Remote access.** On a luu with no users it holds the peers:
+  - add one by its page's address;
+  - see each one's state;
+  - switch `dial` and `may`;
+  - unlink;
+  - copy this luu's key.
+
+  It is written from this machine only. On a server with users it holds
+  your linked luus (*Open* goes to `/h/<name>/`) and your keys. A link to
+  `/?add-key=<key>&name=<name>` opens it with the key filled in, and the
+  first-run folder picker waits for the next visit.
+
+**Providers across luus, by name.** A provider one luu offers is chosen on the
+other as `<provider>@<peer>`, while the link is up: `gpu@casa` online,
+`claude@online` at home. Nothing is written for it, and a profile with that
+exact name wins.
+
+- **The key and the engine stay where they are.** The offering luu serves
+  `GET /api/infer` (what it offers: backend, model, window, transport),
+  `GET /api/infer/<p>/models`, and `/api/infer/<p>/to/<path>`, which passes a
+  request to that provider's own URL with its engine started and its key added.
+- **It offers everything a session there can use**, less a provider with
+  `offer = false`: a switch in Remote access at home, the file on a server.
+- **Who reaches it.**
+  - At home, `/api/infer` is `sessions` behind the peer gate.
+  - Online, a linked luu's own `direct-tcpip` channels reach a router with
+    `/api/infer` and nothing else, as the key's user.
+  - A user's linked providers are that user's only.
+- **A backend reaches it through a unix socket**, never a port on loopback:
+  - `<state>/sockets/links-<pid>.sock`, `0600` in a `0700` folder (a
+    folder under the temp dir when that path is too long for a socket);
+  - the three backends take its client (`with_http`) and are otherwise
+    unchanged;
+  - it carries `/via/<owner>/<mark>/<peer>/api/infer/…` and nothing else
+    over that peer's link.
+
+  `<mark>` signs the path for its owner with a secret that never leaves
+  the process. A session's commands run as luu's user and could connect to
+  the socket, since Landlock does not hold `connect` on one, but without the
+  secret they cannot write another owner's path.
+- **The rule that keeps a server's prompts on the machine** (*a token says
+  who may reach the port*) does not reach a provider through the user's own
+  link: the link is theirs, and choosing it per session is typing it.
+
+**A luu without users accepts links too**, and that is what replaces a
+`[host.*]` and its token:
+- `[server] ssh` is read on it as well. Who may link is a `[peer.<name>]`
+  with `key = "ssh-ed25519 …"`, written by `luu link allow <name> <key>` or
+  Remote access's *Let luus link to this one*, from this machine only. The
+  link is known by that table's name, and the table's `may` says what it may
+  do here.
+- **Either side opens the other's page under `/h/<name>/`.** The dialling
+  side does it over `direct-tcpip` channels, which the accepting side answers
+  with its whole router behind the peer gate. The accepting side does it over
+  `forwarded-tcpip`, as an online server does. On both, `/h/*` is this
+  machine's own page's only (`hosts_allowed`).
+- **Providers cross on these links too**, both ways.
+- `/api/link.json` gives the address from the request's own `Host` when
+  there is no `ssh-public` and no origin.
+- The project modal lists the linked luus beside the hosts, and *Link a luu*
+  opens Remote access.
+- **A `[host.*]` still works and can still be edited, and is no longer
+  added from the page.** Removing the table would refuse every
+  `config.toml` that has one.
+
+**What a link trusts:** the online server ends TLS for the browser and holds
+the connection, so it sees what crosses it. See
+[`RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`](RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md).
 
 ## Suggested work order
 

@@ -38,9 +38,35 @@ curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- uninstall --purge
 wget -qO- https://jgermade.github.io/luu/setup.sh | sh
 ```
 
+After an install it asks how luu runs here. **local** is all of the above: for
+you, on `127.0.0.1`, no login. **online** is for people who log in — Linux with
+systemd, and root through `sudo`. It does five things:
+
+- puts the binary in `/usr/local/bin`;
+- makes a system user `luu` whose home `/var/lib/luu` is the state directory;
+- writes `/etc/luu/luu.toml`;
+- writes your domain into its `[server]` (`luu config server`);
+- starts `luu.service`, and prints a one-time link to finish in the page, with
+  a QR code of it for your phone. The page sets how it sends mail, and makes
+  you its owner, proved by one code sent to you.
+
+`reinstall` restarts the service, and `uninstall --purge` removes all of it.
+Without a terminal, say it:
+
+```sh
+curl -fsSL https://jgermade.github.io/luu/setup.sh | sh -s -- install --mode online \
+  --origin https://luu.example.com
+```
+
+luu does not terminate TLS: put a proxy in front, `caddy reverse-proxy --from
+luu.example.com --to 127.0.0.1:7878`. See
+[`local-or-online`](RECORD/2026-11-03.local-or-online.completed.md).
+
 | Option | |
 | --- | --- |
-| `--dir DIR` | Where the binary goes. Default `~/.local/bin`, or `LUU_INSTALL_DIR`. |
+| `--mode MODE` | `local` (the default) or `online`. Or `LUU_MODE`. |
+| `--origin URL` | Online: what a browser types. |
+| `--dir DIR` | Where the binary goes. Default `~/.local/bin` (`/usr/local/bin` online), or `LUU_INSTALL_DIR`. |
 | `--version TAG` | A release such as `v0.1.1`. Default the latest, or `LUU_VERSION`. |
 | `--purge` | With `uninstall`: also delete the state directory (`LUU_HOME`, `~/.luu`, `~/.config/luu`). |
 | `-y`, `--yes` | Do not ask before deleting; `--purge` needs it when there is no terminal. |
@@ -86,9 +112,28 @@ helm install luu oci://ghcr.io/jgermade/charts/luu \
 kubectl exec deploy/luu -- cat /state/token
 ```
 
-One identity, the token; several are
-[`a-public-luu`](RECORD/2026-10-07.a-public-luu.WIP.md)'s later steps. See
-[`three-ways-in`](RECORD/2026-10-30.three-ways-in.WIP.md).
+Sessions run in luu's own pod by default. With `--set runtime=kubernetes`
+each session runs in a pod of its own that mounts only its folder; hold the
+namespace to Pod Security `restricted` (see
+[`a-pod-per-session`](RECORD/2026-11-03.a-pod-per-session.WIP.md)).
+
+Each starts with one identity, the token. To make either one online, with
+people who log in, run `luu config` in it, then restart it:
+
+```sh
+docker exec -it luu luu config && docker restart luu
+kubectl exec -it deploy/luu -- luu config && kubectl rollout restart deploy/luu
+```
+
+`luu config` writes `[server]` for your domain, then takes how it sends mail
+and your email, and sends you a code under those settings. Type it back, and
+the mail is saved and you are the owner: the code is the mail's test. Or
+finish it in the page: `luu config setup-url` prints a one-time link. After
+that, people are added with `luu user add <email>`, log in with a code by
+email, and each has their own sessions and folder. See
+[`an-owner-proved-by-email`](RECORD/2026-11-03.an-owner-proved-by-email.WIP.md),
+[`a-user-a-code-and-a-folder`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md)
+and [`three-ways-in`](RECORD/2026-10-30.three-ways-in.WIP.md).
 
 ## First run
 

@@ -191,6 +191,14 @@ impl Anthropic {
         self
     }
 
+    /// Another client than the default: one that dials a unix socket, which
+    /// is how a provider another luu offers is reached — through the link,
+    /// never through a port on loopback. See `luu`'s `crate::link`.
+    pub fn with_http(mut self, http: reqwest::Client) -> Self {
+        self.http = http;
+        self
+    }
+
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
         self

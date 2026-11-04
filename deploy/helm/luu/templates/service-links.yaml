@@ -1,0 +1,26 @@
+{{- if .Values.links.enabled }}
+# Links from other luus, over SSH: its own Service, because an Ingress
+# carries HTTP only. See RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "luu.fullname" . }}-links
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+  {{- with .Values.links.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.links.service.type }}
+  selector:
+    {{- include "luu.selector" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  ports:
+    - name: ssh
+      port: {{ .Values.links.port }}
+      targetPort: ssh
+      {{- if and (eq .Values.links.service.type "NodePort") .Values.links.service.nodePort }}
+      nodePort: {{ .Values.links.service.nodePort }}
+      {{- end }}
+{{- end }}

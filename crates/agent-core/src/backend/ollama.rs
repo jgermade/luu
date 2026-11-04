@@ -21,6 +21,14 @@ impl Ollama {
             http: reqwest::Client::new(),
         }
     }
+
+    /// Another client than the default: one that dials a unix socket, which
+    /// is how a provider another luu offers is reached — through the link,
+    /// never through a port on loopback. See `luu`'s `crate::link`.
+    pub fn with_http(mut self, http: reqwest::Client) -> Self {
+        self.http = http;
+        self
+    }
 }
 
 impl Default for Ollama {

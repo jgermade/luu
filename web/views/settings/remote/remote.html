@@ -1,0 +1,405 @@
+<script :setup>
+  // Remote access: this luu linked to another, over SSH by key, so the online
+  // page is a way into the luu at home. On a luu with no users it is what that
+  // luu dials and what each link may do here; on a server with users it is
+  // your keys and the luus they linked. See `@web/lib/remote.js` and
+  // `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+  const { account } = await import("@web/lib/account.js")
+  const { currentHost, goToHost } = await import("@web/lib/hosts.js")
+  const remote = await import("@web/lib/remote.js")
+  const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
+  if (!state.providers) loadProviders()
+
+  // What this luu offers the luus linked to it, by provider: everything a
+  // session here can use, less what is withheld (`offer = false`). Written
+  // from this machine; on a server with users, read here and set in its file.
+  $: ownProviders = Object.keys(state.providers?.providers || {})
+  const offers = name => state.providers?.providers?.[name]?.offer !== false
+  let offerError = ""
+  const setOffer = async (name, on) => {
+    const providers = { ...(state.providers?.providers || {}) }
+    const profile = { ...providers[name] }
+    if (on) delete profile.offer
+    else profile.offer = false
+    providers[name] = profile
+    const saved = await saveProviders({ default: state.providers?.default ?? null, providers })
+    offerError = saved?.ok ? "" : (state.providersError || "the write was refused")
+  }
+  $: linkedHere = Object.keys(state.providers?.linked || {})
+
+  const online = account.users
+  const LABELS = {
+    sessions: "Sessions: read everything, start, run, approve and end sessions",
+    terminal: "Terminal: a shell on this machine or in its container",
+    settings: "Settings: providers, engines, runtimes, policies",
+  }
+  const STATES = {
+    connected: "connected", connecting: "connecting…", retrying: "retrying",
+    refused: "refused", off: "off",
+  }
+  const ago = at => {
+    const s = Math.max(0, Math.round((Date.now() - at) / 1000))
+    return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`
+  }
+
+  // ---- a luu with no users: the luus it dials ------------------------------
+  let view = null
+  let error = ""
+  let refusedHere = false
+  let url = ""
+  let name = ""
+  let linking = false
+  let copied = false
+
+  const load = async () => {
+    const asked = await remote.loadPeers()
+    if (asked.ok) { view = asked.view; error = "" }
+    else if (asked.status === 403) refusedHere = true
+    else error = asked.error
+  }
+  const save = async peers => {
+    const asked = await remote.savePeers(peers)
+    if (asked.ok) { view = asked.view; error = "" } else error = asked.error
+  }
+  const change = (peer, edit) => save({ ...view.peers, [peer]: { ...view.peers[peer], ...edit } })
+  const toggleMay = (peer, word) => {
+    const may = view.peers[peer].may || []
+    change(peer, { may: may.includes(word) ? may.filter(w => w !== word) : [...may, word] })
+  }
+  // What it dials, and what it lets in: a table may be both.
+  $: dialled = view ? Object.keys(view.peers || {}).filter(p => view.peers[p].ssh) : []
+  $: allowed = view ? Object.keys(view.peers || {}).filter(p => view.peers[p].key) : []
+  const without = (peer, fields) => {
+    const kept = { ...view.peers[peer] }
+    for (const field of fields) delete kept[field]
+    const rest = { ...view.peers }
+    if (kept.ssh || kept.key) rest[peer] = kept
+    else delete rest[peer]
+    return rest
+  }
+  const unlink = peer => save(without(peer, ["ssh", "host-key", "name", "url", "dial"]))
+  const disallow = peer => save(without(peer, ["key"]))
+  // A luu let in by its key, `luu link key` there: on a luu without users,
+  // where `[server] ssh` takes links.
+  let allowName = ""
+  let allowKey = ""
+  const allow = async () => {
+    const name = allowName.trim()
+    const had = view.peers[name] || {}
+    await save({ ...view.peers, [name]: { ...had, key: allowKey.trim(), may: had.may || ["sessions"], dial: had.dial ?? false } })
+    if (!error) { allowName = ""; allowKey = "" }
+  }
+  const shortKey = key => {
+    const [kind, body, comment] = (key || "").split(" ")
+    return comment || (body ? `${kind} …${body.slice(-8)}` : "")
+  }
+  // The page tells where to dial and the key to expect, over HTTPS; pinned
+  // here at once, so the link follows by itself once the key is added there.
+  const link = async () => {
+    linking = true
+    error = ""
+    const asked = await remote.probePeer(url.trim())
+    if (!asked.ok) { error = asked.error; linking = false; return }
+    const probe = asked.view
+    const host = (probe.url.split("://")[1] || "online").split(/[.:/]/)[0] || "online"
+    let peer = host.replace(/[^A-Za-z0-9_-]/g, "") || "online"
+    while (view?.peers?.[peer]) peer += "-2"
+    const as = (name.trim() || defaultName()).toLowerCase()
+    await save({
+      ...(view?.peers || {}),
+      [peer]: { url: probe.url, ssh: probe.ssh, "host-key": probe.host_key, name: as, dial: true, may: ["sessions"] },
+    })
+    linking = false
+    if (!error) { url = ""; name = "" }
+  }
+  const defaultName = () => ((view?.key || "").split(" ")[2] || "luu@home").split("@")[1]?.split(".")[0]?.toLowerCase() || "home"
+  const copyKey = async () => {
+    try { await navigator.clipboard.writeText(view.key); copied = true; setTimeout(() => copied = false, 1500) } catch {}
+  }
+
+  // ---- a server with users: your keys and your luus ------------------------
+  let keys = null
+  const asked = remote.keyAsked()
+  let newKey = asked?.key || ""
+  let newName = asked?.name || ""
+  let keyError = ""
+  let added = ""
+  const loadMine = async () => {
+    const got = await remote.loadKeys()
+    if (got.ok) keys = got.view; else keyError = got.error
+  }
+  const add = async () => {
+    keyError = ""
+    const got = await remote.addKey(newKey.trim(), newName.trim())
+    if (!got.ok) { keyError = got.error; return }
+    added = got.view.name
+    newKey = ""
+    newName = ""
+    remote.forgetKeyAsked()
+    loadMine()
+  }
+  const remove = async key => {
+    const got = await remote.removeKey(key)
+    if (!got.ok) keyError = got.error
+    loadMine()
+  }
+
+  // Polled while the section is open: a link comes up and goes down by itself.
+  if (online) loadMine(); else load()
+  const timer = setInterval(() => (online ? loadMine() : refusedHere || load()), 3000)
+  $destroyed(() => clearInterval(timer))
+  const origin = location.origin
+</script>
+
+<div class="remote-pane pane-main">
+<div class="ds-hero">
+  <div class="ds-hero-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2.5" y="4" width="8" height="6" rx="1.2"/>
+      <rect x="13.5" y="14" width="8" height="6" rx="1.2"/>
+      <path d="M6.5 10v3a2 2 0 0 0 2 2h5"/>
+      <path d="M17.5 14v-3a2 2 0 0 0-2-2h-5"/>
+    </svg>
+  </div>
+  <div class="ds-hero-body">
+    <h4 class="ds-hero-title">Remote access</h4>
+    <p class="ds-hero-desc" :if="online">The luus your keys linked here, opened from this page as if you were at them.</p>
+    <p class="ds-hero-desc" :if="!online">This luu, reached from another luu's page: linked over SSH by key, and only as far as you allow.</p>
+  </div>
+</div>
+
+<!-- ======================= a server with users ======================= -->
+<section class="pane-group" :if="online">
+  <h3>Your luus</h3>
+  <p class="note" :if="keys && !keys.accepts">
+    This server accepts no links: its <code>[server] ssh</code> is not set.
+  </p>
+  <ul class="rows" :if="keys?.links?.length">
+    <li :each="l in keys.links">
+      <span class="dot st-connected"></span>
+      <span class="grow"><strong>{{ l.name }}</strong>
+        <span class="dim small">linked {{ ago(l.since) }} ago · {{ l.key }}</span></span>
+      <button type="button" class="soft" @click="goToHost(l.name)">Open</button>
+    </li>
+  </ul>
+  <p class="note" :if="keys && !keys.links?.length">
+    None linked now. A luu links here from its own Settings → Remote access, or with
+    <code>luu link add {{ origin }} --name casa</code>, once its key is below.
+  </p>
+</section>
+
+<section class="pane-group" :if="online">
+  <h3>Keys</h3>
+  <ul class="rows" :if="keys?.keys?.length">
+    <li :each="k in keys.keys">
+      <span class="grow"><strong>{{ k.name }}</strong>
+        <span class="dim small">{{ k.fingerprint }} · {{ k.last_used ? "used " + ago(k.last_used) + " ago" : "never used" }}</span></span>
+      <button type="button" class="soft danger" @click="remove(k.fingerprint)">Remove</button>
+    </li>
+  </ul>
+  <p class="note" :if="added">{{ added }} is on your account: that luu links within half a minute.</p>
+  <div class="add-key" :class.asked="!!asked && !added">
+    <p class="note" :if="asked && !added">
+      A luu asked to link to your account with this key. Add it only if you just
+      linked it yourself.
+    </p>
+    <textarea rows="2" placeholder="ssh-ed25519 AAAA… luu@casa" aria-label="Public key"
+              :value="newKey" @input="newKey = $event.target.value"></textarea>
+    <div class="inline">
+      <input placeholder="name (optional)" aria-label="Key name" :value="newName" @input="newName = $event.target.value">
+      <button type="button" class="primary" :disabled="!newKey.trim()" @click="add()">Add key</button>
+    </div>
+    <p class="warn" :if="keyError">{{ keyError }}</p>
+  </div>
+</section>
+
+<!-- ======================= a luu with no users ======================= -->
+<section class="pane-group" :if="!online && refusedHere">
+  <p class="note">
+    Remote access is set on {{ currentHost || "that machine" }} itself, from a browser there:
+    a luu reached from another never changes what it is allowed.
+  </p>
+</section>
+
+<section class="pane-group" :if="!online && !refusedHere">
+  <h3>Linked to</h3>
+  <ul class="rows peers" :if="dialled.length">
+    <li :each="peer in dialled" class="peer">
+      <div class="peer-head">
+        <span class="dot" :class="'st-' + (view.status?.[peer]?.state || 'off')"></span>
+        <span class="grow"><strong>{{ view.peers[peer].url || view.peers[peer].ssh }}</strong>
+          <span class="dim small">as <code>{{ view.peers[peer].name }}</code> ·
+            {{ STATES[view.status?.[peer]?.state] || "off" }}{{ view.status?.[peer]?.retry_in ? ", again in " + view.status[peer].retry_in + " s" : "" }}</span></span>
+        <label class="switch" :title="view.peers[peer].dial ? 'Linked: turn off' : 'Off: link'">
+          <input type="checkbox" :checked="view.peers[peer].dial" :disabled="!view.editable"
+                 @change="change(peer, { dial: $event.target.checked })"> on
+        </label>
+        <button type="button" class="soft danger" :disabled="!view.editable" @click="unlink(peer)">Unlink</button>
+      </div>
+      <p class="said" :if="view.status?.[peer]?.said">{{ view.status[peer].said }}</p>
+      <p class="note" :if="view.status?.[peer]?.state === 'refused' && view.peers[peer].url && view.key">
+        Add this luu's key to your account there:
+        <a :href="remote.addKeyLink(view.peers[peer].url, view.key, view.peers[peer].name)" target="_blank" rel="noopener">open {{ view.peers[peer].url }}</a>
+      </p>
+      <div class="may">
+        <span class="dim small">From there, it may use here:</span>
+        <label :each="word in view.may">
+          <input type="checkbox" :checked="(view.peers[peer].may || []).includes(word)" :disabled="!view.editable"
+                 @change="toggleMay(peer, word)"> {{ LABELS[word] || word }}
+        </label>
+        <span class="dim small">Never Remote access itself.</span>
+      </div>
+    </li>
+  </ul>
+  <p class="note" :if="view && !dialled.length">
+    Not linked. Link it to a luu online and that luu's page opens this one, from anywhere.
+  </p>
+</section>
+
+<section class="pane-group" :if="!online && !refusedHere && view">
+  <h3>Let luus link to this one</h3>
+  <p class="note" :if="view.listening">
+    Links come to port {{ view.listening.port }}, answered with the key
+    <code>{{ view.listening.fingerprint }}</code>. A luu let in below opens this
+    one's page, and this one opens its page, under <strong>/h/&lt;name&gt;/</strong>.
+  </p>
+  <p class="note" :if="!view.listening">
+    This luu takes no links: set <code>[server] ssh = "0.0.0.0:2222"</code> in
+    <code>config.toml</code> and restart <code>luu serve</code>. The luus below are let in once it does.
+  </p>
+  <ul class="rows peers" :if="allowed.length">
+    <li :each="peer in allowed" class="peer">
+      <div class="peer-head">
+        <span class="dot" :class="view.accepted?.[peer] ? 'st-connected' : 'st-off'"></span>
+        <span class="grow"><strong>{{ peer }}</strong>
+          <span class="dim small">{{ shortKey(view.peers[peer].key) }} ·
+            {{ view.accepted?.[peer] ? "linked " + ago(view.accepted[peer].since) + " ago" : "not linked now" }}</span></span>
+        <button type="button" class="soft danger" :disabled="!view.editable" @click="disallow(peer)">Remove</button>
+      </div>
+      <div class="may">
+        <span class="dim small">From there, it may use here:</span>
+        <label :each="word in view.may">
+          <input type="checkbox" :checked="(view.peers[peer].may || []).includes(word)" :disabled="!view.editable"
+                 @change="toggleMay(peer, word)"> {{ LABELS[word] || word }}
+        </label>
+        <span class="dim small">Never Remote access itself.</span>
+      </div>
+    </li>
+  </ul>
+  <div class="add-key">
+    <textarea rows="2" placeholder="ssh-ed25519 AAAA… luu@laptop — what luu link key prints there"
+              aria-label="Its key" :value="allowKey" @input="allowKey = $event.target.value"
+              :disabled="!view.editable"></textarea>
+    <div class="inline">
+      <input placeholder="its name here, such as laptop" aria-label="Its name here" :value="allowName"
+             @input="allowName = $event.target.value" :disabled="!view.editable">
+      <button type="button" class="primary" :disabled="!allowName.trim() || !allowKey.trim() || !view.editable"
+              @click="allow()">Let it link</button>
+    </div>
+  </div>
+</section>
+
+<section class="pane-group" :if="!online && !refusedHere && view">
+  <h3>Link to a luu</h3>
+  <div class="link-form">
+    <input placeholder="https://luu.example.com" aria-label="Its address" :value="url"
+           @input="url = $event.target.value" :disabled="!view.editable">
+    <input :placeholder="'shown there as ' + defaultName()" aria-label="Name there" :value="name"
+           @input="name = $event.target.value" :disabled="!view.editable">
+    <button type="button" class="primary" :disabled="!url.trim() || linking || !view.editable" @click="link()">
+      {{ linking ? "Asking…" : "Link" }}</button>
+  </div>
+  <p class="note">
+    Its page says where it takes links and the key it answers with, over HTTPS; that key
+    is pinned here. Then add this luu's key to your account there, and it links by itself.
+  </p>
+  <p class="warn" :if="error">{{ error }}</p>
+</section>
+
+<section class="pane-group" :if="!refusedHere && ownProviders.length">
+  <h3>Offered to linked luus</h3>
+  <p class="note">
+    A luu linked {{ online ? "here" : "to this one" }} may send to these, named
+    <code>&lt;provider&gt;@&lt;the name it gives this one&gt;</code> there. The key
+    and the engine stay here.
+  </p>
+  <ul class="rows">
+    <li :each="name in ownProviders">
+      <span class="grow"><strong>{{ name }}</strong>
+        <span class="dim small">{{ state.providers.providers[name].backend || "" }} · {{ state.providers.providers[name].model || "" }}</span></span>
+      <label class="switch" :title="offers(name) ? 'Offered: withhold it' : 'Withheld: offer it'">
+        <input type="checkbox" :checked="offers(name)" :disabled="!state.providers?.editable"
+               @change="setOffer(name, $event.target.checked)"> offered
+      </label>
+    </li>
+  </ul>
+  <p class="note" :if="!state.providers?.editable">
+    Set in <code>config.toml</code> on the machine: <code>offer = false</code> under a provider withholds it.
+  </p>
+  <p class="warn" :if="offerError">{{ offerError }}</p>
+</section>
+
+<section class="pane-group" :if="!refusedHere && linkedHere.length">
+  <h3>Offered to this {{ online ? "account" : "luu" }}</h3>
+  <p class="note">Providers your linked luus offer: chosen like any other, in a new session's picker.</p>
+  <ul class="rows">
+    <li :each="name in linkedHere">
+      <span class="grow"><strong>{{ name }}</strong>
+        <span class="dim small">{{ state.providers.linked[name].backend }} · {{ state.providers.linked[name].model }}</span></span>
+    </li>
+  </ul>
+</section>
+
+<section class="pane-group" :if="!online && !refusedHere && view?.key">
+  <h3>This luu's key</h3>
+  <div class="key-line">
+    <code>{{ view.key }}</code>
+    <button type="button" class="soft" @click="copyKey()">{{ copied ? "Copied" : "Copy" }}</button>
+  </div>
+  <p class="note">{{ view.fingerprint }} — in <code>id_ed25519</code>, in luu's own folder, readable only by you.</p>
+</section>
+</div>
+
+<style scoped>
+  .remote-pane { flex: 1 0 auto; }
+  .note { margin: .4rem 0; color: var(--luu-fg-muted); font-size: var(--luu-text-md); line-height: 1.5; }
+  .warn { color: var(--luu-warn); margin: .4rem 0; overflow-wrap: anywhere; }
+  .small { font-size: 12px; }
+  .dim { color: var(--luu-fg-muted); }
+  .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; overflow-wrap: anywhere; }
+  .inline { display: flex; gap: .5rem; align-items: center; }
+  .rows { list-style: none; margin: .3rem 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+  .rows > li {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .55rem .7rem;
+    border: 1px solid var(--luu-border); border-radius: 8px;
+    background: var(--luu-surface);
+  }
+  .rows.peers > li { flex-direction: column; align-items: stretch; }
+  .peer-head { display: flex; align-items: center; gap: .6rem; }
+  .dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--luu-fg-muted); flex: none; }
+  .dot.st-connected { background: var(--luu-good, #3a8a3a); }
+  .dot.st-connecting, .dot.st-retrying { background: var(--luu-warn); }
+  .dot.st-refused { background: var(--luu-bad); }
+  .said { margin: .1rem 0 0 1.15rem; font-size: 12px; color: var(--luu-fg-muted); overflow-wrap: anywhere; }
+  .may { display: flex; flex-direction: column; gap: .25rem; margin: .3rem 0 0 1.15rem; }
+  .may label, .switch { display: flex; align-items: center; gap: .4rem; font-size: var(--luu-text-md); }
+  .link-form { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .link-form input:first-child { flex: 2 1 14rem; }
+  .link-form input { flex: 1 1 9rem; min-width: 0; }
+  .add-key { display: flex; flex-direction: column; gap: .5rem; margin-top: .5rem; }
+  .add-key.asked { padding: .6rem; border: 1px solid var(--luu-accent); border-radius: 8px; }
+  .add-key textarea { font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
+  .add-key .inline input { flex: 1; min-width: 0; }
+  .key-line { display: flex; gap: .5rem; align-items: flex-start; }
+  .key-line code { flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+  button.soft, button.primary {
+    font: inherit; font-size: var(--luu-text-md);
+    padding: .3rem .8rem; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  }
+  button.soft { border: 1px solid var(--luu-border); background: var(--luu-surface); color: var(--luu-fg); }
+  button.soft:hover { background: var(--luu-hover); }
+  button.soft.danger { color: var(--luu-bad); }
+  button.primary { border: 1px solid var(--luu-accent); background: var(--luu-accent); color: var(--luu-on-accent, #fff); }
+  button:disabled { opacity: .5; cursor: default; }
+</style>

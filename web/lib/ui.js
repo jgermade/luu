@@ -84,7 +84,7 @@ export const ui = $reactive({
 
 /// `sheet` is an engine's — `{ name, tab }` — for `engines`.
 export function openSettingsAt(section, sheet = null) {
-  ui.section = ["models", "appearance", "engines", "policies"].includes(section) ? section : "general"
+  ui.section = ["models", "appearance", "engines", "policies", "remote"].includes(section) ? section : "general"
   ui.engineSheet = section === "engines" ? sheet : null
   return openSettings()
 }

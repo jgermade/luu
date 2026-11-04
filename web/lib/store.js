@@ -1104,9 +1104,31 @@ export async function loadPostures() {
 /// switched off (`idle`), which Settings → Models still lists, since that is
 /// where a provider is edited. See
 /// `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
-export function offeredProviders() {
+///
+/// With `linked`, the providers linked luus offer too, by `<provider>@<peer>`:
+/// a session may send there, over the link, and Settings does not edit them.
+/// See `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+export function offeredProviders(linked = true) {
   const idle = state.providers?.idle || []
-  return Object.keys(state.providers?.providers || {}).filter(name => !idle.includes(name))
+  const own = Object.keys(state.providers?.providers || {}).filter(name => !idle.includes(name))
+  return linked ? [...own, ...Object.keys(state.providers?.linked || {})] : own
+}
+
+/// A provider's profile by name, a linked one's drawn in the same shape: what
+/// a picker reads to show its mark, its model and its transport.
+export function profileOf(name) {
+  const own = state.providers?.providers?.[name]
+  if (own) return own
+  const linked = state.providers?.linked?.[name]
+  if (!linked) return undefined
+  return {
+    backend: linked.backend,
+    model: linked.model,
+    "context-limit": linked.context_limit || undefined,
+    "tool-calls": linked.tool_calls,
+    url: `linked · ${linked.peer}`,
+    linked: linked.peer,
+  }
 }
 
 /// The providers file, without opening anything.

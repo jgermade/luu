@@ -131,7 +131,7 @@ pub fn write(path: &Path, secret: &str) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn check_mode(path: &Path, what: &str, consequence: &str) -> Result<()> {
+pub(crate) fn check_mode(path: &Path, what: &str, consequence: &str) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let mode = std::fs::metadata(path)
@@ -150,7 +150,7 @@ fn check_mode(path: &Path, what: &str, consequence: &str) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn check_mode(_path: &Path, _what: &str, _consequence: &str) -> Result<()> {
+pub(crate) fn check_mode(_path: &Path, _what: &str, _consequence: &str) -> Result<()> {
     Ok(())
 }
 

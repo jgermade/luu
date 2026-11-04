@@ -1,6 +1,6 @@
-# luu serve, as `deploy/Containerfile.release` builds it. One identity — the
-# token the entrypoint writes on the first start — and one replica: `serve`
-# runs one live session at a time. See RECORD/2026-10-30.three-ways-in.WIP.md.
+# luu serve, as `deploy/Containerfile.release` builds it. One replica: its
+# sessions live in it, and a session does not move between machines. See
+# RECORD/2026-10-30.three-ways-in.WIP.md.
 
 image:
   repository: ghcr.io/jgermade/luu
@@ -33,15 +33,72 @@ persistence:
     size: 1Gi
     storageClass: ""
     existingClaim: ""
-  # /work: the tree the agent works in.
+  # /work: the tree the agent works in. ReadWriteMany (NFS, EFS, CephFS) lets
+  # worker pods run on any node; see worker.sameNode.
   work:
+    accessMode: ReadWriteOnce
     size: 10Gi
     storageClass: ""
     existingClaim: ""
 
+# Where a session's commands run:
+#
+#   host        in luu's own container, held by Landlock. Every session shares
+#               the pod: one person, or a team that trusts each other.
+#   kubernetes  a pod per session, mounting only that session's folder, made
+#               with kubectl through a ServiceAccount this chart creates. It can
+#               create pods in this namespace, so put the namespace under Pod
+#               Security `restricted` — the workers already meet it:
+#                 kubectl label ns <ns> pod-security.kubernetes.io/enforce=restricted
+#
+# See RECORD/2026-11-03.a-pod-per-session.WIP.md.
+runtime: host
+
+# The worker pods, with `runtime: kubernetes`.
+worker:
+  image:
+    repository: ghcr.io/jgermade/luu-worker
+    # Empty is the chart's appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # The work claim is ReadWriteOnce by default, which pods on one node only can
+  # mount: a worker runs on luu's node. With a ReadWriteMany claim
+  # (persistence.work.accessMode), false lets it run anywhere.
+  sameNode: true
+  # gVisor or Kata, where the cluster has them.
+  runtimeClassName: ""
+  resources: {}
+
+# Links from other luus, over SSH by key: a luu at home dials this one, and
+# this page opens it (Settings → Remote access). `luu config server` sets
+# [server] ssh to 0.0.0.0:2222. An Ingress carries HTTP only, so the port goes
+# out through a Service of its own. When what a luu dials is not the origin's
+# host and this port (a NodePort, another port in front), say it with
+# `luu config server --ssh-public host:port`. See
+# RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md.
+links:
+  enabled: true
+  port: 2222
+  service:
+    type: LoadBalancer
+    # With type NodePort, the node's port; empty lets Kubernetes choose.
+    nodePort: ""
+    annotations: {}
+
+# The SMTP password, from a Secret you manage, mounted at
+# /run/secrets/luu/smtp-password. luu reads it there on every send, so a rotated
+# Secret is the next email's; `luu config` is told where it is (NOTES.txt says
+# how) and copies nothing. Empty, the password typed in `luu config` or the
+# setup page goes to /state/smtp.password, 0600. Never an environment variable:
+# a session's commands inherit luu's. See
+# RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
+mail:
+  passwordSecret: ""
+  passwordKey: password
+
 # The policy `luu serve` runs under, mounted at /etc/luu/luu.toml. Empty is the
-# image's own (deploy/luu.toml): /work read and write, cargo, rustc, git, rg,
-# ls, no network.
+# image's own (deploy/luu.toml): the session's folder under /work read and
+# write, cargo, rustc, git, rg, ls, no network.
 policy: ""
 
 resources: {}

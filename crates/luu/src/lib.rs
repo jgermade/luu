@@ -41,7 +41,9 @@ pub mod grants;
 pub mod highlight;
 pub mod hosts;
 pub mod icons;
+pub mod link;
 pub mod log;
+pub mod mail;
 pub mod models;
 pub mod policies;
 pub mod provider;
@@ -52,6 +54,7 @@ pub mod session;
 pub mod store;
 #[cfg(unix)]
 pub mod terminal;
+pub mod users;
 pub mod workspace;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::io::{AsyncWriteExt, stdout};
@@ -161,7 +164,7 @@ enum Command {
     /// rather than with `openssl rand` and a `chmod`, because the mode is what
     /// `serve` checks and a token written first and narrowed second was
     /// readable in between. A container makes its own on first start with
-    /// `--if-missing`. See `RECORD/2026-10-07.a-public-luu.WIP.md`.
+    /// `--if-missing`. See `RECORD/2026-10-07.a-public-luu.completed.md`.
     Token {
         /// Where to write it. Never overwritten: a token in use is replaced by
         /// deleting it, which is a decision and not a side effect.
@@ -170,6 +173,51 @@ enum Command {
         /// Succeed quietly when the file is already there.
         #[arg(long)]
         if_missing: bool,
+    },
+
+    /// Put this luu online, and give it an owner proved by email.
+    ///
+    /// With no step, both, asked on a terminal: the server (`[server]`, with
+    /// `exposure = "public"`, the origin and the bind), then mail and the
+    /// first owner together — the owner's code goes out under the mail
+    /// settings as typed, and they are saved only when it comes back. `luu
+    /// serve` reads `[server]` when it starts, so restart it after that step.
+    /// See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+    Config {
+        #[command(subcommand)]
+        step: Option<ConfigStep>,
+
+        /// The user database. Defaults to `auth.db` in the state directory.
+        #[arg(long, global = true, value_name = "PATH", env = "LUU_AUTH_DB")]
+        auth_db: Option<std::path::PathBuf>,
+    },
+
+    /// Who may log in to a public `serve`: `auth.db` in the state directory.
+    ///
+    /// The way in that needs no request — the person at this machine, which
+    /// is what loopback is on a laptop. `luu user code` prints a code to log
+    /// in with until a server can send it by email. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    /// This luu linked to another, over SSH by key: the online page as a way
+    /// into the luu at home. See
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+    Link {
+        #[command(subcommand)]
+        action: LinkAction,
+    },
+
+    User {
+        #[command(subcommand)]
+        action: UserAction,
+
+        /// The user database. Defaults to `auth.db` in the state directory.
+        #[arg(long, global = true, value_name = "PATH", env = "LUU_AUTH_DB")]
+        auth_db: Option<std::path::PathBuf>,
+
+        /// The session store `remove` counts a user's sessions in. Defaults
+        /// to `sessions.db` in the state directory.
+        #[arg(long, global = true, value_name = "PATH")]
+        store: Option<std::path::PathBuf>,
     },
 
     /// Print the repository map that a budget resolves to, and what it cost.
@@ -287,6 +335,11 @@ enum Command {
         /// front of it: `https://luu.example.com`. Overrides `[server] origin`.
         #[arg(long, value_name = "URL", env = "LUU_ORIGIN")]
         origin: Option<String>,
+
+        /// Who may log in, where `exposure = "public"`: the database `luu
+        /// user` writes. Defaults to `auth.db` in the state directory.
+        #[arg(long, value_name = "PATH", env = "LUU_AUTH_DB")]
+        auth_db: Option<std::path::PathBuf>,
 
         /// Where sessions are cached between restarts, as SQLite. Defaults to
         /// `sessions.db` in the state directory the first run chose
@@ -769,6 +822,173 @@ fn fill_of(non_greedy: bool) -> agent_core::repo_map::Fill {
 }
 
 #[derive(Subcommand)]
+enum ConfigStep {
+    /// `[server]`: `exposure = "public"`, the origin, the bind. What
+    /// `setup.sh` runs.
+    Server {
+        /// What a browser types to reach it: `https://luu.example.com`.
+        #[arg(long, value_name = "URL")]
+        origin: Option<String>,
+        /// Where `luu serve` listens. Default: `127.0.0.1:7878` on a machine,
+        /// with a proxy in front; `0.0.0.0:7878` inside a container.
+        #[arg(long, value_name = "ADDR")]
+        bind: Option<std::net::SocketAddr>,
+        /// Where other luus link to this one, over SSH by key. Default:
+        /// `0.0.0.0:2222`, as intergate's; `none` for no links.
+        #[arg(long, value_name = "ADDR")]
+        ssh: Option<String>,
+        /// What a linking luu dials, when it is not the origin's host and
+        /// `--ssh`'s port: a NodePort, another port in front. `none` clears it.
+        #[arg(long, value_name = "HOST:PORT")]
+        ssh_public: Option<String>,
+    },
+    /// Mail and the first owner: a code to their email under the mail
+    /// settings, typed back here. Nothing is saved until it is.
+    Owner {
+        /// The owner's email.
+        #[arg(long, value_name = "EMAIL")]
+        email: Option<String>,
+        #[command(flatten)]
+        smtp: SmtpArgs,
+    },
+    /// Other mail settings, proved by a code to an owner, typed back here.
+    Mail {
+        /// Where the code goes: an owner's email. Default: the only owner.
+        #[arg(long, value_name = "EMAIL")]
+        to: Option<String>,
+        #[command(flatten)]
+        smtp: SmtpArgs,
+    },
+    /// A one-time link to do the owner step in the page: an hour, once. On a
+    /// terminal, a QR code of it too, for a phone.
+    SetupUrl {
+        /// The QR code even where stdout is not a terminal: `docker exec`
+        /// without `-t`, or a script that shows what it ran.
+        #[arg(long)]
+        qr: bool,
+    },
+}
+
+/// Mail settings, as flags. What no flag says is asked on a terminal.
+#[derive(clap::Args, Default)]
+struct SmtpArgs {
+    /// `smtps://smtp.example.com:465`, or `smtp://smtp.example.com:587?tls=required`.
+    #[arg(long, value_name = "URL")]
+    smtp_url: Option<String>,
+    /// What the email says it is from: `luu <luu@example.com>`.
+    #[arg(long, value_name = "ADDRESS")]
+    smtp_from: Option<String>,
+    /// The mail account's user.
+    #[arg(long, value_name = "USER")]
+    smtp_user: Option<String>,
+    /// A file holding its password, for a script: read once and copied to
+    /// `smtp.password`. On a terminal it is asked without echo.
+    #[arg(long, value_name = "PATH", conflicts_with = "smtp_password_ref")]
+    smtp_password_file: Option<std::path::PathBuf>,
+    /// Where its password is mounted for luu, read on every send and never
+    /// copied: `file:/run/secrets/luu/smtp-password`, a Kubernetes or Docker
+    /// secret.
+    #[arg(long, value_name = "file:PATH")]
+    smtp_password_ref: Option<String>,
+}
+
+impl SmtpArgs {
+    fn given(&self) -> bool {
+        self.smtp_url.is_some()
+            || self.smtp_from.is_some()
+            || self.smtp_user.is_some()
+            || self.smtp_password_file.is_some()
+            || self.smtp_password_ref.is_some()
+    }
+}
+
+#[derive(Subcommand)]
+enum UserAction {
+    /// Add someone. There is no sign-up: this, or an admin, is how a person
+    /// becomes a user.
+    Add {
+        email: String,
+        #[arg(long, value_enum, default_value = "user")]
+        role: crate::users::Role,
+    },
+    /// Everyone, with their role and whether they are suspended.
+    List,
+    /// Change what someone may do. The last owner is not demoted.
+    Role {
+        email: String,
+        #[arg(value_enum)]
+        role: crate::users::Role,
+    },
+    /// Stop someone logging in, and end every login they have.
+    Suspend { email: String },
+    /// Let a suspended user log in again.
+    Resume { email: String },
+    /// Remove someone. Refused while they have sessions: what removing does
+    /// with those is still open, and `suspend` keeps everything.
+    Remove { email: String },
+    /// Print a code to log in with: six digits, ten minutes, one use.
+    Code { email: String },
+    /// A user's SSH keys: what links their luus to this one.
+    Key {
+        #[command(subcommand)]
+        action: UserKeyAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum UserKeyAction {
+    /// Add a key: `ssh-ed25519 AAAA… name`, as `luu link key` prints it.
+    Add {
+        email: String,
+        key: String,
+        /// What to call it. Default: the key's own comment.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// A user's keys.
+    List { email: String },
+    /// Take a key off, by its name or its fingerprint. A link it opened
+    /// closes within half a minute.
+    Remove { email: String, key: String },
+}
+
+/// `luu link`: this luu linked to another, over SSH by key.
+#[derive(Subcommand)]
+enum LinkAction {
+    /// This luu's public key, to add on an account where it should link.
+    Key,
+    /// Link to another luu: asks its page where its links are accepted and
+    /// the key it answers with, pins that key, and writes `[peer.<as>]`.
+    /// `luu serve` dials it, and keeps dialling.
+    Add {
+        /// Its page: `https://luu.example.com`.
+        url: String,
+        /// What that luu calls this one: `/h/<name>/` there.
+        #[arg(long)]
+        name: String,
+        /// What this config calls that luu. Default: its host's first label.
+        #[arg(long = "as")]
+        as_name: Option<String>,
+    },
+    /// Let another luu link to this one, by its key (`luu link key` there):
+    /// for a luu without users, where `[server] ssh` accepts links.
+    Allow {
+        /// What this luu calls it: `/h/<peer>/` here.
+        peer: String,
+        /// `ssh-ed25519 AAAA… luu@laptop`.
+        key: String,
+        /// What it may do here, comma-separated: `sessions`, `terminal`,
+        /// `settings`.
+        #[arg(long, default_value = "sessions")]
+        may: String,
+    },
+    /// The luus this one links to, and the ones it lets link to it.
+    List,
+    /// Stop linking to one, and forget it.
+    Remove { peer: String },
+}
+
+#[derive(Subcommand)]
 enum KeyAction {
     /// Make a key, write the private half, and print the block to paste into
     /// `luu.toml`.
@@ -895,6 +1115,702 @@ fn write_private(path: &std::path::Path, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// How long ago `at` (ms since the epoch) was, as a person says it.
+fn ago(at: u64) -> String {
+    let seconds = crate::session::now_ms().saturating_sub(at) / 1000;
+    match seconds {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{}m ago", seconds / 60),
+        3600..86_400 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86_400),
+    }
+}
+
+/// Whether this process runs inside a container: where `luu config` binds
+/// every interface by default, because a published port is the only way in.
+fn in_a_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || std::env::var_os("KUBERNETES_SERVICE_HOST").is_some()
+}
+
+/// One answer, from the flag, else asked on the terminal, else an error that
+/// names the flag. `current` is offered as the default when there is one.
+fn answer(
+    given: Option<String>,
+    question: &str,
+    current: Option<String>,
+    flag: &str,
+) -> Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if let Some(given) = given {
+        return Ok(given);
+    }
+    if !std::io::stdin().is_terminal() {
+        return match current {
+            Some(current) => Ok(current),
+            None => anyhow::bail!("{flag} is needed: there is no terminal to ask on"),
+        };
+    }
+    let shown = current
+        .as_deref()
+        .map(|current| format!(" [{current}]"))
+        .unwrap_or_default();
+    eprint!("{question}{shown}: ");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    match (line.trim(), current) {
+        ("", Some(current)) => Ok(current),
+        ("", None) => anyhow::bail!("{flag} is needed, and nothing was typed"),
+        (typed, _) => Ok(typed.to_string()),
+    }
+}
+
+/// `text` as a QR code, two modules a character with half blocks, in black
+/// on white whatever the terminal's own colours — a scanner wants dark on
+/// light, and a dark terminal would otherwise invert it. A quiet zone of two
+/// modules round it, which is what lets a camera find its edge.
+fn qr_lines(text: &str) -> Result<Vec<String>> {
+    let code = qrcode::QrCode::new(text.as_bytes()).context("the setup link as a QR code")?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let quiet = 2;
+    let size = width + 2 * quiet;
+    let dark = |x: usize, y: usize| {
+        x >= quiet
+            && y >= quiet
+            && x < quiet + width
+            && y < quiet + width
+            && colors[(y - quiet) * width + (x - quiet)] == qrcode::Color::Dark
+    };
+    let mut lines = Vec::new();
+    for y in (0..size).step_by(2) {
+        let mut line = String::from("\x1b[30;47m");
+        for x in 0..size {
+            line.push(match (dark(x, y), y + 1 < size && dark(x, y + 1)) {
+                (false, false) => ' ',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (true, true) => '█',
+            });
+        }
+        line.push_str("\x1b[0m");
+        lines.push(line);
+    }
+    Ok(lines)
+}
+
+/// A secret typed on a terminal, not echoed. Without a terminal, a line of
+/// stdin.
+fn secret_line(prompt: &str) -> Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let terminal = std::io::stdin().is_terminal();
+    eprint!("{prompt}: ");
+    std::io::stderr().flush().ok();
+    #[cfg(unix)]
+    let restore = terminal.then(|| {
+        // SAFETY: tcgetattr and tcsetattr on stdin with a termios this owns.
+        unsafe {
+            let mut term: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(0, &mut term) != 0 {
+                return None;
+            }
+            let before = term;
+            term.c_lflag &= !libc::ECHO;
+            libc::tcsetattr(0, libc::TCSANOW, &term);
+            Some(before)
+        }
+    });
+    let mut line = String::new();
+    let read = std::io::stdin().lock().read_line(&mut line);
+    #[cfg(unix)]
+    if let Some(Some(before)) = restore {
+        // SAFETY: as above, putting back what was there.
+        unsafe {
+            libc::tcsetattr(0, libc::TCSANOW, &before);
+        }
+        eprintln!();
+    }
+    read?;
+    Ok(line.trim_end_matches(['\n', '\r']).to_string())
+}
+
+/// The state directory, `config.toml` in it, and the file as it stands.
+fn config_here() -> Result<(
+    std::path::PathBuf,
+    std::path::PathBuf,
+    crate::provider::Config,
+)> {
+    let dir = crate::config::dir()
+        .context("no state directory (neither LUU_HOME nor HOME is set): set LUU_HOME")?;
+    let path = dir.join(crate::provider::FILE);
+    let config = match path.exists() {
+        true => crate::provider::Config::from_toml(
+            &std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+            &path.display().to_string(),
+        )?,
+        false => crate::provider::Config::default(),
+    };
+    Ok((dir, path, config))
+}
+
+/// `luu config`, or one of its steps.
+async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>) -> Result<()> {
+    let users_at = |dir: &std::path::Path| match auth_db {
+        Some(path) => path.to_path_buf(),
+        None => dir.join("auth.db"),
+    };
+    match step {
+        Some(ConfigStep::Server {
+            origin,
+            bind,
+            ssh,
+            ssh_public,
+        }) => config_server(origin.clone(), *bind, ssh.clone(), ssh_public.clone()),
+        Some(ConfigStep::Owner { email, smtp }) => {
+            let (dir, _, _) = config_here()?;
+            config_owner(email.clone(), smtp, &users_at(&dir)).await
+        }
+        Some(ConfigStep::Mail { to, smtp }) => {
+            let (dir, _, _) = config_here()?;
+            config_mail(to.clone(), smtp, &users_at(&dir)).await
+        }
+        Some(ConfigStep::SetupUrl { qr }) => {
+            let (dir, _, config) = config_here()?;
+            let origin = config.server().origin.context(
+                "[server] names no origin yet, and a link needs one: `luu config server --origin URL`",
+            )?;
+            let users = crate::users::Users::open(&users_at(&dir))?;
+            let key = users.issue_setup_key()?;
+            eprintln!(
+                "a link to make this server's owner in the page: {} minutes, once",
+                crate::users::SETUP_MINUTES
+            );
+            let link = format!("{}/?setup={key}", origin.trim_end_matches('/'));
+            println!("{link}");
+            use std::io::IsTerminal;
+            if *qr || std::io::stdout().is_terminal() {
+                println!();
+                for line in qr_lines(&link)? {
+                    println!("{line}");
+                }
+            }
+            Ok(())
+        }
+        None => {
+            config_server(None, None, None, None)?;
+            let (dir, _, _) = config_here()?;
+            let users = crate::users::Users::open(&users_at(&dir))?;
+            if users.has_owner()? {
+                eprintln!(
+                    "\nThis server has an owner. To change how it sends mail: luu config mail"
+                );
+                return Ok(());
+            }
+            eprintln!("\nMail and you, its owner: a code goes to your email under these settings.");
+            config_owner(None, &SmtpArgs::default(), &users_at(&dir)).await
+        }
+    }
+}
+
+/// `luu link`.
+async fn run_link(action: &LinkAction) -> Result<()> {
+    let (dir, path, config) = config_here()?;
+    match action {
+        LinkAction::Key => {
+            let key = crate::link::identity(&dir)?;
+            println!("{}", crate::link::public_line(key.public_key()));
+        }
+        LinkAction::Add { url, name, as_name } => {
+            crate::link::check_name(name)?;
+            let url = url.trim().trim_end_matches('/').to_string();
+            let info = crate::link::probe(&url).await?;
+            let host_key = crate::link::parse_public(&info.host_key)?;
+            let peer_name = match as_name {
+                Some(as_name) => as_name.clone(),
+                None => url
+                    .split("://")
+                    .nth(1)
+                    .and_then(|rest| rest.split(['.', ':', '/']).next())
+                    .unwrap_or("online")
+                    .to_string(),
+            };
+            if !crate::provider::is_host_name(&peer_name) {
+                anyhow::bail!("`{peer_name}` is not a name for a peer: --as <name>");
+            }
+            let mut peers = config.peers().clone();
+            let had = peers.get(&peer_name).cloned();
+            peers.insert(
+                peer_name.clone(),
+                crate::provider::Peer {
+                    url: Some(url.clone()),
+                    ssh: info.ssh.clone(),
+                    host_key: crate::link::public_line(&host_key),
+                    name: name.clone(),
+                    key: had.as_ref().and_then(|had| had.key.clone()),
+                    dial: true,
+                    may: had
+                        .map(|had| had.may)
+                        .unwrap_or_else(|| vec!["sessions".to_string()]),
+                },
+            );
+            config.with_peers(peers).write(&path)?;
+            let key = crate::link::identity(&dir)?;
+            let public = crate::link::public_line(key.public_key());
+            println!(
+                "[peer.{peer_name}] in {}: {} at {}, key {} (from its page, over {})",
+                path.display(),
+                url,
+                info.ssh,
+                crate::link::fingerprint(&host_key),
+                url.split("://").next().unwrap_or("http"),
+            );
+            println!(
+                "\nAdd this luu's key to your account there (Account → Keys), or open:\n  {url}/?add-key={}&name={name}\n\n{public}",
+                percent(&public)
+            );
+            println!(
+                "\nluu serve dials it while it runs; a running one picks this up when restarted."
+            );
+        }
+        LinkAction::Allow { peer, key, may } => {
+            if !crate::provider::is_host_name(peer) {
+                anyhow::bail!("`{peer}` is not a name for a peer: letters, digits, - and _");
+            }
+            let parsed = crate::link::parse_public(key)?;
+            let may: Vec<String> = may
+                .split(',')
+                .map(str::trim)
+                .filter(|word| !word.is_empty())
+                .map(str::to_string)
+                .collect();
+            let mut peers = config.peers().clone();
+            let entry = peers
+                .entry(peer.clone())
+                .or_insert_with(|| crate::provider::Peer {
+                    url: None,
+                    ssh: String::new(),
+                    host_key: String::new(),
+                    name: String::new(),
+                    key: None,
+                    dial: false,
+                    may: Vec::new(),
+                });
+            entry.key = Some(crate::link::public_line(&parsed));
+            entry.may = may;
+            config.with_peers(peers).write(&path)?;
+            println!(
+                "[peer.{peer}] in {}: {} may link here",
+                path.display(),
+                crate::link::fingerprint(&parsed)
+            );
+            if config.server().ssh.is_none() {
+                println!(
+                    "This luu accepts no links yet: set [server] ssh = \"0.0.0.0:{}\" and \
+                     restart luu serve.",
+                    crate::link::DEFAULT_PORT
+                );
+            }
+        }
+        LinkAction::List => {
+            for (name, peer) in config.peers() {
+                let dials = match peer.dials() {
+                    true => format!("dials {} as {}", peer.ssh, peer.name),
+                    false if !peer.ssh.is_empty() => format!("{} (off)", peer.ssh),
+                    false => "does not dial".to_string(),
+                };
+                let accepts = match &peer.key {
+                    Some(key) => crate::link::parse_public(key)
+                        .map(|key| format!(", accepts {}", crate::link::fingerprint(&key)))
+                        .unwrap_or_default(),
+                    None => String::new(),
+                };
+                println!("{name:<16} {dials}{accepts}  may {}", peer.may.join(","));
+            }
+        }
+        LinkAction::Remove { peer } => {
+            let mut peers = config.peers().clone();
+            if peers.remove(peer).is_none() {
+                anyhow::bail!("there is no [peer.{peer}]");
+            }
+            config.with_peers(peers).write(&path)?;
+            println!("[peer.{peer}] removed; a running luu serve stops dialling it when restarted");
+        }
+    }
+    Ok(())
+}
+
+/// A query value, percent-encoded: what is not unreserved, as bytes.
+fn percent(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+/// `luu config server`: `[server]`, the rest of `config.toml` carried.
+fn config_server(
+    origin: Option<String>,
+    bind: Option<std::net::SocketAddr>,
+    ssh: Option<String>,
+    ssh_public: Option<String>,
+) -> Result<()> {
+    let (_, path, config) = config_here()?;
+    let server = config.server();
+    let origin = answer(
+        origin,
+        "What a browser types to reach luu (https://luu.example.com)",
+        server.origin.clone(),
+        "--origin",
+    )?;
+    if !crate::provider::is_origin(&origin) {
+        anyhow::bail!("{origin} is not a scheme and a host, as `https://luu.example.com`");
+    }
+    let bind = bind.or(server.bind).unwrap_or_else(|| {
+        match in_a_container() {
+            true => "0.0.0.0:7878",
+            false => "127.0.0.1:7878",
+        }
+        .parse()
+        .expect("a literal address")
+    });
+    // Links on by default: the online page as a way into a luu at home is
+    // what they are for. `none` turns them off.
+    let ssh = match ssh.as_deref().map(str::trim) {
+        Some("none") | Some("") => None,
+        Some(address) => Some(address.to_string()),
+        None => server
+            .ssh
+            .clone()
+            .or_else(|| Some(format!("0.0.0.0:{}", crate::link::DEFAULT_PORT))),
+    };
+    // `public` refuses a token, so the file stops naming one; the token file
+    // itself is left where it is.
+    config
+        .with_server(crate::provider::Server {
+            exposure: Some(crate::provider::Exposure::Public),
+            bind: Some(bind),
+            token_file: None,
+            origin: Some(origin.clone()),
+            ssh: ssh.clone(),
+            ssh_public: match ssh_public.as_deref().map(str::trim) {
+                Some("none") | Some("") => None,
+                Some(public) => Some(public.to_string()),
+                None => server.ssh_public.clone(),
+            },
+        })
+        .write(&path)?;
+    println!(
+        "[server] in {}: exposure = \"public\", origin {origin}, bind {bind}",
+        path.display()
+    );
+    if let Some(ssh) = &ssh {
+        println!("Other luus link to it over SSH on {ssh}: open that port too.");
+    }
+    println!("luu serve reads [server] when it starts: restart it.");
+    Ok(())
+}
+
+/// Mail settings from the flags, else the terminal: not saved, not tried.
+fn mail_asked(smtp: &SmtpArgs) -> Result<crate::mail::Mail> {
+    let url = answer(
+        smtp.smtp_url.clone(),
+        "Mail server (smtps://smtp.example.com:465, or smtp://host:587?tls=required)",
+        None,
+        "--smtp-url",
+    )?;
+    let from = answer(
+        smtp.smtp_from.clone(),
+        "Send from (luu <luu@example.com>)",
+        None,
+        "--smtp-from",
+    )?;
+    let user = match &smtp.smtp_user {
+        Some(user) => Some(user.clone()),
+        None if smtp.given() => None,
+        None => Some(answer(
+            None,
+            "Its user (empty for none)",
+            Some(String::new()),
+            "--smtp-user",
+        )?)
+        .filter(|user| !user.is_empty()),
+    };
+    let mail = crate::mail::Mail {
+        url,
+        from,
+        ..Default::default()
+    };
+    let mail = match (&smtp.smtp_password_ref, &smtp.smtp_password_file, &user) {
+        (Some(reference), _, _) => mail.with_mounted(reference)?,
+        (None, Some(path), _) => crate::mail::Mail {
+            password: Some(crate::secret::read(
+                path,
+                "the SMTP password file",
+                "hands the mail account to anyone who can read it",
+            )?),
+            ..mail
+        },
+        (None, None, Some(_)) => crate::mail::Mail {
+            password: Some(secret_line("Its password")?),
+            ..mail
+        },
+        (None, None, None) => mail,
+    };
+    let mail = crate::mail::Mail { user, ..mail };
+    mail.check()?;
+    Ok(mail)
+}
+
+/// Sends `code` to `to` under `mail`, then reads it back from the person. A
+/// send that fails forgets the code, so a second try need not wait a minute.
+async fn proved_by_code(
+    users: &crate::users::Users,
+    mail: &crate::mail::Mail,
+    to: &str,
+    code: &str,
+    origin: Option<&str>,
+) -> Result<String> {
+    if let Err(error) = mail.send_code(to, code, origin).await {
+        users.forget_code(to)?;
+        return Err(error.context("the code could not be sent, and nothing was saved"));
+    }
+    eprintln!("A code went to {to}.");
+    // A line of stdin, terminal or not: a script pipes the code it read.
+    use std::io::{BufRead, Write};
+    eprint!("The code: ");
+    std::io::stderr().flush().ok();
+    let mut typed = String::new();
+    std::io::stdin().lock().read_line(&mut typed)?;
+    Ok(typed.trim().to_string())
+}
+
+/// `luu config owner`: mail and the first owner, both proved by one code.
+async fn config_owner(
+    email: Option<String>,
+    smtp: &SmtpArgs,
+    users_path: &std::path::Path,
+) -> Result<()> {
+    let (dir, path, config) = config_here()?;
+    let users = crate::users::Users::open(users_path)?;
+    if users.has_owner()? {
+        anyhow::bail!(
+            "this server has an owner: they add people (`luu user add`), and mail changes with \
+             `luu config mail`"
+        );
+    }
+    // Mail already proved is used as it is, unless other settings were named.
+    let saved = config.auth().smtp;
+    let (mail, new) = match (&saved, smtp.given()) {
+        (Some(table), false) => (crate::mail::Mail::from_table(table)?, false),
+        _ => (mail_asked(smtp)?, true),
+    };
+    let email = answer(email, "Your email, the owner", None, "--email")?;
+    let email = crate::users::email_of(&email)?;
+    let code = users.code_to_claim(&email)?.context(
+        "a code went to that address less than a minute ago, or the server has an owner: wait \
+         a minute and run this again",
+    )?;
+    let origin = config.server().origin;
+    let typed = proved_by_code(&users, &mail, &email, &code, origin.as_deref()).await?;
+    let hours = config.auth().session_hours();
+    let Some((owner, token)) = users.claim_owner(&email, &typed, hours)? else {
+        anyhow::bail!(
+            "that code is not valid, and nothing was saved: run this again for a new one"
+        );
+    };
+    // A login nobody will use: this is a terminal, not a browser.
+    users.logout(&token)?;
+    if new {
+        let table = mail.save(&dir)?;
+        let auth = crate::provider::AuthTable {
+            smtp: Some(table),
+            ..config.auth()
+        };
+        config.with_auth(auth).write(&path)?;
+        println!("[auth.smtp] in {}: {}", path.display(), mail.url);
+    }
+    println!(
+        "{} owns this server, and logs in with a code by email.",
+        owner.email
+    );
+    Ok(())
+}
+
+/// `luu config mail`: other mail settings, proved by a code to an owner.
+async fn config_mail(
+    to: Option<String>,
+    smtp: &SmtpArgs,
+    users_path: &std::path::Path,
+) -> Result<()> {
+    let (dir, path, config) = config_here()?;
+    let users = crate::users::Users::open(users_path)?;
+    let owners = users.owners()?;
+    let to = match (to, owners.as_slice()) {
+        (Some(to), _) => to,
+        (None, [only]) => only.email.clone(),
+        (None, []) => anyhow::bail!("this server has no owner yet: `luu config owner` does both"),
+        (None, _) => answer(None, "Which owner gets the code", None, "--to")?,
+    };
+    let to = crate::users::email_of(&to)?;
+    if !owners.iter().any(|owner| owner.email == to) {
+        anyhow::bail!("{to} is not an owner here: new mail is proved to an owner");
+    }
+    let mail = mail_asked(smtp)?;
+    let code = users.issue_code(&to)?;
+    let origin = config.server().origin;
+    let typed = proved_by_code(&users, &mail, &to, &code, origin.as_deref()).await?;
+    if !users.check_code(&to, &typed)? {
+        anyhow::bail!(
+            "that code is not valid, and nothing was saved: run this again for a new one"
+        );
+    }
+    let table = mail.save(&dir)?;
+    let auth = crate::provider::AuthTable {
+        smtp: Some(table),
+        ..config.auth()
+    };
+    config.with_auth(auth).write(&path)?;
+    println!("[auth.smtp] in {}: {}", path.display(), mail.url);
+    Ok(())
+}
+
+/// `luu user`.
+fn run_user(
+    action: &UserAction,
+    auth_db: Option<&std::path::Path>,
+    store: Option<&std::path::Path>,
+) -> Result<()> {
+    use crate::users::{Users, email_of};
+    let path = match auth_db {
+        Some(path) => path.to_path_buf(),
+        None => crate::users::default_path().context(
+            "no state directory (neither LUU_HOME nor HOME is set): pass --auth-db <PATH>",
+        )?,
+    };
+    let users = Users::open(&path)?;
+    match action {
+        UserAction::Add { email, role } => {
+            let user = users.add(email, *role)?;
+            eprintln!(
+                "added {} as {} ({})",
+                user.email,
+                user.role.as_str(),
+                user.id
+            );
+            eprintln!("they log in with a code: luu user code {}", user.email);
+        }
+        UserAction::List => {
+            for user in users.list()? {
+                let state = if user.suspended {
+                    "suspended"
+                } else {
+                    "active"
+                };
+                let last = user
+                    .last_login
+                    .map(|at| format!("last login {}", ago(at)))
+                    .unwrap_or_else(|| "never logged in".to_string());
+                println!(
+                    "{:<32} {:<6} {:<9} {}  {last}",
+                    user.email,
+                    user.role.as_str(),
+                    state,
+                    user.id
+                );
+            }
+        }
+        UserAction::Role { email, role } => {
+            let user = users.set_role(email, *role)?;
+            eprintln!("{} is now {}", user.email, user.role.as_str());
+        }
+        UserAction::Suspend { email } => {
+            let user = users.set_suspended(email, true)?;
+            eprintln!(
+                "{} is suspended, and every login of theirs ended",
+                user.email
+            );
+        }
+        UserAction::Resume { email } => {
+            let user = users.set_suspended(email, false)?;
+            eprintln!("{} may log in again", user.email);
+        }
+        UserAction::Remove { email } => {
+            let email = email_of(email)?;
+            let user = users
+                .find(&email)?
+                .with_context(|| format!("{email} is not a user"))?;
+            let store = store
+                .map(std::path::Path::to_path_buf)
+                .or_else(crate::store::default_path);
+            let sessions = match store.filter(|path| path.exists()) {
+                Some(path) => crate::store::SessionStore::open(&path)?.count_owned(&user.id)?,
+                None => 0,
+            };
+            if sessions > 0 {
+                anyhow::bail!(
+                    "{} has {sessions} session(s), and what removing a user does with them is \
+                     not decided yet: `luu user suspend {}` keeps everything and stops them \
+                     logging in",
+                    user.email,
+                    user.email
+                );
+            }
+            users.remove(&email)?;
+            eprintln!("removed {}", user.email);
+        }
+        UserAction::Key { action } => match action {
+            UserKeyAction::Add { email, key, name } => {
+                let user = users
+                    .find(email)?
+                    .with_context(|| format!("{email} is not a user"))?;
+                let added = users.add_key(&user.id, name.as_deref().unwrap_or(""), key)?;
+                eprintln!(
+                    "{} links {}'s luus here: {}",
+                    added.name, user.email, added.fingerprint
+                );
+            }
+            UserKeyAction::List { email } => {
+                let user = users
+                    .find(email)?
+                    .with_context(|| format!("{email} is not a user"))?;
+                for key in users.keys_of(&user.id)? {
+                    let used = key
+                        .last_used
+                        .map(|at| format!("used {}", ago(at)))
+                        .unwrap_or_else(|| "never used".to_string());
+                    println!("{:<24} {}  {used}", key.name, key.fingerprint);
+                }
+            }
+            UserKeyAction::Remove { email, key } => {
+                let user = users
+                    .find(email)?
+                    .with_context(|| format!("{email} is not a user"))?;
+                if !users.remove_key(&user.id, key)? {
+                    anyhow::bail!("{} has no key named {key}", user.email);
+                }
+                eprintln!("removed; a link it opened closes within half a minute");
+            }
+        },
+        UserAction::Code { email } => {
+            let code = users.issue_code(email)?;
+            eprintln!(
+                "a code for {}: valid for {} minutes, once",
+                email_of(email)?,
+                crate::users::CODE_MINUTES
+            );
+            println!("{code}");
+        }
+    }
+    Ok(())
+}
+
 /// `luu token`: 32 bytes from the kernel, as hex, in a file created `0600` —
 /// created with that mode, so there is no moment it is anything else.
 fn run_token(path: &std::path::Path, if_missing: bool) -> Result<()> {
@@ -986,8 +1902,9 @@ pub(crate) struct SandboxArgs {
     no_tools: bool,
 
     /// Where tool calls run: `host` (this process), `direct` (a `luu worker`
-    /// child, no container), or a container runtime — `docker`, `podman`,
-    /// `nerdctl`, `container`, `colima`. Overrides `[worker] runtime`.
+    /// child, no container), a container runtime — `docker`, `podman`,
+    /// `nerdctl`, `container`, `colima` — or `kubernetes`, a pod per session
+    /// in the cluster the chart runs luu in. Overrides `[worker] runtime`.
     ///
     /// `direct` isolates nothing and says so in every line that reports it. It
     /// exists so the seam can be exercised where no runtime is installed.
@@ -1301,7 +2218,17 @@ impl SandboxArgs {
                     // The seam's clock: how long a call with no clock of its
                     // own may take before the worker is treated as stuck. See
                     // `RECORD/2026-09-05.a-clock-at-the-seam.completed.md`.
-                    .with_timeout_ms(worker_config.timeout_ms);
+                    .with_timeout_ms(worker_config.timeout_ms)
+                    // A pod's claim, owner and labels, from the `LUU_KUBE_*`
+                    // the chart writes. See
+                    // `RECORD/2026-11-03.a-pod-per-session.WIP.md`.
+                    .with_kube(match worker_config.runtime {
+                        Runtime::Kubernetes => Some(
+                            agent_core::worker::kubernetes::Kube::from_env()
+                                .map_err(anyhow::Error::msg)?,
+                        ),
+                        _ => None,
+                    });
                 // What the runtime cannot express, said once, where a person
                 // reads it — rather than silently dropped from the argv. Before
                 // the start rather than after it, so a run that fails for an
@@ -1750,9 +2677,26 @@ pub(crate) fn build_backend(
     mock: Option<Mock>,
     announce: bool,
 ) -> Result<Box<dyn Backend>> {
+    // A provider another luu offers: the same backend, dialling the socket
+    // that carries it over the link. See `crate::link`.
+    let http = match &resolved.socket {
+        Some(socket) => Some(
+            reqwest::Client::builder()
+                .unix_socket(socket.as_path())
+                .build()
+                .context("a client for the link's socket")?,
+        ),
+        None => None,
+    };
     Ok(match resolved.kind {
         BackendKind::Mock => Box::new(mock.unwrap_or_default()),
-        BackendKind::Ollama => Box::new(Ollama::new(&resolved.url)),
+        BackendKind::Ollama => {
+            let backend = Ollama::new(&resolved.url);
+            match http {
+                Some(http) => Box::new(backend.with_http(http)),
+                None => Box::new(backend),
+            }
+        }
         BackendKind::Openai => {
             // Once, before anything is measured: this API has no field for the
             // window, so a run that budgets 8192 against a server started with
@@ -1764,6 +2708,9 @@ pub(crate) fn build_backend(
             let mut backend = OpenAi::new(&resolved.url);
             if let Some(key) = api_key(resolved)? {
                 backend = backend.with_api_key(key);
+            }
+            if let Some(http) = http.clone() {
+                backend = backend.with_http(http);
             }
             Box::new(backend)
         }
@@ -1784,6 +2731,9 @@ pub(crate) fn build_backend(
             if let Some(key) = api_key(resolved)? {
                 backend = backend.with_api_key(key);
             }
+            if let Some(http) = http {
+                backend = backend.with_http(http);
+            }
             Box::new(backend)
         }
     })
@@ -1791,7 +2741,7 @@ pub(crate) fn build_backend(
 
 /// The key a resolution names, read and its mode checked; `None` without a
 /// file, which sends no key header at all.
-fn api_key(resolved: &provider::Resolved) -> Result<Option<String>> {
+pub(crate) fn api_key(resolved: &provider::Resolved) -> Result<Option<String>> {
     let Some(path) = &resolved.key_file else {
         return Ok(None);
     };
@@ -2329,6 +3279,23 @@ pub async fn run() -> Result<()> {
         return run_token(path, *if_missing);
     }
 
+    if let Command::Link { action } = &command {
+        return run_link(action).await;
+    }
+
+    if let Command::User {
+        action,
+        auth_db,
+        store,
+    } = &command
+    {
+        return run_user(action, auth_db.as_deref(), store.as_deref());
+    }
+
+    if let Command::Config { step, auth_db } = &command {
+        return run_config(step.as_ref(), auth_db.as_deref()).await;
+    }
+
     if let Command::Tools { sandbox } = &command {
         let agency = sandbox.resolve().await?;
         print!("{}", agency.describe());
@@ -2444,6 +3411,7 @@ pub async fn run() -> Result<()> {
         auth_token_file,
         exposure,
         origin,
+        auth_db,
         store,
         no_store,
         no_log,
@@ -2529,7 +3497,7 @@ pub async fn run() -> Result<()> {
         // same file. A config that will not load is not a reason to refuse to
         // serve: it is already reported where the providers are, and a machine
         // with none simply offers none.
-        let (postures, environments, postures_path, ui, resend, server) =
+        let (postures, environments, postures_path, ui, resend, server, auth_table) =
             match crate::provider::Config::load() {
                 Ok((config, path)) => (
                     // Read as environments of the same name: nothing offers a
@@ -2550,12 +3518,14 @@ pub async fn run() -> Result<()> {
                     config.ui().cloned(),
                     config.resend().unwrap_or_default(),
                     config.server(),
+                    config.auth(),
                 ),
                 Err(_) => (
                     Default::default(),
                     Default::default(),
                     None,
                     None,
+                    Default::default(),
                     Default::default(),
                     Default::default(),
                 ),
@@ -2720,6 +3690,8 @@ pub async fn run() -> Result<()> {
             auth_token_file,
             exposure,
             origin,
+            auth_db,
+            auth: auth_table,
             approvers,
             max_tool_steps: sandbox_args.max_tool_steps,
         })
@@ -3480,6 +4452,31 @@ pub async fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_setup_link_is_a_qr_code_of_half_blocks_in_black_on_white() {
+        let link = "https://luu.example.com/?setup=64ecac26b49ff5cf432f3d2aef78b546a824cbcb6746014642f2d8c4936eed0a";
+        let lines = super::qr_lines(link).expect("a QR code");
+        let width = qrcode::QrCode::new(link.as_bytes()).unwrap().width() + 4;
+        // Two modules a line, the quiet zone included.
+        assert_eq!(lines.len(), width.div_ceil(2));
+        for line in &lines {
+            // Its own colours whatever the terminal's, and nothing else drawn.
+            assert!(
+                line.starts_with("\x1b[30;47m") && line.ends_with("\x1b[0m"),
+                "{line:?}"
+            );
+            let body = &line["\x1b[30;47m".len()..line.len() - "\x1b[0m".len()];
+            assert_eq!(body.chars().count(), width);
+            assert!(
+                body.chars().all(|c| matches!(c, ' ' | '▀' | '▄' | '█')),
+                "{body:?}"
+            );
+        }
+        // The quiet zone: the first line is light all the way across.
+        assert!(lines[0].contains(&" ".repeat(width)));
+    }
+
     use std::path::{Path, PathBuf};
 
     use super::*;

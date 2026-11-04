@@ -168,6 +168,12 @@ pub struct Profile {
     /// no edit. See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub models: std::collections::BTreeMap<String, ModelEntry>,
+    /// Whether a luu linked to this one may send here, as `<name>@<this luu>`
+    /// there. Absent is yes: what a session here can use, a linked one can.
+    /// `false` withholds it. See
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<bool>,
 }
 
 /// The three keys only the Anthropic API reads, read off a profile or one
@@ -176,7 +182,8 @@ pub struct Profile {
 /// any other backend's profile: a key that a backend ignores is a key somebody
 /// believes is working. See
 /// `RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
 pub struct MessagesKeys {
     pub thinking: Option<agent_core::backend::anthropic::Thinking>,
     pub effort: Option<agent_core::backend::anthropic::Effort>,
@@ -494,16 +501,22 @@ struct File {
     /// `[server]`: how `luu serve` is reached. See [`Server`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     server: Option<Server>,
+    /// `[auth]`: how a public server's logins behave. See [`AuthTable`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<AuthTable>,
     /// `[host.<name>]`: another `luu serve` this one forwards to. See [`Host`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     host: BTreeMap<String, Host>,
+    /// `[peer.<name>]`: another luu this one links to, by key. See [`Peer`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    peer: BTreeMap<String, Peer>,
 }
 
 /// `[server]`: how `luu serve` is reached, written down rather than typed on
 /// every start — a container is configured by its files and its environment,
 /// not by somebody at a prompt. Every key is optional, and a flag or a
 /// `LUU_*` variable overrides it for one run. See
-/// `RECORD/2026-10-07.a-public-luu.WIP.md`.
+/// `RECORD/2026-10-07.a-public-luu.completed.md`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Server {
@@ -522,10 +535,18 @@ pub struct Server {
     /// as an `Origin` beside the request's own `Host`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Where other luus link to this one, over SSH: `0.0.0.0:2222`. Only on
+    /// a server with users, whose keys say who may. See
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<String>,
+    /// The address a linking luu dials, when it is not the origin's host and
+    /// `ssh`'s port: a load balancer's, or another port in front.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_public: Option<String>,
 }
 
-/// Who may reach a `luu serve`. `public` — identities with passkeys — is the
-/// next step of the record, and is not a value until it exists.
+/// Who may reach a `luu serve`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Exposure {
@@ -534,6 +555,10 @@ pub enum Exposure {
     Loopback,
     /// Anyone who holds the bearer token, on any address.
     Private,
+    /// Users, each logged in with a code: `auth.db` in the state directory,
+    /// and `luu user` to add them. Needs `origin`. See
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    Public,
 }
 
 impl Exposure {
@@ -541,7 +566,54 @@ impl Exposure {
         match self {
             Self::Loopback => "loopback",
             Self::Private => "private",
+            Self::Public => "public",
         }
+    }
+}
+
+/// `[auth]`: how a public server's logins behave. Read only where
+/// `exposure = "public"`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct AuthTable {
+    /// How long a login lasts, in hours. A week when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_hours: Option<u64>,
+    /// How codes are emailed. Absent, codes come only from `luu user code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smtp: Option<SmtpTable>,
+}
+
+/// `[auth.smtp]`: the mail server codes go out through. Written by `luu
+/// config` or setup in the page, and only once a code sent through it came
+/// back. See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SmtpTable {
+    /// `smtps://smtp.example.com:465`, or `smtp://smtp.example.com:587?tls=required`
+    /// for STARTTLS.
+    pub url: String,
+    /// What the email says it is from: `luu <luu@example.com>`.
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// The password, in a file luu wrote and whose mode is checked, as a
+    /// provider's key is: `smtp.password` in the state directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_file: Option<PathBuf>,
+    /// Or where the password is mounted for luu, a file it reads on every
+    /// send and never writes: `file:/run/secrets/luu/smtp-password`, a
+    /// Kubernetes or Docker secret. Never `env:`: a session's commands inherit
+    /// luu's environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_ref: Option<String>,
+}
+
+impl AuthTable {
+    pub fn session_hours(&self) -> u64 {
+        self.session_hours
+            .filter(|hours| *hours > 0)
+            .unwrap_or(crate::users::SESSION_HOURS)
     }
 }
 
@@ -571,6 +643,62 @@ pub struct Host {
     /// one bound to loopback — another port on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_file: Option<PathBuf>,
+}
+
+/// `[peer.<name>]`: another luu this one links to, by key. Written by `luu
+/// link` or Settings → Remote access. The side behind NAT dials (`dial`), and
+/// what the other side may do *here* is `may`, decided on this machine and
+/// never by the peer. See
+/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Peer {
+    /// Its page, for the link that adds this luu's key there:
+    /// `https://luu.example.com`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Where its links are accepted: `luu.example.com:2222`. Empty for a
+    /// peer this luu does not dial, only accepts.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ssh: String,
+    /// Its key, pinned the first time: the SSH handshake must match it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_key: String,
+    /// What it calls this luu: `/h/<name>/` there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Its own key, `ssh-ed25519 AAAA…`, for a peer that dials this luu:
+    /// what lets it in, on a luu without users. Its link is known here by
+    /// this table's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Whether this luu opens the connection. Off, the peer is kept and not
+    /// dialled.
+    #[serde(default = "yes")]
+    pub dial: bool,
+    /// What it may do here: `sessions`, `terminal`, `settings`. Remote access
+    /// itself is never a peer's.
+    #[serde(default = "sessions_only")]
+    pub may: Vec<String>,
+}
+
+impl Peer {
+    /// Whether this luu opens the connection: it is switched on and knows
+    /// where to.
+    pub fn dials(&self) -> bool {
+        self.dial && !self.ssh.is_empty()
+    }
+}
+
+/// What `may` can name.
+pub const PEER_MAY: &[&str] = &["sessions", "terminal", "settings"];
+
+fn yes() -> bool {
+    true
+}
+
+fn sessions_only() -> Vec<String> {
+    vec!["sessions".to_string()]
 }
 
 /// Whether `name` may name a host: it is a path segment in `/h/<name>/`, so
@@ -873,7 +1001,9 @@ pub struct Config {
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
     hosts: BTreeMap<String, Host>,
+    peers: BTreeMap<String, Peer>,
     server: Option<Server>,
+    auth: Option<AuthTable>,
 }
 
 /// A default that points off this machine and has not said `remote = true`:
@@ -940,6 +1070,12 @@ pub enum ConfigError {
     },
     #[error("{path}: [server]: {problem}")]
     BadServer { path: String, problem: String },
+    #[error("{path}: [peer.{name}]: {problem}")]
+    BadPeer {
+        path: String,
+        name: String,
+        problem: String,
+    },
     #[error("{path}: {at}: {problem}")]
     BadMessages {
         path: String,
@@ -1010,12 +1146,15 @@ impl Config {
             authority: file.authority,
             engines: file.engine,
             hosts: file.host,
+            peers: file.peer,
             server: file.server,
+            auth: file.auth,
         };
         config.held = config.check_default(path)?;
         config.check_engines(path)?;
         config.check_messages(path)?;
         config.check_hosts(path)?;
+        config.check_peers(path)?;
         config.check_server(path)?;
         config.check_images(path)?;
         config
@@ -1142,6 +1281,53 @@ impl Config {
                     "origin = \"{origin}\" is not a scheme and a host, as `https://luu.example.com`"
                 ),
             });
+        }
+        Ok(())
+    }
+
+    /// A peer's names are path segments, its address is a host and a port,
+    /// its pinned key is one, and `may` says only what it can say.
+    fn check_peers(&self, path: &str) -> Result<(), ConfigError> {
+        for (name, peer) in &self.peers {
+            let dials = !peer.ssh.is_empty();
+            let problem = if !is_host_name(name) {
+                Some("a peer's name is letters, digits, `-` and `_`".to_string())
+            } else if !dials && peer.key.is_none() {
+                Some("neither `ssh` (to dial it) nor `key` (to let it dial this luu)".to_string())
+            } else if let Some(Err(error)) = peer.key.as_deref().map(crate::link::parse_public) {
+                Some(format!("key: {error}"))
+            } else if !dials {
+                None
+            } else if let Err(error) = crate::link::check_name(&peer.name) {
+                Some(format!("name: {error}"))
+            } else if peer
+                .ssh
+                .rsplit_once(':')
+                .is_none_or(|(host, port)| host.is_empty() || port.parse::<u16>().is_err())
+            {
+                Some(format!("ssh = \"{}\" is not a host and a port", peer.ssh))
+            } else if let Err(error) = crate::link::parse_public(&peer.host_key) {
+                Some(format!("host-key: {error}"))
+            } else {
+                None
+            };
+            let problem = if problem.is_some() {
+                problem
+            } else {
+                peer.may
+                    .iter()
+                    .find(|word| !PEER_MAY.contains(&word.as_str()))
+                    .map(|word| {
+                        format!("may = [\"{word}\"]: a peer may use {}", PEER_MAY.join(", "))
+                    })
+            };
+            if let Some(problem) = problem {
+                return Err(ConfigError::BadPeer {
+                    path: path.to_string(),
+                    name: name.clone(),
+                    problem,
+                });
+            }
         }
         Ok(())
     }
@@ -1319,7 +1505,9 @@ impl Config {
             authority: self.authority.clone(),
             engine: self.engines.clone(),
             host: self.hosts.clone(),
+            peer: self.peers.clone(),
             server: self.server.clone(),
+            auth: self.auth.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -1405,7 +1593,9 @@ impl Config {
             authority: self.authority.clone(),
             engines: self.engines.clone(),
             hosts: self.hosts.clone(),
+            peers: self.peers.clone(),
             server: self.server.clone(),
+            auth: self.auth.clone(),
         }
     }
 
@@ -1493,9 +1683,46 @@ impl Config {
         self.server.clone().unwrap_or_default()
     }
 
+    /// The same file with another `[server]`: what `luu config server` writes. An
+    /// empty table is written as no table, and everything else is carried
+    /// through, for [`Config::with_resend`]'s reason.
+    pub fn with_server(&self, server: Server) -> Self {
+        Self {
+            server: (server != Server::default()).then_some(server),
+            ..self.clone()
+        }
+    }
+
+    /// `[auth]`, defaulted where the file says nothing.
+    pub fn auth(&self) -> AuthTable {
+        self.auth.clone().unwrap_or_default()
+    }
+
+    /// The same file with another `[auth]`: what saving mail settings writes.
+    pub fn with_auth(&self, auth: AuthTable) -> Self {
+        Self {
+            auth: (auth != AuthTable::default()).then_some(auth),
+            ..self.clone()
+        }
+    }
+
     /// Every host the file names.
     pub fn hosts(&self) -> &BTreeMap<String, Host> {
         &self.hosts
+    }
+
+    /// Every luu this one links to.
+    pub fn peers(&self) -> &BTreeMap<String, Peer> {
+        &self.peers
+    }
+
+    /// The file as Remote access hands back the peers: `[peer.*]`, and
+    /// everything else this config already had.
+    pub fn with_peers(&self, peers: BTreeMap<String, Peer>) -> Self {
+        Self {
+            peers,
+            ..self.clone()
+        }
     }
 
     /// Every engine the file names.
@@ -1687,6 +1914,10 @@ pub struct Resolved {
     /// (or the mock with no default), and it follows the file when the file
     /// changes — a new default is used without restarting `serve`.
     pub named: bool,
+    /// Where the backend's HTTP goes instead of the network: the unix socket
+    /// that carries it over a link to the luu that offers this provider.
+    /// `None` for every provider of this luu's own. See `crate::link`.
+    pub socket: Option<PathBuf>,
 }
 
 impl Resolved {
@@ -1708,6 +1939,7 @@ impl Resolved {
             max_tool_steps: None,
             messages: MessagesKeys::default(),
             named: false,
+            socket: None,
         }
     }
 
@@ -1925,6 +2157,7 @@ pub fn resolve(
             || flags.api_key_file.is_some()
             || flags.context_limit != 0
             || flags.tool_calls.is_some(),
+        socket: None,
     })
 }
 

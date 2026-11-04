@@ -32,7 +32,21 @@ landlock = "0.4"
 # See RECORD/2026-10-01.the-tree-follows-the-disk.completed.md.
 notify = "8"
 libc = "0.2"
+# Mail for the code a user logs in with. rustls, never its default
+# native-tls, which would bring OpenSSL in. See
+# RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
+# The setup link as a QR code on the terminal, for a phone. No image
+# support: drawn in text.
+qrcode = { version = "0.14", default-features = false }
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1-rustls-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# One luu to another, over SSH by key, the way intergate connects: `ring`,
+# never its default aws-lc, which builds C, and no RSA. hyper and hyper-util
+# are axum's already; here they carry HTTP over an SSH channel. See
+# RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md.
+russh = { version = "0.64.1", default-features = false, features = ["ring"] }
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
 mime_guess = "2"
 # `include-exclude` is what lets the UI folder keep a gitignored
 # `node_modules` — Monaco is a node dependency of it, served from disk rather

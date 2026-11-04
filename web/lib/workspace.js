@@ -141,6 +141,10 @@ export async function loadRoot(settings) {
   }
   if (remembered === null) {
     if (workspace.folder) return true
+    // A visit that came to add another luu's key (`?add-key=`, from that
+    // luu's Remote access) is for that: the folder is asked on the next one,
+    // rather than in front of the key.
+    if (new URLSearchParams(location.search).has("add-key")) return true
     workspace.picker = { open: true, forced: true, at: "" }
     return false
   }

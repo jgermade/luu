@@ -85,4 +85,45 @@ step "uninstall --purge --yes"
 sh "$setup" uninstall --purge --yes
 [ ! -e "$HOME/.luu" ] || fail "--purge --yes left $HOME/.luu"
 
+# Online for real, where it can be: Linux with systemd running and a sudo
+# that asks nothing — a GitHub runner, not a laptop. It makes the user luu,
+# /var/lib/luu, /etc/luu and luu.service, so it removes them again whatever
+# happens. See RECORD/2026-11-03.local-or-online.completed.md.
+if [ "$(uname -s)" = Linux ] && [ -d /run/systemd/system ] && sudo -n true 2>/dev/null; then
+  step "online: a service, a user, a policy, and a link to finish it"
+  trap 'sh "$setup" uninstall --purge --yes </dev/null >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+  sh "$setup" install --mode online --origin http://luu.test:7878 </dev/null | tee "$work/out"
+  grep -q 'http://luu.test:7878/?setup=' "$work/out" || fail "online printed no setup link"
+  answered=""
+  for _ in $(seq 1 30); do
+    # Not `-f`: with users and nobody logged in, the answer is a 401 — and
+    # `{"users":true}` is exactly what it says.
+    if curl -sS http://127.0.0.1:7878/api/auth/me.json >"$work/me" 2>/dev/null; then
+      answered=1
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$answered" ] || ! grep -q '"users":true' "$work/me" || ! grep -q '"owner":false' "$work/me"; then
+    sudo systemctl status luu --no-pager || true
+    sudo journalctl -u luu --no-pager | tail -30 || true
+    fail "luu.service did not answer as a server with users"
+  fi
+  [ "$(sudo stat -c %a /var/lib/luu/auth.db)" = 600 ] || fail "auth.db is not 0600"
+  [ "$(sudo stat -c %U /var/lib/luu/auth.db)" = luu ] || fail "auth.db is not the user luu's"
+
+  step "online reinstall restarts the service"
+  sh "$setup" reinstall </dev/null | tee "$work/out"
+  grep -q 'Restarted luu.service' "$work/out" || fail "reinstall did not restart luu.service"
+
+  step "online uninstall --purge --yes"
+  sh "$setup" uninstall --purge --yes </dev/null | tee "$work/out"
+  [ ! -e /etc/systemd/system/luu.service ] || fail "uninstall left the unit"
+  [ ! -e /usr/local/bin/luu ] || fail "uninstall left /usr/local/bin/luu"
+  if id luu >/dev/null 2>&1; then fail "--purge left the user luu"; fi
+  sudo test ! -e /var/lib/luu || fail "--purge left /var/lib/luu"
+else
+  step "online: skipped, it needs Linux with systemd and a sudo that asks nothing"
+fi
+
 printf '\nsetup.sh: every check passed for %s\n' "$name"

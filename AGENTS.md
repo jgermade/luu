@@ -394,6 +394,26 @@ embedded page, so a guarded server is opened at `http://host:7878/?token=…` an
 the UI carries it from there. The file's mode is checked: a flag is greppable in
 `ps` and an env var is inherited by every child `run_command` spawns.
 
+`exposure = "public"` (with `origin`, and no token) is the third way: **users**,
+in `auth.db` beside `sessions.db`, each logged in with a six-digit code and
+kept logged in by an `HttpOnly` cookie; `Origin` is checked on every write and
+every socket. There is no sign-up — `luu user` on the machine (or, later, an
+admin) adds people — and nobody sees another user's sessions or folder
+(`<root>/<user id>`), an owner included. A user's session whose policy reaches
+past their folder is refused, whatever the file says. Settings writes stay
+refused off loopback until roles reach them. See
+[`RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md).
+
+```sh
+luu config                                  # [server], then mail and the owner, proved by one code
+luu config server --origin https://luu.example.com   # [server] alone: what setup.sh runs
+luu config setup-url [--qr]                 # a one-time link to finish it in the page, and its QR
+luu user add me@example.com --role owner   # owner | admin | user
+luu user code me@example.com               # six digits, ten minutes, once
+luu user list
+luu serve --exposure public --bind 0.0.0.0:7878 --origin https://luu.example.com
+```
+
 A script is prompts one per line, `#` comments, and `##` directives for the task
 lifecycle — `## task: <objective>`, then `## step:` / `## file:` / `## write:` /
 `## command:` for its plan, and `## close`. `## file:` is what the task may

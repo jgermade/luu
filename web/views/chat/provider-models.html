@@ -24,7 +24,7 @@
   // right after the name, that emits `edit`. All three list the same
   // providers: a provider whose engine is switched off in Engines is in none
   // of them.
-  const { state, providerModels, offeredProviders } = await import("@web/lib/store.js")
+  const { state, providerModels, offeredProviders, profileOf } = await import("@web/lib/store.js")
   const { modelLabel } = await import("@web/lib/engines.js")
   const { brandSrc, providerBrand, modelBrand, loadBrands } = await import("@web/lib/brands.js")
   const BrandIcon = await import("@web/components/brand-icon.html")
@@ -32,7 +32,7 @@
   // Each provider and model wears its brand's mark where one is known — see
   // `lib/brands.js`, which also says where the marks are drawn from.
   loadBrands()
-  const markOf = name => brandSrc(providerBrand(state.providers?.providers?.[name], state.providers?.engines))
+  const markOf = name => brandSrc(providerBrand(profileOf(name), state.providers?.engines))
 
   const flag = v => v === "" || v === true || v === "true"
   $: isDisabled = flag(disabled)
@@ -45,14 +45,16 @@
   // which writes the file, and only there — the pickers show it and leave it.
   $: canToggle = flag(toggles) && !flag(disabled)
 
-  $: names = offeredProviders()
+  // Settings edits this luu's own; a session may also send to what a linked
+  // luu offers.
+  $: names = offeredProviders(!canEdit)
   // The provider whose models the second column shows.
   let focus = ""
   // name → { loading, models, reason, labels, unavailable }. Kept while this
   // is mounted, so going back to a provider does not ask it twice.
   let lists = {}
   $: shown = lists[focus] || null
-  $: profile = state.providers?.providers?.[focus] || {}
+  $: profile = profileOf(focus) || {}
   // What the server listed, and first the model the profile names when the
   // list leaves it out: it is a choice whether or not the provider lists it —
   // what a session there starts on. Worked out as it is drawn rather than
@@ -127,7 +129,7 @@
       : "fenced — the tools are text in the prompt, and a call is a fenced block"
   // Under the field, what it would choose.
   const describe = name => {
-    const p = state.providers?.providers?.[name] || {}
+    const p = profileOf(name) || {}
     return [
       p.backend || "ollama",
       p.engine ? ((state.providers?.idle || []).includes(name) ? "engine off" : "luu starts it") : "",

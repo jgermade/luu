@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use agent_core::api::{SessionSummary, SessionView};
 use agent_core::record::RecordLine;
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// The shape of the schema. Stored in `PRAGMA user_version`, because a database
 /// that cannot say which shape it is is one that has to be deleted the first
@@ -59,7 +59,11 @@ use rusqlite::Connection;
 /// **5 is archiving** (`archived_at`): a session put away from the history
 /// without being deleted, `NULL` for one that is not. Rows from before it are
 /// not archived, which is what they were.
-const SCHEMA: i32 = 5;
+///
+/// 6 added `owner`: the user a session belongs to on a public server, `NULL`
+/// for one made where there are no users — every session before it. Set when
+/// the row is first written and never by a save after.
+const SCHEMA: i32 = 6;
 
 /// Where the store lives when nobody says otherwise.
 ///
@@ -99,6 +103,9 @@ const WRITTEN_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN written_at INTEGER
 /// When a session was archived, or `NULL`. Never touched by a save: the
 /// upsert names its columns, and this is not one of them.
 const ARCHIVED_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN archived_at INTEGER;";
+
+/// Whose session it is, on a public server. See [`SCHEMA`].
+const OWNER_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN owner TEXT;";
 
 pub struct SessionStore {
     connection: Connection,
@@ -148,6 +155,7 @@ impl SessionStore {
                 connection.execute_batch(EVENTS)?;
                 connection.execute_batch(WRITTEN_COLUMN)?;
                 connection.execute_batch(ARCHIVED_COLUMN)?;
+                connection.execute_batch(OWNER_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before the stream was kept. Its sessions stay
@@ -159,6 +167,7 @@ impl SessionStore {
                 connection.execute_batch(PROVIDER_COLUMN)?;
                 connection.execute_batch(WRITTEN_COLUMN)?;
                 connection.execute_batch(ARCHIVED_COLUMN)?;
+                connection.execute_batch(OWNER_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before a session could name the profile it ran on.
@@ -168,17 +177,26 @@ impl SessionStore {
                 connection.execute_batch(PROVIDER_COLUMN)?;
                 connection.execute_batch(WRITTEN_COLUMN)?;
                 connection.execute_batch(ARCHIVED_COLUMN)?;
+                connection.execute_batch(OWNER_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before the history was ordered by writing.
             3 => {
                 connection.execute_batch(WRITTEN_COLUMN)?;
                 connection.execute_batch(ARCHIVED_COLUMN)?;
+                connection.execute_batch(OWNER_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             // A store from before a session could be archived.
             4 => {
                 connection.execute_batch(ARCHIVED_COLUMN)?;
+                connection.execute_batch(OWNER_COLUMN)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            // A store from before a session had an owner. Every row keeps its
+            // `NULL`: it was made where there were no users.
+            5 => {
+                connection.execute_batch(OWNER_COLUMN)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -252,6 +270,18 @@ impl SessionStore {
     /// is a cache of a fold and a partially-updated cache of a fold is not a
     /// fold of anything.
     pub fn save(&self, view: &SessionView, provider: Option<&str>) -> Result<()> {
+        self.save_owned(view, provider, None)
+    }
+
+    /// [`save`](Self::save), naming whose session it is. The owner is written
+    /// with the row and never changed by a save after it: a session does not
+    /// change hands by being opened.
+    pub fn save_owned(
+        &self,
+        view: &SessionView,
+        provider: Option<&str>,
+        owner: Option<&str>,
+    ) -> Result<()> {
         let summary = view.summary();
         self.connection.execute(
             // `written_at` moves when the turn count does and at no other
@@ -260,9 +290,9 @@ impl SessionStore {
             // with no turns yet counts from when it started.
             "INSERT INTO sessions
                  (id, title, backend, model, started_at, turns, record, view, saved_at, provider,
-                  written_at)
+                  written_at, owner)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                     CASE WHEN ?6 > 0 THEN ?9 ELSE ?5 END)
+                     CASE WHEN ?6 > 0 THEN ?9 ELSE ?5 END, ?11)
              ON CONFLICT(id) DO UPDATE SET
                  title = excluded.title,
                  backend = excluded.backend,
@@ -287,6 +317,7 @@ impl SessionStore {
                 serde_json::to_string(view)?,
                 crate::session::now_ms() as i64,
                 provider,
+                owner,
             ],
         )?;
         Ok(())
@@ -385,14 +416,23 @@ impl SessionStore {
     /// What `GET /api/sessions` lists: the one last written to first. Opening
     /// one does not move it; a turn in it does.
     pub fn list(&self) -> Result<Vec<SessionSummary>> {
+        Ok(self
+            .list_owned()?
+            .into_iter()
+            .map(|(summary, _)| summary)
+            .collect())
+    }
+
+    /// [`list`](Self::list), each row with whose it is.
+    pub fn list_owned(&self) -> Result<Vec<(SessionSummary, Option<String>)>> {
         let mut statement = self.connection.prepare(
             "SELECT id, title, backend, model, started_at, turns, record,
-                    COALESCE(written_at, started_at) AS written, archived_at
+                    COALESCE(written_at, started_at) AS written, archived_at, owner
              FROM sessions
              ORDER BY written DESC, started_at DESC, id DESC",
         )?;
         let rows = statement.query_map([], |row| {
-            Ok(SessionSummary {
+            let summary = SessionSummary {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 backend: row.get(2)?,
@@ -403,9 +443,31 @@ impl SessionStore {
                 written_at: Some(row.get::<_, i64>(7)? as u64),
                 archived_at: row.get::<_, Option<i64>>(8)?.map(|at| at as u64),
                 live: None,
-            })
+            };
+            Ok((summary, row.get::<_, Option<String>>(9)?))
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Whose a stored session is: `None` when there is no such session,
+    /// `Some(None)` for one that belongs to nobody.
+    pub fn owner_of(&self, id: &str) -> Result<Option<Option<String>>> {
+        Ok(self
+            .connection
+            .query_row("SELECT owner FROM sessions WHERE id = ?1", [id], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .optional()?)
+    }
+
+    /// How many sessions belong to `owner`.
+    pub fn count_owned(&self, owner: &str) -> Result<usize> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE owner = ?1",
+            [owner],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     /// Puts a session away from the history, or back: `at` is when, `None` to
@@ -718,5 +780,30 @@ mod tests {
             serde_json::to_value(view.summary()).unwrap(),
             "a column that stopped matching the fold is a second truth",
         );
+    }
+
+    #[test]
+    fn an_owner_is_written_once_and_kept() {
+        let store = SessionStore::in_memory().expect("a store");
+        store
+            .save_owned(&view("hers"), None, Some("a1b2c3d4e5f6"))
+            .expect("saving");
+        store.save(&view("nobodys"), None).expect("saving");
+        // A later save, by whatever path, does not move it.
+        store.save(&view("hers"), None).expect("saving again");
+        assert_eq!(
+            store.owner_of("hers").unwrap(),
+            Some(Some("a1b2c3d4e5f6".to_string()))
+        );
+        assert_eq!(store.owner_of("nobodys").unwrap(), Some(None));
+        assert_eq!(store.owner_of("missing").unwrap(), None);
+        assert_eq!(store.count_owned("a1b2c3d4e5f6").unwrap(), 1);
+        let owners: Vec<Option<String>> = store
+            .list_owned()
+            .unwrap()
+            .into_iter()
+            .map(|(_, owner)| owner)
+            .collect();
+        assert!(owners.contains(&None) && owners.contains(&Some("a1b2c3d4e5f6".into())));
     }
 }

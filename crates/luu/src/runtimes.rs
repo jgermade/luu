@@ -89,6 +89,9 @@ pub fn install_steps(runtime: Runtime) -> Result<Vec<Vec<String>>, &'static str>
             return Err("not from here: it needs root");
         }
         Runtime::Host | Runtime::Direct => return Err("there is nothing to install"),
+        Runtime::Kubernetes => {
+            return Err("a cluster is not installed from here: luu runs in it, by its chart");
+        }
     };
     if !cfg!(target_os = "macos") {
         return Err("here the package manager needs root: install it from a terminal");

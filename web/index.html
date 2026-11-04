@@ -21,7 +21,16 @@
   // Before jq79, which fetches a component each time a setup imports it.
   import "./lib/components-once.js"
   import { C79 } from "./vendor/jq79.js"
-  C79.fetch("./app.html").mount("#app")
+  import { whoAmI } from "./lib/account.js"
+  // On a server with users nothing loads before a login: every request the
+  // app makes would be a 401. Everywhere else the answer is `users: false`.
+  const account = await whoAmI()
+  // No owner yet is setup, which takes the one-time link `luu config
+  // setup-url` prints. See RECORD/2026-11-03.an-owner-proved-by-email.WIP.md.
+  const page = !account.users || account.loggedIn ? "./app.html"
+    : account.owner ? "./views/login/login.html"
+    : "./views/login/setup.html"
+  C79.fetch(page).mount("#app")
 </script>
 </body>
 </html>

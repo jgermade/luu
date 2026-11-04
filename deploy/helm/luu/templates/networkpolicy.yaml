@@ -1,0 +1,34 @@
+{{- if include "luu.pods" . }}
+# Worker pods take no connections: kubectl reaches them through the kubelet,
+# not the pod network.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "luu.fullname" . }}-workers
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: ["Ingress"]
+---
+# And a session whose policy denies the network makes a pod labelled
+# `luu.dev/network: none`, which may reach nothing. Held only where the CNI
+# enforces NetworkPolicy; where it does not, the per-command seccomp filter is
+# what denies, and luu says so.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "luu.fullname" . }}-workers-sealed
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      luu.dev/network: none
+  policyTypes: ["Egress"]
+{{- end }}

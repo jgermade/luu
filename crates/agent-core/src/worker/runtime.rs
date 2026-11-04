@@ -40,6 +40,10 @@ pub enum Runtime {
     Container,
     /// Colima with containerd (`colima nerdctl`).
     Colima,
+    /// A pod per session, started with `kubectl run -i`, in the cluster luu's
+    /// chart runs in. See [`super::kubernetes`] and
+    /// `RECORD/2026-11-03.a-pod-per-session.WIP.md`.
+    Kubernetes,
 }
 
 impl Runtime {
@@ -65,6 +69,7 @@ impl Runtime {
             Self::Nerdctl => Some("nerdctl"),
             Self::Container => Some("container"),
             Self::Colima => Some("colima"),
+            Self::Kubernetes => Some("kubectl"),
         }
     }
 
@@ -77,6 +82,7 @@ impl Runtime {
             Self::Nerdctl => "nerdctl",
             Self::Container => "container",
             Self::Colima => "colima",
+            Self::Kubernetes => "kubernetes",
         }
     }
 
@@ -120,6 +126,9 @@ impl Runtime {
     pub fn probe_argv(self) -> Option<Vec<String>> {
         match self {
             Self::Container => self.with(&["system", "status"]),
+            // Not whether a cluster answers but whether this one may do the
+            // one thing the runtime needs of it.
+            Self::Kubernetes => self.with(&["auth", "can-i", "create", "pods"]),
             _ => self.with(&["info"]),
         }
     }
@@ -127,6 +136,10 @@ impl Runtime {
     /// The line that asks whether this runtime's store has `image`. Each
     /// runtime keeps its own: Docker's images are not Podman's.
     pub fn image_argv(self, image: &str) -> Option<Vec<String>> {
+        // A cluster has no store luu can ask: each node pulls.
+        if self == Self::Kubernetes {
+            return None;
+        }
         self.with(&["image", "inspect", image])
     }
 
@@ -142,6 +155,10 @@ impl Runtime {
         args: &[(&str, &str)],
         labels: &[(&str, &str)],
     ) -> Option<Vec<String>> {
+        // luu builds nothing on a cluster: it pulls the published worker.
+        if self == Self::Kubernetes {
+            return None;
+        }
         let mut argv = self.with(&["build", "-t", image, "-f", containerfile])?;
         for (flag, pairs) in [("--build-arg", args), ("--label", labels)] {
             for (name, value) in pairs {
@@ -159,6 +176,9 @@ impl Runtime {
     /// without a session, by the handshake itself rather than by anything
     /// written down beside the image. No network where the runtime can say so.
     pub fn hello_argv(self, image: &str) -> Option<Vec<String>> {
+        if self == Self::Kubernetes {
+            return None;
+        }
         let mut words = vec!["run", "--rm"];
         if self.cannot().is_none() {
             words.extend(["--network", "none"]);
@@ -187,6 +207,10 @@ impl Runtime {
                 "Apple's container (github.com/apple/container/releases), macOS 26 on Apple \
                  silicon, then `container system start`",
             ),
+            Self::Kubernetes => Some(
+                "a cluster, and luu in it: its Helm chart (deploy/helm/luu) with \
+                 `runtime: kubernetes`, whose image carries kubectl",
+            ),
         }
     }
 
@@ -201,6 +225,11 @@ impl Runtime {
         match self {
             Self::Container => Some(
                 "no --network none: the container stays attached and the \
+                 per-command seccomp filter is the only thing denying the network",
+            ),
+            Self::Kubernetes => Some(
+                "the network is denied by the chart's NetworkPolicy, which only a CNI that \
+                 enforces NetworkPolicy holds: elsewhere the pod stays attached and the \
                  per-command seccomp filter is the only thing denying the network",
             ),
             _ => None,
@@ -220,9 +249,10 @@ impl std::str::FromStr for Runtime {
             "nerdctl" => Ok(Self::Nerdctl),
             "container" => Ok(Self::Container),
             "colima" => Ok(Self::Colima),
+            "kubernetes" => Ok(Self::Kubernetes),
             other => Err(format!(
                 "unknown worker runtime `{other}`: \
-                 host, direct, docker, podman, nerdctl, container or colima"
+                 host, direct, docker, podman, nerdctl, container, colima or kubernetes"
             )),
         }
     }
@@ -242,6 +272,8 @@ pub enum RuntimeError {
     NoWorker(Runtime),
     #[error("the path to this binary could not be resolved, so no worker can be started: {0}")]
     NoBinary(#[source] std::io::Error),
+    #[error("{0}")]
+    Kube(String),
 }
 
 /// Everything needed to start one worker.
@@ -292,6 +324,10 @@ pub struct WorkerSpec {
     /// the runtime as the mount's parent, and is not writable there, which is
     /// what the `/` it replaces was too.
     pub home: Option<PathBuf>,
+    /// What a pod needs that a container does not, for [`Runtime::Kubernetes`]:
+    /// the claim, luu's pod, the labels. `None` for every other runtime. See
+    /// [`super::kubernetes::Kube`].
+    pub kube: Option<super::kubernetes::Kube>,
 }
 
 impl WorkerSpec {
@@ -306,6 +342,7 @@ impl WorkerSpec {
             timeout_ms: DEFAULT_TIMEOUT_MS,
             user: current_user(),
             home: std::env::var_os("HOME").map(PathBuf::from),
+            kube: None,
         }
     }
 
@@ -353,6 +390,22 @@ impl WorkerSpec {
     pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
         self
+    }
+
+    pub fn with_kube(mut self, kube: Option<super::kubernetes::Kube>) -> Self {
+        self.kube = kube;
+        self
+    }
+
+    /// The pod settings, or why there are none.
+    fn kube(&self) -> Result<&super::kubernetes::Kube, RuntimeError> {
+        self.kube.as_ref().ok_or_else(|| {
+            RuntimeError::Kube(
+                "the kubernetes runtime has no pod settings: LUU_KUBE_CLAIM and the rest, \
+                 which the chart sets with `runtime: kubernetes`"
+                    .to_string(),
+            )
+        })
     }
 
     /// How a verdict and `luu tools` name this worker.
@@ -417,6 +470,29 @@ impl WorkerSpec {
                 runtime: self.runtime,
             });
         };
+
+        if self.runtime == Runtime::Kubernetes {
+            let generated;
+            let name = match name {
+                Some(name) => name,
+                None => {
+                    generated = super::kubernetes::pod_name();
+                    &generated
+                }
+            };
+            return self
+                .kube()?
+                .run_argv(&super::kubernetes::Pod {
+                    name,
+                    image: &image,
+                    base: &self.base,
+                    home: self.home.as_deref(),
+                    user: self.user,
+                    network: self.network,
+                    args: worker_args("luu".to_string()),
+                })
+                .map_err(RuntimeError::Kube);
+        }
 
         let mut argv = match self.runtime {
             Runtime::Colima => vec![
@@ -494,6 +570,9 @@ impl WorkerSpec {
     /// there is no container.
     fn exec_prefix(&self) -> Option<Vec<String>> {
         let program = self.runtime.program()?;
+        if self.runtime == Runtime::Kubernetes {
+            return self.kube.as_ref().map(super::kubernetes::Kube::exec_prefix);
+        }
         Some(match self.runtime {
             Runtime::Colima => vec![
                 program.to_string(),
@@ -511,6 +590,11 @@ impl WorkerSpec {
     /// there is no container. `DEBIAN_FRONTEND` so `apt-get` asks nothing.
     /// See `crate::tools::install`.
     pub fn root_exec_argv(&self, name: &str, argv: &[String]) -> Option<Vec<String>> {
+        // A worker pod runs as luu's uid with no privilege escalation, which is
+        // Pod Security `restricted`: there is no root to `exec` as.
+        if self.runtime == Runtime::Kubernetes {
+            return None;
+        }
         let mut line = self.exec_prefix()?;
         match self.runtime {
             Runtime::Container => line.extend(["--uid".to_string(), "0".to_string()]),
@@ -537,20 +621,39 @@ impl WorkerSpec {
     /// host it names.
     pub fn exec_argv(&self, name: &str, id: &str) -> Option<TerminalLine> {
         let mut open = self.exec_prefix()?;
-        open.extend([
-            "-i".to_string(),
-            "-t".to_string(),
-            "-e".to_string(),
-            "TERM=xterm-256color".to_string(),
-            "-e".to_string(),
-            format!("LUU_TERMINAL={id}"),
-            "-e".to_string(),
-            format!("LUU_RUNTIME={}", self.runtime),
-            name.to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            SHELL.to_string(),
-        ]);
+        // `kubectl exec` takes no `-e`: the variables go through `env`, after
+        // the `--` that ends kubectl's own flags.
+        let kubernetes = self.runtime == Runtime::Kubernetes;
+        if kubernetes {
+            open.extend([
+                "-i".to_string(),
+                "-t".to_string(),
+                name.to_string(),
+                "--".to_string(),
+                "env".to_string(),
+                "TERM=xterm-256color".to_string(),
+                format!("LUU_TERMINAL={id}"),
+                format!("LUU_RUNTIME={}", self.runtime),
+                "sh".to_string(),
+                "-c".to_string(),
+                SHELL.to_string(),
+            ]);
+        } else {
+            open.extend([
+                "-i".to_string(),
+                "-t".to_string(),
+                "-e".to_string(),
+                "TERM=xterm-256color".to_string(),
+                "-e".to_string(),
+                format!("LUU_TERMINAL={id}"),
+                "-e".to_string(),
+                format!("LUU_RUNTIME={}", self.runtime),
+                name.to_string(),
+                "sh".to_string(),
+                "-c".to_string(),
+                SHELL.to_string(),
+            ]);
+        }
         // `/proc/<pid>/environ` is readable for the worker's own uid, which is
         // every process a terminal started. The script that reads it does not
         // carry the id, so it never signals itself.
@@ -561,8 +664,11 @@ impl WorkerSpec {
             )
         };
         let mut end = self.exec_prefix()?;
+        end.push(name.to_string());
+        if kubernetes {
+            end.push("--".to_string());
+        }
         end.extend([
-            name.to_string(),
             "sh".to_string(),
             "-c".to_string(),
             format!("{}; sleep 1; {}; true", each("HUP"), each("KILL")),
@@ -706,6 +812,74 @@ mod tests {
         assert!(!argv.iter().any(|word| word == "--network"));
         assert!(Runtime::Container.cannot().is_some());
         assert!(Runtime::Docker.cannot().is_none());
+    }
+
+    fn kube_spec() -> WorkerSpec {
+        let kube = super::super::kubernetes::Kube::from_lookup(|name| match name {
+            "LUU_KUBE_CLAIM" => Some("luu-work".to_string()),
+            "LUU_KUBE_NAMESPACE" => Some("luu".to_string()),
+            _ => None,
+        })
+        .unwrap();
+        WorkerSpec::new(Runtime::Kubernetes, "/work/u/project")
+            .with_image(Some("ghcr.io/jgermade/luu-worker:0.1.6".into()))
+            .with_user(Some((10001, 10001)))
+            .with_home(Some("/state".into()))
+            .with_kube(Some(kube))
+    }
+
+    #[test]
+    fn kubernetes_is_a_pod_through_kubectl_and_builds_nothing() {
+        assert_eq!("kubernetes".parse::<Runtime>(), Ok(Runtime::Kubernetes));
+        assert_eq!(Runtime::Kubernetes.program(), Some("kubectl"));
+        assert!(Runtime::Kubernetes.is_contained());
+        // Not offered beside the runtimes a machine installs and starts.
+        assert!(!Runtime::CONTAINED.contains(&Runtime::Kubernetes));
+        assert!(Runtime::Kubernetes.image_argv("x").is_none());
+        assert!(
+            Runtime::Kubernetes
+                .build_argv("x", "f", ".", &[], &[])
+                .is_none()
+        );
+        assert!(Runtime::Kubernetes.hello_argv("x").is_none());
+        assert!(
+            Runtime::Kubernetes
+                .cannot()
+                .is_some_and(|gap| gap.contains("NetworkPolicy"))
+        );
+
+        let argv = kube_spec()
+            .argv_as(&["cargo".into()], Some("luu-worker-9-0"))
+            .unwrap();
+        assert_eq!(
+            &argv[..5],
+            ["kubectl", "run", "--namespace", "luu", "luu-worker-9-0"]
+        );
+        assert!(kube_spec().label().starts_with("kubernetes ("));
+        // Without the pod settings it says what is missing, not a bare error.
+        let bare = WorkerSpec::new(Runtime::Kubernetes, "/work")
+            .with_image(Some("w".into()))
+            .argv(&[])
+            .unwrap_err();
+        assert!(bare.to_string().contains("LUU_KUBE_CLAIM"), "{bare}");
+    }
+
+    #[test]
+    fn a_pods_terminal_is_kubectl_exec_with_env_after_the_dashes() {
+        let line = kube_spec().exec_argv("luu-worker-9-0", "7-1").unwrap();
+        assert_eq!(&line.open[..4], ["kubectl", "exec", "--namespace", "luu"]);
+        let dashes = line.open.iter().position(|word| word == "--").unwrap();
+        assert_eq!(line.open[dashes - 1], "luu-worker-9-0");
+        assert_eq!(line.open[dashes + 1], "env");
+        assert!(line.open.contains(&"LUU_TERMINAL=7-1".to_string()));
+        assert!(!line.open.contains(&"-e".to_string()), "{:?}", line.open);
+        assert_eq!(&line.end[4..7], ["luu-worker-9-0", "--", "sh"]);
+        // No root to install as: the pod is Pod Security `restricted`.
+        assert!(
+            kube_spec()
+                .root_exec_argv("luu-worker-9-0", &["apt-get".into()])
+                .is_none()
+        );
     }
 
     #[test]

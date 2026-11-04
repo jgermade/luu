@@ -39,8 +39,12 @@ async function call(method, path, body) {
 /// `{ hosts: { name: { url, "token-file" } }, editable, path }`.
 export const loadHosts = () => call("GET", "/api/hosts")
 
-/// Replaces every `[host.*]`.
-export const saveHosts = hosts => call("PUT", "/api/hosts", { hosts })
+/// Replaces every `[host.*]`. The luus linked by key are listed beside them
+/// and are not hosts: they are Remote access's, and never written here.
+export const saveHosts = hosts =>
+  call("PUT", "/api/hosts", {
+    hosts: Object.fromEntries(Object.entries(hosts).filter(([, host]) => !host?.linked)),
+  })
 
 /// GET one of a host's API paths.
 export const askHost = (name, path) => call("GET", hostApi(name, path))

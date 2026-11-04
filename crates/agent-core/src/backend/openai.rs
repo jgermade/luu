@@ -65,6 +65,14 @@ impl OpenAi {
         self
     }
 
+    /// Another client than the default: one that dials a unix socket, which
+    /// is how a provider another luu offers is reached — through the link,
+    /// never through a port on loopback. See `luu`'s `crate::link`.
+    pub fn with_http(mut self, http: reqwest::Client) -> Self {
+        self.http = http;
+        self
+    }
+
     /// What a run should be told once, before it measures anything.
     ///
     /// `None` when there is nothing to warn about. This is the sentence that

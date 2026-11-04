@@ -30,6 +30,7 @@ use tokio::sync::Mutex;
 use crate::sandbox::{Applied, Authority, PathRule, Sandbox, SandboxPolicy, Verdict};
 use crate::tools::{ToolCall, ToolFuture, ToolOutcome, Tools};
 
+pub mod kubernetes;
 pub mod runtime;
 
 pub use runtime::{Runtime, RuntimeError, TerminalLine, WorkerConfig, WorkerSpec};
@@ -371,7 +372,10 @@ impl Worker {
     /// restart repeats — the same three checks, so a worker started an hour into
     /// a session is held to what the one at the start was.
     async fn open(spec: &WorkerSpec, commands: &[String]) -> Result<(Pipe, Hello), WorkerError> {
-        let container = spec.runtime.is_contained().then(runtime::container_name);
+        let container = spec.runtime.is_contained().then(|| match spec.runtime {
+            Runtime::Kubernetes => kubernetes::pod_name(),
+            _ => runtime::container_name(),
+        });
         let argv = spec.argv_as(commands, container.as_deref())?;
 
         let mut command = tokio::process::Command::new(&argv[0]);
@@ -386,7 +390,21 @@ impl Worker {
             command: argv.join(" "),
             source,
         })?;
-        let stdin = child.stdin.take().expect("stdin was piped");
+        let mut stdin = child.stdin.take().expect("stdin was piped");
+        // A pod's worker waits for one line before it greets: `kubectl run -i`
+        // attaches only once the pod runs, and a hello written before that is
+        // not replayed. The line waits in `kubectl`'s stdin until the attach
+        // carries it. See `kubernetes::WAIT`.
+        if spec.runtime == Runtime::Kubernetes {
+            use tokio::io::AsyncWriteExt;
+            stdin
+                .write_all(b"\n")
+                .await
+                .map_err(|source| WorkerError::Spawn {
+                    command: argv.join(" "),
+                    source,
+                })?;
+        }
         let stdout = BufReader::new(child.stdout.take().expect("stdout was piped"));
         // Still on this process's stderr, line by line, as it was when it was
         // inherited — and the last few kept, because a runtime that refuses to

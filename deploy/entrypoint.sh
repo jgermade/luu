@@ -12,7 +12,7 @@ mkdir -p "${CARGO_HOME:-$state/cargo}"
 if [ ! -f "$state/config.toml" ]; then
   cat > "$state/config.toml" <<TOML
 # Written by the container on its first start. Yours to edit: see
-# RECORD/2026-10-07.a-public-luu.WIP.md for every key.
+# RECORD/2026-10-07.a-public-luu.completed.md for every key.
 [server]
 exposure = "private"
 bind = "0.0.0.0:7878"

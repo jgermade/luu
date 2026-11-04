@@ -1,0 +1,44 @@
+{{- if include "luu.pods" . }}
+# What `kubectl run -i --rm` and the terminal's `kubectl exec` need, in this
+# namespace and nothing more: make a worker pod, watch it start, attach to it,
+# read what it said if it ended first, exec a shell into it, delete it. See
+# RECORD/2026-11-03.a-pod-per-session.WIP.md.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "luu.fullname" . }}
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "luu.fullname" . }}-workers
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/attach", "pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "luu.fullname" . }}-workers
+  labels:
+    {{- include "luu.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "luu.fullname" . }}-workers
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "luu.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

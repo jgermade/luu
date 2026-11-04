@@ -25,6 +25,7 @@
   const SettingsRuntimes = await import("./runtimes/runtimes.html")
   const SettingsSessions = await import("./sessions/sessions.html")
   const SettingsPolicies = await import("./policies/policies.html")
+  const SettingsRemote = await import("./remote/remote.html")
   const Rail = await import("@web/components/rail.html")
 
   const SECTIONS = [
@@ -45,6 +46,9 @@
     // environments that combine them. See `policies/policies.html`.
     { value: "policies", label: "Policies", icon: "i-shield" },
     { value: "sessions", label: "Sessions", icon: "i-repeat" },
+    // This luu linked to another over SSH by key, or, on a server with
+    // users, your keys and the luus they linked. See `remote/remote.html`.
+    { value: "remote", label: "Remote access", icon: "i-machine" },
   ]
 
   // **A change of section is a transition, not a swap, and its end is known
@@ -128,6 +132,8 @@
              :aria-hidden="String(shown !== 'sessions')"><SettingsSessions /></div>
         <div :if="mounted('policies')" class="section" data-section="policies" :class="phase('policies')"
              :aria-hidden="String(shown !== 'policies')"><SettingsPolicies /></div>
+        <div :if="mounted('remote')" class="section" data-section="remote" :class="phase('remote')"
+             :aria-hidden="String(shown !== 'remote')"><SettingsRemote /></div>
       </div>
     </section>
   </div>

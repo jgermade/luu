@@ -17,6 +17,12 @@
   const { modelLabel } = await import("@web/lib/engines.js")
   const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
   const Dropup = await import("@web/components/dropup.html")
+  // A key another luu asked this account to add (`?add-key=`): Remote access
+  // opens with it filled in, for the person to add or not. See
+  // `@web/lib/remote.js`.
+  const { keyAsked } = await import("@web/lib/remote.js")
+  const { account: me } = await import("@web/lib/account.js")
+  if (me.users && me.loggedIn && keyAsked()) openSettingsAt("remote")
 
   // The gate's two narrowings. `null` is *leave*, which is what almost every
   // approval means; the other two are a person deciding this job is not the
