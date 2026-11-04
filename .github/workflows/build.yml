@@ -56,6 +56,23 @@ jobs:
             --set-string policy='[sandbox]' \
             --set persistence.work.existingClaim=work |
             grep -q 'value: "https://luu.example.com"'
+      # Traefik's ACME: its two router annotations, a TLS entry naming no
+      # Secret, and an https origin. And a key the chart does not have is
+      # refused, not ignored. See
+      # RECORD/2026-11-04.a-certificate-from-traefik.completed.md.
+      - run: |
+          set -euo pipefail
+          traefik=$(helm template luu deploy/helm/luu --set ingress.enabled=true \
+            --set ingress.host=luu.example.com --set ingress.tls.certResolver=letsencrypt)
+          for want in 'traefik.ingress.kubernetes.io/router.tls: "true"' \
+              'traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt' \
+              'value: "https://luu.example.com"'; do
+            grep -qF -- "$want" <<<"$traefik" || { echo "::error::missing: $want"; exit 1; }
+          done
+          if grep -qF 'secretName: luu-tls' <<<"$traefik"; then echo "::error::unexpected: secretName: luu-tls"; exit 1; fi
+          grep -qF 'secretName: luu-tls' <<<"$(helm template luu deploy/helm/luu \
+            --set ingress.enabled=true --set ingress.tls.enabled=true)"
+          if helm template luu deploy/helm/luu --set traefik.tls.certResolver=letsencrypt >/dev/null 2>&1; then echo "::error::a key the chart does not have was accepted"; exit 1; fi
       # A pod per session: the ServiceAccount and its Role, the pod settings,
       # the NetworkPolicy that seals a worker, and `--worker kubernetes` —
       # and none of it under the default `runtime: host`. See
@@ -74,10 +91,10 @@ jobs:
           done
           rwx=$(helm template luu deploy/helm/luu --set runtime=kubernetes \
             --set worker.sameNode=false --set persistence.work.accessMode=ReadWriteMany)
-          ! grep -qF 'LUU_KUBE_SAME_NODE' <<<"$rwx"
+          if grep -qF 'LUU_KUBE_SAME_NODE' <<<"$rwx"; then echo "::error::unexpected: LUU_KUBE_SAME_NODE"; exit 1; fi
           grep -qF '"ReadWriteMany"' <<<"$rwx"
           host=$(helm template luu deploy/helm/luu)
-          ! grep -qE 'kind: (Role|ServiceAccount|NetworkPolicy)' <<<"$host"
+          if grep -qE 'kind: (Role|ServiceAccount|NetworkPolicy)' <<<"$host"; then echo "::error::unexpected: kind: (Role|ServiceAccount|NetworkPolicy)"; exit 1; fi
           grep -qF 'automountServiceAccountToken: false' <<<"$host"
       # The SMTP password from a Secret: mounted under /run, which no
       # session's command is granted, and not at all when none is named.
@@ -88,7 +105,7 @@ jobs:
               'key: password' 'path: smtp-password'; do
             grep -qF -- "$want" <<<"$mail" || { echo "::error::missing: $want"; exit 1; }
           done
-          ! grep -qF 'smtp-password' <<<"$(helm template luu deploy/helm/luu)"
+          if grep -qF 'smtp-password' <<<"$(helm template luu deploy/helm/luu)"; then echo "::error::unexpected: smtp-password"; exit 1; fi
       # Links over SSH: their own Service and container port, and none when
       # turned off.
       - run: |
@@ -99,7 +116,7 @@ jobs:
           done
           node=$(helm template luu deploy/helm/luu --set links.service.type=NodePort --set links.service.nodePort=30222)
           grep -qF 'nodePort: 30222' <<<"$node"
-          ! grep -qF 'luu-links' <<<"$(helm template luu deploy/helm/luu --set links.enabled=false)"
+          if grep -qF 'luu-links' <<<"$(helm template luu deploy/helm/luu --set links.enabled=false)"; then echo "::error::unexpected: luu-links"; exit 1; fi
 
   # The four targets `pages/setup.sh` installs. Linux is built on the oldest
   # Ubuntu runner rather than the newest, because a binary needs the glibc it

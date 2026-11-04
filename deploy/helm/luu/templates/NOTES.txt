@@ -33,6 +33,18 @@ The token, written on the first start:
 {{- if .Values.ingress.enabled }}
 
 Then open {{ include "luu.origin" . }}/?token=<the token>
+{{- if .Values.ingress.tls.certResolver }}
+
+The certificate is Traefik's: its resolver {{ .Values.ingress.tls.certResolver }} gets one for
+{{ .Values.ingress.host }} and renews it. Until it has, Traefik answers with its own
+default certificate; if that lasts, Traefik's log says why.
+{{- else if .Values.ingress.tls.enabled }}
+
+The certificate is the Secret {{ .Values.ingress.tls.secretName }}, which this chart does not write:
+cert-manager does, from an issuer in ingress.annotations. Until something
+writes it, the ingress controller serves its own default certificate. With
+Traefik's ACME instead: --set ingress.tls.certResolver=<its resolver>.
+{{- end }}
 {{- else }}
 
 Then, with no ingress:

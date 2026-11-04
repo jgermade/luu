@@ -1765,7 +1765,12 @@ An online install is known afterwards by its unit: `reinstall` restarts it, and
 `uninstall --purge` removes the unit, the binary, `/var/lib/luu`, `/etc/luu` and
 the user. It ends by printing the setup link (and `luu config` as the
 terminal's way). In Docker and the chart the online steps are `luu config`
-through `exec`, and a restart. See
+through `exec`, and a restart. **In the chart TLS is the Ingress's**: a Secret
+cert-manager writes (`ingress.tls.secretName`, from an issuer annotation), or
+Traefik's own ACME (`ingress.tls.certResolver`, two router annotations and a
+TLS entry naming no Secret). Its values have a schema, so a key the chart does
+not have is refused rather than ignored
+([`a-certificate-from-traefik`](RECORD/2026-11-04.a-certificate-from-traefik.completed.md)). See
 [`RECORD/2026-11-03.local-or-online.completed.md`](RECORD/2026-11-03.local-or-online.completed.md).
 
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and

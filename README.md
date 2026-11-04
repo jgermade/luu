@@ -112,6 +112,11 @@ helm install luu oci://ghcr.io/jgermade/charts/luu \
 kubectl exec deploy/luu -- cat /state/token
 ```
 
+The certificate is the Secret `luu-tls`, which the chart does not write:
+cert-manager does, from an issuer in `ingress.annotations`. With Traefik's
+own ACME, name its resolver instead, `--set ingress.tls.certResolver=letsencrypt`.
+A value the chart does not have is refused (`values.schema.json`), not ignored.
+
 Sessions run in luu's own pod by default. With `--set runtime=kubernetes`
 each session runs in a pod of its own that mounts only its folder; hold the
 namespace to Pod Security `restricted` (see
