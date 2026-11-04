@@ -456,3 +456,302 @@ async fn the_online_page_reaches_a_luu_at_home_by_key_and_nobody_else_does() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// An OpenAI-compatible server that answers every chat with `reply`, and
+/// keeps the `Authorization` each request came with.
+async fn fake_openai(reply: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+    use axum::routing::{get, post};
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let kept = seen.clone();
+    let router = axum::Router::new()
+        .route(
+            "/v1/models",
+            get(|| async { axum::Json(serde_json::json!({ "data": [{ "id": "the-model" }] })) }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(move |headers: axum::http::HeaderMap| {
+                let kept = kept.clone();
+                async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    kept.lock().unwrap().push(auth);
+                    let delta =
+                        serde_json::json!({ "choices": [{ "delta": { "content": reply } }] });
+                    (
+                        [("content-type", "text/event-stream")],
+                        format!("data: {delta}\n\ndata: [DONE]\n\n"),
+                    )
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    (format!("http://{address}/v1"), seen)
+}
+
+fn provider(home: &Path, name: &str, url: &str, key: &str, offer: Option<bool>) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let key_file = home.join(format!("{name}.key"));
+    std::fs::write(&key_file, key).unwrap();
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let offer = offer
+        .map(|offer| format!("offer = {offer}\n"))
+        .unwrap_or_default();
+    format!(
+        "\n[provider.{name}]\nbackend = \"openai\"\nurl = \"{url}\"\nmodel = \"the-model\"\n\
+         key-file = \"{}\"\n{offer}",
+        key_file.display()
+    )
+}
+
+/// Sends `prompt` on a session's socket and waits for `expected` in what
+/// comes back.
+async fn turn(
+    url: &str,
+    cookie: Option<&str>,
+    origin: &str,
+    prompt: &str,
+    expected: &str,
+) -> Result<(), String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = url.into_client_request().unwrap();
+    if let Some(cookie) = cookie {
+        request
+            .headers_mut()
+            .insert("Cookie", cookie.parse().unwrap());
+    }
+    request
+        .headers_mut()
+        .insert("Origin", origin.parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|error| error.to_string())?;
+    // What the client speaks first, as the page does: a port with users or a
+    // token asks for it before anything else.
+    for message in [
+        serde_json::json!({
+            "type": "hello",
+            "protocol": agent_core::protocol::VERSION,
+            "format": agent_core::record::FORMAT,
+        }),
+        serde_json::json!({ "type": "prompt", "text": prompt }),
+    ] {
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::text(
+                message.to_string(),
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let mut said = String::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(30), socket.next()).await {
+            Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => {
+                if text.contains(expected) {
+                    return Ok(());
+                }
+                said.push_str(&text);
+                said.push('\n');
+            }
+            Ok(Some(Ok(_))) => continue,
+            _ => break,
+        }
+    }
+    Err(said)
+}
+
+#[tokio::test]
+async fn providers_cross_both_ways_and_their_keys_stay_home() {
+    let online = scratch("cross-online");
+    let home = scratch("cross-home");
+    let (home_url, home_seen) = fake_openai("hello from home").await;
+    let (online_url, online_seen) = fake_openai("hello from online").await;
+    let port = free_port();
+    let mut online_config = format!(
+        "[server]\nexposure = \"public\"\nbind = \"127.0.0.1:0\"\norigin = \"{ORIGIN}\"\n\
+         ssh = \"127.0.0.1:{port}\"\nssh-public = \"127.0.0.1:{port}\"\n"
+    );
+    online_config.push_str(&provider(&online, "big", &online_url, "online-key", None));
+    std::fs::write(online.join("config.toml"), online_config).unwrap();
+    run(
+        &online,
+        &["user", "add", "ana@example.com", "--role", "owner"],
+    );
+    run(&online, &["user", "add", "bo@example.com"]);
+    let server = start(&online);
+    let address = server.address.clone();
+
+    let mut home_config = "[server]\nbind = \"127.0.0.1:0\"\n".to_string();
+    home_config.push_str(&provider(&home, "gpu", &home_url, "home-key", None));
+    home_config.push_str(&provider(
+        &home,
+        "private",
+        &home_url,
+        "home-key",
+        Some(false),
+    ));
+    std::fs::write(home.join("config.toml"), home_config).unwrap();
+    run(
+        &home,
+        &[
+            "link",
+            "add",
+            &format!("http://{address}"),
+            "--name",
+            "casa",
+            "--as",
+            "online",
+        ],
+    );
+    let key = run(&home, &["link", "key"]).trim().to_string();
+    run(&online, &["user", "key", "add", "ana@example.com", &key]);
+    let local = start(&home);
+    let ana = log_in(&address, &online, "ana@example.com").await;
+    let bo = log_in(&address, &online, "bo@example.com").await;
+    assert!(
+        linked(&address, &ana, "casa").await,
+        "{}",
+        local.said.lock().unwrap()
+    );
+
+    // Online, ana's pickers offer home's providers, but not the one home
+    // withholds; bo's offer none of them.
+    let mut listed = Value::Null;
+    for _ in 0..50 {
+        listed = get(&address, "/api/providers", &ana)
+            .await
+            .json()
+            .await
+            .unwrap();
+        if listed["linked"].get("gpu@casa").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(listed["linked"].get("gpu@casa").is_some(), "{listed}");
+    assert!(listed["linked"].get("private@casa").is_none(), "{listed}");
+    assert_eq!(listed["linked"]["gpu@casa"]["backend"], "openai");
+    let bo_listed: Value = get(&address, "/api/providers", &bo)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(bo_listed.get("linked").is_none(), "{bo_listed}");
+    let models: Value = get(&address, "/api/providers/gpu@casa/models", &ana)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(models["models"][0], "the-model", "{models}");
+
+    // A session online on home's GPU: the turn is answered by home's server,
+    // with home's key, which never left home.
+    let made = reqwest::Client::new()
+        .post(format!("http://{address}/api/sessions"))
+        .header("Cookie", &ana)
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({ "provider": "gpu@casa" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(made.status(), 201, "{:?}", made.text().await);
+    turn(
+        &format!("ws://{address}/ws"),
+        Some(&ana),
+        ORIGIN,
+        "hola",
+        "hello from home",
+    )
+    .await
+    .expect("a turn answered by home's provider");
+    assert_eq!(home_seen.lock().unwrap().last().unwrap(), "Bearer home-key");
+    // The withheld one cannot be chosen, and bo cannot reach ana's link.
+    for (cookie, name) in [(&ana, "private@casa"), (&bo, "gpu@casa")] {
+        let refused = reqwest::Client::new()
+            .post(format!("http://{address}/api/sessions"))
+            .header("Cookie", cookie)
+            .header("Origin", ORIGIN)
+            .json(&serde_json::json!({ "provider": name }))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            refused.status().is_client_error(),
+            "{name}: {}",
+            refused.status()
+        );
+    }
+
+    // The other way: a session at home on the online server's provider, as
+    // ana, its key staying online.
+    let home_listed: Value = reqwest::get(format!("http://{}/api/providers", local.address))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        home_listed["linked"].get("big@online").is_some(),
+        "{home_listed}"
+    );
+    let made = reqwest::Client::new()
+        .post(format!("http://{}/api/sessions", local.address))
+        .json(&serde_json::json!({ "provider": "big@online" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(made.status(), 201, "{:?}", made.text().await);
+    let local_origin = format!("http://{}", local.address);
+    turn(
+        &format!("ws://{}/ws", local.address),
+        None,
+        &local_origin,
+        "hola",
+        "hello from online",
+    )
+    .await
+    .expect("a turn answered by the online server's provider");
+    assert_eq!(
+        online_seen.lock().unwrap().last().unwrap(),
+        "Bearer online-key"
+    );
+
+    // The socket a backend dials is luu's user's, as every command a session
+    // runs is: a path not signed for its owner is refused, whatever it asks.
+    let socket = std::fs::read_dir(home.join("sockets"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "sock"))
+        .expect("the links' socket");
+    let client = reqwest::Client::builder()
+        .unix_socket(socket.as_path())
+        .build()
+        .unwrap();
+    for path in [
+        "/via/_/00000000000000000000000000000000/online/api/infer",
+        "/via/_/00000000000000000000000000000000/online/api/sessions",
+    ] {
+        let refused = client
+            .get(format!("http://online{path}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), 403, "{path}");
+    }
+
+    drop(local);
+    drop(server);
+    for dir in [online, home] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

@@ -1751,6 +1751,17 @@ impl Serving {
     /// and the page holds a WebSocket open for as long as it is on screen, so
     /// a Ctrl-C with the page open would never finish.
     pub async fn run(self) -> Result<()> {
+        // The socket a backend dials for a provider another luu offers, over
+        // that luu's link. See `crate::link::relay`.
+        // Where links come in (a server with users and `[server] ssh`), or
+        // where they may go out (a luu with no users).
+        let relays = self.state.links.is_some() || self.state.users.is_none();
+        if relays
+            && let Err(error) =
+                crate::link::relay(self.state.links.clone(), self.state.peers.clone()).await
+        {
+            eprintln!("note: no providers from linked luus: {error:#}");
+        }
         // The luus this one dials, answered with this router behind a peer's
         // gate. Never from a server with users: there, links come in.
         if self.state.users.is_none() {
@@ -2079,6 +2090,20 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     if users.is_some() {
         shared_paths_said(&app).await;
     }
+    // What a linked luu's own channels reach here: `/api/infer`, and nothing
+    // else, as the key's user — no login, no page.
+    if let Some(links) = &state.links {
+        links.offer(
+            Router::new()
+                .route("/api/infer", get(get_infer))
+                .route("/api/infer/{name}/models", get(get_infer_models))
+                .route(
+                    "/api/infer/{name}/to/{*rest}",
+                    axum::routing::any(infer_pass),
+                )
+                .with_state(state.clone()),
+        );
+    }
     let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
@@ -2232,6 +2257,15 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/auth/keys/remove", post(post_key_remove))
         .route("/api/peers", get(get_peers).put(put_peers))
         .route("/api/peers/probe", post(post_peer_probe))
+        // The providers this luu offers a linked one, by name, the key and
+        // the engine staying here. A peer reaches them with `sessions`; a
+        // linked luu's own channels reach nothing else. See `crate::link`.
+        .route("/api/infer", get(get_infer))
+        .route("/api/infer/{name}/models", get(get_infer_models))
+        .route(
+            "/api/infer/{name}/to/{*rest}",
+            axum::routing::any(infer_pass),
+        )
         .route("/h/{name}/api/{*rest}", axum::routing::any(host_api))
         .route("/h/{name}/ws", get(host_socket))
         .route("/h/{name}/ws/{*rest}", get(host_socket))
@@ -7462,6 +7496,238 @@ async fn post_peer_probe(
     .into_response()
 }
 
+// ---- providers offered to a linked luu -------------------------------------
+//
+// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+
+/// One provider this luu offers a linked one: what the luu that sends to it
+/// needs to build its backend, and nothing about the key or the engine.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Offered {
+    backend: crate::provider::BackendKind,
+    model: String,
+    #[serde(default)]
+    context_limit: u32,
+    #[serde(default)]
+    tool_calls: crate::provider::ToolCalls,
+    #[serde(default)]
+    messages: crate::provider::MessagesKeys,
+}
+
+/// Whether `name` is offered: a profile, not withheld with `offer = false`,
+/// and not one whose engine is switched off.
+fn is_offered(config: &crate::provider::Config, name: &str) -> bool {
+    let Some(profile) = config.profiles().get(name) else {
+        return false;
+    };
+    let idle = profile
+        .engine
+        .as_ref()
+        .and_then(|engine| config.engines().get(engine))
+        .is_some_and(|engine| !engine.enabled);
+    profile.offer != Some(false) && !idle
+}
+
+async fn get_infer() -> Response {
+    let (config, path) = match load_config().await {
+        Ok(loaded) => loaded,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let mut offered = std::collections::BTreeMap::new();
+    for name in config.profiles().keys() {
+        if !is_offered(&config, name) {
+            continue;
+        }
+        let Ok(resolved) = crate::provider::resolve(
+            &config,
+            path.as_deref(),
+            crate::provider::Flags {
+                provider: Some(name),
+                ..Default::default()
+            },
+        ) else {
+            continue;
+        };
+        if resolved.kind == crate::provider::BackendKind::Mock {
+            continue;
+        }
+        offered.insert(
+            name.clone(),
+            Offered {
+                backend: resolved.kind,
+                model: resolved.model,
+                context_limit: resolved.context_limit,
+                tool_calls: resolved.tool_calls,
+                messages: resolved.messages,
+            },
+        );
+    }
+    Json(offered).into_response()
+}
+
+async fn get_infer_models(state: State<AppRouterState>, Path(name): Path<String>) -> Response {
+    let offered = load_config()
+        .await
+        .is_ok_and(|(config, _)| is_offered(&config, &name));
+    if !offered {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("no provider named {name} is offered here"),
+        )
+            .into_response();
+    }
+    get_provider_models(state, Path(name), Query(ModelsAsk { facts: None })).await
+}
+
+fn infer_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("an HTTP client")
+    })
+}
+
+/// A request a linked luu's backend made of one of this luu's providers,
+/// passed through to it: this luu's URL for it, its engine started, its key
+/// added. The key and the engine never leave.
+async fn infer_pass(
+    State(state): State<AppRouterState>,
+    Path((name, rest)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let (config, path) = match load_config().await {
+        Ok(loaded) => loaded,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    if !is_offered(&config, &name) {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("no provider named {name} is offered here"),
+        )
+            .into_response();
+    }
+    let resolved = match crate::provider::resolve(
+        &config,
+        path.as_deref(),
+        crate::provider::Flags {
+            provider: Some(&name),
+            ..Default::default()
+        },
+    ) {
+        Ok(resolved) if resolved.kind != crate::provider::BackendKind::Mock => resolved,
+        Ok(_) => return (StatusCode::NOT_FOUND, "the mock is offered to nobody").into_response(),
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let mut url = resolved.url.clone();
+    if let Some((engine_name, engine)) = crate::engines::for_run(&resolved) {
+        match state.app.engines.ensure(&engine_name, &engine).await {
+            Ok(port) => url = crate::engines::at_port(&url, port).unwrap_or(url),
+            Err(why) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    format!("engine {engine_name}: {why}"),
+                )
+                    .into_response();
+            }
+        }
+    }
+    let key = match crate::api_key(&resolved) {
+        Ok(key) => key,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
+        }
+    };
+    let query = request
+        .uri()
+        .query()
+        .map(|query| format!("?{query}"))
+        .unwrap_or_default();
+    let target = format!("{}/{rest}{query}", url.trim_end_matches('/'));
+    let (parts, body) = request.into_parts();
+    let mut asked = infer_client().request(parts.method, target);
+    for (header_name, value) in &parts.headers {
+        if !crate::hosts::NOT_FORWARDED.contains(header_name) && header_name.as_str() != "x-api-key"
+        {
+            asked = asked.header(header_name, value);
+        }
+    }
+    if let Some(key) = key {
+        asked = match resolved.kind {
+            crate::provider::BackendKind::Anthropic => asked.header("x-api-key", key),
+            _ => asked.bearer_auth(key),
+        };
+    }
+    asked = asked.body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    let answer = match asked.send().await {
+        Ok(answer) => answer,
+        Err(error) => {
+            return (StatusCode::BAD_GATEWAY, format!("{name}: {error}")).into_response();
+        }
+    };
+    let mut response = Response::builder().status(answer.status().as_u16());
+    for (header_name, value) in answer.headers() {
+        if !crate::hosts::NOT_RETURNED.contains(header_name) {
+            response = response.header(header_name.as_str(), value.as_bytes());
+        }
+    }
+    response
+        .body(axum::body::Body::from_stream(answer.bytes_stream()))
+        .unwrap_or_else(|error| (StatusCode::BAD_GATEWAY, error.to_string()).into_response())
+}
+
+/// The providers linked luus offer this person, by `<provider>@<peer>`: the
+/// peers this luu dials that are connected, or, on a server with users, the
+/// luus their keys linked. Asked of each at once, a slow one cut at 3 s.
+async fn linked_offers(
+    state: &AppRouterState,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let owner = owner_key();
+    let peers: Vec<String> = match (&state.links, &owner) {
+        (Some(links), Some(user)) => links
+            .of(user)
+            .into_iter()
+            .map(|linked| linked.name)
+            .collect(),
+        (None, None) => state
+            .peers
+            .statuses()
+            .into_iter()
+            .filter(|(_, status)| status.state == "connected")
+            .map(|(name, _)| name)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let asks = peers.iter().map(|peer| {
+        let owner = owner.clone();
+        async move {
+            let asked = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                crate::link::ask_offered(owner.as_deref(), peer, ""),
+            )
+            .await;
+            (peer.clone(), asked)
+        }
+    });
+    let mut linked = std::collections::BTreeMap::new();
+    for (peer, asked) in futures_util::future::join_all(asks).await {
+        let Ok(Ok(serde_json::Value::Object(offered))) = asked else {
+            continue;
+        };
+        for (provider, entry) in offered {
+            let mut entry = entry;
+            if let Some(fields) = entry.as_object_mut() {
+                fields.insert("peer".into(), peer.clone().into());
+                fields.insert("provider".into(), provider.clone().into());
+            }
+            linked.insert(format!("{provider}@{peer}"), entry);
+        }
+    }
+    linked
+}
+
 // ---- engines ---------------------------------------------------------------
 //
 // See `crate::engines` and `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
@@ -8387,6 +8653,10 @@ struct ProvidersView {
     /// a turn in flight, or turns already sent to the old one.
     #[serde(skip_serializing_if = "Option::is_none")]
     waiting: Option<String>,
+    /// Providers linked luus offer, by `<provider>@<peer>`: offered by the
+    /// pickers beside this luu's own. See [`linked_offers`].
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    linked: std::collections::BTreeMap<String, serde_json::Value>,
     /// Provider name → what may be said about its key file without saying what
     /// is in it. Read from disk here rather than kept in `config.toml`, where
     /// even two ends of a key would be two ends of a key in every backup.
@@ -8434,7 +8704,9 @@ async fn providers_view(
         })
         .await
     };
+    let linked = linked_offers(state).await;
     Ok(ProvidersView {
+        linked,
         path: shown_path(path).await,
         editable: state.providers_editable,
         refused: match state.providers_editable {
@@ -8615,6 +8887,26 @@ async fn get_provider_models(
             return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
         }
     };
+    // A provider another luu offers: its own list, asked over the link.
+    if let Some((provider, peer)) = linked_name(&config, name) {
+        let owner = owner_key();
+        return match crate::link::ask_offered(
+            owner.as_deref(),
+            &peer,
+            &format!("/{provider}/models"),
+        )
+        .await
+        {
+            Ok(models) => Json(models).into_response(),
+            Err(error) => Json(serde_json::json!({
+                "models": [],
+                "reason": format!("{error:#}"),
+                "suggested": null,
+                "suggested_from": null,
+            }))
+            .into_response(),
+        };
+    }
     let resolved = match crate::provider::resolve(
         &config,
         path.as_deref(),
@@ -10483,38 +10775,21 @@ async fn destination_for(
     let (config, path) = load_config()
         .await
         .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-    // With nothing named and the default held, the mock, as `serve` started:
-    // a new session is not the place the host gets typed.
-    let resolved = crate::provider::resolve_holding(
-        &config,
-        path.as_deref(),
-        crate::provider::Flags {
-            provider: asked.provider.as_deref(),
-            ..Default::default()
-        },
-    )
-    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-
-    // The one authority rule this route has, and it is narrower than the write
-    // route's. Writing a `default` outlives the session and the gate, so it is
-    // loopback-only; a session's destination dies with the session. What the
-    // bearer token must still not buy is *this machine's prompts leaving it* to
-    // a destination whoever holds the token picked — so off loopback the choice
-    // is bounded to profiles that stay here. Decided by `is_this_machine`,
-    // server-side, in the one place it is implemented.
-    if !editable && !resolved.url.is_empty() && !crate::provider::is_this_machine(&resolved.url) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            format!(
-                "{} sends off this machine, and this server is bound off loopback: a token says \
-                 who may reach the port, not where this machine's prompts may go. Choose it from \
-                 a browser on the machine itself.",
-                asked.provider.as_deref().unwrap_or("that provider"),
-            ),
-        ));
-    }
-
+    // `<provider>@<peer>`: one another luu offers, over this person's own
+    // link. Chosen per session, which is typing it, so the rule below about
+    // where prompts may go does not reach it: the link is theirs.
+    let linked = asked
+        .provider
+        .as_deref()
+        .and_then(|name| linked_name(&config, name));
+    let resolved = match linked {
+        Some((provider, peer)) => linked_resolved(&provider, &peer)
+            .await
+            .map_err(|why| (StatusCode::UNPROCESSABLE_ENTITY, why))?,
+        None => checked_resolution(&config, path.as_deref(), asked, editable)?,
+    };
     let mut resolved = resolved;
+
     if let Some(model) = asked
         .model
         .as_deref()
@@ -10571,6 +10846,90 @@ async fn destination_for(
         // Neither the destination's nor the process's, `budget`'s own reason
         // one field up: kept from the session that is being pointed elsewhere.
         authority: current.authority.clone(),
+    })
+}
+
+/// A provider of this luu's own, resolved, under the one authority rule this
+/// route has.
+fn checked_resolution(
+    config: &crate::provider::Config,
+    path: Option<&std::path::Path>,
+    asked: &NewSession,
+    editable: bool,
+) -> Result<crate::provider::Resolved, (StatusCode, String)> {
+    // With nothing named and the default held, the mock, as `serve` started:
+    // a new session is not the place the host gets typed.
+    let resolved = crate::provider::resolve_holding(
+        config,
+        path,
+        crate::provider::Flags {
+            provider: asked.provider.as_deref(),
+            ..Default::default()
+        },
+    )
+    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    // The one authority rule this route has, and it is narrower than the write
+    // route's. Writing a `default` outlives the session and the gate, so it is
+    // loopback-only; a session's destination dies with the session. What the
+    // bearer token must still not buy is *this machine's prompts leaving it* to
+    // a destination whoever holds the token picked — so off loopback the choice
+    // is bounded to profiles that stay here. Decided by `is_this_machine`,
+    // server-side, in the one place it is implemented.
+    if !editable && !resolved.url.is_empty() && !crate::provider::is_this_machine(&resolved.url) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} sends off this machine, and this server is bound off loopback: a token says \
+                 who may reach the port, not where this machine's prompts may go. Choose it from \
+                 a browser on the machine itself.",
+                asked.provider.as_deref().unwrap_or("that provider"),
+            ),
+        ));
+    }
+    Ok(resolved)
+}
+
+/// `<provider>@<peer>`, when no profile here has that name: a provider
+/// another luu offers over a link. A profile with that exact name wins.
+fn linked_name(config: &crate::provider::Config, name: &str) -> Option<(String, String)> {
+    if config.profiles().contains_key(name) {
+        return None;
+    }
+    let (provider, peer) = name.rsplit_once('@')?;
+    (!provider.is_empty() && !peer.is_empty()).then(|| (provider.to_string(), peer.to_string()))
+}
+
+/// A provider `peer` offers, as a destination: the backend it is, at the
+/// relay's socket, under the name `<provider>@<peer>`. Asked of the peer now,
+/// so a provider it stopped offering is said, not sent to.
+async fn linked_resolved(provider: &str, peer: &str) -> Result<crate::provider::Resolved, String> {
+    let owner = owner_key();
+    let offered = crate::link::ask_offered(owner.as_deref(), peer, "")
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    let entry = offered
+        .get(provider)
+        .ok_or_else(|| format!("{peer} offers no provider named {provider}"))?;
+    let offered: Offered =
+        serde_json::from_value(entry.clone()).map_err(|error| format!("{peer}: {error}"))?;
+    let (url, socket) = crate::link::via_url(owner.as_deref(), peer, provider)
+        .ok_or("this luu has no socket for linked providers")?;
+    Ok(crate::provider::Resolved {
+        kind: offered.backend,
+        url,
+        model: offered.model,
+        context_limit: offered.context_limit,
+        window_from: match offered.context_limit {
+            0 => crate::provider::WindowFrom::Unset,
+            _ => crate::provider::WindowFrom::Profile,
+        },
+        profile: Some(format!("{provider}@{peer}")),
+        destination_from: crate::provider::DestinationFrom::Profile,
+        tool_calls: offered.tool_calls,
+        messages: offered.messages,
+        named: true,
+        socket: Some(socket),
+        ..crate::provider::Resolved::mock()
     })
 }
 

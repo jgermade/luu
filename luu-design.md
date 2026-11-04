@@ -3050,9 +3050,41 @@ luu user key add ana@example.com "$(luu link key)"  # online, or Account → Key
   `/?add-key=<key>&name=<name>` opens it with the key filled in, and the
   first-run folder picker waits for the next visit.
 
+**Providers across luus, by name.** A provider one luu offers is chosen on the
+other as `<provider>@<peer>`, while the link is up: `gpu@casa` online,
+`claude@online` at home. Nothing is written for it, and a profile with that
+exact name wins.
+
+- **The key and the engine stay where they are.** The offering luu serves
+  `GET /api/infer` (what it offers: backend, model, window, transport),
+  `GET /api/infer/<p>/models`, and `/api/infer/<p>/to/<path>`, which passes a
+  request to that provider's own URL with its engine started and its key added.
+- **It offers everything a session there can use**, less a provider with
+  `offer = false`: a switch in Remote access at home, the file on a server.
+- **Who reaches it.**
+  - At home, `/api/infer` is `sessions` behind the peer gate.
+  - Online, a linked luu's own `direct-tcpip` channels reach a router with
+    `/api/infer` and nothing else, as the key's user.
+  - A user's linked providers are that user's only.
+- **A backend reaches it through a unix socket**, never a port on loopback:
+  - `<state>/sockets/links-<pid>.sock`, `0600` in a `0700` folder (a
+    folder under the temp dir when that path is too long for a socket);
+  - the three backends take its client (`with_http`) and are otherwise
+    unchanged;
+  - it carries `/via/<owner>/<mark>/<peer>/api/infer/…` and nothing else
+    over that peer's link.
+
+  `<mark>` signs the path for its owner with a secret that never leaves
+  the process. A session's commands run as luu's user and could connect to
+  the socket, since Landlock does not hold `connect` on one, but without the
+  secret they cannot write another owner's path.
+- **The rule that keeps a server's prompts on the machine** (*a token says
+  who may reach the port*) does not reach a provider through the user's own
+  link: the link is theirs, and choosing it per session is typing it.
+
 **What a link trusts:** the online server ends TLS for the browser and holds
-the connection, so it sees what crosses it. Providers across luus (row 67) and
-`[host.*]` replaced by peers (row 68) are not built. See
+the connection, so it sees what crosses it. `[host.*]` replaced by peers (row
+68) is not built. See
 [`RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`](RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md).
 
 ## Suggested work order

@@ -2617,9 +2617,26 @@ pub(crate) fn build_backend(
     mock: Option<Mock>,
     announce: bool,
 ) -> Result<Box<dyn Backend>> {
+    // A provider another luu offers: the same backend, dialling the socket
+    // that carries it over the link. See `crate::link`.
+    let http = match &resolved.socket {
+        Some(socket) => Some(
+            reqwest::Client::builder()
+                .unix_socket(socket.as_path())
+                .build()
+                .context("a client for the link's socket")?,
+        ),
+        None => None,
+    };
     Ok(match resolved.kind {
         BackendKind::Mock => Box::new(mock.unwrap_or_default()),
-        BackendKind::Ollama => Box::new(Ollama::new(&resolved.url)),
+        BackendKind::Ollama => {
+            let backend = Ollama::new(&resolved.url);
+            match http {
+                Some(http) => Box::new(backend.with_http(http)),
+                None => Box::new(backend),
+            }
+        }
         BackendKind::Openai => {
             // Once, before anything is measured: this API has no field for the
             // window, so a run that budgets 8192 against a server started with
@@ -2631,6 +2648,9 @@ pub(crate) fn build_backend(
             let mut backend = OpenAi::new(&resolved.url);
             if let Some(key) = api_key(resolved)? {
                 backend = backend.with_api_key(key);
+            }
+            if let Some(http) = http.clone() {
+                backend = backend.with_http(http);
             }
             Box::new(backend)
         }
@@ -2651,6 +2671,9 @@ pub(crate) fn build_backend(
             if let Some(key) = api_key(resolved)? {
                 backend = backend.with_api_key(key);
             }
+            if let Some(http) = http {
+                backend = backend.with_http(http);
+            }
             Box::new(backend)
         }
     })
@@ -2658,7 +2681,7 @@ pub(crate) fn build_backend(
 
 /// The key a resolution names, read and its mode checked; `None` without a
 /// file, which sends no key header at all.
-fn api_key(resolved: &provider::Resolved) -> Result<Option<String>> {
+pub(crate) fn api_key(resolved: &provider::Resolved) -> Result<Option<String>> {
     let Some(path) = &resolved.key_file else {
         return Ok(None);
     };

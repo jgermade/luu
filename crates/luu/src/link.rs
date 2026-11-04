@@ -165,6 +165,10 @@ pub struct Linked {
 pub struct Links {
     open: Mutex<HashMap<(String, String), Linked>>,
     next: AtomicU64,
+    /// What answers a linked luu's own `direct-tcpip` channels: this server's
+    /// `/api/infer` and nothing else, as the key's user. Set once the router
+    /// exists.
+    infer: OnceLock<Router>,
 }
 
 impl Links {
@@ -211,6 +215,12 @@ impl Links {
 
     fn all(&self) -> Vec<Linked> {
         self.open().values().cloned().collect()
+    }
+
+    /// The router a linked luu's `direct-tcpip` channels are answered by:
+    /// the providers this server offers. See [`relay`].
+    pub fn offer(&self, router: Router) {
+        let _ = self.infer.set(router);
     }
 }
 
@@ -402,6 +412,54 @@ impl russh::server::Handler for Connection {
         }
         Ok(true)
     }
+
+    /// A linked luu asking for this server's providers, as `ssh -L` would:
+    /// answered by `/api/infer` only, as the key's user.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: russh::Channel<russh::server::Msg>,
+        _host_to_connect: &str,
+        _port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        match self.serves_direct() {
+            Some(router) => {
+                reply.accept().await;
+                serve_channel(channel.into_stream(), router);
+            }
+            None => {
+                reply
+                    .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Connection {
+    fn serves_direct(&self) -> Option<Router> {
+        self.user.as_ref()?;
+        self.links.infer.get().cloned()
+    }
+}
+
+/// Serves one channel's HTTP with `router`, upgrades included.
+fn serve_channel<S>(stream: S, router: Router)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let service = hyper_util::service::TowerToHyperService::new(router);
+        let _ = hyper::server::conn::http1::Builder::new()
+            .serve_connection(io, service)
+            .with_upgrades()
+            .await;
+    });
 }
 
 impl Drop for Connection {
@@ -453,14 +511,29 @@ pub async fn forward(
         Ok(stream) => stream,
         Err(refused) => return *refused,
     };
-    let (mut sender, connection) = match hyper::client::conn::http1::handshake::<_, Body>(
-        hyper_util::rt::TokioIo::new(stream),
-    )
-    .await
-    {
-        Ok(pair) => pair,
-        Err(error) => return bad_gateway(linked, error),
-    };
+    forward_on(stream, &linked.name, method, rest, headers, body)
+        .await
+        .unwrap_or_else(|why| bad_gateway(linked, why))
+}
+
+/// One HTTP request over one channel's stream, whichever way the channel
+/// goes: `forwarded-tcpip` to a luu that dialled, `direct-tcpip` to the one
+/// it dialled.
+async fn forward_on<S>(
+    stream: S,
+    host: &str,
+    method: Method,
+    rest: &str,
+    headers: &HeaderMap,
+    body: Body,
+) -> Result<Response, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake::<_, Body>(hyper_util::rt::TokioIo::new(stream))
+            .await
+            .map_err(|error| error.to_string())?;
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -472,15 +545,12 @@ pub async fn forward(
             asked = asked.header(key, value);
         }
     }
-    asked = asked.header(header::HOST, linked.name.as_str());
-    let asked = match asked.body(body) {
-        Ok(asked) => asked,
-        Err(error) => return bad_gateway(linked, error),
-    };
-    let answer = match sender.send_request(asked).await {
-        Ok(answer) => answer,
-        Err(error) => return bad_gateway(linked, error),
-    };
+    asked = asked.header(header::HOST, host);
+    let asked = asked.body(body).map_err(|error| error.to_string())?;
+    let answer = sender
+        .send_request(asked)
+        .await
+        .map_err(|error| error.to_string())?;
     let (parts, body) = answer.into_parts();
     let mut response = Response::builder().status(parts.status);
     for (key, value) in &parts.headers {
@@ -490,7 +560,7 @@ pub async fn forward(
     }
     response
         .body(Body::new(body))
-        .unwrap_or_else(|error| bad_gateway(linked, error))
+        .map_err(|error| error.to_string())
 }
 
 /// The other end of a socket the page opened on a linked luu.
@@ -593,6 +663,9 @@ pub struct Peers {
     tasks: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     router: OnceLock<Router>,
     identity: Mutex<Option<Arc<PrivateKey>>>,
+    /// Each connected peer's SSH connection, for the `direct-tcpip` channels
+    /// that reach the providers it offers. See [`relay`].
+    handles: Mutex<HashMap<String, Arc<russh::client::Handle<Dialer>>>>,
     /// This server's own bearer token, when it has one: a channel's request
     /// passes the same gate a request on the port does.
     token: OnceLock<Option<String>>,
@@ -644,6 +717,10 @@ impl Peers {
         for (_, task) in tasks.drain() {
             task.abort();
         }
+        self.handles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         let mut statuses = self.statuses.lock().unwrap_or_else(|p| p.into_inner());
         statuses.clear();
         for (name, peer) in peers {
@@ -668,6 +745,36 @@ impl Peers {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
+    }
+
+    /// A channel to `peer`'s own API, while it is linked.
+    async fn channel(
+        &self,
+        peer: &str,
+    ) -> Result<russh::ChannelStream<russh::client::Msg>, String> {
+        let handle = self
+            .handles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(peer)
+            .cloned()
+            .ok_or_else(|| format!("{peer} is not linked now"))?;
+        let channel = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            handle.channel_open_direct_tcpip("luu", 80, "luu", 0),
+        )
+        .await
+        .map_err(|_| format!("{peer}: no answer within 15 s"))?
+        .map_err(|error| format!("{peer}: {error}"))?;
+        Ok(channel.into_stream())
+    }
+
+    fn keep(&self, peer: &str, handle: Option<Arc<russh::client::Handle<Dialer>>>) {
+        let mut handles = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+        match handle {
+            Some(handle) => handles.insert(peer.to_string(), handle),
+            None => handles.remove(peer),
+        };
     }
 
     fn set(&self, name: &str, state: PeerStatus) {
@@ -780,13 +887,19 @@ async fn once(
     }
     tracing::info!(target: "luu::link", peer = name, ssh = peer.ssh, "linked");
     peers.set(name, status("connected", None, None));
-    match session.await {
-        Ok(()) => Ended::Closed("the connection closed".to_string()),
-        Err(error) => Ended::Closed(error.to_string()),
+    // Kept for the channels that reach its providers, and watched: `Handle`
+    // is a future that ends with the connection, but awaiting it would give
+    // it away.
+    let session = Arc::new(session);
+    peers.keep(name, Some(session.clone()));
+    while !session.is_closed() {
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
+    peers.keep(name, None);
+    Ended::Closed("the connection closed".to_string())
 }
 
-struct Dialer {
+pub struct Dialer {
     pinned: PublicKey,
     /// False once the server's key was not the pinned one, to tell that
     /// failure from a network's.
@@ -822,17 +935,230 @@ impl russh::client::Handler for Dialer {
         _session: &mut russh::client::Session,
     ) -> Result<(), Self::Error> {
         reply.accept().await;
-        let router = self.router.clone();
-        tokio::spawn(async move {
-            let io = hyper_util::rt::TokioIo::new(channel.into_stream());
-            let service = hyper_util::service::TowerToHyperService::new(router);
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(io, service)
-                .with_upgrades()
-                .await;
-        });
+        serve_channel(channel.into_stream(), self.router.clone());
         Ok(())
     }
+}
+
+// ---- the providers another luu offers --------------------------------------
+
+/// Where this process's backends reach a linked luu's providers, and the
+/// secret their paths are signed with.
+struct Relay {
+    socket: std::path::PathBuf,
+    secret: [u8; 32],
+}
+
+static RELAY: OnceLock<Relay> = OnceLock::new();
+
+/// Who a path is for: `_` on a luu that dials, a user's id on a server with
+/// users.
+const DIALLER: &str = "_";
+
+/// The path's signature for `owner`: the commands sessions run are luu's own
+/// user, so they can connect to the socket like anything else luu's — a
+/// socket's mode does not keep them out, and Landlock does not restrict
+/// `connect` on one. A path for another owner cannot be made without the
+/// secret, which never leaves this process.
+fn mark(secret: &[u8; 32], owner: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::new()
+        .chain_update(secret)
+        .chain_update(owner.as_bytes())
+        .finalize();
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The unix socket the backends dial for a provider another luu offers:
+/// `<state>/sockets/links-<pid>.sock`, in a `0700` folder, itself `0600`.
+/// Each request is `/via/<owner>/<mark>/<peer>/api/infer/…`, carried over
+/// that peer's link: a `direct-tcpip` channel where this luu dialled, a
+/// `forwarded-tcpip` one where the peer did. Nothing but `/api/infer` goes
+/// through it.
+pub async fn relay(links: Option<Arc<Links>>, peers: Arc<Peers>) -> Result<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = socket_dir()?;
+    // One per process, and a process that ended does not remove its own: the
+    // sockets of processes gone are removed here.
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let pid = name
+                .strip_prefix("links-")
+                .and_then(|rest| rest.strip_suffix(".sock"))
+                .and_then(|pid| pid.parse::<u32>().ok());
+            if let Some(pid) = pid
+                && pid != std::process::id()
+                && !alive(pid)
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let socket = dir.join(format!("links-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&socket);
+    let listener = tokio::net::UnixListener::bind(&socket)
+        .with_context(|| format!("binding {}", socket.display()))?;
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+    let secret = crate::users::random::<32>()?;
+    let _ = RELAY.set(Relay {
+        socket: socket.clone(),
+        secret,
+    });
+    let router = Router::new().route(
+        "/via/{owner}/{mark}/{peer}/{*rest}",
+        axum::routing::any(
+            move |axum::extract::Path((owner, signed, peer, rest)): axum::extract::Path<(
+                String,
+                String,
+                String,
+                String,
+            )>,
+                  request: Request| {
+                let links = links.clone();
+                let peers = peers.clone();
+                async move { via(links, peers, &owner, &signed, &peer, &rest, request).await }
+            },
+        ),
+    );
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, router).await {
+            tracing::warn!(target: "luu::link", "the links' socket stopped: {error}");
+        }
+    });
+    Ok(socket)
+}
+
+/// Whether a process is there: `kill(pid, 0)`, which sends nothing, and
+/// fails with `ESRCH` only when there is no such process.
+fn alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 is a check, not a signal; nothing is delivered.
+    let answer = unsafe { libc::kill(pid, 0) };
+    answer == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// Where the socket goes: `<state>/sockets`, `0700` — unless that path is
+/// too long for a socket's (108 bytes on Linux, 104 on macOS, a long
+/// `LUU_HOME` away), when it is `<temp>/luu-<uid>`, made `0700` and refused
+/// unless it is this user's own folder and not a link.
+fn socket_dir() -> Result<std::path::PathBuf> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let longest = format!("links-{}.sock", u32::MAX).len();
+    let state = crate::config::dir()
+        .context("no state directory for the links' socket")?
+        .join("sockets");
+    let dir = match state.as_os_str().len() + 1 + longest < 100 {
+        true => state,
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        false => std::env::temp_dir().join(format!("luu-{}", unsafe { libc::geteuid() })),
+    };
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let held = std::fs::symlink_metadata(&dir)?;
+    // SAFETY: as above.
+    if !held.is_dir() || held.uid() != unsafe { libc::geteuid() } {
+        bail!("{} is not this user's own folder", dir.display());
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
+}
+
+async fn via(
+    links: Option<Arc<Links>>,
+    peers: Arc<Peers>,
+    owner: &str,
+    signed: &str,
+    peer: &str,
+    rest: &str,
+    request: Request,
+) -> Response {
+    let refuse = |status, why: String| (status, why).into_response();
+    let Some(relay) = RELAY.get() else {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "no relay".into());
+    };
+    if mark(&relay.secret, owner) != signed {
+        return refuse(StatusCode::FORBIDDEN, "not this owner's path".into());
+    }
+    if !(rest == "api/infer" || rest.starts_with("api/infer/")) {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            "only /api/infer goes over a link from here".into(),
+        );
+    }
+    let query = request
+        .uri()
+        .query()
+        .map(|query| format!("?{query}"))
+        .unwrap_or_default();
+    let path = format!("/{rest}{query}");
+    let (parts, body) = request.into_parts();
+    let forwarded = match (owner, &links) {
+        (DIALLER, _) => match peers.channel(peer).await {
+            Ok(stream) => forward_on(stream, peer, parts.method, &path, &parts.headers, body).await,
+            Err(why) => Err(why),
+        },
+        (user, Some(links)) => match links.get(user, peer) {
+            Some(linked) => {
+                return forward(&linked, parts.method, &path, &parts.headers, body).await;
+            }
+            None => Err(format!("no luu named {peer} is linked now")),
+        },
+        (_, None) => Err("this luu accepts no links".to_string()),
+    };
+    forwarded.unwrap_or_else(|why| refuse(StatusCode::BAD_GATEWAY, why))
+}
+
+/// Where a backend sends to reach `provider`, offered by `peer`, for
+/// `owner` (`None` on a luu that dials): a base URL to hand the backend, and
+/// the socket its client dials. `None` before the relay exists.
+pub fn via_url(
+    owner: Option<&str>,
+    peer: &str,
+    provider: &str,
+) -> Option<(String, std::path::PathBuf)> {
+    let relay = RELAY.get()?;
+    let owner = owner.unwrap_or(DIALLER);
+    // The host is the peer's name: a socket ignores it, and a backend names
+    // itself after it (`openai@casa`), which is what the page should say.
+    Some((
+        format!(
+            "http://{}/via/{owner}/{}/{peer}/api/infer/{provider}/to",
+            peer.to_lowercase(),
+            mark(&relay.secret, owner)
+        ),
+        relay.socket.clone(),
+    ))
+}
+
+/// GET one of `peer`'s `/api/infer` paths through the relay, as JSON.
+pub async fn ask_offered(owner: Option<&str>, peer: &str, path: &str) -> Result<serde_json::Value> {
+    let relay = RELAY.get().context("this luu has no links' socket")?;
+    let owner = owner.unwrap_or(DIALLER);
+    let client = reqwest::Client::builder()
+        .unix_socket(relay.socket.as_path())
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let answer = client
+        .get(format!(
+            "http://luu/via/{owner}/{}/{peer}/api/infer{path}",
+            mark(&relay.secret, owner)
+        ))
+        .send()
+        .await
+        .with_context(|| format!("asking {peer}"))?;
+    let status = answer.status();
+    let text = answer.text().await.unwrap_or_default();
+    if !status.is_success() {
+        bail!("{peer}: {} {}", status.as_u16(), text.trim());
+    }
+    Ok(serde_json::from_str(&text)?)
 }
 
 // ---- what a peer may do here -----------------------------------------------
@@ -889,11 +1215,14 @@ pub fn needs(method: &Method, path: &str) -> Need {
     if matches!(*method, Method::GET | Method::HEAD) {
         return Need::Sessions;
     }
+    // `/api/infer`: what a session here may send to, a peer may send to —
+    // the providers this luu offers. See [`relay`].
     let a_sessions = [
         "/api/sessions",
         "/api/session/",
         "/api/workspace/",
         "/api/highlight",
+        "/api/infer",
     ];
     match a_sessions.iter().any(|prefix| path.starts_with(prefix)) {
         true => Need::Sessions,
@@ -1003,6 +1332,15 @@ mod tests {
     }
 
     #[test]
+    fn a_relay_path_is_one_owners_and_cannot_be_made_for_another() {
+        let secret = [7u8; 32];
+        assert_eq!(mark(&secret, "abc"), mark(&secret, "abc"));
+        assert_ne!(mark(&secret, "abc"), mark(&secret, "abd"));
+        assert_ne!(mark(&secret, "abc"), mark(&[8u8; 32], "abc"));
+        assert_eq!(mark(&secret, "_").len(), 32);
+    }
+
+    #[test]
     fn what_a_peer_needs_by_route() {
         let get = Method::GET;
         let post = Method::POST;
@@ -1018,6 +1356,11 @@ mod tests {
         assert_eq!(needs(&post, "/api/engines/gemma/start"), Need::Settings);
         assert_eq!(needs(&put, "/api/terminal"), Need::Settings);
         assert_eq!(needs(&get, "/ws/terminal"), Need::Terminal);
+        assert_eq!(needs(&get, "/api/infer"), Need::Sessions);
+        assert_eq!(
+            needs(&post, "/api/infer/gpu/to/chat/completions"),
+            Need::Sessions
+        );
         assert_eq!(needs(&get, "/api/peers"), Need::Never);
         assert_eq!(needs(&put, "/api/peers"), Need::Never);
         assert_eq!(needs(&put, "/api/hosts"), Need::Never);

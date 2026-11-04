@@ -168,6 +168,12 @@ pub struct Profile {
     /// no edit. See `RECORD/2026-10-21.connecting-a-provider.completed.md`.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub models: std::collections::BTreeMap<String, ModelEntry>,
+    /// Whether a luu linked to this one may send here, as `<name>@<this luu>`
+    /// there. Absent is yes: what a session here can use, a linked one can.
+    /// `false` withholds it. See
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<bool>,
 }
 
 /// The three keys only the Anthropic API reads, read off a profile or one
@@ -176,7 +182,8 @@ pub struct Profile {
 /// any other backend's profile: a key that a backend ignores is a key somebody
 /// believes is working. See
 /// `RECORD/2026-10-22.an-anthropic-compatible-backend.completed.md`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
 pub struct MessagesKeys {
     pub thinking: Option<agent_core::backend::anthropic::Thinking>,
     pub effort: Option<agent_core::backend::anthropic::Effort>,
@@ -1878,6 +1885,10 @@ pub struct Resolved {
     /// (or the mock with no default), and it follows the file when the file
     /// changes — a new default is used without restarting `serve`.
     pub named: bool,
+    /// Where the backend's HTTP goes instead of the network: the unix socket
+    /// that carries it over a link to the luu that offers this provider.
+    /// `None` for every provider of this luu's own. See `crate::link`.
+    pub socket: Option<PathBuf>,
 }
 
 impl Resolved {
@@ -1899,6 +1910,7 @@ impl Resolved {
             max_tool_steps: None,
             messages: MessagesKeys::default(),
             named: false,
+            socket: None,
         }
     }
 
@@ -2116,6 +2128,7 @@ pub fn resolve(
             || flags.api_key_file.is_some()
             || flags.context_limit != 0
             || flags.tool_calls.is_some(),
+        socket: None,
     })
 }
 

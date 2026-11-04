@@ -7,6 +7,25 @@
   const { account } = await import("@web/lib/account.js")
   const { currentHost, goToHost } = await import("@web/lib/hosts.js")
   const remote = await import("@web/lib/remote.js")
+  const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
+  if (!state.providers) loadProviders()
+
+  // What this luu offers the luus linked to it, by provider: everything a
+  // session here can use, less what is withheld (`offer = false`). Written
+  // from this machine; on a server with users, read here and set in its file.
+  $: ownProviders = Object.keys(state.providers?.providers || {})
+  const offers = name => state.providers?.providers?.[name]?.offer !== false
+  let offerError = ""
+  const setOffer = async (name, on) => {
+    const providers = { ...(state.providers?.providers || {}) }
+    const profile = { ...providers[name] }
+    if (on) delete profile.offer
+    else profile.offer = false
+    providers[name] = profile
+    const saved = await saveProviders({ default: state.providers?.default ?? null, providers })
+    offerError = saved?.ok ? "" : (state.providersError || "the write was refused")
+  }
+  $: linkedHere = Object.keys(state.providers?.linked || {})
 
   const online = account.users
   const LABELS = {
@@ -229,6 +248,40 @@
     is pinned here. Then add this luu's key to your account there, and it links by itself.
   </p>
   <p class="warn" :if="error">{{ error }}</p>
+</section>
+
+<section class="pane-group" :if="!refusedHere && ownProviders.length">
+  <h3>Offered to linked luus</h3>
+  <p class="note">
+    A luu linked {{ online ? "here" : "to this one" }} may send to these, named
+    <code>&lt;provider&gt;@&lt;the name it gives this one&gt;</code> there. The key
+    and the engine stay here.
+  </p>
+  <ul class="rows">
+    <li :each="name in ownProviders">
+      <span class="grow"><strong>{{ name }}</strong>
+        <span class="dim small">{{ state.providers.providers[name].backend || "" }} · {{ state.providers.providers[name].model || "" }}</span></span>
+      <label class="switch" :title="offers(name) ? 'Offered: withhold it' : 'Withheld: offer it'">
+        <input type="checkbox" :checked="offers(name)" :disabled="!state.providers?.editable"
+               @change="setOffer(name, $event.target.checked)"> offered
+      </label>
+    </li>
+  </ul>
+  <p class="note" :if="!state.providers?.editable">
+    Set in <code>config.toml</code> on the machine: <code>offer = false</code> under a provider withholds it.
+  </p>
+  <p class="warn" :if="offerError">{{ offerError }}</p>
+</section>
+
+<section class="pane-group" :if="!refusedHere && linkedHere.length">
+  <h3>Offered to this {{ online ? "account" : "luu" }}</h3>
+  <p class="note">Providers your linked luus offer: chosen like any other, in a new session's picker.</p>
+  <ul class="rows">
+    <li :each="name in linkedHere">
+      <span class="grow"><strong>{{ name }}</strong>
+        <span class="dim small">{{ state.providers.linked[name].backend }} · {{ state.providers.linked[name].model }}</span></span>
+    </li>
+  </ul>
 </section>
 
 <section class="pane-group" :if="!online && !refusedHere && view?.key">
