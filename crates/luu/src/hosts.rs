@@ -39,7 +39,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Request headers that are about *this* hop, or this server's own
 /// credential, and never forwarded.
-const NOT_FORWARDED: &[header::HeaderName] = &[
+pub(crate) const NOT_FORWARDED: &[header::HeaderName] = &[
     header::HOST,
     header::AUTHORIZATION,
     header::CONNECTION,
@@ -52,7 +52,7 @@ const NOT_FORWARDED: &[header::HeaderName] = &[
 ];
 
 /// Response headers that are about the other hop.
-const NOT_RETURNED: &[header::HeaderName] = &[
+pub(crate) const NOT_RETURNED: &[header::HeaderName] = &[
     header::CONNECTION,
     header::TRANSFER_ENCODING,
     header::CONTENT_LENGTH,
@@ -94,7 +94,7 @@ fn token(host: &Host) -> Result<Option<String>, String> {
 }
 
 /// `rest` with this server's `token` taken out of its query, if it had one.
-fn without_token(rest: &str) -> String {
+pub(crate) fn without_token(rest: &str) -> String {
     let Some((path, query)) = rest.split_once('?') else {
         return rest.to_string();
     };
@@ -234,8 +234,17 @@ pub struct Upstream(
 
 /// Carries frames both ways until either end closes.
 pub async fn pipe(socket: WebSocket, upstream: Upstream) {
+    pipe_to(socket, upstream.0).await
+}
+
+/// [`pipe`], to any socket's other end: a host's over TCP, or a linked luu's
+/// over a channel of its link.
+pub async fn pipe_to<S>(socket: WebSocket, upstream: tokio_tungstenite::WebSocketStream<S>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let (mut to_page, mut from_page) = socket.split();
-    let (mut to_host, mut from_host) = upstream.0.split();
+    let (mut to_host, mut from_host) = upstream.split();
     let up = async {
         while let Some(Ok(message)) = from_page.next().await {
             let message = match message {

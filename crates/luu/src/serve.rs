@@ -1751,6 +1751,19 @@ impl Serving {
     /// and the page holds a WebSocket open for as long as it is on screen, so
     /// a Ctrl-C with the page open would never finish.
     pub async fn run(self) -> Result<()> {
+        // The luus this one dials, answered with this router behind a peer's
+        // gate. Never from a server with users: there, links come in.
+        if self.state.users.is_none() {
+            let peers = load_config()
+                .await
+                .map(|(config, _)| config.peers().clone())
+                .unwrap_or_default();
+            let token = match self.state.auth.as_ref() {
+                crate::auth::Auth::Token(token) => Some(token.clone()),
+                _ => None,
+            };
+            self.state.peers.start(self.router.clone(), token, &peers);
+        }
         let engines = self.app.engines.clone();
         let result = tokio::select! {
             served = async { axum::serve(self.listener, self.router).await } => {
@@ -1928,6 +1941,46 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             Some(Arc::new(users))
         }
     };
+    // Links from other luus, by key: on a server with users, where `[server]
+    // ssh` says where. See `crate::link`.
+    let server_table = load_config()
+        .await
+        .map(|(config, _)| config.server())
+        .unwrap_or_default();
+    let (links, link_info) = match (&users, server_table.ssh.as_deref()) {
+        (Some(users), Some(ssh)) => {
+            let dir = crate::config::dir().context("no state directory for the SSH host key")?;
+            let host = crate::link::host_key(&dir)?;
+            let links = Arc::new(crate::link::Links::default());
+            let listening = crate::link::listen(ssh, host, users.clone(), links.clone()).await?;
+            let host_name = origin
+                .as_deref()
+                .and_then(|origin| origin.split("://").nth(1))
+                .and_then(|rest| rest.split([':', '/']).next())
+                .unwrap_or("localhost")
+                .to_string();
+            let dialled = server_table
+                .ssh_public
+                .clone()
+                .unwrap_or_else(|| format!("{host_name}:{}", listening.address.port()));
+            eprintln!(
+                "links — ssh on {}, dialled as {dialled}, key {}",
+                listening.address, listening.fingerprint
+            );
+            let info = crate::link::LinkInfo {
+                ssh: dialled,
+                host_key: listening.host_key,
+            };
+            (Some(links), Some(info))
+        }
+        (None, Some(_)) => {
+            eprintln!(
+                "note: [server] ssh is read only on a server with users, whose keys say who may link"
+            );
+            (None, None)
+        }
+        _ => (None, None),
+    };
     let starts = crate::engines::for_run(&provider);
     let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
@@ -2019,6 +2072,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         session_hours: auth_settings.session_hours(),
         pending_mail: Arc::default(),
         mailed: Arc::default(),
+        links,
+        link_info,
+        peers: Arc::default(),
     };
     if users.is_some() {
         shared_paths_said(&app).await;
@@ -2170,6 +2226,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // everything a page served under `/h/<name>/` asks of its API. See
         // `crate::hosts`, and [`hosts_allowed`] for who may.
         .route("/api/hosts", get(get_hosts).put(put_hosts))
+        // Links, by key. A user's keys, on a server with users; the luus this
+        // one dials, on this machine. See `crate::link`.
+        .route("/api/auth/keys", get(get_keys).post(post_key))
+        .route("/api/auth/keys/remove", post(post_key_remove))
+        .route("/api/peers", get(get_peers).put(put_peers))
+        .route("/api/peers/probe", post(post_peer_probe))
         .route("/h/{name}/api/{*rest}", axum::routing::any(host_api))
         .route("/h/{name}/ws", get(host_socket))
         .route("/h/{name}/ws/{*rest}", get(host_socket))
@@ -2185,6 +2247,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/auth/me", get(get_me))
         .route("/api/auth/me.json", get(get_me))
         .route("/api/auth/code", post(post_code))
+        // Where to link to this server, and its key: outside the gate, as the
+        // page is, because a luu asks it before it has any way in.
+        .route("/api/link.json", get(get_link_info))
         .route("/api/setup/send", post(post_setup_send))
         .route("/api/setup/claim", post(post_setup_claim))
         .route(
@@ -2237,6 +2302,12 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
 
 #[derive(Clone)]
 struct AppRouterState {
+    /// The luus linked to this one, on a server with users and `[server] ssh`.
+    links: Option<Arc<crate::link::Links>>,
+    /// Where they dial, and the key they pin: `/api/link.json`.
+    link_info: Option<crate::link::LinkInfo>,
+    /// The luus this one dials, and how each is doing.
+    peers: Arc<crate::link::Peers>,
     app: Arc<App>,
     /// Whether this surface may rewrite `config.toml`. See where it is set.
     providers_editable: bool,
@@ -7006,6 +7077,29 @@ async fn hosts_view(state: &AppRouterState) -> Result<HostsView, crate::provider
 }
 
 async fn get_hosts(State(state): State<AppRouterState>) -> Response {
+    // On a server with users, a user's hosts are the luus they linked, and
+    // nobody else's: `[host.*]` is the machine's, with its token paths.
+    if state.users.is_some() {
+        let mine = match (&state.links, owner_key()) {
+            (Some(links), Some(user)) => links.of(&user),
+            _ => Vec::new(),
+        };
+        let hosts: serde_json::Map<String, serde_json::Value> = mine
+            .iter()
+            .map(|linked| {
+                (
+                    linked.name.clone(),
+                    serde_json::json!({
+                        "url": format!("linked · {}", linked.key),
+                        "linked": true,
+                        "since": linked.since,
+                    }),
+                )
+            })
+            .collect();
+        return Json(serde_json::json!({ "hosts": hosts, "editable": false, "path": null }))
+            .into_response();
+    }
     match hosts_view(&state).await {
         Ok(view) => Json(view).into_response(),
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
@@ -7045,11 +7139,43 @@ async fn put_hosts(
 }
 
 /// A request the page made of a host's API, forwarded.
+/// A user's linked luu by name, on a server with links: theirs, or a 404
+/// that reads the same as one that does not exist.
+fn linked_named(
+    state: &AppRouterState,
+    name: &str,
+) -> Option<Result<crate::link::Linked, Box<Response>>> {
+    let links = state.links.as_ref()?;
+    let found = owner_key().and_then(|user| links.get(&user, name));
+    Some(found.ok_or_else(|| {
+        Box::new(
+            (
+                StatusCode::NOT_FOUND,
+                format!("no luu named {name} is linked to your account"),
+            )
+                .into_response(),
+        )
+    }))
+}
+
 async fn host_api(
     State(state): State<AppRouterState>,
     Path((name, _)): Path<(String, String)>,
     request: Request,
 ) -> Response {
+    if state.users.is_some() {
+        // The login and its Origin were checked by the gate already.
+        let linked = match linked_named(&state, &name) {
+            Some(Ok(linked)) => linked,
+            Some(Err(refused)) => return *refused,
+            None => {
+                return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
+            }
+        };
+        let rest = host_rest(request.uri(), &name);
+        let (parts, body) = request.into_parts();
+        return crate::link::forward(&linked, parts.method, &rest, &parts.headers, body).await;
+    }
     if let Err(refused) = hosts_allowed(&state, request.headers()) {
         return *refused;
     }
@@ -7072,6 +7198,25 @@ async fn host_socket(
     uri: Uri,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if state.users.is_some() {
+        let name = params.get("name").cloned().unwrap_or_default();
+        let linked = match linked_named(&state, &name) {
+            Some(Ok(linked)) => linked,
+            Some(Err(refused)) => return *refused,
+            None => {
+                return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
+            }
+        };
+        let upstream = match crate::link::connect(&linked, &host_rest(&uri, &name)).await {
+            Ok(upstream) => upstream,
+            Err(refused) => return *refused,
+        };
+        return ws.on_upgrade(move |socket| async move {
+            tracing::info!(target: "luu::ws", linked = name, "forwarding");
+            crate::hosts::pipe_to(socket, upstream).await;
+            tracing::info!(target: "luu::ws", linked = name, "closed");
+        });
+    }
     if let Err(refused) = hosts_allowed(&state, &headers) {
         return *refused;
     }
@@ -7116,6 +7261,205 @@ async fn host_page(
         return installed_asset(xterm_root(), "xterm.js", rest).await;
     }
     serve_asset(&path, &headers).await
+}
+
+// ---- links -----------------------------------------------------------------
+//
+// See `crate::link` and `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+
+/// Where another luu dials to link here, and the key it should expect: over
+/// HTTPS, so the key is the certificate's to vouch for.
+async fn get_link_info(State(state): State<AppRouterState>) -> Response {
+    match &state.link_info {
+        Some(info) => Json(info.clone()).into_response(),
+        None => (StatusCode::NOT_FOUND, "this server accepts no links").into_response(),
+    }
+}
+
+/// The logged-in user, on a server with users, or why not.
+fn keys_user(state: &AppRouterState) -> Result<(Arc<crate::users::Users>, String), Box<Response>> {
+    let refuse = |status, why: &str| Box::new((status, why.to_string()).into_response());
+    let users = state.users.clone().ok_or_else(|| {
+        refuse(
+            StatusCode::NOT_FOUND,
+            "this server has no users, so no keys",
+        )
+    })?;
+    let user = owner_key().ok_or_else(|| refuse(StatusCode::UNAUTHORIZED, "log in first"))?;
+    Ok((users, user))
+}
+
+async fn get_keys(State(state): State<AppRouterState>) -> Response {
+    let (users, user) = match keys_user(&state) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    let links = state
+        .links
+        .as_ref()
+        .map(|links| links.of(&user))
+        .unwrap_or_default();
+    match users.keys_of(&user) {
+        Ok(keys) => Json(serde_json::json!({
+            "keys": keys,
+            "links": links.iter().map(|linked| serde_json::json!({
+                "name": linked.name,
+                "key": linked.key,
+                "since": linked.since,
+            })).collect::<Vec<_>>(),
+            "accepts": state.link_info.is_some(),
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct KeyAdd {
+    key: String,
+    #[serde(default)]
+    name: String,
+}
+
+async fn post_key(State(state): State<AppRouterState>, Json(asked): Json<KeyAdd>) -> Response {
+    let (users, user) = match keys_user(&state) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.add_key(&user, &asked.name, &asked.key) {
+        Ok(key) => (StatusCode::CREATED, Json(key)).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct KeyRemove {
+    key: String,
+}
+
+async fn post_key_remove(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<KeyRemove>,
+) -> Response {
+    let (users, user) = match keys_user(&state) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.remove_key(&user, &asked.key) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such key on your account").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// Remote access is this machine's alone: the page on loopback, never a
+/// peer (which `crate::link::needs` refuses before it gets here) and never a
+/// server with users.
+fn peers_allowed(state: &AppRouterState) -> Result<(), Box<Response>> {
+    match state.providers_editable {
+        true => Ok(()),
+        false => Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "Remote access is set from a browser on this machine",
+            )
+                .into_response(),
+        )),
+    }
+}
+
+async fn peers_view(state: &AppRouterState) -> Response {
+    let peers = load_config()
+        .await
+        .map(|(config, _)| config.peers().clone())
+        .unwrap_or_default();
+    // The key exists once there is something to link: a GET with no peers
+    // writes nothing.
+    let key = match peers.is_empty() {
+        true => None,
+        false => state.peers.identity().ok(),
+    };
+    Json(serde_json::json!({
+        "peers": peers,
+        "status": state.peers.statuses(),
+        "key": key.as_ref().map(|key| crate::link::public_line(key.public_key())),
+        "fingerprint": key.as_ref().map(|key| crate::link::fingerprint(key.public_key())),
+        "editable": state.providers_editable,
+        "may": crate::provider::PEER_MAY,
+    }))
+    .into_response()
+}
+
+async fn get_peers(State(state): State<AppRouterState>) -> Response {
+    if state.users.is_some() {
+        return (StatusCode::NOT_FOUND, "a server with users does not dial").into_response();
+    }
+    peers_view(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct PeersEdit {
+    peers: std::collections::BTreeMap<String, crate::provider::Peer>,
+}
+
+/// Replaces every `[peer.*]`, and redials.
+async fn put_peers(State(state): State<AppRouterState>, Json(edit): Json<PeersEdit>) -> Response {
+    if let Err(refused) = peers_allowed(&state) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory to write config.toml in",
+        )
+            .into_response();
+    };
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    if let Err(error) = write_config(current.with_peers(edit.peers.clone()), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    state.peers.restart(&edit.peers);
+    peers_view(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct PeerProbe {
+    url: String,
+}
+
+/// What a page says about linking to it, asked by this machine over HTTPS,
+/// with this luu's key to add there.
+async fn post_peer_probe(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<PeerProbe>,
+) -> Response {
+    if let Err(refused) = peers_allowed(&state) {
+        return *refused;
+    }
+    let info = match crate::link::probe(&asked.url).await {
+        Ok(info) => info,
+        Err(error) => return (StatusCode::BAD_GATEWAY, format!("{error:#}")).into_response(),
+    };
+    let fingerprint = crate::link::parse_public(&info.host_key)
+        .map(|key| crate::link::fingerprint(&key))
+        .unwrap_or_default();
+    let key = match state.peers.identity() {
+        Ok(key) => key,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
+        }
+    };
+    Json(serde_json::json!({
+        "url": asked.url.trim().trim_end_matches('/'),
+        "ssh": info.ssh,
+        "host_key": info.host_key,
+        "fingerprint": fingerprint,
+        "key": crate::link::public_line(key.public_key()),
+    }))
+    .into_response()
 }
 
 // ---- engines ---------------------------------------------------------------

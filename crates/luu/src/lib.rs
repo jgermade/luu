@@ -41,6 +41,7 @@ pub mod grants;
 pub mod highlight;
 pub mod hosts;
 pub mod icons;
+pub mod link;
 pub mod log;
 pub mod mail;
 pub mod models;
@@ -197,6 +198,14 @@ enum Command {
     /// is what loopback is on a laptop. `luu user code` prints a code to log
     /// in with until a server can send it by email. See
     /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    /// This luu linked to another, over SSH by key: the online page as a way
+    /// into the luu at home. See
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+    Link {
+        #[command(subcommand)]
+        action: LinkAction,
+    },
+
     User {
         #[command(subcommand)]
         action: UserAction,
@@ -824,6 +833,10 @@ enum ConfigStep {
         /// with a proxy in front; `0.0.0.0:7878` inside a container.
         #[arg(long, value_name = "ADDR")]
         bind: Option<std::net::SocketAddr>,
+        /// Where other luus link to this one, over SSH by key. Default:
+        /// `0.0.0.0:2222`, as intergate's; `none` for no links.
+        #[arg(long, value_name = "ADDR")]
+        ssh: Option<String>,
     },
     /// Mail and the first owner: a code to their email under the mail
     /// settings, typed back here. Nothing is saved until it is.
@@ -911,6 +924,52 @@ enum UserAction {
     Remove { email: String },
     /// Print a code to log in with: six digits, ten minutes, one use.
     Code { email: String },
+    /// A user's SSH keys: what links their luus to this one.
+    Key {
+        #[command(subcommand)]
+        action: UserKeyAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum UserKeyAction {
+    /// Add a key: `ssh-ed25519 AAAA… name`, as `luu link key` prints it.
+    Add {
+        email: String,
+        key: String,
+        /// What to call it. Default: the key's own comment.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// A user's keys.
+    List { email: String },
+    /// Take a key off, by its name or its fingerprint. A link it opened
+    /// closes within half a minute.
+    Remove { email: String, key: String },
+}
+
+/// `luu link`: this luu linked to another, over SSH by key.
+#[derive(Subcommand)]
+enum LinkAction {
+    /// This luu's public key, to add on an account where it should link.
+    Key,
+    /// Link to another luu: asks its page where its links are accepted and
+    /// the key it answers with, pins that key, and writes `[peer.<as>]`.
+    /// `luu serve` dials it, and keeps dialling.
+    Add {
+        /// Its page: `https://luu.example.com`.
+        url: String,
+        /// What that luu calls this one: `/h/<name>/` there.
+        #[arg(long)]
+        name: String,
+        /// What this config calls that luu. Default: its host's first label.
+        #[arg(long = "as")]
+        as_name: Option<String>,
+    },
+    /// The luus this one links to.
+    List,
+    /// Stop linking to one, and forget it.
+    Remove { peer: String },
 }
 
 #[derive(Subcommand)]
@@ -1188,7 +1247,9 @@ async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>
         None => dir.join("auth.db"),
     };
     match step {
-        Some(ConfigStep::Server { origin, bind }) => config_server(origin.clone(), *bind),
+        Some(ConfigStep::Server { origin, bind, ssh }) => {
+            config_server(origin.clone(), *bind, ssh.clone())
+        }
         Some(ConfigStep::Owner { email, smtp }) => {
             let (dir, _, _) = config_here()?;
             config_owner(email.clone(), smtp, &users_at(&dir)).await
@@ -1220,7 +1281,7 @@ async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>
             Ok(())
         }
         None => {
-            config_server(None, None)?;
+            config_server(None, None, None)?;
             let (dir, _, _) = config_here()?;
             let users = crate::users::Users::open(&users_at(&dir))?;
             if users.has_owner()? {
@@ -1235,8 +1296,103 @@ async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>
     }
 }
 
+/// `luu link`.
+async fn run_link(action: &LinkAction) -> Result<()> {
+    let (dir, path, config) = config_here()?;
+    match action {
+        LinkAction::Key => {
+            let key = crate::link::identity(&dir)?;
+            println!("{}", crate::link::public_line(key.public_key()));
+        }
+        LinkAction::Add { url, name, as_name } => {
+            crate::link::check_name(name)?;
+            let url = url.trim().trim_end_matches('/').to_string();
+            let info = crate::link::probe(&url).await?;
+            let host_key = crate::link::parse_public(&info.host_key)?;
+            let peer_name = match as_name {
+                Some(as_name) => as_name.clone(),
+                None => url
+                    .split("://")
+                    .nth(1)
+                    .and_then(|rest| rest.split(['.', ':', '/']).next())
+                    .unwrap_or("online")
+                    .to_string(),
+            };
+            if !crate::provider::is_host_name(&peer_name) {
+                anyhow::bail!("`{peer_name}` is not a name for a peer: --as <name>");
+            }
+            let mut peers = config.peers().clone();
+            peers.insert(
+                peer_name.clone(),
+                crate::provider::Peer {
+                    url: Some(url.clone()),
+                    ssh: info.ssh.clone(),
+                    host_key: crate::link::public_line(&host_key),
+                    name: name.clone(),
+                    dial: true,
+                    may: vec!["sessions".to_string()],
+                },
+            );
+            config.with_peers(peers).write(&path)?;
+            let key = crate::link::identity(&dir)?;
+            let public = crate::link::public_line(key.public_key());
+            println!(
+                "[peer.{peer_name}] in {}: {} at {}, key {} (from its page, over {})",
+                path.display(),
+                url,
+                info.ssh,
+                crate::link::fingerprint(&host_key),
+                url.split("://").next().unwrap_or("http"),
+            );
+            println!(
+                "\nAdd this luu's key to your account there (Account → Keys), or open:\n  {url}/?add-key={}&name={name}\n\n{public}",
+                percent(&public)
+            );
+            println!(
+                "\nluu serve dials it while it runs; a running one picks this up when restarted."
+            );
+        }
+        LinkAction::List => {
+            for (name, peer) in config.peers() {
+                println!(
+                    "{name:<16} {} as {}  may {}{}",
+                    peer.ssh,
+                    peer.name,
+                    peer.may.join(","),
+                    if peer.dial { "" } else { "  (off)" }
+                );
+            }
+        }
+        LinkAction::Remove { peer } => {
+            let mut peers = config.peers().clone();
+            if peers.remove(peer).is_none() {
+                anyhow::bail!("there is no [peer.{peer}]");
+            }
+            config.with_peers(peers).write(&path)?;
+            println!("[peer.{peer}] removed; a running luu serve stops dialling it when restarted");
+        }
+    }
+    Ok(())
+}
+
+/// A query value, percent-encoded: what is not unreserved, as bytes.
+fn percent(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
 /// `luu config server`: `[server]`, the rest of `config.toml` carried.
-fn config_server(origin: Option<String>, bind: Option<std::net::SocketAddr>) -> Result<()> {
+fn config_server(
+    origin: Option<String>,
+    bind: Option<std::net::SocketAddr>,
+    ssh: Option<String>,
+) -> Result<()> {
     let (_, path, config) = config_here()?;
     let server = config.server();
     let origin = answer(
@@ -1256,6 +1412,16 @@ fn config_server(origin: Option<String>, bind: Option<std::net::SocketAddr>) -> 
         .parse()
         .expect("a literal address")
     });
+    // Links on by default: the online page as a way into a luu at home is
+    // what they are for. `none` turns them off.
+    let ssh = match ssh.as_deref().map(str::trim) {
+        Some("none") | Some("") => None,
+        Some(address) => Some(address.to_string()),
+        None => server
+            .ssh
+            .clone()
+            .or_else(|| Some(format!("0.0.0.0:{}", crate::link::DEFAULT_PORT))),
+    };
     // `public` refuses a token, so the file stops naming one; the token file
     // itself is left where it is.
     config
@@ -1264,12 +1430,17 @@ fn config_server(origin: Option<String>, bind: Option<std::net::SocketAddr>) -> 
             bind: Some(bind),
             token_file: None,
             origin: Some(origin.clone()),
+            ssh: ssh.clone(),
+            ssh_public: server.ssh_public.clone(),
         })
         .write(&path)?;
     println!(
         "[server] in {}: exposure = \"public\", origin {origin}, bind {bind}",
         path.display()
     );
+    if let Some(ssh) = &ssh {
+        println!("Other luus link to it over SSH on {ssh}: open that port too.");
+    }
     println!("luu serve reads [server] when it starts: restart it.");
     Ok(())
 }
@@ -1522,6 +1693,39 @@ fn run_user(
             users.remove(&email)?;
             eprintln!("removed {}", user.email);
         }
+        UserAction::Key { action } => match action {
+            UserKeyAction::Add { email, key, name } => {
+                let user = users
+                    .find(email)?
+                    .with_context(|| format!("{email} is not a user"))?;
+                let added = users.add_key(&user.id, name.as_deref().unwrap_or(""), key)?;
+                eprintln!(
+                    "{} links {}'s luus here: {}",
+                    added.name, user.email, added.fingerprint
+                );
+            }
+            UserKeyAction::List { email } => {
+                let user = users
+                    .find(email)?
+                    .with_context(|| format!("{email} is not a user"))?;
+                for key in users.keys_of(&user.id)? {
+                    let used = key
+                        .last_used
+                        .map(|at| format!("used {}", ago(at)))
+                        .unwrap_or_else(|| "never used".to_string());
+                    println!("{:<24} {}  {used}", key.name, key.fingerprint);
+                }
+            }
+            UserKeyAction::Remove { email, key } => {
+                let user = users
+                    .find(email)?
+                    .with_context(|| format!("{email} is not a user"))?;
+                if !users.remove_key(&user.id, key)? {
+                    anyhow::bail!("{} has no key named {key}", user.email);
+                }
+                eprintln!("removed; a link it opened closes within half a minute");
+            }
+        },
         UserAction::Code { email } => {
             let code = users.issue_code(email)?;
             eprintln!(
@@ -2978,6 +3182,10 @@ pub async fn run() -> Result<()> {
 
     if let Command::Token { path, if_missing } = &command {
         return run_token(path, *if_missing);
+    }
+
+    if let Command::Link { action } = &command {
+        return run_link(action).await;
     }
 
     if let Command::User {

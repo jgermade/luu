@@ -500,6 +500,9 @@ struct File {
     /// `[host.<name>]`: another `luu serve` this one forwards to. See [`Host`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     host: BTreeMap<String, Host>,
+    /// `[peer.<name>]`: another luu this one links to, by key. See [`Peer`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    peer: BTreeMap<String, Peer>,
 }
 
 /// `[server]`: how `luu serve` is reached, written down rather than typed on
@@ -525,6 +528,15 @@ pub struct Server {
     /// as an `Origin` beside the request's own `Host`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Where other luus link to this one, over SSH: `0.0.0.0:2222`. Only on
+    /// a server with users, whose keys say who may. See
+    /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<String>,
+    /// The address a linking luu dials, when it is not the origin's host and
+    /// `ssh`'s port: a load balancer's, or another port in front.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_public: Option<String>,
 }
 
 /// Who may reach a `luu serve`.
@@ -624,6 +636,45 @@ pub struct Host {
     /// one bound to loopback — another port on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_file: Option<PathBuf>,
+}
+
+/// `[peer.<name>]`: another luu this one links to, by key. Written by `luu
+/// link` or Settings → Remote access. The side behind NAT dials (`dial`), and
+/// what the other side may do *here* is `may`, decided on this machine and
+/// never by the peer. See
+/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Peer {
+    /// Its page, for the link that adds this luu's key there:
+    /// `https://luu.example.com`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Where its links are accepted: `luu.example.com:2222`.
+    pub ssh: String,
+    /// Its key, pinned the first time: the SSH handshake must match it.
+    pub host_key: String,
+    /// What it calls this luu: `/h/<name>/` there.
+    pub name: String,
+    /// Whether this luu opens the connection. Off, the peer is kept and not
+    /// dialled.
+    #[serde(default = "yes")]
+    pub dial: bool,
+    /// What it may do here: `sessions`, `terminal`, `settings`. Remote access
+    /// itself is never a peer's.
+    #[serde(default = "sessions_only")]
+    pub may: Vec<String>,
+}
+
+/// What `may` can name.
+pub const PEER_MAY: &[&str] = &["sessions", "terminal", "settings"];
+
+fn yes() -> bool {
+    true
+}
+
+fn sessions_only() -> Vec<String> {
+    vec!["sessions".to_string()]
 }
 
 /// Whether `name` may name a host: it is a path segment in `/h/<name>/`, so
@@ -926,6 +977,7 @@ pub struct Config {
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
     hosts: BTreeMap<String, Host>,
+    peers: BTreeMap<String, Peer>,
     server: Option<Server>,
     auth: Option<AuthTable>,
 }
@@ -994,6 +1046,12 @@ pub enum ConfigError {
     },
     #[error("{path}: [server]: {problem}")]
     BadServer { path: String, problem: String },
+    #[error("{path}: [peer.{name}]: {problem}")]
+    BadPeer {
+        path: String,
+        name: String,
+        problem: String,
+    },
     #[error("{path}: {at}: {problem}")]
     BadMessages {
         path: String,
@@ -1064,6 +1122,7 @@ impl Config {
             authority: file.authority,
             engines: file.engine,
             hosts: file.host,
+            peers: file.peer,
             server: file.server,
             auth: file.auth,
         };
@@ -1071,6 +1130,7 @@ impl Config {
         config.check_engines(path)?;
         config.check_messages(path)?;
         config.check_hosts(path)?;
+        config.check_peers(path)?;
         config.check_server(path)?;
         config.check_images(path)?;
         config
@@ -1197,6 +1257,41 @@ impl Config {
                     "origin = \"{origin}\" is not a scheme and a host, as `https://luu.example.com`"
                 ),
             });
+        }
+        Ok(())
+    }
+
+    /// A peer's names are path segments, its address is a host and a port,
+    /// its pinned key is one, and `may` says only what it can say.
+    fn check_peers(&self, path: &str) -> Result<(), ConfigError> {
+        for (name, peer) in &self.peers {
+            let problem = if !is_host_name(name) {
+                Some("a peer's name is letters, digits, `-` and `_`".to_string())
+            } else if let Err(error) = crate::link::check_name(&peer.name) {
+                Some(format!("name: {error}"))
+            } else if peer
+                .ssh
+                .rsplit_once(':')
+                .is_none_or(|(host, port)| host.is_empty() || port.parse::<u16>().is_err())
+            {
+                Some(format!("ssh = \"{}\" is not a host and a port", peer.ssh))
+            } else if let Err(error) = crate::link::parse_public(&peer.host_key) {
+                Some(format!("host-key: {error}"))
+            } else {
+                peer.may
+                    .iter()
+                    .find(|word| !PEER_MAY.contains(&word.as_str()))
+                    .map(|word| {
+                        format!("may = [\"{word}\"]: a peer may use {}", PEER_MAY.join(", "))
+                    })
+            };
+            if let Some(problem) = problem {
+                return Err(ConfigError::BadPeer {
+                    path: path.to_string(),
+                    name: name.clone(),
+                    problem,
+                });
+            }
         }
         Ok(())
     }
@@ -1374,6 +1469,7 @@ impl Config {
             authority: self.authority.clone(),
             engine: self.engines.clone(),
             host: self.hosts.clone(),
+            peer: self.peers.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
         })
@@ -1461,6 +1557,7 @@ impl Config {
             authority: self.authority.clone(),
             engines: self.engines.clone(),
             hosts: self.hosts.clone(),
+            peers: self.peers.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
         }
@@ -1576,6 +1673,20 @@ impl Config {
     /// Every host the file names.
     pub fn hosts(&self) -> &BTreeMap<String, Host> {
         &self.hosts
+    }
+
+    /// Every luu this one links to.
+    pub fn peers(&self) -> &BTreeMap<String, Peer> {
+        &self.peers
+    }
+
+    /// The file as Remote access hands back the peers: `[peer.*]`, and
+    /// everything else this config already had.
+    pub fn with_peers(&self, peers: BTreeMap<String, Peer>) -> Self {
+        Self {
+            peers,
+            ..self.clone()
+        }
     }
 
     /// Every engine the file names.

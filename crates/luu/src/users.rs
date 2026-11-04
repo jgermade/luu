@@ -75,6 +75,20 @@ impl Role {
     }
 }
 
+/// A key on a user's account: what links their luus to this one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Key {
+    /// `SHA256:…`, as `ssh-keygen -l` prints it: how it is named on the wire.
+    pub fingerprint: String,
+    /// What the person calls it: the key's comment, unless they said.
+    pub name: String,
+    /// `ssh-ed25519 AAAA… comment`.
+    pub public: String,
+    /// Milliseconds since the epoch.
+    pub added_at: u64,
+    pub last_used: Option<u64>,
+}
+
 /// One person.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct User {
@@ -107,7 +121,9 @@ pub fn default_path() -> Option<PathBuf> {
 /// 2 added `codes.issued_at`, for one code by email a minute, and
 /// `setup_keys`, for the one-time link that makes the first owner in the
 /// page. See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
-const SCHEMA: i32 = 2;
+/// 3 added `keys`: a user's SSH keys, which link their luus to this one. See
+/// `RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`.
+const SCHEMA: i32 = 3;
 
 const TABLES: &str = "
 CREATE TABLE IF NOT EXISTS users (
@@ -134,6 +150,25 @@ CREATE TABLE IF NOT EXISTS logins (
 CREATE TABLE IF NOT EXISTS setup_keys (
     hash       BLOB PRIMARY KEY,
     expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS keys (
+    fingerprint TEXT PRIMARY KEY,
+    user        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    public      TEXT NOT NULL,
+    added_at    INTEGER NOT NULL,
+    last_used   INTEGER
+);";
+
+/// Schema 2 to 3: the table, no row touched.
+const TO_3: &str = "
+CREATE TABLE IF NOT EXISTS keys (
+    fingerprint TEXT PRIMARY KEY,
+    user        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    public      TEXT NOT NULL,
+    added_at    INTEGER NOT NULL,
+    last_used   INTEGER
 );";
 
 /// Schema 1 to 2: the column and the table, no row touched.
@@ -175,6 +210,11 @@ impl Users {
             }
             1 => {
                 connection.execute_batch(TO_2)?;
+                connection.execute_batch(TO_3)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            2 => {
+                connection.execute_batch(TO_3)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -294,8 +334,120 @@ impl Users {
             last_owner_guard(&connection, &user, "removed")?;
         }
         end_everything(&connection, &user)?;
+        connection.execute("DELETE FROM keys WHERE user = ?1", [&user.id])?;
         connection.execute("DELETE FROM users WHERE id = ?1", [&user.id])?;
         Ok(user)
+    }
+
+    /// A key that links this user's luus here: `ssh-ed25519 AAAA… name`. A
+    /// key belongs to one user, so the same key twice is refused, whoever
+    /// added it first.
+    pub fn add_key(&self, user_id: &str, name: &str, public: &str) -> Result<Key> {
+        let key = crate::link::parse_public(public)?;
+        let fingerprint = crate::link::fingerprint(&key);
+        let name = match name.trim() {
+            "" => key.comment().to_string(),
+            name => name.to_string(),
+        };
+        let name = match name.is_empty() {
+            true => fingerprint.clone(),
+            false => name.chars().take(64).collect(),
+        };
+        let connection = self.connection();
+        if self.get_on(&connection, user_id)?.is_none() {
+            bail!("no such user");
+        }
+        let taken: Option<String> = connection
+            .query_row(
+                "SELECT user FROM keys WHERE fingerprint = ?1",
+                [&fingerprint],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if taken.is_some() {
+            bail!("{fingerprint} is already on an account here");
+        }
+        let added = Key {
+            fingerprint,
+            name,
+            public: crate::link::public_line(&key),
+            added_at: crate::session::now_ms(),
+            last_used: None,
+        };
+        connection.execute(
+            "INSERT INTO keys (fingerprint, user, name, public, added_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                added.fingerprint,
+                user_id,
+                added.name,
+                added.public,
+                added.added_at as i64
+            ],
+        )?;
+        Ok(added)
+    }
+
+    /// A user's keys, oldest first.
+    pub fn keys_of(&self, user_id: &str) -> Result<Vec<Key>> {
+        let connection = self.connection();
+        let mut statement = connection.prepare(
+            "SELECT fingerprint, name, public, added_at, last_used FROM keys
+             WHERE user = ?1 ORDER BY added_at",
+        )?;
+        let rows = statement.query_map([user_id], |row| {
+            Ok(Key {
+                fingerprint: row.get(0)?,
+                name: row.get(1)?,
+                public: row.get(2)?,
+                added_at: row.get::<_, i64>(3)? as u64,
+                last_used: row.get::<_, Option<i64>>(4)?.map(|at| at as u64),
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Takes a key off a user's account, by its fingerprint or its name.
+    /// `false` when they had none such.
+    pub fn remove_key(&self, user_id: &str, which: &str) -> Result<bool> {
+        let removed = self.connection().execute(
+            "DELETE FROM keys WHERE user = ?1 AND (fingerprint = ?2 OR name = ?2)",
+            [user_id, which],
+        )?;
+        Ok(removed > 0)
+    }
+
+    /// Whose a key is, by its fingerprint: a user who can log in, or nobody.
+    /// What a link is let in by, and checked again while it is open.
+    pub fn key_user(&self, fingerprint: &str) -> Result<Option<User>> {
+        let connection = self.connection();
+        let user: Option<String> = connection
+            .query_row(
+                "SELECT user FROM keys WHERE fingerprint = ?1",
+                [fingerprint],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(user) = user else {
+            return Ok(None);
+        };
+        let user = self.get_on(&connection, &user)?;
+        if user.as_ref().is_some_and(|user| !user.suspended) {
+            connection.execute(
+                "UPDATE keys SET last_used = ?1 WHERE fingerprint = ?2",
+                rusqlite::params![crate::session::now_ms() as i64, fingerprint],
+            )?;
+        }
+        Ok(user.filter(|user| !user.suspended))
+    }
+
+    fn get_on(&self, connection: &Connection, id: &str) -> Result<Option<User>> {
+        Ok(connection
+            .query_row(
+                "SELECT id, email, role, suspended, created_at, last_login FROM users WHERE id = ?1",
+                [id],
+                user_of,
+            )
+            .optional()?)
     }
 
     /// A code for `email`, replacing any it had: six digits, ten minutes, one
@@ -700,7 +852,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn random<const N: usize>() -> Result<[u8; N]> {
+pub(crate) fn random<const N: usize>() -> Result<[u8; N]> {
     use std::io::Read;
     let mut bytes = [0u8; N];
     std::fs::File::open("/dev/urandom")
@@ -813,6 +965,47 @@ mod tests {
     }
 
     #[test]
+    fn a_key_is_one_users_and_lets_in_only_while_they_can_log_in() {
+        let (dir, users) = scratch("keys");
+        let ana = users.add("ana@example.com", Role::Owner).unwrap();
+        let bo = users.add("bo@example.com", Role::User).unwrap();
+        let key = crate::link::identity(&dir).unwrap();
+        let line = crate::link::public_line(key.public_key());
+        let added = users.add_key(&bo.id, "", &line).unwrap();
+        assert!(added.fingerprint.starts_with("SHA256:"));
+        assert!(
+            added.name.starts_with("luu@"),
+            "the comment names it: {}",
+            added.name
+        );
+        // One key, one user: the same key on a second account is refused.
+        assert!(users.add_key(&ana.id, "casa", &line).is_err());
+        assert!(
+            users
+                .add_key(&bo.id, "x", "ssh-rsa AAAAB3NzaC1yc2E x")
+                .is_err()
+        );
+        assert_eq!(users.keys_of(&bo.id).unwrap().len(), 1);
+        assert!(users.keys_of(&ana.id).unwrap().is_empty());
+        let whose = users.key_user(&added.fingerprint).unwrap().unwrap();
+        assert_eq!(whose.id, bo.id);
+        assert!(users.keys_of(&bo.id).unwrap()[0].last_used.is_some());
+        // Suspended, the key lets nobody in; resumed, it does again.
+        users.set_suspended("bo@example.com", true).unwrap();
+        assert!(users.key_user(&added.fingerprint).unwrap().is_none());
+        users.set_suspended("bo@example.com", false).unwrap();
+        assert!(users.key_user(&added.fingerprint).unwrap().is_some());
+        // Taken off by name, it is gone; and a user removed takes theirs.
+        assert!(users.remove_key(&bo.id, &added.name).unwrap());
+        assert!(users.key_user(&added.fingerprint).unwrap().is_none());
+        users.add_key(&bo.id, "casa", &line).unwrap();
+        users.remove("bo@example.com").unwrap();
+        assert!(users.key_user(&added.fingerprint).unwrap().is_none());
+        assert!(users.add_key(&ana.id, "casa", &line).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn one_email_one_user() {
         let (dir, users) = scratch("unique");
         users.add("cy@example.com", Role::User).unwrap();
@@ -905,6 +1098,9 @@ mod tests {
         assert!(users.has_owner().unwrap());
         let code = users.issue_code("old@example.com").unwrap();
         assert!(users.redeem("old@example.com", &code, 1).unwrap().is_some());
+        // Schema 3's table came with it.
+        let old = users.find("old@example.com").unwrap().unwrap();
+        assert!(users.keys_of(&old.id).unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
