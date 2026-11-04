@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$comment": "Only the shape of the top level and of ingress: a key this chart does not have is refused rather than ignored, which is how --set traefik.tls.certResolver=… once did nothing at all. See RECORD/2026-11-04.a-certificate-from-traefik.completed.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object"
+    },
+    "image": {
+      "type": "object"
+    },
+    "origin": {
+      "type": "string"
+    },
+    "service": {
+      "type": "object"
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string"
+            },
+            "certResolver": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object"
+    },
+    "runtime": {
+      "enum": [
+        "host",
+        "kubernetes"
+      ]
+    },
+    "worker": {
+      "type": "object"
+    },
+    "links": {
+      "type": "object"
+    },
+    "mail": {
+      "type": "object"
+    },
+    "policy": {
+      "type": "string"
+    },
+    "resources": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array"
+    },
+    "affinity": {
+      "type": "object"
+    }
+  }
+}

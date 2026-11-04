@@ -25,7 +25,15 @@ ingress:
   annotations: {}
   tls:
     enabled: false
+    # The Secret the certificate is in. Nothing in this chart writes it:
+    # cert-manager does, from an issuer in `annotations`. Where nothing writes
+    # it, the ingress controller serves its own default certificate.
     secretName: luu-tls
+    # Or Traefik's own ACME: the name of a `certificatesResolvers` entry in
+    # Traefik's static configuration (`letsencrypt`, say). Set, it turns TLS
+    # on, Traefik gets and renews the certificate itself, and no Secret is
+    # named. See RECORD/2026-11-04.a-certificate-from-traefik.completed.md.
+    certResolver: ""
 
 persistence:
   # /state: config.toml, sessions.db, the token.

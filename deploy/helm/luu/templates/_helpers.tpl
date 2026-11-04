@@ -19,12 +19,17 @@ app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/* Whether the ingress is TLS: asked for, or Traefik's resolver named. */}}
+{{- define "luu.tls" -}}
+{{- if or .Values.ingress.tls.enabled .Values.ingress.tls.certResolver }}true{{ end -}}
+{{- end -}}
+
 {{/* What a browser types: `origin`, else the ingress's host. */}}
 {{- define "luu.origin" -}}
 {{- if .Values.origin -}}
 {{- .Values.origin -}}
 {{- else if and .Values.ingress.enabled .Values.ingress.host -}}
-{{- printf "%s://%s" (ternary "https" "http" .Values.ingress.tls.enabled) .Values.ingress.host -}}
+{{- printf "%s://%s" (ternary "https" "http" (eq (include "luu.tls" .) "true")) .Values.ingress.host -}}
 {{- end -}}
 {{- end -}}
 

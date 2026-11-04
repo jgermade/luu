@@ -1,11 +1,20 @@
 {{- if .Values.ingress.enabled }}
+{{- /* Traefik's ACME resolver is two of its router annotations, and a TLS
+       entry naming no Secret: Traefik keeps the certificate itself. */}}
+{{- $resolver := .Values.ingress.tls.certResolver }}
+{{- $annotations := dict }}
+{{- if $resolver }}
+{{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.tls" "true" }}
+{{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.tls.certresolver" $resolver }}
+{{- end }}
+{{- $annotations = mergeOverwrite $annotations (.Values.ingress.annotations | default dict) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "luu.fullname" . }}
   labels:
     {{- include "luu.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -13,10 +22,12 @@ spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}
   {{- end }}
-  {{- if .Values.ingress.tls.enabled }}
+  {{- if include "luu.tls" . }}
   tls:
     - hosts: [{{ .Values.ingress.host | quote }}]
+      {{- if not $resolver }}
       secretName: {{ .Values.ingress.tls.secretName }}
+      {{- end }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
