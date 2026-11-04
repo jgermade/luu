@@ -169,6 +169,9 @@ pub struct Links {
     /// `/api/infer` and nothing else, as the key's user. Set once the router
     /// exists.
     infer: OnceLock<Router>,
+    /// On a luu without users, its whole router and its own token: what a
+    /// peer it lets in reaches, behind the peer gate.
+    full: OnceLock<(Router, Option<String>)>,
 }
 
 impl Links {
@@ -222,6 +225,113 @@ impl Links {
     pub fn offer(&self, router: Router) {
         let _ = self.infer.set(router);
     }
+
+    /// The router a peer of a luu without users reaches over its own
+    /// channels, behind the peer gate.
+    pub fn serve_peers(&self, router: Router, token: Option<String>) {
+        let _ = self.full.set((router, token));
+    }
+}
+
+/// Who may link to this luu.
+#[derive(Clone)]
+pub enum Accepts {
+    /// A server with users: a key on one of their accounts, as that user.
+    Users(Arc<Users>),
+    /// A luu without users: a key one of its `[peer.*]` tables names, as
+    /// that peer.
+    Keys(Arc<Keys>),
+}
+
+/// The keys a luu without users lets in, by fingerprint: which `[peer.*]`
+/// each is, and what it may do here. Set again on every write to Remote
+/// access.
+#[derive(Default)]
+pub struct Keys {
+    granted: std::sync::RwLock<HashMap<String, Grant>>,
+}
+
+/// One peer let in by its key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grant {
+    /// This luu's name for it: `/h/<name>/` here.
+    pub name: String,
+    pub may: Vec<String>,
+}
+
+impl Keys {
+    /// The keys `peers` names, in place of the ones before.
+    pub fn set(&self, peers: &BTreeMap<String, Peer>) {
+        let granted = peers
+            .iter()
+            .filter_map(|(name, peer)| {
+                let key = parse_public(peer.key.as_deref()?).ok()?;
+                Some((
+                    fingerprint(&key),
+                    Grant {
+                        name: name.clone(),
+                        may: peer.may.clone(),
+                    },
+                ))
+            })
+            .collect();
+        *self.granted.write().unwrap_or_else(|p| p.into_inner()) = granted;
+    }
+
+    fn get(&self, fingerprint: &str) -> Option<Grant> {
+        self.granted
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(fingerprint)
+            .cloned()
+    }
+}
+
+/// Who a key lets in: the owner its link is filed under, the link's name,
+/// and, for a peer of a luu without users, what it may do.
+struct Admitted {
+    owner: String,
+    name: String,
+    may: Option<Vec<String>>,
+}
+
+impl Accepts {
+    fn admit(&self, asked: &str, key: &PublicKey) -> Option<Admitted> {
+        let print = fingerprint(key);
+        match self {
+            Self::Users(users) => {
+                check_name(asked).ok()?;
+                let user = users.key_user(&print).ok().flatten()?;
+                Some(Admitted {
+                    owner: user.id,
+                    name: asked.to_string(),
+                    may: None,
+                })
+            }
+            Self::Keys(keys) => {
+                let grant = keys.get(&print)?;
+                Some(Admitted {
+                    owner: DIALLER.to_string(),
+                    name: grant.name,
+                    may: Some(grant.may),
+                })
+            }
+        }
+    }
+
+    /// Whether an open link's key still lets in what it let in.
+    fn still(&self, linked: &Linked) -> bool {
+        match self {
+            Self::Users(users) => users
+                .key_user(&linked.key)
+                .ok()
+                .flatten()
+                .is_some_and(|user| user.id == linked.user),
+            Self::Keys(keys) => keys
+                .get(&linked.key)
+                .is_some_and(|grant| grant.name == linked.name),
+        }
+    }
 }
 
 /// Where this server accepts links, and the key it answers with.
@@ -236,7 +346,7 @@ pub struct Listening {
 pub async fn listen(
     bind: &str,
     host: PrivateKey,
-    users: Arc<Users>,
+    accepts: Accepts,
     links: Arc<Links>,
 ) -> Result<Listening> {
     let listening = Listening {
@@ -258,7 +368,7 @@ pub async fn listen(
         .with_context(|| format!("binding {bind} for links"))?;
     let address = socket.local_addr().context("the address links come to")?;
     let mut server = Server {
-        users: users.clone(),
+        accepts: accepts.clone(),
         links: links.clone(),
     };
     tokio::spawn(async move {
@@ -267,7 +377,7 @@ pub async fn listen(
             tracing::warn!(target: "luu::link", "the link listener stopped: {error}");
         }
     });
-    tokio::spawn(sweep(users, links));
+    tokio::spawn(sweep(accepts, links));
     Ok(Listening {
         address,
         ..listening
@@ -277,16 +387,11 @@ pub async fn listen(
 /// Every 30 s, a link whose key left its account, or whose user was
 /// suspended or removed, is closed: `luu user` runs in another process, and
 /// this is how what it did reaches a link that is already open.
-async fn sweep(users: Arc<Users>, links: Arc<Links>) {
+async fn sweep(accepts: Accepts, links: Arc<Links>) {
     loop {
         tokio::time::sleep(KEEPALIVE).await;
         for linked in links.all() {
-            let still = users
-                .key_user(&linked.key)
-                .ok()
-                .flatten()
-                .is_some_and(|user| user.id == linked.user);
-            if !still {
+            if !accepts.still(&linked) {
                 tracing::info!(target: "luu::link", name = linked.name, "closed: its key is on no account now");
                 links.forget(&linked.user, &linked.name, linked.generation);
                 let _ = linked
@@ -304,7 +409,7 @@ async fn sweep(users: Arc<Users>, links: Arc<Links>) {
 
 #[derive(Clone)]
 struct Server {
-    users: Arc<Users>,
+    accepts: Accepts,
     links: Arc<Links>,
 }
 
@@ -313,11 +418,13 @@ impl russh::server::Server for Server {
 
     fn new_client(&mut self, from: Option<SocketAddr>) -> Connection {
         Connection {
-            users: self.users.clone(),
+            accepts: self.accepts.clone(),
             links: self.links.clone(),
             from,
             user: None,
             name: String::new(),
+            asked: String::new(),
+            may: None,
             key: String::new(),
             opened: Vec::new(),
         }
@@ -326,21 +433,20 @@ impl russh::server::Server for Server {
 
 /// One SSH connection: one luu, one user's key, one name.
 struct Connection {
-    users: Arc<Users>,
+    accepts: Accepts,
     links: Arc<Links>,
     from: Option<SocketAddr>,
+    /// Whom the link is filed under: a user's id, or `_` on a luu without
+    /// users.
     user: Option<String>,
+    /// What the link is called here.
     name: String,
+    /// What the dialling luu asked to be called: the SSH user.
+    asked: String,
+    /// What a peer of a luu without users may do here.
+    may: Option<Vec<String>>,
     key: String,
     opened: Vec<u64>,
-}
-
-impl Connection {
-    /// The user a key belongs to, when the name asked for is one.
-    fn whose(&self, name: &str, key: &PublicKey) -> Option<crate::users::User> {
-        check_name(name).ok()?;
-        self.users.key_user(&fingerprint(key)).ok().flatten()
-    }
 }
 
 impl russh::server::Handler for Connection {
@@ -351,7 +457,7 @@ impl russh::server::Handler for Connection {
         name: &str,
         key: &PublicKey,
     ) -> Result<russh::server::Auth, Self::Error> {
-        Ok(match self.whose(name, key) {
+        Ok(match self.accepts.admit(name, key) {
             Some(_) => russh::server::Auth::Accept,
             None => russh::server::Auth::reject(),
         })
@@ -362,12 +468,14 @@ impl russh::server::Handler for Connection {
         name: &str,
         key: &PublicKey,
     ) -> Result<russh::server::Auth, Self::Error> {
-        let Some(user) = self.whose(name, key) else {
-            tracing::info!(target: "luu::link", name, key = fingerprint(key), "refused: a key on no account");
+        let Some(admitted) = self.accepts.admit(name, key) else {
+            tracing::info!(target: "luu::link", name, key = fingerprint(key), "refused: a key nothing here lets in");
             return Ok(russh::server::Auth::reject());
         };
-        self.user = Some(user.id);
-        self.name = name.to_string();
+        self.user = Some(admitted.owner);
+        self.name = admitted.name;
+        self.asked = name.to_string();
+        self.may = admitted.may;
         self.key = fingerprint(key);
         Ok(russh::server::Auth::Accept)
     }
@@ -382,7 +490,7 @@ impl russh::server::Handler for Connection {
             return Ok(false);
         };
         // The name is the SSH user's; the address may repeat it, or be empty.
-        if !address.is_empty() && address != self.name && address != "localhost" {
+        if !address.is_empty() && address != self.asked && address != "localhost" {
             return Ok(false);
         }
         *port = 80;
@@ -441,9 +549,18 @@ impl russh::server::Handler for Connection {
 }
 
 impl Connection {
+    /// What answers this link's own `direct-tcpip` channels: on a server
+    /// with users, `/api/infer` alone; on a luu without users, its whole
+    /// router behind the peer gate, under what this peer may do here.
     fn serves_direct(&self) -> Option<Router> {
         self.user.as_ref()?;
-        self.links.infer.get().cloned()
+        match &self.may {
+            None => self.links.infer.get().cloned(),
+            Some(may) => {
+                let (router, token) = self.links.full.get()?;
+                Some(gated(router.clone(), may.clone(), token.clone()))
+            }
+        }
     }
 }
 
@@ -572,17 +689,32 @@ pub async fn connect(
     Box<Response>,
 > {
     let stream = channel(linked).await?;
-    let url = format!("ws://{}{}", linked.name, crate::hosts::without_token(rest));
+    socket_on(stream, &linked.name, rest).await
+}
+
+/// A WebSocket handshake over one channel's stream, whichever way it goes.
+async fn socket_on<S>(
+    stream: S,
+    name: &str,
+    rest: &str,
+) -> Result<tokio_tungstenite::WebSocketStream<S>, Box<Response>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let bad = |why: String| {
+        Box::new((StatusCode::BAD_GATEWAY, format!("{name} (linked): {why}")).into_response())
+    };
+    let url = format!("ws://{name}{}", crate::hosts::without_token(rest));
     let request = url
         .as_str()
         .into_client_request()
-        .map_err(|error| Box::new(bad_gateway(linked, error)))?;
+        .map_err(|error| bad(error.to_string()))?;
     let (socket, _) = tokio::time::timeout(
         CONNECT_TIMEOUT,
         tokio_tungstenite::client_async(request, stream),
     )
     .await
-    .map_err(|_| Box::new(bad_gateway(linked, "no answer within 15 s")))?
+    .map_err(|_| bad("no answer within 15 s".to_string()))?
     .map_err(|error| match error {
         tokio_tungstenite::tungstenite::Error::Http(answer) => {
             let status =
@@ -594,9 +726,9 @@ pub async fn connect(
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            Box::new((status, format!("{} (linked): {said}", linked.name)).into_response())
+            Box::new((status, format!("{name} (linked): {said}")).into_response())
         }
-        error => Box::new(bad_gateway(linked, error)),
+        error => bad(error.to_string()),
     })?;
     Ok(socket)
 }
@@ -702,7 +834,7 @@ impl Peers {
         let Some(router) = self.router.get() else {
             return;
         };
-        let identity = match peers.values().any(|peer| peer.dial) {
+        let identity = match peers.values().any(|peer| peer.dials()) {
             false => None,
             true => match self.identity() {
                 Ok(identity) => Some(identity),
@@ -724,7 +856,10 @@ impl Peers {
         let mut statuses = self.statuses.lock().unwrap_or_else(|p| p.into_inner());
         statuses.clear();
         for (name, peer) in peers {
-            let Some(identity) = identity.as_ref().filter(|_| peer.dial) else {
+            if peer.ssh.is_empty() {
+                continue;
+            }
+            let Some(identity) = identity.as_ref().filter(|_| peer.dials()) else {
                 statuses.insert(name.clone(), status("off", None, None));
                 continue;
             };
@@ -745,6 +880,48 @@ impl Peers {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
+    }
+
+    /// Whether `peer` is linked now, from this side.
+    pub fn has(&self, peer: &str) -> bool {
+        self.handles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(peer)
+    }
+
+    /// A request this luu's page made of a peer it dials, over a channel of
+    /// that link.
+    pub async fn forward(
+        &self,
+        peer: &str,
+        method: Method,
+        rest: &str,
+        headers: &HeaderMap,
+        body: Body,
+    ) -> Response {
+        let forwarded = match self.channel(peer).await {
+            Ok(stream) => forward_on(stream, peer, method, rest, headers, body).await,
+            Err(why) => Err(why),
+        };
+        forwarded.unwrap_or_else(|why| {
+            (StatusCode::BAD_GATEWAY, format!("{peer} (linked): {why}")).into_response()
+        })
+    }
+
+    /// The other end of a socket this luu's page opened on a peer it dials.
+    pub async fn connect(
+        &self,
+        peer: &str,
+        rest: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<russh::ChannelStream<russh::client::Msg>>,
+        Box<Response>,
+    > {
+        let stream = self.channel(peer).await.map_err(|why| {
+            Box::new((StatusCode::BAD_GATEWAY, format!("{peer} (linked): {why}")).into_response())
+        })?;
+        socket_on(stream, peer, rest).await
     }
 
     /// A channel to `peer`'s own API, while it is linked.
@@ -1099,7 +1276,13 @@ async fn via(
         .unwrap_or_default();
     let path = format!("/{rest}{query}");
     let (parts, body) = request.into_parts();
+    // `_`: a peer this luu dials, or one it let in, on a luu without users.
+    let accepted = links.as_ref().and_then(|links| links.get(DIALLER, peer));
     let forwarded = match (owner, &links) {
+        (DIALLER, _) if !peers.has(peer) && accepted.is_some() => {
+            let linked = accepted.expect("checked just above");
+            return forward(&linked, parts.method, &path, &parts.headers, body).await;
+        }
         (DIALLER, _) => match peers.channel(peer).await {
             Ok(stream) => forward_on(stream, peer, parts.method, &path, &parts.headers, body).await,
             Err(why) => Err(why),

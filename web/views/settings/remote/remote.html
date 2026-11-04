@@ -66,9 +66,32 @@
     const may = view.peers[peer].may || []
     change(peer, { may: may.includes(word) ? may.filter(w => w !== word) : [...may, word] })
   }
-  const unlink = peer => {
-    const { [peer]: _, ...rest } = view.peers
-    save(rest)
+  // What it dials, and what it lets in: a table may be both.
+  $: dialled = view ? Object.keys(view.peers || {}).filter(p => view.peers[p].ssh) : []
+  $: allowed = view ? Object.keys(view.peers || {}).filter(p => view.peers[p].key) : []
+  const without = (peer, fields) => {
+    const kept = { ...view.peers[peer] }
+    for (const field of fields) delete kept[field]
+    const rest = { ...view.peers }
+    if (kept.ssh || kept.key) rest[peer] = kept
+    else delete rest[peer]
+    return rest
+  }
+  const unlink = peer => save(without(peer, ["ssh", "host-key", "name", "url", "dial"]))
+  const disallow = peer => save(without(peer, ["key"]))
+  // A luu let in by its key, `luu link key` there: on a luu without users,
+  // where `[server] ssh` takes links.
+  let allowName = ""
+  let allowKey = ""
+  const allow = async () => {
+    const name = allowName.trim()
+    const had = view.peers[name] || {}
+    await save({ ...view.peers, [name]: { ...had, key: allowKey.trim(), may: had.may || ["sessions"], dial: had.dial ?? false } })
+    if (!error) { allowName = ""; allowKey = "" }
+  }
+  const shortKey = key => {
+    const [kind, body, comment] = (key || "").split(" ")
+    return comment || (body ? `${kind} …${body.slice(-8)}` : "")
   }
   // The page tells where to dial and the key to expect, over HTTPS; pinned
   // here at once, so the link follows by itself once the key is added there.
@@ -200,8 +223,8 @@
 
 <section class="pane-group" :if="!online && !refusedHere">
   <h3>Linked to</h3>
-  <ul class="rows peers" :if="view && Object.keys(view.peers || {}).length">
-    <li :each="peer in Object.keys(view.peers)" class="peer">
+  <ul class="rows peers" :if="dialled.length">
+    <li :each="peer in dialled" class="peer">
       <div class="peer-head">
         <span class="dot" :class="'st-' + (view.status?.[peer]?.state || 'off')"></span>
         <span class="grow"><strong>{{ view.peers[peer].url || view.peers[peer].ssh }}</strong>
@@ -228,9 +251,52 @@
       </div>
     </li>
   </ul>
-  <p class="note" :if="view && !Object.keys(view.peers || {}).length">
+  <p class="note" :if="view && !dialled.length">
     Not linked. Link it to a luu online and that luu's page opens this one, from anywhere.
   </p>
+</section>
+
+<section class="pane-group" :if="!online && !refusedHere && view">
+  <h3>Let luus link to this one</h3>
+  <p class="note" :if="view.listening">
+    Links come to port {{ view.listening.port }}, answered with the key
+    <code>{{ view.listening.fingerprint }}</code>. A luu let in below opens this
+    one's page, and this one opens its page, under <strong>/h/&lt;name&gt;/</strong>.
+  </p>
+  <p class="note" :if="!view.listening">
+    This luu takes no links: set <code>[server] ssh = "0.0.0.0:2222"</code> in
+    <code>config.toml</code> and restart <code>luu serve</code>. The luus below are let in once it does.
+  </p>
+  <ul class="rows peers" :if="allowed.length">
+    <li :each="peer in allowed" class="peer">
+      <div class="peer-head">
+        <span class="dot" :class="view.accepted?.[peer] ? 'st-connected' : 'st-off'"></span>
+        <span class="grow"><strong>{{ peer }}</strong>
+          <span class="dim small">{{ shortKey(view.peers[peer].key) }} ·
+            {{ view.accepted?.[peer] ? "linked " + ago(view.accepted[peer].since) + " ago" : "not linked now" }}</span></span>
+        <button type="button" class="soft danger" :disabled="!view.editable" @click="disallow(peer)">Remove</button>
+      </div>
+      <div class="may">
+        <span class="dim small">From there, it may use here:</span>
+        <label :each="word in view.may">
+          <input type="checkbox" :checked="(view.peers[peer].may || []).includes(word)" :disabled="!view.editable"
+                 @change="toggleMay(peer, word)"> {{ LABELS[word] || word }}
+        </label>
+        <span class="dim small">Never Remote access itself.</span>
+      </div>
+    </li>
+  </ul>
+  <div class="add-key">
+    <textarea rows="2" placeholder="ssh-ed25519 AAAA… luu@laptop — what luu link key prints there"
+              aria-label="Its key" :value="allowKey" @input="allowKey = $event.target.value"
+              :disabled="!view.editable"></textarea>
+    <div class="inline">
+      <input placeholder="its name here, such as laptop" aria-label="Its name here" :value="allowName"
+             @input="allowName = $event.target.value" :disabled="!view.editable">
+      <button type="button" class="primary" :disabled="!allowName.trim() || !allowKey.trim() || !view.editable"
+              @click="allow()">Let it link</button>
+    </div>
+  </div>
 </section>
 
 <section class="pane-group" :if="!online && !refusedHere && view">

@@ -970,7 +970,19 @@ enum LinkAction {
         #[arg(long = "as")]
         as_name: Option<String>,
     },
-    /// The luus this one links to.
+    /// Let another luu link to this one, by its key (`luu link key` there):
+    /// for a luu without users, where `[server] ssh` accepts links.
+    Allow {
+        /// What this luu calls it: `/h/<peer>/` here.
+        peer: String,
+        /// `ssh-ed25519 AAAA… luu@laptop`.
+        key: String,
+        /// What it may do here, comma-separated: `sessions`, `terminal`,
+        /// `settings`.
+        #[arg(long, default_value = "sessions")]
+        may: String,
+    },
+    /// The luus this one links to, and the ones it lets link to it.
     List,
     /// Stop linking to one, and forget it.
     Remove { peer: String },
@@ -1329,6 +1341,7 @@ async fn run_link(action: &LinkAction) -> Result<()> {
                 anyhow::bail!("`{peer_name}` is not a name for a peer: --as <name>");
             }
             let mut peers = config.peers().clone();
+            let had = peers.get(&peer_name).cloned();
             peers.insert(
                 peer_name.clone(),
                 crate::provider::Peer {
@@ -1336,8 +1349,11 @@ async fn run_link(action: &LinkAction) -> Result<()> {
                     ssh: info.ssh.clone(),
                     host_key: crate::link::public_line(&host_key),
                     name: name.clone(),
+                    key: had.as_ref().and_then(|had| had.key.clone()),
                     dial: true,
-                    may: vec!["sessions".to_string()],
+                    may: had
+                        .map(|had| had.may)
+                        .unwrap_or_else(|| vec!["sessions".to_string()]),
                 },
             );
             config.with_peers(peers).write(&path)?;
@@ -1359,15 +1375,59 @@ async fn run_link(action: &LinkAction) -> Result<()> {
                 "\nluu serve dials it while it runs; a running one picks this up when restarted."
             );
         }
+        LinkAction::Allow { peer, key, may } => {
+            if !crate::provider::is_host_name(peer) {
+                anyhow::bail!("`{peer}` is not a name for a peer: letters, digits, - and _");
+            }
+            let parsed = crate::link::parse_public(key)?;
+            let may: Vec<String> = may
+                .split(',')
+                .map(str::trim)
+                .filter(|word| !word.is_empty())
+                .map(str::to_string)
+                .collect();
+            let mut peers = config.peers().clone();
+            let entry = peers
+                .entry(peer.clone())
+                .or_insert_with(|| crate::provider::Peer {
+                    url: None,
+                    ssh: String::new(),
+                    host_key: String::new(),
+                    name: String::new(),
+                    key: None,
+                    dial: false,
+                    may: Vec::new(),
+                });
+            entry.key = Some(crate::link::public_line(&parsed));
+            entry.may = may;
+            config.with_peers(peers).write(&path)?;
+            println!(
+                "[peer.{peer}] in {}: {} may link here",
+                path.display(),
+                crate::link::fingerprint(&parsed)
+            );
+            if config.server().ssh.is_none() {
+                println!(
+                    "This luu accepts no links yet: set [server] ssh = \"0.0.0.0:{}\" and \
+                     restart luu serve.",
+                    crate::link::DEFAULT_PORT
+                );
+            }
+        }
         LinkAction::List => {
             for (name, peer) in config.peers() {
-                println!(
-                    "{name:<16} {} as {}  may {}{}",
-                    peer.ssh,
-                    peer.name,
-                    peer.may.join(","),
-                    if peer.dial { "" } else { "  (off)" }
-                );
+                let dials = match peer.dials() {
+                    true => format!("dials {} as {}", peer.ssh, peer.name),
+                    false if !peer.ssh.is_empty() => format!("{} (off)", peer.ssh),
+                    false => "does not dial".to_string(),
+                };
+                let accepts = match &peer.key {
+                    Some(key) => crate::link::parse_public(key)
+                        .map(|key| format!(", accepts {}", crate::link::fingerprint(&key)))
+                        .unwrap_or_default(),
+                    None => String::new(),
+                };
+                println!("{name:<16} {dials}{accepts}  may {}", peer.may.join(","));
             }
         }
         LinkAction::Remove { peer } => {

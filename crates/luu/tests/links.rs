@@ -755,3 +755,199 @@ async fn providers_cross_both_ways_and_their_keys_stay_home() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[tokio::test]
+async fn two_luus_without_users_link_by_key_and_open_each_other() {
+    let laptop = scratch("laptop");
+    let station = scratch("station");
+    let (station_url, station_seen) = fake_openai("hello from the workstation").await;
+    let (laptop_url, laptop_seen) = fake_openai("hello from the laptop").await;
+    let port = free_port();
+
+    // The laptop's key, let in by the workstation, which takes links.
+    let mut laptop_config = "[server]\nbind = \"127.0.0.1:0\"\n".to_string();
+    laptop_config.push_str(&provider(&laptop, "cpu", &laptop_url, "laptop-key", None));
+    std::fs::write(laptop.join("config.toml"), laptop_config).unwrap();
+    let key = run(&laptop, &["link", "key"]).trim().to_string();
+    let mut station_config =
+        format!("[server]\nbind = \"127.0.0.1:0\"\nssh = \"127.0.0.1:{port}\"\n");
+    station_config.push_str(&provider(
+        &station,
+        "gpu",
+        &station_url,
+        "station-key",
+        None,
+    ));
+    std::fs::write(station.join("config.toml"), station_config).unwrap();
+    let allowed = run(&station, &["link", "allow", "laptop", &key]);
+    assert!(allowed.contains("[peer.laptop]"), "{allowed}");
+    let ws = start(&station);
+
+    // The laptop links by the workstation's page, as a host was added by URL.
+    run(
+        &laptop,
+        &[
+            "link",
+            "add",
+            &format!("http://{}", ws.address),
+            "--name",
+            "laptop",
+            "--as",
+            "ws",
+        ],
+    );
+    let lap = start(&laptop);
+    let mut state = String::new();
+    for _ in 0..100 {
+        state = peer_state(&lap.address, "ws").await;
+        if state == "connected" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        state,
+        "connected",
+        "laptop: {}\nstation: {}",
+        lap.said.lock().unwrap(),
+        ws.said.lock().unwrap()
+    );
+
+    // Each lists the other among its hosts, and opens its page.
+    let listed = |address: String| async move {
+        let hosts: Value = reqwest::get(format!("http://{address}/api/hosts"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        hosts
+    };
+    let mut hosts = Value::Null;
+    for _ in 0..50 {
+        hosts = listed(ws.address.clone()).await;
+        if hosts["hosts"].get("laptop").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(hosts["hosts"]["laptop"]["linked"], true, "{hosts}");
+    let hosts = listed(lap.address.clone()).await;
+    assert_eq!(hosts["hosts"]["ws"]["linked"], true, "{hosts}");
+    for (from, name, home) in [
+        (&lap.address, "ws", &station),
+        (&ws.address, "laptop", &laptop),
+    ] {
+        let settings: Value = reqwest::get(format!("http://{from}/h/{name}/api/settings"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            settings["home"].as_str().map(Path::new),
+            Some(home.as_path()),
+            "{from} → {name}: {settings}"
+        );
+        // Sessions, and no Settings write: what each side gives the other.
+        let write = reqwest::Client::new()
+            .put(format!("http://{from}/h/{name}/api/tool-steps"))
+            .json(&serde_json::json!({ "steps": 3 }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(write.status(), 403, "{from} → {name}");
+    }
+    // The workstation's protocol socket, from the laptop's page.
+    let origin = format!("http://{}", lap.address);
+    turn(
+        &format!("ws://{}/h/ws/ws", lap.address),
+        None,
+        &origin,
+        "hola",
+        "\"type\":\"hello\"",
+    )
+    .await
+    .expect("the workstation's hello through the link");
+
+    // And the providers cross both ways, keys staying where they are.
+    let made = reqwest::Client::new()
+        .post(format!("http://{}/api/sessions", lap.address))
+        .json(&serde_json::json!({ "provider": "gpu@ws" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(made.status(), 201, "{:?}", made.text().await);
+    turn(
+        &format!("ws://{}/ws", lap.address),
+        None,
+        &origin,
+        "hola",
+        "hello from the workstation",
+    )
+    .await
+    .expect("a turn on the workstation's provider");
+    assert_eq!(
+        station_seen.lock().unwrap().last().unwrap(),
+        "Bearer station-key"
+    );
+    let made = reqwest::Client::new()
+        .post(format!("http://{}/api/sessions", ws.address))
+        .json(&serde_json::json!({ "provider": "cpu@laptop" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(made.status(), 201, "{:?}", made.text().await);
+    let ws_origin = format!("http://{}", ws.address);
+    turn(
+        &format!("ws://{}/ws", ws.address),
+        None,
+        &ws_origin,
+        "hola",
+        "hello from the laptop",
+    )
+    .await
+    .expect("a turn on the laptop's provider");
+    assert_eq!(
+        laptop_seen.lock().unwrap().last().unwrap(),
+        "Bearer laptop-key"
+    );
+
+    // Removed from the workstation's Remote access, the laptop is let in no
+    // more: its link closes.
+    let peers: Value = reqwest::get(format!("http://{}/api/peers", ws.address))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        peers["listening"]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("SHA256:")
+    );
+    assert!(peers["accepted"].get("laptop").is_some(), "{peers}");
+    let put = reqwest::Client::new()
+        .put(format!("http://{}/api/peers", ws.address))
+        .json(&serde_json::json!({ "peers": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put.status(), 200);
+    let mut gone = false;
+    for _ in 0..450 {
+        if peer_state(&lap.address, "ws").await != "connected" {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "a key taken off still links");
+
+    drop(lap);
+    drop(ws);
+    for dir in [laptop, station] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

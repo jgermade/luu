@@ -657,12 +657,21 @@ pub struct Peer {
     /// `https://luu.example.com`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Where its links are accepted: `luu.example.com:2222`.
+    /// Where its links are accepted: `luu.example.com:2222`. Empty for a
+    /// peer this luu does not dial, only accepts.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ssh: String,
     /// Its key, pinned the first time: the SSH handshake must match it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub host_key: String,
     /// What it calls this luu: `/h/<name>/` there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// Its own key, `ssh-ed25519 AAAA…`, for a peer that dials this luu:
+    /// what lets it in, on a luu without users. Its link is known here by
+    /// this table's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     /// Whether this luu opens the connection. Off, the peer is kept and not
     /// dialled.
     #[serde(default = "yes")]
@@ -671,6 +680,14 @@ pub struct Peer {
     /// itself is never a peer's.
     #[serde(default = "sessions_only")]
     pub may: Vec<String>,
+}
+
+impl Peer {
+    /// Whether this luu opens the connection: it is switched on and knows
+    /// where to.
+    pub fn dials(&self) -> bool {
+        self.dial && !self.ssh.is_empty()
+    }
 }
 
 /// What `may` can name.
@@ -1272,8 +1289,15 @@ impl Config {
     /// its pinned key is one, and `may` says only what it can say.
     fn check_peers(&self, path: &str) -> Result<(), ConfigError> {
         for (name, peer) in &self.peers {
+            let dials = !peer.ssh.is_empty();
             let problem = if !is_host_name(name) {
                 Some("a peer's name is letters, digits, `-` and `_`".to_string())
+            } else if !dials && peer.key.is_none() {
+                Some("neither `ssh` (to dial it) nor `key` (to let it dial this luu)".to_string())
+            } else if let Some(Err(error)) = peer.key.as_deref().map(crate::link::parse_public) {
+                Some(format!("key: {error}"))
+            } else if !dials {
+                None
             } else if let Err(error) = crate::link::check_name(&peer.name) {
                 Some(format!("name: {error}"))
             } else if peer
@@ -1284,6 +1308,11 @@ impl Config {
                 Some(format!("ssh = \"{}\" is not a host and a port", peer.ssh))
             } else if let Err(error) = crate::link::parse_public(&peer.host_key) {
                 Some(format!("host-key: {error}"))
+            } else {
+                None
+            };
+            let problem = if problem.is_some() {
+                problem
             } else {
                 peer.may
                     .iter()

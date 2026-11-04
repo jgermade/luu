@@ -3082,9 +3082,29 @@ exact name wins.
   who may reach the port*) does not reach a provider through the user's own
   link: the link is theirs, and choosing it per session is typing it.
 
+**A luu without users accepts links too**, and that is what replaces a
+`[host.*]` and its token:
+- `[server] ssh` is read on it as well. Who may link is a `[peer.<name>]`
+  with `key = "ssh-ed25519 …"`, written by `luu link allow <name> <key>` or
+  Remote access's *Let luus link to this one*, from this machine only. The
+  link is known by that table's name, and the table's `may` says what it may
+  do here.
+- **Either side opens the other's page under `/h/<name>/`.** The dialling
+  side does it over `direct-tcpip` channels, which the accepting side answers
+  with its whole router behind the peer gate. The accepting side does it over
+  `forwarded-tcpip`, as an online server does. On both, `/h/*` is this
+  machine's own page's only (`hosts_allowed`).
+- **Providers cross on these links too**, both ways.
+- `/api/link.json` gives the address from the request's own `Host` when
+  there is no `ssh-public` and no origin.
+- The project modal lists the linked luus beside the hosts, and *Link a luu*
+  opens Remote access.
+- **A `[host.*]` still works and can still be edited, and is no longer
+  added from the page.** Removing the table would refuse every
+  `config.toml` that has one.
+
 **What a link trusts:** the online server ends TLS for the browser and holds
-the connection, so it sees what crosses it. `[host.*]` replaced by peers (row
-68) is not built. See
+the connection, so it sees what crosses it. See
 [`RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`](RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md).
 
 ## Suggested work order

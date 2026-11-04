@@ -22,6 +22,7 @@
   // way round.
   const { workspace, chooseRoot, closePicker, rootKey, FILES_SPRITE } = await import("@web/lib/workspace.js")
   const { currentHost, loadHosts, askHost, goToHost } = await import("@web/lib/hosts.js")
+  const { openSettingsAt } = await import("@web/lib/ui.js")
   const Modal = await import("@web/components/modal.html")
   const HostForm = await import("./host-form.html")
 
@@ -156,12 +157,15 @@
                 </span>
                 <span :if="name === currentHost" class="here small">here</span>
               </button>
-              <button :if="name && hostsView.editable" type="button" class="edit" title="Edit this host"
+              <button :if="name && hostsView.editable && !hostsView.hosts[name]?.linked" type="button" class="edit" title="Edit this host"
                       @click="editingHost = { name }"><svg class="ic"><use href="#i-edit"/></svg></button>
             </li>
           </ul>
-          <button :if="hostsView.editable" type="button" class="add" @click="editingHost = {}">
-            <svg class="ic"><use href="#i-plus"/></svg> Add a host
+          <!-- Another luu is linked by key in Remote access, since row 68: a
+               `[host.*]` and its token are kept and edited, no longer added.
+               See RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md. -->
+          <button :if="hostsView.editable" type="button" class="add" @click="closePicker(), openSettingsAt('remote')">
+            <svg class="ic"><use href="#i-plus"/></svg> Link a luu
           </button>
         </section>
 

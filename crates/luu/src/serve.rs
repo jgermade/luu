@@ -1773,6 +1773,10 @@ impl Serving {
                 crate::auth::Auth::Token(token) => Some(token.clone()),
                 _ => None,
             };
+            // And what the peers it lets in reach over their own channels.
+            if let Some(links) = &self.state.links {
+                links.serve_peers(self.router.clone(), token.clone());
+            }
             self.state.peers.start(self.router.clone(), token, &peers);
         }
         let engines = self.app.engines.clone();
@@ -1952,45 +1956,52 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             Some(Arc::new(users))
         }
     };
-    // Links from other luus, by key: on a server with users, where `[server]
-    // ssh` says where. See `crate::link`.
-    let server_table = load_config()
+    // Links from other luus, by key, where `[server] ssh` says: a key on a
+    // user's account on a server with users, a key a `[peer.*]` names on a
+    // luu without them. See `crate::link`.
+    let loaded = load_config()
         .await
-        .map(|(config, _)| config.server())
+        .map(|(config, _)| config)
         .unwrap_or_default();
-    let (links, link_info) = match (&users, server_table.ssh.as_deref()) {
-        (Some(users), Some(ssh)) => {
+    let server_table = loaded.server();
+    let (links, link_info, link_port, keys) = match server_table.ssh.as_deref() {
+        None => (None, None, 0, None),
+        Some(ssh) => {
             let dir = crate::config::dir().context("no state directory for the SSH host key")?;
             let host = crate::link::host_key(&dir)?;
             let links = Arc::new(crate::link::Links::default());
-            let listening = crate::link::listen(ssh, host, users.clone(), links.clone()).await?;
-            let host_name = origin
-                .as_deref()
-                .and_then(|origin| origin.split("://").nth(1))
-                .and_then(|rest| rest.split([':', '/']).next())
-                .unwrap_or("localhost")
-                .to_string();
-            let dialled = server_table
-                .ssh_public
-                .clone()
-                .unwrap_or_else(|| format!("{host_name}:{}", listening.address.port()));
+            let (accepts, keys) = match &users {
+                Some(users) => (crate::link::Accepts::Users(users.clone()), None),
+                None => {
+                    let keys = Arc::new(crate::link::Keys::default());
+                    keys.set(loaded.peers());
+                    (crate::link::Accepts::Keys(keys.clone()), Some(keys))
+                }
+            };
+            let listening = crate::link::listen(ssh, host, accepts, links.clone()).await?;
+            let port = listening.address.port();
+            // What a linking luu dials: said, or the origin's host and this
+            // port, or — on a luu without either — the host its page was
+            // asked by, worked out per request (`get_link_info`).
+            let dialled = server_table.ssh_public.clone().or_else(|| {
+                origin
+                    .as_deref()
+                    .and_then(|origin| origin.split("://").nth(1))
+                    .and_then(|rest| rest.split([':', '/']).next())
+                    .map(|host| format!("{host}:{port}"))
+            });
             eprintln!(
-                "links — ssh on {}, dialled as {dialled}, key {}",
-                listening.address, listening.fingerprint
+                "links — ssh on {}, dialled as {}, key {}",
+                listening.address,
+                dialled.as_deref().unwrap_or("the page's own host"),
+                listening.fingerprint
             );
             let info = crate::link::LinkInfo {
-                ssh: dialled,
+                ssh: dialled.unwrap_or_default(),
                 host_key: listening.host_key,
             };
-            (Some(links), Some(info))
+            (Some(links), Some(info), port, keys)
         }
-        (None, Some(_)) => {
-            eprintln!(
-                "note: [server] ssh is read only on a server with users, whose keys say who may link"
-            );
-            (None, None)
-        }
-        _ => (None, None),
     };
     let starts = crate::engines::for_run(&provider);
     let rebuild = crate::rebuild_for(&provider);
@@ -2085,6 +2096,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         mailed: Arc::default(),
         links,
         link_info,
+        link_port,
+        keys,
         peers: Arc::default(),
     };
     if users.is_some() {
@@ -2340,6 +2353,10 @@ struct AppRouterState {
     links: Option<Arc<crate::link::Links>>,
     /// Where they dial, and the key they pin: `/api/link.json`.
     link_info: Option<crate::link::LinkInfo>,
+    /// The port links come to, for an address worked out from a request.
+    link_port: u16,
+    /// On a luu without users, the keys its `[peer.*]` let in.
+    keys: Option<Arc<crate::link::Keys>>,
     /// The luus this one dials, and how each is doing.
     peers: Arc<crate::link::Peers>,
     app: Arc<App>,
@@ -7060,6 +7077,12 @@ fn hosts_allowed(
     Ok(())
 }
 
+/// A luu that linked to this one by a key a `[peer.*]` names, on a luu
+/// without users.
+fn accepted_link(state: &AppRouterState, name: &str) -> Option<crate::link::Linked> {
+    state.links.as_ref()?.get("_", name)
+}
+
 /// One `[host.<name>]`, or the answer that says it is not there.
 async fn host_named(name: &str) -> Result<crate::provider::Host, Box<Response>> {
     let config = load_config()
@@ -7135,9 +7158,56 @@ async fn get_hosts(State(state): State<AppRouterState>) -> Response {
             .into_response();
     }
     match hosts_view(&state).await {
-        Ok(view) => Json(view).into_response(),
+        Ok(view) => {
+            let mut view = serde_json::to_value(view).unwrap_or_default();
+            if let Some(hosts) = view
+                .get_mut("hosts")
+                .and_then(|hosts| hosts.as_object_mut())
+            {
+                for (name, entry) in linked_hosts(&state).await {
+                    hosts.insert(name, entry);
+                }
+            }
+            Json(view).into_response()
+        }
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     }
+}
+
+/// The luus linked by key that this page can open, as the project modal
+/// lists hosts: the ones this luu dials that are up, and the ones it let in.
+async fn linked_hosts(state: &AppRouterState) -> Vec<(String, serde_json::Value)> {
+    let config = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let mut linked = Vec::new();
+    for (name, status) in state.peers.statuses() {
+        if status.state == "connected" {
+            let ssh = config
+                .peers()
+                .get(&name)
+                .map(|peer| peer.ssh.clone())
+                .unwrap_or_default();
+            linked.push((
+                name,
+                serde_json::json!({ "url": format!("linked · {ssh}"), "linked": true, "since": status.since }),
+            ));
+        }
+    }
+    if let Some(links) = &state.links {
+        for accepted in links.of("_") {
+            linked.push((
+                accepted.name.clone(),
+                serde_json::json!({
+                    "url": format!("linked · {}", accepted.key),
+                    "linked": true,
+                    "since": accepted.since,
+                }),
+            ));
+        }
+    }
+    linked
 }
 
 #[derive(serde::Deserialize)]
@@ -7213,6 +7283,20 @@ async fn host_api(
     if let Err(refused) = hosts_allowed(&state, request.headers()) {
         return *refused;
     }
+    // A luu linked by key: one this luu dials, or one it let in.
+    if state.peers.has(&name) {
+        let rest = host_rest(request.uri(), &name);
+        let (parts, body) = request.into_parts();
+        return state
+            .peers
+            .forward(&name, parts.method, &rest, &parts.headers, body)
+            .await;
+    }
+    if let Some(linked) = accepted_link(&state, &name) {
+        let rest = host_rest(request.uri(), &name);
+        let (parts, body) = request.into_parts();
+        return crate::link::forward(&linked, parts.method, &rest, &parts.headers, body).await;
+    }
     let host = match host_named(&name).await {
         Ok(host) => host,
         Err(refused) => return *refused,
@@ -7262,6 +7346,29 @@ async fn host_socket(
             .into_response();
     }
     let name = params.get("name").cloned().unwrap_or_default();
+    // A luu linked by key: one this luu dials, or one it let in.
+    if state.peers.has(&name) {
+        let upstream = match state.peers.connect(&name, &host_rest(&uri, &name)).await {
+            Ok(upstream) => upstream,
+            Err(refused) => return *refused,
+        };
+        return ws.on_upgrade(move |socket| async move {
+            tracing::info!(target: "luu::ws", linked = name, "forwarding");
+            crate::hosts::pipe_to(socket, upstream).await;
+            tracing::info!(target: "luu::ws", linked = name, "closed");
+        });
+    }
+    if let Some(linked) = accepted_link(&state, &name) {
+        let upstream = match crate::link::connect(&linked, &host_rest(&uri, &name)).await {
+            Ok(upstream) => upstream,
+            Err(refused) => return *refused,
+        };
+        return ws.on_upgrade(move |socket| async move {
+            tracing::info!(target: "luu::ws", linked = name, "forwarding");
+            crate::hosts::pipe_to(socket, upstream).await;
+            tracing::info!(target: "luu::ws", linked = name, "closed");
+        });
+    }
     let host = match host_named(&name).await {
         Ok(host) => host,
         Err(refused) => return *refused,
@@ -7303,11 +7410,31 @@ async fn host_page(
 
 /// Where another luu dials to link here, and the key it should expect: over
 /// HTTPS, so the key is the certificate's to vouch for.
-async fn get_link_info(State(state): State<AppRouterState>) -> Response {
-    match &state.link_info {
-        Some(info) => Json(info.clone()).into_response(),
-        None => (StatusCode::NOT_FOUND, "this server accepts no links").into_response(),
+async fn get_link_info(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let Some(info) = &state.link_info else {
+        return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
+    };
+    let mut info = info.clone();
+    // No address said: the one this page was asked by, as the other luu
+    // typed it, with the port links come to.
+    if info.ssh.is_empty() {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("localhost");
+        let name = match host.strip_prefix('[') {
+            Some(rest) => format!("[{}]", rest.split(']').next().unwrap_or("")),
+            None => host
+                .rsplit_once(':')
+                .map_or(host, |(name, _)| name)
+                .to_string(),
+        };
+        info.ssh = format!("{name}:{}", state.link_port);
     }
+    Json(info).into_response()
 }
 
 /// The logged-in user, on a server with users, or why not.
@@ -7413,7 +7540,30 @@ async fn peers_view(state: &AppRouterState) -> Response {
         true => None,
         false => state.peers.identity().ok(),
     };
+    // Links this luu accepts: where, with which key, and who is linked in now.
+    let listening = state.link_info.as_ref().map(|info| {
+        serde_json::json!({
+            "port": state.link_port,
+            "host_key": info.host_key,
+            "fingerprint": crate::link::parse_public(&info.host_key)
+                .map(|key| crate::link::fingerprint(&key))
+                .unwrap_or_default(),
+        })
+    });
+    let accepted: serde_json::Map<String, serde_json::Value> = state
+        .links
+        .iter()
+        .flat_map(|links| links.of("_"))
+        .map(|linked| {
+            (
+                linked.name.clone(),
+                serde_json::json!({ "since": linked.since, "key": linked.key }),
+            )
+        })
+        .collect();
     Json(serde_json::json!({
+        "listening": listening,
+        "accepted": accepted,
         "peers": peers,
         "status": state.peers.statuses(),
         "key": key.as_ref().map(|key| crate::link::public_line(key.public_key())),
@@ -7456,6 +7606,9 @@ async fn put_peers(State(state): State<AppRouterState>, Json(edit): Json<PeersEd
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     state.peers.restart(&edit.peers);
+    if let Some(keys) = &state.keys {
+        keys.set(&edit.peers);
+    }
     peers_view(&state).await
 }
 
@@ -7697,6 +7850,13 @@ async fn linked_offers(
             .into_iter()
             .filter(|(_, status)| status.state == "connected")
             .map(|(name, _)| name)
+            .chain(
+                state
+                    .links
+                    .iter()
+                    .flat_map(|links| links.of("_"))
+                    .map(|linked| linked.name),
+            )
             .collect(),
         _ => Vec::new(),
     };
