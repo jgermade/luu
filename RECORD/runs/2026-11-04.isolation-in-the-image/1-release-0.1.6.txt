@@ -1,0 +1,58 @@
+=== wide (ana)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/a2a248fd6dc2
+[0] other-is: /work/ff7fee0fd24b
+[0] own-write: a
+[2] other-list: ls: cannot open directory '/work/ff7fee0fd24b': Permission denied
+[1] other-read: cat: /work/ff7fee0fd24b/secret: Permission denied
+[2] other-write: sh: 1: cannot create /work/ff7fee0fd24b/from-a-neighbour: Permission denied
+[1] other-symlink: cat: ./to-neighbour/secret: Permission denied
+[1] other-hardlink: ln: failed to create hard link './neighbour-secret' => '/work/ff7fee0fd24b/secret': Invalid cross-device link
+[2] work-root-list: ls: cannot open directory '/work': Permission denied
+[2] state-list: ls: cannot open directory '/state': Permission denied
+[1] state-auth-db: head: cannot open '/state/auth.db' for reading: Permission denied
+[1] state-token: cat: /state/token: Permission denied
+[0] cargo-home-list: total 8 drwxr-xr-x 2 luu luu 4096 Nov  4 13:32 . drwxr-xr-x 4 luu luu 4096 Nov  4 13:32 ..
+[0] cargo-home-write: left-by-a2a248fd6dc2
+[0] cargo-home-exec: ran
+[2] proc-1-environ: sh: 1: cannot open /proc/1/environ: Permission denied
+[2] proc-list: ls: cannot open directory '/proc': Permission denied
+[0] signal-pid1: 
+[2] tmp-write: sh: 1: cannot create /tmp/was-here: Permission denied
+[1] net-tcp: bash: socket: Operation not permitted bash: line 1: /dev/tcp/172.17.0.2/1025: Operation not permitted
+
+
+=== plant (ana)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/a2a248fd6dc2
+[0] other-is: /work/ff7fee0fd24b
+[0] plant: [target.x86_64-unknown-linux-gnu] runner = ["/state/cargo/runner"] #!/bin/sh cat secret > /state/cargo/taken-from-$(basename $PWD) exec "$@"
+
+
+=== victim (bo)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/ff7fee0fd24b
+[0] other-is: /work/a2a248fd6dc2
+[0] cargo-home-list: total 24 drwxr-xr-x 2 luu luu 4096 Nov  4 13:32 . drwxr-xr-x 4 luu luu 4096 Nov  4 13:32 .. -rw-r--r-- 1 luu luu   67 Nov  4 13:32 config.toml -rw-r--r-- 1 luu luu   18 Nov  4 13:32 left-by-a2a248fd6dc2 -rwxr-xr-x 1 luu luu   74 Nov  4 13:3
+[101] cargo-run: error: linking with `cc` failed: signal: 6 (SIGABRT)   |   = note:  "cc" "-m64" "/work/ff7fee0fd24b/hello/target/debug/deps/rustcb8wqfn/symbols.o" "<7 object files omitted>" "-Wl,--as-needed" "-Wl,-Bstatic" "<sysroot>/lib/rustlib/x86_64-unk
+
+
+=== link (bo)
+verdict: True {'by': 'kernel', 'how': 'landlock ABI v7 + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)'} | held: 0
+exit 0
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/ff7fee0fd24b
+[0] other-is: /work/a2a248fd6dc2
+[0] env-tmp: TMPDIR=
+[134] cc-c: Cannot create temporary file in /tmp/: Permission denied Aborted
+[0] cc-link: exit=134 Cannot create temporary file in /tmp/: Permission denied Aborted
+[0] cc-link-tmp: exit=1 /usr/bin/ld: cannot find t.o: No such file or directory collect2: error: ld returned 1 exit status
+[0] cargo-build: exit=101 demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libminiz_oxide-*,libadler2-*,libunwind-*,liblibc-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "-Wl,-Bdynamic" "-lgcc_s" 
+
+

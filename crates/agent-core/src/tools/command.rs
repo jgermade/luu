@@ -164,6 +164,9 @@ impl Tool for RunCommand {
                 command.env("https_proxy", proxy);
                 command.env("all_proxy", proxy);
             }
+            // The policy's own, last, so it says where scratch and tools'
+            // homes go whatever this process inherited.
+            command.envs(sandbox.env());
             restrictions.install(&mut command);
 
             let timeout = requested_timeout(arguments);
@@ -346,6 +349,64 @@ mod tests {
             "a subprocess is never held by an in-process check: {:?}",
             outcome.verdict.enforced_by
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The image's `[sandbox.env]`: `TMPDIR` and `CARGO_HOME` in the session's
+    /// own `.tmp`. Without it, in the image, `cc` found `/tmp` refused and
+    /// aborted, so no `cargo build` linked (2026-11-04).
+    #[tokio::test]
+    async fn the_policy_says_where_a_command_s_scratch_goes() {
+        let dir = scratch("env");
+        std::fs::create_dir_all(dir.join(".tmp")).unwrap();
+        let policy = SandboxPolicy::from_toml(
+            r#"
+            [sandbox]
+            enforcement = "best-effort"
+            commands = ["sh"]
+
+            [[sandbox.paths]]
+            path = "."
+            access = "read-write"
+
+            [sandbox.env]
+            TMPDIR = "./.tmp"
+            CARGO_HOME = "./.tmp/cargo"
+            LANG = "C.UTF-8"
+            "#,
+        )
+        .unwrap();
+        let sandbox = Sandbox::new(&policy, &dir).unwrap();
+        let outcome = run(
+            &sandbox,
+            json!({"argv": ["sh", "-c", "echo $TMPDIR $CARGO_HOME $LANG; mktemp"]}),
+        )
+        .await;
+        assert!(outcome.error.is_none(), "{outcome:?}");
+        let tmp = dir.join(".tmp");
+        assert!(
+            outcome.output.contains(&format!(
+                "{} {} C.UTF-8",
+                tmp.display(),
+                tmp.join("cargo").display()
+            )),
+            "{}",
+            outcome.output
+        );
+        assert!(
+            outcome.output.contains(&format!("{}/tmp.", tmp.display())),
+            "a temporary file is made where TMPDIR says: {}",
+            outcome.output
+        );
+        // A plan carries it on: it has no words for where scratch goes.
+        let narrowed = crate::job::Plan {
+            writes: vec![".".into()],
+            commands: vec!["sh".into()],
+            ..Default::default()
+        }
+        .narrow(&sandbox, 1)
+        .unwrap();
+        assert_eq!(narrowed.env(), sandbox.env());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

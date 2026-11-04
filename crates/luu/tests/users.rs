@@ -1,6 +1,6 @@
 //! A public `luu serve`: users who log in with a code, and who never reach
 //! each other's sessions or folders. See
-//! `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+//! `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

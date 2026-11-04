@@ -98,7 +98,7 @@ pub fn export(sessions: &[Session], out: &Path) -> Result<Vec<SessionSummary>> {
 
     write_json(&out.join("sessions.json"), &summaries)?;
     // The one question the page asks before it mounts: a static copy has no
-    // users. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    // users. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
     write_json(
         &out.join("auth").join("me.json"),
         &serde_json::json!({ "users": false }),

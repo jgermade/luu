@@ -1,7 +1,7 @@
 // Who is logged in, on a server with users — asked once, before the page
 // mounts anything. Everywhere else (loopback, a token, a static copy of the
 // page) the answer is `{ users: false }` and the page is what it always was.
-// See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+// See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
 
 // `owner`: whether the server has one yet — none means setup, not a login.
 // `mail`: whether a code can come by email.

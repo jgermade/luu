@@ -1,0 +1,31 @@
+# 0.1.6, a plan that declares no files and no writes: it narrows the session too
+verdict: {"allowed": true, "rule": "commands allows `git`", "enforced_by": {"by": "kernel", "how": "landlock ABI v7 + seccomp (no sockets, no ptrace) + rlimits (cpu 300s, file 1024M)"}}
+[0] whoami: uid=10001(luu) gid=10001(luu) groups=10001(luu)
+[0] pwd: /work/b0dbb68a973b
+[0] other-is: /work/0c4b11d6ed03
+[2] own-write: sh: 1: cannot create ./mine: Permission denied
+[2] other-list: ls: cannot open directory '/work/0c4b11d6ed03': Permission denied
+[1] other-read: cat: /work/0c4b11d6ed03/secret: Permission denied
+[2] other-write: sh: 1: cannot create /work/0c4b11d6ed03/from-a-neighbour: Permission denied
+[1] other-symlink: ln: failed to create symbolic link './to-neighbour': Permission denied
+[1] other-hardlink: ln: failed to create hard link './neighbour-secret' => '/work/0c4b11d6ed03/secret': Permission denied
+[2] work-root-list: ls: cannot open directory '/work': Permission denied
+[2] state-list: ls: cannot open directory '/state': Permission denied
+[1] state-auth-db: head: cannot open '/state/auth.db' for reading: Permission denied
+[1] state-sessions-db: head: cannot open '/state/sessions.db' for reading: Permission denied
+[1] state-config: cat: /state/config.toml: Permission denied
+[1] state-token: cat: /state/token: Permission denied
+[2] cargo-home-list: ls: cannot open directory '/state/cargo': Permission denied
+[2] cargo-home-write: sh: 1: cannot create /state/cargo/left-by-work: Permission denied
+[2] proc-1-environ: sh: 1: cannot open /proc/1/environ: Permission denied
+[2] proc-1-cmdline: sh: 1: cannot open /proc/1/cmdline: Permission denied
+[2] proc-1-root: ls: cannot access '/proc/1/root/work': Permission denied
+[2] proc-list: ls: cannot open directory '/proc': Permission denied
+[2] self-status: grep: /proc/self/status: Permission denied
+[0] signal-pid1: 
+[2] tmp-write: sh: 1: cannot create /tmp/was-here: Permission denied
+[2] tmp-list: ls: cannot open directory '/tmp': Permission denied
+[0] etc-passwd: root:x:0:0:root:/root:/bin/bash
+[0] env-names: CARGO_HOME GIT_CONFIG_PARAMETERS GIT_EXEC_PATH GIT_PREFIX HOME HOSTNAME LUU_HOME PATH PWD RUSTUP_HOME RUST_VERSION 
+[1] net-tcp: bash: socket: Operation not permitted bash: line 1: /dev/tcp/172.17.0.2/1025: Operation not permitted
+[128] net-ls-remote: fatal: unable to access 'http://172.17.0.2:8025/': Failed to connect to 172.17.0.2 port 8025 after 0 ms: Couldn't connect to server

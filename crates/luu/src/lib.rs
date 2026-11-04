@@ -197,7 +197,7 @@ enum Command {
     /// The way in that needs no request — the person at this machine, which
     /// is what loopback is on a laptop. `luu user code` prints a code to log
     /// in with until a server can send it by email. See
-    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
     /// This luu linked to another, over SSH by key: the online page as a way
     /// into the luu at home. See
     /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.

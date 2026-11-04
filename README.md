@@ -132,7 +132,7 @@ finish it in the page: `luu config setup-url` prints a one-time link. After
 that, people are added with `luu user add <email>`, log in with a code by
 email, and each has their own sessions and folder. See
 [`an-owner-proved-by-email`](RECORD/2026-11-03.an-owner-proved-by-email.WIP.md),
-[`a-user-a-code-and-a-folder`](RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md)
+[`a-user-a-code-and-a-folder`](RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md)
 and [`three-ways-in`](RECORD/2026-10-30.three-ways-in.WIP.md).
 
 ## First run

@@ -8,7 +8,7 @@
   const { state, loadProviders, saveToolSteps } = await import("@web/lib/store.js")
   if (!state.providers) loadProviders()
   // Who is logged in, on a server with users: asked once, before the page
-  // mounted. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+  // mounted. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
   const { account, logOut } = await import("@web/lib/account.js")
 
   // How many tool calls a turn makes before it asks whether to go on, where

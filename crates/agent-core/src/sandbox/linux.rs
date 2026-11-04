@@ -18,6 +18,7 @@ use std::os::unix::process::CommandExt;
 
 use landlock::{
     ABI, Access as _, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
+    Scope,
 };
 use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
@@ -36,6 +37,16 @@ use super::{Access, Root};
 /// granted; it is a smaller set of *kinds of access* being mediated, and the
 /// verdict reports the kernel's own ABI so a reader can see the difference.
 const TARGET_ABI: ABI = ABI::V5;
+
+/// The first ABI that scopes signals: from it, a held command signals only
+/// processes in its own domain — its own children — and not `serve`, nor
+/// another session's command, which on a server with users is another
+/// person's. Asked for on every kernel and dropped by the crate where the
+/// kernel is older, so the verdict says whether it held. Abstract unix
+/// sockets, the other half of ABI 6's scoping, are not asked for: with the
+/// network off seccomp refuses every socket anyway, and with it on they are
+/// the network. See `RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md`.
+const SIGNAL_SCOPE_ABI: i64 = 6;
 
 #[cfg(target_arch = "x86_64")]
 const SECCOMP_ARCH: Option<TargetArch> = Some(TargetArch::x86_64);
@@ -74,6 +85,9 @@ pub(super) fn prepare(roots: &[Root], network: bool) -> Prepared {
     let mut how = Vec::new();
     if ruleset.is_some() {
         how.push(match kernel_abi() {
+            Some(version) if version >= SIGNAL_SCOPE_ABI => {
+                format!("landlock ABI v{version} (signals scoped)")
+            }
             Some(version) => format!("landlock ABI v{version}"),
             None => "landlock".to_string(),
         });
@@ -142,6 +156,7 @@ impl Prepared {
 fn build_ruleset(roots: &[Root]) -> Result<OwnedFd, String> {
     let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(TARGET_ABI))
+        .and_then(|ruleset| ruleset.scope(Scope::Signal))
         .and_then(|ruleset| ruleset.create())
         .map_err(|error| format!("landlock ruleset: {error}"))?;
 
@@ -267,6 +282,7 @@ mod tests {
                 proxy: None,
                 enforcement: Enforcement::BestEffort,
                 limits: Default::default(),
+                env: Default::default(),
             },
             dir,
         )
@@ -347,6 +363,46 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Found in the image on 2026-11-04: one user's command could signal
+    /// `serve` (pid 1 there) and so anyone's. From ABI 6 it signals only its
+    /// own domain.
+    #[test]
+    fn a_child_signals_its_own_children_and_nobody_outside() {
+        let dir = scratch("signals");
+        if build_ruleset(&[]).is_err()
+            || kernel_abi().is_none_or(|abi| abi < SIGNAL_SCOPE_ABI)
+            || !std::path::Path::new("/bin/sh").exists()
+        {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let sandbox = sandbox_over(&dir, false);
+        // A process outside every sandbox, as `serve` is to a command.
+        let mut outside = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .unwrap();
+        assert_ne!(
+            run_under(&sandbox, &format!("kill -0 {}", outside.id())),
+            0,
+            "a held command signalled a process outside its domain",
+        );
+        assert_eq!(
+            run_under(&sandbox, "sleep 30 & kill $! && wait $!; test $? -gt 128"),
+            0,
+            "its own child is still its to stop",
+        );
+        assert!(
+            prepare(&[], false)
+                .how
+                .is_some_and(|how| how.contains("signals scoped")),
+            "the verdict says it held",
+        );
+        let _ = outside.kill();
+        let _ = outside.wait();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

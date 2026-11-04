@@ -249,6 +249,8 @@ impl Plan {
             // it has words for. Whether it should is in
             // `RECORD/2026-09-01.what-the-audit-left.completed.md`.
             limits: session.limits(),
+            // The session's too: a plan has no words for where scratch goes.
+            env: session.env_as_written().clone(),
         };
         for file in &self.files {
             let path = std::path::Path::new(file);

@@ -557,7 +557,7 @@ pub enum Exposure {
     Private,
     /// Users, each logged in with a code: `auth.db` in the state directory,
     /// and `luu user` to add them. Needs `origin`. See
-    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
     Public,
 }
 

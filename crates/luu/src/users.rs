@@ -6,7 +6,7 @@
 //! because with admins adding people from the page the list is written while
 //! the server runs, and the person's own `config.toml` is the wrong file for
 //! that. See `RECORD/2026-11-03.users-and-a-code-by-email.WIP.md` and, for
-//! this file, `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+//! this file, `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
 //!
 //! **Nothing secret is stored as itself.** A code is kept as the `sha256` of
 //! the email and the code, and a login as the `sha256` of the cookie's value:

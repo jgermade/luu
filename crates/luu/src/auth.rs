@@ -28,7 +28,7 @@ pub enum Auth {
     /// Users, each with a login: `exposure = "public"`. No bearer token is
     /// accepted, in a header or in a URL — a login is a cookie, checked by
     /// `serve`'s own middleware against `auth.db`. See
-    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md`.
+    /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
     Users,
 }
 

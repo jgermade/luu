@@ -217,6 +217,16 @@ pub struct SandboxPolicy {
     /// would be holding the agent.
     #[serde(default)]
     pub limits: Limits,
+    /// What a subprocess's environment says, over what it inherits: where its
+    /// scratch and its tools' homes go. A value that is `.` or starts with
+    /// `./` is a path under the session's folder, resolved there; anything
+    /// else is passed as written. The deployment's to say, as the grants are:
+    /// the image's policy sends `TMPDIR` and `CARGO_HOME` to the session's own
+    /// `.tmp`, so neither a compiler's temporary files nor cargo's home are a
+    /// path two users share. See
+    /// `RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for SandboxPolicy {
@@ -232,6 +242,7 @@ impl Default for SandboxPolicy {
             proxy: None,
             enforcement: Enforcement::default(),
             limits: Limits::default(),
+            env: Default::default(),
         }
     }
 }

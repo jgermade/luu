@@ -6,7 +6,7 @@
 # `.` and not `/work`: a relative path is the session's folder, so a session
 # reaches its own tree and not its siblings — and on a server with users
 # (`exposure = "public"`) a grant that holds every user's folder is refused.
-# See RECORD/2026-11-03.a-user-a-code-and-a-folder.WIP.md.
+# See RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md.
 #
 # Mount another file at /etc/luu/luu.toml to change it — a deployment's policy
 # is the deployment's, not the image's.
@@ -33,8 +33,13 @@ access = "execute"
 path = "/usr/local/rustup"
 access = "execute"
 
-# Shared by every session, and on a server with users by every user: `serve`
-# says so when it starts. A cargo home per user is still open.
-[[sandbox.paths]]
-path = "/state/cargo"
-access = "read-write"
+# Where a command's scratch and cargo's home go: the session's own `.tmp`,
+# inside `.`, so they are the session's and nobody else's. Without `TMPDIR`
+# a compiler finds `/tmp` refused and no `cargo build` links; and the image's
+# `CARGO_HOME=/state/cargo`, granted here until 2026-11-04, was one folder every
+# user's commands could write and run from — one user's `config.toml` there
+# ran inside another's `cargo run`. See
+# RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md.
+[sandbox.env]
+TMPDIR = "./.tmp"
+CARGO_HOME = "./.tmp/cargo"
