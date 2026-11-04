@@ -69,6 +69,22 @@ worker:
   runtimeClassName: ""
   resources: {}
 
+# Links from other luus, over SSH by key: a luu at home dials this one, and
+# this page opens it (Settings → Remote access). `luu config server` sets
+# [server] ssh to 0.0.0.0:2222. An Ingress carries HTTP only, so the port goes
+# out through a Service of its own. When what a luu dials is not the origin's
+# host and this port (a NodePort, another port in front), say it with
+# `luu config server --ssh-public host:port`. See
+# RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md.
+links:
+  enabled: true
+  port: 2222
+  service:
+    type: LoadBalancer
+    # With type NodePort, the node's port; empty lets Kubernetes choose.
+    nodePort: ""
+    annotations: {}
+
 # The SMTP password, from a Secret you manage, mounted at
 # /run/secrets/luu/smtp-password. luu reads it there on every send, so a rotated
 # Secret is the next email's; `luu config` is told where it is (NOTES.txt says

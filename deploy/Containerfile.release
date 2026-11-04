@@ -60,6 +60,7 @@ ENV LUU_HOME=/state \
 VOLUME ["/state", "/work"]
 WORKDIR /work
 USER luu
-EXPOSE 7878
+# 2222: links from other luus, over SSH by key (`[server] ssh`).
+EXPOSE 7878 2222
 
 ENTRYPOINT ["luu-entrypoint"]

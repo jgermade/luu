@@ -96,6 +96,10 @@ spec:
           ports:
             - name: http
               containerPort: 7878
+            {{- if .Values.links.enabled }}
+            - name: ssh
+              containerPort: {{ .Values.links.port }}
+            {{- end }}
           # The container is the sandbox: nothing it does not need.
           securityContext:
             allowPrivilegeEscalation: false

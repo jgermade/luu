@@ -89,6 +89,17 @@ jobs:
             grep -qF -- "$want" <<<"$mail" || { echo "::error::missing: $want"; exit 1; }
           done
           ! grep -qF 'smtp-password' <<<"$(helm template luu deploy/helm/luu)"
+      # Links over SSH: their own Service and container port, and none when
+      # turned off.
+      - run: |
+          set -euo pipefail
+          links=$(helm template luu deploy/helm/luu)
+          for want in 'name: luu-links' 'containerPort: 2222' 'type: LoadBalancer' 'targetPort: ssh'; do
+            grep -qF -- "$want" <<<"$links" || { echo "::error::missing: $want"; exit 1; }
+          done
+          node=$(helm template luu deploy/helm/luu --set links.service.type=NodePort --set links.service.nodePort=30222)
+          grep -qF 'nodePort: 30222' <<<"$node"
+          ! grep -qF 'luu-links' <<<"$(helm template luu deploy/helm/luu --set links.enabled=false)"
 
   # The four targets `pages/setup.sh` installs. Linux is built on the oldest
   # Ubuntu runner rather than the newest, because a binary needs the glibc it

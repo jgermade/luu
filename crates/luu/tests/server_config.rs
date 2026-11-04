@@ -278,6 +278,22 @@ async fn luu_config_server_puts_a_server_online_and_keeps_the_rest_of_the_file()
     assert!(written.contains("max-live = 2"), "{written}");
     // The bind it had is kept: a test server's `127.0.0.1:0`.
     assert!(written.contains("127.0.0.1:0"), "{written}");
+    // Links from other luus are on by default, on intergate's port; moved to
+    // an ephemeral one here, so no two tests and no sshd ever share it.
+    assert!(written.contains("ssh = \"0.0.0.0:2222\""), "{written}");
+    let moved = luu(&home)
+        .args([
+            "config",
+            "server",
+            "--origin",
+            "http://luu.test",
+            "--ssh",
+            "127.0.0.1:0",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(moved.status.success(), "{moved:?}");
 
     // The server it describes starts, with nobody yet: the page says so.
     let (mut child, address) = start(luu(&home)).expect("an online server starts");
@@ -288,6 +304,23 @@ async fn luu_config_server_puts_a_server_online_and_keeps_the_rest_of_the_file()
     let me: serde_json::Value = me.json().await.unwrap();
     assert_eq!(me["users"], true);
     assert_eq!(me["owner"], false);
+    // And where a luu dials to link here, with the key to pin.
+    let info: serde_json::Value = reqwest::get(format!("http://{address}/api/link.json"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        info["ssh"].as_str().unwrap().starts_with("luu.test:"),
+        "{info}"
+    );
+    assert!(
+        info["host_key"]
+            .as_str()
+            .unwrap()
+            .starts_with("ssh-ed25519 ")
+    );
     let _ = child.kill();
     let _ = child.wait();
 

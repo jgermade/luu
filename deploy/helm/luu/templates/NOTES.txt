@@ -17,6 +17,13 @@ is: after `luu config server`, prove the mail and the owner with
     --smtp-user <user> --smtp-password-ref file:/run/secrets/luu/smtp-password
 {{- end }}
 
+{{- if .Values.links.enabled }}
+
+A luu at home links to this one over SSH, by key, on the Service
+{{ include "luu.fullname" . }}-links (port {{ .Values.links.port }}): from its Settings → Remote access,
+or `luu link add <this origin> --name casa`. Then this page opens it.
+{{- end }}
+
 Or keep it to whoever holds the token:
 
 The token, written on the first start:

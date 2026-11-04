@@ -2994,6 +2994,67 @@ session. See
 [`RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`](RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md)
 and [`RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md`](RECORD/2026-10-27.a-project-is-a-host-and-a-folder.completed.md).
 
+### A luu linked by key, over SSH: the online page as a way into one at home
+
+**One SSH connection, opened by whichever side can dial**, which is the one
+behind NAT: the luu at home dials the online one, the way intergate's client
+dials intergate. `russh` (with `ring`, no OpenSSL) on both ends.
+
+```sh
+luu link add https://luu.example.com --name casa   # at home: pins its key
+luu user key add ana@example.com "$(luu link key)"  # online, or Account → Keys
+```
+
+- **Keys, like ssh.** Every luu has `<state>/id_ed25519`; a server that accepts
+  links has `ssh_host_ed25519_key`. Both are OpenSSH ed25519 keys made from
+  `/dev/urandom`, `0600`, with their mode checked. A server with users keeps
+  each user's public keys in `auth.db` (schema 3), and a key belongs to one
+  user. A suspended or removed user's key lets nothing in, and a sweep every
+  30 s closes a link whose key left its account.
+- **The server's key is pinned from its page, over HTTPS.**
+  `GET /api/link.json` says where to dial (`[server] ssh`, or `ssh-public`) and
+  the key to expect, so the trust is the certificate's on the address that was
+  typed. A handshake with any other key is refused.
+- **`[server] ssh`** is where links are accepted: `0.0.0.0:2222` by default
+  from `luu config server`, and read only on a server with users. Its own
+  port, because an Ingress or Caddy carries HTTP only. The chart gives it a
+  Service, and compose publishes it.
+- **The online side.** A key's `tcpip-forward` registers its user and its
+  name (the SSH user), and a newer link with the same pair replaces the older
+  at once. `/h/<name>/api/*` and `/h/<name>/ws*` go over one
+  `forwarded-tcpip` channel per request, HTTP/1.1 through `hyper`. They are
+  for that user only: anyone else gets the 404 a missing one gets.
+  `/api/hosts` lists a user's linked luus, and never `[host.*]`.
+- **The dialing side.** `[peer.<name>]` holds `url`, `ssh`, `host-key`,
+  `name`, `dial` and `may`. `luu serve` dials each peer:
+  - the wait starts at 1 s and doubles up to 30 s, and goes back to 1 s once
+    a connection has lasted a minute;
+  - a refusal is retried every 30 s, so a link follows by itself once its key
+    is added on the other side;
+  - a keepalive goes every 30 s.
+- **A channel is served by this luu's own router behind a peer gate, never as
+  loopback.** `may` is `sessions` (by default: every read, and a session's
+  writes), `terminal` and `settings`. Remote access, `[host.*]`, logins and
+  `/h/*` are never a peer's. Past the gate the request is made to look like
+  this machine's own page, so every check below it reads it as it already
+  knows how.
+- **Settings → Remote access.** On a luu with no users it holds the peers:
+  - add one by its page's address;
+  - see each one's state;
+  - switch `dial` and `may`;
+  - unlink;
+  - copy this luu's key.
+
+  It is written from this machine only. On a server with users it holds
+  your linked luus (*Open* goes to `/h/<name>/`) and your keys. A link to
+  `/?add-key=<key>&name=<name>` opens it with the key filled in, and the
+  first-run folder picker waits for the next visit.
+
+**What a link trusts:** the online server ends TLS for the browser and holds
+the connection, so it sees what crosses it. Providers across luus (row 67) and
+`[host.*]` replaced by peers (row 68) are not built. See
+[`RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md`](RECORD/2026-11-03.one-luu-to-another-over-ssh.WIP.md).
+
 ## Suggested work order
 
 1. `agent-core`: base types (`Task`, `Context`, `Tool`, `SandboxPolicy`) + inference backend (Ollama/llama.cpp). *Done.*

@@ -46,6 +46,9 @@ services:
       - state:/state
       - work:/work
     # secrets: [smtp-password]
+    # Links from other luus, over SSH by key: straight to luu, since Caddy
+    # proxies HTTP only. `luu config` sets [server] ssh to 0.0.0.0:2222.
+    ports: ["2222:2222"]
     # The container is the sandbox: nothing it does not need.
     read_only: true
     tmpfs: [/tmp]

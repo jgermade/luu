@@ -178,8 +178,8 @@ from 65.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 65 | **Keys and the link**: `russh` built without OpenSSL on the four targets, host and identity keys, a user's keys (`auth.db`, Settings → Account → Keys, `luu user key`), `luu link` with a pinned host key and intergate's reconnection, `[server] ssh` | nothing | *One connection, the way intergate makes one* |
-| 66 | **A local luu managed from an online one**: `/h/<name>/` for the linked user only, the peer identity and `may` (`sessions`, `terminal`, `settings`) on the local side, Remote access in the local page, Account → Keys in the online one, and a test that a peer never reaches Remote access, nor Settings or the host shell unless allowed | row 65 | *1. A local luu managed from an online luu* |
+| 65 | ~~**Keys and the link**: `russh` built without OpenSSL on the four targets, host and identity keys, a user's keys (`auth.db`, Settings → Account → Keys, `luu user key`), `luu link` with a pinned host key and intergate's reconnection, `[server] ssh`~~. *Built 2026-11-04*, with `luu link` in place of `luu key` (taken) and a refusal retried every 30 s. What is left is CI's macOS builds with `russh` | nothing | *One connection, the way intergate makes one* |
+| 66 | ~~**A local luu managed from an online one**: `/h/<name>/` for the linked user only, the peer identity and `may` (`sessions`, `terminal`, `settings`) on the local side, Remote access in the local page, Account → Keys in the online one, and a test that a peer never reaches Remote access, nor Settings or the host shell unless allowed~~. *Built 2026-11-04*: two real servers in `tests/links.rs`, and both pages in Chromium. What is left is a real cluster's LoadBalancer | row 65 | *1. A local luu managed from an online luu* |
 | 67 | **Providers across luus**: `/api/infer/<provider>/…`, `offer`, `via`, the backends' HTTP through the channel in-process, `remote` on a `via` default | row 65 | *2. Providers across luus* |
 | 68 | **`[host.*]` and its token replaced by `[peer.*]`**, and the CLI by key | rows 66–67 | *What `[host.*]` becomes* |
 

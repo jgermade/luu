@@ -837,6 +837,10 @@ enum ConfigStep {
         /// `0.0.0.0:2222`, as intergate's; `none` for no links.
         #[arg(long, value_name = "ADDR")]
         ssh: Option<String>,
+        /// What a linking luu dials, when it is not the origin's host and
+        /// `--ssh`'s port: a NodePort, another port in front. `none` clears it.
+        #[arg(long, value_name = "HOST:PORT")]
+        ssh_public: Option<String>,
     },
     /// Mail and the first owner: a code to their email under the mail
     /// settings, typed back here. Nothing is saved until it is.
@@ -1247,9 +1251,12 @@ async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>
         None => dir.join("auth.db"),
     };
     match step {
-        Some(ConfigStep::Server { origin, bind, ssh }) => {
-            config_server(origin.clone(), *bind, ssh.clone())
-        }
+        Some(ConfigStep::Server {
+            origin,
+            bind,
+            ssh,
+            ssh_public,
+        }) => config_server(origin.clone(), *bind, ssh.clone(), ssh_public.clone()),
         Some(ConfigStep::Owner { email, smtp }) => {
             let (dir, _, _) = config_here()?;
             config_owner(email.clone(), smtp, &users_at(&dir)).await
@@ -1281,7 +1288,7 @@ async fn run_config(step: Option<&ConfigStep>, auth_db: Option<&std::path::Path>
             Ok(())
         }
         None => {
-            config_server(None, None, None)?;
+            config_server(None, None, None, None)?;
             let (dir, _, _) = config_here()?;
             let users = crate::users::Users::open(&users_at(&dir))?;
             if users.has_owner()? {
@@ -1392,6 +1399,7 @@ fn config_server(
     origin: Option<String>,
     bind: Option<std::net::SocketAddr>,
     ssh: Option<String>,
+    ssh_public: Option<String>,
 ) -> Result<()> {
     let (_, path, config) = config_here()?;
     let server = config.server();
@@ -1431,7 +1439,11 @@ fn config_server(
             token_file: None,
             origin: Some(origin.clone()),
             ssh: ssh.clone(),
-            ssh_public: server.ssh_public.clone(),
+            ssh_public: match ssh_public.as_deref().map(str::trim) {
+                Some("none") | Some("") => None,
+                Some(public) => Some(public.to_string()),
+                None => server.ssh_public.clone(),
+            },
         })
         .write(&path)?;
     println!(

@@ -348,6 +348,76 @@ async fn the_online_page_reaches_a_luu_at_home_by_key_and_nobody_else_does() {
         assert_eq!(hello["type"], "hello");
     }
 
+    // What a peer may do is changed at home, from home's own page: with
+    // `settings` it may write Settings; the link restarts by itself.
+    let peers: Value = reqwest::get(format!("http://{}/api/peers", local.address))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut edited = peers["peers"].clone();
+    edited["online"]["may"] = serde_json::json!(["sessions", "settings"]);
+    let put = reqwest::Client::new()
+        .put(format!("http://{}/api/peers", local.address))
+        .json(&serde_json::json!({ "peers": edited }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put.status(), 200, "{:?}", put.text().await);
+    let mut allowed = false;
+    for _ in 0..100 {
+        let write = reqwest::Client::new()
+            .put(format!("http://{address}/h/casa/api/tool-steps"))
+            .header("Cookie", &ana)
+            .header("Origin", ORIGIN)
+            .json(&serde_json::json!({ "steps": 12 }))
+            .send()
+            .await
+            .unwrap();
+        if write.status().is_success() {
+            allowed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(allowed, "a peer with `settings` still refused");
+    let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(written.contains("max-tool-steps = 12"), "{written}");
+    // Off, the link goes, and ana's page no longer lists it.
+    edited["online"]["dial"] = serde_json::json!(false);
+    let put = reqwest::Client::new()
+        .put(format!("http://{}/api/peers", local.address))
+        .json(&serde_json::json!({ "peers": edited }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(put.status(), 200);
+    let mut gone = false;
+    for _ in 0..100 {
+        let hosts: Value = get(&address, "/api/hosts", &ana)
+            .await
+            .json()
+            .await
+            .unwrap();
+        if hosts["hosts"].get("casa").is_none() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "turned off, the link is still listed");
+    assert_eq!(peer_state(&local.address, "online").await, "off");
+    // And on again, for what follows.
+    edited["online"]["dial"] = serde_json::json!(true);
+    reqwest::Client::new()
+        .put(format!("http://{}/api/peers", local.address))
+        .json(&serde_json::json!({ "peers": edited }))
+        .send()
+        .await
+        .unwrap();
+    assert!(linked(&address, &ana, "casa").await);
+
     // A luu whose key is on nobody's account is refused at the handshake.
     std::fs::write(
         stranger.join("config.toml"),
