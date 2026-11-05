@@ -10,6 +10,17 @@
 <link rel="stylesheet" href="./theme/default/tokens.css">
 <link rel="stylesheet" href="./theme/default/luu.css">
 <link rel="stylesheet" href="./app.css">
+<!-- Asked for beside the modules below rather than after them: the one
+     question the page asks before anything else, and the page its answer
+     picks unless this server has users and nobody is logged in. `whoAmI`'s
+     fetch and jq79's take these responses instead of asking again — the same
+     URL, `as="fetch"` and `crossorigin` being what a plain `fetch()` is. Two
+     round trips fewer before the first paint. On the login view `app.html`
+     goes unused, and Chrome warns that it was; the page reloads into the app
+     once logged in. See
+     RECORD/2026-11-05.what-the-first-load-waits-on.completed.md. -->
+<link rel="preload" href="./api/auth/me.json" as="fetch" crossorigin>
+<link rel="preload" href="./app.html" as="fetch" crossorigin>
 </head>
 <body>
 <main id="app"></main>

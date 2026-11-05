@@ -1947,11 +1947,11 @@ round trip per `await`. Its relative specifiers resolve against the page, so eve
 [`RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md`](RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md).
 **0.7.11 preloads**: before a component's scripts first run, every literal specifier their top
 level is sure to import is asked for at once — a component into jq79's cache, a module as a
-`modulepreload` — and each component that arrives is read the same way, down the tree. Every
-import in luu's components is at a top level, so the first load also brings Settings and what it
-imports (105 requests against `luu serve`, where 0.7.9 made 74). On loopback the logo paints
-~25 ms later; at 100 ms a request, ~30 ms sooner. 0.7.10's `$importAll` — `importAll` relative
-to the component's own file — is not used: luu's are already written in `@web/`. See
+`modulepreload` — and each component that arrives is read the same way, down the tree. So a
+top-level import is a promise to download that file's whole tree on every first load, drawn or
+not, and what the page draws only when asked is not imported there (below). 0.7.10's
+`$importAll` — `importAll` relative to the component's own file — is not used: luu's are already
+written in `@web/`. See
 [`RECORD/2026-11-05.jq79-0.7.11.completed.md`](RECORD/2026-11-05.jq79-0.7.11.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
@@ -1970,6 +1970,16 @@ The rest follows from that:
   keeps each component's text for the visit (`lib/components-once.js`, before jq79), since
   jq79 fetches a component every time a setup imports it. See
   [`RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`](RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md).
+- **The first load is what the first paint draws.** A setup's top-level imports are the
+  components it draws on arrival; a dialog, the folder picker, the terminal panel, the model
+  menu's list and a diff's hunks are asked for with `later()` (`lib/later.js`) inside a `$:` the
+  first time they open, and their tag draws nothing until they land. Once `app.html` has
+  painted and the browser is idle it asks for those files anyway, so a first open waits on the
+  dialog's imports and not on the dialog. `index.html` preloads `api/auth/me.json` and
+  `app.html` beside jq79, rather than one after the other once jq79 has run. Against `luu serve`
+  the logo paints at 173 ms where it was 183 on loopback, and 576 where it was 856 at 100 ms a
+  request; Settings opens in the 104 ms it took on loopback, ~20 ms later with latency. See
+  [`RECORD/2026-11-05.what-the-first-load-waits-on.completed.md`](RECORD/2026-11-05.what-the-first-load-waits-on.completed.md).
 - **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
   keeps existing DOM when the transcript is appended to.
 - **Tool calls in the transcript**: an assistant reply is drawn as prose and tool calls, not as
