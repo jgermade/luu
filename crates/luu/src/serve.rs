@@ -2367,7 +2367,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             crate::log::requests,
         ));
     crate::log::Watchdog::start(app.inflight.clone());
-    warm_compressed();
+    warm_gzipped();
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -2439,15 +2439,16 @@ async fn asset_handler(
 /// theirs name more — a round trip each, because nothing in the browser
 /// knows a file's imports before the file arrives. This server has every
 /// file, so it reads the graph once ([`first_load`]) and sends the whole tree
-/// of the page this visitor will get as a `Link` header: `modulepreload` for
-/// a module, `preload` as a fetch for a component, which is what jq79's own
-/// `fetch` and `import()` then take instead of asking. Which page is the
+/// of the page this visitor will get: the components as a `Link` header
+/// (`preload` as a fetch), and the modules as `modulepreload` tags written
+/// into the page after its import map. jq79's own `fetch` and `import()` then
+/// take those instead of asking. Which page is the
 /// server's to say, the way `index.html` will decide it: the app where there
 /// are no users or this visitor is logged in, else the login, else the setup.
 ///
 /// Not stored by the browser (`no-store`, no `ETag`): the header depends on
 /// the visitor's cookie, and a 304 would answer with the one it had before.
-/// It is a few hundred bytes. See
+/// It is a few kilobytes, sent as written. See
 /// `RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md`.
 async fn serve_page(state: &AppRouterState, headers: &axum::http::HeaderMap) -> Response {
     let page = match &state.users {
@@ -2462,29 +2463,60 @@ async fn serve_page(state: &AppRouterState, headers: &axum::http::HeaderMap) -> 
             }
         }
     };
-    let mut answer = serve_asset("index.html", headers).await;
-    if answer.status() == StatusCode::NOT_MODIFIED {
-        // Asked with a tag it should never have been given.
-        answer = serve_asset("index.html", &axum::http::HeaderMap::new()).await;
-    }
-    let kept = answer.headers_mut();
-    kept.remove(header::ETAG);
+    let Some(index) = Ui::get("index.html") else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    let (link, body) =
+        page_naming_its_tree(&String::from_utf8_lossy(&index.data), &first_load(page));
+    let mut kept = axum::http::HeaderMap::new();
+    kept.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("text/html"),
+    );
     kept.insert(
         header::CACHE_CONTROL,
         header::HeaderValue::from_static("no-store"),
     );
-    let link = first_load(page)
-        .iter()
-        .map(|file| match file.ends_with(".js") {
-            true => format!("<./{file}>; rel=modulepreload"),
-            false => format!("<./{file}>; rel=preload; as=fetch; crossorigin"),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
     if let Ok(link) = header::HeaderValue::from_str(&link) {
         kept.insert(header::LINK, link);
     }
-    answer
+    (kept, body).into_response()
+}
+
+/// `index.html` and its `Link` header, naming `tree` — see [`serve_page`].
+fn page_naming_its_tree(index: &str, tree: &[String]) -> (String, String) {
+    // The components in the header, where the browser starts them before it
+    // has parsed a byte of the page: a component is a `fetch`, which resolves
+    // nothing.
+    let link = tree
+        .iter()
+        .filter(|file| !file.ends_with(".js"))
+        .map(|file| format!("<./{file}>; rel=preload; as=fetch; crossorigin"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // **The modules in the page, after its import map, never in the header.**
+    // A `modulepreload` fetches the module's own imports too, resolving each
+    // as it arrives, and `lib/*.js` import `@web/vendor/jq79.js`: started from
+    // a header, a module could arrive before the parser had reached the import
+    // map that says what `@web/` is, and its import failed — and stayed
+    // failed for the visit, with half the page drawn. One run of the live
+    // suite in two hit it; a page held back 500 ms after its headers hit it
+    // every time.
+    let tags = tree
+        .iter()
+        .filter(|file| file.ends_with(".js"))
+        .map(|file| format!("<link rel=\"modulepreload\" href=\"./{file}\">\n"))
+        .collect::<String>();
+    let body = match index.find("<script type=\"importmap\">").and_then(|at| {
+        index[at..]
+            .find("</script>")
+            .map(|end| at + end + "</script>".len())
+    }) {
+        Some(after) => format!("{}\n{tags}{}", &index[..after], &index[after..]),
+        // No import map, no module of the page can load at all: name none.
+        None => index.to_owned(),
+    };
+    (link, body)
 }
 
 /// What a page's first paint will ask for: the page and every file its tree
@@ -2666,11 +2698,12 @@ fn resolve_page_specifier(from: &str, spec: &str) -> Option<String> {
 /// every one of them whole. See
 /// `RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`.
 ///
-/// **Compressed where the browser takes it**: text, from 1 KB up, in brotli or
-/// else gzip (see [`Coding`]), each compressed once and kept for the life of
-/// the process (see [`compressed`]). A compressed copy is a representation of
-/// its own, so it has an `ETag` of its own (`"<sha256>-br"`, `"<sha256>-gz"`),
-/// and every compressible file says `Vary: Accept-Encoding`. Over loopback this changes nothing anyone can
+/// **Gzipped where the browser takes it**: text, from 1 KB up, compressed once
+/// and kept for the life of the process (see [`gzipped`]). The gzipped copy is
+/// a representation of its own, so it has an `ETag` of its own
+/// (`"<sha256>-gz"`), and every compressible file says `Vary: Accept-Encoding`.
+/// Not brotli: at a quality cheap enough to run at every start it is 5% under
+/// gzip, and a dependency more. Over loopback this changes nothing anyone can
 /// time; over a network the page's text is a third of what it was. See
 /// `RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md`.
 async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
@@ -2688,13 +2721,10 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
                 .collect::<String>();
             let mime = mime_guess::from_path(&file).first_or_octet_stream();
             let compressible = compressible(mime.as_ref(), found.data.len());
-            let coding = match compressible {
-                true => Coding::chosen(headers),
-                false => None,
-            };
-            let tag = match coding {
-                Some(coding) => format!("\"{hash}-{}\"", coding.suffix()),
-                None => format!("\"{hash}\""),
+            let gzip = compressible && accepts_gzip(headers);
+            let tag = match gzip {
+                true => format!("\"{hash}-gz\""),
+                false => format!("\"{hash}\""),
             };
             let unchanged = headers
                 .get(header::IF_NONE_MATCH)
@@ -2722,12 +2752,12 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
             if unchanged {
                 return (StatusCode::NOT_MODIFIED, kept).into_response();
             }
-            if let Some(coding) = coding {
+            if gzip {
                 kept.insert(
                     header::CONTENT_ENCODING,
-                    header::HeaderValue::from_static(coding.name()),
+                    header::HeaderValue::from_static("gzip"),
                 );
-                let body = compressed(coding, hash, found.data).await;
+                let body = gzipped(hash, found.data).await;
                 return (
                     [(header::CONTENT_TYPE, mime.as_ref().to_string())],
                     kept,
@@ -2760,132 +2790,72 @@ fn compressible(mime: &str, len: usize) -> bool {
             || mime == "image/svg+xml")
 }
 
-/// How a page file is compressed for a browser that takes it. Brotli first:
-/// smaller than gzip on this page's text (see [`Coding::compress`]), and every browser that
-/// reaches luu over HTTPS or on this machine sends `br`. Gzip for the rest:
-/// over plain HTTP to another machine, Chrome leaves `br` out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Coding {
-    Brotli,
-    Gzip,
+/// Whether the request says it takes gzip: `gzip` (or `*`) in
+/// `Accept-Encoding`, without `q=0`.
+fn accepts_gzip(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|one| {
+            let mut parts = one.split(';').map(str::trim);
+            let coding = parts.next().unwrap_or("");
+            let refused = parts.any(|param| {
+                param
+                    .strip_prefix("q=")
+                    .and_then(|q| q.parse::<f32>().ok())
+                    .is_some_and(|q| q == 0.0)
+            });
+            (coding.eq_ignore_ascii_case("gzip") || coding == "*") && !refused
+        })
 }
 
-impl Coding {
-    /// The best of the two the request takes, or `None`.
-    fn chosen(headers: &axum::http::HeaderMap) -> Option<Self> {
-        let takes = |wanted: &str| {
-            headers
-                .get_all(header::ACCEPT_ENCODING)
-                .iter()
-                .filter_map(|value| value.to_str().ok())
-                .flat_map(|value| value.split(','))
-                .any(|one| {
-                    let mut parts = one.split(';').map(str::trim);
-                    let coding = parts.next().unwrap_or("");
-                    let refused = parts.any(|param| {
-                        param
-                            .strip_prefix("q=")
-                            .and_then(|q| q.parse::<f32>().ok())
-                            .is_some_and(|q| q == 0.0)
-                    });
-                    (coding.eq_ignore_ascii_case(wanted) || coding == "*") && !refused
-                })
-        };
-        if takes("br") {
-            Some(Coding::Brotli)
-        } else if takes("gzip") {
-            Some(Coding::Gzip)
-        } else {
-            None
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Coding::Brotli => "br",
-            Coding::Gzip => "gzip",
-        }
-    }
-
-    /// What the `ETag` of this copy ends in, after the content's sha256.
-    fn suffix(self) -> &'static str {
-        match self {
-            Coding::Brotli => "br",
-            Coding::Gzip => "gz",
-        }
-    }
-
-    fn compress(self, data: &[u8]) -> Vec<u8> {
-        use std::io::Write as _;
-        match self {
-            Coding::Brotli => {
-                let mut out = Vec::with_capacity(data.len() / 3);
-                // Quality 5, not 11: over this page's text 11 is 10% smaller
-                // and takes 1.5 s of CPU where 5 takes 70 ms — every time a
-                // server starts, which is every test of the live suite. 5 is
-                // already 5% under gzip at its best.
-                let params = brotli::enc::BrotliEncoderParams {
-                    quality: 5,
-                    lgwin: 22,
-                    ..Default::default()
-                };
-                brotli::BrotliCompress(&mut &data[..], &mut out, &params)
-                    .expect("compressing into a Vec");
-                out
-            }
-            Coding::Gzip => {
-                let mut encoder = flate2::write::GzEncoder::new(
-                    Vec::with_capacity(data.len() / 3),
-                    flate2::Compression::best(),
-                );
-                encoder.write_all(data).expect("writing to a Vec");
-                encoder.finish().expect("finishing into a Vec")
-            }
-        }
-    }
-}
-
-/// A page file compressed, once per content and coding: keyed by its sha256,
+/// A page file gzipped, once per content: keyed by its sha256,
 /// so a debug build, which reads `web/` from disk, never answers with an old
 /// copy of a file that was edited. The page is a few hundred files, so the map
 /// is bounded by the page itself.
 ///
 /// Each entry is a cell the first asker fills and every other waits on, so a
 /// first load that asks for one file on six connections compresses it once.
-/// It runs on a blocking thread, and [`warm_compressed`] does the page's files
+/// It runs on a blocking thread, and [`warm_gzipped`] does the page's files
 /// once when `serve` starts.
-async fn compressed(
-    coding: Coding,
-    hash: String,
-    data: std::borrow::Cow<'static, [u8]>,
-) -> axum::body::Bytes {
+async fn gzipped(hash: String, data: std::borrow::Cow<'static, [u8]>) -> axum::body::Bytes {
     type Cell = Arc<std::sync::OnceLock<axum::body::Bytes>>;
-    type Kept = std::sync::Mutex<std::collections::HashMap<(String, Coding), Cell>>;
+    type Kept = std::sync::Mutex<std::collections::HashMap<String, Cell>>;
     static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
     let cell = KEPT
         .get_or_init(Default::default)
         .lock()
         .expect("the compression cache")
-        .entry((hash, coding))
+        .entry(hash)
         .or_default()
         .clone();
     if let Some(done) = cell.get() {
         return done.clone();
     }
     tokio::task::spawn_blocking(move || {
-        cell.get_or_init(|| axum::body::Bytes::from(coding.compress(&data)))
-            .clone()
+        cell.get_or_init(|| {
+            use std::io::Write as _;
+            let mut encoder = flate2::write::GzEncoder::new(
+                Vec::with_capacity(data.len() / 3),
+                flate2::Compression::best(),
+            );
+            encoder.write_all(&data).expect("writing to a Vec");
+            axum::body::Bytes::from(encoder.finish().expect("finishing into a Vec"))
+        })
+        .clone()
     })
     .await
     .expect("compressing a page file")
 }
 
-/// Every compressible page file, compressed both ways, in the background of
+/// Every compressible page file, gzipped, in the background of
 /// `serve`'s start: the first browser then waits on none of it. All at once on
 /// the blocking pool, the largest first — `app.html`, `jq79.js`, `store.js`,
 /// which are also the first load's. Not the source maps: only a debugger asks
 /// for one, and they are half a megabyte.
-fn warm_compressed() {
+fn warm_gzipped() {
     let mut files: Vec<_> = Ui::iter()
         .filter(|file| !file.ends_with(".map"))
         .filter_map(|file| {
@@ -2902,9 +2872,7 @@ fn warm_compressed() {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        for coding in [Coding::Brotli, Coding::Gzip] {
-            tokio::spawn(compressed(coding, hash.clone(), found.data.clone()));
-        }
+        tokio::spawn(gzipped(hash, found.data.clone()));
     }
 }
 
@@ -14437,12 +14405,11 @@ mod tests {
         assert!(waiting.is_empty(), "{waiting:?}");
     }
 
-    /// A browser that takes brotli gets the page's text in brotli, one that
-    /// takes only gzip gets gzip, each under a tag of its own that its next
-    /// ask is answered a 304 by; one that takes neither gets the bytes as
-    /// written, under the plain tag. The same file every way.
+    /// A browser that takes gzip gets the page's text gzipped, under a tag of
+    /// its own that its next ask is answered a 304 by; one that does not gets
+    /// the bytes as written, under the plain tag. The same file both ways.
     #[tokio::test]
-    async fn page_files_go_out_compressed_to_whoever_takes_it() {
+    async fn page_files_go_out_gzipped_to_whoever_takes_it() {
         use std::io::Read as _;
         let written = Ui::get("app.html").expect("app.html is embedded").data;
         let ask = |encoding: Option<&str>, tag: Option<&str>| {
@@ -14455,63 +14422,37 @@ mod tests {
             }
             headers
         };
-        let unpack = |coding: &str, body: &[u8]| {
-            let mut out = Vec::new();
-            match coding {
-                "br" => {
-                    brotli::BrotliDecompress(&mut &body[..], &mut out).unwrap();
-                }
-                _ => {
-                    flate2::read::GzDecoder::new(body)
-                        .read_to_end(&mut out)
-                        .unwrap();
-                }
-            }
-            out
-        };
 
-        let mut tags = Vec::new();
-        for (accepts, coding, suffix) in [
-            ("gzip, deflate, br, zstd", "br", "-br\""),
-            ("gzip, deflate", "gzip", "-gz\""),
-            ("gzip;q=0, br", "br", "-br\""),
-        ] {
-            let packed = serve_asset("app.html", &ask(Some(accepts), None)).await;
-            assert_eq!(packed.status(), StatusCode::OK);
-            assert_eq!(
-                packed.headers()[header::CONTENT_ENCODING],
-                coding,
-                "{accepts}"
-            );
-            assert_eq!(packed.headers()[header::VARY], "accept-encoding");
-            let tag = packed.headers()[header::ETAG].to_str().unwrap().to_owned();
-            assert!(tag.ends_with(suffix), "{tag}");
-            let body = axum::body::to_bytes(packed.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            assert!(
-                body.len() * 2 < written.len(),
-                "{} of {}",
-                body.len(),
-                written.len()
-            );
-            assert_eq!(unpack(coding, &body), written.as_ref());
+        let zipped = serve_asset("app.html", &ask(Some("gzip, deflate, br, zstd"), None)).await;
+        assert_eq!(zipped.status(), StatusCode::OK);
+        assert_eq!(zipped.headers()[header::CONTENT_ENCODING], "gzip");
+        assert_eq!(zipped.headers()[header::VARY], "accept-encoding");
+        let tag = zipped.headers()[header::ETAG].to_str().unwrap().to_owned();
+        assert!(tag.ends_with("-gz\""), "{tag}");
+        let body = axum::body::to_bytes(zipped.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            body.len() * 2 < written.len(),
+            "{} of {}",
+            body.len(),
+            written.len()
+        );
+        let mut unzipped = Vec::new();
+        flate2::read::GzDecoder::new(&body[..])
+            .read_to_end(&mut unzipped)
+            .unwrap();
+        assert_eq!(unzipped, written.as_ref());
 
-            let again = serve_asset("app.html", &ask(Some(accepts), Some(&tag))).await;
-            assert_eq!(again.status(), StatusCode::NOT_MODIFIED, "{accepts}");
-            tags.push(tag);
-        }
-        // The brotli copy is not the gzip one: a tag for one is no 304 for
-        // the other.
-        let other = serve_asset("app.html", &ask(Some("br"), Some(&tags[1]))).await;
-        assert_eq!(other.status(), StatusCode::OK);
+        let again = serve_asset("app.html", &ask(Some("gzip"), Some(&tag))).await;
+        assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
 
-        for refused in [None, Some("identity"), Some("gzip;q=0, br;q=0")] {
-            let plain = serve_asset("app.html", &ask(refused, Some(&tags[0]))).await;
+        for refused in [None, Some("identity"), Some("br"), Some("gzip;q=0, br")] {
+            let plain = serve_asset("app.html", &ask(refused, Some(&tag))).await;
             assert_eq!(plain.status(), StatusCode::OK, "{refused:?}");
             assert!(plain.headers().get(header::CONTENT_ENCODING).is_none());
-            let tag = plain.headers()[header::ETAG].to_str().unwrap().to_owned();
-            assert!(!tag.ends_with("-br\"") && !tag.ends_with("-gz\""), "{tag}");
+            let plain_tag = plain.headers()[header::ETAG].to_str().unwrap().to_owned();
+            assert!(!plain_tag.ends_with("-gz\""), "{plain_tag}");
             let body = axum::body::to_bytes(plain.into_body(), usize::MAX)
                 .await
                 .unwrap();
@@ -14583,9 +14524,34 @@ mod tests {
         assert_eq!(resolve_page_specifier("app.html", "../../etc/passwd"), None);
     }
 
+    /// The components go in the header and the modules in the page, after
+    /// its import map: a module started from a header can arrive before the
+    /// map that resolves its `@web/` imports, and fail for the visit.
+    #[test]
+    fn modules_are_named_after_the_import_map_and_never_in_the_header() {
+        let index = String::from_utf8_lossy(&Ui::get("index.html").unwrap().data).into_owned();
+        let (link, body) = page_naming_its_tree(&index, &first_load("app.html"));
+        assert!(
+            link.contains("<./app.html>; rel=preload; as=fetch; crossorigin"),
+            "{link}"
+        );
+        assert!(!link.contains(".js>"), "{link}");
+        let map = body
+            .find("<script type=\"importmap\">")
+            .expect("the import map");
+        let store = body
+            .find("<link rel=\"modulepreload\" href=\"./lib/store.js\">")
+            .expect("store.js named in the page");
+        assert!(map < store);
+        assert!(!body.contains("modulepreload\" href=\"./views/settings/"));
+        // A page with no import map names no module at all.
+        let (_, bare) = page_naming_its_tree("<html><body></body></html>", &first_load("app.html"));
+        assert!(!bare.contains("modulepreload"));
+    }
+
     /// Small files and pictures go out as they are, whatever the browser takes.
     #[test]
-    fn only_text_worth_the_header_is_compressed() {
+    fn only_text_worth_the_header_is_gzipped() {
         assert!(compressible("text/html", 4096));
         assert!(compressible("application/javascript", 4096));
         assert!(compressible("image/svg+xml", 4096));

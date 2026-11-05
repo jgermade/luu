@@ -14,9 +14,11 @@
      question the page asks before anything else. `whoAmI`'s fetch takes this
      response instead of asking again — the same URL, `as="fetch"` and
      `crossorigin` being what a plain `fetch()` is. The page its answer picks,
-     and that page's whole tree, `luu serve` names in a `Link` header on this
-     file, because it knows who is asking; a static copy of the page names
-     nothing. See RECORD/2026-11-05.what-the-first-load-waits-on.completed.md
+     and that page's whole tree, `luu serve` names as it serves this file,
+     because it knows who is asking: the components in a `Link` header, the
+     modules as `modulepreload` tags right after the import map below — never
+     before it, which would leave their `@web/` imports unresolved. A static
+     copy of the page names nothing. See RECORD/2026-11-05.what-the-first-load-waits-on.completed.md
      and RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md. -->
 <link rel="preload" href="./api/auth/me.json" as="fetch" crossorigin>
 </head>

@@ -1977,10 +1977,13 @@ The rest follows from that:
   until they land. Once the page (or Settings) has painted and the browser is idle it asks for
   those files anyway, so a first open waits on the dialog's imports and not on the dialog.
   `index.html` preloads `api/auth/me.json` beside jq79, and **`luu serve` names the rest of the
-  first load in a `Link` header on `index.html`**: it reads the import graph of the embedded files
-  once (the same top-level imports jq79 0.7.11 preloads, never a `later()`), and sends the whole
-  tree of the page this visitor gets — the app, or the login or setup where there are users and
-  no session — as `modulepreload`s and `preload`s jq79's own `import()` and `fetch` then take.
+  first load when it serves `index.html`**: it reads the import graph of the embedded files once
+  (the same top-level imports jq79 0.7.11 preloads, never a `later()`), and names the whole tree
+  of the page this visitor gets — the app, or the login or setup where there are users and no
+  session — for jq79's own `fetch` and `import()` to take: the components in a `Link` header,
+  the modules as `modulepreload` tags it writes into the page after the import map. **Never a
+  module in the header**: it can arrive before the import map that resolves its `@web/` imports,
+  and the failure is kept for the visit.
   Every file of the first paint is asked for in the first round trip, where it was three levels
   deep. It pays where the link multiplexes — HTTP/2 or 3, as behind Caddy: at 100 ms a round trip
   the logo paints at 381 ms where it was 576. Over `luu serve`'s own HTTP/1.1 Chrome queues the
@@ -1993,11 +1996,11 @@ The rest follows from that:
   `SettingsResend` and `SettingsAuthority` in `sessions.html`. A part that opens on a click (an
   engine's form, a provider's) keeps its file: jq79 starts its download when the parent renders,
   so a merge would only make the parent larger.
-- **Compressed where the browser takes it**: the page's text from 1 KB up, in brotli (quality 5)
-  or else gzip, compressed once per file content and coding — all of it in the background when
-  `serve` starts, which costs a few tenths of a second of CPU — and kept, under an `ETag` of its
-  own (`"<sha256>-br"`, `"<sha256>-gz"`) and `Vary: Accept-Encoding`. Brotli 11 would be 10%
-  smaller again and costs 1.5 s of CPU per start; see
+- **Gzipped where the browser takes it**: the page's text from 1 KB up, compressed once per file
+  content — all of it in the background when `serve` starts, a fifth of a second of CPU — and
+  kept, under an `ETag` of its own (`"<sha256>-gz"`) and `Vary: Accept-Encoding`. **Not brotli**:
+  at a quality cheap enough for every start (5) it is 3–5% under gzip, and a dependency more; at
+  11 it is 15% under and costs 1.5 s of CPU per start. See
   [`RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md`](RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md).
   A first load against `luu serve` is 306 KB where it was 946 (the page before 0.7.11); at 40 ms
   and 10 Mbit/s the logo paints at 589 ms where it was 940, and Settings opens in 75 ms where it
