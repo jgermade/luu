@@ -38,6 +38,8 @@ spec:
         runAsGroup: 10001
         runAsNonRoot: true
         fsGroup: 10001
+        # A recursive relabel would give auth.db g+rw, and luu refuses that.
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
