@@ -1925,7 +1925,7 @@ Server stack: `axum` + `tokio`.
 ### UI stack
 
 **[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.** Vendored at
-`web/vendor/jq79.js`, version 0.7.9, with its source map beside it, which binds attributes one
+`web/vendor/jq79.js`, version 0.7.11, with its source map beside it, which binds attributes one
 at a time (`:title="x"`); `:attrs` went in 0.7. See
 [`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
 **0.7.4 keeps a keyed `:each` row that is handed a new object**, re-running its bindings rather
@@ -1945,6 +1945,14 @@ setup script that imported more than one file asks for them that way: at once, r
 round trip per `await`. Its relative specifiers resolve against the page, so every entry is an
 `@web/` one. Until `#app` holds an element, `index.html` shows the logo drawing itself. See
 [`RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md`](RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md).
+**0.7.11 preloads**: before a component's scripts first run, every literal specifier their top
+level is sure to import is asked for at once — a component into jq79's cache, a module as a
+`modulepreload` — and each component that arrives is read the same way, down the tree. Every
+import in luu's components is at a top level, so the first load also brings Settings and what it
+imports (105 requests against `luu serve`, where 0.7.9 made 74). On loopback the logo paints
+~25 ms later; at 100 ms a request, ~30 ms sooner. 0.7.10's `$importAll` — `importAll` relative
+to the component's own file — is not used: luu's are already written in `@web/`. See
+[`RECORD/2026-11-05.jq79-0.7.11.completed.md`](RECORD/2026-11-05.jq79-0.7.11.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
 frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
