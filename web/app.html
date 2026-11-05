@@ -29,21 +29,12 @@
     InspectorFiles,
     InspectorGit,
     ContentViewer,
-    Project,
     { currentHost },
-    SettingsModal,
     ModelPicker,
-    SessionsDialog,
     ToolCall,
     ToolGroup,
-    ContextModal,
-    PermissionsDialog,
-    DiffModal,
     DiffStrip,
-    SnippetPreview,
-    TerminalPanel,
     TerminalFoot,
-    RuntimeDialog,
     Menu,
     { segments, runs },
     { keeper },
@@ -51,6 +42,7 @@
     { markdown },
     Scrollable,
     { snippet, snippetHtml, copySnippet, previewable, previewSnippet },
+    { later },
   ] = await C79.importAll([
     "@web/lib/store.js",
     "@web/lib/prefs.js",
@@ -68,21 +60,12 @@
     "@web/views/inspector/tree/tree.html",
     "@web/views/inspector/version-control/version-control.html",
     "@web/views/editor/editor.html",
-    "@web/views/inspector/tree/project.html",
     "@web/lib/hosts.js",
-    "@web/views/settings/settings.html",
     "@web/views/chat/model-picker.html",
-    "@web/views/chat/sessions-dialog.html",
     "@web/views/chat/tool-call.html",
     "@web/views/chat/tool-group.html",
-    "@web/views/chat/context-modal.html",
-    "@web/views/chat/permissions-dialog.html",
-    "@web/views/editor/diff-modal.html",
     "@web/views/editor/diff-strip.html",
-    "@web/views/chat/snippet-preview.html",
-    "@web/views/editor/terminal.html",
     "@web/views/editor/terminal-foot.html",
-    "@web/views/editor/runtime-dialog.html",
     "@web/theme/default/components/menu.html",
     "@web/helpers/segments.js",
     "@web/helpers/rows.js",
@@ -90,7 +73,44 @@
     "@web/helpers/markdown.js",
     "@web/theme/default/components/scrollable.html",
     "@web/lib/snippet.js",
+    "@web/lib/later.js",
   ])
+  // What the page draws only when a person asks for it — every dialog, the
+  // folder picker, the terminal panel — is asked for the first time it opens,
+  // not above: jq79 preloads whatever a top level imports, down the tree, so a
+  // dialog listed there came to every first load whole, opened or not. Until
+  // it lands its tag draws nothing. See `@web/lib/later.js` and
+  // `RECORD/2026-11-05.what-the-first-load-waits-on.completed.md`.
+  const LATER = {
+    project: "@web/views/inspector/tree/project.html",
+    settings: "@web/views/settings/settings.html",
+    sessions: "@web/views/chat/sessions-dialog.html",
+    context: "@web/views/chat/context-modal.html",
+    permissions: "@web/views/chat/permissions-dialog.html",
+    diff: "@web/views/editor/diff-modal.html",
+    preview: "@web/views/chat/snippet-preview.html",
+    terminal: "@web/views/editor/terminal.html",
+    runtime: "@web/views/editor/runtime-dialog.html",
+  }
+  let Project, SettingsModal, SessionsDialog, ContextModal, PermissionsDialog,
+    DiffModal, SnippetPreview, TerminalPanel, RuntimeDialog
+  $: if (workspace.picker.open) later(LATER.project).then(c => { Project = c })
+  $: if (state.settingsOpen) later(LATER.settings).then(c => { SettingsModal = c })
+  $: if (ui.sessions) later(LATER.sessions).then(c => { SessionsDialog = c })
+  $: if (ui.inspecting != null || ui.contextOpen) later(LATER.context).then(c => { ContextModal = c })
+  $: if (ui.permissions) later(LATER.permissions).then(c => { PermissionsDialog = c })
+  $: if (ui.diff) later(LATER.diff).then(c => { DiffModal = c })
+  $: if (snippet.preview !== null) later(LATER.preview).then(c => { SnippetPreview = c })
+  $: if (ui.terminal) later(LATER.terminal).then(c => { TerminalPanel = c })
+  $: if (terminal.choosing) later(LATER.runtime).then(c => { RuntimeDialog = c })
+  // And once the page has painted and the browser is idle, each of those
+  // files is asked for anyway, so a first open waits on what the dialog
+  // imports and not on the dialog itself. Not their imports in turn: jq79
+  // reads a file for preloads only when it renders.
+  $mounted().then(() => {
+    const idle = window.requestIdleCallback ?? (warm => setTimeout(warm, 200))
+    idle(() => Object.values(LATER).forEach(later), { timeout: 2000 })
+  })
   // A key another luu asked this account to add (`?add-key=`): Remote access
   // opens with it filled in, for the person to add or not. See
   // `@web/lib/remote.js`.

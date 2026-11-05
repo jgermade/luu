@@ -22,15 +22,20 @@
     { state, loadProviders, providerModels, newSession, resumeSession, offeredProviders },
     { ui, checkModel, openSettingsAt, switching: leavingFrom },
     { modelLabel },
-    ProviderModels,
+    { later },
   ] = await C79.importAll([
     "@web/lib/store.js",
     "@web/lib/ui.js",
     "@web/lib/engines.js",
-    "@web/views/chat/provider-models.html",
+    "@web/lib/later.js",
   ])
 
   let open = false
+  // The menu's two columns, asked for the first time it opens: the button is
+  // on every page, the menu only on a click. See `@web/lib/later.js`.
+  let ProviderModels
+  $: if (open) later("@web/views/chat/provider-models.html").then(c => { ProviderModels = c })
+
   // Where the menu goes: fixed, from the button's own box, because the chat
   // foot clips what overflows it and a menu that opens upward overflows it
   // by design.

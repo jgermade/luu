@@ -8,15 +8,19 @@
   // are the same 40px. This file draws what is inside the box. See
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const [{ workspace }, { prefs, monacoAvailable }, { paint, dispose, textOf }, { paintFile }, Hunks] = await C79.importAll([
+  const [{ workspace }, { prefs, monacoAvailable }, { paint, dispose, textOf }, { paintFile }, { later }] = await C79.importAll([
     "@web/lib/workspace.js",
     "@web/lib/prefs.js",
     "@web/views/editor/monaco.js",
     "@web/views/editor/rows.js",
-    "@web/views/editor/hunks.html",
+    "@web/lib/later.js",
   ])
 
   $: shown = workspace.content
+  // A diff's hunks, asked for the first time a diff is shown: a file is what
+  // the column holds far more often. See `@web/lib/later.js`.
+  let Hunks
+  $: if (shown?.kind === "diff") later("@web/views/editor/hunks.html").then(c => { Hunks = c })
   // `picked` rather than `selected`, and the name is load-bearing: a scope
   // variable called `selected` collides with the DOM property of that name,
   // and the render effect ends up writing what it reads. jq79 gives up after

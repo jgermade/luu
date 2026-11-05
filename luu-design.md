@@ -1840,7 +1840,7 @@ named after its folder, so a tab or a search result says which view it is. See
 
 **`@web/` is that folder, from anywhere in it.** An import that leaves its own folder is written
 `@web/lib/store.js`, never `../../../lib/store.js`; one that stays beside the file
-(`./context-view.html`, `./general/general.html`) stays relative. It is an import map in
+(`./general/general.html`) stays relative. It is an import map in
 `index.html`, so it is the browser's and not a build step's. See
 [`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
 
@@ -1925,7 +1925,7 @@ Server stack: `axum` + `tokio`.
 ### UI stack
 
 **[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.** Vendored at
-`web/vendor/jq79.js`, version 0.7.9, with its source map beside it, which binds attributes one
+`web/vendor/jq79.js`, version 0.7.11, with its source map beside it, which binds attributes one
 at a time (`:title="x"`); `:attrs` went in 0.7. See
 [`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
 **0.7.4 keeps a keyed `:each` row that is handed a new object**, re-running its bindings rather
@@ -1945,6 +1945,14 @@ setup script that imported more than one file asks for them that way: at once, r
 round trip per `await`. Its relative specifiers resolve against the page, so every entry is an
 `@web/` one. Until `#app` holds an element, `index.html` shows the logo drawing itself. See
 [`RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md`](RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md).
+**0.7.11 preloads**: before a component's scripts first run, every literal specifier their top
+level is sure to import is asked for at once — a component into jq79's cache, a module as a
+`modulepreload` — and each component that arrives is read the same way, down the tree. So a
+top-level import is a promise to download that file's whole tree on every first load, drawn or
+not, and what the page draws only when asked is not imported there (below). 0.7.10's
+`$importAll` — `importAll` relative to the component's own file — is not used: luu's are already
+written in `@web/`. See
+[`RECORD/2026-11-05.jq79-0.7.11.completed.md`](RECORD/2026-11-05.jq79-0.7.11.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
 frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
@@ -1962,6 +1970,42 @@ The rest follows from that:
   keeps each component's text for the visit (`lib/components-once.js`, before jq79), since
   jq79 fetches a component every time a setup imports it. See
   [`RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`](RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md).
+- **The first load is what the first paint draws.** A setup's top-level imports are the
+  components it draws on arrival; a dialog, the folder picker, the terminal panel, the model
+  menu's list, a diff's hunks and each section of Settings are asked for with `later()`
+  (`lib/later.js`) inside a `$:` the first time they are drawn, and their tag draws nothing
+  until they land. Once the page (or Settings) has painted and the browser is idle it asks for
+  those files anyway, so a first open waits on the dialog's imports and not on the dialog.
+  `index.html` preloads `api/auth/me.json` beside jq79, and **`luu serve` names the rest of the
+  first load when it serves `index.html`**: it reads the import graph of the embedded files once
+  (the same top-level imports jq79 0.7.11 preloads, never a `later()`), and names the whole tree
+  of the page this visitor gets — the app, or the login or setup where there are users and no
+  session — for jq79's own `fetch` and `import()` to take: the components in a `Link` header,
+  the modules as `modulepreload` tags it writes into the page after the import map. **Never a
+  module in the header**: it can arrive before the import map that resolves its `@web/` imports,
+  and the failure is kept for the visit.
+  Every file of the first paint is asked for in the first round trip, where it was three levels
+  deep. It pays where the link multiplexes — HTTP/2 or 3, as behind Caddy: at 100 ms a round trip
+  the logo paints at 381 ms where it was 576. Over `luu serve`'s own HTTP/1.1 Chrome queues the
+  requests on six connections and it comes out even. `index.html` is `no-store` for it, since the
+  header depends on the cookie. See
+  [`RECORD/2026-11-05.what-the-first-load-waits-on.completed.md`](RECORD/2026-11-05.what-the-first-load-waits-on.completed.md)
+  and [`RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md`](RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md).
+- **A part drawn only inside one component, and always with it, is declared in that file** with
+  `<template name="X">` rather than fetched after it: `ContextView` in `context-modal.html`,
+  `SettingsResend` and `SettingsAuthority` in `sessions.html`. A part that opens on a click (an
+  engine's form, a provider's) keeps its file: jq79 starts its download when the parent renders,
+  so a merge would only make the parent larger.
+- **Gzipped where the browser takes it**: the page's text from 1 KB up, compressed once per file
+  content — all of it in the background when `serve` starts, a fifth of a second of CPU — and
+  kept, under an `ETag` of its own (`"<sha256>-gz"`) and `Vary: Accept-Encoding`. **Not brotli**:
+  at a quality cheap enough for every start (5) it is 3–5% under gzip, and a dependency more; at
+  11 it is 15% under and costs 1.5 s of CPU per start. See
+  [`RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md`](RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md).
+  A first load against `luu serve` is 306 KB where it was 946 (the page before 0.7.11); at 40 ms
+  and 10 Mbit/s the logo paints at 589 ms where it was 940, and Settings opens in 75 ms where it
+  took 224. See
+  [`RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md`](RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md).
 - **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
   keeps existing DOM when the transcript is appended to.
 - **Tool calls in the transcript**: an assistant reply is drawn as prose and tool calls, not as
@@ -1998,7 +2042,7 @@ The rest follows from that:
   server counted, how the tools travelled, and, once the turn has ended, how it ended, what it
   wrote, its speed and its times; the copy; and the grouped context with the answer last, as
   the turn went. **The context is grouped by what each piece is**
-  (`context-view.html`): system, tools, map, summaries, history, code, prompt, in the legend's
+  (`ContextView`, declared in `context-modal.html`): system, tools, map, summaries, history, code, prompt, in the legend's
   order and colours, each a card under its bucket's count, with an earlier exchange keeping
   who said it. The boundaries are read back from what the renderer always writes (`# Tools`,
   `# Repository map`, a fold's `[job closed]`, a `// path` fragment, the question at the end),

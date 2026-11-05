@@ -15,39 +15,42 @@
     { closeSettings, state },
     { ui },
     Modal,
-    SessionsDialog,
-    Project,
     { workspace },
-    SettingsGeneral,
-    SettingsAppearance,
-    SettingsModels,
-    SettingsEngines,
-    SettingsRuntimes,
-    SettingsSessions,
-    SettingsPolicies,
-    SettingsRemote,
-    SettingsUsers,
     Rail,
     { account, managesPeople },
+    { later },
   ] = await C79.importAll([
     "@web/lib/store.js",
     "@web/lib/ui.js",
     "@web/components/modal.html",
-    "@web/views/chat/sessions-dialog.html",
-    "@web/views/inspector/tree/project.html",
     "@web/lib/workspace.js",
-    "@web/views/settings/general/general.html",
-    "@web/views/settings/appearance/appearance.html",
-    "@web/views/settings/models/models.html",
-    "@web/views/settings/engines/engines.html",
-    "@web/views/settings/runtimes/runtimes.html",
-    "@web/views/settings/sessions/sessions.html",
-    "@web/views/settings/policies/policies.html",
-    "@web/views/settings/remote/remote.html",
-    "@web/views/settings/users/users.html",
     "@web/components/rail.html",
     "@web/lib/account.js",
+    "@web/lib/later.js",
   ])
+
+  // **A section is asked for when it is mounted**, not with the dialog: one
+  // is drawn at a time, and with jq79 0.7.11 a top-level import brings its
+  // file's whole tree — nine sections, their forms and sheets, to draw one.
+  // The two sheets the same way, from the same files `app.html` names, so
+  // `later` hands both the one definition. Once the dialog has painted and
+  // the browser is idle, the other sections' files are asked for too, so a
+  // change of section waits on what it imports and not on itself. See
+  // `@web/lib/later.js` and
+  // `RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md`.
+  const FILES = {
+    general: "@web/views/settings/general/general.html",
+    appearance: "@web/views/settings/appearance/appearance.html",
+    engines: "@web/views/settings/engines/engines.html",
+    models: "@web/views/settings/models/models.html",
+    runtimes: "@web/views/settings/runtimes/runtimes.html",
+    sessions: "@web/views/settings/sessions/sessions.html",
+    policies: "@web/views/settings/policies/policies.html",
+    remote: "@web/views/settings/remote/remote.html",
+    users: "@web/views/settings/users/users.html",
+  }
+  let SettingsGeneral, SettingsAppearance, SettingsEngines, SettingsModels, SettingsRuntimes,
+    SettingsSessions, SettingsPolicies, SettingsRemote, SettingsUsers, SessionsDialog, Project
 
   const SECTIONS = [
     // Engines before Models: a provider can name an engine, so the thing it
@@ -121,6 +124,24 @@
     }
   })()
   $: switchTo(ui.section)
+
+  // Each section as it is mounted, and the rest once the dialog is idle —
+  // see `FILES` above.
+  $: if (mounted("general")) later(FILES.general).then(c => { SettingsGeneral = c })
+  $: if (mounted("appearance")) later(FILES.appearance).then(c => { SettingsAppearance = c })
+  $: if (mounted("engines")) later(FILES.engines).then(c => { SettingsEngines = c })
+  $: if (mounted("models")) later(FILES.models).then(c => { SettingsModels = c })
+  $: if (mounted("runtimes")) later(FILES.runtimes).then(c => { SettingsRuntimes = c })
+  $: if (mounted("sessions")) later(FILES.sessions).then(c => { SettingsSessions = c })
+  $: if (mounted("policies")) later(FILES.policies).then(c => { SettingsPolicies = c })
+  $: if (mounted("remote")) later(FILES.remote).then(c => { SettingsRemote = c })
+  $: if (mounted("users")) later(FILES.users).then(c => { SettingsUsers = c })
+  $: if (ui.sessions) later("@web/views/chat/sessions-dialog.html").then(c => { SessionsDialog = c })
+  $: if (workspace.picker.open) later("@web/views/inspector/tree/project.html").then(c => { Project = c })
+  $mounted().then(() => {
+    const idle = window.requestIdleCallback ?? (warm => setTimeout(warm, 200))
+    idle(() => SECTIONS.forEach(({ value }) => later(FILES[value])), { timeout: 2000 })
+  })
 </script>
 
 <Modal title="Settings" width="76rem" variant="folio" animation="folio" @close="closeSettings()">

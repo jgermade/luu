@@ -2335,9 +2335,11 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/setup/claim", post(post_setup_claim))
         .route(
             "/",
-            get(|headers: axum::http::HeaderMap| async move {
-                serve_asset("index.html", &headers).await
-            }),
+            get(
+                |State(state): State<AppRouterState>, headers: axum::http::HeaderMap| async move {
+                    serve_page(&state, &headers).await
+                },
+            ),
         )
         // Monaco, when this machine has it. Ungated for the same reason the
         // embedded UI is: it is a third-party editor, the same bytes in every
@@ -2365,6 +2367,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             crate::log::requests,
         ));
     crate::log::Watchdog::start(app.inflight.clone());
+    warm_gzipped();
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -2418,8 +2421,267 @@ struct AppRouterState {
     passkeys: Option<Arc<crate::passkeys::Passkeys>>,
 }
 
-async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
-    serve_asset(uri.path().trim_start_matches('/'), &headers).await
+async fn asset_handler(
+    State(state): State<AppRouterState>,
+    uri: Uri,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    match uri.path().trim_start_matches('/') {
+        "index.html" => serve_page(&state, &headers).await,
+        path => serve_asset(path, &headers).await,
+    }
+}
+
+/// `index.html`, with what its first paint will ask for named up front.
+///
+/// The page asks for its files a level at a time: `index.html` names
+/// `app.html`, `app.html`'s setup names its components and modules, and
+/// theirs name more — a round trip each, because nothing in the browser
+/// knows a file's imports before the file arrives. This server has every
+/// file, so it reads the graph once ([`first_load`]) and sends the whole tree
+/// of the page this visitor will get: the components as a `Link` header
+/// (`preload` as a fetch), and the modules as `modulepreload` tags written
+/// into the page after its import map. jq79's own `fetch` and `import()` then
+/// take those instead of asking. Which page is the
+/// server's to say, the way `index.html` will decide it: the app where there
+/// are no users or this visitor is logged in, else the login, else the setup.
+///
+/// Not stored by the browser (`no-store`, no `ETag`): the header depends on
+/// the visitor's cookie, and a 304 would answer with the one it had before.
+/// It is a few kilobytes, sent as written. See
+/// `RECORD/2026-11-05.brotli-and-a-page-that-names-its-tree.completed.md`.
+async fn serve_page(state: &AppRouterState, headers: &axum::http::HeaderMap) -> Response {
+    let page = match &state.users {
+        None => "app.html",
+        Some(users) => {
+            let user = cookie(headers, crate::users::COOKIE)
+                .and_then(|token| users.identify(&token).ok().flatten());
+            match user {
+                Some(_) => "app.html",
+                None if users.has_owner().unwrap_or(true) => "views/login/login.html",
+                None => "views/login/setup.html",
+            }
+        }
+    };
+    let Some(index) = Ui::get("index.html") else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    let (link, body) =
+        page_naming_its_tree(&String::from_utf8_lossy(&index.data), &first_load(page));
+    let mut kept = axum::http::HeaderMap::new();
+    kept.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("text/html"),
+    );
+    kept.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    if let Ok(link) = header::HeaderValue::from_str(&link) {
+        kept.insert(header::LINK, link);
+    }
+    (kept, body).into_response()
+}
+
+/// `index.html` and its `Link` header, naming `tree` — see [`serve_page`].
+fn page_naming_its_tree(index: &str, tree: &[String]) -> (String, String) {
+    // The components in the header, where the browser starts them before it
+    // has parsed a byte of the page: a component is a `fetch`, which resolves
+    // nothing.
+    let link = tree
+        .iter()
+        .filter(|file| !file.ends_with(".js"))
+        .map(|file| format!("<./{file}>; rel=preload; as=fetch; crossorigin"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // **The modules in the page, after its import map, never in the header.**
+    // A `modulepreload` fetches the module's own imports too, resolving each
+    // as it arrives, and `lib/*.js` import `@web/vendor/jq79.js`: started from
+    // a header, a module could arrive before the parser had reached the import
+    // map that says what `@web/` is, and its import failed — and stayed
+    // failed for the visit, with half the page drawn. One run of the live
+    // suite in two hit it; a page held back 500 ms after its headers hit it
+    // every time.
+    let tags = tree
+        .iter()
+        .filter(|file| file.ends_with(".js"))
+        .map(|file| format!("<link rel=\"modulepreload\" href=\"./{file}\">\n"))
+        .collect::<String>();
+    let body = match index.find("<script type=\"importmap\">").and_then(|at| {
+        index[at..]
+            .find("</script>")
+            .map(|end| at + end + "</script>".len())
+    }) {
+        Some(after) => format!("{}\n{tags}{}", &index[..after], &index[after..]),
+        // No import map, no module of the page can load at all: name none.
+        None => index.to_owned(),
+    };
+    (link, body)
+}
+
+/// What a page's first paint will ask for: the page and every file its tree
+/// imports at the top of a setup — `C79.importAll([...])`, `import("...")` in
+/// a component, a static `import` in a module — the same statements jq79
+/// 0.7.11 starts downloads for before a script runs, read the same way down
+/// the tree. A `later("...")` is none of them, so what the page draws only
+/// when asked stays out, as it stays out of jq79's preloads. Modules' dynamic
+/// `import()`s are lazy by intent (`./unzip.js`) and are not followed.
+///
+/// Read by a scanner that knows this page's conventions, not by a JavaScript
+/// parser: a literal specifier in an `importAll` array or an `import(`, and an
+/// `import` statement at the start of a line in a module. Kept for the life of
+/// a release build, whose files cannot change; read again on every ask in a
+/// debug build, which reads `web/` from disk.
+fn first_load(page: &str) -> Arc<Vec<String>> {
+    type Kept = std::sync::Mutex<std::collections::HashMap<String, Arc<Vec<String>>>>;
+    static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
+    let kept = KEPT.get_or_init(Default::default);
+    if !cfg!(debug_assertions)
+        && let Some(found) = kept.lock().expect("the first-load cache").get(page)
+    {
+        return found.clone();
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut order = Vec::new();
+    let mut queue = std::collections::VecDeque::from([page.to_owned()]);
+    while let Some(file) = queue.pop_front() {
+        if !seen.insert(file.clone()) {
+            continue;
+        }
+        let Some(found) = Ui::get(&file) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&found.data);
+        order.push(file.clone());
+        for spec in page_imports(&file, &text) {
+            if let Some(next) = resolve_page_specifier(&file, &spec) {
+                queue.push_back(next);
+            }
+        }
+    }
+    let order = Arc::new(order);
+    kept.lock()
+        .expect("the first-load cache")
+        .insert(page.to_owned(), order.clone());
+    order
+}
+
+/// The literal specifiers a page file imports up front — see [`first_load`].
+fn page_imports(file: &str, text: &str) -> Vec<String> {
+    let literal = |rest: &str| -> Option<String> {
+        let rest = rest.trim_start();
+        let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let body = &rest[1..];
+        let end = body.find(quote)?;
+        let spec = &body[..end];
+        (!spec.contains('\n')).then(|| spec.to_owned())
+    };
+    let mut found = Vec::new();
+    if file.ends_with(".js") {
+        for line in text.lines() {
+            let line = line.trim_start();
+            let Some(rest) = line.strip_prefix("import") else {
+                continue;
+            };
+            let rest = rest.trim_start();
+            if rest.starts_with('(')
+                || !(rest.starts_with(['{', '*', '"', '\''])
+                    || rest.starts_with(char::is_alphabetic))
+            {
+                continue;
+            }
+            // The statement's specifier: the first string after `import`,
+            // which may be lines below the braces it opens.
+            let at = line.as_ptr() as usize - text.as_ptr() as usize;
+            let tail = &text[at..];
+            if let Some(q) = tail.find(['"', '\''])
+                && let Some(spec) = literal(&tail[q..])
+            {
+                found.push(spec);
+            }
+        }
+        return found;
+    }
+    // A component: what its scripts ask for.
+    let mut rest = text;
+    while let Some(open) = rest.find("<script") {
+        let after = &rest[open..];
+        let Some(body_at) = after.find('>') else {
+            break;
+        };
+        let body = &after[body_at + 1..];
+        let end = body.find("</script>").unwrap_or(body.len());
+        let script = &body[..end];
+        let mut at = 0;
+        while let Some(i) = script[at..].find("import") {
+            let start = at + i;
+            at = start + "import".len();
+            let before = script[..start].chars().next_back();
+            if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+                continue;
+            }
+            let after = &script[at..];
+            if let Some(list) = after.strip_prefix("All(") {
+                let list = list.trim_start();
+                let Some(list) = list.strip_prefix('[') else {
+                    continue;
+                };
+                let close = list.find(']').unwrap_or(list.len());
+                let mut items = &list[..close];
+                while let Some(q) = items.find(['"', '\'']) {
+                    let Some(spec) = literal(&items[q..]) else {
+                        break;
+                    };
+                    items = &items[q + spec.len() + 2..];
+                    found.push(spec);
+                }
+            } else if let Some(call) = after.trim_start().strip_prefix('(') {
+                if let Some(spec) = literal(call) {
+                    found.push(spec);
+                }
+            } else if script[..start].trim_end().is_empty()
+                || script[..start].ends_with('\n')
+                || script[..start]
+                    .trim_end_matches([' ', '\t'])
+                    .ends_with('\n')
+            {
+                // A module script's static import, as in `index.html`.
+                if let Some(q) = after.find(['"', '\''])
+                    && let Some(spec) = literal(&after[q..])
+                {
+                    found.push(spec);
+                }
+            }
+        }
+        rest = &body[end..];
+    }
+    found
+}
+
+/// A specifier as the page resolves it, as a path among the embedded files:
+/// `@web/` is the page's folder, `./` and `../` are the importing file's. Any
+/// other bare specifier is not this page's to name.
+fn resolve_page_specifier(from: &str, spec: &str) -> Option<String> {
+    let joined = match spec.strip_prefix("@web/") {
+        Some(rest) => rest.to_owned(),
+        None if spec.starts_with("./") || spec.starts_with("../") => {
+            let dir = from.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+            format!("{dir}/{spec}")
+        }
+        None => return None,
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    let path = parts.join("/");
+    (path.ends_with(".html") || path.ends_with(".js")).then_some(path)
 }
 
 /// One embedded file, or a folder's `index.html`.
@@ -2435,6 +2697,15 @@ async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
 /// cache. They went out with neither until 2026-10-27, and a reload fetched
 /// every one of them whole. See
 /// `RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`.
+///
+/// **Gzipped where the browser takes it**: text, from 1 KB up, compressed once
+/// and kept for the life of the process (see [`gzipped`]). The gzipped copy is
+/// a representation of its own, so it has an `ETag` of its own
+/// (`"<sha256>-gz"`), and every compressible file says `Vary: Accept-Encoding`.
+/// Not brotli: at a quality cheap enough to run at every start it is 5% under
+/// gzip, and a dependency more. Over loopback this changes nothing anyone can
+/// time; over a network the page's text is a third of what it was. See
+/// `RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md`.
 async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
     let file = match path.is_empty() || path.ends_with('/') {
         true => format!("{path}index.html"),
@@ -2442,15 +2713,19 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
     };
     match Ui::get(&file) {
         Some(found) => {
-            let tag = format!(
-                "\"{}\"",
-                found
-                    .metadata
-                    .sha256_hash()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            );
+            let hash = found
+                .metadata
+                .sha256_hash()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            let compressible = compressible(mime.as_ref(), found.data.len());
+            let gzip = compressible && accepts_gzip(headers);
+            let tag = match gzip {
+                true => format!("\"{hash}-gz\""),
+                false => format!("\"{hash}\""),
+            };
             let unchanged = headers
                 .get(header::IF_NONE_MATCH)
                 .and_then(|value| value.to_str().ok())
@@ -2459,14 +2734,37 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
                         .split(',')
                         .any(|one| one.trim().trim_start_matches("W/") == tag)
                 });
-            let kept = [
-                (header::ETAG, tag),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
-            ];
+            let mut kept = axum::http::HeaderMap::new();
+            kept.insert(
+                header::ETAG,
+                tag.parse().expect("a hex tag is a header value"),
+            );
+            kept.insert(
+                header::CACHE_CONTROL,
+                header::HeaderValue::from_static("no-cache"),
+            );
+            if compressible {
+                kept.insert(
+                    header::VARY,
+                    header::HeaderValue::from_static("accept-encoding"),
+                );
+            }
             if unchanged {
                 return (StatusCode::NOT_MODIFIED, kept).into_response();
             }
-            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            if gzip {
+                kept.insert(
+                    header::CONTENT_ENCODING,
+                    header::HeaderValue::from_static("gzip"),
+                );
+                let body = gzipped(hash, found.data).await;
+                return (
+                    [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                    kept,
+                    body,
+                )
+                    .into_response();
+            }
             (
                 [(header::CONTENT_TYPE, mime.as_ref().to_string())],
                 kept,
@@ -2479,6 +2777,102 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
             axum::response::Redirect::permanent(&format!("{folder}/")).into_response()
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+/// Whether a page file is worth gzipping: text, and big enough that the
+/// header and the framing do not eat the saving.
+fn compressible(mime: &str, len: usize) -> bool {
+    len >= 1024
+        && (mime.starts_with("text/")
+            || mime == "application/javascript"
+            || mime == "application/json"
+            || mime == "image/svg+xml")
+}
+
+/// Whether the request says it takes gzip: `gzip` (or `*`) in
+/// `Accept-Encoding`, without `q=0`.
+fn accepts_gzip(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|one| {
+            let mut parts = one.split(';').map(str::trim);
+            let coding = parts.next().unwrap_or("");
+            let refused = parts.any(|param| {
+                param
+                    .strip_prefix("q=")
+                    .and_then(|q| q.parse::<f32>().ok())
+                    .is_some_and(|q| q == 0.0)
+            });
+            (coding.eq_ignore_ascii_case("gzip") || coding == "*") && !refused
+        })
+}
+
+/// A page file gzipped, once per content: keyed by its sha256,
+/// so a debug build, which reads `web/` from disk, never answers with an old
+/// copy of a file that was edited. The page is a few hundred files, so the map
+/// is bounded by the page itself.
+///
+/// Each entry is a cell the first asker fills and every other waits on, so a
+/// first load that asks for one file on six connections compresses it once.
+/// It runs on a blocking thread, and [`warm_gzipped`] does the page's files
+/// once when `serve` starts.
+async fn gzipped(hash: String, data: std::borrow::Cow<'static, [u8]>) -> axum::body::Bytes {
+    type Cell = Arc<std::sync::OnceLock<axum::body::Bytes>>;
+    type Kept = std::sync::Mutex<std::collections::HashMap<String, Cell>>;
+    static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
+    let cell = KEPT
+        .get_or_init(Default::default)
+        .lock()
+        .expect("the compression cache")
+        .entry(hash)
+        .or_default()
+        .clone();
+    if let Some(done) = cell.get() {
+        return done.clone();
+    }
+    tokio::task::spawn_blocking(move || {
+        cell.get_or_init(|| {
+            use std::io::Write as _;
+            let mut encoder = flate2::write::GzEncoder::new(
+                Vec::with_capacity(data.len() / 3),
+                flate2::Compression::best(),
+            );
+            encoder.write_all(&data).expect("writing to a Vec");
+            axum::body::Bytes::from(encoder.finish().expect("finishing into a Vec"))
+        })
+        .clone()
+    })
+    .await
+    .expect("compressing a page file")
+}
+
+/// Every compressible page file, gzipped, in the background of
+/// `serve`'s start: the first browser then waits on none of it. All at once on
+/// the blocking pool, the largest first — `app.html`, `jq79.js`, `store.js`,
+/// which are also the first load's. Not the source maps: only a debugger asks
+/// for one, and they are half a megabyte.
+fn warm_gzipped() {
+    let mut files: Vec<_> = Ui::iter()
+        .filter(|file| !file.ends_with(".map"))
+        .filter_map(|file| {
+            let found = Ui::get(&file)?;
+            let mime = mime_guess::from_path(file.as_ref()).first_or_octet_stream();
+            compressible(mime.as_ref(), found.data.len()).then_some(found)
+        })
+        .collect();
+    files.sort_by_key(|found| std::cmp::Reverse(found.data.len()));
+    for found in files {
+        let hash = found
+            .metadata
+            .sha256_hash()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        tokio::spawn(gzipped(hash, found.data.clone()));
     }
 }
 
@@ -14009,6 +14403,160 @@ mod tests {
         let (moved, waiting) = resend_live(asked(None, None, Some(Results::CitedReads)), off);
         assert_eq!(moved.results, Results::CitedReads);
         assert!(waiting.is_empty(), "{waiting:?}");
+    }
+
+    /// A browser that takes gzip gets the page's text gzipped, under a tag of
+    /// its own that its next ask is answered a 304 by; one that does not gets
+    /// the bytes as written, under the plain tag. The same file both ways.
+    #[tokio::test]
+    async fn page_files_go_out_gzipped_to_whoever_takes_it() {
+        use std::io::Read as _;
+        let written = Ui::get("app.html").expect("app.html is embedded").data;
+        let ask = |encoding: Option<&str>, tag: Option<&str>| {
+            let mut headers = axum::http::HeaderMap::new();
+            if let Some(encoding) = encoding {
+                headers.insert(header::ACCEPT_ENCODING, encoding.parse().unwrap());
+            }
+            if let Some(tag) = tag {
+                headers.insert(header::IF_NONE_MATCH, tag.parse().unwrap());
+            }
+            headers
+        };
+
+        let zipped = serve_asset("app.html", &ask(Some("gzip, deflate, br, zstd"), None)).await;
+        assert_eq!(zipped.status(), StatusCode::OK);
+        assert_eq!(zipped.headers()[header::CONTENT_ENCODING], "gzip");
+        assert_eq!(zipped.headers()[header::VARY], "accept-encoding");
+        let tag = zipped.headers()[header::ETAG].to_str().unwrap().to_owned();
+        assert!(tag.ends_with("-gz\""), "{tag}");
+        let body = axum::body::to_bytes(zipped.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            body.len() * 2 < written.len(),
+            "{} of {}",
+            body.len(),
+            written.len()
+        );
+        let mut unzipped = Vec::new();
+        flate2::read::GzDecoder::new(&body[..])
+            .read_to_end(&mut unzipped)
+            .unwrap();
+        assert_eq!(unzipped, written.as_ref());
+
+        let again = serve_asset("app.html", &ask(Some("gzip"), Some(&tag))).await;
+        assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+
+        for refused in [None, Some("identity"), Some("br"), Some("gzip;q=0, br")] {
+            let plain = serve_asset("app.html", &ask(refused, Some(&tag))).await;
+            assert_eq!(plain.status(), StatusCode::OK, "{refused:?}");
+            assert!(plain.headers().get(header::CONTENT_ENCODING).is_none());
+            let plain_tag = plain.headers()[header::ETAG].to_str().unwrap().to_owned();
+            assert!(!plain_tag.ends_with("-gz\""), "{plain_tag}");
+            let body = axum::body::to_bytes(plain.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(body, written.as_ref());
+        }
+    }
+
+    /// What the app's first paint asks for is named, down the tree — a module
+    /// a module imports, a component a component imports — and what the page
+    /// draws only when asked is not.
+    #[test]
+    fn the_first_load_is_the_tree_of_what_the_first_paint_draws() {
+        let tree = first_load("app.html");
+        for wanted in [
+            "app.html",
+            "lib/store.js",
+            "lib/ui.js",
+            "lib/places.js",
+            "vendor/jq79.js",
+            "views/inspector/tree/tree.html",
+            "theme/default/components/text-input.html",
+            "views/editor/editor.html",
+            "views/editor/rows.js",
+            "views/chat/model-picker.html",
+            "theme/default/components/scrollable.html",
+        ] {
+            assert!(
+                tree.iter().any(|file| file == wanted),
+                "{wanted} missing from {tree:?}"
+            );
+        }
+        for unwanted in [
+            "views/settings/settings.html",
+            "views/settings/general/general.html",
+            "views/chat/sessions-dialog.html",
+            "views/chat/context-modal.html",
+            "views/chat/provider-models.html",
+            "views/editor/hunks.html",
+            "views/inspector/tree/project.html",
+            "lib/unzip.js",
+            "index.html",
+        ] {
+            assert!(
+                !tree.iter().any(|file| file == unwanted),
+                "{unwanted} in {tree:?}"
+            );
+        }
+        let login = first_load("views/login/login.html");
+        assert!(login.iter().any(|file| file == "views/login/login.html"));
+        assert!(!login.iter().any(|file| file == "app.html"), "{login:?}");
+    }
+
+    #[test]
+    fn page_specifiers_resolve_as_the_page_does() {
+        let from = "theme/default/components/menu.html";
+        assert_eq!(
+            resolve_page_specifier(from, "./scrollable.html").as_deref(),
+            Some("theme/default/components/scrollable.html")
+        );
+        assert_eq!(
+            resolve_page_specifier("lib/ui.js", "../helpers/rows.js").as_deref(),
+            Some("helpers/rows.js")
+        );
+        assert_eq!(
+            resolve_page_specifier(from, "@web/lib/store.js").as_deref(),
+            Some("lib/store.js")
+        );
+        assert_eq!(resolve_page_specifier(from, "@theme/usage.js"), None);
+        assert_eq!(resolve_page_specifier("app.html", "../../etc/passwd"), None);
+    }
+
+    /// The components go in the header and the modules in the page, after
+    /// its import map: a module started from a header can arrive before the
+    /// map that resolves its `@web/` imports, and fail for the visit.
+    #[test]
+    fn modules_are_named_after_the_import_map_and_never_in_the_header() {
+        let index = String::from_utf8_lossy(&Ui::get("index.html").unwrap().data).into_owned();
+        let (link, body) = page_naming_its_tree(&index, &first_load("app.html"));
+        assert!(
+            link.contains("<./app.html>; rel=preload; as=fetch; crossorigin"),
+            "{link}"
+        );
+        assert!(!link.contains(".js>"), "{link}");
+        let map = body
+            .find("<script type=\"importmap\">")
+            .expect("the import map");
+        let store = body
+            .find("<link rel=\"modulepreload\" href=\"./lib/store.js\">")
+            .expect("store.js named in the page");
+        assert!(map < store);
+        assert!(!body.contains("modulepreload\" href=\"./views/settings/"));
+        // A page with no import map names no module at all.
+        let (_, bare) = page_naming_its_tree("<html><body></body></html>", &first_load("app.html"));
+        assert!(!bare.contains("modulepreload"));
+    }
+
+    /// Small files and pictures go out as they are, whatever the browser takes.
+    #[test]
+    fn only_text_worth_the_header_is_gzipped() {
+        assert!(compressible("text/html", 4096));
+        assert!(compressible("application/javascript", 4096));
+        assert!(compressible("image/svg+xml", 4096));
+        assert!(!compressible("text/html", 500));
+        assert!(!compressible("image/png", 1 << 20));
     }
 
     /// A directory that removes itself, so a failing test does not leave one
