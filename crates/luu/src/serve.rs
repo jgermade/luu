@@ -2435,6 +2435,14 @@ async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
 /// cache. They went out with neither until 2026-10-27, and a reload fetched
 /// every one of them whole. See
 /// `RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`.
+///
+/// **Gzipped where the browser takes it**: text, from 1 KB up, compressed the
+/// first time it is asked for and kept for the life of the process (see
+/// [`gzipped`]). The gzipped copy is a representation of its own, so it has an
+/// `ETag` of its own (`"<sha256>-gz"`), and every compressible file says
+/// `Vary: Accept-Encoding`. Over loopback this changes nothing anyone can
+/// time; over a network the page's text is a third of what it was. See
+/// `RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md`.
 async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
     let file = match path.is_empty() || path.ends_with('/') {
         true => format!("{path}index.html"),
@@ -2442,15 +2450,19 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
     };
     match Ui::get(&file) {
         Some(found) => {
-            let tag = format!(
-                "\"{}\"",
-                found
-                    .metadata
-                    .sha256_hash()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            );
+            let hash = found
+                .metadata
+                .sha256_hash()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            let compressible = compressible(mime.as_ref(), found.data.len());
+            let gzip = compressible && accepts_gzip(headers);
+            let tag = match gzip {
+                true => format!("\"{hash}-gz\""),
+                false => format!("\"{hash}\""),
+            };
             let unchanged = headers
                 .get(header::IF_NONE_MATCH)
                 .and_then(|value| value.to_str().ok())
@@ -2459,14 +2471,37 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
                         .split(',')
                         .any(|one| one.trim().trim_start_matches("W/") == tag)
                 });
-            let kept = [
-                (header::ETAG, tag),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
-            ];
+            let mut kept = axum::http::HeaderMap::new();
+            kept.insert(
+                header::ETAG,
+                tag.parse().expect("a hex tag is a header value"),
+            );
+            kept.insert(
+                header::CACHE_CONTROL,
+                header::HeaderValue::from_static("no-cache"),
+            );
+            if compressible {
+                kept.insert(
+                    header::VARY,
+                    header::HeaderValue::from_static("accept-encoding"),
+                );
+            }
             if unchanged {
                 return (StatusCode::NOT_MODIFIED, kept).into_response();
             }
-            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            if gzip {
+                kept.insert(
+                    header::CONTENT_ENCODING,
+                    header::HeaderValue::from_static("gzip"),
+                );
+                let body = gzipped(&hash, &found.data);
+                return (
+                    [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                    kept,
+                    body,
+                )
+                    .into_response();
+            }
             (
                 [(header::CONTENT_TYPE, mime.as_ref().to_string())],
                 kept,
@@ -2480,6 +2515,61 @@ async fn serve_asset(path: &str, headers: &axum::http::HeaderMap) -> Response {
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+/// Whether a page file is worth gzipping: text, and big enough that the
+/// header and the framing do not eat the saving.
+fn compressible(mime: &str, len: usize) -> bool {
+    len >= 1024
+        && (mime.starts_with("text/")
+            || mime == "application/javascript"
+            || mime == "application/json"
+            || mime == "image/svg+xml")
+}
+
+/// Whether the request says it takes gzip: `gzip` (or `*`) in
+/// `Accept-Encoding`, without `q=0`.
+fn accepts_gzip(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|one| {
+            let mut parts = one.split(';').map(str::trim);
+            let coding = parts.next().unwrap_or("");
+            let refused = parts.any(|param| {
+                param
+                    .strip_prefix("q=")
+                    .and_then(|q| q.parse::<f32>().ok())
+                    .is_some_and(|q| q == 0.0)
+            });
+            (coding.eq_ignore_ascii_case("gzip") || coding == "*") && !refused
+        })
+}
+
+/// A page file gzipped, once per content: keyed by its sha256, so a debug
+/// build, which reads `web/` from disk, never answers with an old copy of a
+/// file that was edited. The page is a few hundred files, so the map is
+/// bounded by the page itself.
+fn gzipped(hash: &str, data: &[u8]) -> axum::body::Bytes {
+    use std::io::Write as _;
+    type Kept = std::sync::Mutex<std::collections::HashMap<String, axum::body::Bytes>>;
+    static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
+    let kept = KEPT.get_or_init(Default::default);
+    if let Some(found) = kept.lock().expect("the gzip cache").get(hash) {
+        return found.clone();
+    }
+    let mut encoder = flate2::write::GzEncoder::new(
+        Vec::with_capacity(data.len() / 3),
+        flate2::Compression::best(),
+    );
+    encoder.write_all(data).expect("writing to a Vec");
+    let body = axum::body::Bytes::from(encoder.finish().expect("finishing into a Vec"));
+    kept.lock()
+        .expect("the gzip cache")
+        .insert(hash.to_owned(), body.clone());
+    body
 }
 
 /// Where Monaco lives when somebody installed it.
@@ -14009,6 +14099,75 @@ mod tests {
         let (moved, waiting) = resend_live(asked(None, None, Some(Results::CitedReads)), off);
         assert_eq!(moved.results, Results::CitedReads);
         assert!(waiting.is_empty(), "{waiting:?}");
+    }
+
+    /// A browser that takes gzip gets the page's text gzipped, under a tag of
+    /// its own that its next ask is answered a 304 by; one that does not gets
+    /// the bytes as written, under the plain tag. The same file both ways.
+    #[tokio::test]
+    async fn page_files_go_out_gzipped_to_whoever_takes_it() {
+        use std::io::Read as _;
+        let written = Ui::get("app.html").expect("app.html is embedded").data;
+        let ask = |encoding: Option<&str>, tag: Option<&str>| {
+            let mut headers = axum::http::HeaderMap::new();
+            if let Some(encoding) = encoding {
+                headers.insert(header::ACCEPT_ENCODING, encoding.parse().unwrap());
+            }
+            if let Some(tag) = tag {
+                headers.insert(header::IF_NONE_MATCH, tag.parse().unwrap());
+            }
+            headers
+        };
+
+        let zipped = serve_asset("app.html", &ask(Some("gzip, deflate, br"), None)).await;
+        assert_eq!(zipped.status(), StatusCode::OK);
+        assert_eq!(zipped.headers()[header::CONTENT_ENCODING], "gzip");
+        assert_eq!(zipped.headers()[header::VARY], "accept-encoding");
+        let tag = zipped.headers()[header::ETAG].to_str().unwrap().to_owned();
+        assert!(tag.ends_with("-gz\""), "{tag}");
+        let body = axum::body::to_bytes(zipped.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            body.len() * 2 < written.len(),
+            "{} of {}",
+            body.len(),
+            written.len()
+        );
+        let mut unzipped = Vec::new();
+        flate2::read::GzDecoder::new(&body[..])
+            .read_to_end(&mut unzipped)
+            .unwrap();
+        assert_eq!(unzipped, written.as_ref());
+
+        let again = serve_asset("app.html", &ask(Some("gzip"), Some(&tag))).await;
+        assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+
+        for refused in [None, Some("identity"), Some("gzip;q=0, br")] {
+            let plain = serve_asset("app.html", &ask(refused, Some(&tag))).await;
+            assert_eq!(plain.status(), StatusCode::OK, "{refused:?}");
+            assert!(plain.headers().get(header::CONTENT_ENCODING).is_none());
+            assert!(
+                !plain.headers()[header::ETAG]
+                    .to_str()
+                    .unwrap()
+                    .ends_with("-gz\"")
+            );
+            let body = axum::body::to_bytes(plain.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(body, written.as_ref());
+        }
+    }
+
+    /// Small files and pictures go out as they are, whatever the browser takes.
+    #[test]
+    fn only_text_worth_the_header_is_gzipped() {
+        assert!(compressible("text/html", 4096));
+        assert!(compressible("application/javascript", 4096));
+        assert!(compressible("image/svg+xml", 4096));
+        assert!(!compressible("text/html", 500));
+        assert!(!compressible("image/png", 1 << 20));
     }
 
     /// A directory that removes itself, so a failing test does not leave one

@@ -18,7 +18,8 @@
 /// One definition per file for the visit, so a dialog opened again is the
 /// same component rather than its text parsed a second time. A file that
 /// failed is asked for again the next time, not remembered.
-/// See `RECORD/2026-11-05.what-the-first-load-waits-on.completed.md`.
+/// See `RECORD/2026-11-05.what-the-first-load-waits-on.completed.md` and
+/// `RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md`.
 
 import { C79 } from "@web/vendor/jq79.js"
 

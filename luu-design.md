@@ -1840,7 +1840,7 @@ named after its folder, so a tab or a search result says which view it is. See
 
 **`@web/` is that folder, from anywhere in it.** An import that leaves its own folder is written
 `@web/lib/store.js`, never `../../../lib/store.js`; one that stays beside the file
-(`./context-view.html`, `./general/general.html`) stays relative. It is an import map in
+(`./general/general.html`) stays relative. It is an import map in
 `index.html`, so it is the browser's and not a build step's. See
 [`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
 
@@ -1972,14 +1972,24 @@ The rest follows from that:
   [`RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md`](RECORD/2026-10-27.the-page-asks-for-a-file-once.completed.md).
 - **The first load is what the first paint draws.** A setup's top-level imports are the
   components it draws on arrival; a dialog, the folder picker, the terminal panel, the model
-  menu's list and a diff's hunks are asked for with `later()` (`lib/later.js`) inside a `$:` the
-  first time they open, and their tag draws nothing until they land. Once `app.html` has
-  painted and the browser is idle it asks for those files anyway, so a first open waits on the
-  dialog's imports and not on the dialog. `index.html` preloads `api/auth/me.json` and
-  `app.html` beside jq79, rather than one after the other once jq79 has run. Against `luu serve`
-  the logo paints at 173 ms where it was 183 on loopback, and 576 where it was 856 at 100 ms a
-  request; Settings opens in the 104 ms it took on loopback, ~20 ms later with latency. See
+  menu's list, a diff's hunks and each section of Settings are asked for with `later()`
+  (`lib/later.js`) inside a `$:` the first time they are drawn, and their tag draws nothing
+  until they land. Once the page (or Settings) has painted and the browser is idle it asks for
+  those files anyway, so a first open waits on the dialog's imports and not on the dialog.
+  `index.html` preloads `api/auth/me.json` and `app.html` beside jq79, rather than one after the
+  other once jq79 has run. See
   [`RECORD/2026-11-05.what-the-first-load-waits-on.completed.md`](RECORD/2026-11-05.what-the-first-load-waits-on.completed.md).
+- **A part drawn only inside one component, and always with it, is declared in that file** with
+  `<template name="X">` rather than fetched after it: `ContextView` in `context-modal.html`,
+  `SettingsResend` and `SettingsAuthority` in `sessions.html`. A part that opens on a click (an
+  engine's form, a provider's) keeps its file: jq79 starts its download when the parent renders,
+  so a merge would only make the parent larger.
+- **Gzipped where the browser takes it**: the page's text from 1 KB up, compressed once per file
+  content and kept, under an `ETag` of its own (`"<sha256>-gz"`) and `Vary: Accept-Encoding`.
+  A first load against `luu serve` is 306 KB where it was 946 (the page before 0.7.11); at 40 ms
+  and 10 Mbit/s the logo paints at 589 ms where it was 940, and Settings opens in 75 ms where it
+  took 224. See
+  [`RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md`](RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md).
 - **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
   keeps existing DOM when the transcript is appended to.
 - **Tool calls in the transcript**: an assistant reply is drawn as prose and tool calls, not as
@@ -2016,7 +2026,7 @@ The rest follows from that:
   server counted, how the tools travelled, and, once the turn has ended, how it ended, what it
   wrote, its speed and its times; the copy; and the grouped context with the answer last, as
   the turn went. **The context is grouped by what each piece is**
-  (`context-view.html`): system, tools, map, summaries, history, code, prompt, in the legend's
+  (`ContextView`, declared in `context-modal.html`): system, tools, map, summaries, history, code, prompt, in the legend's
   order and colours, each a card under its bucket's count, with an earlier exchange keeping
   who said it. The boundaries are read back from what the renderer always writes (`# Tools`,
   `# Repository map`, a fold's `[job closed]`, a `// path` fragment, the question at the end),
