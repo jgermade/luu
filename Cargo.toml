@@ -57,6 +57,9 @@ mime_guess = "2"
 # 104 KB as written and 31 KB gzipped. The default backend, miniz_oxide, is
 # pure Rust. See RECORD/2026-11-05.settings-on-demand-and-compressed.completed.md.
 flate2 = "1"
+# And brotli, which every browser reaching luu over HTTPS takes first: a fifth
+# smaller again than gzip on the page's text. Pure Rust.
+brotli = "8"
 # `include-exclude` is what lets the UI folder keep a gitignored
 # `node_modules` — Monaco is a node dependency of it, served from disk rather
 # than baked into a release binary. See `serve::Ui`.

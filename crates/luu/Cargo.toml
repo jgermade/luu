@@ -32,6 +32,7 @@ tree-sitter-typescript.workspace = true
 tree-sitter-yaml.workspace = true
 mime_guess.workspace = true
 flate2.workspace = true
+brotli.workspace = true
 rust-embed.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
