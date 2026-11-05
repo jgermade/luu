@@ -233,7 +233,7 @@
       <label :if="canType &amp;&amp; shown &amp;&amp; !shown.loading" class="typed">
         <span class="dim small">another model</span>
         <input type="text" :value="typed" :disabled="isDisabled" placeholder="a model name, then Enter"
-               @input="typed = $event.target.value" @keydown.enter="chooseTyped()">
+               @input="typed = $event.target.value" @keydown="$event.key === 'Enter' && chooseTyped()">
       </label>
     </div>
   </div>

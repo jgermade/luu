@@ -1,14 +1,15 @@
 <script :setup>
-  // A server with users and no owner yet. With the one-time link `luu config
-  // setup-url` printed (`?setup=<key>`): the mail settings and your email,
+  // A server with users and no owner yet: the mail settings and your email,
   // then the code sent to it — **the code is the test of the mail**, and the
-  // settings are saved, and you made the owner, only when it comes back.
-  // Without the link: what to run on the server. See
+  // settings are saved, and you made the owner, only when it comes back. The
+  // setup key is what `serve` prints when it starts without an owner, or what
+  // `luu config setup-url` puts in its link (`?setup=<key>`). See
   // `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
   const { setupSend, setupClaim } = await import("@web/lib/account.js")
   const OtpInput = await import("@web/components/otp-input.html")
 
-  const key = new URLSearchParams(location.search).get("setup") || ""
+  const linked = new URLSearchParams(location.search).get("setup") || ""
+  let key = linked
 
   let url = ""
   let from = ""
@@ -21,12 +22,13 @@
   let sentTo = ""
   let status = "idle"
 
-  $: ready = url.trim() && from.trim() && email.includes("@") && !busy
+  $: ready = key.trim() && url.trim() && from.trim() && email.includes("@") && !busy
 
   const send = async () => {
     if (!ready) return
     busy = true
     said = ""
+    key = key.trim()
     const problem = await setupSend({ key, url: url.trim(), from: from.trim(), user, password, email: email.trim() })
     busy = false
     if (problem) { said = problem; return }
@@ -57,18 +59,18 @@
     <img class="logo" src="./logo.svg" alt="" width="40" height="40">
     <h1>Set up luu</h1>
 
-    <div :if="!key">
-      <p class="lead">This server has no owner yet. On the server, either finish it in a terminal:</p>
-      <pre>luu config</pre>
-      <p class="lead">or ask for a link that opens this page to do it here — an hour, once:</p>
-      <pre>luu config setup-url</pre>
-      <p class="note">As the service: <code>sudo -u luu env LUU_HOME=/var/lib/luu luu config setup-url</code>.
-        In a container: <code>docker exec luu luu config setup-url</code>.</p>
-    </div>
-
-    <div :if="key && !sentTo" class="form">
+    <div :if="!sentTo" class="form">
       <p class="lead">How this server sends mail, and you, its owner. A code goes to your email
         through these settings: it is their test, and they are saved only when it comes back.</p>
+
+      <div :if="!linked" class="form">
+        <label for="setup-key">Setup key</label>
+        <input id="setup-key" autocomplete="off" spellcheck="false" autofocus
+               :value="key" @input="key = $event.target.value">
+        <p class="hint">The server prints it when it starts with no owner — <code>kubectl logs
+          deploy/luu</code>, <code>docker logs luu</code> — and <code>luu config setup-url</code>
+          on the server makes another. Or finish it there with <code>luu config</code>.</p>
+      </div>
 
       <label for="setup-url">Mail server</label>
       <input id="setup-url" placeholder="smtps://smtp.example.com:465" autocomplete="off"
@@ -93,14 +95,14 @@
 
       <label for="setup-email">Your email</label>
       <input id="setup-email" type="email" autocomplete="email"
-             :value="email" @input="email = $event.target.value" @keydown.enter="send()">
+             :value="email" @input="email = $event.target.value" @keydown="$event.key === 'Enter' && send()">
 
       <button type="button" class="go" :disabled="!ready" @click="send()">
         {{ busy ? "Sending…" : "Send me a code" }}
       </button>
     </div>
 
-    <div :if="key && sentTo" class="form">
+    <div :if="sentTo" class="form">
       <p class="lead">A code went to <strong>{{ sentTo }}</strong>. Type it here: that saves the mail
         settings and makes you this server's owner.</p>
       <div class="code">

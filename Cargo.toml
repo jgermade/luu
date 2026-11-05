@@ -45,6 +45,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # are axum's already; here they carry HTTP over an SSH channel. See
 # RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md.
 russh = { version = "0.64.1", default-features = false, features = ["ring"] }
+# Passkeys. 0.6 is RustCrypto throughout (`crypto-glue`) and links no OpenSSL,
+# which 0.5 did; `conditional-ui` is the discoverable login, with no email.
+# base64 is in the tree already. See RECORD/2026-11-05.passkeys.completed.md.
+webauthn-rs = { version = "0.6.2", features = ["conditional-ui"] }
+base64 = "0.22"
 hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 mime_guess = "2"

@@ -2,9 +2,12 @@
   // The page on a server with users, before a login: an email and the code
   // `luu user code` printed for it. Nothing else of the app loads until the
   // server knows who this is — every route behind the login would be a 401.
-  // See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
-  const { logIn, emailCode, account } = await import("@web/lib/account.js")
+  // See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`; passkeys,
+  // first and with no email, in `RECORD/2026-11-05.passkeys.completed.md`.
+  const { logIn, emailCode, account, passkeysHere, logInWithPasskey, addPasskey, deviceName } =
+    await import("@web/lib/account.js")
   const OtpInput = await import("@web/components/otp-input.html")
+  const withPasskeys = passkeysHere()
 
   let email = ""
   let code = ""
@@ -12,15 +15,32 @@
   let said = ""
   // The code boxes' state: shaken red on a refusal, ringed green on a login.
   let status = "idle"
+  // The address the code was asked for: set, the page asks for the code.
+  let sentTo = ""
 
-  $: ready = email.includes("@") && code.length === 6 && !busy
+  // Where the server has mail, a code is asked for; the answer is the same
+  // whoever asked, so the page says the same either way. Without mail the
+  // code comes from `luu user code`, and this only moves on to the boxes.
+  const ask = async () => {
+    if (!email.includes("@") || busy) return
+    said = ""
+    if (account.mail) {
+      busy = true
+      const problem = await emailCode(email.trim())
+      busy = false
+      if (problem) { said = problem; return }
+    }
+    sentTo = email.trim()
+    code = ""
+    status = "idle"
+  }
 
   const submit = async () => {
-    if (!ready) return
+    if (code.length !== 6 || busy) return
     busy = true
     said = ""
     status = "idle"
-    const problem = await logIn(email.trim(), code)
+    const problem = await logIn(sentTo, code)
     busy = false
     if (problem) {
       said = problem
@@ -28,23 +48,35 @@
       return
     }
     status = "success"
+    // After a code, this device may keep a passkey instead; asked once,
+    // before the page reloads into the app.
+    if (withPasskeys) { setTimeout(() => { offering = true }, 600); return }
     // Long enough for the ring to draw round every box.
     setTimeout(() => location.reload(), 800)
   }
 
-  // A code by email, where the server has mail. The answer is the same
-  // whoever asked; the button rests a minute, as the server does.
-  let mailed = ""
-  let resting = false
-  const mailMe = async () => {
-    if (!email.includes("@") || resting) return
+  const withPasskey = async () => {
+    if (busy) return
+    busy = true
     said = ""
-    const problem = await emailCode(email.trim())
-    if (problem) { said = problem; return }
-    mailed = "If that address has an account here, a code is on its way."
-    resting = true
-    setTimeout(() => { resting = false }, 60_000)
+    const problem = await logInWithPasskey()
+    busy = false
+    if (problem === null) { location.reload(); return }
+    said = problem
   }
+
+  let offering = false
+  const notNow = () => location.reload()
+  const keep = async () => {
+    busy = true
+    said = ""
+    const problem = await addPasskey(deviceName())
+    busy = false
+    if (problem) { said = problem; return }
+    location.reload()
+  }
+
+  const back = () => { sentTo = ""; said = ""; status = "idle" }
 
   // An edit after a refusal: the boxes are waiting again.
   const edited = () => {
@@ -55,35 +87,47 @@
 
 <div class="login">
   <div class="card">
-    <img class="logo" src="./logo.svg" alt="" width="40" height="40">
+    <img class="logo" src="./logo.svg" alt="" width="64" height="64">
     <h1>Log in to luu</h1>
-    <p class="lead">Log in with your email and the code sent to it.</p>
 
-    <label for="login-email">Email</label>
-    <input id="login-email" type="email" autocomplete="username" autofocus
-           :value="email" @input="email = $event.target.value"
-           @keydown.enter="submit()">
-
-    <button :if="account.mail" type="button" class="mail" :disabled="!email.includes('@') || resting"
-            @click="mailMe()">Email me a code</button>
-    <p :if="mailed" class="mailed">{{ mailed }}</p>
-
-    <span class="label" id="login-code">Code</span>
-    <div class="code">
-      <OtpInput :model="code" :status="status" :disabled="busy" label="Code"
-                @change="edited()" @complete="submit()" />
+    <div :if="!sentTo" class="step">
+      <button :if="withPasskeys" type="button" class="go passkey" :disabled="busy" @click="withPasskey()">
+        Log in with a passkey
+      </button>
+      <p :if="withPasskeys" class="or">or with a code by email</p>
+      <label for="login-email">Email</label>
+      <input id="login-email" type="email" autocomplete="username webauthn" :autofocus="!withPasskeys"
+             :value="email" @input="email = $event.target.value"
+             @keydown="$event.key === 'Enter' &amp;&amp; ask()">
+      <button type="button" class="go" :class.secondary="withPasskeys" :disabled="!email.includes('@') || busy" @click="ask()">
+        {{ busy ? "Sending…" : "Log in" }}
+      </button>
     </div>
 
-    <button type="button" class="go" :disabled="!ready" @click="submit()">
-      {{ busy ? "Logging in…" : "Log in" }}
-    </button>
-    <p :if="said" class="said" role="alert">{{ said }}</p>
+    <div :if="sentTo &amp;&amp; !offering" class="step">
+      <p :if="account.mail" class="lead">If <strong>{{ sentTo }}</strong> has an account here,
+        a code is on its way. Type it here.</p>
+      <p :if="!account.mail" class="lead">This server sends no mail yet, so an owner gives you a
+        code: on the server, <code>luu user code {{ sentTo }}</code> prints one — six digits,
+        ten minutes, once.</p>
+      <div class="code">
+        <OtpInput :model="code" :status="status" :disabled="busy" :autofocus="true" label="Code"
+                  @change="edited()" @complete="submit()" />
+      </div>
+      <button type="button" class="go" :disabled="code.length !== 6 || busy" @click="submit()">
+        {{ busy ? "Logging in…" : "Log in" }}
+      </button>
+      <button type="button" class="back" @click="back()">Use another email</button>
+    </div>
 
-    <p class="note" :if="!account.mail">
-      This server sends no mail yet, so an owner gives you a code. On the
-      server itself, <code>luu user code &lt;email&gt;</code> prints one: six
-      digits, valid for ten minutes, once.
-    </p>
+    <div :if="offering" class="step">
+      <p class="lead">You are in. Keep a passkey on this device, and next time log in with it
+        instead of a code?</p>
+      <button type="button" class="go" :disabled="busy" @click="keep()">Add a passkey</button>
+      <button type="button" class="back" @click="notNow()">Not now</button>
+    </div>
+
+    <p :if="said" class="said" role="alert">{{ said }}</p>
   </div>
 </div>
 
@@ -110,8 +154,8 @@
     background: var(--luu-surface);
     box-sizing: border-box;
   }
-  .logo { margin-bottom: 4px; }
-  h1 { font-size: var(--luu-text-xl); margin: 0; }
+  .logo { align-self: center; margin-bottom: 8px; }
+  h1 { font-size: var(--luu-text-xl); margin: 0 0 8px; text-align: center; }
   .lead { margin: 0 0 12px; color: var(--luu-fg-muted); font-size: var(--luu-text-md); }
   label, .label { font-size: var(--luu-text-sm); color: var(--luu-fg-muted); margin-top: 6px; }
   input {
@@ -139,6 +183,14 @@
   }
   .go:hover:not(:disabled) { background: var(--luu-accent-hover); }
   .go:disabled { opacity: .5; cursor: default; }
+  .go.passkey { margin-top: 0; }
+  .go.secondary {
+    background: var(--luu-surface);
+    color: var(--luu-fg);
+    border: 1px solid var(--luu-border);
+  }
+  .go.secondary:hover:not(:disabled) { background: var(--luu-hover); }
+  .or { margin: 12px 0 0; text-align: center; color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
   .said {
     margin: 6px 0 0;
     padding: 8px 10px;
@@ -147,21 +199,17 @@
     color: var(--luu-bad);
     font-size: var(--luu-text-md);
   }
-  .mail {
-    align-self: flex-start;
-    margin-top: 6px;
-    padding: 6px 10px;
-    border: 1px solid var(--luu-border);
-    border-radius: 6px;
-    background: var(--luu-surface);
-    color: var(--luu-fg);
+  .step { display: flex; flex-direction: column; gap: 6px; }
+  .back {
+    align-self: center;
+    margin-top: 4px;
+    border: 0;
+    background: none;
+    color: var(--luu-fg-muted);
     font: inherit;
-    font-size: var(--luu-text-md);
+    font-size: var(--luu-text-sm);
+    text-decoration: underline;
     cursor: pointer;
   }
-  .mail:hover:not(:disabled) { background: var(--luu-hover); }
-  .mail:disabled { opacity: .5; cursor: default; }
-  .mailed { margin: 2px 0 0; color: var(--luu-fg-muted); font-size: var(--luu-text-sm); }
-  .note { margin: 14px 0 0; color: var(--luu-fg-subtle); font-size: var(--luu-text-sm); }
   code { font-family: var(--luu-font-mono); }
 </style>

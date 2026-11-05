@@ -166,7 +166,7 @@
 
   <p :if="loading" class="dim">Reading config.toml…</p>
   <p :if="!loading &amp;&amp; !draft" class="error">{{ error || "The policies could not be read." }}</p>
-  <p :if="draft &amp;&amp; !editable" class="caveat small">Read-only: this server is bound off loopback, and only a person at this machine edits its config.toml.</p>
+  <p :if="draft &amp;&amp; !editable" class="caveat small">Read-only: a person at this machine, or on a server with users an admin or an owner, edits its config.toml.</p>
 
   <section :if="draft" :each="kind in KINDS" :key="kind.key" class="pane-group kind" :data-kind="kind.key">
     <div class="kind-head">

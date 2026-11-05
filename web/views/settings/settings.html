@@ -26,7 +26,9 @@
   const SettingsSessions = await import("./sessions/sessions.html")
   const SettingsPolicies = await import("./policies/policies.html")
   const SettingsRemote = await import("./remote/remote.html")
+  const SettingsUsers = await import("./users/users.html")
   const Rail = await import("@web/components/rail.html")
+  const { account, managesPeople } = await import("@web/lib/account.js")
 
   const SECTIONS = [
     // Engines before Models: a provider can name an engine, so the thing it
@@ -49,6 +51,9 @@
     // This luu linked to another over SSH by key, or, on a server with
     // users, your keys and the luus they linked. See `remote/remote.html`.
     { value: "remote", label: "Remote access", icon: "i-machine" },
+    // Who may log in, on a server with users, for an admin or an owner. See
+    // `users/users.html`.
+    ...(account.users && managesPeople() ? [{ value: "users", label: "Users", icon: "i-users" }] : []),
   ]
 
   // **A change of section is a transition, not a swap, and its end is known
@@ -134,6 +139,8 @@
              :aria-hidden="String(shown !== 'policies')"><SettingsPolicies /></div>
         <div :if="mounted('remote')" class="section" data-section="remote" :class="phase('remote')"
              :aria-hidden="String(shown !== 'remote')"><SettingsRemote /></div>
+        <div :if="mounted('users')" class="section" data-section="users" :class="phase('users')"
+             :aria-hidden="String(shown !== 'users')"><SettingsUsers /></div>
       </div>
     </section>
   </div>

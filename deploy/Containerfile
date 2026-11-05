@@ -33,6 +33,13 @@ RUN set -eu; \
     echo "$(cat kubectl.sha256)  kubectl" | sha256sum -c -; \
     install -m 0755 kubectl /kubectl
 
+# xterm.js, which draws the terminal panel. The binary reads it from disk under
+# LUU_UI_DIR rather than embedding it; the lockfile pins and checks it.
+FROM node:22-bookworm-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+
 # The rust image again, and not a slim one, on purpose: the agent's tools are
 # what the policy's `commands` names — cargo, git, rg — and a container that
 # lacks them is a policy that says `absent`. A deployment for another language
@@ -46,6 +53,7 @@ RUN apt-get update \
  && chown luu:luu /state /work
 COPY --from=build /src/target/release/luu /usr/local/bin/luu
 COPY --from=kubectl /kubectl /usr/local/bin/kubectl
+COPY --from=web /web/node_modules/@xterm /usr/share/luu/web/node_modules/@xterm
 COPY deploy/luu.toml /etc/luu/luu.toml
 COPY deploy/entrypoint.sh /usr/local/bin/luu-entrypoint
 
@@ -53,7 +61,8 @@ COPY deploy/entrypoint.sh /usr/local/bin/luu-entrypoint
 # agent works in. Both volumes: neither belongs to the image.
 ENV LUU_HOME=/state \
     HOME=/state \
-    CARGO_HOME=/state/cargo
+    CARGO_HOME=/state/cargo \
+    LUU_UI_DIR=/usr/share/luu/web
 VOLUME ["/state", "/work"]
 WORKDIR /work
 USER luu

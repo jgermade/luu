@@ -217,7 +217,7 @@ async fn public_needs_an_origin_and_logs_in_with_a_code_luu_user_printed() {
     assert_eq!(me.status(), 200);
     let me: serde_json::Value = me.json().await.unwrap();
     assert_eq!(me["role"], "owner");
-    // A Settings write is still refused: roles reach Settings in step 3.
+    // An owner's login writes Settings, as loopback does.
     let write = http
         .put(format!("http://{address}/api/tool-steps"))
         .header("Cookie", &cookie)
@@ -226,7 +226,67 @@ async fn public_needs_an_origin_and_logs_in_with_a_code_luu_user_printed() {
         .send()
         .await
         .unwrap();
+    assert_eq!(write.status(), 200, "{:?}", write.text().await);
+    let written = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(written.contains("max-tool-steps = 9"), "{written}");
+    let engines: serde_json::Value = http
+        .get(format!("http://{address}/api/engines"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(engines["editable"], true, "{engines}");
+
+    // A user who is not an owner does not.
+    assert!(
+        luu(&home)
+            .args(["user", "add", "bo@example.com"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let code = luu(&home)
+        .args(["user", "code", "bo@example.com"])
+        .output()
+        .unwrap();
+    let code = String::from_utf8(code.stdout).unwrap().trim().to_string();
+    let login = http
+        .post(format!("http://{address}/api/auth/login"))
+        .header("Origin", "http://luu.test")
+        .json(&serde_json::json!({ "email": "bo@example.com", "code": code }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 204);
+    let user_cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let write = http
+        .put(format!("http://{address}/api/tool-steps"))
+        .header("Cookie", &user_cookie)
+        .header("Origin", "http://luu.test")
+        .json(&serde_json::json!({ "steps": 3 }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(write.status(), 403);
+    let engines = http
+        .put(format!("http://{address}/api/engines"))
+        .header("Cookie", &user_cookie)
+        .header("Origin", "http://luu.test")
+        .json(&serde_json::json!({ "engines": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(engines.status(), 403);
     let _ = child.kill();
     let _ = child.wait();
     let mode = {
@@ -537,6 +597,25 @@ async fn setup_in_the_page_makes_the_owner_and_codes_come_by_email_after() {
     .unwrap();
     assert_eq!(refused.status(), 403);
 
+    // The key `serve` printed when it started without an owner opens setup.
+    let mut said = BufReader::new(child.stderr.take().unwrap()).lines();
+    let printed = said
+        .by_ref()
+        .map_while(Result::ok)
+        .skip_while(|line| !line.starts_with("no owner yet"))
+        .nth(1)
+        .expect("serve prints a setup key")
+        .trim()
+        .to_string();
+    std::thread::spawn(move || for _ in said {});
+    let opened = post(
+        "/api/setup/send",
+        serde_json::json!({ "key": printed, "email": "ana@example.com", "url": "smtp://127.0.0.1:1", "from": "luu@example.com" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(opened.status(), 502);
+
     let link = luu(&home).args(["config", "setup-url"]).output().unwrap();
     let link = String::from_utf8(link.stdout).unwrap();
     let key = link.trim().rsplit("setup=").next().unwrap().to_string();
@@ -651,6 +730,372 @@ async fn setup_in_the_page_makes_the_owner_and_codes_come_by_email_after() {
             .any(|sent| sent.to.iter().any(|to| to.contains("eve@"))),
         "a stranger got mail"
     );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// A login's cookie, by a code `luu user code` printed.
+async fn log_in(http: &reqwest::Client, address: &str, home: &Path, email: &str) -> String {
+    let code = luu(home).args(["user", "code", email]).output().unwrap();
+    let code = String::from_utf8(code.stdout).unwrap().trim().to_string();
+    let login = http
+        .post(format!("http://{address}/api/auth/login"))
+        .header("Origin", "http://luu.test")
+        .json(&serde_json::json!({ "email": email, "code": code }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 204, "{email}");
+    login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn roles_write_by_level_manage_people_and_end_logins() {
+    let home = scratch();
+    std::fs::write(
+        home.join("config.toml"),
+        "[server]\nexposure = \"public\"\nbind = \"127.0.0.1:0\"\norigin = \"http://luu.test\"\n",
+    )
+    .unwrap();
+    for (email, role) in [
+        ("ana@example.com", "owner"),
+        ("carl@example.com", "admin"),
+        ("bo@example.com", "user"),
+    ] {
+        let added = luu(&home)
+            .args(["user", "add", email, "--role", role])
+            .output()
+            .unwrap();
+        assert!(added.status.success(), "{added:?}");
+    }
+    // Users' folders under the scratch directory, not this checkout.
+    let mut serve = luu(&home);
+    serve.current_dir(&home);
+    let (mut child, address) = start(serve).expect("a public server starts");
+    let http = reqwest::Client::new();
+    let owner = log_in(&http, &address, &home, "ana@example.com").await;
+    let admin = log_in(&http, &address, &home, "carl@example.com").await;
+    let user = log_in(&http, &address, &home, "bo@example.com").await;
+    let send = |method: reqwest::Method, path: &str, cookie: &str, body: serde_json::Value| {
+        http.request(method, format!("http://{address}{path}"))
+            .header("Cookie", cookie)
+            .header("Origin", "http://luu.test")
+            .json(&body)
+            .send()
+    };
+    use reqwest::Method;
+
+    // What is shared inside luu is an admin's; the machine is an owner's.
+    let steps = send(
+        Method::PUT,
+        "/api/tool-steps",
+        &admin,
+        serde_json::json!({ "steps": 7 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(steps.status(), 200);
+    let engines = send(
+        Method::PUT,
+        "/api/engines",
+        &admin,
+        serde_json::json!({ "engines": {} }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(engines.status(), 403);
+    assert!(engines.text().await.unwrap().contains("an owner's"));
+    let steps = send(
+        Method::PUT,
+        "/api/tool-steps",
+        &user,
+        serde_json::json!({ "steps": 3 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(steps.status(), 403);
+
+    // People: an admin's and an owner's, and an owner is only an owner's.
+    let listed = send(Method::GET, "/api/users", &user, serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), 403);
+    let listed: serde_json::Value =
+        send(Method::GET, "/api/users", &admin, serde_json::Value::Null)
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let id_of = |email: &str| {
+        listed["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["email"] == email)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (ana, carl, bo) = (
+        id_of("ana@example.com"),
+        id_of("carl@example.com"),
+        id_of("bo@example.com"),
+    );
+    let made = send(
+        Method::POST,
+        "/api/users",
+        &admin,
+        serde_json::json!({ "email": "dee@example.com", "role": "owner" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(made.status(), 403);
+    let made = send(
+        Method::POST,
+        "/api/users",
+        &admin,
+        serde_json::json!({ "email": "dee@example.com" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(made.status(), 201);
+    let dee: serde_json::Value = made.json().await.unwrap();
+    assert_eq!(dee["role"], "user");
+    let touched = send(
+        Method::PUT,
+        &format!("/api/users/{ana}"),
+        &admin,
+        serde_json::json!({ "role": "user" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(touched.status(), 403);
+    let suspended = send(
+        Method::PUT,
+        &format!("/api/users/{bo}"),
+        &admin,
+        serde_json::json!({ "suspended": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(suspended.status(), 200);
+    let out = send(Method::GET, "/api/auth/me", &user, serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(out.status(), 401, "a suspended user's login ends");
+    let removed = send(
+        Method::DELETE,
+        &format!("/api/users/{}", dee["id"].as_str().unwrap()),
+        &admin,
+        serde_json::Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed.status(), 200);
+    let removed: serde_json::Value = removed.json().await.unwrap();
+    assert!(removed["removed_at"].is_u64(), "{removed}");
+    // Restored by an admin, and removed again.
+    let restored: serde_json::Value = send(
+        Method::PUT,
+        &format!("/api/users/{}", dee["id"].as_str().unwrap()),
+        &admin,
+        serde_json::json!({ "removed": false }),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert!(restored["removed_at"].is_null(), "{restored}");
+    // Bo logged in, and so has a session and a folder: removed all the same,
+    // and kept for the week.
+    let gone = send(
+        Method::DELETE,
+        &format!("/api/users/{bo}"),
+        &admin,
+        serde_json::Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(gone.status(), 200);
+    assert!(
+        home.join(&bo).is_dir(),
+        "a removed user's folder waits a week"
+    );
+    let promoted = send(
+        Method::PUT,
+        &format!("/api/users/{carl}"),
+        &owner,
+        serde_json::json!({ "role": "owner" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(promoted.status(), 200);
+    let myself = send(
+        Method::PUT,
+        &format!("/api/users/{ana}"),
+        &owner,
+        serde_json::json!({ "suspended": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(myself.status(), 409);
+
+    // A login of one's own, ended from another.
+    let second = log_in(&http, &address, &home, "ana@example.com").await;
+    let logins: serde_json::Value = send(
+        Method::GET,
+        "/api/account/logins",
+        &owner,
+        serde_json::Value::Null,
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let logins = logins["logins"].as_array().unwrap();
+    assert_eq!(logins.len(), 2, "{logins:?}");
+    assert_eq!(logins.iter().filter(|l| l["current"] == true).count(), 1);
+    let current = logins.iter().find(|l| l["current"] == true).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let itself = send(
+        Method::POST,
+        &format!("/api/account/logins/{current}/end"),
+        &owner,
+        serde_json::Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(itself.status(), 409);
+    let ended: serde_json::Value = send(
+        Method::POST,
+        "/api/account/logins/end-others",
+        &owner,
+        serde_json::Value::Null,
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(ended["ended"], 1);
+    let gone = send(
+        Method::GET,
+        "/api/auth/me",
+        &second,
+        serde_json::Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(gone.status(), 401);
+    let here = send(Method::GET, "/api/auth/me", &owner, serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(here.status(), 200);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[tokio::test]
+async fn a_removed_user_is_deleted_after_a_week_unless_they_log_in() {
+    let home = scratch();
+    std::fs::write(
+        home.join("config.toml"),
+        "[server]\nexposure = \"public\"\nbind = \"127.0.0.1:0\"\norigin = \"http://luu.test\"\n",
+    )
+    .unwrap();
+    for (email, role) in [
+        ("ana@example.com", "owner"),
+        ("bo@example.com", "user"),
+        ("cy@example.com", "user"),
+    ] {
+        assert!(
+            luu(&home)
+                .args(["user", "add", email, "--role", role])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    let serve = || {
+        let mut serve = luu(&home);
+        serve.current_dir(&home);
+        start(serve).expect("a public server starts")
+    };
+    let http = reqwest::Client::new();
+    let id_of = |email: &str| {
+        let listed = luu(&home).args(["user", "list"]).output().unwrap();
+        String::from_utf8(listed.stdout)
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with(email))
+            .map(|line| line.split_whitespace().nth(3).unwrap().to_string())
+    };
+    let (bo, cy) = (id_of("bo@").unwrap(), id_of("cy@").unwrap());
+
+    // Both log in and ask for something, which gives each a folder.
+    let (mut child, address) = serve();
+    for email in ["bo@example.com", "cy@example.com"] {
+        let cookie = log_in(&http, &address, &home, email).await;
+        let asked = http
+            .get(format!("http://{address}/api/settings"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(asked.status(), 200);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(home.join(&bo).is_dir() && home.join(&cy).is_dir());
+
+    for email in ["bo@example.com", "cy@example.com"] {
+        let removed = luu(&home).args(["user", "remove", email]).output().unwrap();
+        assert!(removed.status.success(), "{removed:?}");
+        assert!(String::from_utf8_lossy(&removed.stderr).contains("unless they log in"));
+    }
+    // A week, gone by for Bo.
+    let eight_days_ago = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        - 8 * 86_400_000;
+    rusqlite::Connection::open(home.join("auth.db"))
+        .unwrap()
+        .execute(
+            "UPDATE users SET removed_at = ?1 WHERE id = ?2",
+            rusqlite::params![eight_days_ago, bo],
+        )
+        .unwrap();
+
+    // The server deletes Bo's data when it starts; Cy logs in within the week.
+    let (mut child, address) = serve();
+    let mut waited = 0;
+    while home.join(&bo).exists() && waited < 50 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        waited += 1;
+    }
+    assert!(!home.join(&bo).exists(), "Bo's folder is deleted");
+    assert!(id_of("bo@").is_none(), "Bo is no longer a user");
+    log_in(&http, &address, &home, "cy@example.com").await;
+    let listed = luu(&home).args(["user", "list"]).output().unwrap();
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    let cy_line = listed.lines().find(|line| line.starts_with("cy@")).unwrap();
+    assert!(cy_line.contains("active"), "a login keeps Cy: {cy_line}");
+    assert!(home.join(&cy).is_dir());
     let _ = child.kill();
     let _ = child.wait();
 }

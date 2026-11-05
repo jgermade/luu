@@ -31,6 +31,9 @@
   // again rather than swapping in place.
   let stamps = blank().map(() => 0)
   let focused = null
+  // The box last focused, kept through a blur: disabling the inputs during a
+  // check drops the focus, and it goes back here once they are enabled again.
+  let last = null
   let caretX = 0
   let caretMoving = false
 
@@ -131,6 +134,7 @@
     // Appears where it belongs the first time, and slides only after.
     if (focused === null) caretMoving = false
     focused = i
+    last = i
     box(i)?.select()
     requestAnimationFrame(() => { caretMoving = true })
   }
@@ -141,6 +145,17 @@
 
   await $mounted()
   if (autofocus) focusAt(0)
+
+  let wasDisabled = disabled
+  const reenabled = () => {
+    if (disabled === wasDisabled) return
+    wasDisabled = disabled
+    if (disabled || last === null) return
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    setTimeout(() => focusAt(last))
+  }
+  $: (disabled, reenabled())
 
   $: caretOn = focused !== null && !chars[focused] && !disabled
   $: caretStyle = `transform:translateX(${caretX}px)`

@@ -1,0 +1,155 @@
+<script :setup>
+  // People, for an admin or an owner: who may log in here, with which role.
+  // An admin manages users and admins; an owner, everyone. Nobody suspends or
+  // removes themselves from here. Removing ends their logins now and deletes
+  // their data a week later unless they log in first; Restore cancels it. See
+  // `RECORD/2026-11-05.roles-in-the-page.completed.md` and
+  // `RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md`.
+  const { listUsers, addUser, editUser, removeUser } = await import("@web/lib/account.js")
+  const WEEK = 7 * 86_400_000
+
+  let view = null
+  let error = ""
+  let email = ""
+  let role = "user"
+  let adding = false
+
+  const load = async () => {
+    const got = await listUsers()
+    if (got.ok) { view = got.view; error = "" } else error = got.error
+  }
+  load()
+
+  $: roles = view?.owner ? ["user", "admin", "owner"] : ["user", "admin"]
+  // An owner is only an owner's to change.
+  const locked = u => u.role === "owner" && !view?.owner
+  const mine = u => u.id === view?.me
+
+  const act = async promise => {
+    const got = await promise
+    if (!got.ok) error = got.error
+    else error = ""
+    await load()
+  }
+  const setRole = (u, value) => act(editUser(u.id, { role: value }))
+  const setSuspended = (u, value) => act(editUser(u.id, { suspended: value }))
+  const restore = u => act(editUser(u.id, { removed: false }))
+  const goes = u => new Date(u.removed_at + WEEK).toLocaleDateString(undefined, { dateStyle: "medium" })
+  const state = u => u.removed_at ? `removed: data deleted on ${goes(u)} unless they log in`
+    : u.suspended ? "suspended" : ago(u.last_login)
+  // The first click asks; the second, on the same row, removes.
+  let confirming = ""
+  const remove = u => {
+    if (confirming !== u.id) { confirming = u.id; return }
+    confirming = ""
+    act(removeUser(u.id))
+  }
+  const add = async () => {
+    if (!email.includes("@") || adding) return
+    adding = true
+    const got = await addUser(email.trim(), role)
+    adding = false
+    if (!got.ok) { error = got.error; return }
+    email = ""
+    role = "user"
+    error = ""
+    load()
+  }
+
+  const ago = at => {
+    if (!at) return "never logged in"
+    const s = Math.max(0, Math.round((Date.now() - at) / 1000))
+    const said = s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)} min`
+      : s < 86400 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`
+    return `last login ${said} ago`
+  }
+</script>
+
+<div class="users-pane pane-main">
+<div class="ds-hero">
+  <div class="ds-hero-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="9" cy="8" r="3.2"/>
+      <path d="M3.5 19.5c0-3 2.5-5.2 5.5-5.2s5.5 2.2 5.5 5.2"/>
+      <path d="M15.5 5.2a3.2 3.2 0 0 1 0 6"/>
+      <path d="M17.5 14.6c1.8.6 3 2.4 3 4.9"/>
+    </svg>
+  </div>
+  <div class="ds-hero-body">
+    <h4 class="ds-hero-title">Users</h4>
+    <p class="ds-hero-desc">Who may log in here. There is no sign-up: a person is a user because someone added them.</p>
+  </div>
+</div>
+
+<section class="pane-group">
+  <h3>People</h3>
+  <ul class="rows" :if="view?.users?.length">
+    <li :each="u in view.users" :key="u.id" :class.suspended="u.suspended || !!u.removed_at">
+      <span class="grow">
+        <strong>{{ u.email }}<span :if="mine(u)" class="dim"> · you</span></strong>
+        <span class="dim small">{{ state(u) }} · {{ u.id }}</span>
+      </span>
+      <select aria-label="Role" :value="u.role" :disabled="locked(u)"
+              @change="setRole(u, $event.target.value)">
+        <option :each="r in (roles.includes(u.role) ? roles : [...roles, u.role])" :key="r" :value="r"
+                :selected="r === u.role">{{ r }}</option>
+      </select>
+      <button type="button" class="soft" :disabled="locked(u) || mine(u)"
+              @click="setSuspended(u, !u.suspended)">{{ u.suspended ? "Resume" : "Suspend" }}</button>
+      <button :if="!u.removed_at" type="button" class="soft danger" :disabled="locked(u) || mine(u)"
+              @click="remove(u)">{{ confirming === u.id ? "Remove them?" : "Remove" }}</button>
+      <button :if="u.removed_at" type="button" class="soft" :disabled="locked(u)"
+              @click="restore(u)">Restore</button>
+    </li>
+  </ul>
+  <p :if="view && !view.users?.length" class="note">Nobody yet.</p>
+</section>
+
+<section class="pane-group">
+  <h3>Add</h3>
+  <div class="add">
+    <input type="email" placeholder="ana@example.com" aria-label="Email" :value="email"
+           @input="email = $event.target.value" @keydown="$event.key === 'Enter' &amp;&amp; add()">
+    <select aria-label="Role" :value="role" @change="role = $event.target.value">
+      <option :each="r in roles" :key="r" :value="r" :selected="r === role">{{ r }}</option>
+    </select>
+    <button type="button" class="primary" :disabled="!email.includes('@') || adding" @click="add()">Add</button>
+  </div>
+  <p class="note">They log in with a code sent to that email, or one from <code>luu user code</code> on the machine.</p>
+</section>
+
+<p :if="error" class="warn" role="alert">{{ error }}</p>
+</div>
+
+<style scoped>
+  .users-pane { flex: 1 0 auto; }
+  .note { margin: .4rem 0; color: var(--luu-fg-muted); font-size: var(--luu-text-md); line-height: 1.5; }
+  .warn { color: var(--luu-warn); margin: .4rem 0; overflow-wrap: anywhere; }
+  .small { font-size: 12px; }
+  .dim { color: var(--luu-fg-muted); font-weight: normal; }
+  .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; overflow-wrap: anywhere; }
+  .rows { list-style: none; margin: .3rem 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+  .rows > li {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .55rem .7rem;
+    border: 1px solid var(--luu-border); border-radius: 8px;
+    background: var(--luu-surface);
+  }
+  .rows > li.suspended strong { color: var(--luu-fg-muted); }
+  .add { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .add input { flex: 1 1 14rem; min-width: 0; }
+  select, input {
+    font: inherit; font-size: var(--luu-text-md);
+    padding: .3rem .5rem; border: 1px solid var(--luu-border); border-radius: 6px;
+    background: var(--luu-field, var(--luu-surface)); color: var(--luu-fg);
+  }
+  button.soft, button.primary {
+    font: inherit; font-size: var(--luu-text-md);
+    padding: .3rem .8rem; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  }
+  button.soft { border: 1px solid var(--luu-border); background: var(--luu-surface); color: var(--luu-fg); }
+  button.soft:hover { background: var(--luu-hover); }
+  button.soft.danger { color: var(--luu-bad); }
+  button.primary { border: 1px solid var(--luu-accent); background: var(--luu-accent); color: var(--luu-on-accent, #fff); }
+  button:disabled { opacity: .5; cursor: default; }
+</style>

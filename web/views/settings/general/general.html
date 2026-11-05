@@ -9,7 +9,64 @@
   if (!state.providers) loadProviders()
   // Who is logged in, on a server with users: asked once, before the page
   // mounted. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
-  const { account, logOut } = await import("@web/lib/account.js")
+  const { account, logOut, listLogins, endLogin, endOtherLogins, passkeysHere, listPasskeys,
+    addPasskey, renamePasskey, removePasskey, deviceName } = await import("@web/lib/account.js")
+
+  // This user's logins: when each began and ends, this browser's marked, and
+  // the others ended one by one or all at once. See
+  // `RECORD/2026-11-05.roles-in-the-page.completed.md`.
+  let logins = null
+  let loginsError = ""
+  const loadLogins = async () => {
+    const got = await listLogins()
+    if (got.ok) { logins = got.view.logins; loginsError = "" } else loginsError = got.error
+  }
+  if (account.users && account.loggedIn) loadLogins()
+  const endOne = async id => {
+    const got = await endLogin(id)
+    if (!got.ok) loginsError = got.error
+    loadLogins()
+  }
+  const endOthers = async () => {
+    const got = await endOtherLogins()
+    if (!got.ok) loginsError = got.error
+    loadLogins()
+  }
+  const when = at => new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+  $: others = (logins || []).filter(login => !login.current).length
+
+  // This user's passkeys: added from this device, renamed, removed. See
+  // `RECORD/2026-11-05.passkeys.completed.md`.
+  const withPasskeys = passkeysHere()
+  let passkeys = null
+  let passkeysError = ""
+  let adding = false
+  let renaming = ""
+  let newName = ""
+  const loadPasskeys = async () => {
+    const got = await listPasskeys()
+    if (got.ok) { passkeys = got.view.passkeys; passkeysError = "" } else passkeysError = got.error
+  }
+  if (withPasskeys && account.loggedIn) loadPasskeys()
+  const addOne = async () => {
+    adding = true
+    const problem = await addPasskey(deviceName())
+    adding = false
+    passkeysError = problem || ""
+    loadPasskeys()
+  }
+  const startRename = p => { renaming = p.id; newName = p.name }
+  const saveName = async () => {
+    const got = await renamePasskey(renaming, newName)
+    if (!got.ok) passkeysError = got.error
+    renaming = ""
+    loadPasskeys()
+  }
+  const dropOne = async id => {
+    const got = await removePasskey(id)
+    if (!got.ok) passkeysError = got.error
+    loadPasskeys()
+  }
 
   // How many tool calls a turn makes before it asks whether to go on, where
   // neither its provider nor its model says: `max-tool-steps` in
@@ -70,6 +127,47 @@
       Your sessions and your folder are yours: nobody else on this server
       sees them, an admin or an owner included.
     </dd>
+    <dt>Logins</dt>
+    <dd>
+      <ul class="logins" :if="logins?.length">
+        <li :each="login in logins" :key="login.id">
+          <span class="grow">
+            <span>{{ login.current ? "This browser" : "Another browser" }}</span>
+            <span class="dim">since {{ when(login.created_at) }} · until {{ when(login.expires_at) }}</span>
+          </span>
+          <button :if="!login.current" type="button" class="sign-out" @click="endOne(login.id)">End</button>
+        </li>
+      </ul>
+    </dd>
+    <dd class="inline" :if="others">
+      <button type="button" class="sign-out" @click="endOthers()">Sign out everywhere else</button>
+    </dd>
+    <dd :if="loginsError" class="warn">{{ loginsError }}</dd>
+    <dt :if="withPasskeys">Passkeys</dt>
+    <dd :if="withPasskeys">
+      <ul class="logins" :if="passkeys?.length">
+        <li :each="p in passkeys" :key="p.id">
+          <span class="grow">
+            <span :if="renaming !== p.id">{{ p.name }}</span>
+            <input :if="renaming === p.id" class="rename" aria-label="Passkey name" :value="newName"
+                   @input="newName = $event.target.value"
+                   @keydown="$event.key === 'Enter' &amp;&amp; saveName()">
+            <span class="dim">added {{ when(p.added_at) }} · {{ p.last_used ? "used " + when(p.last_used) : "never used" }}</span>
+          </span>
+          <button :if="renaming !== p.id" type="button" class="sign-out" @click="startRename(p)">Rename</button>
+          <button :if="renaming === p.id" type="button" class="sign-out" @click="saveName()">Save</button>
+          <button type="button" class="sign-out" @click="dropOne(p.id)">Remove</button>
+        </li>
+      </ul>
+    </dd>
+    <dd class="inline" :if="withPasskeys">
+      <button type="button" class="sign-out" :disabled="adding" @click="addOne()">Add a passkey</button>
+    </dd>
+    <dd class="note" :if="withPasskeys">
+      A passkey logs this device in with no code. The code by email still works,
+      and is how you get back in if a device is lost.
+    </dd>
+    <dd :if="passkeysError" class="warn">{{ passkeysError }}</dd>
   </dl>
 </section>
 <section class="pane-group">
@@ -138,6 +236,11 @@
     cursor: pointer;
   }
   .sign-out:hover { background: var(--luu-hover); }
+  .logins { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+  .logins > li { display: flex; align-items: center; gap: .6rem; }
+  .logins .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .logins .dim { color: var(--luu-fg-muted); font-size: 12px; }
+  .rename { font: inherit; padding: .2rem .4rem; border: 1px solid var(--luu-border); border-radius: 6px; }
   .steps.invalid { border-color: var(--luu-bad); }
   .warn { color: var(--luu-warn); }
   .path {

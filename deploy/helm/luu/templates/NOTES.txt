@@ -1,4 +1,17 @@
 luu serve is starting, with its state in a volume that outlives the release.
+{{- with include "luu.origin" . }}
+
+On a first install it is online, for people who log in. Open {{ . }}:
+until it has an owner the page asks how it sends mail, your email and the
+setup key the pod prints when it starts (an hour; a restart prints another):
+
+  kubectl logs deploy/{{ include "luu.fullname" $ }} -n {{ $.Release.Namespace }} | grep -A2 'no owner yet'
+
+Or in a terminal instead: `luu config` proves the mail and you as its owner
+with one code sent to you.
+
+  kubectl exec -it deploy/{{ include "luu.fullname" $ }} -n {{ $.Release.Namespace }} -- luu config
+{{- else }}
 
 Online, for people who log in: `luu config` writes your domain, then proves
 how it sends mail and you as its owner with one code sent to you; then restart
@@ -6,6 +19,7 @@ it. (`luu config setup-url` gives a link to do the second half in the page.)
 
   kubectl exec -it deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }} -- luu config
   kubectl rollout restart deploy/{{ include "luu.fullname" . }} -n {{ .Release.Namespace }}
+{{- end }}
 {{- if .Values.mail.passwordSecret }}
 
 The SMTP password is the Secret {{ .Values.mail.passwordSecret }}'s, mounted at
@@ -24,7 +38,8 @@ A luu at home links to this one over SSH, by key, on the Service
 or `luu link add <this origin> --name casa`. Then this page opens it.
 {{- end }}
 
-Or keep it to whoever holds the token:
+Or, where /state/config.toml is private (no origin on its first start, or a
+volume from before this chart wrote one), whoever holds the token:
 
 The token, written on the first start:
 

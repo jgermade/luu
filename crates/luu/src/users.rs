@@ -31,6 +31,9 @@ pub const COOKIE: &str = "luu_login";
 pub const CODE_COOLDOWN_SECONDS: u64 = 60;
 /// How long a setup link lasts.
 pub const SETUP_MINUTES: u64 = 60;
+/// How long a removed user's data waits for them to log in again. See
+/// `RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md`.
+pub const REMOVAL_DAYS: u64 = 7;
 
 /// What a user may do. Ordered, so `role >= Role::Admin` reads as it means.
 /// See the parent record's *Three roles*.
@@ -102,6 +105,9 @@ pub struct User {
     /// Milliseconds since the epoch.
     pub created_at: u64,
     pub last_login: Option<u64>,
+    /// When they were removed: their data goes [`REMOVAL_DAYS`] after,
+    /// unless they log in first.
+    pub removed_at: Option<u64>,
 }
 
 /// `auth.db`, opened. One connection behind a lock: every statement here is a
@@ -123,7 +129,13 @@ pub fn default_path() -> Option<PathBuf> {
 /// page. See `RECORD/2026-11-03.an-owner-proved-by-email.WIP.md`.
 /// 3 added `keys`: a user's SSH keys, which link their luus to this one. See
 /// `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
-const SCHEMA: i32 = 3;
+/// 4 added `users.removed_at` and `passkeys`. See
+/// `RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md` and
+/// `RECORD/2026-11-05.passkeys.completed.md`.
+const SCHEMA: i32 = 4;
+
+/// Every column of a user, in the order [`user_of`] reads them.
+const USER: &str = "id, email, role, suspended, created_at, last_login, removed_at";
 
 const TABLES: &str = "
 CREATE TABLE IF NOT EXISTS users (
@@ -132,7 +144,8 @@ CREATE TABLE IF NOT EXISTS users (
     role       TEXT NOT NULL,
     suspended  INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
-    last_login INTEGER
+    last_login INTEGER,
+    removed_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS codes (
     email      TEXT PRIMARY KEY,
@@ -156,6 +169,26 @@ CREATE TABLE IF NOT EXISTS keys (
     user        TEXT NOT NULL,
     name        TEXT NOT NULL,
     public      TEXT NOT NULL,
+    added_at    INTEGER NOT NULL,
+    last_used   INTEGER
+);
+CREATE TABLE IF NOT EXISTS passkeys (
+    id          TEXT PRIMARY KEY,
+    user        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    passkey     TEXT NOT NULL,
+    added_at    INTEGER NOT NULL,
+    last_used   INTEGER
+);";
+
+/// Schema 3 to 4: the column and the table, no row touched.
+const TO_4: &str = "
+ALTER TABLE users ADD COLUMN removed_at INTEGER;
+CREATE TABLE IF NOT EXISTS passkeys (
+    id          TEXT PRIMARY KEY,
+    user        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    passkey     TEXT NOT NULL,
     added_at    INTEGER NOT NULL,
     last_used   INTEGER
 );";
@@ -211,10 +244,16 @@ impl Users {
             1 => {
                 connection.execute_batch(TO_2)?;
                 connection.execute_batch(TO_3)?;
+                connection.execute_batch(TO_4)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             2 => {
                 connection.execute_batch(TO_3)?;
+                connection.execute_batch(TO_4)?;
+                connection.pragma_update(None, "user_version", SCHEMA)?;
+            }
+            3 => {
+                connection.execute_batch(TO_4)?;
                 connection.pragma_update(None, "user_version", SCHEMA)?;
             }
             SCHEMA => {}
@@ -255,6 +294,7 @@ impl Users {
             suspended: false,
             created_at: crate::session::now_ms(),
             last_login: None,
+            removed_at: None,
         };
         connection.execute(
             "INSERT INTO users (id, email, role, suspended, created_at) VALUES (?1, ?2, ?3, 0, ?4)",
@@ -266,10 +306,9 @@ impl Users {
     /// Everyone, oldest first.
     pub fn list(&self) -> Result<Vec<User>> {
         let connection = self.connection();
-        let mut statement = connection.prepare(
-            "SELECT id, email, role, suspended, created_at, last_login FROM users
-             ORDER BY created_at, email",
-        )?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT {USER} FROM users ORDER BY created_at, email"
+        ))?;
         let rows = statement.query_map([], user_of)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -281,14 +320,7 @@ impl Users {
 
     /// One person, by id.
     pub fn get(&self, id: &str) -> Result<Option<User>> {
-        Ok(self
-            .connection()
-            .query_row(
-                "SELECT id, email, role, suspended, created_at, last_login FROM users WHERE id = ?1",
-                [id],
-                user_of,
-            )
-            .optional()?)
+        self.get_on(&self.connection(), id)
     }
 
     /// Changes what someone may do. The last owner who can log in is not
@@ -324,19 +356,68 @@ impl Users {
         Ok(User { suspended, ..user })
     }
 
-    /// Removes someone, their logins and their code. Their sessions are the
-    /// caller's to have refused about first: what removing does with them is
-    /// still open, so `luu user remove` refuses while there are any.
+    /// Removes someone: every login and code of theirs ends now, and their
+    /// data goes [`REMOVAL_DAYS`] later unless they log in first — which
+    /// [`Users::due`] and [`Users::purge`] are for.
     pub fn remove(&self, email: &str) -> Result<User> {
         let connection = self.connection();
         let user = existing(&connection, email)?;
         if user.role == Role::Owner {
             last_owner_guard(&connection, &user, "removed")?;
         }
+        let now = crate::session::now_ms();
+        end_everything(&connection, &user)?;
+        connection.execute(
+            "UPDATE users SET removed_at = ?2 WHERE id = ?1",
+            rusqlite::params![user.id, now as i64],
+        )?;
+        Ok(User {
+            removed_at: Some(now),
+            ..user
+        })
+    }
+
+    /// Cancels a removal: what an admin's *Restore* is.
+    pub fn restore(&self, email: &str) -> Result<User> {
+        let connection = self.connection();
+        let user = existing(&connection, email)?;
+        connection.execute(
+            "UPDATE users SET removed_at = NULL WHERE id = ?1",
+            [&user.id],
+        )?;
+        Ok(User {
+            removed_at: None,
+            ..user
+        })
+    }
+
+    /// The removed users whose week has passed: their data is due.
+    pub fn due(&self) -> Result<Vec<User>> {
+        let before = crate::session::now_ms().saturating_sub(REMOVAL_DAYS * 86_400_000);
+        let connection = self.connection();
+        let mut statement = connection.prepare(&format!(
+            "SELECT {USER} FROM users WHERE removed_at IS NOT NULL AND removed_at <= ?1"
+        ))?;
+        let rows = statement.query_map([before as i64], user_of)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Deletes a removed user's row, keys and passkeys — the last of their
+    /// data, after the caller deleted their sessions and folder. Only one
+    /// still removed: a login since [`Users::due`] keeps them.
+    pub fn purge(&self, id: &str) -> Result<bool> {
+        let connection = self.connection();
+        let Some(user) = self.get_on(&connection, id)? else {
+            return Ok(false);
+        };
+        if user.removed_at.is_none() {
+            return Ok(false);
+        }
         end_everything(&connection, &user)?;
         connection.execute("DELETE FROM keys WHERE user = ?1", [&user.id])?;
+        connection.execute("DELETE FROM passkeys WHERE user = ?1", [&user.id])?;
         connection.execute("DELETE FROM users WHERE id = ?1", [&user.id])?;
-        Ok(user)
+        Ok(true)
     }
 
     /// A key that links this user's luus here: `ssh-ed25519 AAAA… name`. A
@@ -430,20 +511,141 @@ impl Users {
         let Some(user) = user else {
             return Ok(None);
         };
-        let user = self.get_on(&connection, &user)?;
-        if user.as_ref().is_some_and(|user| !user.suspended) {
+        // A removed user's keys wait out the week with them, and let nothing in.
+        let user = self
+            .get_on(&connection, &user)?
+            .filter(|user| !user.suspended && user.removed_at.is_none());
+        if user.is_some() {
             connection.execute(
                 "UPDATE keys SET last_used = ?1 WHERE fingerprint = ?2",
                 rusqlite::params![crate::session::now_ms() as i64, fingerprint],
             )?;
         }
-        Ok(user.filter(|user| !user.suspended))
+        Ok(user)
+    }
+
+    /// Stores a passkey a user registered: `id` is its credential id,
+    /// base64url, and `passkey` what the WebAuthn library keeps of it, as
+    /// JSON. See `RECORD/2026-11-05.passkeys.completed.md`.
+    pub fn add_passkey(
+        &self,
+        user_id: &str,
+        id: &str,
+        name: &str,
+        passkey: &str,
+    ) -> Result<Passkey> {
+        let name = match name.trim() {
+            "" => "passkey",
+            name => name,
+        };
+        let added_at = crate::session::now_ms();
+        self.connection()
+            .execute(
+                "INSERT INTO passkeys (id, user, name, passkey, added_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![id, user_id, name, passkey, added_at as i64],
+            )
+            .with_context(|| "that passkey is already on an account here".to_string())?;
+        Ok(Passkey {
+            id: id.to_string(),
+            name: name.to_string(),
+            added_at,
+            last_used: None,
+        })
+    }
+
+    /// A user's passkeys, oldest first.
+    pub fn passkeys_of(&self, user_id: &str) -> Result<Vec<Passkey>> {
+        let connection = self.connection();
+        let mut statement = connection.prepare(
+            "SELECT id, name, added_at, last_used FROM passkeys WHERE user = ?1 ORDER BY added_at",
+        )?;
+        let rows = statement.query_map([user_id], |row| {
+            Ok(Passkey {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                added_at: row.get::<_, i64>(2)? as u64,
+                last_used: row.get::<_, Option<i64>>(3)?.map(|at| at as u64),
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The stored passkeys of a user, as the library's JSON: what a new one
+    /// is checked against so the same authenticator is not registered twice.
+    pub fn passkey_bodies(&self, user_id: &str) -> Result<Vec<String>> {
+        let connection = self.connection();
+        let mut statement = connection.prepare("SELECT passkey FROM passkeys WHERE user = ?1")?;
+        let rows = statement.query_map([user_id], |row| row.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Whose a passkey is, and its JSON, by credential id.
+    pub fn passkey(&self, id: &str) -> Result<Option<(String, String)>> {
+        Ok(self
+            .connection()
+            .query_row(
+                "SELECT user, passkey FROM passkeys WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    /// A passkey used to log in: its JSON as the library updated it (the
+    /// counter), and when.
+    pub fn passkey_used(&self, id: &str, passkey: &str) -> Result<()> {
+        self.connection().execute(
+            "UPDATE passkeys SET passkey = ?2, last_used = ?3 WHERE id = ?1",
+            rusqlite::params![id, passkey, crate::session::now_ms() as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Renames one of a user's passkeys. `false` when they have none such.
+    pub fn rename_passkey(&self, user_id: &str, id: &str, name: &str) -> Result<bool> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("a passkey needs a name");
+        }
+        Ok(self.connection().execute(
+            "UPDATE passkeys SET name = ?3 WHERE user = ?1 AND id = ?2",
+            [user_id, id, name],
+        )? > 0)
+    }
+
+    /// Takes a passkey off a user's account. `false` when they had none such.
+    pub fn remove_passkey(&self, user_id: &str, id: &str) -> Result<bool> {
+        Ok(self.connection().execute(
+            "DELETE FROM passkeys WHERE user = ?1 AND id = ?2",
+            [user_id, id],
+        )? > 0)
+    }
+
+    /// A login for a user a passkey proved: the cookie's value, refused to a
+    /// suspended user as a code is.
+    pub fn log_in(&self, user_id: &str, hours: u64) -> Result<Option<(User, String)>> {
+        let connection = self.connection();
+        let Some(user) = self
+            .get_on(&connection, user_id)?
+            .filter(|user| !user.suspended)
+        else {
+            return Ok(None);
+        };
+        let token = login(&connection, &user, hours)?;
+        Ok(Some((
+            User {
+                last_login: Some(crate::session::now_ms()),
+                removed_at: None,
+                ..user
+            },
+            token,
+        )))
     }
 
     fn get_on(&self, connection: &Connection, id: &str) -> Result<Option<User>> {
         Ok(connection
             .query_row(
-                "SELECT id, email, role, suspended, created_at, last_login FROM users WHERE id = ?1",
+                &format!("SELECT {USER} FROM users WHERE id = ?1"),
                 [id],
                 user_of,
             )
@@ -517,6 +719,7 @@ impl Users {
                 User {
                     role: Role::Owner,
                     suspended: false,
+                    removed_at: None,
                     ..user
                 }
             }
@@ -528,6 +731,7 @@ impl Users {
                     suspended: false,
                     created_at: crate::session::now_ms(),
                     last_login: None,
+                    removed_at: None,
                 };
                 connection.execute(
                     "INSERT INTO users (id, email, role, suspended, created_at)
@@ -566,7 +770,7 @@ impl Users {
         Ok(self
             .list()?
             .into_iter()
-            .filter(|user| user.role == Role::Owner && !user.suspended)
+            .filter(|user| user.role == Role::Owner && !user.suspended && user.removed_at.is_none())
             .collect())
     }
 
@@ -628,6 +832,7 @@ impl Users {
         Ok(Some((
             User {
                 last_login: Some(crate::session::now_ms()),
+                removed_at: None,
                 ..user
             },
             token,
@@ -639,7 +844,7 @@ impl Users {
         Ok(self
             .connection()
             .query_row(
-                "SELECT u.id, u.email, u.role, u.suspended, u.created_at, u.last_login
+                "SELECT u.id, u.email, u.role, u.suspended, u.created_at, u.last_login, u.removed_at
                  FROM logins l JOIN users u ON u.id = l.user
                  WHERE l.hash = ?1 AND l.expires_at > ?2 AND u.suspended = 0",
                 rusqlite::params![login_hash(token), crate::session::now_ms() as i64],
@@ -654,6 +859,79 @@ impl Users {
             .execute("DELETE FROM logins WHERE hash = ?1", [login_hash(token)])?;
         Ok(())
     }
+
+    /// `user_id`'s logins not expired, newest first; `current` is the one
+    /// `token` is.
+    pub fn logins_of(&self, user_id: &str, token: Option<&str>) -> Result<Vec<Login>> {
+        let current = token.map(login_hash);
+        let connection = self.connection();
+        let mut statement = connection.prepare(
+            "SELECT hash, created_at, expires_at FROM logins
+             WHERE user = ?1 AND expires_at > ?2 ORDER BY created_at DESC",
+        )?;
+        let rows = statement.query_map(
+            rusqlite::params![user_id, crate::session::now_ms() as i64],
+            |row| {
+                let hash: Vec<u8> = row.get(0)?;
+                Ok(Login {
+                    id: login_id(&hash),
+                    created_at: row.get::<_, i64>(1)? as u64,
+                    expires_at: row.get::<_, i64>(2)? as u64,
+                    current: current.as_deref() == Some(hash.as_slice()),
+                })
+            },
+        )?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Ends `user_id`'s login named `id`, never another user's. Whether
+    /// there was one.
+    pub fn end_login(&self, user_id: &str, id: &str) -> Result<bool> {
+        let connection = self.connection();
+        let mut statement = connection.prepare("SELECT hash FROM logins WHERE user = ?1")?;
+        let hashes = statement
+            .query_map([user_id], |row| row.get::<_, Vec<u8>>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let Some(hash) = hashes.into_iter().find(|hash| login_id(hash) == id) else {
+            return Ok(false);
+        };
+        connection.execute("DELETE FROM logins WHERE hash = ?1", [hash])?;
+        Ok(true)
+    }
+
+    /// Ends every login of `user_id` but the one `token` is. How many.
+    pub fn end_other_logins(&self, user_id: &str, token: &str) -> Result<usize> {
+        Ok(self.connection().execute(
+            "DELETE FROM logins WHERE user = ?1 AND hash <> ?2",
+            rusqlite::params![user_id, login_hash(token)],
+        )?)
+    }
+}
+
+/// A passkey on a user's account, as they see it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Passkey {
+    /// The credential id, base64url.
+    pub id: String,
+    pub name: String,
+    pub added_at: u64,
+    pub last_used: Option<u64>,
+}
+
+/// One login, as its own user sees it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Login {
+    /// The first twelve hex characters of the stored hash: enough to tell one
+    /// person's logins apart, and not the cookie.
+    pub id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    /// Whether this is the login the request came with.
+    pub current: bool,
+}
+
+fn login_id(hash: &[u8]) -> String {
+    hex(&hash[..hash.len().min(6)])
 }
 
 /// Creates the file `0600` when it is not there — with the mode, so there is
@@ -684,13 +962,14 @@ fn user_of(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
         suspended: row.get(3)?,
         created_at: row.get::<_, i64>(4)? as u64,
         last_login: row.get::<_, Option<i64>>(5)?.map(|at| at as u64),
+        removed_at: row.get::<_, Option<i64>>(6)?.map(|at| at as u64),
     })
 }
 
 fn find(connection: &Connection, email: &str) -> Result<Option<User>> {
     Ok(connection
         .query_row(
-            "SELECT id, email, role, suspended, created_at, last_login FROM users WHERE email = ?1",
+            &format!("SELECT {USER} FROM users WHERE email = ?1"),
             [email],
             user_of,
         )
@@ -705,7 +984,8 @@ fn existing(connection: &Connection, email: &str) -> Result<User> {
 /// Refuses to take away the last owner who can log in.
 fn last_owner_guard(connection: &Connection, user: &User, what: &str) -> Result<()> {
     let others: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM users WHERE role = 'owner' AND suspended = 0 AND id <> ?1",
+        "SELECT COUNT(*) FROM users
+         WHERE role = 'owner' AND suspended = 0 AND removed_at IS NULL AND id <> ?1",
         [&user.id],
         |row| row.get(0),
     )?;
@@ -798,8 +1078,9 @@ fn login(connection: &Connection, user: &User, hours: u64) -> Result<String> {
             (now + hours.max(1) * 3_600_000) as i64
         ],
     )?;
+    // A login within the week keeps a removed user.
     connection.execute(
-        "UPDATE users SET last_login = ?2 WHERE id = ?1",
+        "UPDATE users SET last_login = ?2, removed_at = NULL WHERE id = ?1",
         rusqlite::params![user.id, now as i64],
     )?;
     Ok(token)
@@ -807,7 +1088,7 @@ fn login(connection: &Connection, user: &User, hours: u64) -> Result<String> {
 
 fn has_owner(connection: &Connection) -> Result<bool> {
     let owners: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM users WHERE role = 'owner' AND suspended = 0",
+        "SELECT COUNT(*) FROM users WHERE role = 'owner' AND suspended = 0 AND removed_at IS NULL",
         [],
         |row| row.get(0),
     )?;
@@ -889,6 +1170,46 @@ mod tests {
         let path = dir.join("auth.db");
         let users = Users::open(&path).expect("auth.db opens");
         (dir, users)
+    }
+
+    #[test]
+    fn a_removed_user_waits_a_week_and_a_login_keeps_them() {
+        let (dir, users) = scratch("removed");
+        users.add("ana@example.com", Role::Owner).unwrap();
+        let bo = users.add("bo@example.com", Role::User).unwrap();
+        let code = users.issue_code("bo@example.com").unwrap();
+        let (_, token) = users.redeem("bo@example.com", &code, 1).unwrap().unwrap();
+
+        let removed = users.remove("bo@example.com").unwrap();
+        assert!(removed.removed_at.is_some());
+        assert!(
+            users.identify(&token).unwrap().is_none(),
+            "their logins end"
+        );
+        assert!(users.due().unwrap().is_empty(), "not before the week");
+        // The last owner who can log in stays.
+        assert!(users.remove("ana@example.com").is_err());
+
+        // A login within the week keeps them.
+        let code = users.issue_code("bo@example.com").unwrap();
+        users.redeem("bo@example.com", &code, 1).unwrap().unwrap();
+        assert!(users.get(&bo.id).unwrap().unwrap().removed_at.is_none());
+        assert!(!users.purge(&bo.id).unwrap(), "a kept user is not purged");
+
+        // A week gone by without one, and they are due, and purged.
+        users.remove("bo@example.com").unwrap();
+        let long_ago = crate::session::now_ms() - (REMOVAL_DAYS + 1) * 86_400_000;
+        users
+            .connection()
+            .execute(
+                "UPDATE users SET removed_at = ?1 WHERE id = ?2",
+                rusqlite::params![long_ago as i64, bo.id],
+            )
+            .unwrap();
+        assert_eq!(users.due().unwrap().len(), 1);
+        assert!(users.purge(&bo.id).unwrap());
+        assert!(users.find("bo@example.com").unwrap().is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -995,12 +1316,15 @@ mod tests {
         assert!(users.key_user(&added.fingerprint).unwrap().is_none());
         users.set_suspended("bo@example.com", false).unwrap();
         assert!(users.key_user(&added.fingerprint).unwrap().is_some());
-        // Taken off by name, it is gone; and a user removed takes theirs.
+        // Taken off by name, it is gone; a user removed keeps theirs for the
+        // week, letting nothing in, and takes it when purged.
         assert!(users.remove_key(&bo.id, &added.name).unwrap());
         assert!(users.key_user(&added.fingerprint).unwrap().is_none());
         users.add_key(&bo.id, "casa", &line).unwrap();
         users.remove("bo@example.com").unwrap();
         assert!(users.key_user(&added.fingerprint).unwrap().is_none());
+        assert!(users.add_key(&ana.id, "casa", &line).is_err());
+        assert!(users.purge(&bo.id).unwrap());
         assert!(users.add_key(&ana.id, "casa", &line).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }

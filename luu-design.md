@@ -1661,7 +1661,10 @@ with no token) is refused. `luu token <PATH>` makes a token in a file created
 an `Origin` beside the request's `Host`. `deploy/` is that server in a container
 (`deploy/Containerfile`, whose tools run in the container itself, as user `luu`,
 under `deploy/luu.toml`) and behind Caddy (`deploy/compose.yaml`); the first start
-writes `[server]` and the token into the state volume. See
+writes `[server]` into the state volume: `luu config server --origin` where
+`LUU_ORIGIN` names the server (the chart's ingress, compose's domain), else
+`private` and the token. The image carries xterm.js under `LUU_UI_DIR`, so the
+terminal panel draws there. See
 [`RECORD/2026-10-07.a-public-luu.completed.md`](RECORD/2026-10-07.a-public-luu.completed.md).
 
 **`public` is users.** Who may log in is data, not configuration: `auth.db` in
@@ -1698,11 +1701,53 @@ widen it; `deploy/luu.toml` grants `.` (the session's folder) for that reason.
 Writable paths outside the root are shared by every user, and `serve` names
 them when it starts; `deploy/luu.toml` has none since 2026-11-04, when its
 `/state/cargo` turned out to carry one user's code into another's `cargo run`
-and `[sandbox.env]` moved each session's cargo home into its own `.tmp`. A host shell is an owner's only, and Settings writes stay
-refused off loopback until roles reach them (step 3 of
-[`RECORD/2026-11-03.users-and-a-code-by-email.WIP.md`](RECORD/2026-11-03.users-and-a-code-by-email.WIP.md)).
+and `[sandbox.env]` moved each session's cargo home into its own `.tmp`. A host shell is an owner's only.
+
+**Settings are written by role**, read per request beside the loopback flag
+(`may_write(state, Role)`):
+
+| Level | Who | What |
+| --- | --- | --- |
+| shared inside luu | admin, owner | providers and their probe, the tool limit, policy lists and environments, resend rules, authority notes |
+| the machine | owner | engines, runtimes (install, start, images, postures, the host shell rule), the icon theme, brand marks |
+
+A user writes none of it, and a refusal says the role, not the address. For a
+login the `Host` check against DNS rebinding is skipped: the cookie is
+`SameSite=Strict` and `Origin` was checked. Peers and `[host.*]` stay off on
+a server with users. **Any logged-in user may point a session at any provider
+in `config.toml`**, wherever it sends, because an admin or an owner wrote it
+there; a `private` server keeps prompts on the machine unless a person at it
+chooses. Renaming in the workspace is any user's, in their own session's
+sandbox.
+
+**Settings → Users** is an admin's or an owner's (`/api/users`): add, change
+the role, suspend, resume, remove, restore. An admin manages users and admins
+and cannot touch or make an owner; nobody suspends or removes themselves from
+the page; the last owner stays. **Removing ends a user's logins at once and
+deletes their data a week later** — live and stored sessions, their folder,
+their keys and passkeys, the row — **unless they log in first**, which keeps
+everything; *Restore* and `luu user restore` cancel it too, and their SSH keys
+let nothing in meanwhile. `serve` sweeps when it starts and hourly; to keep
+someone out, suspend them as well. **General → Account** lists the user's own
+logins (`/api/account/logins`), this browser's marked, and ends another or
+every other, and their passkeys.
+
+**Passkeys** (`webauthn-rs` 0.6, RustCrypto, no OpenSSL): the login page
+offers *Log in with a passkey* first, with no email — a discoverable
+credential, its user handle the user id padded and checked against the row
+its credential id finds — and the code under it, which stays the way back in.
+After a code the page offers to keep a passkey on this device; Account adds,
+renames and removes them. The relying party is `origin`; ceremony state is in
+memory for five minutes; a passkey is a row in `auth.db` (schema 4) with its
+counter moved on at every login. See
+[`RECORD/2026-11-05.an-owner-writes-settings.completed.md`](RECORD/2026-11-05.an-owner-writes-settings.completed.md),
+[`RECORD/2026-11-05.roles-in-the-page.completed.md`](RECORD/2026-11-05.roles-in-the-page.completed.md),
+[`RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md`](RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md)
+and [`RECORD/2026-11-05.passkeys.completed.md`](RECORD/2026-11-05.passkeys.completed.md).
 See [`RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md).
-The code is typed into six boxes (`web/components/otp-input.html`), which submit
+The login asks for the email alone; *Log in* asks for a code by email where
+the server has mail and then shows the boxes, saying the same whether or not
+the address is a user. The code is typed into six boxes (`web/components/otp-input.html`), which submit
 once the sixth digit arrives, shake red on a refusal and draw a green ring before the
 page reloads.
 
@@ -1740,9 +1785,12 @@ page reloads.
    random bytes, stored as their sha256, valid for an hour, and spent by the
    owner it makes. On a terminal, or with `--qr`, it also draws the link as a
    QR code for a phone, in black-on-white half blocks whatever the terminal's
-   colours. The link opens step 2 in the page. A page with no owner
-   and no key says what to run; it does not offer the form, or whoever
-   arrived first would own the server.
+   colours. The link opens step 2 in the page. **`serve` issues one of
+   these keys itself when it starts with no owner** and prints it, with its
+   link, on stderr — the machine's (`kubectl logs`, `docker logs`), never the
+   log file. A page with no owner always shows the form, and asks for the key
+   where the URL does not carry it; without the key it does not open, or
+   whoever arrived first would own the server.
 
 `luu config` with no step does 1 and 2 on a terminal. After that, a user logs
 in by asking for a code by email (`POST /api/auth/code`). The server answers

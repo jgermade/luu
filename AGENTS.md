@@ -395,14 +395,21 @@ the UI carries it from there. The file's mode is checked: a flag is greppable in
 `ps` and an env var is inherited by every child `run_command` spawns.
 
 `exposure = "public"` (with `origin`, and no token) is the third way: **users**,
-in `auth.db` beside `sessions.db`, each logged in with a six-digit code and
-kept logged in by an `HttpOnly` cookie; `Origin` is checked on every write and
-every socket. There is no sign-up — `luu user` on the machine (or, later, an
-admin) adds people — and nobody sees another user's sessions or folder
-(`<root>/<user id>`), an owner included. A user's session whose policy reaches
-past their folder is refused, whatever the file says. Settings writes stay
-refused off loopback until roles reach them. See
-[`RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md).
+in `auth.db` beside `sessions.db`, each logged in with a six-digit code or a
+passkey and kept logged in by an `HttpOnly` cookie; `Origin` is checked on
+every write and every socket. There is no sign-up — `luu user` on the machine
+or an admin in Settings → Users adds people — and nobody sees another user's
+sessions or folder (`<root>/<user id>`), an owner included. A user's session
+whose policy reaches past their folder is refused, whatever the file says.
+Settings are written by role — what is shared inside luu (providers, policies,
+the tool limit) by an admin or an owner, the machine (engines, runtimes,
+icons) by an owner — and by nobody else; each user sees and ends their own
+logins and passkeys. **Removing a user deletes their data a week later unless
+they log in first.** Peers and `[host.*]` stay off. See
+[`RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md),
+[`RECORD/2026-11-05.roles-in-the-page.completed.md`](RECORD/2026-11-05.roles-in-the-page.completed.md),
+[`RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md`](RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md)
+and [`RECORD/2026-11-05.passkeys.completed.md`](RECORD/2026-11-05.passkeys.completed.md).
 
 ```sh
 luu config                                  # [server], then mail and the owner, proved by one code

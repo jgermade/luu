@@ -45,6 +45,7 @@ pub mod link;
 pub mod log;
 pub mod mail;
 pub mod models;
+pub mod passkeys;
 pub mod policies;
 pub mod provider;
 pub mod runtimes;
@@ -214,8 +215,8 @@ enum Command {
         #[arg(long, global = true, value_name = "PATH", env = "LUU_AUTH_DB")]
         auth_db: Option<std::path::PathBuf>,
 
-        /// The session store `remove` counts a user's sessions in. Defaults
-        /// to `sessions.db` in the state directory.
+        /// The session store `remove` counts a user's sessions in, to say
+        /// what goes. Defaults to `sessions.db` in the state directory.
         #[arg(long, global = true, value_name = "PATH")]
         store: Option<std::path::PathBuf>,
     },
@@ -923,9 +924,12 @@ enum UserAction {
     Suspend { email: String },
     /// Let a suspended user log in again.
     Resume { email: String },
-    /// Remove someone. Refused while they have sessions: what removing does
-    /// with those is still open, and `suspend` keeps everything.
+    /// Remove someone: their logins end now, and their sessions, folder and
+    /// account are deleted a week later by `luu serve`, unless they log in
+    /// again first. `suspend` as well keeps them from coming back.
     Remove { email: String },
+    /// Cancel a removal before its week is up.
+    Restore { email: String },
     /// Print a code to log in with: six digits, ten minutes, one use.
     Code { email: String },
     /// A user's SSH keys: what links their luus to this one.
@@ -1123,6 +1127,18 @@ fn ago(at: u64) -> String {
         60..3600 => format!("{}m ago", seconds / 60),
         3600..86_400 => format!("{}h ago", seconds / 3600),
         _ => format!("{}d ago", seconds / 86_400),
+    }
+}
+
+/// When a user removed at `removed_at` loses their data, as a person says it.
+fn until(removed_at: u64) -> String {
+    let due = removed_at + crate::users::REMOVAL_DAYS * 86_400_000;
+    let seconds = due.saturating_sub(crate::session::now_ms()) / 1000;
+    match seconds {
+        0 => "at the next sweep".to_string(),
+        1..3600 => format!("in {}m", seconds.div_ceil(60)),
+        3600..86_400 => format!("in {}h", seconds / 3600),
+        _ => format!("in {}d", seconds / 86_400),
     }
 }
 
@@ -1708,15 +1724,18 @@ fn run_user(
         }
         UserAction::List => {
             for user in users.list()? {
-                let state = if user.suspended {
-                    "suspended"
-                } else {
-                    "active"
+                let state = match (user.removed_at, user.suspended) {
+                    (Some(_), _) => "removed",
+                    (None, true) => "suspended",
+                    (None, false) => "active",
                 };
-                let last = user
-                    .last_login
-                    .map(|at| format!("last login {}", ago(at)))
-                    .unwrap_or_else(|| "never logged in".to_string());
+                let last = match user.removed_at {
+                    Some(at) => format!("data deleted {}", until(at)),
+                    None => user
+                        .last_login
+                        .map(|at| format!("last login {}", ago(at)))
+                        .unwrap_or_else(|| "never logged in".to_string()),
+                };
                 println!(
                     "{:<32} {:<6} {:<9} {}  {last}",
                     user.email,
@@ -1753,17 +1772,18 @@ fn run_user(
                 Some(path) => crate::store::SessionStore::open(&path)?.count_owned(&user.id)?,
                 None => 0,
             };
-            if sessions > 0 {
-                anyhow::bail!(
-                    "{} has {sessions} session(s), and what removing a user does with them is \
-                     not decided yet: `luu user suspend {}` keeps everything and stops them \
-                     logging in",
-                    user.email,
-                    user.email
-                );
-            }
-            users.remove(&email)?;
-            eprintln!("removed {}", user.email);
+            let removed = users.remove(&email)?;
+            eprintln!(
+                "removed {}: their logins ended; their {sessions} session(s), folder and account \
+                 are deleted {} unless they log in first (`luu user restore {}` cancels it)",
+                user.email,
+                until(removed.removed_at.unwrap_or_default()),
+                user.email
+            );
+        }
+        UserAction::Restore { email } => {
+            let user = users.restore(email)?;
+            eprintln!("{} is kept, with everything they had", user.email);
         }
         UserAction::Key { action } => match action {
             UserKeyAction::Add { email, key, name } => {

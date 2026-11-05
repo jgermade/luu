@@ -26,6 +26,7 @@ use crate::session::{
     Agency, Event, PLAN_OVER_DRAFT, PLANNING, PrefixTracker, Recorder, SYSTEM, now_ms, rendered,
 };
 use crate::store::SessionStore;
+use crate::users::Role;
 use crate::workspace;
 use anyhow::{Context, Result};
 use axum::Json;
@@ -1948,9 +1949,16 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
                 .iter()
                 .any(|user| user.role == crate::users::Role::Owner && !user.suspended)
             {
+                // Said on stderr, which is the machine's (`kubectl logs`,
+                // `docker logs`): the page asks for this key, so whoever
+                // reaches the URL first does not become the owner.
+                let key = users.issue_setup_key()?;
+                let origin = origin.as_deref().unwrap_or_default().trim_end_matches('/');
                 eprintln!(
-                    "warning: nobody here is an owner: `luu user add <email> --role owner`, \
-                     then `luu user code <email>` to log in"
+                    "no owner yet: the page asks for this setup key ({} minutes, once; a restart \
+                     prints another)\n  {key}\n  or open {origin}/?setup={key}\n  or, on this \
+                     machine: luu config",
+                    crate::users::SETUP_MINUTES
                 );
             }
             Some(Arc::new(users))
@@ -2071,6 +2079,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     }
     learn_window(app.clone(), live.clone());
     sleep_the_idle(app.clone());
+    if let Some(users) = &users {
+        purge_the_removed(app.clone(), users.clone());
+    }
 
     // Two halves, because they are two surfaces. `/ws` is authority and
     // `/api/*` is this session's prompts and source — both behind the token
@@ -2094,6 +2105,10 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         session_hours: auth_settings.session_hours(),
         pending_mail: Arc::default(),
         mailed: Arc::default(),
+        passkeys: match (&users, origin.as_deref()) {
+            (Some(_), Some(origin)) => Some(Arc::new(crate::passkeys::Passkeys::new(origin)?)),
+            _ => None,
+        },
         links,
         link_info,
         link_port,
@@ -2268,6 +2283,23 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // one dials, on this machine. See `crate::link`.
         .route("/api/auth/keys", get(get_keys).post(post_key))
         .route("/api/auth/keys/remove", post(post_key_remove))
+        // People, for an admin or an owner, and a user's own logins. See
+        // `RECORD/2026-11-05.roles-in-the-page.completed.md`.
+        .route("/api/users", get(get_users).post(post_user))
+        .route(
+            "/api/users/{id}",
+            axum::routing::put(put_user).delete(delete_user),
+        )
+        .route("/api/account/logins", get(get_logins))
+        .route("/api/account/logins/end-others", post(end_other_logins))
+        .route("/api/account/logins/{id}/end", post(end_login))
+        .route("/api/account/passkeys", get(get_passkeys))
+        .route("/api/account/passkeys/start", post(start_passkey))
+        .route("/api/account/passkeys/finish", post(finish_passkey))
+        .route(
+            "/api/account/passkeys/{id}",
+            axum::routing::put(rename_passkey).delete(remove_passkey),
+        )
         .route("/api/peers", get(get_peers).put(put_peers))
         .route("/api/peers/probe", post(post_peer_probe))
         // The providers this luu offers a linked one, by name, the key and
@@ -2294,6 +2326,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/auth/me", get(get_me))
         .route("/api/auth/me.json", get(get_me))
         .route("/api/auth/code", post(post_code))
+        .route("/api/auth/passkey/start", post(post_passkey_start))
+        .route("/api/auth/passkey/finish", post(post_passkey_finish))
         // Where to link to this server, and its key: outside the gate, as the
         // page is, because a luu asks it before it has any way in.
         .route("/api/link.json", get(get_link_info))
@@ -2379,6 +2413,9 @@ struct AppRouterState {
     pending_mail: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::mail::Mail>>>,
     /// When the last codes by email went out, for a ceiling on them all.
     mailed: Arc<std::sync::Mutex<std::collections::VecDeque<u64>>>,
+    /// The passkey ceremonies, where there are users: the relying party is
+    /// `origin`. See `crate::passkeys`.
+    passkeys: Option<Arc<crate::passkeys::Passkeys>>,
 }
 
 async fn asset_handler(uri: Uri, headers: axum::http::HeaderMap) -> Response {
@@ -3071,6 +3108,89 @@ async fn post_login(
     }
 }
 
+/// The passkey ceremonies and the users, where both are, and only from this
+/// server's own page.
+fn passkey_door(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(Arc<crate::passkeys::Passkeys>, Arc<crate::users::Users>), Box<Response>> {
+    let (Some(passkeys), Some(users)) = (state.passkeys.clone(), state.users.clone()) else {
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "this server has no users").into_response(),
+        ));
+    };
+    if !from_origin(state, headers) {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "this request's Origin is not this server's",
+            )
+                .into_response(),
+        ));
+    }
+    Ok((passkeys, users))
+}
+
+/// `POST /api/auth/passkey/start`: a login with a passkey, begun. No email:
+/// the passkey says whose it is. See `RECORD/2026-11-05.passkeys.completed.md`.
+async fn post_passkey_start(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let (passkeys, _) = match passkey_door(&state, &headers) {
+        Ok(door) => door,
+        Err(refused) => return *refused,
+    };
+    match passkeys.start_login() {
+        Ok((ceremony, options)) => {
+            Json(serde_json::json!({ "ceremony": ceremony, "options": options })).into_response()
+        }
+        Err(error) => (StatusCode::TOO_MANY_REQUESTS, format!("{error:#}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PasskeyLogin {
+    ceremony: String,
+    credential: webauthn_rs::prelude::PublicKeyCredential,
+}
+
+/// `POST /api/auth/passkey/finish`: the browser's answer, and a login. One
+/// answer for every failure, as a code's.
+async fn post_passkey_finish(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<PasskeyLogin>,
+) -> Response {
+    let (passkeys, users) = match passkey_door(&state, &headers) {
+        Ok(door) => door,
+        Err(refused) => return *refused,
+    };
+    let proved = passkeys.finish_login(&asked.ceremony, &asked.credential, |id| users.passkey(id));
+    let (user, id, body) = match proved {
+        Ok(proved) => proved,
+        Err(error) => {
+            tracing::info!(target: "luu::auth", error = %format!("{error:#}"), "a passkey login was refused");
+            return (StatusCode::UNAUTHORIZED, "that passkey did not log in").into_response();
+        }
+    };
+    if let Err(error) = users.passkey_used(&id, &body) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
+    }
+    match users.log_in(&user, state.session_hours) {
+        Ok(Some((user, token))) => {
+            tracing::info!(target: "luu::auth", user = user.id.as_str(), "logged in with a passkey");
+            (
+                StatusCode::NO_CONTENT,
+                [(header::SET_COOKIE, login_cookie(&state, Some(&token)))],
+            )
+                .into_response()
+        }
+        Ok(None) => (StatusCode::UNAUTHORIZED, "that passkey did not log in").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response(),
+    }
+}
+
 /// `POST /api/auth/logout`: ends this login, and clears its cookie.
 async fn post_logout(
     State(state): State<AppRouterState>,
@@ -3113,6 +3233,7 @@ async fn get_me(State(state): State<AppRouterState>, headers: axum::http::Header
             "users": true,
             "owner": true,
             "mail": mail,
+            "passkeys": state.passkeys.is_some(),
             "id": user.id,
             "email": user.email,
             "role": user.role,
@@ -3126,6 +3247,7 @@ async fn get_me(State(state): State<AppRouterState>, headers: axum::http::Header
                 "users": true,
                 "owner": users.has_owner().unwrap_or(true),
                 "mail": mail,
+                "passkeys": state.passkeys.is_some(),
             })),
         )
             .into_response(),
@@ -5752,6 +5874,10 @@ fn workspace_writable(
     headers: &axum::http::HeaderMap,
 ) -> Result<(), Box<Response>> {
     let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
+    // A user's own session's folder: the sandbox below is theirs.
+    if who().is_some() {
+        return Ok(());
+    }
     if !state.providers_editable {
         return Err(refuse(
             "this server is bound off loopback, and renaming changes this machine's files. \
@@ -5928,11 +6054,14 @@ fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
         path: path
             .or_else(crate::provider::Config::path_for_writing)
             .map(|path| path.display().to_string()),
-        editable: state.providers_editable,
-        refused: (!state.providers_editable).then(|| {
-            "this server is bound off loopback, and an icon theme is a path on this machine \
-             and a folder written into it. Edit config.toml on the machine itself."
-                .to_string()
+        editable: may_write(state, Role::Owner),
+        refused: (!may_write(state, Role::Owner)).then(|| {
+            refusal(
+                state,
+                Role::Owner,
+                "this server is bound off loopback, and an icon theme is a path on this \
+                 machine and a folder written into it. Edit config.toml on the machine itself.",
+            )
         }),
         named: named.map(|named| named.display().to_string()),
         loaded: icons.manifest.loaded.then(|| {
@@ -6085,11 +6214,15 @@ fn apply_icon_theme(
     state: &AppRouterState,
     named: Option<std::path::PathBuf>,
 ) -> Result<(), Box<Response>> {
-    if !state.providers_editable {
+    if !may_write(state, Role::Owner) {
         return Err(Box::new(
             (
                 StatusCode::FORBIDDEN,
-                "the icon theme is read-only on a server bound off loopback",
+                refusal(
+                    state,
+                    Role::Owner,
+                    "the icon theme is read-only on a server bound off loopback",
+                ),
             )
                 .into_response(),
         ));
@@ -6135,10 +6268,14 @@ async fn import_icon_theme(
     State(state): State<AppRouterState>,
     mut multipart: axum::extract::Multipart,
 ) -> Response {
-    if !state.providers_editable {
+    if !may_write(&state, Role::Owner) {
         return (
             StatusCode::FORBIDDEN,
-            "the icon theme is read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Owner,
+                "the icon theme is read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -6277,11 +6414,14 @@ fn brands_view(state: &AppRouterState) -> BrandsView {
         slugs: brands.pack.slugs(),
         found: crate::brands::discover(folder.as_deref(), &node_modules()),
         folder: folder.map(|f| f.display().to_string()),
-        editable: state.providers_editable,
-        refused: (!state.providers_editable).then(|| {
-            "this server is bound off loopback, and a pack of marks is a path on this machine. \
-             Edit config.toml on the machine itself."
-                .to_string()
+        editable: may_write(state, Role::Owner),
+        refused: (!may_write(state, Role::Owner)).then(|| {
+            refusal(
+                state,
+                Role::Owner,
+                "this server is bound off loopback, and a pack of marks is a path on this \
+                 machine. Edit config.toml on the machine itself.",
+            )
         }),
     }
 }
@@ -6315,10 +6455,14 @@ fn apply_brands(
     named: Option<std::path::PathBuf>,
 ) -> Result<(), Box<Response>> {
     let refuse = |status: StatusCode, text: String| Box::new((status, text).into_response());
-    if !state.providers_editable {
+    if !may_write(state, Role::Owner) {
         return Err(refuse(
             StatusCode::FORBIDDEN,
-            "the brand marks are read-only on a server bound off loopback".into(),
+            refusal(
+                state,
+                Role::Owner,
+                "the brand marks are read-only on a server bound off loopback",
+            ),
         ));
     }
     let Some(path) = crate::provider::Config::path_for_writing() else {
@@ -6354,10 +6498,14 @@ async fn import_brands(
     State(state): State<AppRouterState>,
     mut multipart: axum::extract::Multipart,
 ) -> Response {
-    if !state.providers_editable {
+    if !may_write(&state, Role::Owner) {
         return (
             StatusCode::FORBIDDEN,
-            "the brand marks are read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Owner,
+                "the brand marks are read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -7513,6 +7661,350 @@ async fn post_key_remove(
     }
 }
 
+/// The user database, for an admin or an owner: Settings → Users. See
+/// `RECORD/2026-11-05.roles-in-the-page.completed.md`.
+fn people(state: &AppRouterState) -> Result<Arc<crate::users::Users>, Box<Response>> {
+    let Some(users) = state.users.clone() else {
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "this server has no users").into_response(),
+        ));
+    };
+    if !has_role(Role::Admin) {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "people are an admin's or an owner's to manage",
+            )
+                .into_response(),
+        ));
+    }
+    Ok(users)
+}
+
+/// One user an admin may act on: an owner is only an owner's.
+fn person(users: &crate::users::Users, id: &str) -> Result<crate::users::User, Box<Response>> {
+    let refuse = |status: StatusCode, why: String| Box::new((status, why).into_response());
+    let user = users
+        .get(id)
+        .map_err(|error| refuse(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .ok_or_else(|| refuse(StatusCode::NOT_FOUND, format!("no user {id}")))?;
+    if user.role == Role::Owner && !is_owner() {
+        return Err(refuse(
+            StatusCode::FORBIDDEN,
+            format!(
+                "{} is an owner, and only an owner changes an owner",
+                user.email
+            ),
+        ));
+    }
+    Ok(user)
+}
+
+async fn get_users(State(state): State<AppRouterState>) -> Response {
+    let users = match people(&state) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    match users.list() {
+        Ok(list) => Json(serde_json::json!({
+            "users": list,
+            "me": owner_key(),
+            "owner": is_owner(),
+        }))
+        .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct UserAdd {
+    email: String,
+    #[serde(default)]
+    role: Option<Role>,
+}
+
+async fn post_user(State(state): State<AppRouterState>, Json(asked): Json<UserAdd>) -> Response {
+    let users = match people(&state) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    let role = asked.role.unwrap_or(Role::User);
+    if role == Role::Owner && !is_owner() {
+        return (StatusCode::FORBIDDEN, "only an owner makes an owner").into_response();
+    }
+    match users.add(&asked.email, role) {
+        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct UserEdit {
+    #[serde(default)]
+    role: Option<Role>,
+    #[serde(default)]
+    suspended: Option<bool>,
+    /// `false` cancels a removal; a removal is `DELETE`.
+    #[serde(default)]
+    removed: Option<bool>,
+}
+
+async fn put_user(
+    State(state): State<AppRouterState>,
+    Path(id): Path<String>,
+    Json(edit): Json<UserEdit>,
+) -> Response {
+    let users = match people(&state) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    let user = match person(&users, &id) {
+        Ok(user) => user,
+        Err(refused) => return *refused,
+    };
+    if edit.role == Some(Role::Owner) && !is_owner() {
+        return (StatusCode::FORBIDDEN, "only an owner makes an owner").into_response();
+    }
+    // Suspending ends every login, this one included: the page would lose
+    // the person mid-click.
+    if edit.suspended == Some(true) && owner_key().as_deref() == Some(user.id.as_str()) {
+        return (
+            StatusCode::CONFLICT,
+            "nobody suspends themselves from the page: `luu user suspend` on the machine",
+        )
+            .into_response();
+    }
+    let mut changed = user;
+    if let Some(role) = edit.role {
+        changed = match users.set_role(&changed.email, role) {
+            Ok(user) => user,
+            Err(error) => return (StatusCode::CONFLICT, format!("{error:#}")).into_response(),
+        };
+    }
+    if let Some(suspended) = edit.suspended {
+        changed = match users.set_suspended(&changed.email, suspended) {
+            Ok(user) => user,
+            Err(error) => return (StatusCode::CONFLICT, format!("{error:#}")).into_response(),
+        };
+    }
+    if edit.removed == Some(false) {
+        changed = match users.restore(&changed.email) {
+            Ok(user) => user,
+            Err(error) => return (StatusCode::CONFLICT, format!("{error:#}")).into_response(),
+        };
+    }
+    Json(changed).into_response()
+}
+
+/// Removes someone: their logins end now, and their sessions, folder and
+/// account are deleted a week later unless they log in first. See
+/// `RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md`.
+async fn delete_user(State(state): State<AppRouterState>, Path(id): Path<String>) -> Response {
+    let users = match people(&state) {
+        Ok(users) => users,
+        Err(refused) => return *refused,
+    };
+    let user = match person(&users, &id) {
+        Ok(user) => user,
+        Err(refused) => return *refused,
+    };
+    if owner_key().as_deref() == Some(user.id.as_str()) {
+        return (
+            StatusCode::CONFLICT,
+            "nobody removes themselves from the page: `luu user remove` on the machine",
+        )
+            .into_response();
+    }
+    match users.remove(&user.email) {
+        Ok(removed) => Json(removed).into_response(),
+        Err(error) => (StatusCode::CONFLICT, format!("{error:#}")).into_response(),
+    }
+}
+
+/// The asker's own account: the database, their id, and the login this
+/// request came with.
+fn account_of(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(Arc<crate::users::Users>, String, Option<String>), Box<Response>> {
+    let Some(users) = state.users.clone() else {
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "this server has no users").into_response(),
+        ));
+    };
+    let Some(id) = owner_key() else {
+        return Err(Box::new(
+            (StatusCode::UNAUTHORIZED, "log in first").into_response(),
+        ));
+    };
+    Ok((users, id, cookie(headers, crate::users::COOKIE)))
+}
+
+/// The asker's own passkeys, and the ceremonies to add one.
+async fn get_passkeys(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let (users, id, _) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.passkeys_of(&id) {
+        Ok(passkeys) => Json(serde_json::json!({ "passkeys": passkeys })).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn start_passkey(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let (users, id, _) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    let Some(passkeys) = &state.passkeys else {
+        return (StatusCode::NOT_FOUND, "this server has no passkeys").into_response();
+    };
+    let user = match users.get(&id) {
+        Ok(Some(user)) => user,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "log in first").into_response(),
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let existing = users.passkey_bodies(&id).unwrap_or_default();
+    match passkeys.start_registration(&id, &user.email, &existing) {
+        Ok(options) => Json(options).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PasskeyAdd {
+    #[serde(default)]
+    name: String,
+    credential: webauthn_rs::prelude::RegisterPublicKeyCredential,
+}
+
+async fn finish_passkey(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<PasskeyAdd>,
+) -> Response {
+    let (users, id, _) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    let Some(passkeys) = &state.passkeys else {
+        return (StatusCode::NOT_FOUND, "this server has no passkeys").into_response();
+    };
+    let (credential, body) = match passkeys.finish_registration(&id, &asked.credential) {
+        Ok(made) => made,
+        Err(error) => return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
+    };
+    match users.add_passkey(&id, &credential, &asked.name, &body) {
+        Ok(passkey) => (StatusCode::CREATED, Json(passkey)).into_response(),
+        Err(error) => (StatusCode::CONFLICT, format!("{error:#}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PasskeyRename {
+    name: String,
+}
+
+async fn rename_passkey(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(passkey): Path<String>,
+    Json(asked): Json<PasskeyRename>,
+) -> Response {
+    let (users, id, _) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.rename_passkey(&id, &passkey, &asked.name) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such passkey of yours").into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
+    }
+}
+
+async fn remove_passkey(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(passkey): Path<String>,
+) -> Response {
+    let (users, id, _) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.remove_passkey(&id, &passkey) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such passkey of yours").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn get_logins(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let (users, id, token) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    match users.logins_of(&id, token.as_deref()) {
+        Ok(logins) => Json(serde_json::json!({ "logins": logins })).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn end_login(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(login): Path<String>,
+) -> Response {
+    let (users, id, token) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    let current = users
+        .logins_of(&id, token.as_deref())
+        .ok()
+        .and_then(|logins| logins.into_iter().find(|each| each.current));
+    if current.is_some_and(|current| current.id == login) {
+        return (
+            StatusCode::CONFLICT,
+            "that is this browser's login: Sign out ends it",
+        )
+            .into_response();
+    }
+    match users.end_login(&id, &login) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such login of yours").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn end_other_logins(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let (users, id, token) = match account_of(&state, &headers) {
+        Ok(found) => found,
+        Err(refused) => return *refused,
+    };
+    let Some(token) = token else {
+        return (StatusCode::UNAUTHORIZED, "log in first").into_response();
+    };
+    match users.end_other_logins(&id, &token) {
+        Ok(ended) => Json(serde_json::json!({ "ended": ended })).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
 /// Remote access is this machine's alone: the page on loopback, never a
 /// peer (which `crate::link::needs` refuses before it gets here) and never a
 /// server with users.
@@ -7905,12 +8397,16 @@ fn engines_allowed(
     headers: &axum::http::HeaderMap,
 ) -> Result<(), Box<Response>> {
     let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
+    if is_owner() {
+        return Ok(());
+    }
     if !state.providers_editable {
-        return Err(refuse(
+        return Err(refuse(refusal(
+            state,
+            Role::Owner,
             "this server is bound off loopback, and an engine is a process started on this \
-             machine. Start it from a browser on the machine itself."
-                .to_string(),
-        ));
+             machine. Start it from a browser on the machine itself.",
+        )));
     }
     let host = headers
         .get(header::HOST)
@@ -7922,6 +8418,40 @@ fn engines_allowed(
             "Host `{host}` is not this machine, and only this machine starts an engine"
         ))),
     }
+}
+
+/// Whether the asker's login holds at least `needs`, on a server with users.
+fn has_role(needs: Role) -> bool {
+    who().is_some_and(|who| who.role >= needs)
+}
+
+fn is_owner() -> bool {
+    has_role(Role::Owner)
+}
+
+/// Whether this request may write what `needs` guards: a server on loopback
+/// with no users, or a login with that role — `Admin` for what is shared
+/// inside luu, `Owner` for the machine. See
+/// `RECORD/2026-11-05.roles-in-the-page.completed.md`.
+fn may_write(state: &AppRouterState, needs: Role) -> bool {
+    state.providers_editable || has_role(needs)
+}
+
+/// Why a write is refused: the role it needs on a server with users, where
+/// the address is not the reason, and `loopback` everywhere else.
+fn refusal(state: &AppRouterState, needs: Role, loopback: &str) -> String {
+    match (state.users.is_some(), needs) {
+        (false, _) => loopback.to_string(),
+        (true, Role::Owner) => "on a server with users, this is an owner's to change".into(),
+        (true, _) => "on a server with users, this is an admin's or an owner's to change".into(),
+    }
+}
+
+/// Whether a session may be pointed at a provider that sends off this
+/// machine: where a person at it chooses, or anyone logged in to a server with
+/// users, whose providers an admin or an owner wrote.
+fn sends_anywhere(state: &AppRouterState) -> bool {
+    state.providers_editable || who().is_some()
 }
 
 fn host_is_loopback(host: &str) -> bool {
@@ -8100,11 +8630,14 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
     }
     Ok(EnginesView {
         path: shown_path(path).await,
-        editable: state.providers_editable,
-        refused: (!state.providers_editable).then(|| {
-            "this server is bound off loopback, and an engine is a process started on this \
-             machine. Edit config.toml on the machine itself."
-                .to_string()
+        editable: may_write(state, Role::Owner),
+        refused: (!may_write(state, Role::Owner)).then(|| {
+            refusal(
+                state,
+                Role::Owner,
+                "this server is bound off loopback, and an engine is a process started on this \
+                 machine. Edit config.toml on the machine itself.",
+            )
         }),
         engines,
         found,
@@ -8868,15 +9401,16 @@ async fn providers_view(
     Ok(ProvidersView {
         linked,
         path: shown_path(path).await,
-        editable: state.providers_editable,
-        refused: match state.providers_editable {
+        editable: may_write(state, Role::Admin),
+        refused: match may_write(state, Role::Admin) {
             true => None,
-            false => Some(
+            false => Some(refusal(
+                state,
+                Role::Admin,
                 "this server is bound off loopback. A provider outlives the session and the \
                  gate, and the bearer token says who may reach the port rather than who may \
-                 decide where this machine sends. Edit config.toml on the machine itself."
-                    .to_string(),
-            ),
+                 decide where this machine sends. Edit config.toml on the machine itself.",
+            )),
         },
         default: config.default_name().map(str::to_string),
         providers: config.profiles().clone(),
@@ -8942,10 +9476,14 @@ async fn put_tool_steps(
     State(state): State<AppRouterState>,
     Json(asked): Json<ToolStepsAsk>,
 ) -> Response {
-    if !state.providers_editable {
+    if !may_write(&state, Role::Admin) {
         return (
             StatusCode::FORBIDDEN,
-            "the tool limit is read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Admin,
+                "the tool limit is read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -9315,10 +9853,14 @@ async fn probe_provider(
 ) -> Response {
     // The same door the writes are behind. A probe is not a write, but it
     // spends the key, and that is close enough to belong on this side of it.
-    if !state.providers_editable {
+    if !may_write(&state, Role::Admin) {
         return (
             StatusCode::FORBIDDEN,
-            "providers are read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Admin,
+                "providers are read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -9446,7 +9988,7 @@ async fn get_policies(State(state): State<AppRouterState>) -> Response {
         .await
         .map(|(config, _)| config)
         .unwrap_or_default();
-    Json(policies_view(&config, state.providers_editable)).into_response()
+    Json(policies_view(&config, may_write(&state, Role::Admin))).into_response()
 }
 
 /// Writes the lists and the environments, whole: the page edits a copy and
@@ -9461,10 +10003,14 @@ async fn put_policies(
     State(state): State<AppRouterState>,
     Json(edit): Json<PoliciesTables>,
 ) -> Response {
-    if !state.providers_editable {
+    if !may_write(&state, Role::Admin) {
         return (
             StatusCode::FORBIDDEN,
-            "the policies are read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Admin,
+                "the policies are read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -9500,7 +10046,7 @@ async fn put_policies(
         .environments
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = environments_of(&config);
-    Json(policies_view(&config, state.providers_editable)).into_response()
+    Json(policies_view(&config, may_write(&state, Role::Admin))).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -9550,10 +10096,14 @@ async fn put_providers(
     State(state): State<AppRouterState>,
     Json(mut edit): Json<ProvidersEdit>,
 ) -> Response {
-    if !state.providers_editable {
+    if !may_write(&state, Role::Admin) {
         return (
             StatusCode::FORBIDDEN,
-            "providers are read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Admin,
+                "providers are read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -9810,15 +10360,16 @@ async fn resend_view(state: &AppRouterState, waiting: Vec<String>) -> ResendView
     };
     ResendView {
         path: shown_path(path).await,
-        editable: state.providers_editable,
-        refused: match state.providers_editable {
+        editable: may_write(state, Role::Admin),
+        refused: match may_write(state, Role::Admin) {
             true => None,
-            false => Some(
+            false => Some(refusal(
+                state,
+                Role::Admin,
                 "this server is bound off loopback. A resend rule outlives the session, and \
                  the bearer token says who may reach the port rather than who may decide what \
-                 this machine sends. Edit config.toml on the machine itself."
-                    .to_string(),
-            ),
+                 this machine sends. Edit config.toml on the machine itself.",
+            )),
         },
         file,
         running: RunningResend::of(live.destination().await.budget),
@@ -9938,10 +10489,14 @@ async fn put_resend(
 ) -> Response {
     let live = state.app.addressed();
     let app = &state.app;
-    if !state.providers_editable {
+    if !may_write(&state, Role::Admin) {
         return (
             StatusCode::FORBIDDEN,
-            "resend rules are read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Admin,
+                "resend rules are read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -10042,15 +10597,16 @@ async fn authority_view(state: &AppRouterState) -> AuthorityView {
     };
     AuthorityView {
         path: shown_path(path).await,
-        editable: state.providers_editable,
-        refused: match state.providers_editable {
+        editable: may_write(state, Role::Admin),
+        refused: match may_write(state, Role::Admin) {
             true => None,
-            false => Some(
+            false => Some(refusal(
+                state,
+                Role::Admin,
                 "this server is bound off loopback. An authority note outlives the session, and \
                  the bearer token says who may reach the port rather than who may decide what \
-                 this machine tells a model. Edit config.toml on the machine itself."
-                    .to_string(),
-            ),
+                 this machine tells a model. Edit config.toml on the machine itself.",
+            )),
         },
         file,
         running: RunningAuthority::of(&live.destination().await.authority),
@@ -10074,10 +10630,14 @@ async fn put_authority(
 ) -> Response {
     let live = state.app.addressed();
     let app = &state.app;
-    if !state.providers_editable {
+    if !may_write(&state, Role::Admin) {
         return (
             StatusCode::FORBIDDEN,
-            "authority notes are read-only on a server bound off loopback",
+            refusal(
+                &state,
+                Role::Admin,
+                "authority notes are read-only on a server bound off loopback",
+            ),
         )
             .into_response();
     }
@@ -11151,7 +11711,7 @@ async fn new_session(
         }
         _ => {
             let current = template.destination().await;
-            match destination_for(app, &current, &asked, state.providers_editable).await {
+            match destination_for(app, &current, &asked, sends_anywhere(state)).await {
                 Ok(next) => Arc::new(next),
                 Err((status, message)) => return Err(Box::new((status, message).into_response())),
             }
@@ -11595,6 +12155,83 @@ async fn sleep_live(app: &App, id: &str) {
     tracing::info!(target: "luu::session", session = id, "a live session was put to sleep");
 }
 
+/// Deletes the data of users removed [`crate::users::REMOVAL_DAYS`] ago who
+/// have not logged in since: once when the server starts, so a deadline it
+/// was down for is met, and once an hour after. See
+/// `RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md`.
+fn purge_the_removed(app: Arc<App>, users: Arc<crate::users::Users>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            match users.due() {
+                Ok(due) => {
+                    for user in due {
+                        if let Err(error) = purge_user(&app, &users, &user.id).await {
+                            tracing::warn!(target: "luu::auth", user = user.id.as_str(), error = %format!("{error:#}"), "a removed user's data could not be deleted");
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(target: "luu::auth", error = %format!("{error:#}"), "the removed users could not be read");
+                }
+            }
+        }
+    });
+}
+
+/// A removed user's data, all of it: live sessions ended without a
+/// checkpoint, stored sessions, their folder, then the row. Asked again
+/// first, so a login since the list was read keeps them.
+async fn purge_user(app: &App, users: &crate::users::Users, id: &str) -> anyhow::Result<()> {
+    if !users.get(id)?.is_some_and(|user| user.removed_at.is_some()) {
+        return Ok(());
+    }
+    // Twelve hex characters the server made: anything else is not a folder
+    // this may delete.
+    anyhow::ensure!(
+        id.len() == 12 && id.chars().all(|c| c.is_ascii_hexdigit()),
+        "{id} is not a user id"
+    );
+    let owner = Some(id.to_string());
+    let ending: Vec<Arc<LiveSession>> = {
+        let mut lives = app
+            .lives
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ids: Vec<String> = lives
+            .map
+            .iter()
+            .filter(|(_, live)| live.owner == owner)
+            .map(|(id, _)| id.clone())
+            .collect();
+        lives.current.remove(&owner);
+        ids.iter().filter_map(|id| lives.map.remove(id)).collect()
+    };
+    for live in ending {
+        live.agency().await.shutdown().await;
+    }
+    if let Some(store) = &app.store {
+        let mut store = store.lock().await;
+        let owned: Vec<String> = store
+            .list_owned()?
+            .into_iter()
+            .filter(|(_, whose)| whose.as_deref() == Some(id))
+            .map(|(summary, _)| summary.id)
+            .collect();
+        for session in owned {
+            store.delete(&session)?;
+        }
+    }
+    let folder = app.root_of(&owner);
+    if folder.exists() {
+        blocking(move || std::fs::remove_dir_all(&folder)).await?;
+    }
+    users.purge(id)?;
+    tracing::info!(target: "luu::auth", user = id, "a removed user's data was deleted");
+    Ok(())
+}
+
 /// Puts to sleep every live session idle for `[sessions] idle-minutes`, once a
 /// minute, for the life of the server. `0` never does.
 fn sleep_the_idle(app: Arc<App>) {
@@ -12029,7 +12666,7 @@ async fn resume_session(
         (false, false) => previous.destination().await,
         _ => {
             let current = previous.destination().await;
-            match destination_for(app, &current, &asked, state.providers_editable).await {
+            match destination_for(app, &current, &asked, sends_anywhere(&state)).await {
                 Ok(next) => Arc::new(next),
                 Err((status, message)) => return (status, message).into_response(),
             }
